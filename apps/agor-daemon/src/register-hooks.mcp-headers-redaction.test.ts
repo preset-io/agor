@@ -39,7 +39,9 @@ describe('register-hooks MCP server secret redaction', () => {
     // writes rather than the `all` chain alone. That gate is no longer a role
     // check: `authorizeMcpServerWriteHook` decides on `mcp_member_policy` plus
     // ownership, which is what lets a member hold a server of their own at all.
-    expect(source).toMatch(/update:\s*\[authorizeMcpServerWriteHook\]/);
+    expect(source).toMatch(
+      /update:\s*\[validateMcpServerOAuthCompatibility,\s*authorizeMcpServerWriteHook\]/
+    );
   });
 
   it('redacts session MCP server route responses that bypass service hooks', () => {
@@ -53,6 +55,22 @@ describe('register-hooks MCP server secret redaction', () => {
     expect(routesSource).toContain('forUserId');
     expect(routesSource).toContain('sessionMCPServersService.setServers');
     expect(routesSource).toContain('update: { role: ROLES.MEMBER');
+  });
+
+  it('publishes marketplace connect results to nobody', () => {
+    // The daemon's global publisher has no path allowlist: any service that
+    // emits `created` fans out to the whole tenant's authenticated channel
+    // unless it says otherwise. A connect result carries the installed
+    // `mcp_server`, which for an API-key entry holds the caller's credential in
+    // `auth.token` — and the `mcp-servers` redaction hook does not cover it,
+    // because this is a different service forwarding the object.
+    //
+    // It is redacted today only because connect obtained that object from
+    // `mcp-servers` with the caller's own params. That is a fact about where
+    // the object came from, not about where it is going, so the broadcast is
+    // suppressed outright rather than left depending on it. Nothing is lost:
+    // `mcp-servers` and `sessions` announce the rows through their own hooks.
+    expect(routesSource).toContain("app.service('mcp-catalog/connect').publish(() => []);");
   });
 
   it('does not expose raw secrets to global session-token service reads', () => {

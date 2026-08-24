@@ -29,7 +29,7 @@ import {
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
-import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type {
   AgenticAuthMethods,
   AuthenticatedParams,
@@ -37,8 +37,13 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
+import { CLAUDE_AUTH_TRUSTED_USER_MUTATION } from './claude-credential-mutation.js';
 import type { ClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
-import { type AppLike, resolveCodexCredentialRoute } from './codex-auth-shared.js';
+import {
+  type AppLike,
+  CODEX_AUTH_DEFER_USER_REALTIME,
+  resolveCodexCredentialRoute,
+} from './codex-auth-shared.js';
 
 /** Minimal users-service surface — mirrors the Claude OAuth service's typing. */
 interface UsersServiceLike {
@@ -72,7 +77,7 @@ export function createClaudeAuthLogoutService(
         runWithTenantDatabaseScope(db, tenantId, work);
       const attemptContext = { tenantId: String(tenantId), userId };
 
-      const remove = async (): Promise<ClaudeAuthLogoutResult> => {
+      const remove = async (generation?: number): Promise<ClaudeAuthLogoutResult> => {
         const identity = await resolveCodexCredentialRoute(
           userId,
           withTenantDatabase,
@@ -84,22 +89,18 @@ export function createClaudeAuthLogoutService(
           );
         }
 
-        // Fence any sign-in still in flight BEFORE removing anything. A submit
-        // that is already exchanging — possibly on another replica — would
-        // otherwise land after this logout and re-write the credential the user
-        // just removed, leaving them signed in against their wishes. The
-        // attempt's pre-write and pre-patch revalidations observe this.
-        await attemptStore?.invalidate(attemptContext, 'signed_out');
-
         // Delete the local login (idempotent — a missing file is success). A
         // genuine delete failure is a real server problem worth surfacing, and we
         // do NOT clear the method/token in that case so a login we couldn't remove
         // keeps working. Log the error class only — never token bytes.
         try {
-          await deleteClaudeAuthViaExecutor({
+          const route = {
             delegatedHomeKey: identity.delegatedHomeKey,
             userId: identity.userId,
-          });
+            ...(identity.claudeConfigDir ? { claudeConfigDir: identity.claudeConfigDir } : {}),
+          };
+          if (generation === undefined) await deleteClaudeAuthViaExecutor(route);
+          else await deleteClaudeAuthViaExecutor(route, generation);
         } catch (err) {
           console.error(
             `[ClaudeAuth] Failed to delete .credentials.json${
@@ -117,19 +118,36 @@ export function createClaudeAuthLogoutService(
         // claude-code keys so the service's merge clears them against the FRESH
         // record — preserving any concurrently-updated method for another tool.
         const usersService = app.service('users') as UsersServiceLike;
-        await usersService.patch(
-          userId,
-          {
-            agentic_auth_methods: { 'claude-code': undefined },
-            agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
-          },
-          { user: authUser, authenticated: true }
-        );
+        try {
+          await usersService.patch(
+            userId,
+            {
+              agentic_auth_methods: { 'claude-code': undefined },
+              agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
+            },
+            {
+              user: authUser,
+              authenticated: true,
+              [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: true,
+              ...(generation === undefined ? {} : { [CODEX_AUTH_DEFER_USER_REALTIME]: true }),
+            }
+          );
+        } catch (error) {
+          // The generation-fenced file deletion has already made native auth
+          // unavailable. Preserve a write-gate 503, but do not leak database
+          // errors. A later Disconnect can reconcile stale metadata.
+          if (error instanceof Unavailable) throw error;
+          throw new BadRequest(
+            'The Claude login file was removed, but account metadata could not be updated. Recheck or disconnect again.'
+          );
+        }
 
         return { status: 'removed' };
       };
 
-      return attemptStore ? attemptStore.withCredentialMutation(attemptContext, remove) : remove();
+      return attemptStore
+        ? attemptStore.runCredentialMutation(attemptContext, 'signed_out', remove)
+        : remove();
     },
   };
 }

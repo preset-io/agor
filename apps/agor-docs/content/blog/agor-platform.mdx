@@ -96,7 +96,9 @@ The same client that powers the Agor GUI and CLI is available as `@agor/core/api
 ```typescript
 import { createClient } from '@agor/core/api';
 
-const client = createClient('http://localhost:3030');
+const client = createClient('http://localhost:3030', true, {
+  socketAuthentication: { accessToken: '<signed-access-token>' },
+});
 
 // List sessions with real-time updates
 const sessions = await client.service('sessions').find({
@@ -238,7 +240,9 @@ Your app can spawn and coordinate Agor sessions:
 // From your VS Code extension, Slack bot, internal tool, etc.
 import { createClient } from '@agor/core/api';
 
-const client = createClient(process.env.AGOR_DAEMON_URL);
+const client = createClient(process.env.AGOR_DAEMON_URL, true, {
+  socketAuthentication: { accessToken: process.env.AGOR_ACCESS_TOKEN! },
+});
 
 // Spawn an agent session
 const session = await client.service('sessions').create({
@@ -354,7 +358,9 @@ Here's what it looks like to build a basic CI integration:
 import { createClient } from '@agor/core/api';
 
 async function reviewPR(prNumber: number, prBranch: string) {
-  const client = createClient('http://localhost:3030');
+  const client = createClient('http://localhost:3030', true, {
+    socketAuthentication: { accessToken: process.env.AGOR_ACCESS_TOKEN! },
+  });
 
   // Create worktree for this PR
   const worktree = await client.service('worktrees').create({

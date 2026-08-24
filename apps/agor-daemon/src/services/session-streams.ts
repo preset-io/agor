@@ -1,5 +1,7 @@
+import type { ResolvedMultiTenancyConfig } from '@agor/core/config';
+import { resolveTenantContext } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
-import { BadRequest } from '@agor/core/feathers';
+import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { Params } from '@agor/core/types';
 import {
   joinSessionStreamChannel,
@@ -42,7 +44,12 @@ function isCanonicalSessionId(id: string): boolean {
   return UUID_RE.test(id);
 }
 
-export function createSessionStreamsService(app: Application) {
+export function createSessionStreamsService(
+  app: Application,
+  multiTenancy?: ResolvedMultiTenancyConfig
+) {
+  const resolveRealtimeTenantId = (params: Params): string =>
+    multiTenancy ? resolveTenantContext(multiTenancy, { params }).tenant_id : 'standalone';
   // Reuse the canonical session read as the access gate AND to resolve the
   // caller-supplied id (which may be a short id / alias) to the row's full
   // session_id. Neutralize the query so the sessions query validator doesn't
@@ -79,8 +86,18 @@ export function createSessionStreamsService(app: Application) {
       }
       // Join the CANONICAL room id so short-id / alias callers land in the same
       // room publishers emit to (they carry the full UUID).
-      const canonicalId = (await resolveAccessibleSessionId(sessionId, params)) ?? sessionId;
-      joinSessionStreamChannel(app, canonicalId, connection);
+      const canonicalId = await resolveAccessibleSessionId(sessionId, params);
+      if (!canonicalId) {
+        // Never turn an unexpected null/partial service result into authority
+        // to join a caller-named room. The access gate must positively return
+        // the canonical tenant-scoped row identifier.
+        throw new Forbidden('Session stream is unavailable');
+      }
+      // Resolve tenant only from the server-authenticated Params installed by
+      // requireAuth. Caller-controlled subscription ids never participate in
+      // room namespace selection.
+      const tenantId = resolveRealtimeTenantId(params);
+      joinSessionStreamChannel(app, tenantId, canonicalId, connection);
       // Do NOT mark the connection aware here: the aware bit is connection-wide,
       // but a subscribe only covers THIS session's room. The owner fallback still
       // bridges other owned sessions this connection raw-listens to but never joined.
@@ -107,7 +124,8 @@ export function createSessionStreamsService(app: Application) {
           // ultimate cleanup regardless.
         }
       }
-      leaveSessionStreamChannel(app, canonicalId, connection);
+      const tenantId = resolveRealtimeTenantId(params);
+      leaveSessionStreamChannel(app, tenantId, canonicalId, connection);
       return { session_id: canonicalId, subscribed: false };
     },
   };

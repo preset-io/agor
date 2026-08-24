@@ -72,11 +72,19 @@ await client.tasks.run(task.task_id, { stream: true });
 For UIs, live dashboards, or anything that needs to react to session events as they fire:
 
 ```ts
-import { createClient } from '@agor-live/client';
+import { createClient, createRestClient } from '@agor-live/client';
 
-const client = createClient('http://localhost:3030');
+const url = 'http://localhost:3030';
+const loginClient = await createRestClient(url);
+const { accessToken } = await loginClient.authenticate({
+  strategy: 'local',
+  email: 'you@example.com',
+  password: '…',
+});
 
-await client.authenticate({ strategy: 'jwt', accessToken: '…' });
+const client = createClient(url, true, {
+  socketAuthentication: { accessToken },
+});
 
 client.service('messages').on('created', (msg) => {
   console.log('[message]', msg.session_id, msg.role, msg.content?.slice(0, 80));
@@ -87,7 +95,7 @@ client.service('sessions').on('patched', (session) => {
 });
 ```
 
-`createClient()` returns a Socket.IO-backed Feathers client with full event subscriptions: `created`, `patched`, `removed` per service, plus the streaming events that power live agent transcripts.
+`createClient()` returns a Socket.IO-backed Feathers client with full event subscriptions: `created`, `patched`, `removed` per service, plus the streaming events that power live agent transcripts. The daemon verifies the bearer during every Socket.IO handshake, before the connection can call a service or receive events. Do not call `client.authenticate()` to replace identity on a live socket.
 
 ## Reactive Sessions (the cool part)
 
@@ -96,8 +104,9 @@ The headline feature: a **reactive session handle** that mirrors the entire UI s
 ```ts
 import { createClient, retainReactiveSession } from '@agor-live/client';
 
-const client = createClient('http://localhost:3030');
-await client.authenticate({ strategy: 'jwt', accessToken: '…' });
+const client = createClient('http://localhost:3030', true, {
+  socketAuthentication: { accessToken: '…' },
+});
 
 const handle = retainReactiveSession(client, sessionId, { taskHydration: 'lazy' });
 await handle.ready();
@@ -139,9 +148,23 @@ This is what you'd reach for if you wanted to:
 | Strategy | When to use | How |
 |---|---|---|
 | **API Key** | Scripts, services, CI | Pass to `createRestClient(url, apiKey)`, or set `AGOR_API_KEY=agor_sk_…` and use `getApiKeyFromEnv()` |
-| **JWT** | Browser apps after login | `await client.authenticate({ strategy: 'jwt', accessToken })` |
+| **JWT** | Browser apps after REST login | Pass `socketAuthentication: { accessToken }` to `createClient()` |
 
 Authentication is required on every endpoint. There is no anonymous strategy.
+
+For long-lived browser clients, `accessToken` may be a getter. Update the value
+after refresh. Keep a healthy socket connected so terminals and subscriptions
+are not interrupted; Socket.IO's next normal transport reconnect reads the
+latest value:
+
+```ts
+let currentAccessToken = accessToken;
+const client = createClient(url, true, {
+  socketAuthentication: { accessToken: () => currentAccessToken },
+});
+
+currentAccessToken = refreshed.accessToken;
+```
 
 Issue API keys from **User Settings → Personal API Keys**. Keys are scoped to your user. Every action runs under your identity, billing, env vars, and MCP OAuth grants.
 

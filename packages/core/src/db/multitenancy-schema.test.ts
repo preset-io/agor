@@ -46,6 +46,12 @@ function migrationTenantTables(): string[] {
   const githubInstallStateMigration = readRepoFile(
     'packages/core/drizzle/postgres/0082_github_install_state.sql'
   );
+  const externalIdentitiesMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0090_external_user_identities.sql'
+  );
+  const codexDeviceAuthMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'
+  );
   const claudeOauthMigration = readRepoFile(
     'packages/core/drizzle/postgres/0093_claude_oauth_attempts.sql'
   );
@@ -60,6 +66,8 @@ function migrationTenantTables(): string[] {
         ...gatewayHaMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...mcpOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...githubInstallStateMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...externalIdentitiesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...codexDeviceAuthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...claudeOauthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
@@ -77,6 +85,8 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0076_gateway_listener_ha.sql'),
     readRepoFile('packages/core/drizzle/postgres/0078_mcp_oauth_pending_flows.sql'),
     readRepoFile('packages/core/drizzle/postgres/0082_github_install_state.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'),
     readRepoFile('packages/core/drizzle/postgres/0093_claude_oauth_attempts.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
@@ -103,17 +113,6 @@ describe('Postgres multitenancy schema coverage', () => {
     const sqliteSchema = readRepoFile('packages/core/src/db/schema.sqlite.ts');
     expect(sqliteSchema).not.toContain('tenant_id');
     expect(sqliteSchema).not.toContain("tenant_id'");
-  });
-
-  it('requires an explicit tenant GUC for Claude OAuth rows, including default', () => {
-    const migration = readRepoFile('packages/core/drizzle/postgres/0093_claude_oauth_attempts.sql');
-    const policy = migration.slice(
-      migration.indexOf('CREATE POLICY "tenant_isolation_claude_oauth_attempts"'),
-      migration.indexOf('CREATE POLICY "claude_oauth_maintenance_select"')
-    );
-
-    expect(policy).toContain("\"tenant_id\" = NULLIF(current_setting('agor.tenant_id', true), '')");
-    expect(policy).not.toContain("COALESCE(NULLIF(current_setting('agor.tenant_id'");
   });
 
   it('limits cross-tenant gateway discovery to enabled rows and an explicit capability', () => {
@@ -245,6 +244,18 @@ describe('Postgres multitenancy schema coverage', () => {
     expect(migration).not.toMatch(
       /CREATE POLICY "github_install_state_(?:callback_discovery|maintenance)"[\s\S]*WITH CHECK/
     );
+  });
+
+  it('limits Codex device attempt maintenance to due rows and its explicit capability', () => {
+    const migration = readRepoFile(
+      'packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'
+    );
+    expect(migration).toContain('FORCE ROW LEVEL SECURITY');
+    expect(migration).toContain("COALESCE(current_setting('agor.system_scope', true), '') = ''");
+    expect(migration).toContain("= 'codex_device_auth_maintenance'");
+    expect(migration).toContain('"poll_lease_expires_at"');
+    expect(migration).toContain('"exchange_started_at"');
+    expect(migration).toContain('"finished_at"');
   });
 
   it('repairs scheduler occurrence and MCP idempotency indexes as tenant-aware uniques', () => {

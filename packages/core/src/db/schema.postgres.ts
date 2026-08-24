@@ -220,6 +220,11 @@ export const sessions = pgTable(
     boardIdx: index('sessions_board_idx').on(table.board_id),
     branchIdx: index('sessions_branch_idx').on(table.branch_id),
     createdIdx: index('sessions_created_idx').on(table.created_at),
+    tenantArchivedUpdatedIdx: index('sessions_tenant_archived_updated_idx').on(
+      table.tenant_id,
+      table.archived,
+      table.updated_at
+    ),
     parentIdx: index('sessions_parent_idx').on(table.parent_session_id),
     forkedIdx: index('sessions_forked_idx').on(table.forked_from_session_id),
     // Scheduler indexes — including the partial unique index below.
@@ -811,6 +816,7 @@ export const branches = pgTable(
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")
+        base_remote_url?: string; // Optional remote that owns base_ref
         base_sha?: string; // SHA at branch creation
         last_commit_sha?: string; // Latest commit
         tracking_branch?: string; // Remote tracking branch
@@ -1017,7 +1023,7 @@ export const users = pgTable(
       .notNull()
       .default('member'),
 
-    // Opaque execution-home key (optional, app-enforced tenant uniqueness)
+    // Opaque execution-home key (optional, database-enforced per-tenant uniqueness)
     unix_username: text('unix_username'),
 
     // Absolute host home dir used as the per-user sandbox overlay SOURCE under
@@ -1030,6 +1036,9 @@ export const users = pgTable(
 
     // Force password change flag (admin-settable, auto-cleared on password change)
     must_change_password: t.bool('must_change_password').notNull().default(false),
+
+    // Monotonic local-credential generation copied into interactive JWTs.
+    credential_generation: integer('credential_generation').notNull().default(0),
 
     // Auth invalidation marker. Password changes set this timestamp so any
     // previously issued browser access or refresh token is rejected.
@@ -1146,6 +1155,8 @@ export const users = pgTable(
             permissionMode?: string;
           };
         };
+        primary_agentic_tool?: import('../types/agentic-tool').AgenticToolName;
+        primary_teammate_id?: import('../types/id').BranchID;
         default_mcp_server_ids?: string[];
         default_agentic_selection?: import('../types/user').UserAgenticDefaultSelections;
       }>()
@@ -1155,6 +1166,47 @@ export const users = pgTable(
     tenantIdx: index('users_tenant_id_idx').on(table.tenant_id),
     emailIdx: index('users_email_idx').on(table.email),
     emailTenantUnique: uniqueIndex('users_tenant_email_unique').on(table.tenant_id, table.email),
+    executionHomeTenantUnique: uniqueIndex('users_tenant_unix_username_unique').on(
+      table.tenant_id,
+      table.unix_username
+    ),
+  })
+);
+
+/**
+ * Database-enforced binding between one trusted external subject and its local
+ * user projection. The JSON copy on users remains a compatibility/audit cache;
+ * this relation is the lookup and uniqueness authority.
+ */
+export const userExternalIdentities = pgTable(
+  'user_external_identities',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    identity_key: varchar('identity_key', { length: 64 }).notNull(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    provider: text('provider').notNull(),
+    issuer: text('issuer').notNull(),
+    subject: text('subject').notNull(),
+    email: text('email'),
+    name: text('name'),
+    last_login_at: t.timestamp('last_login_at').notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.tenant_id, table.identity_key] }),
+    tenantUserFk: foreignKey({
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+      name: 'user_external_identities_tenant_user_fk',
+    }).onDelete('cascade'),
+    providerSubjectUnique: uniqueIndex('user_external_identities_provider_subject_unique').on(
+      table.tenant_id,
+      table.provider,
+      table.issuer,
+      table.subject
+    ),
+    userIdx: index('user_external_identities_tenant_user_idx').on(table.tenant_id, table.user_id),
   })
 );
 
@@ -1403,6 +1455,7 @@ export const mcpServers = pgTable(
     source: text('source', {
       enum: ['user', 'imported', 'agor', 'catalog'],
     }).notNull(),
+    catalog_entry_name: text('catalog_entry_name'),
 
     // JSON blob for configuration and capabilities
     data: t
@@ -1479,6 +1532,9 @@ export const mcpServers = pgTable(
     scopeIdx: index('mcp_servers_scope_idx').on(table.scope),
     ownerIdx: index('mcp_servers_owner_idx').on(table.owner_user_id),
     enabledIdx: index('mcp_servers_enabled_idx').on(table.enabled),
+    catalogOwnerUq: uniqueIndex('mcp_servers_catalog_owner_uq')
+      .on(table.tenant_id, sql`coalesce(${table.owner_user_id}, '')`, table.catalog_entry_name)
+      .where(sql`${table.source} = 'catalog' AND ${table.catalog_entry_name} IS NOT NULL`),
   })
 );
 
@@ -1880,7 +1936,7 @@ export const claudeOauthAttempts = pgTable(
     envelope_version: integer('envelope_version').notNull(),
     is_current: boolean('is_current').notNull().default(true),
     status: text('status', {
-      enum: ['pending', 'exchanging', 'succeeded', 'failed', 'ambiguous', 'expired'],
+      enum: ['pending', 'exchanging', 'persisting', 'succeeded', 'failed', 'ambiguous', 'expired'],
     })
       .notNull()
       .default('pending'),
@@ -1904,15 +1960,94 @@ export const claudeOauthAttempts = pgTable(
       foreignColumns: [users.tenant_id, users.user_id],
     }).onDelete('cascade'),
     stateHashUnique: uniqueIndex('claude_oauth_attempts_state_hash_unique').on(table.state_hash),
+    currentUserUnique: uniqueIndex('claude_oauth_attempts_current_user_uq')
+      .on(table.tenant_id, table.user_id)
+      .where(sql`${table.is_current} = true`),
     tenantUserIdx: index('claude_oauth_attempts_tenant_user_idx').on(
       table.tenant_id,
       table.user_id,
       table.created_at
     ),
-    // The durable replacement for the process-local "one in-flight attempt per
-    // user" invariant is a partial unique index on is_current = true, created in
-    // the migration because Drizzle cannot express the WHERE clause here.
+    // Current-attempt uniqueness mirrors the partial index in the migration.
     maintenanceIdx: index('claude_oauth_attempts_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
+ * Durable, short-lived authority for Codex ChatGPT device sign-in attempts.
+ *
+ * Device identifiers and user codes live only in `sealed_material`, bound to
+ * tenant/user/attempt/generation. Poll ownership is a DB-clock lease; the
+ * authorization-code exchange is a separate one-shot claim.
+ */
+export const codexDeviceAuthAttempts = pgTable(
+  'codex_device_auth_attempts',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    attempt_id: varchar('attempt_id', { length: 36 }).primaryKey(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    attempt_generation: bigint('attempt_generation', { mode: 'number' }).notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: boolean('is_current').notNull().default(true),
+    status: text('status', {
+      enum: [
+        'starting',
+        'pending',
+        'exchanging',
+        'persisting',
+        'succeeded',
+        'unavailable',
+        'denied',
+        'failed',
+        'ambiguous',
+        'expired',
+        'superseded',
+        'cancelled',
+      ],
+    })
+      .notNull()
+      .default('starting'),
+    // Cleared on every terminal transition.
+    sealed_material: text('sealed_material'),
+    poll_interval_ms: integer('poll_interval_ms'),
+    poll_next_at: t.timestamp('poll_next_at'),
+    poll_claim_id: varchar('poll_claim_id', { length: 36 }),
+    poll_claim_generation: bigint('poll_claim_generation', { mode: 'number' }).notNull().default(0),
+    poll_lease_expires_at: t.timestamp('poll_lease_expires_at'),
+    exchange_claim_id: varchar('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    plan_type: text('plan_type'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    currentUserUnique: uniqueIndex('codex_device_auth_attempts_current_user_uq')
+      .on(table.tenant_id, table.user_id)
+      .where(sql`${table.is_current} = true`),
+    tenantUserFk: foreignKey({
+      name: 'codex_device_auth_attempts_tenant_user_fk',
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+    }).onDelete('cascade'),
+    tenantUserIdx: index('codex_device_auth_attempts_tenant_user_idx').on(
+      table.tenant_id,
+      table.user_id,
+      table.created_at
+    ),
+    pollIdx: index('codex_device_auth_attempts_poll_idx').on(
+      table.status,
+      table.poll_next_at,
+      table.poll_lease_expires_at
+    ),
+    maintenanceIdx: index('codex_device_auth_attempts_maintenance_idx').on(
       table.status,
       table.expires_at,
       table.exchange_started_at,
@@ -2801,6 +2936,8 @@ export type ScheduleRow = typeof schedules.$inferSelect;
 export type ScheduleInsert = typeof schedules.$inferInsert;
 export type UserRow = typeof users.$inferSelect;
 export type UserInsert = typeof users.$inferInsert;
+export type UserExternalIdentityRow = typeof userExternalIdentities.$inferSelect;
+export type UserExternalIdentityInsert = typeof userExternalIdentities.$inferInsert;
 export type AppVariableRow = typeof appVariables.$inferSelect;
 export type AppVariableInsert = typeof appVariables.$inferInsert;
 export type AgenticToolPresetRow = typeof agenticToolPresets.$inferSelect;
@@ -2825,6 +2962,8 @@ export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
 export type ClaudeOAuthAttemptRow = typeof claudeOauthAttempts.$inferSelect;
 export type ClaudeOAuthAttemptInsert = typeof claudeOauthAttempts.$inferInsert;
+export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;
+export type CodexDeviceAuthAttemptInsert = typeof codexDeviceAuthAttempts.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;
 export type CardTypeInsert = typeof cardTypes.$inferInsert;
 export type CardRow = typeof cards.$inferSelect;

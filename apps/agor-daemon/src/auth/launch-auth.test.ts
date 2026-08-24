@@ -2,7 +2,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AgorConfig } from '@agor/core/config';
+import { type AgorConfig, resolveExternalLaunchSettings } from '@agor/core/config';
 import type { Database } from '@agor/core/db';
 import {
   createDatabase,
@@ -12,6 +12,7 @@ import {
   insert,
   select,
   update,
+  userExternalIdentities,
   users,
 } from '@agor/core/db';
 import { NotAuthenticated } from '@agor/core/feathers';
@@ -34,6 +35,25 @@ function baseConfig(): AgorConfig {
       dev_shared_secret: ASSERTION_SECRET,
       service_credential: 'exchange-credential',
     },
+  };
+}
+
+function publicLaunchAuthSettings(config: AgorConfig) {
+  const { settings } = resolveExternalLaunchSettings(config);
+  return resolvePublicLaunchAuthSettings(settings);
+}
+
+function externalAuthorityConfig(): AgorConfig {
+  return {
+    ...baseConfig(),
+    identity: {
+      user_lifecycle: 'external',
+      role_authority: 'claims',
+      local_auth: 'disabled',
+      external: { provider: 'external_launch', provisioning: 'jit' },
+    },
+    external_launch: { ...baseConfig().external_launch, allow_admin_roles: true },
+    execution: { allow_superadmin: true },
   };
 }
 
@@ -86,6 +106,7 @@ function makeUsersService(db: Database) {
         unix_username: row.unix_username ?? undefined,
         onboarding_completed: row.onboarding_completed,
         must_change_password: row.must_change_password,
+        credential_generation: row.credential_generation,
         tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
         created_at: row.created_at,
         updated_at: row.updated_at ?? undefined,
@@ -112,9 +133,11 @@ describe('one-time launch auth service', () => {
   });
 
   function service(config = baseConfig(), usersService = makeUsersService(db)) {
+    const { settings } = resolveExternalLaunchSettings(config);
     return createLaunchAuthService({
       db,
       config,
+      provider: settings,
       jwtSecret: RUNTIME_JWT_SECRET,
       accessTokenTtl: '15m',
       refreshTokenTtl: '30d',
@@ -221,6 +244,15 @@ describe('one-time launch auth service', () => {
     }) as { sub: string; type: string };
     expect(decoded.sub).toBe(result.user.user_id);
     expect(decoded.type).toBe('access');
+
+    const binding = await select(db).from(userExternalIdentities).all();
+    expect(binding).toEqual([
+      expect.objectContaining({
+        user_id: result.user.user_id,
+        provider: 'https://issuer.example.test',
+        subject: 'external-user-1',
+      }),
+    ]);
   });
 
   it('scopes launch auth with the configured tenant claim', async () => {
@@ -284,6 +316,28 @@ describe('one-time launch auth service', () => {
     expect(relaunched.user.unix_username).toBe('jose_garcia');
   });
 
+  it('rejects malformed and duplicate authoritative execution-home claims', async () => {
+    mockExchange(
+      signClaims({ sub: 'invalid-home', email: 'invalid-home@example.test', unix_username: '../x' })
+    );
+    await expect(
+      service(externalAuthorityConfig()).create({ launchCode: 'invalid-home' })
+    ).rejects.toThrow(/execution home/);
+
+    mockExchange(
+      signClaims({ sub: 'home-owner', email: 'home-owner@example.test', unix_username: 'shared' })
+    );
+    await service(externalAuthorityConfig()).create({ launchCode: 'home-owner' });
+
+    mockExchange(
+      signClaims({ sub: 'home-other', email: 'home-other@example.test', unix_username: 'shared' })
+    );
+    await expect(
+      service(externalAuthorityConfig()).create({ launchCode: 'home-other' })
+    ).rejects.toThrow(/already assigned/);
+    expect(await select(db).from(users).all()).toHaveLength(1);
+  });
+
   it('repeat login maps the same external identity to the same local user', async () => {
     mockExchange(signClaims());
     const first = await service().create({ launchCode: 'first' });
@@ -293,6 +347,95 @@ describe('one-time launch auth service', () => {
 
     expect(second.user.user_id).toBe(first.user.user_id);
     expect(second.user.name).toBe('Updated Name');
+  });
+
+  it('serializes concurrent JIT projection for the same external subject', async () => {
+    mockExchange(
+      signClaims({ sub: 'concurrent-user', email: 'concurrent@example.test', name: 'Concurrent' })
+    );
+
+    const auth = service();
+    const [first, second] = await Promise.all([
+      auth.create({ launchCode: 'concurrent-1' }),
+      auth.create({ launchCode: 'concurrent-2' }),
+    ]);
+
+    expect(second.user.user_id).toBe(first.user.user_id);
+    expect(await select(db).from(users).all()).toHaveLength(1);
+    expect(await select(db).from(userExternalIdentities).all()).toHaveLength(1);
+  });
+
+  it('synchronizes claim-owned fields on each externally authoritative launch', async () => {
+    mockExchange(
+      signClaims({
+        email: 'first@example.test',
+        name: 'First Name',
+        role: 'admin',
+        avatar: 'https://cdn.example.test/first.png',
+        unix_username: 'first-home',
+      })
+    );
+    const first = await service(externalAuthorityConfig()).create({ launchCode: 'first' });
+    await update(db, users)
+      .set({
+        data: {
+          ...((await select(db).from(users).where(eq(users.user_id, first.user.user_id)).one())!
+            .data as Record<string, unknown>),
+          preferences: { audio: { enabled: false } },
+          default_mcp_server_ids: ['mcp-1'],
+        },
+      })
+      .where(eq(users.user_id, first.user.user_id))
+      .run();
+
+    mockExchange(
+      signClaims({
+        email: 'second@example.test',
+        name: 'Second Name',
+        role: 'viewer',
+        avatar: 'https://cdn.example.test/second.png',
+        unix_username: null,
+      })
+    );
+    const second = await service(externalAuthorityConfig()).create({ launchCode: 'second' });
+
+    expect(second.user.user_id).toBe(first.user.user_id);
+    expect(second.user).toMatchObject({
+      email: 'second@example.test',
+      name: 'Second Name',
+      role: 'viewer',
+    });
+    const row = await select(db).from(users).where(eq(users.user_id, first.user.user_id)).one();
+    expect(row).toMatchObject({
+      email: 'second@example.test',
+      name: 'Second Name',
+      role: 'viewer',
+      unix_username: null,
+    });
+    expect(row?.data).toMatchObject({
+      avatar_url: 'https://cdn.example.test/second.png',
+      preferences: { audio: { enabled: false } },
+      default_mcp_server_ids: ['mcp-1'],
+    });
+  });
+
+  it('requires a recognized role before externally authoritative JIT creation', async () => {
+    mockExchange(
+      signClaims({ sub: 'missing-role', email: 'missing-role@example.test', role: undefined })
+    );
+
+    await expect(
+      service(externalAuthorityConfig()).create({ launchCode: 'missing-role' })
+    ).rejects.toThrow(/role/);
+    expect(await select(db).from(users).all()).toHaveLength(0);
+
+    mockExchange(
+      signClaims({ sub: 'unknown-role', email: 'unknown-role@example.test', role: 'root' })
+    );
+    await expect(
+      service(externalAuthorityConfig()).create({ launchCode: 'unknown-role' })
+    ).rejects.toThrow(/role/);
+    expect(await select(db).from(users).all()).toHaveLength(0);
   });
 
   it('uses token invalidation metadata for launch tokens without returning it', async () => {
@@ -346,6 +489,40 @@ describe('one-time launch auth service', () => {
 
     const row = await select(db).from(users).where(eq(users.user_id, 'local-user-1')).one();
     expect((row!.data as { external_identities?: unknown[] }).external_identities).toHaveLength(1);
+  });
+
+  it('clears an impossible forced-password flag when external authority links a local user', async () => {
+    const now = new Date();
+    await insert(db, users)
+      .values({
+        user_id: 'forced-local-user',
+        created_at: now,
+        updated_at: now,
+        email: 'person@example.test',
+        password: await hash('local-password', 10),
+        name: 'Forced Local User',
+        emoji: '👤',
+        role: 'member',
+        onboarding_completed: false,
+        must_change_password: true,
+        data: { preferences: {} },
+      })
+      .run();
+
+    mockExchange(signClaims({ email_verified: true }));
+    const config = externalAuthorityConfig();
+    config.external_launch = {
+      ...config.external_launch,
+      trust_verified_email_for_linking: true,
+    };
+    const result = await service(config).create({ launchCode: 'trusted-forced-email' });
+
+    expect(result.user).toMatchObject({
+      user_id: 'forced-local-user',
+      must_change_password: false,
+    });
+    const row = await select(db).from(users).where(eq(users.user_id, 'forced-local-user')).one();
+    expect(row?.must_change_password).toBe(false);
   });
 
   it('does not merge a new external identity by email alone', async () => {
@@ -649,7 +826,7 @@ describe('public one-time launch auth settings', () => {
   });
 
   it('returns only the public external launch shape', () => {
-    const result = resolvePublicLaunchAuthSettings({
+    const result = publicLaunchAuthSettings({
       external_launch: {
         ...baseConfig().external_launch,
         login_redirect_url: 'https://workspace.example.test/open',
@@ -668,7 +845,7 @@ describe('public one-time launch auth settings', () => {
   });
 
   it('exposes a default return-host param alongside a login redirect', () => {
-    const result = resolvePublicLaunchAuthSettings({
+    const result = publicLaunchAuthSettings({
       external_launch: {
         ...baseConfig().external_launch,
         login_redirect_url: 'https://console.example.test/launch-init',
@@ -678,7 +855,7 @@ describe('public one-time launch auth settings', () => {
   });
 
   it('honors a configured return-host param name', () => {
-    const result = resolvePublicLaunchAuthSettings({
+    const result = publicLaunchAuthSettings({
       external_launch: {
         ...baseConfig().external_launch,
         login_redirect_url: 'https://console.example.test/launch-init',
@@ -689,14 +866,14 @@ describe('public one-time launch auth settings', () => {
   });
 
   it('does not expose a return-host param without a login redirect', () => {
-    const result = resolvePublicLaunchAuthSettings({
+    const result = publicLaunchAuthSettings({
       external_launch: { ...baseConfig().external_launch },
     });
     expect(result).not.toHaveProperty('returnHostParam');
   });
 
   it('never exposes the exchange service credential in public settings', () => {
-    const result = resolvePublicLaunchAuthSettings({
+    const result = publicLaunchAuthSettings({
       external_launch: {
         ...baseConfig().external_launch,
         service_credential: 'exchange-only-credential',
@@ -708,7 +885,7 @@ describe('public one-time launch auth settings', () => {
 
   it('does not expose an inactive login redirect URL', () => {
     expect(
-      resolvePublicLaunchAuthSettings({
+      publicLaunchAuthSettings({
         external_launch: {
           ...baseConfig().external_launch,
           enabled: false,

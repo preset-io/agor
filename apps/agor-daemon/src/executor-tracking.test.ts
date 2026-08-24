@@ -5,9 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  clearTrackedExecutorGauge,
   containExecutorProcess,
   getTrackedExecutor,
+  getTrackedExecutorCount,
   markExecutorProcessExited,
+  reconcileTrackedExecutorGauge,
   releaseExecutorContainmentFenceIntent,
   reserveExecutorContainmentFence,
   retainExecutorContainmentFence,
@@ -15,6 +18,7 @@ import {
   untrackExecutorProcess,
   verifyExecutorContainmentFence,
 } from './executor-tracking.js';
+import { NOOP_METRICS } from './metrics/noop.js';
 
 describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
   'executor process-group containment',
@@ -41,6 +45,52 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')(
       } finally {
         untrackExecutorProcess('session-owner', 'task-owner', ownerA);
       }
+    });
+
+    it('initializes and reconciles an absolute per-daemon running-executor gauge', () => {
+      const gauge = vi.fn();
+      const owner = {
+        get: (name: string) =>
+          name === 'metrics'
+            ? {
+                ...NOOP_METRICS,
+                enabled: true,
+                gauge,
+              }
+            : undefined,
+      };
+      reconcileTrackedExecutorGauge(owner);
+      expect(gauge).toHaveBeenLastCalledWith('executors.running', 0, {
+        mode: 'local',
+        scope: 'process_group',
+      });
+
+      trackExecutorProcess(
+        { sessionId: 'session-gauge', taskId: 'task-gauge', pid: process.pid },
+        owner
+      );
+      expect(getTrackedExecutorCount(owner)).toBe(1);
+      expect(gauge).toHaveBeenLastCalledWith('executors.running', 1, {
+        mode: 'local',
+        scope: 'process_group',
+      });
+
+      // Leader exit is not absence proof: descendants may still be alive in
+      // the tracked process group, so the gauge remains one until settlement.
+      markExecutorProcessExited('session-gauge', process.pid, owner);
+      expect(getTrackedExecutorCount(owner)).toBe(1);
+      untrackExecutorProcess('session-gauge', 'task-gauge', owner);
+      expect(getTrackedExecutorCount(owner)).toBe(0);
+      expect(gauge).toHaveBeenLastCalledWith('executors.running', 0, {
+        mode: 'local',
+        scope: 'process_group',
+      });
+
+      clearTrackedExecutorGauge(owner);
+      expect(gauge).toHaveBeenLastCalledWith('executors.running', 0, {
+        mode: 'local',
+        scope: 'process_group',
+      });
     });
 
     it('waits through transient inspection uncertainty after cooperative quiescence', async () => {

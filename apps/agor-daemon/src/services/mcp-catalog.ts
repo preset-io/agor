@@ -6,7 +6,8 @@
  * file in this repository, so the way to change them is a pull request.
  *
  * This does not extend `DrizzleService`. There is no table behind it — the
- * catalog is loaded once into the process and every read is served from there.
+ * catalog is parsed lazily on its first read, cached in the process, and every
+ * later read is served from there.
  *
  * Two methods, for two different callers: `find` hands the Marketplace the
  * whole catalog to filter in the browser, and `get` resolves one entry by name
@@ -27,9 +28,9 @@ export class MCPCatalogService {
   /**
    * The whole catalog, every time.
    *
-   * There is nothing to narrow here and no page to take. The catalog is ~50
-   * entries — tens of kilobytes, a few over the wire once — so the browser is
-   * handed all of it and filters, orders and pages what it holds. That makes
+   * There is nothing to narrow here and no page to take. The current static
+   * catalog is bounded and small enough to hand to the browser in one response,
+   * so it filters, orders and pages what it holds. That makes
    * search a keystroke instead of a debounced round trip, and it is why this
    * takes no query: a `search=` or `$skip=` that reached this method would have
    * to be implemented twice to mean the same thing in both places.

@@ -99,3 +99,24 @@ export const SectionDivider: React.FC<SectionDividerProps> = ({ label }) => {
     </Divider>
   );
 };
+
+export interface SettingsSectionProps {
+  title: ReactNode;
+  children: ReactNode;
+}
+
+/**
+ * A prominent, indented section for longer settings pages. Unlike the compact
+ * SectionDivider, this creates a real heading and a visible content hierarchy.
+ */
+export const SettingsSection: React.FC<SettingsSectionProps> = ({ title, children }) => {
+  const { token } = theme.useToken();
+  return (
+    <section style={{ marginBottom: token.marginXL }}>
+      <Title level={5} style={{ margin: `0 0 ${token.marginMD}px` }}>
+        {title}
+      </Title>
+      <div style={{ paddingInlineStart: token.paddingLG }}>{children}</div>
+    </section>
+  );
+};

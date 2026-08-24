@@ -80,6 +80,18 @@ describe('register-services /mcp-servers/discover wiring', () => {
     expect(discoverBlock).toContain('disableProcessTokenCache: !!durableOAuthFlows');
   });
 
+  it('rejects transient compatibility values and uses the durable row for grant-producing discovery', () => {
+    const validationIdx = discoverBlock.indexOf('assertPublicMCPOAuthCompatibilityMode(data.auth)');
+    const firstOutboundIdx = discoverBlock.indexOf('oauthFetch(');
+    expect(validationIdx).toBeGreaterThan(-1);
+    expect(validationIdx).toBeLessThan(firstOutboundIdx);
+    expect(discoverBlock).toMatch(/serverConfig\s*=\s*\{[\s\S]*url:\s*server\.url/);
+    expect(discoverBlock).not.toContain('restoreRedactedMCPAuthSecrets');
+    expect(discoverBlock).toMatch(
+      /resolveMCPOAuthCompatibilityPolicy\s*\(\s*authoritativeServer\s*\?\?/
+    );
+  });
+
   it('skips pre-resolution URL validation for templated URLs', () => {
     // `new URL("https://{{ user.env.HOST }}/mcp")` throws because of the
     // whitespace inside `{{ }}`, and `new URL("{{ user.env.MCP_URL }}")`

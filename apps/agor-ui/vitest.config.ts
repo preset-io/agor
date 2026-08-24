@@ -21,7 +21,10 @@ export default defineConfig({
         inline: ['streamdown', 'katex'],
       },
     },
-    exclude: [...configDefaults.exclude, 'src/utils/theme.test.ts'],
+    // `*.browser.test.tsx` run only under the real-browser config
+    // (vitest.browser.config.ts) — they rely on true layout/scroll/stacking that
+    // jsdom can't model.
+    exclude: [...configDefaults.exclude, 'src/utils/theme.test.ts', 'src/**/*.browser.test.tsx'],
     // Ant Design Form / Select first-mount cost (CSS parse + JSDOM
     // getComputedStyle stubs) blows past vitest's 5s default on CI cold
     // start, even though the same test runs in <300ms warm. Bump to 15s.

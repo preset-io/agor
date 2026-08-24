@@ -26,14 +26,10 @@ import { sanitizeDbError } from '../sanitize-error';
 // Intentionally PostgreSQL-only: import the concrete table so tenant_id stays
 // part of the static type.
 import { claudeOauthAttempts } from '../schema.postgres';
-import { getCurrentTenantDatabaseScope } from '../tenant-context';
+import { assertAuthorityFailureCode, lockTenantAuthoritySubject } from './authority-primitives';
 import { RepositoryError } from './base';
 
-/** Unit separator, so a composite advisory-lock key cannot be ambiguous. */
-const LOCK_KEY_SEPARATOR = '\u001f';
-
 const SHA256_HEX = /^[a-f0-9]{64}$/;
-const SAFE_FAILURE_CODE = /^[a-z0-9_]{1,64}$/;
 
 export interface ClaudeOAuthAttemptCreate {
   tenantId: string;
@@ -99,9 +95,15 @@ function mapRow(row: Record<string, unknown>): ClaudeOAuthAttemptRecord {
     !Number.isSafeInteger(Number(row.attempt_generation)) ||
     !Number.isSafeInteger(Number(row.envelope_version)) ||
     typeof row.is_current !== 'boolean' ||
-    !['pending', 'exchanging', 'succeeded', 'failed', 'ambiguous', 'expired'].includes(
-      String(status)
-    ) ||
+    ![
+      'pending',
+      'exchanging',
+      'persisting',
+      'succeeded',
+      'failed',
+      'ambiguous',
+      'expired',
+    ].includes(String(status)) ||
     (row.sealed_material !== null && typeof row.sealed_material !== 'string') ||
     (row.exchange_claim_id !== null && typeof row.exchange_claim_id !== 'string') ||
     (row.failure_code !== null && typeof row.failure_code !== 'string') ||
@@ -137,9 +139,7 @@ function assertStateHash(stateHash: string): void {
 }
 
 function assertFailureCode(failureCode: string): void {
-  if (!SAFE_FAILURE_CODE.test(failureCode)) {
-    throw new RepositoryError('Claude OAuth failure code is invalid');
-  }
+  assertAuthorityFailureCode(failureCode, 'Claude OAuth');
 }
 
 function databaseFailure(operation: string, error: unknown): RepositoryError {
@@ -154,17 +154,11 @@ export class ClaudeOAuthAttemptRepository {
     }
   }
 
-  private async lockUser(tenantId: string, userId: UserID): Promise<void> {
-    const scope = getCurrentTenantDatabaseScope();
-    if (scope?.kind !== 'tenant' || scope.db !== this.db || scope.tenantId !== tenantId) {
-      throw new RepositoryError('Claude OAuth attempt lock requires its tenant transaction');
-    }
-    await executeRaw(
-      this.db,
-      sql`SELECT pg_advisory_xact_lock(
-        hashtextextended(${[tenantId, userId].join(LOCK_KEY_SEPARATOR)}, 0)
-      )`
-    );
+  async lockUser(tenantId: string, userId: UserID): Promise<void> {
+    // Deliberately the exact same namespace/key as Codex. Cross-provider
+    // mutations take one user authority before either service enters its
+    // users-service role lock, avoiding lock-order inversions.
+    await lockTenantAuthoritySubject(this.db, tenantId, `${tenantId}\u001f${userId}`);
   }
 
   /**
@@ -221,19 +215,19 @@ export class ClaudeOAuthAttemptRepository {
         sql`
           UPDATE ${claudeOauthAttempts}
           SET status = CASE
-                WHEN status = 'exchanging' THEN 'ambiguous'
+                WHEN status IN ('exchanging', 'persisting') THEN 'ambiguous'
                 WHEN status = 'pending' THEN 'failed'
                 ELSE status
               END,
               failure_code = CASE
-                WHEN status IN ('pending', 'exchanging') THEN 'superseded_by_newer_attempt'
+                WHEN status IN ('pending', 'exchanging', 'persisting') THEN 'superseded_by_newer_attempt'
                 ELSE failure_code
               END,
               is_current = false,
               sealed_material = NULL,
               updated_at = CURRENT_TIMESTAMP,
               finished_at = CASE
-                WHEN status IN ('pending', 'exchanging') THEN CURRENT_TIMESTAMP
+                WHEN status IN ('pending', 'exchanging', 'persisting') THEN CURRENT_TIMESTAMP
                 ELSE finished_at
               END
           WHERE tenant_id = ${input.tenantId}
@@ -359,6 +353,28 @@ export class ClaudeOAuthAttemptRepository {
     }
   }
 
+  async markPersisting(record: ClaudeOAuthAttemptRecord): Promise<boolean> {
+    if (!record.exchangeClaimId) return false;
+    try {
+      const result = await executeRaw(
+        this.db,
+        sql`UPDATE ${claudeOauthAttempts}
+            SET status = 'persisting', updated_at = CURRENT_TIMESTAMP
+            WHERE tenant_id = ${record.tenantId}
+              AND user_id = ${record.userId}
+              AND attempt_id = ${record.attemptId}
+              AND attempt_generation = ${record.attemptGeneration}
+              AND exchange_claim_id = ${record.exchangeClaimId}
+              AND status = 'exchanging'
+              AND is_current = true
+            RETURNING attempt_id`
+      );
+      return rowsOf(result).length > 0;
+    } catch (error) {
+      throw databaseFailure('persisting transition', error);
+    }
+  }
+
   async getForUser(
     tenantId: string,
     userId: UserID,
@@ -433,7 +449,7 @@ export class ClaudeOAuthAttemptRepository {
               finished_at = CURRENT_TIMESTAMP
           WHERE tenant_id = ${tenantId}
             AND attempt_id = ${attemptId}
-            AND status = 'exchanging'
+            AND status = ${status === 'succeeded' ? 'persisting' : 'exchanging'}
             AND exchange_claim_id = ${claimId}
             AND is_current = true
           RETURNING attempt_id
@@ -454,19 +470,30 @@ export class ClaudeOAuthAttemptRepository {
   async invalidateForUser(tenantId: string, userId: UserID, failureCode: string): Promise<number> {
     assertFailureCode(failureCode);
     try {
+      await this.lockUser(tenantId, userId);
       const result = await update(this.db, claudeOauthAttempts)
         .set({
-          status: sql`CASE WHEN status = 'exchanging' THEN 'ambiguous' ELSE 'failed' END`,
-          failure_code: failureCode,
+          status: sql`CASE
+            WHEN status IN ('exchanging', 'persisting') THEN 'ambiguous'
+            WHEN status = 'pending' THEN 'failed'
+            ELSE status
+          END`,
+          failure_code: sql`CASE
+            WHEN status IN ('pending', 'exchanging', 'persisting') THEN ${failureCode}
+            ELSE failure_code
+          END`,
           is_current: false,
           sealed_material: null,
           updated_at: sql`CURRENT_TIMESTAMP`,
-          finished_at: sql`CURRENT_TIMESTAMP`,
+          finished_at: sql`CASE
+            WHEN status IN ('pending', 'exchanging', 'persisting') THEN CURRENT_TIMESTAMP
+            ELSE finished_at
+          END`,
         })
         .where(
           sql`tenant_id = ${tenantId}
               AND user_id = ${userId}
-              AND status IN ('pending', 'exchanging')`
+              AND is_current = true`
         )
         .run();
       return result.rowsAffected;
@@ -502,7 +529,7 @@ export class ClaudeOAuthAttemptRepository {
           finished_at: sql`CURRENT_TIMESTAMP`,
         })
         .where(
-          sql`status = 'exchanging'
+          sql`status IN ('exchanging', 'persisting')
               AND exchange_started_at <= CURRENT_TIMESTAMP - INTERVAL '2 minutes'`
         )
         .run();

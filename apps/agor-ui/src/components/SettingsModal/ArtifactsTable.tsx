@@ -7,7 +7,6 @@ import {
   Empty,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Select,
   Space,
@@ -25,6 +24,8 @@ import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { boardSelectFilter, boardSelectOptions, getBoardEmoji } from '../BoardTile';
 import { HighlightMatch } from '../HighlightMatch';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface ArtifactsTableProps {
@@ -281,25 +282,18 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
 
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">
-          Live web application artifacts created by agents via MCP tools.
-        </Typography.Text>
-        <Input
-          allowClear
-          placeholder="Search name, description, template, branch, or board"
-          value={searchTerm}
-          onChange={(event) => setSearchTerm(event.target.value)}
-          style={{ width: 360 }}
-        />
-      </div>
+      <ResponsiveSettingsHeader
+        description="Live web application artifacts created by agents via MCP tools."
+        actions={(compact) => (
+          <Input
+            allowClear
+            placeholder="Search name, description, template, branch, or board"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            style={{ width: compact ? '100%' : 360 }}
+          />
+        )}
+      />
 
       {dataSource.length === 0 ? (
         <div
@@ -330,7 +324,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
       )}
 
       {editingArtifact && (
-        <Modal
+        <AdaptiveSettingsModal
           title="Edit Artifact"
           open={editModalOpen}
           onOk={handleUpdate}
@@ -368,7 +362,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
               />
             </Form.Item>
           </Form>
-        </Modal>
+        </AdaptiveSettingsModal>
       )}
     </div>
   );

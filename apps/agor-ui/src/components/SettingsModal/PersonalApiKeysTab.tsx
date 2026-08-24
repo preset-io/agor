@@ -1,11 +1,13 @@
 import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Popconfirm, Space, Table, Typography, theme } from 'antd';
+import { Alert, Button, Input, Popconfirm, Space, Table, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
 import { filterBySettingsSearch } from '../../utils/settingsSearch';
 import { HighlightMatch } from '../HighlightMatch';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 
 interface ApiKeyEntry {
   id: string;
@@ -156,22 +158,31 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
 
   return (
     <div>
-      <Space style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-        <Input
-          allowClear
-          placeholder="Search name, prefix, or dates"
-          value={searchTerm}
-          onChange={(event) => setSearchTerm(event.target.value)}
-          style={{ width: 300 }}
-        />
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
-          Create New Key
-        </Button>
-      </Space>
+      <ResponsiveSettingsHeader
+        description="Manage personal API keys."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="Search name, prefix, or dates"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{
+                width: compact ? '100%' : 300,
+                flex: compact ? '1 1 100%' : undefined,
+              }}
+            />
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
+              Create New Key
+            </Button>
+          </Space>
+        )}
+      />
 
       <Table
         dataSource={filteredKeys}
         columns={columns}
+        scroll={{ x: 560 }}
         rowKey="id"
         loading={loading}
         pagination={false}
@@ -180,7 +191,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
       />
 
       {/* Create key modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title="Create API Key"
         open={showCreateModal && !newlyCreatedKey}
         onOk={handleCreate}
@@ -202,10 +213,10 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
           maxLength={100}
           autoFocus
         />
-      </Modal>
+      </AdaptiveSettingsModal>
 
       {/* Show key once modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title={
           <Space>
             <KeyOutlined />
@@ -249,7 +260,7 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
         >
           Copy to Clipboard
         </Button>
-      </Modal>
+      </AdaptiveSettingsModal>
     </div>
   );
 };

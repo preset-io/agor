@@ -8,13 +8,12 @@ export interface ExecutorCredentialRouting {
   delegatedHomeKey: string | null;
   userId: string;
   /**
-   * Explicit `CODEX_HOME` (the `.codex` dir) for the codex auth-file executor op.
-   * Set in `unix_user_mode: sandbox` to the caller's per-user store `.codex` so
-   * auth persists where the sandboxed session reads it. Unset otherwise (the
-   * executor falls back to the effective user's `~/.codex`); the Claude flow
-   * resolves its own path and never sets this.
+   * Explicit `CODEX_HOME` (the `.codex` dir) for the Codex auth-file executor.
+   * Set in per-user sandbox mode so auth persists where sessions read it.
    */
   codexHome?: string;
+  /** Explicit Claude config directory for the same per-user sandbox home. */
+  claudeConfigDir?: string;
 }
 
 export function credentialExecutorOptions(logPrefix: string, routing: ExecutorCredentialRouting) {
@@ -30,8 +29,14 @@ export function credentialExecutorOptions(logPrefix: string, routing: ExecutorCr
     // that store overlaid at ~) will later read it — otherwise auth.json goes to
     // the daemon home and the session can't see it. Merge OVER process.env
     // (options.env REPLACES the spawn env), keeping PATH/keys/etc.
-    ...(routing.codexHome
-      ? { env: { ...(process.env as Record<string, string>), CODEX_HOME: routing.codexHome } }
+    ...(routing.codexHome || routing.claudeConfigDir
+      ? {
+          env: {
+            ...(process.env as Record<string, string>),
+            ...(routing.codexHome ? { CODEX_HOME: routing.codexHome } : {}),
+            ...(routing.claudeConfigDir ? { CLAUDE_CONFIG_DIR: routing.claudeConfigDir } : {}),
+          },
+        }
       : {}),
     sensitiveOutput: true,
     timeoutMs: 10_000,

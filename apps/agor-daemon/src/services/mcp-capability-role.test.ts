@@ -161,7 +161,7 @@ describe('MCP capability follows current role, not ownership alone', () => {
 
   it('takes effect on the next request, without waiting for a re-login', async () => {
     // The floor reads `params.user.role`, which is not a JWT claim: the token
-    // carries only the subject, and `ServiceJWTStrategy.getEntity` loads the
+    // carries only the subject, and `RuntimeJWTStrategy.getEntity` loads the
     // user row from the database on every authenticated request. So a demotion
     // lands on the next call rather than whenever the session's token expires,
     // and there is no stale-credential window to close separately.
@@ -212,7 +212,7 @@ describe('MCP capability follows current role, not ownership alone', () => {
     await expect(call(MCP_CAPABILITY_ISSUING_SERVICE_PATHS[0])).resolves.toBeDefined();
   });
 
-  it('leaves internal daemon calls and executor service accounts alone', async () => {
+  it('leaves internal daemon calls and explicit daemon service accounts alone', async () => {
     const { demoteTo } = await buildDaemon('member');
     await demoteTo('viewer');
 
@@ -227,7 +227,7 @@ describe('MCP capability follows current role, not ownership alone', () => {
     // No provider: a daemon-to-daemon call, which carries no role to floor.
     await expect(app.service(path).create({} as never)).resolves.toEqual({ success: true });
 
-    // The executor's service account, likewise.
+    // An explicit daemon service account, likewise.
     await expect(
       app.service(path).create(
         {} as never,

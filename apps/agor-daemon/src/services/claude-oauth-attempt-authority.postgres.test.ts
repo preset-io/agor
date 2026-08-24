@@ -13,6 +13,9 @@
  *     src/services/claude-oauth-attempt-authority.postgres.test.ts
  */
 
+import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   ClaudeOAuthAttemptRepository,
   claudeOauthAttempts,
@@ -20,20 +23,28 @@ import {
   createTenantScopedDatabaseProxy,
   executeRaw,
   initializeDatabase,
-  isMCPOAuthSecretEnvelope,
+  isBoundSecretEnvelope,
   isPostgresDatabase,
   type RawDatabase,
   runWithTenantDatabaseScope,
   sql,
   type TenantScopeAwareDatabase,
   UsersRepository,
+  users as usersTable,
 } from '@agor/core/db';
 import type { ClaudeOAuthAttemptID, UserID } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  deleteClaudeAuthViaExecutor,
+  fenceClaudeAuthCredential,
+  writeClaudeAuthViaExecutor,
+} from '../utils/executor-claude-auth.js';
+import { createClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
+import {
   ClaudeOAuthAttemptAuthority,
   fingerprintClaudeOAuthState,
 } from './claude-oauth-attempt-authority.js';
+import { UsersService } from './users.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -110,7 +121,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       authority: ClaudeOAuthAttemptAuthority,
       seeded: TenantSeed,
       label: string,
-      delegatedHomeKey: string | null = null
+      delegatedHomeKey: string | null = null,
+      claudeConfigDir?: string
     ) =>
       authority.create({
         tenantId: seeded.tenantId,
@@ -118,11 +130,18 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         codeVerifier: `pkce-verifier-${label}`,
         state: stateFor(label),
         delegatedHomeKey,
+        ...(claudeConfigDir ? { claudeConfigDir } : {}),
       });
 
     it('lets replica B finish the attempt replica A started', async () => {
       const seeded = await seed('handoff');
-      const attemptId = await start(authorityA, seeded, 'handoff', 'alice');
+      const attemptId = await start(
+        authorityA,
+        seeded,
+        'handoff',
+        'alice',
+        '/safe/tenant/alice/.claude'
+      );
 
       // B has never seen this attempt in memory — everything it needs is the row.
       const claim = await authorityB.claimForExchange(
@@ -137,11 +156,20 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const opened = authorityB.openClaim(claim.attempt);
       expect(opened.material.codeVerifier).toBe('pkce-verifier-handoff');
       expect(opened.material.delegatedHomeKey).toBe('alice');
+      expect(opened.material.claudeConfigDir).toBe('/safe/tenant/alice/.claude');
       expect(opened.material).not.toHaveProperty('state');
 
-      expect(await authorityB.finish(claim.attempt, 'succeeded', { subscriptionType: 'max' })).toBe(
-        true
+      const finalized = await authorityB.finalize(
+        seeded.tenantId,
+        seeded.userId,
+        attemptId,
+        claim.attempt.exchangeClaimId!,
+        async (material) => {
+          expect(material).toEqual(opened.material);
+          return { value: true, subscriptionType: 'max' };
+        }
       );
+      expect(finalized).toEqual({ outcome: 'committed', value: true });
       const settled = await authorityA.getForUser(seeded.tenantId, seeded.userId, attemptId);
       expect(settled?.status).toBe('succeeded');
       expect(settled?.subscriptionType).toBe('max');
@@ -161,7 +189,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         return rowsOf(result)[0];
       });
 
-      expect(isMCPOAuthSecretEnvelope(String(row?.sealed_material))).toBe(true);
+      expect(isBoundSecretEnvelope(String(row?.sealed_material))).toBe(true);
       expect(String(row?.sealed_material)).toMatch(/^agor-mcp-oauth:v1:claude-signin-attempt:/);
       expect(row?.state_hash).toBe(fingerprintClaudeOAuthState(stateFor('secrets')));
       const serialized = JSON.stringify(row);
@@ -249,6 +277,413 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const settled = await authorityB.getForUser(seeded.tenantId, seeded.userId, attemptId);
       expect(settled?.status).toBe('ambiguous');
       expect(settled?.failureCode).toBe('signed_out');
+    });
+
+    it('linearizes cross-replica finalize then logout and leaves the shared home logged out', async () => {
+      const seeded = await seed('finalize-then-logout');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-ha-'));
+      const claudeConfigDir = join(root, '.claude');
+      try {
+        const attemptId = await start(
+          authorityA,
+          seeded,
+          'finalize-then-logout',
+          null,
+          claudeConfigDir
+        );
+        const claim = await authorityA.claimForExchange(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          stateFor('finalize-then-logout')
+        );
+        expect(claim.outcome).toBe('claimed');
+        if (claim.outcome !== 'claimed') return;
+
+        let releaseFinalize!: () => void;
+        const allowFinalize = new Promise<void>((resolve) => {
+          releaseFinalize = resolve;
+        });
+        let fileWritten!: () => void;
+        const didWrite = new Promise<void>((resolve) => {
+          fileWritten = resolve;
+        });
+        const finalize = authorityA.finalize(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          claim.attempt.exchangeClaimId!,
+          async (material) => {
+            await writeClaudeAuthViaExecutor(
+              '{"winner":"oauth"}\n',
+              {
+                delegatedHomeKey: material.delegatedHomeKey,
+                userId: seeded.userId,
+                claudeConfigDir: material.claudeConfigDir!,
+              },
+              material.attemptGeneration
+            );
+            fileWritten();
+            await allowFinalize;
+            return { value: true };
+          }
+        );
+        await didWrite;
+
+        let logoutSettled = false;
+        const logout = authorityB
+          .runCredentialMutation(seeded.tenantId, seeded.userId, 'signed_out', (generation) =>
+            deleteClaudeAuthViaExecutor(
+              { delegatedHomeKey: null, userId: seeded.userId, claudeConfigDir },
+              generation
+            )
+          )
+          .finally(() => {
+            logoutSettled = true;
+          });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(logoutSettled).toBe(false);
+
+        releaseFinalize();
+        await expect(finalize).resolves.toEqual({ outcome: 'committed', value: true });
+        await expect(logout).resolves.toBeUndefined();
+        await expect(stat(join(claudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+        const row = await authorityA.getForUser(seeded.tenantId, seeded.userId, attemptId);
+        expect(row).toMatchObject({ status: 'succeeded', isCurrent: false });
+        const tombstone = Number.parseInt(
+          await readFile(join(claudeConfigDir, '.agor-auth-generation'), 'utf8'),
+          10
+        );
+        expect(tombstone).toBeGreaterThan(claim.attempt.attemptGeneration);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('lets cross-replica logout win before finalization without invoking the stale writer', async () => {
+      const seeded = await seed('logout-first');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-ha-'));
+      const claudeConfigDir = join(root, '.claude');
+      try {
+        const attemptId = await start(authorityA, seeded, 'logout-first', null, claudeConfigDir);
+        const claim = await authorityA.claimForExchange(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          stateFor('logout-first')
+        );
+        expect(claim.outcome).toBe('claimed');
+        if (claim.outcome !== 'claimed') return;
+
+        let releaseLogout!: () => void;
+        const holdLogout = new Promise<void>((resolve) => {
+          releaseLogout = resolve;
+        });
+        let logoutHasAuthority!: () => void;
+        const logoutStarted = new Promise<void>((resolve) => {
+          logoutHasAuthority = resolve;
+        });
+        const logout = authorityB.runCredentialMutation(
+          seeded.tenantId,
+          seeded.userId,
+          'signed_out',
+          async (generation) => {
+            logoutHasAuthority();
+            await holdLogout;
+            await deleteClaudeAuthViaExecutor(
+              { delegatedHomeKey: null, userId: seeded.userId, claudeConfigDir },
+              generation
+            );
+          }
+        );
+        await logoutStarted;
+
+        let staleWriterCalls = 0;
+        const finalize = authorityA.finalize(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          claim.attempt.exchangeClaimId!,
+          async () => {
+            staleWriterCalls += 1;
+            return { value: true };
+          }
+        );
+        releaseLogout();
+        await logout;
+        await expect(finalize).resolves.toEqual({ outcome: 'stale' });
+        expect(staleWriterCalls).toBe(0);
+        expect(
+          await authorityA.getForUser(seeded.tenantId, seeded.userId, attemptId)
+        ).toMatchObject({ status: 'ambiguous', failureCode: 'signed_out', isCurrent: false });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('generation-fences an external Claude auth-source replacement and preserves credential bytes', async () => {
+      const seeded = await seed('external-source');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-ha-'));
+      const claudeConfigDir = join(root, '.claude');
+      try {
+        const attemptId = await start(authorityA, seeded, 'external-source', null, claudeConfigDir);
+        const claim = await authorityA.claimForExchange(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          stateFor('external-source')
+        );
+        expect(claim.outcome).toBe('claimed');
+        if (claim.outcome !== 'claimed') return;
+        await writeClaudeAuthViaExecutor(
+          '{"existing":"credential"}\n',
+          { delegatedHomeKey: null, userId: seeded.userId, claudeConfigDir },
+          claim.attempt.attemptGeneration
+        );
+
+        await runWithTenantDatabaseScope(dbB, seeded.tenantId, async () => {
+          await authorityB.lockExternalUserMutation(seeded.tenantId, seeded.userId);
+          await authorityB.completeExternalUserMutation(
+            seeded.tenantId,
+            seeded.userId,
+            (generation) =>
+              fenceClaudeAuthCredential(
+                { delegatedHomeKey: null, userId: seeded.userId, claudeConfigDir },
+                generation
+              )
+          );
+        });
+
+        expect(await readFile(join(claudeConfigDir, '.credentials.json'), 'utf8')).toBe(
+          '{"existing":"credential"}\n'
+        );
+        let staleWriterCalls = 0;
+        await expect(
+          authorityA.finalize(
+            seeded.tenantId,
+            seeded.userId,
+            attemptId,
+            claim.attempt.exchangeClaimId!,
+            async () => {
+              staleWriterCalls += 1;
+              return { value: true };
+            }
+          )
+        ).resolves.toEqual({ outcome: 'stale' });
+        expect(staleWriterCalls).toBe(0);
+        expect(
+          await authorityA.getForUser(seeded.tenantId, seeded.userId, attemptId)
+        ).toMatchObject({
+          status: 'ambiguous',
+          failureCode: 'credentials_changed',
+          isCurrent: false,
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('routes a real users-service Claude method patch through the exact-home authority', async () => {
+      const seeded = await seed('users-service-source');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-users-authority-'));
+      try {
+        const attemptId = await start(authorityA, seeded, 'users-service-source');
+        const claim = await authorityA.claimForExchange(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          stateFor('users-service-source')
+        );
+        expect(claim.outcome).toBe('claimed');
+        if (claim.outcome !== 'claimed') return;
+
+        const config = {
+          paths: { data_home: root },
+          deployment: { mode: 'ha' },
+          multi_tenancy: { mode: 'required_from_auth' },
+          execution: {
+            unix_user_mode: 'sandbox',
+            sandbox: { enabled: true, home_mode: 'per_user' },
+            executor_storage: {
+              user_home: 'persistent-per-user',
+              user_home_locking: 'cross-replica-flock',
+            },
+          },
+        } as const;
+        const app = { get: () => config, service: () => undefined };
+        const coordinator = createClaudeUserCredentialPatchCoordinator(
+          app as never,
+          dbB,
+          authorityB
+        );
+        const users = new UsersService(dbB, app as never, config as never, coordinator);
+        await runWithTenantDatabaseScope(dbB, seeded.tenantId, () =>
+          users.patch(seeded.userId, { agentic_auth_methods: { 'claude-code': 'api_key' } }, {
+            authenticated: true,
+            tenant: { tenant_id: seeded.tenantId },
+            user: {
+              user_id: seeded.userId,
+              email: `${seeded.userId}@example.test`,
+              role: 'member',
+            },
+          } as never)
+        );
+
+        expect(
+          await authorityA.getForUser(seeded.tenantId, seeded.userId, attemptId)
+        ).toMatchObject({
+          status: 'ambiguous',
+          failureCode: 'credentials_changed',
+          isCurrent: false,
+        });
+        const claudeConfigDir = join(
+          root,
+          'tenants',
+          seeded.tenantId,
+          'homes',
+          seeded.userId,
+          '.claude'
+        );
+        const tombstone = Number.parseInt(
+          await readFile(join(claudeConfigDir, '.agor-auth-generation'), 'utf8'),
+          10
+        );
+        expect(tombstone).toBeGreaterThan(claim.attempt.attemptGeneration);
+        await expect(
+          writeClaudeAuthViaExecutor(
+            '{"stale":"oauth"}\n',
+            { delegatedHomeKey: null, userId: seeded.userId, claudeConfigDir },
+            claim.attempt.attemptGeneration
+          )
+        ).rejects.toThrow(/superseded/);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('allows an override-home user to switch to an API key while invalidating OAuth', async () => {
+      const seeded = await seed('users-service-override');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-users-override-'));
+      try {
+        const attemptId = await start(authorityA, seeded, 'users-service-override');
+        await runWithTenantDatabaseScope(dbA, seeded.tenantId, (scoped) =>
+          executeRaw(
+            scoped,
+            sql`UPDATE ${usersTable}
+                SET filesystem_home = ${join(tmpdir(), `agor-claude-explicit-${crypto.randomUUID()}`)}
+                WHERE tenant_id = ${seeded.tenantId} AND user_id = ${seeded.userId}`
+          )
+        );
+
+        const config = {
+          paths: { data_home: root },
+          deployment: { mode: 'ha' },
+          multi_tenancy: { mode: 'required_from_auth' },
+          execution: {
+            unix_user_mode: 'sandbox',
+            sandbox: { enabled: true, home_mode: 'per_user' },
+            executor_storage: {
+              user_home: 'persistent-per-user',
+              user_home_locking: 'cross-replica-flock',
+            },
+          },
+        } as const;
+        const app = { get: () => config, service: () => undefined };
+        const users = new UsersService(
+          dbB,
+          app as never,
+          config as never,
+          createClaudeUserCredentialPatchCoordinator(app as never, dbB, authorityB)
+        );
+
+        await expect(
+          runWithTenantDatabaseScope(dbB, seeded.tenantId, () =>
+            users.patch(
+              seeded.userId,
+              {
+                agentic_auth_methods: { 'claude-code': 'api_key' },
+                agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: 'replacement-key' } },
+              },
+              {
+                authenticated: true,
+                tenant: { tenant_id: seeded.tenantId },
+                user: {
+                  user_id: seeded.userId,
+                  email: `${seeded.userId}@example.test`,
+                  role: 'member',
+                },
+              } as never
+            )
+          )
+        ).resolves.toMatchObject({ agentic_auth_methods: { 'claude-code': 'api_key' } });
+        expect(
+          await authorityA.getForUser(seeded.tenantId, seeded.userId, attemptId)
+        ).toMatchObject({
+          status: 'failed',
+          failureCode: 'credentials_changed',
+          isCurrent: false,
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('serializes a replacement start behind cross-replica persistence and makes the new attempt current', async () => {
+      const seeded = await seed('replacement-during-persist');
+      const attemptId = await start(authorityA, seeded, 'replacement-during-persist');
+      const claim = await authorityA.claimForExchange(
+        seeded.tenantId,
+        seeded.userId,
+        attemptId,
+        stateFor('replacement-during-persist')
+      );
+      expect(claim.outcome).toBe('claimed');
+      if (claim.outcome !== 'claimed') return;
+
+      let releasePersistence!: () => void;
+      const holdPersistence = new Promise<void>((resolve) => {
+        releasePersistence = resolve;
+      });
+      let persistenceStarted!: () => void;
+      const persisting = new Promise<void>((resolve) => {
+        persistenceStarted = resolve;
+      });
+      const finalize = authorityA.finalize(
+        seeded.tenantId,
+        seeded.userId,
+        attemptId,
+        claim.attempt.exchangeClaimId!,
+        async () => {
+          persistenceStarted();
+          await holdPersistence;
+          return { value: true };
+        }
+      );
+      await persisting;
+
+      let replacementSettled = false;
+      const replacement = start(authorityB, seeded, 'replacement-during-persist-new').finally(
+        () => {
+          replacementSettled = true;
+        }
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(replacementSettled).toBe(false);
+
+      releasePersistence();
+      await expect(finalize).resolves.toEqual({ outcome: 'committed', value: true });
+      const replacementId = await replacement;
+      expect(await authorityA.getForUser(seeded.tenantId, seeded.userId, attemptId)).toMatchObject({
+        status: 'succeeded',
+        isCurrent: false,
+      });
+      expect(await authorityA.getCurrentForUser(seeded.tenantId, seeded.userId)).toMatchObject({
+        attemptId: replacementId,
+        status: 'pending',
+        isCurrent: true,
+      });
     });
 
     it('expires a timed-out attempt and never lets it be replayed', async () => {

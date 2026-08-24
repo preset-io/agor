@@ -14,14 +14,14 @@
 
 import { createInterface } from 'node:readline';
 import { parseArgs } from 'node:util';
-import { INTERACTIVE_EXECUTOR_EVENT_PREFIX } from '@agor/core/executor-protocol';
+import type { ExecutorCommandResult } from '@agor/core/executor-protocol';
 
 import {
   executeCommand,
   executeInteractiveCommand,
   getRegisteredCommands,
 } from './commands/index.js';
-import { completeExecutorResult, emitExecutorResult } from './executor-output.js';
+import { ExecutorResponsePublisher } from './executor-response.js';
 import { initializeToolRegistry, ToolRegistry } from './handlers/sdk/tool-registry.js';
 import { AgorExecutor } from './index.js';
 import {
@@ -51,8 +51,20 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf-8');
 }
 
-function emitInteractiveEvent(event: unknown): void {
-  console.log(`${INTERACTIVE_EXECUTOR_EVENT_PREFIX}${JSON.stringify(event)}`);
+async function finishExecutorCommand(
+  result: ExecutorCommandResult,
+  publisher?: ExecutorResponsePublisher
+): Promise<never> {
+  const code = result.success ? 0 : 1;
+  if (publisher) {
+    try {
+      await publisher.final(result);
+    } catch {
+      console.error('[executor] Failed to deliver executor response');
+      process.exit(1);
+    }
+  }
+  process.exit(code);
 }
 
 /**
@@ -88,9 +100,25 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   }
 
   executorCliDebug(`[executor] Received command: ${payload.command}`);
+  const publisher =
+    payload.executorMode === 'request' && payload.executorResponse
+      ? new ExecutorResponsePublisher(payload.executorResponse)
+      : undefined;
 
   // Special handling for prompt command - needs long-running WebSocket connection
   if (isPromptPayload(payload)) {
+    if (publisher) {
+      await finishExecutorCommand(
+        {
+          success: false,
+          error: {
+            code: 'EXECUTOR_REQUEST_MODE_UNSUPPORTED',
+            message: 'Prompt execution is autonomous and does not return a request response',
+          },
+        },
+        publisher
+      );
+    }
     await handlePromptPayload(payload, options);
     return;
   }
@@ -98,15 +126,23 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
   // Special handling for zellij.attach - long-running PTY session
   // The executor must stay alive to stream PTY I/O
   if (payload.command === 'zellij.attach') {
+    if (publisher) {
+      await finishExecutorCommand(
+        {
+          success: false,
+          error: {
+            code: 'EXECUTOR_REQUEST_MODE_UNSUPPORTED',
+            message: 'Zellij attachment is autonomous and has no terminal request payload',
+          },
+        },
+        publisher
+      );
+    }
     const result = await executeCommand(payload, { dryRun: options.dryRun });
 
     if (!result.success) {
-      completeExecutorResult(result);
-      return;
+      await finishExecutorCommand(result, publisher);
     }
-
-    // Output result on a sentinel line so daemon parsers can suppress it from logs.
-    emitExecutorResult(result);
 
     // DON'T exit - stay alive to stream PTY I/O
     // The PTY onExit handler will call process.exit() when done
@@ -116,9 +152,7 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
 
   // All other commands go through the command router
   const result = await executeCommand(payload, { dryRun: options.dryRun });
-
-  // Output result on a sentinel line so daemon parsers can suppress it from logs.
-  completeExecutorResult(result);
+  await finishExecutorCommand(result, publisher);
 }
 
 /**
@@ -128,15 +162,20 @@ async function handleStdinMode(options: { dryRun: boolean }): Promise<void> {
 async function handleInteractiveCommandMode(options: { dryRun: boolean }): Promise<void> {
   const lines = createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY });
   const iterator = lines[Symbol.asyncIterator]();
+  let publisher: ExecutorResponsePublisher | undefined;
   try {
     const first = await iterator.next();
     if (first.done || !first.value.trim()) throw new Error('missing payload');
     const payload = ExecutorPayloadSchema.parse(JSON.parse(first.value));
+    if (payload.executorMode !== 'request' || !payload.executorResponse) {
+      throw new Error('interactive commands require request mode');
+    }
+    publisher = new ExecutorResponsePublisher(payload.executorResponse);
     const result = await executeInteractiveCommand(
       payload,
       { dryRun: options.dryRun },
       {
-        emit: emitInteractiveEvent,
+        emit: (event) => publisher?.emit(event),
         async read() {
           const next = await iterator.next();
           if (next.done) throw new Error('Interactive command input closed');
@@ -144,15 +183,18 @@ async function handleInteractiveCommandMode(options: { dryRun: boolean }): Promi
         },
       }
     );
-    completeExecutorResult(result);
+    await finishExecutorCommand(result, publisher);
   } catch {
-    completeExecutorResult({
+    const result = {
       success: false,
       error: {
         code: 'INTERACTIVE_COMMAND_PROTOCOL_INVALID',
         message: 'Interactive executor input was invalid.',
       },
-    });
+    } satisfies ExecutorCommandResult;
+    if (publisher) await finishExecutorCommand(result, publisher);
+    console.error('[executor] Interactive command protocol invalid');
+    process.exit(1);
   } finally {
     lines.close();
   }
@@ -167,18 +209,8 @@ async function handlePromptPayload(
 ): Promise<void> {
   if (options.dryRun) {
     console.log(
-      JSON.stringify({
-        success: true,
-        data: {
-          dryRun: true,
-          command: 'prompt',
-          sessionId: payload.params.sessionId,
-          taskId: payload.params.taskId,
-          tool: payload.params.tool,
-          cwd: payload.params.cwd,
-          envVars: payload.env ? Object.keys(payload.env).length : 0,
-        },
-      })
+      `[executor] Dry run validated prompt payload for ${payload.params.tool} ` +
+        `(${payload.env ? Object.keys(payload.env).length : 0} environment variables)`
     );
     process.exitCode = 0;
     return;

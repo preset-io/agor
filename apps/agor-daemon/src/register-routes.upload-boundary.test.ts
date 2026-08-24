@@ -105,18 +105,18 @@ describe('browser upload route boundary ordering', () => {
     expect(req.feathers).toBeUndefined();
   });
 
-  it('carries authentication params so the JWT user lookup receives tenant scope', () => {
-    const start = source.indexOf('export function createUploadAuthMiddleware');
-    const middleware = source.slice(
-      start,
-      source.indexOf('/**\n * Register authentication', start)
-    );
+  it('centralizes tenant-aware bearer authentication for upload and executor data planes', () => {
+    const helperStart = source.indexOf('export async function authenticateBearerHttpRequest');
+    const middlewareStart = source.indexOf('export function createUploadAuthMiddleware');
+    const routeStart = source.indexOf("'/executor/uploads/:uploadRef/content'");
+    const routeEnd = source.indexOf('const DEBUG_UPLOAD', routeStart);
+    const helper = source.slice(helperStart, middlewareStart);
+    const executorRoutes = source.slice(routeStart, routeEnd);
 
-    expect(start).toBeGreaterThan(0);
-    expect(middleware).toContain(
-      'const authParams: AuthenticatedParams = { headers: req.headers }'
-    );
-    expect(middleware).toMatch(/authentication\.create\([\s\S]*authParams\s*\)/);
-    expect(middleware).toContain('authParams.tenant ??');
+    expect(helperStart).toBeGreaterThan(0);
+    expect(helper).toContain('const authParams: AuthenticatedParams');
+    expect(helper).toMatch(/authentication\.create\([\s\S]*authParams\s*\)/);
+    expect(helper).toContain('authParams.tenant ??');
+    expect(executorRoutes.match(/authenticateBearerHttpRequest\(/g)).toHaveLength(2);
   });
 });

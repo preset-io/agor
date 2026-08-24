@@ -253,7 +253,7 @@ describe('a privileged write still broadcasts a redacted row', () => {
 
   const PRIVILEGED: Array<[string, AuthenticatedParams]> = [
     ['an internal in-process call', INTERNAL],
-    ['the executor service account', SERVICE_ACCOUNT],
+    ['an explicit daemon service account', SERVICE_ACCOUNT],
   ];
 
   describe.each(PRIVILEGED)('%s', (_label, params) => {
@@ -343,7 +343,7 @@ describe('the paths that must keep the real env value', () => {
     expect(server.env?.DATADOG_API_KEY).toBe(REAL_API_KEY);
   });
 
-  it('serves raw env to the executor service account', async () => {
+  it('serves raw env to an explicit daemon service account', async () => {
     const daemon = await buildDaemon();
 
     const server = await daemon.get({
@@ -355,7 +355,7 @@ describe('the paths that must keep the real env value', () => {
     expect(server.env?.GITHUB_TOKEN).toBe(REAL_TOKEN);
   });
 
-  it('serves raw env on a session-token read narrowed to that session', async () => {
+  it('serves raw env on a verified executor-session read narrowed to that session', async () => {
     const daemon = await buildDaemon();
 
     // The decision `/sessions/:id/mcp-servers` makes before returning servers
@@ -363,7 +363,15 @@ describe('the paths that must keep the real env value', () => {
     const sessionParams = {
       provider: 'socketio',
       authenticated: true,
-      authentication: { strategy: 'session-token' },
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          session_id: 'session-1',
+          task_id: 'task-1',
+        },
+      },
       session_id: 'session-1',
       user: { user_id: 'bob', role: 'member' },
     } as unknown as AuthenticatedParams;

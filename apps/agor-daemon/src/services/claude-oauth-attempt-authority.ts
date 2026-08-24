@@ -1,29 +1,21 @@
-/**
- * Durable Claude OAuth attempt authority for PostgreSQL deployments.
- *
- * PostgreSQL owns lifecycle and one-shot claims. This adapter owns the secret
- * boundary: it fingerprints the raw OAuth state, seals/unseals the PKCE
- * verifier with the deployment master secret, and verifies ciphertext binding
- * before any provider exchange. SQLite intentionally does not use this class —
- * a single process keeps its attempts in memory, exactly as before.
- */
+/** Durable secret boundary and mutation coordinator for Claude OAuth in PostgreSQL HA. */
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  BOUND_SECRET_ENVELOPE_VERSION,
   type ClaudeOAuthAttemptClaimResult,
   type ClaudeOAuthAttemptRecord,
   ClaudeOAuthAttemptRepository,
   generateId,
-  MCP_OAUTH_SECRET_ENVELOPE_VERSION,
-  openMCPOAuthSecret,
+  getCurrentTenantDatabaseScope,
+  openBoundSecret,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
-  sealMCPOAuthSecret,
+  sealBoundSecret,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { ClaudeOAuthAttemptID, ClaudeOAuthSealedMaterial, UserID } from '@agor/core/types';
 
-/** How long an attempt keeps its sealed verifier/state fingerprint before restart. */
 const ATTEMPT_TTL_MS = 10 * 60 * 1000;
 
 export interface DurableClaudeOAuthCreate {
@@ -32,6 +24,7 @@ export interface DurableClaudeOAuthCreate {
   codeVerifier: string;
   state: string;
   delegatedHomeKey: string | null;
+  claudeConfigDir?: string;
 }
 
 export interface OpenedClaudeOAuthAttempt {
@@ -43,7 +36,7 @@ export function fingerprintClaudeOAuthState(state: string): string {
   return createHash('sha256').update(state, 'utf8').digest('hex');
 }
 
-function hasOnlyExpectedMaterialShape(value: unknown): value is ClaudeOAuthSealedMaterial {
+function validMaterial(value: unknown): value is ClaudeOAuthSealedMaterial {
   if (!value || typeof value !== 'object') return false;
   const material = value as Partial<ClaudeOAuthSealedMaterial>;
   return (
@@ -53,11 +46,12 @@ function hasOnlyExpectedMaterialShape(value: unknown): value is ClaudeOAuthSeale
     typeof material.userId === 'string' &&
     Number.isSafeInteger(material.attemptGeneration) &&
     typeof material.codeVerifier === 'string' &&
-    (material.delegatedHomeKey === null || typeof material.delegatedHomeKey === 'string')
+    (material.delegatedHomeKey === null || typeof material.delegatedHomeKey === 'string') &&
+    (material.claudeConfigDir === undefined || typeof material.claudeConfigDir === 'string')
   );
 }
 
-function attemptEnvelopeBinding(input: {
+function binding(input: {
   attemptId: string;
   tenantId: string;
   userId: string;
@@ -78,13 +72,19 @@ export class ClaudeOAuthAttemptAuthority {
     }
   }
 
+  private seal(material: ClaudeOAuthSealedMaterial): string {
+    return sealBoundSecret(
+      JSON.stringify(material),
+      this.masterSecret!,
+      'claude-signin-attempt',
+      binding(material)
+    );
+  }
+
   async create(input: DurableClaudeOAuthCreate): Promise<ClaudeOAuthAttemptID> {
     const attemptId = generateId() as ClaudeOAuthAttemptID;
     await runWithTenantDatabaseScope(this.db, input.tenantId, async (scoped) => {
       const repository = new ClaudeOAuthAttemptRepository(scoped);
-      // Allocation takes the per-user transaction lock first and the tenant
-      // scope holds it through sealing and create(), so a lower generation can
-      // never insert after and supersede a higher one.
       const attemptGeneration = await repository.allocateAttemptGeneration(
         input.tenantId,
         input.userId
@@ -97,26 +97,16 @@ export class ClaudeOAuthAttemptAuthority {
         attemptGeneration,
         codeVerifier: input.codeVerifier,
         delegatedHomeKey: input.delegatedHomeKey,
+        ...(input.claudeConfigDir ? { claudeConfigDir: input.claudeConfigDir } : {}),
       };
-      const sealedMaterial = sealMCPOAuthSecret(
-        JSON.stringify(material),
-        this.masterSecret!,
-        'claude-signin-attempt',
-        attemptEnvelopeBinding({
-          attemptId,
-          tenantId: input.tenantId,
-          userId: input.userId,
-          attemptGeneration,
-        })
-      );
       await repository.create({
         tenantId: input.tenantId,
         attemptId,
         stateHash: fingerprintClaudeOAuthState(input.state),
         userId: input.userId,
         attemptGeneration,
-        envelopeVersion: MCP_OAUTH_SECRET_ENVELOPE_VERSION,
-        sealedMaterial,
+        envelopeVersion: BOUND_SECRET_ENVELOPE_VERSION,
+        sealedMaterial: this.seal(material),
         ttlMs: ATTEMPT_TTL_MS,
       });
     });
@@ -140,56 +130,42 @@ export class ClaudeOAuthAttemptAuthority {
     );
   }
 
-  /**
-   * Unseal a claimed attempt's material and verify it binds to the row it came
-   * from. Every field is re-checked against the row so swapped ciphertext, a
-   * superseded generation, or a foreign tenant/user cannot reach an exchange.
-   */
   openClaim(record: ClaudeOAuthAttemptRecord): OpenedClaudeOAuthAttempt {
-    if (record.status !== 'exchanging' || !record.exchangeClaimId || !record.sealedMaterial) {
+    if (
+      (record.status !== 'exchanging' && record.status !== 'persisting') ||
+      !record.exchangeClaimId ||
+      !record.sealedMaterial
+    ) {
       throw new Error('Claude OAuth attempt claim is incomplete');
     }
-
     let parsed: unknown;
     try {
       parsed = JSON.parse(
-        openMCPOAuthSecret(
+        openBoundSecret(
           record.sealedMaterial,
           this.masterSecret!,
           'claude-signin-attempt',
-          attemptEnvelopeBinding({
-            attemptId: record.attemptId,
-            tenantId: record.tenantId,
-            userId: record.userId,
-            attemptGeneration: record.attemptGeneration,
-          })
+          binding(record)
         )
       );
     } catch {
       throw new Error('Claude OAuth attempt material is unavailable');
     }
-    if (!hasOnlyExpectedMaterialShape(parsed)) {
-      throw new Error('Claude OAuth attempt material is invalid');
-    }
-    const material = parsed;
+    if (!validMaterial(parsed)) throw new Error('Claude OAuth attempt material is invalid');
     if (
-      material.attemptId !== record.attemptId ||
-      material.tenantId !== record.tenantId ||
-      material.userId !== record.userId ||
-      material.attemptGeneration !== record.attemptGeneration ||
-      record.envelopeVersion !== MCP_OAUTH_SECRET_ENVELOPE_VERSION ||
+      parsed.attemptId !== record.attemptId ||
+      parsed.tenantId !== record.tenantId ||
+      parsed.userId !== record.userId ||
+      parsed.attemptGeneration !== record.attemptGeneration ||
+      record.envelopeVersion !== BOUND_SECRET_ENVELOPE_VERSION ||
       !record.isCurrent
     ) {
       throw new Error('Claude OAuth attempt material binding is invalid');
     }
-    return { record, material };
+    return { record, material: parsed };
   }
 
-  async readLiveClaim(
-    tenantId: string,
-    attemptId: ClaudeOAuthAttemptID,
-    claimId: string
-  ): Promise<ClaudeOAuthAttemptRecord | null> {
+  async readLiveClaim(tenantId: string, attemptId: ClaudeOAuthAttemptID, claimId: string) {
     return runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
       new ClaudeOAuthAttemptRepository(scoped).readLiveClaim(tenantId, attemptId, claimId)
     );
@@ -224,10 +200,108 @@ export class ClaudeOAuthAttemptAuthority {
     );
   }
 
+  /**
+   * Revalidate, mark persisting, mutate the exact home, update user metadata,
+   * and terminalize while one transaction-scoped tenant/user lock is held.
+   */
+  async finalize<T>(
+    tenantId: string,
+    userId: UserID,
+    attemptId: ClaudeOAuthAttemptID,
+    claimId: string,
+    work: (material: ClaudeOAuthSealedMaterial) => Promise<{
+      value: T;
+      subscriptionType?: string;
+    }>
+  ): Promise<{ outcome: 'committed'; value: T } | { outcome: 'stale' }> {
+    try {
+      return await runWithTenantDatabaseScope(this.db, tenantId, async (scoped) => {
+        const repository = new ClaudeOAuthAttemptRepository(scoped);
+        await repository.lockUser(tenantId, userId);
+        const live = await repository.getForUser(tenantId, userId, attemptId);
+        if (!live?.isCurrent || live.status !== 'exchanging' || live.exchangeClaimId !== claimId) {
+          return { outcome: 'stale' as const };
+        }
+        const material = this.openClaim(live).material;
+        if (!(await repository.markPersisting(live))) return { outcome: 'stale' as const };
+        const completed = await work(material);
+        if (
+          !(await repository.finish(tenantId, attemptId, claimId, 'succeeded', {
+            subscriptionType: completed.subscriptionType ?? null,
+          }))
+        ) {
+          throw new Error('Claude OAuth completion fence was lost');
+        }
+        return { outcome: 'committed' as const, value: completed.value };
+      });
+    } catch (error) {
+      // The one-shot provider exchange already happened. Rollback can restore
+      // the row but cannot prove that the credential write did not happen, so
+      // terminalize ambiguously and never replay or path-delete a newer winner.
+      await runWithTenantDatabaseScope(this.db, tenantId, async (scoped) => {
+        const repository = new ClaudeOAuthAttemptRepository(scoped);
+        const current = await repository.getForUser(tenantId, userId, attemptId);
+        if (current?.exchangeClaimId === claimId) {
+          await repository.finish(tenantId, attemptId, claimId, 'ambiguous', {
+            failureCode: 'credential_persistence_ambiguous',
+          });
+        }
+      }).catch(() => undefined);
+      throw error;
+    }
+  }
+
   async invalidateForUser(tenantId: string, userId: UserID, failureCode: string): Promise<number> {
     return runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
       new ClaudeOAuthAttemptRepository(scoped).invalidateForUser(tenantId, userId, failureCode)
     );
+  }
+
+  /** Coordinate logout with finalization and allocate the filesystem tombstone generation. */
+  async runCredentialMutation<T>(
+    tenantId: string,
+    userId: UserID,
+    reason: 'signed_out' | 'credentials_changed',
+    work: (generation: number) => Promise<T>
+  ): Promise<T> {
+    const outcome = await runWithTenantDatabaseScope(this.db, tenantId, async (scoped) => {
+      const repository = new ClaudeOAuthAttemptRepository(scoped);
+      const generation = await repository.allocateAttemptGeneration(tenantId, userId);
+      await repository.invalidateForUser(tenantId, userId, reason);
+      try {
+        return { ok: true as const, value: await work(generation) };
+      } catch (error) {
+        // Commit invalidation even when the contained writer/user mutation fails.
+        return { ok: false as const, error };
+      }
+    });
+    if (!outcome.ok) throw outcome.error;
+    return outcome.value;
+  }
+
+  /** Lock ordering seam used by UsersService: credential lock, then role lock. */
+  async lockExternalUserMutation(tenantId: string, userId: UserID): Promise<void> {
+    const scope = getCurrentTenantDatabaseScope();
+    if (scope?.kind !== 'tenant' || !scope.transactionActive || scope.tenantId !== tenantId) {
+      throw new Error('Claude credential user mutation requires its tenant transaction');
+    }
+    await new ClaudeOAuthAttemptRepository(scope.db).lockUser(tenantId, userId);
+  }
+
+  /** Complete an already-locked external user credential/method mutation. */
+  async completeExternalUserMutation(
+    tenantId: string,
+    userId: UserID,
+    work: (generation: number) => Promise<void>
+  ): Promise<void> {
+    const scope = getCurrentTenantDatabaseScope();
+    if (scope?.kind !== 'tenant' || !scope.transactionActive || scope.tenantId !== tenantId) {
+      throw new Error('Claude credential user mutation requires its tenant transaction');
+    }
+    const repository = new ClaudeOAuthAttemptRepository(scope.db);
+    const generation = await repository.allocateAttemptGeneration(tenantId, userId);
+    await repository.invalidateForUser(tenantId, userId, 'credentials_changed');
+    await work(generation);
   }
 
   async maintain() {

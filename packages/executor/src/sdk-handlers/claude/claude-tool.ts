@@ -458,8 +458,6 @@ export class ClaudeTool implements ITool {
 
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamStart(waitMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
               role: MessageRole.SYSTEM,
               timestamp: new Date().toISOString(),
             });
@@ -551,8 +549,6 @@ export class ClaudeTool implements ITool {
             // Start streaming event for this system message
             if (streamingCallbacks) {
               await streamingCallbacks.onStreamStart(completeMessageId, {
-                session_id: sessionId,
-                task_id: taskId,
                 role: MessageRole.ASSISTANT,
                 timestamp: new Date().toISOString(),
               });
@@ -597,8 +593,6 @@ export class ClaudeTool implements ITool {
 
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamStart(rateLimitMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
               role: MessageRole.SYSTEM,
               timestamp: new Date().toISOString(),
             });
@@ -646,8 +640,6 @@ export class ClaudeTool implements ITool {
 
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamStart(sdkEventMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
               role: MessageRole.SYSTEM,
               timestamp: new Date().toISOString(),
             });
@@ -737,8 +729,6 @@ export class ClaudeTool implements ITool {
 
           if (streamingCallbacks) {
             await streamingCallbacks.onStreamStart(currentTextMessageId, {
-              session_id: sessionId,
-              task_id: taskId,
               role: MessageRole.ASSISTANT,
               timestamp: new Date().toISOString(),
             });

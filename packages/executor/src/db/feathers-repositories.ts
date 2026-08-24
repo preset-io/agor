@@ -235,7 +235,7 @@ export class FeathersSessionMCPServersRepository {
 
   /**
    * List the effective MCP servers for a session (global + session-assigned).
-   * Executors use the session-scoped route so session-token callers can receive
+   * Executors use the session-scoped route so task-executor callers can receive
    * the raw config needed to launch only their own session's MCP servers.
    */
   async listEffectiveServers(
@@ -305,11 +305,8 @@ export class FeathersMCPOAuthAuthHeadersRepository {
     if (mcpServerIds.length === 0) return {};
 
     const service = this.client.service('mcp-servers/oauth-auth-headers');
-    const executorSessionToken = (this.client as AgorClient & { executorSessionToken?: string })
-      .executorSessionToken;
     const result = (await service.create({
       mcp_server_ids: mcpServerIds,
-      ...(executorSessionToken ? { executorSessionToken } : {}),
     })) as MCPOAuthAuthHeaderResult;
 
     return result.headers ?? {};

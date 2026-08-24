@@ -26,6 +26,8 @@ import {
   type UserID,
 } from '@agor/core/types';
 import { DrizzleService } from '../adapters/drizzle';
+import { gatewaySlackUploadExecutorCommandId } from '../auth/executor-command-ids.js';
+import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import {
   gatewayAgenticConfigToInlineConfiguration,
   hasDefinedGatewayAgenticConfigInlineFields,
@@ -202,15 +204,13 @@ export class GatewayChannelsService extends DrizzleService<
     params?: AuthenticatedParams
   ): Promise<unknown> {
     const caller = params?.user;
-    const claims = params?.authentication?.payload as Record<string, unknown> | undefined;
     if (!caller) throw new NotAuthenticated('Authentication required');
-    if (!caller._isServiceAccount) {
-      throw new Forbidden('Only an executor service account may upload branch files');
-    }
     if (
-      claims?.executor_action !== 'gateway.slack-file-upload' ||
-      claims.executor_gateway_channel_id !== data.gatewayChannelId ||
-      claims.executor_slack_channel_id !== data.channel
+      !matchesExecutorCommandRuntimeScope(
+        params,
+        gatewaySlackUploadExecutorCommandId(data.gatewayChannelId, data.channel),
+        (params.authentication?.payload as { branch_id?: string } | undefined)?.branch_id
+      )
     ) {
       throw new Forbidden('Executor token is not scoped to this Slack upload');
     }
@@ -225,7 +225,10 @@ export class GatewayChannelsService extends DrizzleService<
     if (!resolveSlackAgentTools(gatewayChannel.config?.agent_tools).file_upload) {
       throw new Forbidden('Slack file uploads are disabled for this gateway channel');
     }
-    if (claims.executor_branch_id !== gatewayChannel.target_branch_id) {
+    if (
+      (params.authentication?.payload as { branch_id?: string } | undefined)?.branch_id !==
+      gatewayChannel.target_branch_id
+    ) {
       throw new Forbidden('Executor token branch does not match the gateway channel target');
     }
     if (!isSlackWriteTargetAllowed(gatewayChannel.config, data.channel)) {

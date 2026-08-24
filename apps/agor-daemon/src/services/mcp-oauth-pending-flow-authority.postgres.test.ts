@@ -67,6 +67,7 @@ function flowContext(label: string): DurableMCPOAuthFlowContext {
     state: `state-capability-${label}`,
     authorizationUrl: `https://provider.example.test/${label}/authorize?state=state-capability-${label}`,
     compatibilityMode: 'strict',
+    authorizationResponseIssuerParameterSupported: true,
     allowLocalhostHttp: false,
   };
 }

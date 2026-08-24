@@ -46,4 +46,25 @@ describe('ClaudeOAuthSignIn', () => {
     fireEvent.click(screen.getByText('Start over').closest('button') as HTMLButtonElement);
     await waitFor(() => expect(create).toHaveBeenCalledWith({}));
   });
+
+  it('polls the exact adopted attempt instead of following a cross-replica replacement', async () => {
+    const create = vi.fn();
+    const find = vi
+      .fn()
+      .mockResolvedValueOnce({ phase: 'exchanging', attemptId: 'attempt-1' })
+      .mockResolvedValueOnce({ phase: 'success', attemptId: 'attempt-1' });
+    const client = {
+      service: vi.fn(() => ({ create, find })),
+    } as never;
+
+    render(<ClaudeOAuthSignIn client={client} onVerified={vi.fn()} autoStart={false} />);
+
+    await waitFor(
+      () =>
+        expect(find).toHaveBeenNthCalledWith(2, {
+          query: { attemptId: 'attempt-1' },
+        }),
+      { timeout: 2_000 }
+    );
+  });
 });

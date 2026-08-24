@@ -51,9 +51,9 @@ const httpUrl = z.url().refine((value) => /^https?:\/\//i.test(value), {
  * is pasting a whole OAuth client configuration into an entry, and the
  * dangerous halves of one — `client_secret`, `token_url`, `authorization_url` —
  * are exactly the keys someone would reach for. Under `.strict()` any of them
- * fails the load loudly at review time and at daemon start, rather than being
- * dropped in silence: a published client secret that nobody was told about is
- * strictly worse than a catalog that will not parse. See
+ * fails the load loudly at review time and on the first catalog read, rather
+ * than being dropped in silence: a published client secret that nobody was
+ * told about is strictly worse than a catalog that will not parse. See
  * {@link MCPCatalogEntryOAuth} for why each accepted key is accepted.
  */
 const catalogEntryOAuthSchema = z
@@ -69,7 +69,24 @@ const catalogEntryOAuthSchema = z
   // it all", and there should be exactly one way to say that.
   .refine((value) => Object.values(value).some((field) => field !== undefined), {
     message: 'must state at least one setting, or be omitted entirely',
+  })
+  // `disabled` is the one mode that has to bring its own client. The other two
+  // allow registration to supply one, so an absent `client_id` there is the
+  // ordinary case; with registration off, nothing else can supply it and
+  // `startOAuthFlow` refuses the pair. That refusal lands per-user at sign-in,
+  // long after the entry was reviewed, which is the wrong place to learn that a
+  // combination could never have worked.
+  .refine((value) => value.dcr_mode !== 'disabled' || value.client_id !== undefined, {
+    message: 'must state a client_id when dcr_mode is disabled, since nothing else can supply one',
   });
+
+const catalogEntryCredentialsSchema = z
+  .object({
+    scheme: z.literal('bearer'),
+    acquisition_url: httpUrl,
+    label: nonEmpty.optional(),
+  })
+  .strict();
 
 const catalogEntrySchema = z
   .object({
@@ -99,8 +116,25 @@ const catalogEntrySchema = z
      * opened up simply never uses them.
      */
     oauth: catalogEntryOAuthSchema.optional(),
+    credentials: catalogEntryCredentialsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((entry, context) => {
+    if (entry.auth_type === 'credentials' && !entry.credentials) {
+      context.addIssue({
+        code: 'custom',
+        path: ['credentials'],
+        message: 'is required when auth_type is credentials',
+      });
+    }
+    if (entry.credentials && entry.auth_type !== 'credentials') {
+      context.addIssue({
+        code: 'custom',
+        path: ['credentials'],
+        message: 'is only valid when auth_type is credentials',
+      });
+    }
+  });
 
 const catalogFileSchema = z
   .object({

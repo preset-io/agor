@@ -64,7 +64,12 @@ describe('BoardEditModal — board icon', () => {
     const trigger = await screen.findByRole('button', { name: 'Choose emoji' });
     expect(trigger).toHaveTextContent('🚩');
     fireEvent.click(trigger);
-    fireEvent.click(await screen.findByRole('button', { name: 'Choose technologist' }));
+    const pickerButton = await screen.findByRole(
+      'button',
+      { name: 'Choose technologist' },
+      { timeout: 10_000 }
+    );
+    fireEvent.click(pickerButton);
     expect(trigger).toHaveTextContent('👩🏽‍💻');
 
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));

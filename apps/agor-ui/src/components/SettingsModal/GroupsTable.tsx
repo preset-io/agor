@@ -1,18 +1,7 @@
 import type { AgorClient, Group, GroupMembership, User } from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons';
-import {
-  Button,
-  Form,
-  Input,
-  Modal,
-  Popconfirm,
-  Select,
-  Space,
-  Table,
-  Tag,
-  Typography,
-} from 'antd';
+import { Button, Form, Input, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { slugify } from '@/utils/repoSlug';
@@ -20,7 +9,9 @@ import { searchableSelectProps, toUserSelectOption } from '@/utils/selectSearch'
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface GroupsTableProps {
@@ -158,7 +149,10 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   }
 
   const userOptions = mapToSortedArray(userById, (a, b) => a.email.localeCompare(b.email)).map(
-    toUserSelectOption
+    (user) => ({
+      ...toUserSelectOption(user),
+      disabled: !hasRoleAuthorityOver(currentUser?.role, user.role),
+    })
   );
   const filteredGroups = filterBySettingsSearch(
     [...groups].sort((a, b) => a.name.localeCompare(b.name)),
@@ -176,28 +170,23 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
   );
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">Manage groups and user memberships.</Typography.Text>
-        <Space>
-          <Input
-            allowClear
-            placeholder="Search name, slug, description, or members"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 320 }}
-          />
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
-            New Group
-          </Button>
-        </Space>
-      </div>
+      <ResponsiveSettingsHeader
+        description="Manage groups and user memberships."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="Search name, slug, description, or members"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: compact ? '100%' : 320, flex: compact ? '1 1 100%' : undefined }}
+            />
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+              New Group
+            </Button>
+          </Space>
+        )}
+      />
 
       <Table
         rowKey="group_id"
@@ -230,7 +219,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             render: (_: unknown, group: Group) => (
               <Select
                 mode="multiple"
-                style={{ minWidth: 320 }}
+                style={{ width: '100%', minWidth: 0 }}
                 value={membershipsByGroup.get(group.group_id) || []}
                 options={userOptions}
                 {...searchableSelectProps}
@@ -261,9 +250,15 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             ),
           },
         ]}
+        scroll={{ x: 700 }}
       />
 
-      <Modal title="Create Group" open={createOpen} onOk={createGroup} onCancel={closeCreateModal}>
+      <AdaptiveSettingsModal
+        title="Create Group"
+        open={createOpen}
+        onOk={createGroup}
+        onCancel={closeCreateModal}
+      >
         <Form form={form} layout="vertical" onValuesChange={handleCreateValuesChange}>
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input />
@@ -275,8 +270,8 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             <Input.TextArea rows={3} />
           </Form.Item>
         </Form>
-      </Modal>
-      <Modal
+      </AdaptiveSettingsModal>
+      <AdaptiveSettingsModal
         title="Edit Group"
         open={!!editingGroup}
         onOk={saveGroup}
@@ -307,7 +302,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             />
           </Form.Item>
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
     </div>
   );
 };

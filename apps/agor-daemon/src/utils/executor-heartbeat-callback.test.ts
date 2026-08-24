@@ -56,9 +56,17 @@ describe('ExecutorHeartbeatCallbackRunner', () => {
   it('does not spawn callbacks when heartbeat callbacks are disabled', () => {
     const runner = createRunner({ enabled: false });
 
+    expect(runner.isConfigured()).toBe(false);
     runner.run(payload);
 
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it('reports whether a callback command is configured', () => {
+    expect(createRunner().isConfigured()).toBe(true);
+    expect(
+      createRunner({ callback: { command_template: '', timeout_ms: 100 } }).isConfigured()
+    ).toBe(false);
   });
 
   it('keeps callback coalesced after timeout until the process exits', () => {

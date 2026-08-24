@@ -9,6 +9,7 @@ import { PAGINATION } from '@agor/core/config';
 import {
   type CreateKnowledgeDocumentInput,
   isPostgresDatabaseHandle,
+  KnowledgeAttributionRepository,
   type KnowledgeDocumentFilters,
   KnowledgeDocumentRepository,
   KnowledgeDocumentVersionRepository,
@@ -136,6 +137,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
   KnowledgeDocumentParams
 > {
   private repo: KnowledgeDocumentRepository;
+  private attribution: KnowledgeAttributionRepository;
   private semanticSettings: KnowledgeSemanticSettingsRepository;
   private versions: KnowledgeDocumentVersionRepository;
   private namespaces: KnowledgeNamespaceRepository;
@@ -155,6 +157,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       },
     });
     this.repo = repo;
+    this.attribution = new KnowledgeAttributionRepository(db);
     this.semanticSettings = new KnowledgeSemanticSettingsRepository(db);
     this.versions = new KnowledgeDocumentVersionRepository(db);
     this.namespaces = new KnowledgeNamespaceRepository(db);
@@ -396,22 +399,76 @@ export class KnowledgeDocumentsService extends DrizzleService<
     document: KnowledgeDocument,
     params?: HydrateOptions
   ): Promise<KnowledgeDocument | HydratedKnowledgeDocument> {
+    const wantsHydration = params?.include_content === true || params?.include_links === true;
+    const rawVersion = wantsHydration ? await this.versionFor(document, params?.version) : null;
+    const projected = await this.attribution.attachToDocumentsAndVersions(
+      [document],
+      rawVersion ? [rawVersion] : []
+    );
+    const attributedDocument = projected.documents[0];
+    const version = projected.versions[0] ?? null;
     const withIndexing =
       params?.include_indexing === true || params?.includeIndexing === true
-        ? ((await this.repo.attachIndexingStatus(document)) as KnowledgeDocument)
-        : document;
-    if (params?.include_content !== true && params?.include_links !== true) return withIndexing;
-    const version = await this.versionFor(document, params?.version);
+        ? ((await this.repo.attachIndexingStatus(attributedDocument)) as KnowledgeDocument)
+        : attributedDocument;
+    if (!wantsHydration) return withIndexing;
+    return this.buildHydratedDocument(withIndexing, version, params);
+  }
+
+  private buildHydratedDocument(
+    document: KnowledgeDocument,
+    version: KnowledgeDocumentVersion | null,
+    params?: HydrateOptions
+  ): HydratedKnowledgeDocument {
     return {
-      ...withIndexing,
-      document: withIndexing,
+      ...document,
+      document,
       current_version: version,
       content: version?.content_text ?? null,
-      first_line_is_title: withIndexing.metadata?.title_from_content === true,
+      first_line_is_title: document.metadata?.title_from_content === true,
       ...(params?.include_links
         ? { links: extractKnowledgeLinks(version?.content_text ?? '') }
         : {}),
     };
+  }
+
+  private async versionsForDocuments(
+    documents: readonly KnowledgeDocument[],
+    versionRef?: string | number
+  ): Promise<Array<KnowledgeDocumentVersion | null>> {
+    if (versionRef === undefined || versionRef === null || versionRef === '') {
+      const versions = await this.versions.findByIds(
+        documents.flatMap((document) =>
+          document.current_version_id ? [document.current_version_id] : []
+        )
+      );
+      const byId = new Map(versions.map((version) => [version.version_id, version]));
+      return documents.map((document) =>
+        document.current_version_id ? (byId.get(document.current_version_id) ?? null) : null
+      );
+    }
+    return Promise.all(documents.map((document) => this.versionFor(document, versionRef)));
+  }
+
+  private async hydrateDocuments(
+    documents: readonly KnowledgeDocument[],
+    params: HydrateOptions
+  ): Promise<HydratedKnowledgeDocument[]> {
+    const rawVersions = await this.versionsForDocuments(documents, params.version);
+    const projected = await this.attribution.attachToDocumentsAndVersions(
+      documents,
+      rawVersions.filter((version): version is KnowledgeDocumentVersion => version !== null)
+    );
+    const versionById = new Map(projected.versions.map((version) => [version.version_id, version]));
+    const projectedDocuments =
+      params.include_indexing === true || params.includeIndexing === true
+        ? ((await this.repo.attachIndexingStatus(projected.documents)) as KnowledgeDocument[])
+        : projected.documents;
+    return projectedDocuments.map((document, index) => {
+      const rawVersion = rawVersions[index];
+      const version = rawVersion ? (versionById.get(rawVersion.version_id) ?? null) : null;
+      return this.buildHydratedDocument(document, version, params);
+    });
   }
 
   private async assertExpectedVersion(
@@ -459,22 +516,19 @@ export class KnowledgeDocumentsService extends DrizzleService<
       if (await this.canRead(doc, user)) readable.push(doc);
     }
     if (params?.query?.include_content !== true && params?.query?.include_links !== true) {
+      const attributed = await this.attribution.attachToDocuments(readable);
       if (params?.query?.include_indexing === true || params?.query?.includeIndexing === true) {
-        return this.repo.attachIndexingStatus(readable) as Promise<KnowledgeDocument[]>;
+        return this.repo.attachIndexingStatus(attributed) as Promise<KnowledgeDocument[]>;
       }
-      return readable;
+      return attributed;
     }
-    return Promise.all(
-      readable.map((doc) =>
-        this.hydrateDocument(doc, {
-          include_content: params?.query?.include_content,
-          include_links: params?.query?.include_links,
-          include_indexing: params?.query?.include_indexing,
-          includeIndexing: params?.query?.includeIndexing,
-          version: params?.query?.version,
-        })
-      )
-    );
+    return this.hydrateDocuments(readable, {
+      include_content: params?.query?.include_content,
+      include_links: params?.query?.include_links,
+      include_indexing: params?.query?.include_indexing,
+      includeIndexing: params?.query?.includeIndexing,
+      version: params?.query?.version,
+    });
   }
 
   async get(id: Id, params?: KnowledgeDocumentParams): Promise<KnowledgeDocument> {
@@ -536,7 +590,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
         throw new Forbidden('You do not have permission to update this knowledge document');
       }
       await this.assertExpectedVersion(existing, data.expected_version);
-      const result = await this.repo.update(
+      const persisted = await this.repo.update(
         existing.document_id,
         this.prepareWriteData(
           {
@@ -550,8 +604,9 @@ export class KnowledgeDocumentsService extends DrizzleService<
           existing
         )
       );
-      await this.replaceSearchUnitsForContent(result, data.content_text);
-      await this.syncGraphReferences(result, data.content_text, userId);
+      await this.replaceSearchUnitsForContent(persisted, data.content_text);
+      await this.syncGraphReferences(persisted, data.content_text, userId);
+      const [result] = await this.attribution.attachToDocuments([persisted]);
       this.emitDocumentEvent('patched', result, params);
       return result;
     }
@@ -586,7 +641,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (namespace.archived) throw new NotFound(`Knowledge namespace not found: ${namespaceSlug}`);
     await this.assertCanWriteNamespace(namespace.namespace_id, params?.user as User | undefined);
 
-    const result = await this.repo.create(
+    const persisted = await this.repo.create(
       this.prepareWriteData({
         ...data,
         namespace_id: namespace.namespace_id,
@@ -597,8 +652,9 @@ export class KnowledgeDocumentsService extends DrizzleService<
         ...assistantAttribution(params),
       })
     );
-    await this.replaceSearchUnitsForContent(result, data.content_text);
-    await this.syncGraphReferences(result, data.content_text, userId);
+    await this.replaceSearchUnitsForContent(persisted, data.content_text);
+    await this.syncGraphReferences(persisted, data.content_text, userId);
+    const [result] = await this.attribution.attachToDocuments([persisted]);
     this.emitDocumentEvent('created', result, params);
     return result;
   }
@@ -624,14 +680,14 @@ export class KnowledgeDocumentsService extends DrizzleService<
         : null;
     if (!namespace || namespace.archived) throw new NotFound('Knowledge namespace not found');
     await this.assertCanWriteNamespace(namespace.namespace_id, params?.user as User | undefined);
-    const result = await this.repo.create({
+    const persisted = await this.repo.create({
       ...prepared,
       namespace_id: namespace.namespace_id,
       namespace_slug: namespace.slug,
     });
-    await this.replaceSearchUnitsForContent(result, data.content_text);
-    await this.syncGraphReferences(result, data.content_text, userId);
-    return result;
+    await this.replaceSearchUnitsForContent(persisted, data.content_text);
+    await this.syncGraphReferences(persisted, data.content_text, userId);
+    return (await this.attribution.attachToDocuments([persisted]))[0];
   }
 
   async create(
@@ -684,22 +740,22 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canEdit(existing, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
-    const result = await this.repo.update(String(id), {
+    const persisted = await this.repo.update(String(id), {
       ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
       ...assistantAttribution(params),
     });
     await this.replaceSearchUnitsForContent(
-      result,
+      persisted,
       (data as KnowledgeDocumentWriteData).content_text
     );
     await this.syncGraphReferences(
-      result,
+      persisted,
       (data as KnowledgeDocumentWriteData).content_text,
       this.attributionUserId(params, data.updated_by)
     );
-    return result;
+    return (await this.attribution.attachToDocuments([persisted]))[0];
   }
 
   async update(
@@ -728,22 +784,22 @@ export class KnowledgeDocumentsService extends DrizzleService<
     if (!(await this.canEdit(existing, params?.user as User | undefined))) {
       throw new Forbidden('You do not have permission to update this knowledge document');
     }
-    const result = await this.repo.update(String(id), {
+    const persisted = await this.repo.update(String(id), {
       ...this.prepareWriteData(data as KnowledgeDocumentWriteData, existing),
       created_by: existing.created_by,
       updated_by: this.attributionUserId(params, data.updated_by),
       ...assistantAttribution(params),
     });
     await this.replaceSearchUnitsForContent(
-      result,
+      persisted,
       (data as KnowledgeDocumentWriteData).content_text
     );
     await this.syncGraphReferences(
-      result,
+      persisted,
       (data as KnowledgeDocumentWriteData).content_text,
       this.attributionUserId(params, data.updated_by)
     );
-    return result;
+    return (await this.attribution.attachToDocuments([persisted]))[0];
   }
 
   async remove(id: NullableId, params?: KnowledgeDocumentParams): Promise<KnowledgeDocument> {
@@ -756,7 +812,7 @@ export class KnowledgeDocumentsService extends DrizzleService<
       throw new Forbidden('You do not have permission to delete this knowledge document');
     }
     await this.repo.delete(String(id));
-    return existing;
+    return (await this.attribution.attachToDocuments([existing]))[0];
   }
 
   private emitDocumentEvent(

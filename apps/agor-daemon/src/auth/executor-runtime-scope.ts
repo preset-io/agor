@@ -1,92 +1,131 @@
 import { Forbidden } from '@agor/core/feathers';
-import type { AuthenticatedParams, BranchID, HookContext, Params } from '@agor/core/types';
+import type { AuthenticatedParams, HookContext, Params } from '@agor/core/types';
 import {
+  EXECUTOR_COMMAND_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_TYPE,
   type ExecutorSessionTokenPayload,
+  type ExecutorTokenPurpose,
   getExecutorSessionTokenSessionId,
   isExecutorSessionTokenPayload,
 } from './executor-session-token.js';
 
-type Scope = {
+/**
+ * Executor credentials delegate the initiating user's ordinary Feathers
+ * identity and RBAC; this module is not an endpoint allowlist. Keep exact
+ * scope checks here only for capabilities a normal user connection does not
+ * possess (task lifecycle/data-plane writes, secret resolution, and bounded
+ * executor callbacks).
+ */
+
+interface ExecutorDelegationContext {
   sessionId?: string;
   taskId?: string;
   branchId?: string;
-};
+}
 
-function scopedPayload(context: HookContext): ExecutorSessionTokenPayload | null {
-  const params = context.params as AuthenticatedParams & ExecutorSessionTokenPayload;
-  const payload = params.authentication?.payload as ExecutorSessionTokenPayload | undefined;
+interface AuthenticatedExecutorDelegationContext extends ExecutorDelegationContext {
+  purpose: ExecutorTokenPurpose;
+}
+
+export interface TaskExecutorRuntimeScope extends ExecutorDelegationContext {
+  sessionId: string;
+  taskId: string;
+}
+
+export interface ExecutorCommandRuntimeScope {
+  commandId: string;
+  branchId?: string;
+}
+
+/**
+ * Project executor delegation context only from Feathers' verified JWT payload.
+ *
+ * The immutable Socket.IO authentication projection and REST authentication
+ * hook both preserve this payload. Transport fields and caller-submitted raw
+ * bearers are never fallback authority.
+ */
+function authenticatedExecutorDelegationContext(
+  params?: Params
+): AuthenticatedExecutorDelegationContext | null {
+  const authenticated = params as AuthenticatedParams | undefined;
+  if (authenticated?.authentication?.strategy !== 'jwt') return null;
+  const payload = authenticated.authentication.payload as ExecutorSessionTokenPayload | undefined;
   if (payload?.type === EXECUTOR_SESSION_TOKEN_TYPE) {
     if (!isExecutorSessionTokenPayload(payload)) {
       throw new Forbidden('Executor token is not valid for this request');
     }
-    return payload;
-  }
-
-  // Socket.io can preserve custom auth-result fields (`task_id`, `session_id`)
-  // on the connection while dropping the decoded JWT payload. Treat those
-  // fields as executor scope only when they came from JWT auth and carry a task
-  // claim; normal user/API-key auth must continue through unscoped.
-  if (params.authentication?.strategy === 'jwt' && payload === undefined && params.task_id) {
     return {
-      type: EXECUTOR_SESSION_TOKEN_TYPE,
-      purpose: EXECUTOR_SESSION_TOKEN_PURPOSE,
-      task_id: params.task_id,
-      session_id: params.session_id,
-      sessionId: params.sessionId,
-      branch_id: params.branch_id,
+      purpose: payload.purpose,
+      sessionId: getExecutorSessionTokenSessionId(payload),
+      taskId: payload.task_id,
+      branchId: payload.branch_id,
     };
   }
-
-  if (payload?.type !== undefined) return null;
   return null;
+}
+
+/**
+ * Verified context for capabilities that only a live task executor receives.
+ *
+ * Short-lived branch/environment command executors use the same delegated-user
+ * authentication family but intentionally carry no task claim. They therefore
+ * cannot satisfy task lifecycle, secret, permission, or streaming boundaries.
+ */
+export function authenticatedTaskExecutorRuntimeScope(
+  params?: Params
+): TaskExecutorRuntimeScope | null {
+  const scope = authenticatedExecutorDelegationContext(params);
+  return scope?.purpose === EXECUTOR_SESSION_TOKEN_PURPOSE && scope.taskId && scope.sessionId
+    ? { sessionId: scope.sessionId, taskId: scope.taskId, branchId: scope.branchId }
+    : null;
+}
+
+/** Verified taskless executor command authority from the authenticated JWT. */
+export function authenticatedExecutorCommandRuntimeScope(
+  params?: Params
+): ExecutorCommandRuntimeScope | null {
+  const scope = authenticatedExecutorDelegationContext(params);
+  return scope?.purpose === EXECUTOR_COMMAND_TOKEN_PURPOSE && scope.sessionId && !scope.taskId
+    ? {
+        commandId: scope.sessionId,
+        branchId: scope.branchId,
+      }
+    : null;
+}
+
+/** Exact action/branch check for a one-purpose executor callback. */
+export function matchesExecutorCommandRuntimeScope(
+  params: Params | undefined,
+  commandId: string,
+  branchId?: string
+): boolean {
+  const scope = authenticatedExecutorCommandRuntimeScope(params);
+  return !!scope && scope.commandId === commandId && scope.branchId === branchId;
 }
 
 /** Whether this authenticated transport request carries executor scope for one task. */
 export function isTaskScopedExecutorRequest(context: HookContext, taskId: string): boolean {
-  return scopedPayload(context)?.task_id === taskId;
+  return authenticatedTaskExecutorRuntimeScope(context.params)?.taskId === taskId;
 }
 
-/** Whether this request carries a validated executor-session scope. */
-export function hasExecutorRuntimeScope(context: HookContext): boolean {
-  return scopedPayload(context) !== null;
+/** Exact task/session attribution check for executor-only data-plane writes. */
+export function matchesTaskExecutorRuntimeScope(
+  scope: TaskExecutorRuntimeScope | null,
+  target: { task_id?: unknown; session_id?: unknown }
+): boolean {
+  return !!scope && target.task_id === scope.taskId && target.session_id === scope.sessionId;
 }
 
 /**
  * The session an executor-session token is scoped to, or undefined when the
  * request carries no executor scope.
  *
- * Callers that exempt executors from a per-session rule should compare against
- * this rather than {@link hasExecutorRuntimeScope}, so the exemption is bound to
- * the session it was minted for instead of depending on
- * {@link executorRuntimeScopeGuard} having pinned the claims upstream.
+ * Callers that exempt executors from a per-session rule use the canonical task
+ * context so taskless command credentials cannot acquire the exemption.
  */
 export function executorRuntimeScopeSessionId(context: HookContext): string | undefined {
-  const payload = scopedPayload(context);
-  return payload ? getExecutorSessionTokenSessionId(payload) : undefined;
-}
-
-function expectClaim(claim: string | undefined, label: string): string {
-  if (!claim) {
-    throw new Forbidden(`Executor token is missing ${label} scope`);
-  }
-  return claim;
-}
-
-function expectMatch(claim: string, value: unknown, label: string): void {
-  if (value === undefined || value === null) return;
-  if (String(value) !== claim) {
-    throw new Forbidden(`Executor token ${label} scope does not match this request`);
-  }
-}
-
-function setIfAbsent(target: Record<string, unknown>, key: string, value: string): void {
-  if (target[key] === undefined || target[key] === null) target[key] = value;
-}
-
-function normalizePath(path: string | undefined): string {
-  return (path ?? '').replace(/^\/+/, '');
+  return authenticatedTaskExecutorRuntimeScope(context.params)?.sessionId;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -95,292 +134,42 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function routeId(context: HookContext): string | undefined {
-  return (context.params as Params & { route?: { id?: string } }).route?.id;
-}
+/**
+ * Task identifier addressed by a Feathers custom method.
+ *
+ * Feathers currently exposes custom-method data as `context.data`; retain the
+ * arguments fallback because installed hook adapters may preserve only the raw
+ * method arguments. Both values are server-observed hook state, never trusted
+ * authority: the identifier is compared with the verified JWT claim below.
+ */
+function executorOperationTaskId(context: HookContext): string | undefined {
+  const data = asRecord(context.data);
+  if (typeof data?.task_id === 'string' && data.task_id) return data.task_id;
 
-function routeSessionId(context: HookContext): string | undefined {
-  return routeId(context) ?? (typeof context.id === 'string' ? context.id : undefined);
-}
-
-function recordsFromData(data: unknown): Record<string, unknown>[] {
-  if (Array.isArray(data)) {
-    return data.map((item) => {
-      const record = asRecord(item);
-      if (!record) {
-        throw new Forbidden('Executor token requires scoped object payloads');
-      }
-      return record;
-    });
-  }
-  const record = asRecord(data);
-  if (!record) {
-    throw new Forbidden('Executor token requires a scoped object payload');
-  }
-  return [record];
-}
-
-function expectExistingMatch(claim: string, value: unknown, label: string): void {
-  if (String(value) !== claim) {
-    throw new Forbidden(`Executor token ${label} scope does not match this request`);
-  }
-}
-
-function scopeTaskRecord(record: Record<string, unknown>, scope: Scope): void {
-  const taskId = expectClaim(scope.taskId, 'task');
-  expectMatch(taskId, record.task_id, 'task');
-  setIfAbsent(record, 'task_id', taskId);
-  if (scope.sessionId) {
-    expectMatch(scope.sessionId, record.session_id, 'session');
-    setIfAbsent(record, 'session_id', scope.sessionId);
-  }
-}
-
-function scopeStreamingEnvelope(data: unknown, scope: Scope): void {
-  const envelope = asRecord(data);
-  if (!envelope) {
-    throw new Forbidden('Executor token requires a scoped streaming payload');
-  }
-  const eventData = asRecord(envelope.data);
-  if (!eventData) {
-    throw new Forbidden('Executor token requires scoped streaming event data');
-  }
-  scopeTaskRecord(eventData, scope);
-}
-
-async function loadMessageRecord(
-  context: HookContext,
-  id: string
-): Promise<Record<string, unknown>> {
-  const service = context.service as unknown as {
-    findByIdForScopeCheck?: (id: string) => Promise<unknown>;
-  };
-  const record = asRecord(await service.findByIdForScopeCheck?.(id));
-  if (!record) {
-    throw new Forbidden('Executor token message scope is required for this request');
-  }
-  return record;
-}
-
-function requireMatchingSessionRoute(context: HookContext, scope: Scope): void {
-  const sessionId = expectClaim(scope.sessionId, 'session');
-  const query = ((context.params as Params).query ?? {}) as Record<string, unknown>;
-  const requestedSessionId = routeSessionId(context) ?? query.session_id;
-  expectMatch(sessionId, requestedSessionId, 'session');
-  if (requestedSessionId === undefined || requestedSessionId === null) {
-    throw new Forbidden('Executor token session scope is required for this request');
-  }
-}
-
-async function requireMessageReadScope(
-  context: HookContext,
-  id: string,
-  scope: Scope
-): Promise<void> {
-  const existing = await loadMessageRecord(context, id);
-
-  if (scope.sessionId) {
-    expectExistingMatch(scope.sessionId, existing.session_id, 'session');
-    return;
-  }
-
-  const taskId = expectClaim(scope.taskId, 'task');
-  expectExistingMatch(taskId, existing.task_id, 'task');
-}
-
-async function requireRepoReadScope(
-  context: HookContext,
-  id: string | undefined,
-  scope: Scope
-): Promise<void> {
-  if (context.method !== 'get' || !id) {
-    throw new Forbidden('Executor token is not valid for this endpoint');
-  }
-
-  const branchId = expectClaim(scope.branchId, 'branch') as BranchID;
-  // Resolve the allowed repo from the token-scoped branch under the request's
-  // trusted tenant context. Never authorize from the client-supplied repo id.
-  const branch = await context.app.service('branches').get(branchId, {
-    ...context.params,
-    provider: undefined,
-  });
-  expectExistingMatch(String(branch.repo_id), id, 'repo');
-}
-
-type AuthHook = (context: HookContext) => Promise<HookContext>;
-
-export function scopeExecutorRuntimeAuth(requireAuth: AuthHook): AuthHook {
-  return async (context: HookContext): Promise<HookContext> => {
-    const authenticated = await requireAuth(context);
-    return executorRuntimeScopeGuard()(authenticated);
-  };
-}
-
-/** Require this transport call to carry a task-scoped executor session token. */
-export function requireExecutorRuntimeToken() {
-  return async (context: HookContext): Promise<HookContext> => {
-    if (!scopedPayload(context)) {
-      throw new Forbidden('A task-scoped executor token is required for this request');
+  const firstArgument = (
+    context as HookContext & {
+      arguments?: unknown[];
     }
-    return context;
-  };
+  ).arguments?.[0];
+  const argumentData = asRecord(firstArgument);
+  return typeof argumentData?.task_id === 'string' && argumentData.task_id
+    ? argumentData.task_id
+    : undefined;
 }
 
 /**
- * Restrict executor-session JWTs to the resource claims minted for the
- * executor turn. Normal user/API-key/service auth is intentionally ignored.
+ * Guard an executor-only custom method with the exact task lease.
  *
- * For list endpoints, this fail-closes by injecting the token scope into the
- * service query. For object mutations, the request must either address the
- * scoped object directly or carry matching parent identifiers.
+ * Ordinary services intentionally use the initiating user's normal
+ * authorization. This hook exists only for lifecycle methods that grant
+ * authority a normal user connection does not have.
  */
-export function executorRuntimeScopeGuard() {
+export function requireTaskScopedExecutorRuntimeToken() {
   return async (context: HookContext): Promise<HookContext> => {
-    // Only police calls that arrive over the executor's transport. Internal
-    // server-side service composition (provider undefined) is trusted: route
-    // handlers the executor legitimately reached fan out to other services
-    // (e.g. the session MCP-servers route reads `mcp-servers`) while carrying
-    // the executor's auth in `params`. Re-scoping those would reject paths
-    // that are intentionally not in this guard's allow-list.
-    if (!(context.params as Params).provider) return context;
-
-    const payload = scopedPayload(context);
-    if (!payload) return context;
-
-    const scope = {
-      sessionId: getExecutorSessionTokenSessionId(payload),
-      taskId: payload.task_id,
-      branchId: payload.branch_id,
-    };
-    const data = (context.data ?? {}) as Record<string, unknown>;
-    const query = ((context.params as Params).query ?? {}) as Record<string, unknown>;
-    (context.params as Params).query = query;
-    const id = typeof context.id === 'string' ? context.id : undefined;
-    const path = normalizePath(context.path);
-
-    if (path === 'sessions') {
-      const sessionId = expectClaim(scope.sessionId, 'session');
-      if (context.method === 'find') {
-        expectMatch(sessionId, query.session_id, 'session');
-        setIfAbsent(query, 'session_id', sessionId);
-        if (scope.branchId) {
-          expectMatch(scope.branchId, query.branch_id, 'branch');
-          setIfAbsent(query, 'branch_id', scope.branchId);
-        }
-      } else {
-        expectMatch(sessionId, id ?? data.session_id ?? query.session_id, 'session');
-        if (!id && data.session_id === undefined && query.session_id === undefined) {
-          throw new Forbidden('Executor token session scope is required for this request');
-        }
-        if (scope.branchId)
-          expectMatch(scope.branchId, data.branch_id ?? query.branch_id, 'branch');
-      }
-    } else if (path === 'tasks') {
-      const taskId = expectClaim(scope.taskId, 'task');
-      if (context.method === 'find') {
-        expectMatch(taskId, query.task_id, 'task');
-        setIfAbsent(query, 'task_id', taskId);
-        if (scope.sessionId) {
-          expectMatch(scope.sessionId, query.session_id, 'session');
-          setIfAbsent(query, 'session_id', scope.sessionId);
-        }
-      } else {
-        expectMatch(taskId, id ?? data.task_id ?? query.task_id, 'task');
-        if (!id && data.task_id === undefined && query.task_id === undefined) {
-          throw new Forbidden('Executor token task scope is required for this request');
-        }
-        if (scope.sessionId)
-          expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
-      }
-    } else if (path === 'messages') {
-      const taskId = expectClaim(scope.taskId, 'task');
-      if (context.method === 'find') {
-        const hasTaskQuery = query.task_id !== undefined && query.task_id !== null;
-        const hasSessionQuery = query.session_id !== undefined && query.session_id !== null;
-        if (hasTaskQuery) {
-          expectMatch(taskId, query.task_id, 'task');
-          if (scope.sessionId) {
-            expectMatch(scope.sessionId, query.session_id, 'session');
-            setIfAbsent(query, 'session_id', scope.sessionId);
-          }
-        } else if (hasSessionQuery) {
-          const sessionId = expectClaim(scope.sessionId, 'session');
-          expectMatch(sessionId, query.session_id, 'session');
-        } else {
-          setIfAbsent(query, 'task_id', taskId);
-          if (scope.sessionId) {
-            setIfAbsent(query, 'session_id', scope.sessionId);
-          }
-        }
-      } else if (context.method === 'create') {
-        for (const record of recordsFromData(context.data)) {
-          expectMatch(taskId, record.task_id ?? query.task_id, 'task');
-          setIfAbsent(record, 'task_id', taskId);
-          if (scope.sessionId)
-            expectMatch(scope.sessionId, record.session_id ?? query.session_id, 'session');
-        }
-      } else if (context.method === 'get') {
-        if (!id) {
-          throw new Forbidden('Executor token message scope is required for this request');
-        }
-        await requireMessageReadScope(context, id, scope);
-      } else if (context.method === 'patch') {
-        if (!id) {
-          throw new Forbidden('Executor token message scope is required for this request');
-        }
-        const existing = await loadMessageRecord(context, id);
-        expectExistingMatch(taskId, existing.task_id, 'task');
-        expectMatch(taskId, data.task_id ?? query.task_id, 'task');
-        if (scope.sessionId) {
-          expectExistingMatch(scope.sessionId, existing.session_id, 'session');
-          expectMatch(scope.sessionId, data.session_id ?? query.session_id, 'session');
-        }
-      } else {
-        throw new Forbidden('Executor token is not valid for this messages request');
-      }
-    } else if (path === 'branches') {
-      const branchId = expectClaim(scope.branchId, 'branch');
-      if (context.method === 'find') {
-        expectMatch(branchId, query.branch_id, 'branch');
-        setIfAbsent(query, 'branch_id', branchId);
-      } else {
-        expectMatch(branchId, id ?? data.branch_id ?? query.branch_id, 'branch');
-        if (!id && data.branch_id === undefined && query.branch_id === undefined) {
-          throw new Forbidden('Executor token branch scope is required for this request');
-        }
-      }
-    } else if (path === 'repos') {
-      await requireRepoReadScope(context, id, scope);
-    } else if (path === 'messages/streaming' || path === 'tasks/streaming') {
-      if (context.method !== 'create') {
-        throw new Forbidden('Executor token is not valid for this endpoint');
-      }
-      scopeStreamingEnvelope(context.data, scope);
-    } else if (path === 'sessions/:id/genealogy' || path === 'sessions/genealogy') {
-      requireMatchingSessionRoute(context, scope);
-    } else if (path === 'sessions/:id/mcp-servers' || path === 'sessions/mcp-servers') {
-      if (context.method !== 'find') {
-        throw new Forbidden('Executor token is not valid for this endpoint');
-      }
-      requireMatchingSessionRoute(context, scope);
-    } else if (path === 'mcp-servers/oauth-auth-headers') {
-      // This executor-only endpoint validates the submitted session token and
-      // limits returned headers to MCP servers in that session's effective
-      // scope. Let only its read-like create operation reach that validation.
-      if (context.method !== 'create') {
-        throw new Forbidden('Executor token is not valid for this endpoint');
-      }
-    } else if (path === 'config/resolve-api-key') {
-      if (context.method !== 'create') {
-        throw new Forbidden('Executor token is not valid for this endpoint');
-      }
-      const taskId = expectClaim(scope.taskId, 'task');
-      expectMatch(taskId, data.taskId ?? data.task_id, 'task');
-      setIfAbsent(data, 'taskId', taskId);
-    } else {
-      throw new Forbidden('Executor token is not valid for this endpoint');
+    const taskId = executorOperationTaskId(context);
+    if (!taskId || !isTaskScopedExecutorRequest(context, taskId)) {
+      throw new Forbidden('A token scoped to this executor task is required');
     }
-
     return context;
   };
 }

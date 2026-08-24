@@ -7,12 +7,10 @@ const KEY_LENGTH = 32;
 const SALT_LENGTH = 16;
 const IV_LENGTH = 12;
 
-export type MCPOAuthSecretPurpose =
+/** Purpose domains admitted by the durable bound-secret envelope. */
+export type BoundSecretPurpose =
   | 'pending-exchange'
-  // Claude sign-in attempts share the authenticated-envelope primitive, not
-  // MCP's purpose domain. Keeping a distinct purpose makes ciphertext from one
-  // protocol unusable in the other even if a caller accidentally reuses the
-  // same row binding.
+  | 'codex-device-attempt'
   | 'claude-signin-attempt'
   | 'access-token'
   | 'refresh-token'
@@ -23,23 +21,27 @@ function deriveKey(masterSecret: string, salt: Buffer): Buffer {
   return scryptSync(masterSecret, salt, KEY_LENGTH);
 }
 
-function aad(purpose: MCPOAuthSecretPurpose, binding: string): Buffer {
+function aad(purpose: BoundSecretPurpose, binding: string): Buffer {
   return Buffer.from(`${PREFIX}\0${FORMAT_VERSION}\0${purpose}\0${binding}`, 'utf8');
 }
 
 /**
- * OAuth-only authenticated envelope with explicit format, purpose domain
- * separation, and caller-supplied row binding. Unlike the legacy API-key
- * helper this never falls back to plaintext.
+ * Authenticated envelope with explicit format, purpose-domain separation, and
+ * caller-supplied row binding. Unlike the legacy API-key helper this never
+ * falls back to plaintext.
+ *
+ * The serialized v1 prefix retains its historical `agor-mcp-oauth` spelling
+ * because deployed MCP grants must remain readable. Callers should depend on
+ * this generic API rather than infer ownership from that compatibility prefix.
  */
-export function sealMCPOAuthSecret(
+export function sealBoundSecret(
   plaintext: string,
   masterSecret: string,
-  purpose: MCPOAuthSecretPurpose,
+  purpose: BoundSecretPurpose,
   binding: string
 ): string {
-  if (!masterSecret) throw new Error('MCP OAuth secret sealing requires AGOR_MASTER_SECRET');
-  if (!binding) throw new Error('MCP OAuth secret sealing requires an AAD binding');
+  if (!masterSecret) throw new Error('Bound secret sealing requires AGOR_MASTER_SECRET');
+  if (!binding) throw new Error('Bound secret sealing requires an AAD binding');
   const salt = randomBytes(SALT_LENGTH);
   const iv = randomBytes(IV_LENGTH);
   const cipher = createCipheriv(ALGORITHM, deriveKey(masterSecret, salt), iv);
@@ -56,13 +58,13 @@ export function sealMCPOAuthSecret(
   ].join(':');
 }
 
-export function openMCPOAuthSecret(
+export function openBoundSecret(
   envelope: string,
   masterSecret: string,
-  purpose: MCPOAuthSecretPurpose,
+  purpose: BoundSecretPurpose,
   binding: string
 ): string {
-  if (!masterSecret) throw new Error('MCP OAuth secret opening requires AGOR_MASTER_SECRET');
+  if (!masterSecret) throw new Error('Bound secret opening requires AGOR_MASTER_SECRET');
   const [prefix, version, storedPurpose, salt, iv, tag, encrypted, ...extra] = envelope.split(':');
   if (
     prefix !== PREFIX ||
@@ -74,7 +76,7 @@ export function openMCPOAuthSecret(
     encrypted === undefined ||
     extra.length > 0
   ) {
-    throw new Error('Unsupported MCP OAuth secret envelope');
+    throw new Error('Unsupported bound secret envelope');
   }
   const decipher = createDecipheriv(
     ALGORITHM,
@@ -89,8 +91,15 @@ export function openMCPOAuthSecret(
   ]).toString('utf8');
 }
 
-export function isMCPOAuthSecretEnvelope(value: string): boolean {
+export function isBoundSecretEnvelope(value: string): boolean {
   return value.startsWith(`${PREFIX}:${FORMAT_VERSION}:`);
 }
 
-export const MCP_OAUTH_SECRET_ENVELOPE_VERSION = 1 as const;
+export const BOUND_SECRET_ENVELOPE_VERSION = 1 as const;
+
+/** Compatibility aliases for existing MCP OAuth consumers. */
+export type MCPOAuthSecretPurpose = BoundSecretPurpose;
+export const sealMCPOAuthSecret = sealBoundSecret;
+export const openMCPOAuthSecret = openBoundSecret;
+export const isMCPOAuthSecretEnvelope = isBoundSecretEnvelope;
+export const MCP_OAUTH_SECRET_ENVELOPE_VERSION = BOUND_SECRET_ENVELOPE_VERSION;

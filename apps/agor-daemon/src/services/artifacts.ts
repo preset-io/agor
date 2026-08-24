@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto';
 import * as path from 'node:path';
 import { getDaemonBaseUrl, PAGINATION, resolveUserEnvironment } from '@agor/core/config';
 import {
+  type ArtifactListProjection,
   ArtifactRepository,
   ArtifactTrustGrantRepository,
   BoardRepository,
@@ -47,6 +48,8 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  ARTIFACT_LIST_FIELDS_WITHOUT_FILES,
+  ARTIFACT_METADATA_LIST_FIELDS,
   canonicalizeAgorGrants,
   GRANT_ENV_VAR_NAMES,
   hasMinimumRole,
@@ -54,6 +57,7 @@ import {
   ROLES,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle.js';
+import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import { AGOR_RUNTIME_SOURCE } from '../utils/agor-runtime-source.js';
 import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -64,11 +68,8 @@ import {
   normalizeSandpackConfigForRender,
   sanitizeSandpackConfig,
 } from '../utils/sandpack-config.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  runExecutorCommand,
-} from '../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
+import { issueExecutorCommandToken } from './session-token-service.js';
 import type { UsersService } from './users.js';
 
 /**
@@ -169,6 +170,37 @@ export type ArtifactParams = QueryParams<{
   };
 
 const MAX_CONSOLE_ENTRIES = 100;
+
+const ARTIFACT_METADATA_LIST_FIELD_SET = new Set<string>(ARTIFACT_METADATA_LIST_FIELDS);
+const ARTIFACT_LIST_FIELD_WITHOUT_FILES_SET = new Set<string>(ARTIFACT_LIST_FIELDS_WITHOUT_FILES);
+
+/**
+ * Choose the smallest SQL row shape that still preserves the generic adapter's
+ * late filter, sort, and select semantics.
+ *
+ * A nonempty `$select` is the only opt-in: no selection (including `$select:
+ * []`) retains the full-row response contract. Fields needed by residual
+ * filters and `$sort` must also be materialized even when the caller will not
+ * receive them. Unknown/future fields conservatively fall back to a full row so
+ * a type/schema addition cannot silently change query behavior.
+ */
+function resolveArtifactListProjection(query: Query): ArtifactListProjection {
+  const selectedFields = Array.isArray(query.$select) ? query.$select : undefined;
+  if (!selectedFields || selectedFields.length === 0) return 'full';
+
+  const materializedFields = new Set<string>(selectedFields);
+  for (const field of Object.keys(query)) {
+    if (!field.startsWith('$')) materializedFields.add(field);
+  }
+  for (const field of Object.keys(query.$sort ?? {})) materializedFields.add(field);
+
+  let projection: ArtifactListProjection = 'metadata';
+  for (const field of materializedFields) {
+    if (!ARTIFACT_LIST_FIELD_WITHOUT_FILES_SET.has(field)) return 'full';
+    if (!ARTIFACT_METADATA_LIST_FIELD_SET.has(field)) projection = 'without-files';
+  }
+  return projection;
+}
 
 /** Path the synthesized .env file lands at in the file map. */
 const SYNTHESIZED_ENV_PATH = '/.env';
@@ -301,6 +333,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       archived?: boolean;
       branchIds?: BranchID[];
       visibleToUserId?: UUID;
+      projection?: ArtifactListProjection;
     } = {};
 
     if (typeof query.board_id === 'string') filter.board_id = query.board_id as BoardID;
@@ -308,6 +341,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     if (params?._agorSqlBranchAccessUserId) {
       filter.visibleToUserId = params._agorSqlBranchAccessUserId;
     }
+
+    // `$select` used to run only after `SELECT *` and JSON decoding, so even a
+    // metadata-only initial hydration pulled every source file over the DB
+    // connection. Keep full-row reads as the default. A nonempty selection can
+    // use a leaner SQL shape only when that shape also contains every field the
+    // generic adapter still needs for its residual filtering and sorting.
+    const projection = resolveArtifactListProjection(query);
+    if (projection !== 'full') filter.projection = projection;
 
     const branchId = query.branch_id;
     if (typeof branchId === 'string') {
@@ -482,15 +523,15 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       'session'
     );
 
-    const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } },
-      {
-        executor_action: 'artifact.publish',
-        executor_user_id: params.user?.user_id,
-        executor_branch_id: branch.branch_id,
-      }
+    const userId = params.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    const sessionToken = await issueExecutorCommandToken(
+      this.app,
+      'artifact.publish',
+      userId,
+      branch.branch_id
     );
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.publish',
         sessionToken,
@@ -505,7 +546,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         logPrefix: `[ArtifactsService.publish ${branch.branch_id}]`,
         delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
-          params.user?.user_id,
+          userId,
           this.app.get('config')
         ),
       }
@@ -550,8 +591,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     },
     params?: ArtifactParams
   ): Promise<Artifact> {
-    const claims = this.requireExecutorCallback(params, 'artifact.publish', data.branch_id);
-    const userId = claims.executor_user_id as UserID;
+    const userId = this.requireExecutorCallback(params, 'artifact.publish', data.branch_id);
     const matchedBranchId = data.branch_id as BranchID;
     const provenanceSubpath = data.subpath ?? '';
     const files = data.files;
@@ -959,10 +999,15 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       params.user?.role as UserRole | undefined,
       'session'
     );
-    const sessionToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    const userId = params.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    const sessionToken = await issueExecutorCommandToken(
+      this.app,
+      'branch-artifact-land',
+      userId,
+      branchId
     );
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.land',
         sessionToken,
@@ -978,7 +1023,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         logPrefix: `[ArtifactsService.land ${branchId}]`,
         delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
-          params.user?.user_id,
+          userId,
           this.app.get('config')
         ),
       }
@@ -1584,11 +1629,9 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * - the artifact has `agor_runtime.enabled === false`,
    * - or no browser tab fulfilled the query within `timeoutMs`.
    *
-   * Scope: the response endpoint requires the responding user to match
-   * `requesterId`. So even though the dispatch event is broadcast, only
-   * the requester's own browser can complete the round-trip with their
-   * own (potentially secret-bearing) DOM. Cross-user introspection of
-   * a third party's render is structurally prevented.
+   * Scope: publication filters `agor-query` to `requesterId`, and the response
+   * endpoint independently requires the responder to match it. Other artifact
+   * viewers therefore receive neither the selector/args nor the response.
    */
   async queryArtifactRuntime(input: {
     artifactId: string;
@@ -1630,8 +1673,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       });
     });
 
-    // Broadcast on the artifacts service. The client filters: only respond
-    // if currently viewing this artifact AND logged in as the requester.
+    // The global realtime publisher treats this custom event as requester-only.
     this.app.service('artifacts').emit('agor-query', {
       request_id: requestId,
       artifact_id: input.artifactId,
@@ -1687,16 +1729,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
       params.user?.role as UserRole | undefined,
       'session'
     );
-    const result = await runExecutorCommand(
+    const userId = params.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    const result = await requestExecutor(
       {
         command: 'branch.artifact.validate',
-        sessionToken: generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          {
-            executor_action: 'artifact.validate',
-            executor_user_id: params.user?.user_id,
-            executor_branch_id: branch.branch_id,
-          }
+        sessionToken: await issueExecutorCommandToken(
+          this.app,
+          'artifact.validate',
+          userId,
+          branch.branch_id
         ),
         daemonUrl: getDaemonUrl(),
         params: { branchId: branch.branch_id, subpath: input.subpath },
@@ -1705,7 +1747,7 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
         logPrefix: `[ArtifactsService.validate ${branch.branch_id}]`,
         delegatedHomeKey: await resolveDelegatedExecutionHomeKey(
           this.dbRef,
-          params.user?.user_id,
+          userId,
           this.app.get('config')
         ),
       }
@@ -1739,22 +1781,16 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     params: ArtifactParams | undefined,
     action: 'artifact.publish' | 'artifact.validate',
     branchId: string | undefined
-  ): Record<string, unknown> {
+  ): UserID {
     const caller = params?.user;
     if (!caller) throw new NotAuthenticated('Authentication required');
-    if (!caller._isServiceAccount) {
-      throw new Forbidden('Only an executor service account may invoke this method');
-    }
-    const claims = params.authentication?.payload as Record<string, unknown> | undefined;
     if (
-      claims?.executor_action !== action ||
-      typeof claims.executor_user_id !== 'string' ||
       typeof branchId !== 'string' ||
-      claims.executor_branch_id !== branchId
+      !matchesExecutorCommandRuntimeScope(params, action, branchId)
     ) {
       throw new Forbidden('Executor token is not scoped to this artifact operation');
     }
-    return claims;
+    return caller.user_id as UserID;
   }
 
   async checkBuild(artifactId: string): Promise<{

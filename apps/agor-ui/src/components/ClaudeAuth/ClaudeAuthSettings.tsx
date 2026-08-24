@@ -90,8 +90,15 @@ export function ClaudeAuthSettings({
   // never demote to api_key. After a disconnect (method → api_key) the user
   // stays on the sign-in view showing the signed-out state instead of jumping.
   useEffect(() => {
-    if (authMethod === 'subscription') setView((prev) => (prev === 'token' ? 'token' : 'oauth'));
-  }, [authMethod]);
+    if (authMethod === 'subscription') {
+      setView((prev) => (prev === 'token' || !allowSubscriptionLogin ? 'token' : 'oauth'));
+    }
+  }, [authMethod, allowSubscriptionLogin]);
+
+  // An administrator editing another user cannot invoke the caller-bound OAuth
+  // endpoints, but must still be able to manage that user's pasted subscription
+  // token. Keep only the native OAuth tab self-only.
+  const visibleView = !allowSubscriptionLogin && view === 'oauth' ? 'token' : view;
 
   // Invalidate an in-flight probe and clear the prior verdict whenever the client
   // OR the effective method changes (and on unmount) — a verdict captured under
@@ -222,7 +229,8 @@ export function ClaudeAuthSettings({
     <Form component={false} layout="vertical">
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
         <Text type="secondary">
-          Personal credentials are encrypted at rest and injected only into the agent runtime.
+          API keys and pasted tokens are encrypted at rest. Claude sign-in uses a private credential
+          file in the execution home.
         </Text>
 
         {allowSubscriptionLogin && (connectionBanner || authMethod === 'subscription') && (
@@ -279,21 +287,21 @@ export function ClaudeAuthSettings({
           </Space>
         )}
 
-        {allowSubscriptionLogin && (
-          <FieldRow label="Sign-in method" style={{ marginBottom: 0 }}>
-            <Radio.Group
-              buttonStyle="solid"
-              value={view}
-              onChange={(event) => handleSelect(event.target.value as ClaudeMethodView)}
-            >
-              <Radio.Button value="api_key">API key</Radio.Button>
+        <FieldRow label="Sign-in method" style={{ marginBottom: 0 }}>
+          <Radio.Group
+            buttonStyle="solid"
+            value={visibleView}
+            onChange={(event) => handleSelect(event.target.value as ClaudeMethodView)}
+          >
+            <Radio.Button value="api_key">API key</Radio.Button>
+            {allowSubscriptionLogin && (
               <Radio.Button value="oauth">Sign in with Claude</Radio.Button>
-              <Radio.Button value="token">Subscription token</Radio.Button>
-            </Radio.Group>
-          </FieldRow>
-        )}
+            )}
+            <Radio.Button value="token">Subscription token</Radio.Button>
+          </Radio.Group>
+        </FieldRow>
 
-        {(!allowSubscriptionLogin || view === 'api_key') && (
+        {visibleView === 'api_key' && (
           <ApiKeyFields
             tool="claude-code"
             fields={apiKeyOnlyFields}
@@ -311,10 +319,15 @@ export function ClaudeAuthSettings({
               to copy. The login is shared per server user, so signing in replaces any Claude login
               already on this server.
             </Text>
-            <ClaudeOAuthSignIn client={client} onVerified={handleAuthenticated} autoStart={false} />
+            <ClaudeOAuthSignIn
+              client={client}
+              connected={authMethod === 'subscription'}
+              onVerified={handleAuthenticated}
+              autoStart={false}
+            />
           </div>
         )}
-        {allowSubscriptionLogin && view === 'token' && (
+        {visibleView === 'token' && (
           <ApiKeyFields
             tool="claude-code"
             fields={tokenFields}

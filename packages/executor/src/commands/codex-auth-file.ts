@@ -1,8 +1,12 @@
-import { readFile, rm } from 'node:fs/promises';
 import { parseCodexAuthJson } from '@agor/core/codex/auth-file';
+import {
+  mutateCredentialFile,
+  readCredentialFile,
+  type VerifiedCodexAuthWrite,
+  writeVerifiedCodexAuthFile,
+} from '@agor/core/codex/credential-file';
 import type { CodexAuthFilePayload, ExecutorResult } from '../payload-types.js';
 import { resolveCodexAuthPath } from '../user-runtime-paths.js';
-import { writeCredentialFileAtomically } from './credential-file-io.js';
 import type { CommandOptions } from './index.js';
 
 export async function handleCodexAuthFile(
@@ -15,7 +19,7 @@ export async function handleCodexAuthFile(
   const target = resolveCodexAuthPath();
   if (operation === 'inspect') {
     try {
-      const parsed = parseCodexAuthJson(await readFile(target, 'utf8'));
+      const parsed = parseCodexAuthJson(await readCredentialFile(target));
       if (!parsed.ok) return { success: true, data: { status: 'malformed' } };
       const inspection = parsed.summary;
       if (inspection.authMode !== 'api_key') {
@@ -71,33 +75,45 @@ export async function handleCodexAuthFile(
     }
   }
   if (operation === 'delete') {
-    await rm(target, { force: true });
+    const outcome = await mutateCredentialFile({
+      target,
+      generation: payload.params.generation,
+    });
+    if (outcome === 'stale') {
+      return {
+        success: false,
+        error: { code: 'AUTH_FILE_STALE', message: 'A newer credential mutation already won' },
+      };
+    }
     return { success: true, data: { status: 'deleted' } };
   }
 
-  const readBack = await writeCredentialFileAtomically(target, payload.params.content);
-  if (readBack !== payload.params.content) {
+  let written: VerifiedCodexAuthWrite;
+  try {
+    written = await writeVerifiedCodexAuthFile({
+      target,
+      content: payload.params.content,
+      generation: payload.params.generation,
+    });
+  } catch {
     return {
       success: false,
       error: { code: 'AUTH_FILE_VERIFY_FAILED', message: 'Codex auth file could not be verified' },
     };
   }
-  const parsed = parseCodexAuthJson(readBack);
-  return parsed.ok
-    ? {
-        success: true,
-        data: {
-          status: 'written',
-          authMode: parsed.summary.authMode,
-          ...(parsed.summary.planType ? { planType: parsed.summary.planType } : {}),
-          ...(parsed.summary.lastRefresh ? { lastRefresh: parsed.summary.lastRefresh } : {}),
-        },
-      }
-    : {
-        success: false,
-        error: {
-          code: 'AUTH_FILE_VERIFY_FAILED',
-          message: 'Codex auth file could not be verified',
-        },
-      };
+  if (written.outcome === 'stale') {
+    return {
+      success: false,
+      error: { code: 'AUTH_FILE_STALE', message: 'A newer credential mutation already won' },
+    };
+  }
+  return {
+    success: true,
+    data: {
+      status: 'written',
+      authMode: written.authMode,
+      ...(written.planType ? { planType: written.planType } : {}),
+      ...(written.lastRefresh ? { lastRefresh: written.lastRefresh } : {}),
+    },
+  };
 }

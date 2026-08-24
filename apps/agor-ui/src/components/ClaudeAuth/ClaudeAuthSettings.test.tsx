@@ -12,6 +12,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useRef } from 'react';
 import { TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { ClaudeAuthSettings } from './ClaudeAuthSettings';
+import { ClaudeOAuthSignIn } from './ClaudeOAuthSignIn';
 
 const UNKNOWN: AuthCheckResult = { status: 'unknown', authenticated: false, method: 'none' };
 
@@ -22,6 +23,7 @@ interface HarnessOptions {
   logoutCreate?: ReturnType<typeof vi.fn>;
   onSaveField?: ReturnType<typeof vi.fn>;
   onClearField?: ReturnType<typeof vi.fn>;
+  allowSubscriptionLogin?: boolean;
 }
 
 function Harness({
@@ -31,6 +33,7 @@ function Harness({
   logoutCreate,
   onSaveField,
   onClearField,
+  allowSubscriptionLogin = true,
 }: HarnessOptions) {
   const services: Record<string, unknown> = {
     'check-auth': { create: checkAuth ?? vi.fn(async () => UNKNOWN) },
@@ -60,6 +63,7 @@ function Harness({
       onSaveField={onSaveField ?? vi.fn(async () => undefined)}
       onClearField={onClearField ?? vi.fn(async () => undefined)}
       savingFields={{}}
+      allowSubscriptionLogin={allowSubscriptionLogin}
     />
   );
 }
@@ -155,5 +159,62 @@ describe('ClaudeAuthSettings', () => {
     // No jarring tab jump: still on the sign-in view, and Disconnect is gone.
     expect(await screen.findByText(/Sign in with your Claude subscription/i)).toBeInTheDocument();
     expect(screen.queryByText('Disconnect')).not.toBeInTheDocument();
+  });
+
+  it('lets an admin manage a pasted subscription token without exposing caller-bound OAuth', async () => {
+    render(<Harness initialMethod="subscription" allowSubscriptionLogin={false} />);
+    expect(await screen.findByPlaceholderText('sk-ant-oat01-...')).toBeInTheDocument();
+    expect(screen.getByText('Subscription token')).toBeInTheDocument();
+    expect(screen.queryByText('Sign in with Claude')).not.toBeInTheDocument();
+  });
+});
+
+describe('ClaudeOAuthSignIn', () => {
+  it('adopts an exchanging attempt without replacing it on remount', async () => {
+    const onVerified = vi.fn();
+    const oauth = {
+      find: vi
+        .fn()
+        .mockResolvedValueOnce({ phase: 'exchanging' })
+        .mockResolvedValueOnce({ phase: 'success' }),
+      create: vi.fn(async () => ({ phase: 'awaiting_code' })),
+    };
+    const client = { service: vi.fn(() => oauth) } as never;
+    render(<ClaudeOAuthSignIn client={client} onVerified={onVerified} autoStart />);
+    await waitFor(() => expect(oauth.find).toHaveBeenCalledTimes(2));
+    expect(oauth.create).not.toHaveBeenCalled();
+    await waitFor(() => expect(onVerified).toHaveBeenCalledTimes(1));
+  });
+
+  it('clears a stale success state when the persisted subscription login is removed', async () => {
+    const oauth = {
+      find: vi.fn(async () => ({ phase: 'idle' })),
+      create: vi.fn(async () => ({ phase: 'success', hint: 'Signed in with Claude.' })),
+    };
+    const client = { service: vi.fn(() => oauth) } as never;
+    const onVerified = vi.fn();
+    const { rerender } = render(
+      <ClaudeOAuthSignIn
+        client={client}
+        connected={false}
+        onVerified={onVerified}
+        autoStart={false}
+      />
+    );
+    fireEvent.click(await screen.findByText('Sign in with Claude'));
+    expect(await screen.findByText('Signed in with Claude.')).toBeInTheDocument();
+
+    rerender(
+      <ClaudeOAuthSignIn client={client} connected onVerified={onVerified} autoStart={false} />
+    );
+    rerender(
+      <ClaudeOAuthSignIn
+        client={client}
+        connected={false}
+        onVerified={onVerified}
+        autoStart={false}
+      />
+    );
+    expect(await screen.findByText('Sign in with Claude')).toBeInTheDocument();
   });
 });

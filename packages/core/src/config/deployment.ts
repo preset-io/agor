@@ -1,9 +1,14 @@
-import { hasTenantSafeExecutorCredentialHome } from './executor-credential-storage';
+import {
+  hasCrossReplicaExecutorCredentialLock,
+  hasExactUserExecutorCredentialHome,
+  hasTenantSafeExecutorCredentialHome,
+} from './executor-credential-storage';
 import type {
   AgorConfig,
   AgorDeploymentMode,
   AgorExecutorBaseRepositoryStorage,
   AgorExecutorBranchWorkspaceStorage,
+  AgorExecutorUserHomeLocking,
   AgorExecutorUserHomeStorage,
   AgorHaSupportProfile,
 } from './types';
@@ -37,6 +42,7 @@ export interface ResolvedRedisSettings {
 
 export interface ResolvedExecutorStorageSettings {
   userHome: AgorExecutorUserHomeStorage;
+  userHomeLocking?: AgorExecutorUserHomeLocking;
   branchWorkspace: AgorExecutorBranchWorkspaceStorage;
   baseRepository: AgorExecutorBaseRepositoryStorage;
 }
@@ -72,7 +78,10 @@ export type ResolvedDeploymentConfig =
         widgetResolutionDurableClaim: true;
         githubInstall: true;
         codexCredentialFiles: boolean;
-        codexDeviceAuth: false;
+        codexDeviceAuth: boolean;
+        /** Claude OAuth + logout generation-fenced exact-user mutation authority. */
+        claudeOAuth: boolean;
+        claudeAuth: boolean;
         processAffineAuth: false;
         gatewayListeners: true;
         gatewayOutboundExactlyOnce: false;
@@ -373,6 +382,8 @@ export function resolveDeploymentConfig(
     );
   }
   const tenantSafeCredentialHome = hasTenantSafeExecutorCredentialHome(config);
+  const exactUserCredentialHome = hasExactUserExecutorCredentialHome(config);
+  const crossReplicaCredentialLock = hasCrossReplicaExecutorCredentialLock(config);
   if (!tenantSafeCredentialHome) {
     throw new Error(
       'Config error: HA auth-resolved execution requires execution.executor_storage.user_home: persistent-per-user'
@@ -467,8 +478,16 @@ export function resolveDeploymentConfig(
       widgetResolutionDurableClaim: true,
       githubInstall: true,
       codexCredentialFiles:
-        executorStorage.user_home !== 'replica-local' && tenantSafeCredentialHome,
-      codexDeviceAuth: false,
+        executorStorage.user_home !== 'replica-local' &&
+        tenantSafeCredentialHome &&
+        crossReplicaCredentialLock,
+      // Device completion mutates a credential on behalf of one authenticated
+      // browser user. Replica consistency alone is insufficient: a static
+      // deployment's intentional shared Unix identity would let users replace
+      // each other's login. Admit only a concrete tenant/user-keyed route.
+      codexDeviceAuth: exactUserCredentialHome && crossReplicaCredentialLock,
+      claudeOAuth: exactUserCredentialHome && crossReplicaCredentialLock,
+      claudeAuth: exactUserCredentialHome && crossReplicaCredentialLock,
       processAffineAuth: false,
       gatewayListeners: true,
       gatewayOutboundExactlyOnce: false,
@@ -487,6 +506,9 @@ export function resolveDeploymentConfig(
     environmentHealthMonitor,
     executorStorage: {
       userHome: executorStorage.user_home,
+      ...(executorStorage.user_home_locking
+        ? { userHomeLocking: executorStorage.user_home_locking }
+        : {}),
       branchWorkspace: executorStorage.branch_workspace,
       baseRepository: executorStorage.base_repository,
     },

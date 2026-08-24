@@ -56,10 +56,12 @@ import {
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   EntityNotFoundError,
   generateId,
   getCurrentTenantId,
   isDatabaseUniqueConstraintError,
+  isPostgresDatabaseHandle,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -330,12 +332,20 @@ export class SchedulerService {
       workIdentity,
       testHooks: config.testHooks,
     };
-    this.branchRepo = new BranchRepository(db);
-    this.scheduleRepo = new ScheduleRepository(db);
-    this.sessionRepo = new SessionRepository(db);
-    this.userRepo = new UsersRepository(db);
-    this.sessionMCPRepo = new SessionMCPServerRepository(db);
-    this.taskRepo = new TaskRepository(db);
+    // The HA scheduler is a system-discovered, tenant-reentered workflow rather
+    // than a Feathers request. Bind its PostgreSQL repositories at the shared
+    // short-unit boundary so reads remain available during a tenant freeze
+    // while every create/update/delete checks the gate in the transaction that
+    // owns the mutation. SQLite has no tenant write gate; keep its direct
+    // repository calls unchanged, including their concurrency timing.
+    const bindTenantRepository = <T extends object>(repository: T): T =>
+      isPostgresDatabaseHandle(db) ? bindRepositoryToTenantUnitOfWork(db, repository) : repository;
+    this.branchRepo = bindTenantRepository(new BranchRepository(db));
+    this.scheduleRepo = bindTenantRepository(new ScheduleRepository(db));
+    this.sessionRepo = bindTenantRepository(new SessionRepository(db));
+    this.userRepo = bindTenantRepository(new UsersRepository(db));
+    this.sessionMCPRepo = bindTenantRepository(new SessionMCPServerRepository(db));
+    this.taskRepo = bindTenantRepository(new TaskRepository(db));
 
     if (
       !Number.isInteger(this.config.scanBatchSize) ||

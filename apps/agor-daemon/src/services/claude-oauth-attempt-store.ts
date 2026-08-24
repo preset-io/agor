@@ -38,6 +38,8 @@ export interface ClaudeOAuthStartInput {
   verifier: string;
   state: string;
   delegatedHomeKey: string | null;
+  /** Canonical exact-user `.claude` directory fixed at attempt start. */
+  claudeConfigDir?: string;
   /** Rebuilt from the verifier + state whenever a status read needs it. */
   buildVerificationUrl: (verifier: string, state: string) => string;
 }
@@ -58,6 +60,7 @@ export interface ClaudeOAuthExchangeClaim {
   verifier: string;
   state: string;
   delegatedHomeKey: string | null;
+  claudeConfigDir?: string;
 }
 
 export type ClaudeOAuthClaimResult =
@@ -83,11 +86,16 @@ export interface ClaudeOAuthAttemptStore {
     state: string
   ): Promise<ClaudeOAuthClaimResult>;
   /**
-   * Is this claim still the live one? Checked immediately before the credential
-   * write AND again before the user-method mutation, because a logout or a
-   * replacement attempt can land between those two steps.
+   * Serialize and generation-fence final credential + user-method mutation.
+   * The durable implementation holds the tenant/user advisory lock and exact
+   * claim predicate through the daemon-contained filesystem writer, user patch,
+   * and terminal CAS. Provider I/O has already completed before this begins.
    */
-  isClaimLive(ctx: ClaudeOAuthAttemptContext, claim: ClaudeOAuthExchangeClaim): Promise<boolean>;
+  finalize<T>(
+    ctx: ClaudeOAuthAttemptContext,
+    claim: ClaudeOAuthExchangeClaim,
+    work: (generation: number) => Promise<{ value: T; subscriptionType?: string }>
+  ): Promise<{ outcome: 'committed'; value: T } | { outcome: 'stale' }>;
   finish(
     ctx: ClaudeOAuthAttemptContext,
     claim: ClaudeOAuthExchangeClaim,
@@ -95,12 +103,12 @@ export interface ClaudeOAuthAttemptStore {
   ): Promise<void>;
   /** Invalidate any live attempt — logout, or another auth-relevant change. */
   invalidate(ctx: ClaudeOAuthAttemptContext, failureCode: string): Promise<void>;
-  /**
-   * Serialize the final credential-file/user mutation with logout on this
-   * daemon. Constrained HA remains gated until this local guard is replaced by
-   * the shared generation-fenced credential coordinator.
-   */
-  withCredentialMutation<T>(ctx: ClaudeOAuthAttemptContext, work: () => Promise<T>): Promise<T>;
+  /** Serialize logout/other credential decisions against OAuth completion. */
+  runCredentialMutation<T>(
+    ctx: ClaudeOAuthAttemptContext,
+    reason: 'signed_out' | 'credentials_changed',
+    work: (generation: number) => Promise<T>
+  ): Promise<T>;
 }
 
 class InProcessCredentialMutationQueue {
@@ -134,6 +142,7 @@ function phaseOf(status: string): ClaudeOAuthPhase {
     case 'pending':
       return 'awaiting_code';
     case 'exchanging':
+    case 'persisting':
       return 'exchanging';
     case 'succeeded':
       return 'success';
@@ -153,6 +162,8 @@ function hintForFailureCode(failureCode: string | null): string | undefined {
       return 'A newer sign-in replaced this one.';
     case 'signed_out':
       return 'The Claude login was removed — start over to sign in again.';
+    case 'credentials_changed':
+      return 'A newer Claude authentication choice replaced this sign-in.';
     case 'exchange_owner_lost':
       return 'Sign-in could not be completed and the code may be used up — start over to get a fresh link.';
     default:
@@ -169,6 +180,7 @@ interface MemoryAttempt {
   expiresAtMs: number;
   claimId: string | null;
   delegatedHomeKey: string | null;
+  claudeConfigDir?: string;
   subscriptionType?: string;
   hint?: string;
   finishedAtMs?: number;
@@ -184,6 +196,7 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
   private readonly attempts = new Map<string, MemoryAttempt>();
   private readonly credentialMutations = new InProcessCredentialMutationQueue();
   private sequence = 0;
+  private lastMutationGeneration = 0;
 
   private key(ctx: ClaudeOAuthAttemptContext): string {
     return `${ctx.tenantId}:${ctx.userId}`;
@@ -243,28 +256,33 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
     ctx: ClaudeOAuthAttemptContext,
     input: ClaudeOAuthStartInput
   ): Promise<ClaudeOAuthStarted> {
-    this.expireAndPrune();
-    // Invalidate the prior attempt up front so an in-flight submit of the old
-    // code cannot clobber this fresh one when it lands.
-    const prior = this.attempts.get(this.key(ctx));
-    if (prior) prior.cancelled = true;
+    // Standalone/simple mode can route every user to the daemon's one Claude
+    // home, so starts participate in the same queue as finalize/logout. This
+    // makes "new start wins" linearizable even if the prior submit is already
+    // inside its credential write.
+    return this.credentialMutations.run('standalone-claude-credential-home', async () => {
+      this.expireAndPrune();
+      const prior = this.attempts.get(this.key(ctx));
+      if (prior) prior.cancelled = true;
 
-    this.sequence += 1;
-    const attemptId = `mem-${this.sequence}`;
-    const expiresAtMs = Date.now() + ATTEMPT_LIFETIME_MS;
-    const verificationUrl = input.buildVerificationUrl(input.verifier, input.state);
-    this.attempts.set(this.key(ctx), {
-      attemptId,
-      phase: 'awaiting_code',
-      verifier: input.verifier,
-      state: input.state,
-      verificationUrl,
-      expiresAtMs,
-      claimId: null,
-      delegatedHomeKey: input.delegatedHomeKey,
-      cancelled: false,
+      this.sequence += 1;
+      const attemptId = `mem-${this.sequence}`;
+      const expiresAtMs = Date.now() + ATTEMPT_LIFETIME_MS;
+      const verificationUrl = input.buildVerificationUrl(input.verifier, input.state);
+      this.attempts.set(this.key(ctx), {
+        attemptId,
+        phase: 'awaiting_code',
+        verifier: input.verifier,
+        state: input.state,
+        verificationUrl,
+        expiresAtMs,
+        claimId: null,
+        delegatedHomeKey: input.delegatedHomeKey,
+        ...(input.claudeConfigDir ? { claudeConfigDir: input.claudeConfigDir } : {}),
+        cancelled: false,
+      });
+      return { attemptId, verificationUrl, expiresAtMs };
     });
-    return { attemptId, verificationUrl, expiresAtMs };
   }
 
   async status(ctx: ClaudeOAuthAttemptContext, attemptId?: string): Promise<ClaudeOAuthStatus> {
@@ -304,15 +322,32 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
         verifier: attempt.verifier,
         state: attempt.state,
         delegatedHomeKey: attempt.delegatedHomeKey,
+        ...(attempt.claudeConfigDir ? { claudeConfigDir: attempt.claudeConfigDir } : {}),
       },
     };
   }
 
-  async isClaimLive(
+  async finalize<T>(
     ctx: ClaudeOAuthAttemptContext,
-    claim: ClaudeOAuthExchangeClaim
-  ): Promise<boolean> {
-    return this.live(ctx, claim) !== null;
+    claim: ClaudeOAuthExchangeClaim,
+    work: (generation: number) => Promise<{ value: T; subscriptionType?: string }>
+  ): Promise<{ outcome: 'committed'; value: T } | { outcome: 'stale' }> {
+    return this.credentialMutations.run('standalone-claude-credential-home', async () => {
+      const attempt = this.live(ctx, claim);
+      if (!attempt) return { outcome: 'stale' as const };
+      const generation = Math.max(Date.now() * 1_000, this.lastMutationGeneration + 1);
+      this.lastMutationGeneration = generation;
+      const completed = await work(generation);
+      attempt.subscriptionType = completed.subscriptionType;
+      this.settle(
+        attempt,
+        'success',
+        completed.subscriptionType
+          ? `Signed in with Claude (${completed.subscriptionType}).`
+          : 'Signed in with Claude.'
+      );
+      return { outcome: 'committed' as const, value: completed.value };
+    });
   }
 
   async finish(
@@ -337,16 +372,30 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
   }
 
   async invalidate(ctx: ClaudeOAuthAttemptContext, failureCode: string): Promise<void> {
-    const attempt = this.attempts.get(this.key(ctx));
+    const key = this.key(ctx);
+    const attempt = this.attempts.get(key);
     if (!attempt) return;
     attempt.cancelled = true;
     if (attempt.phase === 'awaiting_code' || attempt.phase === 'exchanging') {
       this.settle(attempt, 'error', hintForFailureCode(failureCode));
+    } else {
+      // Logout or another credential choice must not leave a completed OAuth
+      // attempt looking current on a later remount/status read.
+      this.attempts.delete(key);
     }
   }
 
-  withCredentialMutation<T>(ctx: ClaudeOAuthAttemptContext, work: () => Promise<T>): Promise<T> {
-    return this.credentialMutations.run(this.key(ctx), work);
+  runCredentialMutation<T>(
+    ctx: ClaudeOAuthAttemptContext,
+    reason: 'signed_out' | 'credentials_changed',
+    work: (generation: number) => Promise<T>
+  ): Promise<T> {
+    return this.credentialMutations.run('standalone-claude-credential-home', async () => {
+      await this.invalidate(ctx, reason);
+      const generation = Math.max(Date.now() * 1_000, this.lastMutationGeneration + 1);
+      this.lastMutationGeneration = generation;
+      return work(generation);
+    });
   }
 }
 
@@ -363,8 +412,6 @@ function timingSafeStringEqual(a: string, b: string): boolean {
  * database owns the generation fence and the one-shot exchange claim.
  */
 export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
-  private readonly credentialMutations = new InProcessCredentialMutationQueue();
-
   constructor(private readonly authority: ClaudeOAuthAttemptAuthority) {}
 
   async start(
@@ -377,6 +424,7 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
       codeVerifier: input.verifier,
       state: input.state,
       delegatedHomeKey: input.delegatedHomeKey,
+      ...(input.claudeConfigDir ? { claudeConfigDir: input.claudeConfigDir } : {}),
     });
     const record = await this.authority.getForUser(ctx.tenantId, ctx.userId, attemptId);
     return {
@@ -439,6 +487,7 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
           // material and never needs to be unsealed.
           state,
           delegatedHomeKey: material.delegatedHomeKey,
+          ...(material.claudeConfigDir ? { claudeConfigDir: material.claudeConfigDir } : {}),
         },
       };
     }
@@ -453,16 +502,18 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
     return { outcome: 'state_mismatch' };
   }
 
-  async isClaimLive(
+  async finalize<T>(
     ctx: ClaudeOAuthAttemptContext,
-    claim: ClaudeOAuthExchangeClaim
-  ): Promise<boolean> {
-    const record = await this.authority.readLiveClaim(
+    claim: ClaudeOAuthExchangeClaim,
+    work: (generation: number) => Promise<{ value: T; subscriptionType?: string }>
+  ): Promise<{ outcome: 'committed'; value: T } | { outcome: 'stale' }> {
+    return this.authority.finalize(
       ctx.tenantId,
+      ctx.userId,
       claim.attemptId as ClaudeOAuthAttemptID,
-      claim.claimId
+      claim.claimId,
+      async (material) => work(material.attemptGeneration)
     );
-    return record !== null;
   }
 
   async finish(
@@ -489,7 +540,11 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
     await this.authority.invalidateForUser(ctx.tenantId, ctx.userId, failureCode);
   }
 
-  withCredentialMutation<T>(ctx: ClaudeOAuthAttemptContext, work: () => Promise<T>): Promise<T> {
-    return this.credentialMutations.run(`${ctx.tenantId}:${ctx.userId}`, work);
+  runCredentialMutation<T>(
+    ctx: ClaudeOAuthAttemptContext,
+    reason: 'signed_out' | 'credentials_changed',
+    work: (generation: number) => Promise<T>
+  ): Promise<T> {
+    return this.authority.runCredentialMutation(ctx.tenantId, ctx.userId, reason, work);
   }
 }

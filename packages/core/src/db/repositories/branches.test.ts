@@ -49,6 +49,7 @@ function createBranchData(overrides?: {
   board_id?: UUID;
   created_by?: UUID;
   base_ref?: string;
+  base_remote_url?: string;
   base_sha?: string;
   last_commit_sha?: string;
   tracking_branch?: string;
@@ -63,6 +64,7 @@ function createBranchData(overrides?: {
   updated_at?: string;
   storage_mode?: 'worktree' | 'clone';
   clone_depth?: number;
+  archived?: boolean;
   permission_source?: 'board' | 'override';
   others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
   others_fs_access?: 'none' | 'read' | 'write';
@@ -82,6 +84,7 @@ function createBranchData(overrides?: {
     board_id: overrides?.board_id,
     created_by: overrides?.created_by ?? (generateId() as UUID),
     base_ref: overrides?.base_ref,
+    base_remote_url: overrides?.base_remote_url,
     base_sha: overrides?.base_sha,
     last_commit_sha: overrides?.last_commit_sha,
     tracking_branch: overrides?.tracking_branch,
@@ -96,6 +99,7 @@ function createBranchData(overrides?: {
     updated_at: overrides?.updated_at,
     storage_mode: overrides?.storage_mode,
     clone_depth: overrides?.clone_depth,
+    archived: overrides?.archived,
     permission_source: overrides?.permission_source,
     others_can: overrides?.others_can,
     others_fs_access: overrides?.others_fs_access,
@@ -186,6 +190,7 @@ describe('BranchRepository.create', () => {
       repo_id: repo.repo_id,
       board_id: boardId,
       base_ref: 'main',
+      base_remote_url: 'https://github.com/example/template-source.git',
       base_sha: 'abc123',
       last_commit_sha: 'def456',
       tracking_branch: 'origin/feature',
@@ -209,6 +214,7 @@ describe('BranchRepository.create', () => {
     expect(created.created_by).toBe(data.created_by);
     expect(created.board_id).toBe(boardId);
     expect(created.base_ref).toBe('main');
+    expect(created.base_remote_url).toBe('https://github.com/example/template-source.git');
     expect(created.base_sha).toBe('abc123');
     expect(created.last_commit_sha).toBe('def456');
     expect(created.tracking_branch).toBe('origin/feature');
@@ -692,8 +698,17 @@ describe('BranchRepository.findActiveEnvironmentRefs', () => {
       await branchRepo.create(
         createBranchData({
           repo_id: repo.repo_id as UUID,
-          name: 'env-missing',
+          name: 'env-archived-running',
           branch_unique_id: 5,
+          archived: true,
+          environment_instance: { status: 'running' },
+        })
+      );
+      await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id as UUID,
+          name: 'env-missing',
+          branch_unique_id: 6,
         })
       );
 
@@ -1622,6 +1637,78 @@ describe('BranchRepository findExplicitFsAccessBranchIdsForGroup', () => {
   });
 });
 
+describe('BranchRepository.findAccessibleById', () => {
+  dbTest(
+    'resolves short IDs only among branches meeting the caller permission threshold',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      const repos = new RepoRepository(db);
+      const branches = new BranchRepository(db);
+      const owner = await users.create({
+        email: `accessible-branch-owner-${Date.now()}@example.com`,
+        name: 'Accessible Branch Owner',
+        role: 'member',
+      });
+      const outsider = await users.create({
+        email: `accessible-branch-outsider-${Date.now()}@example.com`,
+        name: 'Accessible Branch Outsider',
+        role: 'member',
+      });
+      const repo = await repos.create(createRepoData({ slug: `accessible-point-${Date.now()}` }));
+      const visibleId = '019f1234-5678-7000-8000-000000000001' as BranchID;
+      const hiddenId = '019f1234-5678-7000-8000-000000000002' as BranchID;
+      const visible = await branches.create(
+        createBranchData({
+          branch_id: visibleId,
+          repo_id: repo.repo_id,
+          name: 'visible-session-branch',
+          branch_unique_id: 9101,
+          created_by: owner.user_id as UUID,
+          permission_source: 'override',
+          others_can: 'session',
+        })
+      );
+      const hidden = await branches.create(
+        createBranchData({
+          branch_id: hiddenId,
+          repo_id: repo.repo_id,
+          name: 'hidden-branch',
+          branch_unique_id: 9102,
+          created_by: owner.user_id as UUID,
+          permission_source: 'override',
+          others_can: 'none',
+        })
+      );
+      await branches.addOwner(hidden.branch_id, owner.user_id as UUID);
+
+      // Both rows share this prefix. The hidden row must not make the visible
+      // branch ambiguous or disclose its full ID to the outsider.
+      const collidingPrefix = visible.branch_id.slice(0, -1);
+      await expect(
+        branches.findAccessibleById(collidingPrefix, outsider.user_id as UUID, {
+          minimumPermission: 'session',
+        })
+      ).resolves.toMatchObject({ branch_id: visible.branch_id });
+      await expect(
+        branches.findAccessibleById(hidden.branch_id, outsider.user_id as UUID, {
+          minimumPermission: 'session',
+        })
+      ).resolves.toBeNull();
+      await expect(
+        branches.findAccessibleById(hidden.branch_id, owner.user_id as UUID, {
+          minimumPermission: 'session',
+        })
+      ).resolves.toMatchObject({ branch_id: hidden.branch_id });
+      await expect(
+        branches.findAccessibleById(hidden.branch_id, outsider.user_id as UUID, {
+          minimumPermission: 'session',
+          enforceAccess: false,
+        })
+      ).resolves.toMatchObject({ branch_id: hidden.branch_id });
+    }
+  );
+});
+
 describe('BranchRepository.findTeammateBranches', () => {
   dbTest(
     'finds marker teammates and enabled-schedule legacy teammates without scanning all branches',
@@ -1765,6 +1852,19 @@ describe('BranchRepository.findTeammateBranches', () => {
       })
     );
     await branches.addOwner(privateTeammate.branch_id, owner.user_id as UUID);
+    const viewOnlyTeammate = await branches.create(
+      createBranchData({
+        repo_id: repo.repo_id as UUID,
+        created_by: owner.user_id as UUID,
+        branch_unique_id: 5,
+        name: 'view-only-teammate',
+        permission_source: 'override',
+        others_can: 'view',
+        custom_context: {
+          teammate: { kind: 'teammate', displayName: 'View-only Teammate' },
+        },
+      })
+    );
 
     const ownerResult = await branches.findTeammateBranches({
       archived: false,
@@ -1778,10 +1878,21 @@ describe('BranchRepository.findTeammateBranches', () => {
       userId: outsider.user_id as UUID,
       limit: 10,
     });
+    const outsiderSessionResult = await branches.findTeammateBranches({
+      archived: false,
+      repo_id: repo.repo_id as UUID,
+      userId: outsider.user_id as UUID,
+      minimumPermission: 'session',
+      limit: 10,
+    });
 
     expect(ownerResult.map((branch) => branch.branch_id)).toContain(privateTeammate.branch_id);
     expect(outsiderResult.map((branch) => branch.branch_id)).not.toContain(
       privateTeammate.branch_id
+    );
+    expect(outsiderResult.map((branch) => branch.branch_id)).toContain(viewOnlyTeammate.branch_id);
+    expect(outsiderSessionResult.map((branch) => branch.branch_id)).not.toContain(
+      viewOnlyTeammate.branch_id
     );
   });
 });

@@ -172,6 +172,10 @@ export const TeammateFormFields: React.FC<TeammateFormFieldsProps> = ({
                   <Input placeholder="private-my-teammate" />
                 </Form.Item>
 
+                {/* TODO(teammate-gallery): offer the TeammateGallery here as a
+                    friendlier way to pick a source branch (a selected template
+                    would set this field + the emoji). Kept as the bare input for
+                    now to avoid form-wiring risk — see PR description. */}
                 <Form.Item name="sourceBranch" label="Source Branch">
                   <Input placeholder="main" />
                 </Form.Item>

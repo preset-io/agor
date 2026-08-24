@@ -12,7 +12,13 @@ afterEach(() => {
 
 const base = { command: 'claude.auth-file' as const };
 const credentials = `${JSON.stringify(
-  { claudeAiOauth: { accessToken: 'sk-ant-oat01-secret', refreshToken: 'sk-ant-ort01-secret' } },
+  {
+    claudeAiOauth: {
+      accessToken: 'sk-ant-oat01-secret',
+      refreshToken: 'sk-ant-ort01-secret',
+      expiresAt: 1_800_000_000_000,
+    },
+  },
   null,
   2
 )}\n`;
@@ -68,6 +74,24 @@ describe('claude.auth-file executor boundary', () => {
       success: true,
       data: { status: 'malformed' },
     });
+  });
+
+  it('generation-fences a stale delegated delete behind a newer credential write', async () => {
+    process.env.CLAUDE_CONFIG_DIR = await mkdtemp(join(tmpdir(), 'agor-claude-auth-'));
+    const target = join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json');
+    expect(
+      await handleClaudeAuthFile(
+        { ...base, params: { operation: 'write', content: credentials, generation: 30 } },
+        {}
+      )
+    ).toEqual({ success: true, data: { status: 'written' } });
+
+    const stale = await handleClaudeAuthFile(
+      { ...base, params: { operation: 'delete', generation: 20 } },
+      {}
+    );
+    expect(stale).toMatchObject({ success: false, error: { code: 'AUTH_FILE_STALE' } });
+    expect(await readFile(target, 'utf8')).toBe(credentials);
   });
 
   it('does not spawn or write in dryRun mode', async () => {

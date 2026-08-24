@@ -161,8 +161,12 @@ async function seedNonPortableOAuthGrant(
         transport: 'http',
         scope: 'global',
         enabled: true,
-        source: 'user',
-        data: { url: 'https://mcp.example.test', auth: { type: 'oauth' } },
+        source: 'catalog',
+        data: {
+          url: 'https://mcp.example.test',
+          catalog_entry_name: 'com.example/portable-oauth',
+          auth: { type: 'oauth' },
+        },
         created_at: new Date(),
       })
       .run();
@@ -711,15 +715,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     const manifest = await readManifest(archive);
     expect(manifest.database.identity.nonPortableTenantTables).toEqual([
       'claude_oauth_attempts',
+      'codex_device_auth_attempts',
       'executor_session_token_authorities',
       'github_install_states',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',
     ]);
+    expect(manifest.database.identity.tenantTables).not.toContain('codex_device_auth_attempts');
     expect(manifest.database.identity.tenantTables).not.toContain('claude_oauth_attempts');
-    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
-      'claude_oauth_attempts'
-    );
     expect(manifest.database.identity.tenantTables).not.toContain(
       'executor_session_token_authorities'
     );
@@ -727,6 +730,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     expect(manifest.database.identity.tenantTables).not.toContain('user_mcp_oauth_tokens');
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'executor_session_token_authorities'
+    );
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'codex_device_auth_attempts'
+    );
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'claude_oauth_attempts'
     );
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'mcp_oauth_pending_flows'
@@ -782,6 +791,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
         .where(eq(pg.mcpServers.mcp_server_id, serverId))
         .all();
       expect(servers).toHaveLength(1);
+      expect(servers[0]?.source).toBe('imported');
+      expect(
+        (servers[0]?.data as { catalog_entry_name?: string } | undefined)?.catalog_entry_name
+      ).toBeUndefined();
       await expect(
         new UserMCPOAuthTokenRepository(
           scoped,

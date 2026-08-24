@@ -1,7 +1,9 @@
 # PostgreSQL + RBAC Testing Environment
 # Extends base docker-compose.yml with PostgreSQL database and RBAC features
 #
-# Usage: docker compose --profile postgres up
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+#     --profile postgres up postgres agor-dev
 #
 # This profile provides:
 # - PostgreSQL database (instead of SQLite)
@@ -11,9 +13,9 @@
 #
 services:
   agor-dev:
-    # Full sandbox environments select this file explicitly, so Compose does
+    # Rich sandbox environments select this file explicitly, so Compose does
     # not auto-load docker-compose.override.yml. Permit Codex's nested Linux
-    # sandbox here as part of the self-contained full environment overlay.
+    # sandbox here as part of the self-contained rich environment overlay.
     security_opt:
       - apparmor=unconfined
       - seccomp=unconfined
@@ -21,12 +23,6 @@ services:
       # PostgreSQL database configuration
       - AGOR_DB_DIALECT=postgresql
       - DATABASE_URL=postgresql://agor_app:agor_dev_secret@postgres:5432/agor
-
-      # PostgreSQL startup skips the SQLite-only `agor init`, so provide the
-      # stable development secrets that production supplies via its secret
-      # manager. These values are intentionally local-environment-only.
-      - AGOR_JWT_SECRET=${AGOR_JWT_SECRET:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
-      - AGOR_MASTER_SECRET=${AGOR_MASTER_SECRET:-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}
 
       # Enable RBAC + local filesystem sandbox
       - AGOR_RBAC_ENABLED=${AGOR_RBAC_ENABLED:-true}

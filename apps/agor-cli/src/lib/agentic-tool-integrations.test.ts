@@ -380,21 +380,28 @@ describe('local selection persistence', () => {
   });
 
   it('allows only one of two simultaneous stale-lock reclaimers to acquire', async () => {
-    const root = await createRoot();
-    const lock = join(root, '.install.lock');
-    await mkdir(lock);
-    await utimes(lock, new Date(0), new Date(0));
+    // Repeat the race: on a busy CI filesystem, proper-lockfile can otherwise
+    // hit the narrow stale-directory replacement window only intermittently.
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const root = await createRoot();
+      const lock = join(root, '.install.lock');
+      await mkdir(lock);
+      await utimes(lock, new Date(0), new Date(0));
 
-    const results = await Promise.allSettled([
-      acquireAgenticToolInstallLock(),
-      acquireAgenticToolInstallLock(),
-    ]);
-    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
-    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
-    const winner = results.find(
-      (result): result is PromiseFulfilledResult<() => Promise<void>> =>
-        result.status === 'fulfilled'
-    );
-    await winner?.value();
+      const results = await Promise.allSettled([
+        acquireAgenticToolInstallLock(),
+        acquireAgenticToolInstallLock(),
+      ]);
+      const winners = results.filter(
+        (result): result is PromiseFulfilledResult<() => Promise<void>> =>
+          result.status === 'fulfilled'
+      );
+      expect(winners, `stale-lock race attempt ${attempt + 1}`).toHaveLength(1);
+      expect(
+        results.filter((result) => result.status === 'rejected'),
+        `stale-lock race attempt ${attempt + 1}`
+      ).toHaveLength(1);
+      await winners[0]?.value();
+    }
   });
 });

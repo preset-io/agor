@@ -72,7 +72,7 @@ CREATE POLICY "claude_oauth_maintenance_select" ON "claude_oauth_attempts"
 		current_setting('agor.system_scope', true) = 'claude_oauth_maintenance'
 		AND (
 			("status" = 'pending' AND "expires_at" <= CURRENT_TIMESTAMP)
-			OR ("status" = 'exchanging' AND "exchange_started_at" <= CURRENT_TIMESTAMP - INTERVAL '2 minutes')
+			OR ("status" IN ('exchanging', 'persisting') AND "exchange_started_at" <= CURRENT_TIMESTAMP - INTERVAL '2 minutes')
 			OR ("status" IN ('succeeded', 'failed', 'ambiguous', 'expired')
 				AND "finished_at" <= CURRENT_TIMESTAMP - INTERVAL '24 hours')
 			OR ("status" IN ('ambiguous', 'expired')
@@ -87,7 +87,7 @@ CREATE POLICY "claude_oauth_maintenance_update" ON "claude_oauth_attempts"
 		current_setting('agor.system_scope', true) = 'claude_oauth_maintenance'
 		AND (
 			("status" = 'pending' AND "expires_at" <= CURRENT_TIMESTAMP)
-			OR ("status" = 'exchanging' AND "exchange_started_at" <= CURRENT_TIMESTAMP - INTERVAL '2 minutes')
+			OR ("status" IN ('exchanging', 'persisting') AND "exchange_started_at" <= CURRENT_TIMESTAMP - INTERVAL '2 minutes')
 		)
 	)
 	WITH CHECK (

@@ -9,6 +9,11 @@
  */
 
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
+import {
+  type ExecutorCommandResult,
+  ExecutorCommandResultSchema,
+  ExecutorResponseDescriptorSchema,
+} from '@agor/core/executor-protocol';
 import { AGENTIC_TOOL_NAMES, type AgenticToolName } from '@agor/core/types';
 import { z } from 'zod';
 
@@ -117,6 +122,12 @@ export const BasePayloadSchema = z.object({
   /** Executor command identifier */
   command: z.string(),
 
+  /** Invocation lifecycle selected by the daemon host. */
+  executorMode: z.enum(['autonomous', 'request']).optional(),
+
+  /** One-attempt callback capability. Required when executorMode=request. */
+  executorResponse: ExecutorResponseDescriptorSchema.optional(),
+
   /** Daemon URL for Feathers connection */
   daemonUrl: z.string().url().optional(),
 
@@ -220,6 +231,13 @@ export const GitClonePayloadSchema = BasePayloadSchema.extend({
     createDbRecord: z.boolean().optional().default(true),
 
     /**
+     * Import executable environment configuration from the cloned
+     * `.agor.yml`. This capability is derived by the daemon from the
+     * initiating user's admin role and defaults closed for direct callers.
+     */
+    importEnvironmentConfig: z.boolean().optional().default(false),
+
+    /**
      * Pre-existing repo row to patch with clone outcome. When set, the
      * executor patches this row with `clone_status: 'ready'` (success) or
      * `'failed'` (with `clone_error`) instead of creating a new row. The
@@ -292,20 +310,13 @@ export type GitBranchAddPayload = z.infer<typeof GitBranchAddPayloadSchema>;
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Git branch remove payload - remove branch filesystem and database resources
- *
- * When deleteDbRecord is true (default), the executor will:
- * 1. Remove the git branch from filesystem
- * 2. Delete the branch record from database via Feathers
+ * Git branch remove payload — remove only daemon-authorized filesystem state.
+ * Branch metadata and cascades remain entirely daemon-owned.
  */
 export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.branch.remove'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
   params: z.object({
-    /** Branch ID (UUID) - required for DB record deletion */
+    /** Branch ID (UUID) retained for bounded diagnostics. */
     branchId: z.string().uuid(),
 
     /** Path to the branch to remove */
@@ -316,9 +327,6 @@ export const GitBranchRemovePayloadSchema = BasePayloadSchema.extend({
 
     /** Force removal even if dirty */
     force: z.boolean().optional(),
-
-    /** Delete DB record after removal (default: true) */
-    deleteDbRecord: z.boolean().optional().default(true),
 
     /** Branch name to delete after branch removal */
     branch: z.string().optional(),
@@ -357,10 +365,6 @@ export type GitBranchRemovePayload = z.infer<typeof GitBranchRemovePayloadSchema
  */
 export const GitBranchCleanPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.branch.clean'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
   params: z.object({
     /** Path to the branch to clean */
     branchPath: z.string(),
@@ -663,13 +667,15 @@ export type EnvironmentLogsPayload = z.infer<typeof EnvironmentLogsPayloadSchema
  */
 export const GitRepoRealignOriginPayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.repo.realign-origin'),
-
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
   params: z.object({
-    /** Repo ID to inspect and realign */
+    /** Repo identity retained for bounded diagnostics. */
     repoId: z.string().uuid(),
+    /** Daemon-authoritative managed repository path. */
+    repoPath: z.string().min(1),
+    /** Daemon-authoritative canonical origin URL. */
+    remoteUrl: z.string().min(1),
+    /** Redacted human-readable identifier for the security log. */
+    repoSlug: z.string().min(1),
   }),
 });
 
@@ -703,12 +709,13 @@ export type GitManagedCredentialsReconcilePayload = z.infer<
 export const GitRepoDeletePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('git.repo.delete'),
 
-  /** JWT for Feathers authentication */
-  sessionToken: z.string(),
-
   params: z.object({
-    /** Repo being deleted; executor fetches the concrete managed paths itself. */
+    /** Repo being deleted (diagnostic attribution only). */
     repoId: z.string().uuid(),
+    /** Daemon-authoritative managed repository path. */
+    repoPath: z.string().min(1),
+    /** Daemon-authoritative managed branch paths from the unbounded inventory. */
+    branchPaths: z.array(z.string().min(1)),
     /** Tenant-scoped root that is allowed to contain the managed repository. */
     reposRoot: z.string().min(1),
     /** Tenant-scoped root that is allowed to contain managed branches. */
@@ -735,7 +742,7 @@ export const ZellijAttachPayloadSchema = BasePayloadSchema.extend({
   sessionToken: z.string(),
 
   params: z.object({
-    /** User ID (for channel: user/${userId}/terminal) */
+    /** User ID used by the daemon to derive an opaque tenant-qualified terminal channel. */
     userId: z.string().uuid(),
 
     /** Opaque process-local attachment id returned to the browser. */
@@ -795,8 +802,15 @@ export const CodexAuthFilePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('codex.auth-file'),
   params: z.discriminatedUnion('operation', [
     z.object({ operation: z.literal('inspect') }),
-    z.object({ operation: z.literal('write'), content: z.string().max(64 * 1024) }),
-    z.object({ operation: z.literal('delete') }),
+    z.object({
+      operation: z.literal('write'),
+      content: z.string().max(64 * 1024),
+      generation: z.number().int().positive().optional(),
+    }),
+    z.object({
+      operation: z.literal('delete'),
+      generation: z.number().int().positive().optional(),
+    }),
   ]),
 });
 
@@ -812,8 +826,15 @@ export const ClaudeAuthFilePayloadSchema = BasePayloadSchema.extend({
   command: z.literal('claude.auth-file'),
   params: z.discriminatedUnion('operation', [
     z.object({ operation: z.literal('inspect') }),
-    z.object({ operation: z.literal('write'), content: z.string().max(64 * 1024) }),
-    z.object({ operation: z.literal('delete') }),
+    z.object({
+      operation: z.literal('write'),
+      content: z.string().max(64 * 1024),
+      generation: z.number().int().positive().optional(),
+    }),
+    z.object({
+      operation: z.literal('delete'),
+      generation: z.number().int().positive().optional(),
+    }),
   ]),
 });
 
@@ -826,7 +847,7 @@ export type ClaudeAuthFilePayload = z.infer<typeof ClaudeAuthFilePayloadSchema>;
 /**
  * All supported executor payloads
  */
-export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
+const ExecutorPayloadUnionSchema = z.discriminatedUnion('command', [
   PromptPayloadSchema,
   AgenticToolInvokePayloadSchema,
   GitClonePayloadSchema,
@@ -858,6 +879,23 @@ export const ExecutorPayloadSchema = z.discriminatedUnion('command', [
   ClaudeAuthFilePayloadSchema,
 ]);
 
+export const ExecutorPayloadSchema = ExecutorPayloadUnionSchema.superRefine((payload, ctx) => {
+  if (payload.executorMode === 'request' && !payload.executorResponse) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['executorResponse'],
+      message: 'executorMode=request requires an executor response descriptor',
+    });
+  }
+  if (payload.executorMode !== 'request' && payload.executorResponse) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['executorResponse'],
+      message: 'executor response descriptors are valid only in request mode',
+    });
+  }
+});
+
 export type ExecutorPayload = z.infer<typeof ExecutorPayloadSchema>;
 
 // ═══════════════════════════════════════════════════════════
@@ -865,25 +903,11 @@ export type ExecutorPayload = z.infer<typeof ExecutorPayloadSchema>;
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Executor result - returned via stdout or Feathers
+ * Executor result returned through the authenticated response channel.
  */
-export const ExecutorResultSchema = z.object({
-  success: z.boolean(),
+export const ExecutorResultSchema = ExecutorCommandResultSchema;
 
-  /** Command-specific result data */
-  data: z.unknown().optional(),
-
-  /** Error information if success=false */
-  error: z
-    .object({
-      code: z.string(),
-      message: z.string(),
-      details: z.unknown().optional(),
-    })
-    .optional(),
-});
-
-export type ExecutorResult = z.infer<typeof ExecutorResultSchema>;
+export type ExecutorResult = ExecutorCommandResult;
 
 // ═══════════════════════════════════════════════════════════
 // Helper Functions

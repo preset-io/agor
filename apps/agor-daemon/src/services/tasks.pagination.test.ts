@@ -95,6 +95,37 @@ describe('TasksService.find pagination', () => {
     ).rejects.toThrow('Deep Task pagination requires an exact session_id filter');
   });
 
+  dbTest('filters by task creator before pagination', async ({ db }) => {
+    const sessionId = await createTestSession(db);
+    const repository = new TaskRepository(db);
+    const creator = generateId() as UUID;
+    const expected = await repository.create({
+      session_id: sessionId,
+      full_prompt: 'Own running task',
+      status: TaskStatus.RUNNING,
+      created_by: creator,
+    });
+    await repository.create({
+      session_id: sessionId,
+      full_prompt: 'Another user running task',
+      status: TaskStatus.RUNNING,
+      created_by: generateId() as UUID,
+    });
+    await repository.create({
+      session_id: sessionId,
+      full_prompt: 'Own completed task',
+      status: TaskStatus.COMPLETED,
+      created_by: creator,
+    });
+
+    const result = (await createTasksService(db, feathers()).find({
+      query: { status: TaskStatus.RUNNING, created_by: creator },
+    })) as Paginated<Task>;
+
+    expect(result).toMatchObject({ total: 1 });
+    expect(result.data.map((task) => task.task_id)).toEqual([expected.task_id]);
+  });
+
   dbTest('walks exact Session Tasks with an immutable Task-ID keyset', async ({ db }) => {
     const sessionId = await createTestSession(db);
     const repository = new TaskRepository(db);

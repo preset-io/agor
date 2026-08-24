@@ -2,7 +2,14 @@ import { type SdkFailure, TaskStatus } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const beginExecutorTermination = vi.hoisted(() => vi.fn());
+const withFreshTenantWrite = vi.hoisted(() =>
+  vi.fn(async (_db: unknown, _tenantId: string, work: () => Promise<unknown>) => work())
+);
 vi.mock('../termination-coordinator.js', () => ({ beginExecutorTermination }));
+vi.mock('../utils/tenant-db-scope.js', () => ({
+  deferWithTenantContext: vi.fn(),
+  withFreshTenantWrite,
+}));
 
 import { TasksService } from './tasks.js';
 
@@ -28,6 +35,7 @@ function serviceFor(current = task, observationAccepted = true) {
       ),
     },
   });
+  Object.defineProperty(service, 'db', { value: {} });
   service.app = {
     get: () => ({ execution: { sdk_watchdog: { abort_grace_ms: 25 } } }),
     service: (name: string) => {
@@ -40,7 +48,10 @@ function serviceFor(current = task, observationAccepted = true) {
 }
 
 describe('TasksService SDK health reports', () => {
-  beforeEach(() => beginExecutorTermination.mockReset());
+  beforeEach(() => {
+    beginExecutorTermination.mockReset();
+    withFreshTenantWrite.mockClear();
+  });
 
   it('persists observe-only evidence without lifecycle side effects', async () => {
     const service = serviceFor();
@@ -89,11 +100,14 @@ describe('TasksService SDK health reports', () => {
     const service = serviceFor(current);
     beginExecutorTermination.mockResolvedValue({ ...current, status: TaskStatus.STOPPING });
 
-    await service.reportSdkHealthFailure({
-      task_id: task.task_id,
-      reason: 'no_first_progress',
-      watchdog_action: 'enforced',
-    });
+    await service.reportSdkHealthFailure(
+      {
+        task_id: task.task_id,
+        reason: 'no_first_progress',
+        watchdog_action: 'enforced',
+      },
+      { tenant: { tenant_id: 'tenant-a' } } as never
+    );
 
     expect(beginExecutorTermination).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -101,8 +115,14 @@ describe('TasksService SDK health reports', () => {
         cause: 'sdk_health_failure',
         signalDelayMs: 25,
         sdkFailure: expect.objectContaining({ termination: 'requested' }),
+        runInFreshTenantWriteDatabase: expect.any(Function),
       })
     );
+    const runFreshWrite = beginExecutorTermination.mock.calls[0][0]
+      .runInFreshTenantWriteDatabase as (work: () => Promise<unknown>) => Promise<unknown>;
+    const work = vi.fn(async () => 'written');
+    await expect(runFreshWrite(work)).resolves.toBe('written');
+    expect(withFreshTenantWrite).toHaveBeenCalledWith({}, 'tenant-a', work);
   });
 
   it('rejects terminal, disconnected, disabled, and authority-escalating reports', async () => {

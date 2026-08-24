@@ -264,6 +264,9 @@ async function probeCodexAuthFile(
     if (identity.reason === 'unsupported-mode') {
       return unknown(identity.message);
     }
+    if (identity.reason === 'unsupported-home-override') {
+      return unknown(identity.message);
+    }
     return unknown('Could not resolve the execution home that holds the Codex login.');
   }
 
@@ -338,6 +341,7 @@ async function probeClaudeAuthFile(
   const inspection = await inspectClaudeAuthViaExecutor({
     delegatedHomeKey: identity.delegatedHomeKey,
     userId: identity.userId,
+    ...(identity.claudeConfigDir ? { claudeConfigDir: identity.claudeConfigDir } : {}),
   });
   if (inspection.ok) return authed('oauth', 'Claude subscription login found.');
   // Only a genuinely absent/malformed file proves "no login"; an unreadable

@@ -1,8 +1,32 @@
 # PostgreSQL development profile
 
-The PostgreSQL Compose profile runs Agor against PostgreSQL for schema parity,
-multi-user RBAC, and tenant-boundary testing. It does not create host Unix
-accounts or POSIX branch groups.
+The `docker-compose.postgres.yml` overlay runs Agor against PostgreSQL with
+branch RBAC, the fail-closed per-user sandbox, and Alice/Bob fixtures. It does
+not create host Unix accounts or POSIX branch groups. The Compose `postgres`
+profile by itself only activates the database service; it does not enable RBAC.
+
+Because `agor init` is the SQLite bootstrap, source-mode PostgreSQL startup
+creates only the missing deployment config on first boot. Its generated
+`daemon.deployment_id`, JWT secret, and master secret persist in the
+project-scoped `agor-home` volume; an existing config is validated and never
+rewritten.
+
+### One-time upgrade from the old `full` profile
+
+The former `full` overlay injected fixed development JWT and master secrets
+instead of relying on the project volume. An existing `full`/`rich` volume can
+therefore contain different or incomplete persisted secrets. Do not preserve
+that volume and simply restart it with this profile: doing so can invalidate
+sessions or make credentials encrypted under the former master secret
+unreadable.
+
+These profiles contain disposable development fixtures, so the supported
+upgrade is to use the branch environment's **Nuke** action (or the explicit
+`down -v` command below) once, then start `rich` with a fresh volume. This
+deletes the profile's PostgreSQL data and Agor home. If its data is not
+disposable, preserve the currently effective identity and secrets in
+`config.yaml` before upgrading rather than rotating them; see the operator
+configuration guide linked below.
 
 ## Start
 
@@ -12,9 +36,13 @@ docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
 ```
 
 The checked-in `.agor.yml` variants provide the usual branch-specific ports and
-project names. The `full` variant enables PostgreSQL, branch RBAC, and
-`execution.unix_user_mode: sandbox`; it requires bubblewrap/user-namespace
-support and fails closed if the sandbox cannot start.
+project names. The `postgres` variant selects the smaller
+`docker-compose.override.postgres.yml` overlay for database parity with RBAC and
+Agor's sandbox off. The `rich` variant selects the overlay above; it requires
+bubblewrap/user-namespace support and fails closed if the sandbox cannot start.
+The deprecated `full` variant is a compatibility alias for `rich`. Both
+capability profiles are standalone source-mode development stacks; HA remains
+a separate variant.
 
 ## Relevant environment overrides
 
@@ -58,11 +86,14 @@ stamps and are ignored by runtime repositories.
 ## Cleanup
 
 ```bash
-docker compose --profile postgres down
-docker compose --profile postgres down -v
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  --profile postgres down
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml \
+  --profile postgres down -v
 ```
 
 See
+[`apps/agor-docs/content/guide/config-yaml.mdx`](../apps/agor-docs/content/guide/config-yaml.mdx),
 [`apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx`](../apps/agor-docs/content/guide/multiplayer-unix-isolation.mdx)
 and
 [`context/guides/rbac-and-unix-isolation.md`](../context/guides/rbac-and-unix-isolation.md).

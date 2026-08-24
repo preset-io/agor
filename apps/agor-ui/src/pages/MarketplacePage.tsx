@@ -99,7 +99,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
           <Paragraph type="secondary" style={{ marginBottom: token.margin }}>
             Attach tools to your agents — browse, review permissions, connect.
           </Paragraph>
-          <CatalogTab client={client} connected={connected} />
+          <CatalogTab client={client} connected={connected} currentUserId={currentUser?.user_id} />
         </div>
       </Content>
     </Layout>

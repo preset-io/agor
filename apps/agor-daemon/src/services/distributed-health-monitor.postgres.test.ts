@@ -48,7 +48,11 @@ function monitorOptions(
   };
 }
 
-async function seedBranch(db: TenantScopeAwareDatabase, tenantId: TenantID) {
+async function seedBranch(
+  db: TenantScopeAwareDatabase,
+  tenantId: TenantID,
+  status: 'starting' | 'running' = 'running'
+) {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     const user = await new UsersRepository(scoped).create({
       email: `${tenantId}-${generateId()}@example.com`,
@@ -72,7 +76,7 @@ async function seedBranch(db: TenantScopeAwareDatabase, tenantId: TenantID) {
       path: `/tmp/${generateId()}`,
       created_by: user.user_id,
       health_check_url: 'https://example.invalid/health',
-      environment_instance: { status: 'running' },
+      environment_instance: { status },
     });
   });
 }
@@ -137,6 +141,62 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ).toMatchObject({
         environment_instance: { status: 'running', last_health_check: { status: 'healthy' } },
       });
+      await Promise.all([monitorA.cleanup(), monitorB.cleanup()]);
+    });
+
+    it('coordinates repeated unrecorded startup failures without errors or realtime events', async () => {
+      const tenantId = `worker-starting-${generateId()}` as TenantID;
+      const branch = await seedBranch(dbA, tenantId, 'starting');
+      const fetchHealth = vi.fn(async () => {
+        throw new Error('Health endpoint unreachable');
+      });
+      const appA = makeApp();
+      const appB = makeApp();
+      const emitA = vi.spyOn(appA.branches, 'emit');
+      const emitB = vi.spyOn(appB.branches, 'emit');
+      const monitorA = new DistributedHealthMonitor(
+        appA.app as never,
+        dbA,
+        monitorOptions(tenantId, branch.branch_id, { fetchHealth })
+      );
+      const monitorB = new DistributedHealthMonitor(
+        appB.app as never,
+        dbB,
+        monitorOptions(tenantId, branch.branch_id, { fetchHealth })
+      );
+
+      const first = await Promise.all([monitorA.checkOnce(), monitorB.checkOnce()]);
+      expect(first.reduce((sum, result) => sum + result.claimed, 0)).toBe(1);
+      expect(first.reduce((sum, result) => sum + result.committed, 0)).toBe(1);
+      expect(first.reduce((sum, result) => sum + result.failures, 0)).toBe(0);
+
+      // The durable cooldown prevents event hints or a second replica from
+      // turning one expected startup failure into a tight retry loop.
+      const duringCooldown = await Promise.all([monitorA.checkOnce(), monitorB.checkOnce()]);
+      expect(duringCooldown.reduce((sum, result) => sum + result.claimed, 0)).toBe(0);
+      expect(duringCooldown.reduce((sum, result) => sum + result.failures, 0)).toBe(0);
+      expect(fetchHealth).toHaveBeenCalledOnce();
+
+      await new Promise((resolve) => setTimeout(resolve, 75));
+      const nextInterval = await Promise.all([monitorA.checkOnce(), monitorB.checkOnce()]);
+      expect(nextInterval.reduce((sum, result) => sum + result.committed, 0)).toBe(1);
+      expect(nextInterval.reduce((sum, result) => sum + result.failures, 0)).toBe(0);
+      expect(fetchHealth).toHaveBeenCalledTimes(2);
+      expect(
+        await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new BranchRepository(scoped).findById(branch.branch_id)
+        )
+      ).toMatchObject({ environment_instance: { status: 'starting' } });
+      expect(
+        (
+          await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+            new BranchRepository(scoped).findById(branch.branch_id)
+          )
+        )?.environment_instance?.last_health_check
+      ).toBeUndefined();
+      expect(emitA).not.toHaveBeenCalled();
+      expect(emitB).not.toHaveBeenCalled();
+
       await Promise.all([monitorA.cleanup(), monitorB.cleanup()]);
     });
 

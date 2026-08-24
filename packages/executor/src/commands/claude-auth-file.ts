@@ -1,4 +1,4 @@
-import { readFile, rm } from 'node:fs/promises';
+import { mutateCredentialFile, readCredentialFile } from '@agor/core/codex/credential-file';
 import type { ClaudeAuthFilePayload, ExecutorResult } from '../payload-types.js';
 import { resolveClaudeCredentialsPath } from '../user-runtime-paths.js';
 import { writeCredentialFileAtomically } from './credential-file-io.js';
@@ -26,7 +26,7 @@ export async function handleClaudeAuthFile(
   if (operation === 'inspect') {
     let raw: string;
     try {
-      raw = await readFile(target, 'utf8');
+      raw = await readCredentialFile(target);
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === 'ENOENT'
         ? { success: true, data: { status: 'not-found' } }
@@ -38,12 +38,24 @@ export async function handleClaudeAuthFile(
             },
           };
     }
-    // A present-but-malformed file is not a usable login. Confirm the shape the
-    // SDK reads (`claudeAiOauth.accessToken`) without returning any token bytes.
+    // A present file is not itself proof of a usable login. Confirm the complete
+    // refreshable OAuth shape the SDK reads without returning any token bytes.
     try {
-      const parsed = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: unknown } };
-      return typeof parsed.claudeAiOauth?.accessToken === 'string' &&
-        parsed.claudeAiOauth.accessToken
+      const parsed = JSON.parse(raw) as {
+        claudeAiOauth?: {
+          accessToken?: unknown;
+          refreshToken?: unknown;
+          expiresAt?: unknown;
+        };
+      };
+      const oauth = parsed.claudeAiOauth;
+      return typeof oauth?.accessToken === 'string' &&
+        oauth.accessToken.startsWith('sk-ant-oat') &&
+        typeof oauth.refreshToken === 'string' &&
+        oauth.refreshToken.startsWith('sk-ant-ort') &&
+        typeof oauth.expiresAt === 'number' &&
+        Number.isFinite(oauth.expiresAt) &&
+        oauth.expiresAt > 0
         ? { success: true, data: { status: 'found' } }
         : { success: true, data: { status: 'malformed' } };
     } catch {
@@ -52,11 +64,28 @@ export async function handleClaudeAuthFile(
   }
 
   if (operation === 'delete') {
-    await rm(target, { force: true });
+    if (
+      (await mutateCredentialFile({ target, generation: payload.params.generation })) === 'stale'
+    ) {
+      return {
+        success: false,
+        error: { code: 'AUTH_FILE_STALE', message: 'Claude credential mutation was superseded' },
+      };
+    }
     return { success: true, data: { status: 'deleted' } };
   }
 
-  const readBack = await writeCredentialFileAtomically(target, payload.params.content);
+  const readBack = await writeCredentialFileAtomically(
+    target,
+    payload.params.content,
+    payload.params.generation
+  );
+  if (readBack === null) {
+    return {
+      success: false,
+      error: { code: 'AUTH_FILE_STALE', message: 'Claude credential mutation was superseded' },
+    };
+  }
   if (readBack !== payload.params.content) {
     return {
       success: false,

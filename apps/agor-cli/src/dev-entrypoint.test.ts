@@ -55,7 +55,7 @@ describe('CLI development entrypoint', () => {
     };
     delete env.AGOR_OUTER_SANDBOX;
     try {
-      const { stderr, stdout } = await execFileAsync('pnpm', ['dev', 'version'], {
+      const { stderr, stdout } = await execFileAsync('pnpm', ['dev', 'version', '--remote'], {
         cwd: new URL('..', import.meta.url),
         env,
         timeout: 30_000,
@@ -86,7 +86,8 @@ describe('CLI development entrypoint', () => {
       expect(stdout).toContain('LOCAL DEPLOYMENT');
       expect(stdout).toContain('CONNECTED DEPLOYMENT');
       expect(stdout).toContain('Show the effective local deployment configuration');
-      expect(stdout).toContain('Show the connected daemon version');
+      expect(stdout).toContain('Open the local deployment');
+      expect(stdout).toContain('Show the local daemon version');
       expect(stdout).not.toContain('Permanently delete all data belonging to a single tenant');
       expect(stdout).not.toContain('TOPICS');
       expect(stdout).not.toContain('COMMANDS');

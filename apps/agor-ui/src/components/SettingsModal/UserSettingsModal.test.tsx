@@ -1,8 +1,9 @@
 import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { App as AntApp, ConfigProvider, type FormInstance } from 'antd';
+import { App as AntApp, ConfigProvider, type FormInstance, Grid } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { agorStore } from '../../store/agorStore';
 import { UserSettingsModal } from './UserSettingsModal';
 
@@ -170,6 +171,78 @@ function makeUser(overrides: Partial<User> = {}): User {
 const ASYNC = { timeout: 10_000 };
 
 describe('UserSettingsModal', { timeout: 60_000 }, () => {
+  it('fails closed when an admin opens a superadmin settings modal', () => {
+    const currentAdmin = makeUser({
+      user_id: 'admin-1',
+      email: 'admin@example.test',
+      role: 'admin',
+    });
+    const targetSuperadmin = makeUser({
+      user_id: 'superadmin-1',
+      email: 'superadmin@example.test',
+      role: 'superadmin',
+    });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={targetSuperadmin}
+        currentUser={currentAdmin}
+        client={null}
+        onUpdate={vi.fn()}
+        initialTab="security"
+      />
+    );
+
+    expect(screen.getByRole('menuitem', { name: /profile/i })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /security/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /codex/i })).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('John Doe')).toBeDisabled();
+    expect(screen.getByPlaceholderText('user@example.com')).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+  });
+
+  it('lets a superadmin manage an admin while locking self role changes', () => {
+    const currentSuperadmin = makeUser({
+      user_id: 'superadmin-1',
+      email: 'superadmin@example.test',
+      role: 'superadmin',
+    });
+    const targetAdmin = makeUser({
+      user_id: 'admin-1',
+      email: 'admin@example.test',
+      role: 'admin',
+    });
+    const { unmount } = renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={targetAdmin}
+        currentUser={currentSuperadmin}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('menuitem', { name: /security/i })).toBeInTheDocument();
+    expect(screen.getByLabelText('Role')).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled();
+
+    unmount();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={currentSuperadmin}
+        currentUser={currentSuperadmin}
+        client={null}
+        onUpdate={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText('Role')).toBeDisabled();
+  });
+
   it('saves dirty agentic defaults across tabs and closes from the footer', async () => {
     const user = makeUser({
       default_agentic_config: {
@@ -318,17 +391,89 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await screen.findByRole('heading', { name: 'Security' });
 
     const passwordInput = screen.getByPlaceholderText('••••••••') as HTMLInputElement;
-    fireEvent.change(passwordInput, { target: { value: 'new-password' } });
+    fireEvent.change(passwordInput, { target: { value: 'new-secure-password' } });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledWith(
         'user-1',
-        expect.objectContaining({ password: 'new-password' })
+        expect.objectContaining({ password: 'new-secure-password' })
       );
     }, ASYNC);
 
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps externally managed identity read-only while saving Agor preferences', async () => {
+    __resetAuthConfigForTests();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          auth: {
+            requireAuth: true,
+            identity: {
+              contractVersion: 1,
+              userLifecycle: 'external',
+              roleAuthority: 'claims',
+              localAuth: 'disabled',
+              external: { provider: 'external_launch', provisioning: 'jit' },
+              capabilities: {
+                users: {
+                  create: false,
+                  delete: false,
+                  identityWrite: false,
+                  roleWrite: false,
+                  passwordWrite: false,
+                  avatarSettingsWrite: false,
+                  selfConfigurationWrite: true,
+                },
+              },
+            },
+          },
+        }),
+      })
+    );
+    const user = makeUser({ role: 'admin' });
+    const onUpdate = vi.fn(async () => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    await screen.findByText('Identity and role are managed by your workspace');
+    expect(screen.getByPlaceholderText('John Doe')).toBeDisabled();
+    expect(screen.getByPlaceholderText('user@example.com')).toBeDisabled();
+    expect(screen.queryByRole('menuitem', { name: /security/i })).not.toBeInTheDocument();
+    const useSlackAvatar = screen.getByRole('switch');
+    expect(useSlackAvatar).toBeEnabled();
+    fireEvent.click(useSlackAvatar);
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
+    await screen.findByRole('heading', { name: 'Preferences' });
+    const enableChimes = document.querySelector<HTMLInputElement>(
+      'input[aria-label="Enable chimes"]'
+    );
+    expect(enableChimes).not.toBeNull();
+    fireEvent.click(enableChimes as HTMLInputElement);
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
+    const patch = onUpdate.mock.calls[0][1];
+    expect(patch.preferences?.audio?.enabled).toBe(true);
+    expect(patch.preferences?.use_slack_avatar).toBe(false);
+    expect(patch).not.toHaveProperty('email');
+    expect(patch).not.toHaveProperty('name');
+    expect(patch).not.toHaveProperty('role');
+    expect(patch).not.toHaveProperty('password');
   });
 
   it('keeps the modal open when saving Profile settings fails', async () => {
@@ -669,14 +814,16 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     fireEvent.change(screen.getByPlaceholderText('John Doe'), { target: { value: 'Renamed' } });
     fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
     await screen.findByRole('heading', { name: 'Security' });
-    fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'new-pass' } });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'new-secure-password' },
+    });
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     // Both the Profile edit and the Security edit land in the flush.
     await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
     const patch = onUpdate.mock.calls[0][1];
     expect(patch.name).toBe('Renamed');
-    expect(patch.password).toBe('new-pass');
+    expect(patch.password).toBe('new-secure-password');
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
@@ -880,6 +1027,39 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await waitFor(() => {
       const patch = onUpdate.mock.calls.find(([, p]) => p?.preferences?.audio)?.[1];
       expect(patch?.preferences?.audio?.enabled).toBe(true);
+    }, ASYNC);
+  });
+
+  it('shows and saves the primary coding agent from Preferences', async () => {
+    const user = makeUser({ primary_agentic_tool: 'codex' });
+    const onUpdate = vi.fn(async () => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+        initialTab="preferences"
+      />
+    );
+
+    const picker = await screen.findByRole('combobox', { name: 'Primary coding agent' });
+    fireEvent.mouseDown(picker);
+    const geminiOption = (await screen.findAllByText('Gemini')).find((element) =>
+      element.closest('.ant-select-item-option')
+    );
+    expect(geminiOption).toBeDefined();
+    fireEvent.click(geminiOption as HTMLElement);
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith(
+        user.user_id,
+        expect.objectContaining({ primary_agentic_tool: 'gemini' })
+      );
     }, ASYNC);
   });
 
@@ -1100,14 +1280,111 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(heading.parentElement).toHaveTextContent('Available');
     expect(modelFind).toHaveBeenCalled();
   });
+
+  it('groups Primary Assistant within Preferences for the signed-in user', async () => {
+    // Caller-scoped: the picker reads the signed-in user's primary teammate via
+    // the users service. A null result leaves the select ready for a choice —
+    // enough to prove the Preferences assistant section mounts the picker.
+    const getPrimaryTeammate = vi.fn(async () => null);
+    const getPrimaryTeammateCandidates = vi.fn(async () => []);
+    const client = {
+      service: (name: string) => {
+        if (name === 'users') {
+          return { getPrimaryTeammate, getPrimaryTeammateCandidates };
+        }
+        return { findAll: vi.fn(async () => []), find: vi.fn(async () => ({ data: [] })) };
+      },
+    } as unknown as AgorClient;
+
+    const user = makeUser();
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={client}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole('menuitem', { name: /primary assistant/i })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('Search settings'), {
+      target: { value: 'primary assistant' },
+    });
+    fireEvent.click(await screen.findByRole('menuitem', { name: /primary assistant/i }));
+
+    await screen.findByRole('heading', { name: 'Preferences' });
+    expect(screen.getByRole('heading', { name: 'Assistant' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Notifications' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Developer tools' })).toBeInTheDocument();
+    expect(screen.getByText('Primary assistant')).toBeInTheDocument();
+    expect(await screen.findByText('Select a primary assistant')).toBeInTheDocument();
+    expect(getPrimaryTeammate).toHaveBeenCalled();
+  });
+
+  it('redirects the former Primary Assistant deep link to Preferences', async () => {
+    const getPrimaryTeammate = vi.fn(async () => null);
+    const getPrimaryTeammateCandidates = vi.fn(async () => []);
+    const client = {
+      service: (name: string) => {
+        if (name === 'users') {
+          return { getPrimaryTeammate, getPrimaryTeammateCandidates };
+        }
+        return { findAll: vi.fn(async () => []), find: vi.fn(async () => ({ data: [] })) };
+      },
+    } as unknown as AgorClient;
+    const user = makeUser();
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={client}
+        onUpdate={vi.fn()}
+        initialTab="primary-teammate"
+      />
+    );
+
+    await screen.findByRole('heading', { name: 'Preferences' });
+    expect(await screen.findByText('Select a primary assistant')).toBeInTheDocument();
+  });
+
+  it('hides the caller-scoped Primary Assistant preference when an admin edits another user', async () => {
+    const admin = makeUser({ user_id: 'admin-1', name: 'Ada', role: 'admin' });
+    const target = makeUser({ user_id: 'user-2', name: 'Bob', role: 'member' });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={target}
+        currentUser={admin}
+        client={null as AgorClient | null}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    await screen.findByRole('heading', { name: 'Profile' });
+    expect(screen.queryByRole('menuitem', { name: /primary assistant/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: /preferences/i }));
+    await screen.findByRole('heading', { name: 'Preferences' });
+    expect(screen.queryByText('Primary assistant')).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Assistant' })).not.toBeInTheDocument();
+  });
 });
 
 // The tenant tool-settings store is module-global. Seed it as HYDRATED (empty =
 // every tool enabled) before each test so provider panels render, and clear any
 // per-test override afterwards so visibility never leaks between tests.
 beforeEach(() => {
+  __setAuthConfigForTests({ requireAuth: true });
+  vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true });
   agorStore.getState().setAgenticToolSettings([]);
 });
 afterEach(() => {
   agorStore.getState().setAgenticToolSettings([]);
+  vi.unstubAllGlobals();
 });

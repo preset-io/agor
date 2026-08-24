@@ -1,9 +1,8 @@
 /**
  * Proves the terminal-executor identity is REJECTED from REST/Feathers — not
  * merely under-privileged. These exercise the real production authz predicates
- * (`requireMinimumRole` / `hasMinimumRole`), not token shape, which is exactly
- * the gap a shape-only test missed: `role: 'terminal-executor'` falls through
- * the RBAC rank table to viewer rank and would otherwise pass viewer gating.
+ * (`requireMinimumRole` / `hasMinimumRole`) as well as the explicit guard. The
+ * rank helper and the transport guard are intentionally defense in depth.
  */
 
 import { Forbidden } from '@agor/core/feathers';
@@ -29,21 +28,17 @@ function ctx(user: unknown): HookContext {
 }
 
 describe('terminal-executor identity is rejected from REST/Feathers', () => {
-  it('THE GAP: the RBAC rank system alone does not reject the terminal role', () => {
-    // Real production predicate: 'terminal-executor' isn't a rank key, so it
-    // falls through to 0 (== viewer). This is why an explicit reject is needed.
-    expect(hasMinimumRole('terminal-executor', ROLES.VIEWER)).toBe(true);
+  it('fails closed when the RBAC rank system sees the terminal role', () => {
+    expect(hasMinimumRole('terminal-executor', ROLES.VIEWER)).toBe(false);
   });
 
-  it('THE GAP: a real viewer-gated hook lets the terminal identity through', () => {
+  it('does not let the terminal identity through a viewer-gated hook', () => {
     const viewerGate = requireMinimumRole(ROLES.VIEWER, 'read data');
-    // Without the guard, this does NOT throw — the terminal token would reach
-    // the service handler with viewer-level access.
-    expect(() => viewerGate(ctx(terminalUser))).not.toThrow();
-    expect(viewerGate(ctx(terminalUser))).toBeDefined();
+    expect(() => viewerGate(ctx(terminalUser))).toThrow(Forbidden);
+    expect(() => viewerGate(ctx(terminalUser))).toThrow(/viewer access/);
   });
 
-  it('THE FIX: the guard rejects the terminal identity outright', async () => {
+  it('the transport guard still rejects the terminal identity outright', async () => {
     await expect(rejectTerminalExecutorIdentity(ctx(terminalUser))).rejects.toBeInstanceOf(
       Forbidden
     );

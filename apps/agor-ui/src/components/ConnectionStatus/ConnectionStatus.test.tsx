@@ -11,10 +11,9 @@
  *      grace window in useAgorClient that keeps `connected=true` while
  *      flipping `connecting=true`, so sub-grace reconnects silently
  *      dropped the green flash.
- *   2. Successful in-place re-auth on TOKENS_REFRESHED_EVENT didn't
- *      publish to React state, leaving the navbar stuck on "Reconnecting"
- *      forever. That fix lives in useAgorClient; we cover the navbar's
- *      reaction to the state it produces.
+ *   2. A successful token-refresh reconnect didn't publish to React state,
+ *      leaving the navbar stuck on "Reconnecting" forever. That fix lives in
+ *      useAgorClient; we cover the navbar's reaction to its state.
  */
 
 import { act, fireEvent, render, screen } from '@testing-library/react';

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   createTenantScopedDatabaseProxy,
   MissingTenantDatabaseScopeError,
@@ -8,6 +9,23 @@ import { createRequiredTenantDatabaseRunner } from './register-routes.js';
 import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
 
 describe('Stop route transaction scope', () => {
+  it('wires short tenant DB units and session-level RBAC through every Stop path', () => {
+    const source = readFileSync(new URL('./register-routes.ts', import.meta.url), 'utf8');
+    const stop = source.slice(
+      source.indexOf('// Stop endpoint'),
+      source.indexOf('// Queue listing', source.indexOf('// Stop endpoint'))
+    );
+
+    expect(stop).toContain('resolveSessionPromptAccess({');
+    expect(stop).toContain('body.force_unverified !== true');
+    expect(stop).toContain(
+      'runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase'
+    );
+    expect(stop).toMatch(
+      /const failedTask = await runInFreshTerminationTenantWriteDatabase\(\(\) =>\s+forceFailUnverifiedTask\(\{/
+    );
+  });
+
   it('production-injected long-route runner activates the guarded tenant unit', async () => {
     const rawDb = {
       transaction: async (work: (tx: unknown) => Promise<unknown>) =>

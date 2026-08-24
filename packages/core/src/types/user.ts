@@ -1,10 +1,6 @@
-import type {
-  AgenticToolName,
-  CodexApprovalPolicy,
-  CodexNetworkAccess,
-  CodexSandboxMode,
-} from './agentic-tool';
-import type { UserID } from './id';
+import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
+import { type AgenticToolName, DEFAULT_AGENTIC_TOOL_NAME, isAgenticToolName } from './agentic-tool';
+import type { BranchID, UserID } from './id';
 import type { EffortLevel, PermissionMode } from './session';
 
 /** Canonical syntax for the transitional delegated execution-home key. */
@@ -68,13 +64,18 @@ export const ROLE_OPTIONS: readonly RoleOption[] = [
  * Role rank used for minimum-role comparisons.
  * Higher rank = more privileges. 'owner' is a deprecated alias for superadmin.
  */
-const ROLE_RANK: Record<string, number> = {
+const ROLE_AUTHORITY_RANK: Readonly<Record<UserRole | 'owner', number>> = {
   [ROLES.VIEWER]: 0,
   [ROLES.MEMBER]: 1,
   [ROLES.ADMIN]: 2,
   [ROLES.SUPERADMIN]: 3,
   owner: 3,
 };
+
+/** Return true only for canonical roles accepted on new writes. */
+export function isUserRole(role: unknown): role is UserRole {
+  return typeof role === 'string' && Object.values(ROLES).includes(role as UserRole);
+}
 
 /**
  * Normalize legacy role values.
@@ -90,8 +91,55 @@ export function normalizeRole(role: string | undefined): UserRole {
  * Shared by backend hooks and frontend permission checks.
  */
 export function hasMinimumRole(userRole: string | undefined, minimumRole: UserRole): boolean {
+  if (!userRole) return false;
   const normalized = normalizeRole(userRole);
-  return (ROLE_RANK[normalized] ?? 0) >= ROLE_RANK[minimumRole];
+  return (ROLE_AUTHORITY_RANK[normalized] ?? -1) >= (ROLE_AUTHORITY_RANK[minimumRole] ?? -1);
+}
+
+/**
+ * Compare two roles by authority.
+ *
+ * Positive means `left` has more authority, zero means equal authority, and
+ * negative means less authority. Unknown/missing roles are always below every
+ * canonical role. The deprecated `owner` value retains superadmin authority
+ * for reads of historical data, but is canonicalized before new writes.
+ */
+export function compareRoleAuthority(left: string | undefined, right: string | undefined): number {
+  return roleAuthorityRank(left) - roleAuthorityRank(right);
+}
+
+function roleAuthorityRank(role: string | undefined): number {
+  if (!role) return -1;
+  const normalized = normalizeRole(role);
+  return ROLE_AUTHORITY_RANK[normalized] ?? -1;
+}
+
+function isKnownRoleAuthority(role: string | undefined): boolean {
+  return !!role && (isUserRole(role) || role === 'owner');
+}
+
+/** Whether an actor's role is authoritative over a target's current role. */
+export function hasRoleAuthorityOver(
+  actorRole: string | undefined,
+  targetRole: string | undefined
+): boolean {
+  return (
+    isKnownRoleAuthority(actorRole) &&
+    isKnownRoleAuthority(targetRole) &&
+    compareRoleAuthority(actorRole, targetRole) >= 0
+  );
+}
+
+/** Whether an actor may assign the requested role without exceeding their ceiling. */
+export function canAssignUserRole(
+  actorRole: string | undefined,
+  requestedRole: string | undefined
+): boolean {
+  return (
+    isKnownRoleAuthority(actorRole) &&
+    isKnownRoleAuthority(requestedRole) &&
+    compareRoleAuthority(actorRole, requestedRole) >= 0
+  );
 }
 
 /**
@@ -372,7 +420,15 @@ export interface EventStreamPreferences {
  * Per-user onboarding state (stored in user.preferences)
  */
 export interface OnboardingState {
-  /** Onboarding persona id the user selected (see ONBOARDING_PERSONAS in agor-ui). */
+  /**
+   * Onboarding goal ids the user selected, order-preserving (primary first),
+   * max 2. See ONBOARDING_GOALS in agor-ui. Written once at completion.
+   */
+  goals?: string[];
+  /**
+   * @deprecated Legacy single-persona onboarding field. Not written by new
+   * completions and never re-read; retained only for pre-redesign records.
+   */
   persona?: string;
   /** Which path the user took */
   path?: 'teammate' | 'own-repo';
@@ -388,6 +444,8 @@ export interface OnboardingState {
   assistantDisplayName?: string;
   /** Teammate emoji captured during onboarding identity step */
   teammateEmoji?: string;
+  /** Starter-template id selected for the first teammate (for resumable setup). */
+  teammateTemplateId?: string;
   /** @deprecated Use teammateEmoji. Read for pre-rename preferences compatibility only. */
   assistantEmoji?: string;
 }
@@ -490,6 +548,10 @@ export interface User extends BaseUserFields {
   // tolerated on read but not yet exposed by the UI.
   env_vars?: Record<string, EnvVarMetadata>;
   // Default agentic tool configuration (prepopulates session creation forms)
+  /** Agentic coding tool preselected for new sessions. */
+  primary_agentic_tool?: AgenticToolName;
+  /** Teammate branch preselected by quick compose and user preferences. */
+  primary_teammate_id?: BranchID;
   default_agentic_config?: DefaultAgenticConfig;
   default_agentic_selection?: UserAgenticDefaultSelections;
   // Default MCP selection, independent of the selected agentic tool.
@@ -505,11 +567,39 @@ export interface User extends BaseUserFields {
 export type UserAuthMetadata = object & {
   /** Tokens issued at or before this timestamp are no longer valid. */
   tokens_valid_after?: Date;
+  /**
+   * Monotonic local-credential generation captured in interactive JWTs.
+   * Password changes increment this atomically so a token minted by a racing
+   * login or refresh against an older credential snapshot is fail-closed.
+   */
+  credential_generation?: number;
   /** Backend-only tenant id used while issuing/validating runtime tokens. */
   tenant_id?: string;
 };
 
-export type InternalUser = User & UserAuthMetadata;
+/** Required backend metadata for any user used to validate or mint interactive credentials. */
+export type AuthenticationUserAuthMetadata = Omit<UserAuthMetadata, 'credential_generation'> & {
+  credential_generation: number;
+};
+
+export type AuthenticationUser = User & AuthenticationUserAuthMetadata;
+
+/** Database-backed internal users always carry the non-null generation column. */
+export type InternalUser = AuthenticationUser;
+
+/**
+ * Read an explicitly stored primary coding agent, tolerating malformed JSON.
+ */
+export function getUserPrimaryAgenticTool(
+  user: User | null | undefined
+): AgenticToolName | undefined {
+  return isAgenticToolName(user?.primary_agentic_tool) ? user.primary_agentic_tool : undefined;
+}
+
+/** Resolve the primary coding agent, falling back only while it is unset. */
+export function resolveUserPrimaryAgenticTool(user: User | null | undefined): AgenticToolName {
+  return getUserPrimaryAgenticTool(user) ?? DEFAULT_AGENTIC_TOOL_NAME;
+}
 
 /**
  * Env var scope values.
@@ -634,6 +724,8 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
    */
   env_var_scopes?: Record<string, EnvVarScope>;
   // Default agentic tool configuration
+  /** Agentic coding tool preselected for new sessions. */
+  primary_agentic_tool?: AgenticToolName;
   default_agentic_config?: DefaultAgenticConfig;
   default_agentic_selection?: UserAgenticDefaultSelections;
   // Default MCP selection, independent of the selected agentic tool.

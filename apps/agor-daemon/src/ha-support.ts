@@ -9,12 +9,14 @@ export const HA_UNSUPPORTED_FEATURES = {
   providerNativeInteractivePermissions:
     'provider-native interactive permission modes without Agor realtime decision routing',
   mcpOAuth: 'MCP OAuth flows',
-  codexAuth: 'Codex credential-file import/logout without a consistent executor user home',
-  codexDeviceAuth: 'Codex device authentication polling without durable attempt ownership',
+  codexAuth:
+    'Codex credential-file import/logout without a consistent executor user home and execution.executor_storage.user_home_locking: cross-replica-flock',
+  codexDeviceAuth:
+    'Codex device authentication without durable attempt ownership, exact per-user credential routing, and execution.executor_storage.user_home_locking: cross-replica-flock',
   claudeAuth:
     'Claude credential mutation without cross-replica writer serialization and generation fencing',
   claudeOAuth:
-    'Claude subscription OAuth without cross-replica credential mutation serialization and generation fencing',
+    'Claude subscription OAuth without durable attempt ownership and cross-replica credential mutation authority',
   openCodeAuth: 'OpenCode OAuth/native authentication flows',
   artifactRuntime: 'synchronous artifact runtime introspection',
 } as const;
@@ -40,12 +42,9 @@ export function isHaFeatureUnavailable(
 ): boolean {
   if (!isConstrainedHa(deployment)) return false;
   if (feature === 'codexAuth') return !deployment.capabilities.codexCredentialFiles;
-  // The attempt authority is durable, but that is not the final mutation
-  // authority. A logout/new generation may race a credential writer after its
-  // last DB claim check, and an external writer may survive loss of the daemon
-  // that owned the claim. Keep both Claude mutation endpoints fail-closed until
-  // they reuse the generation-fenced, cross-replica credential coordinator.
-  if (feature === 'claudeAuth' || feature === 'claudeOAuth') return true;
+  if (feature === 'codexDeviceAuth') return !deployment.capabilities.codexDeviceAuth;
+  if (feature === 'claudeAuth') return !deployment.capabilities.claudeAuth;
+  if (feature === 'claudeOAuth') return !deployment.capabilities.claudeOAuth;
   return true;
 }
 

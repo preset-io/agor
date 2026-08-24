@@ -313,8 +313,9 @@ export async function cacheBranchAccess(
  * Managed environment controls may run shell/webhook actions with impact tied
  * to the branch rather than the triggering user. Keep these controls limited
  * to users with effective `all` permission on the branch and global admins.
- * Internal daemon/service-account calls bypass so health loops and executor
- * plumbing can continue to operate.
+ * Internal daemon/service-account calls bypass so daemon-owned health and
+ * maintenance work can continue to operate. User-triggered executors do not
+ * use that bypass; they retain the initiating user's ordinary branch RBAC.
  */
 export async function ensureCanControlBranchEnvironment(
   branchRepo: BranchRepository,
@@ -1269,9 +1270,8 @@ export async function assertSessionUnixIdentityUnchanged(
  * process is already running as the stamped user: refusing its writes only loses
  * the transcript, and the launch that mattered was already gated by
  * `prepareSessionForExecutorStart`. The exemption compares the token's own
- * session claim rather than merely asking whether an executor token is present,
- * so it cannot be widened by a caller registering this hook somewhere
- * `executorRuntimeScopeGuard` has not already pinned the claims.
+ * session claim rather than merely asking whether an executor credential is
+ * present, so taskless command executors cannot acquire the exemption.
  *
  * @param userRepo - UserRepository instance
  */
@@ -1544,16 +1544,20 @@ type FindSqlScopeDecision =
 
 async function resolveFindSqlScopeAccess(
   context: HookContext,
-  options: { allowSuperadmin?: boolean } | undefined
+  options: { allowSuperadmin?: boolean } | undefined,
+  methods: readonly string[] = ['find']
 ): Promise<FindSqlScopeDecision> {
-  if (context.method !== 'find') return { kind: 'passThrough' };
+  if (!methods.includes(context.method)) return { kind: 'passThrough' };
   if (!context.params.provider) return { kind: 'passThrough' };
   if (context.params.user?._isServiceAccount) return { kind: 'passThrough' };
 
   const userId = context.params.user?.user_id as UUID | undefined;
   if (!userId) {
-    emptyFindResult(context);
-    return { kind: 'handled' };
+    if (context.method === 'find') {
+      emptyFindResult(context);
+      return { kind: 'handled' };
+    }
+    throw new NotAuthenticated('Authentication required');
   }
 
   const userRole = context.params.user?.role as string | undefined;
@@ -1765,6 +1769,22 @@ export function scopeFindToAccessibleBoardsSql(options?: { allowSuperadmin?: boo
 }
 
 /**
+ * Mark board-object find/get requests for repository-level visibility
+ * pushdown. Unlike board list scoping, object hydration also exposes a get
+ * endpoint, so both read methods must carry the same authenticated user.
+ */
+export function scopeReadToAccessibleBoardsSql(options?: { allowSuperadmin?: boolean }) {
+  return async (context: HookContext) => {
+    const decision = await resolveFindSqlScopeAccess(context, options, ['find', 'get']);
+    if (decision.kind !== 'filter') return context;
+
+    (context.params as { _agorSqlBoardAccessUserId?: UUID })._agorSqlBoardAccessUserId =
+      decision.userId;
+    return context;
+  };
+}
+
+/**
  * Core check: is the caller the session's creator OR a global admin/superadmin?
  *
  * Pure function (no FeathersJS dependency) so it can be reused from Feathers
@@ -1773,7 +1793,8 @@ export function scopeFindToAccessibleBoardsSql(options?: { allowSuperadmin?: boo
  *
  * Behavior:
  * - Service accounts (executor) pass through.
- * - Admin / superadmin pass through (respecting `allowSuperadmin`).
+ * - Admin / superadmin pass through. `allowSuperadmin` only controls the
+ *   exceptional branch-RBAC bypass; it cannot remove ordinary admin authority.
  * - Session creator passes through.
  * - Everyone else → Forbidden. Branch `all` does NOT grant access: session
  *   env selections expose the creator's private credentials to the executor.
@@ -1789,10 +1810,9 @@ export function checkSessionOwnerOrAdmin(
   // Service accounts (executor) bypass RBAC
   if (user._isServiceAccount) return;
 
-  const allowSuperadmin = options?.allowSuperadmin ?? true;
   const userRole = user.role;
 
-  if (userRole === ROLES.ADMIN || isSuperAdmin(userRole, allowSuperadmin)) {
+  if (hasMinimumRole(userRole, ROLES.ADMIN)) {
     return;
   }
 
@@ -1879,7 +1899,6 @@ export function determineSpawnIdentity(
   branch: { branch_id: string; dangerously_allow_session_sharing?: boolean } | undefined,
   options?: { allowSuperadmin?: boolean }
 ): { created_by: string; usedLegacySharing: boolean } {
-  const allowSuperadmin = options?.allowSuperadmin ?? true;
   const callerId = caller.user_id;
   const role = caller.role;
 
@@ -1892,7 +1911,9 @@ export function determineSpawnIdentity(
 
   // Admin / superadmin → always attributed to themselves so the audit trail
   // points at the human who pressed the button. Never inherit parent identity.
-  if (role === ROLES.ADMIN || isSuperAdmin(role, allowSuperadmin)) {
+  // `allow_superadmin` only gates exceptional branch-RBAC bypasses. A
+  // superadmin always retains the ordinary admin authority represented here.
+  if (hasMinimumRole(role, ROLES.ADMIN)) {
     if (!callerId) {
       // Should not happen — admins always have an id — but fall back safely.
       return { created_by: parent.created_by, usedLegacySharing: false };

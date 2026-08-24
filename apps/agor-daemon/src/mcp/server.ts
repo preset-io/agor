@@ -31,7 +31,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Session, SessionID, TenantContext, UserID } from '@agor/core/types';
-import { NotFoundError } from '@agor/core/utils/errors';
+import { isNotFoundError } from '@agor/core/utils/errors';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, type ListToolsResult, McpServer } from '@modelcontextprotocol/server';
 import type { Request, Response } from 'express';
@@ -641,7 +641,7 @@ export function setupMCPRoutes(
             app.service('users').get(userId, { tenant } as AuthenticatedParams)
           );
         } catch (error) {
-          if (error instanceof NotFoundError) {
+          if (isNotFoundError(error)) {
             return res.status(401).json({
               ...jsonRpcError(req, -32001, 'Invalid personal API key'),
             });
@@ -691,7 +691,7 @@ export function setupMCPRoutes(
             app.service('users').get(userId, { tenant } as AuthenticatedParams)
           );
         } catch (error) {
-          if (error instanceof NotFoundError) {
+          if (isNotFoundError(error)) {
             return res.status(401).json({
               ...jsonRpcError(req, -32001, 'Invalid or expired session token'),
             });

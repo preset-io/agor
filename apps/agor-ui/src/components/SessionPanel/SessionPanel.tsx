@@ -92,11 +92,6 @@ import { useComposerAttachments } from './useComposerAttachments';
 // Re-export PermissionMode from SDK for convenience
 export type { PermissionMode };
 
-// The find shortcut is Cmd+F on mac, Ctrl+F elsewhere — label it correctly.
-const IS_MAC =
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/i.test(navigator.platform ?? '');
-const FIND_SHORTCUT_LABEL = IS_MAC ? 'Cmd+F' : 'Ctrl+F';
-
 // ---------------------------------------------------------------------------
 // PromptInput — thin wrapper around AutocompleteTextarea that keeps the typed
 // text in *local* state so that keystrokes never trigger a parent re-render.
@@ -113,7 +108,7 @@ interface PromptInputProps {
   sessionId: SessionID;
   getDraft: (id: string) => string;
   saveDraft: (id: string, value: string) => void;
-  deleteDraft: (id: string) => void;
+  deleteDraft: (id: string, expectedText?: string) => void;
   /** Fires only on empty↔non-empty transitions, not every keystroke */
   onHasInputChange: (hasInput: boolean) => void;
   /** Kept in sync so memoized children can read the latest value */
@@ -176,7 +171,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
     );
 
     // Track empty↔non-empty transitions → notify parent (minimal re-renders)
-    const prevHasInput = React.useRef(!!value.trim());
+    const prevHasInput = React.useRef<boolean | null>(null);
     React.useEffect(() => {
       const has = !!value.trim();
       if (has !== prevHasInput.current) {
@@ -407,12 +402,22 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       .map((server) => server!);
   }, [sessionMcpServerIds, mcpServerById, userAuthenticatedMcpServerIds]);
 
-  // Per-session draft storage (localStorage-backed to survive unmounts).
+  // Shared single-draft storage (localStorage-backed to survive refreshes).
   // Aliased as stable callbacks because they're threaded through props and
   // effect deps below.
-  const getDraft = React.useCallback(getPromptDraft, []);
-  const saveDraft = React.useCallback(savePromptDraft, []);
-  const deleteDraft = React.useCallback(deletePromptDraft, []);
+  const getDraft = React.useCallback(
+    (sessionId: string) => getPromptDraft(currentUserId, sessionId),
+    [currentUserId]
+  );
+  const saveDraft = React.useCallback(
+    (sessionId: string, value: string) => savePromptDraft(currentUserId, sessionId, value),
+    [currentUserId]
+  );
+  const deleteDraft = React.useCallback(
+    (sessionId: string, expectedText?: string) =>
+      deletePromptDraft(currentUserId, sessionId, expectedText),
+    [currentUserId]
+  );
 
   // Input value lives entirely inside PromptInput (local state).
   // The parent reads it imperatively via promptRef / inputValueRef — no
@@ -500,19 +505,33 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     goPrev,
   } = useSessionSearch(conversationRef);
   const composerSessionIdentityRef = React.useRef<{
+    ownerId: string | null;
     sessionId: SessionID | null;
     generation: number;
+    ownerGeneration: number;
   }>({
+    ownerId: currentUserId ?? null,
     sessionId: session?.session_id ?? null,
     generation: 0,
+    ownerGeneration: 0,
   });
+  const currentComposerOwnerId = currentUserId ?? null;
   const currentComposerSessionId = session?.session_id ?? null;
-  if (composerSessionIdentityRef.current.sessionId !== currentComposerSessionId) {
+  if (
+    composerSessionIdentityRef.current.ownerId !== currentComposerOwnerId ||
+    composerSessionIdentityRef.current.sessionId !== currentComposerSessionId
+  ) {
     composerSessionIdentityRef.current = {
+      ownerId: currentComposerOwnerId,
       sessionId: currentComposerSessionId,
       generation: composerSessionIdentityRef.current.generation + 1,
+      ownerGeneration:
+        composerSessionIdentityRef.current.ownerId === currentComposerOwnerId
+          ? composerSessionIdentityRef.current.ownerGeneration
+          : composerSessionIdentityRef.current.ownerGeneration + 1,
     };
   }
+  const composerIdentityKey = `${currentComposerOwnerId ?? 'anonymous'}:${composerSessionIdentityRef.current.generation}:${currentComposerSessionId ?? 'none'}`;
   const {
     attachments: composerAttachments,
     attachmentsRef: composerAttachmentsRef,
@@ -527,10 +546,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     setValidationError: setComposerAttachmentValidationError,
   } = useComposerAttachments({
     sessionId: session?.session_id ?? null,
+    scopeKey: composerIdentityKey,
     showError,
     uploadPolicy,
   });
-  const composerSendInFlightRef = React.useRef(false);
+  const composerSendInFlightRef = React.useRef<typeof composerSessionIdentityRef.current | null>(
+    null
+  );
 
   // Fetch queued tasks (post never-lose-prompt: queueing lives on tasks, not messages).
   React.useEffect(() => {
@@ -717,16 +739,11 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
   React.useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f' && open) {
-        e.preventDefault();
-        if (!searchOpen) openSearch();
-        else searchInputRef.current?.focus();
-      }
       if (e.key === 'Escape' && searchOpen) closeSearch();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [searchOpen, open, openSearch, closeSearch]);
+  }, [searchOpen, closeSearch]);
 
   // Reset search when switching sessions — stale ranges/counts belong to the
   // previous conversation's DOM.
@@ -837,6 +854,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           onRemove={removeComposerAttachment}
         />
         <PromptInput
+          key={composerIdentityKey}
           ref={promptRef}
           sessionId={session.session_id}
           getDraft={getDraft}
@@ -888,6 +906,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     composerAttachmentValidationError,
     composerAttachments,
     composerDropActive,
+    composerIdentityKey,
     hasComposerAttachments,
     isRunning,
     client,
@@ -1006,18 +1025,18 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleSendPrompt = async () => {
+    const sendStartComposerIdentity = composerSessionIdentityRef.current;
     if (
-      composerSendInFlightRef.current ||
+      composerSendInFlightRef.current === sendStartComposerIdentity ||
       composerAttachmentUploadingRef.current ||
       connectionDisabled
     ) {
       return;
     }
 
-    composerSendInFlightRef.current = true;
+    composerSendInFlightRef.current = sendStartComposerIdentity;
     try {
       const sendStartSessionId = session.session_id;
-      const sendStartComposerIdentity = composerSessionIdentityRef.current;
       const value = promptRef.current?.getValue() ?? '';
       const attachmentsAtSendStart = composerAttachmentsRef.current;
       const hasAttachments = attachmentsAtSendStart.length > 0;
@@ -1040,10 +1059,16 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
         attachmentsAtSendStart,
         sendStartSessionId
       );
+      const currentComposerIdentity = composerSessionIdentityRef.current;
+      if (
+        currentComposerIdentity.ownerId !== sendStartComposerIdentity.ownerId ||
+        currentComposerIdentity.ownerGeneration !== sendStartComposerIdentity.ownerGeneration
+      ) {
+        return;
+      }
       const promptAttachments = uploadedFiles;
       const composerStillOwnsSend =
-        composerSessionIdentityRef.current.sessionId === sendStartSessionId &&
-        composerSessionIdentityRef.current.generation === sendStartComposerIdentity.generation;
+        composerSessionIdentityRef.current === sendStartComposerIdentity;
       // Re-read from the imperative textarea handle after upload only if the
       // same composer instance still owns this send. When the user switches
       // sessions during a delayed upload, promptRef points at the newly active
@@ -1066,27 +1091,36 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       const sendResult = await onSendPrompt?.(sendStartSessionId, promptToSend, permissionMode);
       if (sendResult === false) return;
 
-      if (composerStillOwnsSend) {
+      // Admission can outlive this composer. Re-check ownership after the
+      // await rather than reusing the pre-admission snapshot: a later caller
+      // may have typed identical text and selected different attachments.
+      const composerOwnsAdmissionCompletion =
+        composerSessionIdentityRef.current === sendStartComposerIdentity;
+      const composerStillOwnsSentText =
+        composerOwnsAdmissionCompletion && promptRef.current?.getValue() === latestValue;
+      if (composerStillOwnsSentText) {
         promptRef.current?.clear();
         clearComposerAttachments();
         setComposerAttachmentValidationError(null);
       } else {
-        // The old composer is no longer live; clear only its saved draft so the
-        // successfully sent snapshot does not reappear when the user returns.
-        // Never call promptRef.current?.clear() here because it now belongs to
-        // a different active session.
-        deleteDraft(sendStartSessionId);
+        // The composer moved or its text changed while admission was pending.
+        // Clear only an exactly matching persisted snapshot; never erase the
+        // replacement text now visible to the user.
+        deleteDraft(sendStartSessionId, latestValue);
       }
 
       // Re-engage the bottom lock so a scrolled-up user follows their just-sent
       // message and the streaming reply (behavior 3). `scrollToBottom` is the
       // function ConversationView exposed via onScrollRef.
-      if (composerStillOwnsSend) scrollToBottom?.();
+      if (composerOwnsAdmissionCompletion) scrollToBottom?.();
     } catch (error) {
+      if (composerSessionIdentityRef.current !== sendStartComposerIdentity) return;
       console.error('Composer send failed — keeping prompt and files in composer:', error);
       showError(error instanceof Error ? error.message : 'Failed to send prompt');
     } finally {
-      composerSendInFlightRef.current = false;
+      if (composerSendInFlightRef.current === sendStartComposerIdentity) {
+        composerSendInFlightRef.current = null;
+      }
     }
   };
 
@@ -1115,7 +1149,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
 
     setStopRequestInFlight(true);
     try {
-      await client.service(`sessions/${session.session_id}/stop`).create({});
+      const result = (await client.service(`sessions/${session.session_id}/stop`).create({})) as {
+        success?: boolean;
+        reason?: string;
+      };
+      if (result.success === false) {
+        showInfo(result.reason ?? 'Stop requested; waiting for executor termination.');
+      }
     } catch (error) {
       console.error('Failed to stop execution:', error);
       showError('Failed to stop execution. You can try again.');
@@ -1503,8 +1543,13 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 <Button type="text" icon={<EllipsisOutlined />} />
               </Tooltip>
             </Dropdown>
-            <Tooltip title={`Search session (${FIND_SHORTCUT_LABEL})`}>
-              <Button type="text" icon={<SearchOutlined />} onClick={openSearch} />
+            <Tooltip title="Search session">
+              <Button
+                type="text"
+                aria-label="Search session"
+                icon={<SearchOutlined />}
+                onClick={openSearch}
+              />
             </Tooltip>
             <Tooltip title="Close Panel">
               <Button

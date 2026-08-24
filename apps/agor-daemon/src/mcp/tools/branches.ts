@@ -22,13 +22,10 @@ import type {
   ReposServiceImpl,
 } from '../../declarations.js';
 import type { BranchParams } from '../../services/branches.js';
+import { issueExecutorCommandToken } from '../../services/session-token-service.js';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  runExecutorCommand,
-} from '../../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -354,11 +351,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         })
       );
 
-      const statusResult = await runExecutorCommand(
+      const statusResult = await requestExecutor(
         {
           command: 'branch.filesystem.status',
-          sessionToken: generateScopedServiceToken(
-            ctx.app as unknown as { settings: { authentication?: { secret?: string } } }
+          sessionToken: await issueExecutorCommandToken(
+            ctx.app,
+            'branch-filesystem-status',
+            ctx.userId
           ),
           daemonUrl: getDaemonUrl(),
           params: { branchIds: branches.map((branch) => branch.branch_id) },
@@ -1139,7 +1138,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_set_zone',
     {
       description:
-        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session.",
+        "Pin a branch to a zone on a board, clear its current zone pin with zoneId:null, and optionally trigger the zone's prompt template. Calculates zone center position automatically and creates board association. If the zone has an 'always_new' trigger, a new session is automatically created and the prompt template is executed (matching UI drag-drop behavior). For 'show_picker' zones, use triggerTemplate + targetSessionId to send to an existing session on the branch being moved (targetSessionId must live on that branch — cross-branch targets are rejected, since the trigger prompt acts on the moved branch's files). A remote orchestrator on a different branch does NOT target itself here; to be notified when the work finishes, register a completion callback instead (agor_sessions_create enableCallback/callbackSessionId, or agor_sessions_prompt callback).",
       inputSchema: z.object({
         branchId: mcpRequiredId(
           'branchId',
@@ -1158,7 +1157,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         targetSessionId: mcpOptionalId(
           'targetSessionId',
           'Session',
-          'Session ID to send the zone trigger prompt to (required if triggerTemplate is true)'
+          'Session ID to send the zone trigger prompt to (required if triggerTemplate is true). ' +
+            'Must be a session on the branch being moved — cross-branch targets are rejected. ' +
+            'For cross-branch completion notifications (e.g. a remote orchestrator), use a callback instead; see agor_sessions_create.'
         ),
         triggerTemplate: z
           .boolean()

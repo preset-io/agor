@@ -9,11 +9,19 @@ describe('UsersService.find', () => {
   dbTest('respects limit/skip pagination and reports total matches', async ({ db }) => {
     const service = new UsersService(db);
 
-    await service.create({ email: 'alpha@example.com', password: 'password-123', name: 'Alpha' });
-    await service.create({ email: 'bravo@example.com', password: 'password-123', name: 'Bravo' });
+    await service.create({
+      email: 'alpha@example.com',
+      password: 'test-password-1234',
+      name: 'Alpha',
+    });
+    await service.create({
+      email: 'bravo@example.com',
+      password: 'test-password-1234',
+      name: 'Bravo',
+    });
     await service.create({
       email: 'charlie@example.com',
-      password: 'password-123',
+      password: 'test-password-1234',
       name: 'Charlie',
     });
 
@@ -30,7 +38,7 @@ describe('UsersService.find', () => {
     const service = new UsersService(db);
 
     const created = await service.create(
-      { email: 'tenant-safe@example.com', password: 'password-123', name: 'Tenant Safe' },
+      { email: 'tenant-safe@example.com', password: 'test-password-1234', name: 'Tenant Safe' },
       { tenant: { tenant_id: 'default', source: 'static' } } as never
     );
 
@@ -49,8 +57,16 @@ describe('UsersService.find', () => {
   dbTest('supports offset alias for pagination', async ({ db }) => {
     const service = new UsersService(db);
 
-    await service.create({ email: 'alpha@example.com', password: 'password-123', name: 'Alpha' });
-    await service.create({ email: 'bravo@example.com', password: 'password-123', name: 'Bravo' });
+    await service.create({
+      email: 'alpha@example.com',
+      password: 'test-password-1234',
+      name: 'Alpha',
+    });
+    await service.create({
+      email: 'bravo@example.com',
+      password: 'test-password-1234',
+      name: 'Bravo',
+    });
 
     const page = await service.find({ query: { limit: 1, offset: 1 } });
 
@@ -67,13 +83,13 @@ describe('UsersService.find', () => {
 
       await service.create({
         email: 'reed@preset.io',
-        password: 'password-123',
+        password: 'test-password-1234',
         name: 'Reed Thompson',
         unix_username: 'rthompson',
       });
       await service.create({
         email: 'someone@example.com',
-        password: 'password-123',
+        password: 'test-password-1234',
         name: 'Someone Else',
         unix_username: 'someone',
       });
@@ -96,7 +112,7 @@ describe('UsersService.find', () => {
 describe('UsersService.find exact-email hardening', () => {
   dbTest('rejects unauthenticated external exact-email lookup', async ({ db }) => {
     const service = new UsersService(db);
-    await service.create({ email: 'target@example.com', password: 'password-123' });
+    await service.create({ email: 'target@example.com', password: 'test-password-1234' });
 
     await expect(
       service.find({ provider: 'rest', query: { email: 'target@example.com' } })
@@ -107,9 +123,9 @@ describe('UsersService.find exact-email hardening', () => {
     const service = new UsersService(db);
     const requester = await service.create({
       email: 'requester@example.com',
-      password: 'password-123',
+      password: 'test-password-1234',
     });
-    await service.create({ email: 'target@example.com', password: 'password-123' });
+    await service.create({ email: 'target@example.com', password: 'test-password-1234' });
 
     await expect(
       service.find({
@@ -122,7 +138,10 @@ describe('UsersService.find exact-email hardening', () => {
 
   dbTest('allows self exact-email lookup without exposing password', async ({ db }) => {
     const service = new UsersService(db);
-    const user = await service.create({ email: 'self@example.com', password: 'password-123' });
+    const user = await service.create({
+      email: 'self@example.com',
+      password: 'test-password-1234',
+    });
 
     const page = await service.find({
       provider: 'rest',
@@ -137,7 +156,7 @@ describe('UsersService.find exact-email hardening', () => {
 
   dbTest('allows admin exact-email lookup without exposing password', async ({ db }) => {
     const service = new UsersService(db);
-    await service.create({ email: 'target@example.com', password: 'password-123' });
+    await service.create({ email: 'target@example.com', password: 'test-password-1234' });
 
     const page = await service.find({
       provider: 'rest',
@@ -152,7 +171,7 @@ describe('UsersService.find exact-email hardening', () => {
 
   dbTest('keeps password hash scoped to the local authentication pipeline', async ({ db }) => {
     const service = new UsersService(db);
-    await service.create({ email: 'login@example.com', password: 'password-123' });
+    await service.create({ email: 'login@example.com', password: 'test-password-1234' });
 
     const externalSelf = await service.find({
       provider: 'rest',
@@ -199,7 +218,7 @@ describe('UsersService.find exact-email hardening', () => {
 
     await app.service('users').create({
       email: 'strategy-login@example.com',
-      password: 'password-123',
+      password: 'test-password-1234',
       role: 'viewer',
     });
 
@@ -207,7 +226,7 @@ describe('UsersService.find exact-email hardening', () => {
       {
         strategy: 'local',
         email: 'strategy-login@example.com',
-        password: 'password-123',
+        password: 'test-password-1234',
       },
       { provider: 'rest' }
     );

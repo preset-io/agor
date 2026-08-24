@@ -10,10 +10,8 @@ import { describe, expect, it } from 'vitest';
 import type { RepoEnvironment, RepoEnvironmentConfigV1 } from '../types/branch';
 import { parseAgorYml, resolveVariant, writeAgorYml } from './agor-yml';
 
-const REPO_ROOT_AGOR_YML = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../../../../.agor.yml'
-);
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+const REPO_ROOT_AGOR_YML = path.join(REPO_ROOT, '.agor.yml');
 
 function withTmpFile<T>(fn: (filePath: string) => T): T {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agor-yml-test-'));
@@ -268,6 +266,44 @@ describe('parseAgorYml — misc', () => {
 });
 
 describe('parseAgorYml — repo .agor.yml demo variants', () => {
+  it('renders HA as the auth-resolved multi-tenant development profile', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+    const ha = resolveVariant(env!, 'ha');
+    if (ha === null) throw new Error('ha variant must resolve');
+
+    expect(ha.start).toContain('AGOR_EXTERNAL_LAUNCH_SHARED_SECRET=');
+    expect(ha.start).not.toContain('AGOR_ADMIN_PASSWORD=');
+    expect(ha.app).toMatch(/\/dev-auth\/$/);
+    expect(ha.description).toMatch(/auth-resolved tenants/);
+  });
+
+  it('forwards the RBAC fixture flag used by .env.postgres', () => {
+    const compose = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
+    expect(compose).toMatch(/- CREATE_RBAC_TEST_USERS=\$\{CREATE_RBAC_TEST_USERS:-\}/);
+  });
+
+  it('keeps persisted deployment secrets stable when switching postgres variants', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    const postgres = resolveVariant(env!, 'postgres');
+    const rich = resolveVariant(env!, 'rich');
+    if (postgres === null || rich === null) throw new Error('postgres/rich variants must resolve');
+
+    // Both variants use the same Compose project and project-scoped agor-home
+    // volume. Neither command nor overlay may replace its persisted secrets.
+    for (const variant of [postgres, rich]) {
+      expect(variant.start).toContain('-p agor-{{branch.name}}');
+      expect(variant.start).not.toMatch(/AGOR_(JWT|MASTER)_SECRET/);
+    }
+    for (const overlay of ['docker-compose.override.postgres.yml', 'docker-compose.postgres.yml']) {
+      expect(fs.readFileSync(path.join(REPO_ROOT, overlay), 'utf8')).not.toMatch(
+        /AGOR_(JWT|MASTER)_SECRET/
+      );
+    }
+  });
+
   it('uses env(1) for UID/GID on Docker variants instead of shell assignments', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML);
     expect(env).not.toBeNull();
@@ -281,9 +317,9 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
       .sort();
 
     expect(uidGidVariants).toEqual([
-      'full',
       'postgres',
       'postgres-demo',
+      'rich',
       'sandbox',
       'sandbox-peruser',
       'sqlite',
@@ -298,6 +334,26 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
       expect(start, `${name}.start`).toMatch(/^env UID=\$\(id -u\) GID=/);
       expect(start, `${name}.start`).not.toMatch(/^UID=/);
     }
+  });
+
+  it('keeps full as a deprecated compatibility alias for rich', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    expect(env!.variants.full.extends).toBe('rich');
+    expect(env!.variants.full.description).toMatch(/Deprecated compatibility alias/);
+
+    const rich = resolveVariant(env!, 'rich');
+    const full = resolveVariant(env!, 'full');
+    if (rich === null || full === null) throw new Error('rich/full variants must resolve');
+    expect(full).toMatchObject({
+      start: rich.start,
+      stop: rich.stop,
+      nuke: rich.nuke,
+      logs: rich.logs,
+      health: rich.health,
+      app: rich.app,
+    });
   });
 
   it('resolves sqlite-demo / postgres-demo with LOAD_FIXTURES and required start/stop', () => {

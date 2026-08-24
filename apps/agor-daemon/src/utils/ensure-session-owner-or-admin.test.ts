@@ -105,13 +105,13 @@ describe('ensureSessionOwnerOrAdmin', () => {
     expect(() => hook(ctx)).toThrow(/loadSession/);
   });
 
-  it('allowSuperadmin: false blocks superadmins', () => {
+  it('allowSuperadmin: false preserves ordinary admin authority for superadmins', () => {
     const strict = ensureSessionOwnerOrAdmin({ allowSuperadmin: false });
     const ctx = makeContext({
       provider: 'rest',
       user: { user_id: 'super-1', role: ROLES.SUPERADMIN },
       session: { created_by: 'alice' },
     });
-    expect(() => strict(ctx)).toThrow(Forbidden);
+    expect(() => strict(ctx)).not.toThrow();
   });
 });

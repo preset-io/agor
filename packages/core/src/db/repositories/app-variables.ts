@@ -1,5 +1,5 @@
 import type { UserID } from '@agor/core/types';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { deleteFrom, insert, select, update } from '../database-wrapper';
@@ -140,6 +140,31 @@ export class AppVariableRepository {
       updated_at: now,
     };
     await insert(this.db, appVariables).values(insertRow).onConflictDoNothing().run();
+  }
+
+  /**
+   * Allocate a durable, monotonically increasing generation.
+   *
+   * The insert is deliberately its own statement: on PostgreSQL a losing
+   * INSERT would abort a surrounding transaction. The following arithmetic
+   * UPDATE is one statement, so both databases serialize concurrent claims
+   * without timestamp precision or an in-process lock.
+   */
+  async incrementPlainInteger(namespace: string, key: string): Promise<number> {
+    await this.setIfAbsent({ namespace, key, value: '0' });
+    const row = await update(this.db, appVariables)
+      .set({
+        value_text: sql`cast(${appVariables.value_text} as integer) + 1`,
+        updated_at: new Date(),
+      })
+      .where(and(eq(appVariables.namespace, namespace), eq(appVariables.key, key)))
+      .returning()
+      .one();
+    const next = Number((row as AppVariableRow).value_text);
+    if (!Number.isSafeInteger(next) || next < 1) {
+      throw new RepositoryError(`Invalid integer app variable ${namespace}.${key}`);
+    }
+    return next;
   }
 
   async setEncrypted(

@@ -1,24 +1,14 @@
 import type { AgenticToolPreset, AgorClient, TenantAgenticToolName } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import {
-  Button,
-  Empty,
-  Form,
-  Input,
-  List,
-  Modal,
-  Popconfirm,
-  Space,
-  Switch,
-  Tag,
-  Typography,
-} from 'antd';
+import { Button, Empty, Form, Input, List, Popconfirm, Space, Switch, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
 import {
   AgenticToolConfigForm,
   buildConfigFromFormValues,
   getFormValuesFromConfig,
 } from '../AgenticToolConfigForm';
+
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 
 interface Props {
   client: AgorClient;
@@ -137,7 +127,7 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({ client, tool, onErr
           )}
         />
       )}
-      <Modal
+      <AdaptiveSettingsModal
         title={editing ? `Edit ${editing.name}` : `New ${tool} preset`}
         open={modalOpen}
         onCancel={() => setModalOpen(false)}
@@ -162,7 +152,7 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({ client, tool, onErr
           </Form.Item>
           <AgenticToolConfigForm agenticTool={tool} client={client} />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
     </Space>
   );
 };

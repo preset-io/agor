@@ -3,10 +3,16 @@ import {
   resolveTenantContext,
   TenantResolutionError,
 } from '@agor/core/config';
-import type { BranchRepository, SessionRepository, TenantScopeAwareDatabase } from '@agor/core/db';
+import type {
+  BoardRepository,
+  BranchRepository,
+  SessionRepository,
+  TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { getCurrentTenantId, runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
+  isBoardRemovalRealtimeVisibilitySnapshot,
   isBranchRemovalRealtimeVisibilitySnapshot,
   isRealtimeRelayEnvelope,
   MAX_REALTIME_RELAY_BYTES,
@@ -14,6 +20,9 @@ import {
   type RealtimeRelayEnvelope,
 } from '@agor/core/realtime';
 import {
+  BOARD_COMMENT_ATTACHMENT_POLICY,
+  type BoardID,
+  type BoardRemovalRealtimeVisibilitySnapshot,
   type BranchID,
   type BranchRealtimeVisibility,
   BranchRealtimeVisibilityMode,
@@ -25,7 +34,12 @@ import {
   type User,
   type UserID,
 } from '@agor/core/types';
-import { tenantChannelName } from '../realtime/routing.js';
+import {
+  executorTaskRoomName,
+  isExecutorTaskRoomName,
+  sessionStreamRoomName,
+  tenantChannelName,
+} from '../realtime/routing.js';
 import { isSuperAdmin } from './branch-authorization.js';
 import {
   isKnowledgeRealtimeSuppressedEvent,
@@ -36,8 +50,46 @@ import {
   RealtimeAccessCache,
   type RealtimeAccessSessionRepository,
 } from './realtime-access-cache.js';
+import {
+  isRealtimePublishAllowed,
+  type RealtimePublishAudience,
+  realtimePublishPolicyFor,
+} from './realtime-publish-policy.js';
 
 export const BRANCH_REMOVAL_VISIBILITY_PARAM = '_agorRealtimeBranchRemovalVisibility';
+export const BOARD_REMOVAL_VISIBILITY_PARAM = '_agorRealtimeBoardRemovalVisibility';
+
+export function setBoardRemovalRealtimeVisibility(
+  params: HookContext['params'],
+  boardId: BoardID,
+  visibility:
+    | { mode: typeof BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+    | { mode: typeof BranchRealtimeVisibilityMode.EXPLICIT_USERS; userIds: ReadonlySet<UserID> }
+): void {
+  const snapshot: BoardRemovalRealtimeVisibilitySnapshot =
+    visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED
+      ? { boardId, mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
+      : {
+          boardId,
+          mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+          userIds: [...visibility.userIds].sort(),
+        };
+  (params as HookContext['params'] & Record<string, unknown>)[BOARD_REMOVAL_VISIBILITY_PARAM] =
+    snapshot;
+}
+
+function boardRemovalVisibilitySnapshot(
+  context: PublishContext,
+  boardId: string
+): BoardRemovalRealtimeVisibilitySnapshot | null {
+  if (context.path !== 'boards' || context.event !== 'removed') return null;
+  const value = (context.params as Record<string, unknown> | undefined)?.[
+    BOARD_REMOVAL_VISIBILITY_PARAM
+  ];
+  return isBoardRemovalRealtimeVisibilitySnapshot(value) && value.boardId === boardId
+    ? value
+    : null;
+}
 
 /** Capture the branch visibility fact while its ACL rows still exist. */
 export function setBranchRemovalRealtimeVisibility(
@@ -83,63 +135,25 @@ function visibilityFromRemovalSnapshot(
 }
 
 /**
- * Per-session channel that carries only the high-frequency streaming events
- * (message text/thinking chunks, tool start/complete). Connections join this
- * room via the `session-streams` service after passing a session-access check,
- * so streaming traffic reaches only the tabs actively viewing a session
- * instead of the whole tenant. Session ids are globally-unique UUIDv7, so the
- * unprefixed name cannot collide across tenants; cross-tenant membership is
- * additionally impossible because the subscribe path gates on a tenant-scoped
- * `sessions.get`.
- */
-const SESSION_STREAM_CHANNEL_PREFIX = 'session-stream:';
-const EXECUTOR_TASK_CHANNEL_PREFIX = 'executor-task:';
-
-/**
  * Private control-plane room for the one executor JWT scoped to a Task.
  *
  * Unlike normal Task events, membership is not derived from branch visibility:
- * configureChannels joins this room only after ServiceJWTStrategy has verified
+ * configureChannels joins this room only after RuntimeJWTStrategy has verified
  * an `executor-session` token whose signed `task_id` matches the room. There is
  * no client-callable subscribe method.
  */
 export function executorTaskChannelName(tenantId: string, taskId: string): string {
-  return `${EXECUTOR_TASK_CHANNEL_PREFIX}${tenantId}:${taskId}`;
+  return executorTaskRoomName(tenantId, taskId);
 }
 
-export function sessionStreamChannelName(sessionId: string): string {
-  return `${SESSION_STREAM_CHANNEL_PREFIX}${sessionId}`;
+export function sessionStreamChannelName(tenantId: string, sessionId: string): string {
+  return sessionStreamRoomName(tenantId, sessionId);
 }
 
-/**
- * Remove a connection from every session-stream room it has joined. Called on
- * logout so a still-connected-but-deauthenticated socket stops receiving live
- * session text — Feathers only auto-drops channel membership on socket
- * disconnect, and streaming delivery would otherwise keep reaching a logged-out
- * connection (which is no longer in the authenticated/tenant channels but may
- * still sit in a session-stream room).
- */
-export function leaveAllSessionStreamChannels(app: Application, connection: unknown): void {
-  for (const name of app.channels ?? []) {
-    if (name.startsWith(SESSION_STREAM_CHANNEL_PREFIX)) {
-      app.channel(name).leave(connection as never);
-    }
-  }
-}
-
-/** Drop task-control capability on logout or before replacing socket auth. */
+/** Drop task-control capability before disconnecting an executor socket. */
 export function leaveAllExecutorTaskChannels(app: Application, connection: unknown): void {
   for (const name of app.channels ?? []) {
-    if (name.startsWith(EXECUTOR_TASK_CHANNEL_PREFIX)) {
-      app.channel(name).leave(connection as never);
-    }
-  }
-}
-
-/** Drop every tenant-scoped Feathers channel on logout or live auth replacement. */
-export function leaveAllTenantChannels(app: Application, connection: unknown): void {
-  for (const name of app.channels ?? []) {
-    if (name.startsWith('tenant:')) {
+    if (isExecutorTaskRoomName(name)) {
       app.channel(name).leave(connection as never);
     }
   }
@@ -174,10 +188,11 @@ function existingChannel(app: Application, name: string): PublishChannel | null 
  */
 export function joinSessionStreamChannel(
   app: Application,
+  tenantId: string,
   sessionId: string,
   connection: unknown
 ): void {
-  app.channel(sessionStreamChannelName(sessionId)).join(connection as never);
+  app.channel(sessionStreamChannelName(tenantId, sessionId)).join(connection as never);
 }
 
 /**
@@ -189,10 +204,11 @@ export function joinSessionStreamChannel(
  */
 export function leaveSessionStreamChannel(
   app: Application,
+  tenantId: string,
   sessionId: string,
   connection: unknown
 ): void {
-  existingChannel(app, sessionStreamChannelName(sessionId))?.leave(connection as never);
+  existingChannel(app, sessionStreamChannelName(tenantId, sessionId))?.leave(connection as never);
 }
 
 const DEBUG_REALTIME_PUBLISH =
@@ -217,6 +233,7 @@ type RealtimePublishOptions = {
   db?: TenantScopeAwareDatabase;
   branchRbacEnabled: boolean;
   branchRepository: BranchRepository;
+  boardRepository?: BoardRepository;
   sessionsRepository: SessionRepository;
   accessCache?: RealtimeAccessCache;
   allowSuperadmin?: boolean;
@@ -232,19 +249,21 @@ type PublishChannel = ReturnType<Application['channel']>;
 
 type PublishScope =
   | { kind: 'global' }
+  | { kind: 'board'; boardId: string | null }
   | { kind: 'branch'; branchId: BranchID | null }
+  | { kind: 'branches'; branchIds: BranchID[] }
   | { kind: 'users'; userIds: Set<string> }
   | { kind: 'serviceOnly' };
 
-const BRANCH_ID_SCOPED_PATHS = new Set(['branches', 'schedules']);
-const ROUTE_BRANCH_ID_SCOPED_PATHS = new Set(['branches/:id/owners', 'branches/:id/group-grants']);
-const SESSION_ID_SCOPED_PATHS = new Set([
-  'tasks',
-  'messages',
-  'session-mcp-servers',
-  'session-env-selections',
-]);
-const OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS = new Set(['board-objects', 'board-comments']);
+/**
+ * The declared audience for a path, or `undefined` when it was never declared.
+ * `undefined` is a DENY here, not a default — see `realtime-publish-policy.ts`.
+ * Every scoping decision below reads from that one table so the audiences a
+ * reviewer sees listed are the audiences the publisher actually applies.
+ */
+function audienceFor(path: string | null | undefined): RealtimePublishAudience | undefined {
+  return realtimePublishPolicyFor(path)?.audience;
+}
 
 // Authentication and credential control-plane results must never enter shared
 // Redis, even if a future service accidentally enables publication for them.
@@ -342,7 +361,7 @@ function extractBranchId(data: unknown, context: PublishContext): string | undef
   const record = asRecord(data);
   const routeBranchId = (context.params as { route?: { id?: unknown } } | undefined)?.route?.id;
   if (
-    ROUTE_BRANCH_ID_SCOPED_PATHS.has(context.path ?? '') &&
+    audienceFor(context.path) === 'branch-route' &&
     typeof routeBranchId === 'string' &&
     routeBranchId.length > 0
   ) {
@@ -356,6 +375,14 @@ function extractBranchId(data: unknown, context: PublishContext): string | undef
     );
   }
   return pickString(record, 'branch_id', 'branchId');
+}
+
+function extractBoardId(data: unknown, context: PublishContext): string | undefined {
+  const record = asRecord(data);
+  return (
+    pickString(record, 'board_id', 'boardId') ??
+    (context.path === 'boards' && typeof context.id === 'string' ? context.id : undefined)
+  );
 }
 
 function extractSessionId(data: unknown): string | undefined {
@@ -474,6 +501,62 @@ async function resolveBranchIdFromSessionTaskOrMessage(
   return undefined;
 }
 
+/**
+ * Resolve every attachment on a board resource. `undefined` means the row is
+ * purely spatial and should inherit board visibility; `null` means at least
+ * one caller-supplied attachment could not be resolved and must fail closed.
+ */
+async function resolveBranchIdsFromBoardResource(
+  data: unknown,
+  context: PublishContext,
+  accessCache: RealtimeAccessCache
+): Promise<BranchID[] | null | undefined> {
+  const record = asRecord(data);
+  if (!record) return null;
+
+  const branchIds = new Set<BranchID>();
+  let hasAttachment = false;
+  for (const { field, resource } of BOARD_COMMENT_ATTACHMENT_POLICY) {
+    const attachmentId = pickString(record, field);
+    let branchId: BranchID | null | undefined;
+    switch (resource) {
+      case 'branch': {
+        const directBranchId = attachmentId ?? extractBranchId(data, context);
+        if (directBranchId) branchId = directBranchId as BranchID;
+        break;
+      }
+      case 'session': {
+        if (attachmentId) branchId = await sessionBranchId(attachmentId, accessCache);
+        break;
+      }
+      case 'task': {
+        if (attachmentId) {
+          const resolvedSessionId = await taskSessionId(context, attachmentId);
+          branchId = resolvedSessionId
+            ? await sessionBranchId(resolvedSessionId, accessCache)
+            : null;
+        }
+        break;
+      }
+      case 'message': {
+        if (attachmentId) {
+          const resolvedSessionId = await messageSessionId(context, attachmentId);
+          branchId = resolvedSessionId
+            ? await sessionBranchId(resolvedSessionId, accessCache)
+            : null;
+        }
+        break;
+      }
+    }
+    if (branchId === undefined) continue;
+    hasAttachment = true;
+    if (!branchId) return null;
+    branchIds.add(branchId);
+  }
+
+  return hasAttachment ? [...branchIds] : undefined;
+}
+
 async function resolveBranchIdFromBranchOrSession(
   data: unknown,
   context: PublishContext,
@@ -493,53 +576,97 @@ async function resolvePublishScope(
   context: PublishContext,
   accessCache: RealtimeAccessCache
 ): Promise<PublishScope> {
-  if (!context.path) return { kind: 'global' };
+  const audience = audienceFor(context.path);
+  switch (audience) {
+    case 'board': {
+      return { kind: 'board', boardId: extractBoardId(data, context) ?? null };
+    }
+    case 'board-resource': {
+      const branchIds = await resolveBranchIdsFromBoardResource(data, context, accessCache);
+      if (branchIds === null) return { kind: 'serviceOnly' };
+      if (branchIds === undefined) {
+        return { kind: 'board', boardId: extractBoardId(data, context) ?? null };
+      }
+      return { kind: 'branches', branchIds };
+    }
+    case 'branch':
+    case 'branch-route': {
+      const branchId = extractBranchId(data, context);
+      return { kind: 'branch', branchId: (branchId as BranchID | undefined) ?? null };
+    }
 
-  if (BRANCH_ID_SCOPED_PATHS.has(context.path) || ROUTE_BRANCH_ID_SCOPED_PATHS.has(context.path)) {
-    const branchId = extractBranchId(data, context);
-    return { kind: 'branch', branchId: (branchId as BranchID | undefined) ?? null };
+    case 'branch-or-session': {
+      // Hot session/message/task paths must carry branch_id or session_id —
+      // custom `sessions` events carry camelCase `sessionId` rather than the
+      // row's `branch_id`. Avoid message/task fallback lookups here so
+      // malformed streaming events fail closed instead of doing DB work per
+      // chunk.
+      const branchId = await resolveBranchIdFromBranchOrSession(data, context, accessCache);
+      return { kind: 'branch', branchId: branchId ?? null };
+    }
+
+    case 'branch-optional': {
+      const resolvedBranchId = await resolveBranchIdFromSessionTaskOrMessage(
+        data,
+        context,
+        accessCache
+      );
+      if (resolvedBranchId !== undefined) return { kind: 'branch', branchId: resolvedBranchId };
+
+      // These services can also emit global/card/board rows with no branch,
+      // session, task, or message attachment.
+      return { kind: 'global' };
+    }
+
+    case 'artifact': {
+      const branchId = extractBranchId(data, context);
+      if (branchId) return { kind: 'branch', branchId: branchId as BranchID };
+
+      // Null-branch artifacts are not covered by branch visibility. Keep
+      // delivery narrow to the creator/admins when the creator is known,
+      // otherwise service connections only.
+      const createdBy = extractCreatedBy(data);
+      return createdBy ? { kind: 'users', userIds: new Set([createdBy]) } : { kind: 'serviceOnly' };
+    }
+
+    case 'tenant':
+    // 'knowledge' should not reach here — resolveKnowledgeRealtimeUserIds
+    // answers for every `kb/*` path earlier in resolveDelivery. It is listed
+    // explicitly anyway: if that call ever stops covering a kb path, the
+    // tenant channel is the same answer it had before, not a silent widening
+    // through a catch-all.
+    case 'knowledge':
+      return { kind: 'global' };
+
+    case 'none':
+    case undefined:
+      // Unreachable: the gate in resolveLocalDelivery denied both before this
+      // ran. Answering serviceOnly rather than falling through keeps the two
+      // in agreement if the gate is ever moved.
+      return { kind: 'serviceOnly' };
+
+    default:
+      return unhandledAudienceScope(audience, context);
   }
+}
 
-  if (context.path === 'sessions') {
-    // Custom sessions events carry camelCase `sessionId` instead of the
-    // session row's `branch_id`.
-    const resolvedBranchId = await resolveBranchIdFromBranchOrSession(data, context, accessCache);
-    return { kind: 'branch', branchId: resolvedBranchId ?? null };
-  }
-
-  if (SESSION_ID_SCOPED_PATHS.has(context.path)) {
-    // Hot message/task paths must carry branch_id or session_id. Avoid
-    // message/task fallback lookups here so malformed streaming events fail
-    // closed instead of doing DB work per chunk.
-    const branchId = await resolveBranchIdFromBranchOrSession(data, context, accessCache);
-    return { kind: 'branch', branchId: branchId ?? null };
-  }
-
-  if (OPTIONAL_BRANCH_OR_SESSION_SCOPED_PATHS.has(context.path)) {
-    const resolvedBranchId = await resolveBranchIdFromSessionTaskOrMessage(
-      data,
-      context,
-      accessCache
-    );
-    if (resolvedBranchId !== undefined) return { kind: 'branch', branchId: resolvedBranchId };
-
-    // These services can also emit global/card/board rows with no branch,
-    // session, task, or message attachment.
-    return { kind: 'global' };
-  }
-
-  if (context.path === 'artifacts') {
-    const branchId = extractBranchId(data, context);
-    if (branchId) return { kind: 'branch', branchId: branchId as BranchID };
-
-    // Null-branch artifacts are not covered by branch visibility. Keep delivery
-    // narrow to the creator/admins when the creator is known, otherwise service
-    // connections only.
-    const createdBy = extractCreatedBy(data);
-    return createdBy ? { kind: 'users', userIds: new Set([createdBy]) } : { kind: 'serviceOnly' };
-  }
-
-  return { kind: 'global' };
+/**
+ * Fail closed on an audience nobody wrote a case for.
+ *
+ * The `never` parameter is the real mechanism: adding a member to
+ * `RealtimePublishAudience` without a case above stops compiling, so
+ * `turbo run typecheck` catches it before anyone can ship it. This body is the
+ * belt to that braces — if the type is ever widened through a cast, delivery
+ * narrows to service connections instead of quietly reaching the whole tenant,
+ * which is the failure this whole file exists to prevent.
+ */
+function unhandledAudienceScope(audience: never, context: PublishContext): PublishScope {
+  console.warn('[realtime] Suppressing event with an unhandled publish audience', {
+    audience,
+    path: context.path,
+    event: context.event,
+  });
+  return { kind: 'serviceOnly' };
 }
 
 function filterToServiceConnections(authenticated: PublishChannel): PublishChannel {
@@ -594,6 +721,7 @@ function filterToUserIdsOrServices(
 async function resolveStreamingDelivery(
   app: Application,
   data: unknown,
+  tenantId: string,
   tenantScoped: PublishChannel,
   accessCache: RealtimeAccessCache,
   branchRbacEnabled: boolean,
@@ -614,7 +742,7 @@ async function resolveStreamingDelivery(
   // Never materialize the room on the publish path — a session streaming with
   // zero subscribers would otherwise accumulate an empty, never-cleaned channel
   // per session. Only an actual subscribe (join) creates it.
-  const existingRoom = existingChannel(app, sessionStreamChannelName(sessionId));
+  const existingRoom = existingChannel(app, sessionStreamChannelName(tenantId, sessionId));
   const room = existingRoom
     ? existingRoom.filter((connection: unknown) => tenantConnections.has(connection))
     : null;
@@ -727,11 +855,13 @@ function resolveRealtimeTenantId(
   try {
     return resolveTenantContext(multiTenancy, { params: context.params }).tenant_id;
   } catch (error) {
+    const isMissingTenant =
+      error instanceof TenantResolutionError && error.message.startsWith('Missing tenant context');
     const connectionTenantId = extractConnectionTenantId(context);
-    if (error instanceof TenantResolutionError && connectionTenantId) return connectionTenantId;
+    if (isMissingTenant && connectionTenantId) return connectionTenantId;
 
     const ambientTenantId = getCurrentTenantId();
-    if (error instanceof TenantResolutionError && ambientTenantId) {
+    if (isMissingTenant && ambientTenantId) {
       return ambientTenantId as TenantID;
     }
     throw error;
@@ -741,11 +871,17 @@ function resolveRealtimeTenantId(
 /**
  * Register the single global Feathers publish handler.
  *
- * In open-access mode this preserves the legacy behavior: every authenticated
- * socket receives every service event. When branch RBAC is enabled, events for
- * branch/session-scoped resources are reduced to authenticated connections whose
- * user currently has at least `view` permission for the event's branch. Service
- * executor sockets remain trusted so prompt/permission plumbing keeps working.
+ * Nothing publishes unless `realtime-publish-policy.ts` says who may hear it.
+ * That gate runs first and is independent of branch RBAC: an undeclared path
+ * reaches nobody at all, service connections included, and never enters the
+ * Redis relay.
+ *
+ * For a path that IS declared, the audience is then narrowed as before. In
+ * open-access mode a declared service reaches every authenticated socket in the
+ * tenant. When branch RBAC is enabled, events for branch/session-scoped
+ * resources are reduced to authenticated connections whose user currently has
+ * at least `view` permission for the event's branch. Service executor sockets
+ * remain trusted so prompt/permission plumbing keeps working.
  */
 export function configureRealtimePublish(options: RealtimePublishOptions): void {
   const {
@@ -753,6 +889,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     db,
     branchRbacEnabled,
     branchRepository,
+    boardRepository,
     sessionsRepository,
     accessCache = new RealtimeAccessCache({
       branchRepository: branchRepository as unknown as RealtimeAccessBranchRepository,
@@ -764,6 +901,15 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
   } = options;
 
   const resolveLocalDelivery = async (data: unknown, context: HookContext) => {
+    // Default-deny. Feathers routes EVERY service event that has no publisher
+    // of its own through this handler, so an undeclared path is one nobody
+    // decided about — including the RPC routes that emit their own response
+    // body as `created`. Suppressing here also keeps the event off the Redis
+    // relay below, because `tenantId` stays undefined.
+    if (!isRealtimePublishAllowed(context.path)) {
+      return { delivery: [] as PublishChannel[], tenantId: undefined };
+    }
+
     const authenticated = app.channel('authenticated');
     if (context.path && isKnowledgeRealtimeSuppressedEvent(context.path, context.event)) {
       return { delivery: authenticated.filter(() => false), tenantId: undefined };
@@ -782,7 +928,9 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
             event: context.event,
             method: context.method,
           });
-          return { delivery: filterToServiceConnections(authenticated), tenantId: undefined };
+          // Service connections are tenant-owned too. A missing tenant must
+          // not degrade into the old cross-tenant "service-only" broadcast.
+          return { delivery: [] as PublishChannel[], tenantId: undefined };
         }
         throw error;
       }
@@ -803,6 +951,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         return resolveStreamingDelivery(
           app,
           data,
+          tenantId ?? 'standalone',
           tenantScoped,
           accessCache,
           branchRbacEnabled,
@@ -821,6 +970,14 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         return filterToUserIdsOrServices(tenantScoped, knowledgeUserIds);
       }
 
+      if (context.path === 'artifacts' && context.event === 'agor-query') {
+        const requestedBy = pickString(asRecord(data), 'requested_by_user_id');
+        if (!requestedBy) return [];
+        return tenantScoped.filter(
+          (connection: unknown) => userFromConnection(connection)?.user_id === requestedBy
+        );
+      }
+
       if (!branchRbacEnabled) return tenantScoped;
 
       const scope = await resolvePublishScope(data, context, accessCache);
@@ -828,6 +985,74 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       if (scope.kind === 'serviceOnly') return filterToServiceConnections(tenantScoped);
       if (scope.kind === 'users') {
         return filterToUserIdsOrAdmins(tenantScoped, scope.userIds, allowSuperadmin);
+      }
+      if (scope.kind === 'board') {
+        if (!scope.boardId || !boardRepository) {
+          return filterToServiceConnections(tenantScoped);
+        }
+        const removalVisibility = boardRemovalVisibilitySnapshot(context, scope.boardId);
+        if (removalVisibility?.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) {
+          return tenantScoped;
+        }
+        if (removalVisibility?.mode === BranchRealtimeVisibilityMode.EXPLICIT_USERS) {
+          return filterToUserIdsOrAdmins(
+            tenantScoped,
+            new Set(removalVisibility.userIds),
+            allowSuperadmin
+          );
+        }
+        // Resolve the current board row before using its visibility. Event
+        // payloads also cross the Redis relay and can be stale or forged, so
+        // fields such as `access_mode` are data to publish, never authority.
+        // A hard delete is the sole exception and was handled above using the
+        // server-captured pre-delete visibility snapshot.
+        let loadedBoard: Awaited<ReturnType<BoardRepository['findById']>>;
+        try {
+          loadedBoard = await boardRepository.findById(scope.boardId);
+        } catch {
+          return filterToServiceConnections(tenantScoped);
+        }
+        if (!loadedBoard) return filterToServiceConnections(tenantScoped);
+        const currentBoard = loadedBoard;
+        if (currentBoard.access_mode === 'shared') return tenantScoped;
+
+        // For a current private board, evaluate the same repository predicate
+        // as boards.get for each connected user at publication time; a room
+        // join, payload field, or stale client cache is never authorization.
+        const visibleUserIds = new Set<string>();
+        await Promise.all(
+          uniqueUserIds(tenantScoped).map(async (userId) => {
+            try {
+              if (await boardRepository.canView(currentBoard.board_id, userId as UserID)) {
+                visibleUserIds.add(userId);
+              }
+            } catch {
+              // Concurrent deletion or ACL lookup failure fails narrow for
+              // this principal. Deleted boards require the snapshot above.
+            }
+          })
+        );
+        return filterToUserIdsOrAdmins(tenantScoped, visibleUserIds, allowSuperadmin);
+      }
+      if (scope.kind === 'branches') {
+        let explicitUserIds: Set<UserID> | null = null;
+        for (const branchId of scope.branchIds) {
+          const visibility = await accessCache.getBranchVisibility(branchId);
+          if (!visibility) return filterToServiceConnections(tenantScoped);
+          if (visibility.mode === BranchRealtimeVisibilityMode.ALL_AUTHENTICATED) continue;
+          if (explicitUserIds) {
+            const intersection = new Set<UserID>();
+            for (const userId of explicitUserIds) {
+              if (visibility.userIds.has(userId)) intersection.add(userId);
+            }
+            explicitUserIds = intersection;
+          } else {
+            explicitUserIds = new Set(visibility.userIds);
+          }
+        }
+        return explicitUserIds
+          ? filterToUserIdsOrSuperadmins(tenantScoped, explicitUserIds, allowSuperadmin)
+          : tenantScoped;
       }
       if (!scope.branchId) {
         console.warn('[realtime] Suppressing scoped event without resolvable branch context', {
@@ -898,6 +1123,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         const removalVisibility = removedBranchId
           ? branchRemovalVisibilitySnapshot(context, removedBranchId)
           : null;
+        const removedBoardId = extractBoardId(relayData, context);
+        const boardRemovalVisibility = removedBoardId
+          ? boardRemovalVisibilitySnapshot(context, removedBoardId)
+          : null;
         const envelope: RealtimeRelayEnvelope = {
           version: REALTIME_RELAY_VERSION,
           tenantId: resolved.tenantId,
@@ -909,6 +1138,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
             : {}),
           data: relayData,
           ...(removalVisibility ? { branchRemovalVisibility: removalVisibility } : {}),
+          ...(boardRemovalVisibility ? { boardRemovalVisibility } : {}),
         };
         try {
           if (!isRealtimeRelayEnvelope(envelope)) {
@@ -938,6 +1168,9 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
     };
     if (envelope.branchRemovalVisibility) {
       params[BRANCH_REMOVAL_VISIBILITY_PARAM] = envelope.branchRemovalVisibility;
+    }
+    if (envelope.boardRemovalVisibility) {
+      params[BOARD_REMOVAL_VISIBILITY_PARAM] = envelope.boardRemovalVisibility;
     }
     const context = {
       app,

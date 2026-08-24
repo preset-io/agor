@@ -3,7 +3,10 @@ import { runWithTenantContext } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { createClaudeAuthLogoutService } from './claude-auth-logout';
-import { InMemoryClaudeOAuthAttemptStore } from './claude-oauth-attempt-store';
+import {
+  type ClaudeOAuthAttemptStore,
+  InMemoryClaudeOAuthAttemptStore,
+} from './claude-oauth-attempt-store';
 
 vi.mock('@agor/core/config', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/config')>('@agor/core/config');
@@ -39,8 +42,8 @@ function makeApp(
   return { app: { get: () => loadConfigSyncMock(), service: () => usersService }, usersService };
 }
 
-function service(app: { service: () => unknown }, store?: InMemoryClaudeOAuthAttemptStore) {
-  const delegate = createClaudeAuthLogoutService(app as never, TEST_DB, store);
+function service(app: { service: () => unknown }, coordinator?: ClaudeOAuthAttemptStore) {
+  const delegate = createClaudeAuthLogoutService(app as never, TEST_DB, coordinator);
   return {
     create: (...args: Parameters<typeof delegate.create>) =>
       runWithTenantContext('tenant-test', () => delegate.create(...args)),
@@ -92,24 +95,37 @@ describe('claude-auth-logout', () => {
     expect(result).toEqual({ status: 'removed' });
   });
 
-  it('invalidates the shared standalone attempt before deleting credentials', async () => {
-    const store = new InMemoryClaudeOAuthAttemptStore();
-    const context = { tenantId: 'tenant-test', userId: 'user-1' as never };
-    const started = await store.start(context, {
-      verifier: 'verifier',
-      state: 'state',
-      delegatedHomeKey: null,
-      buildVerificationUrl: () => 'https://claude.example/authorize',
-    });
-    const claimed = await store.claimForExchange(context, started.attemptId, 'state');
-    expect(claimed.outcome).toBe('claimed');
-    if (claimed.outcome !== 'claimed') return;
+  it('shares the OAuth coordinator so logout linearizes after an in-flight credential write', async () => {
+    const coordinator = new InMemoryClaudeOAuthAttemptStore();
+    let releaseWrite!: () => void;
+    const events: string[] = [];
+    const write = coordinator.runCredentialMutation(
+      { tenantId: 'tenant-test', userId: 'user-1' as never },
+      'credentials_changed',
+      () =>
+        new Promise<void>((resolve) => {
+          events.push('write-start');
+          releaseWrite = () => {
+            events.push('write-end');
+            resolve();
+          };
+        })
+    );
+    await vi.waitFor(() => expect(events).toEqual(['write-start']));
 
     const { app } = makeApp();
-    await service(app, store).create({}, AUTH_PARAMS);
+    deleteClaudeAuthViaExecutorMock.mockImplementation(async () => {
+      events.push('delete');
+    });
+    const logout = service(app, coordinator).create({}, AUTH_PARAMS);
+    await Promise.resolve();
+    expect(deleteClaudeAuthViaExecutorMock).not.toHaveBeenCalled();
 
-    expect(await store.isClaimLive(context, claimed.claim)).toBe(false);
-    expect((await store.status(context, started.attemptId)).phase).toBe('error');
+    releaseWrite();
+    await write;
+    await logout;
+    expect(events).toEqual(['write-start', 'write-end', 'delete']);
+    expect(deleteClaudeAuthViaExecutorMock.mock.calls[0]?.[1]).toEqual(expect.any(Number));
   });
 
   it('surfaces a friendly error and does NOT clear anything if the delete fails', async () => {
@@ -128,6 +144,18 @@ describe('claude-auth-logout', () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it('reports stale metadata safely when the file was deleted but the metadata patch fails', async () => {
+    const { app, usersService } = makeApp();
+    usersService.patch.mockRejectedValueOnce(
+      new Error('postgres password=secret should not reach the browser')
+    );
+
+    await expect(service(app).create({}, AUTH_PARAMS)).rejects.toThrow(
+      /login file was removed, but account metadata could not be updated/
+    );
+    expect(deleteClaudeAuthViaExecutorMock).toHaveBeenCalledTimes(1);
   });
 
   it('refuses hosted multi-tenant mode before touching the shared login file', async () => {

@@ -1,4 +1,4 @@
-import type { AgorClient } from '@agor-live/client';
+import type { AuthenticatedAgorClient } from '@agor-live/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Mock the underlying refresh call so tests are hermetic — we want to
@@ -9,23 +9,21 @@ vi.mock('./tokenRefresh', async () => {
   return {
     ...actual,
     refreshAndStoreTokens: vi.fn(),
-    getStoredRefreshToken: vi.fn(),
   };
 });
 
 import {
   isRefreshUnrecoverable,
+  markAuthenticationUnrecoverable,
   RefreshUnrecoverableError,
-  refreshAndReauthenticate,
   refreshTokensSingleFlight,
   resetRefreshFailureState,
   TOKENS_REFRESH_UNRECOVERABLE_EVENT,
   TOKENS_REFRESHED_EVENT,
 } from './singleFlightRefresh';
-import { getStoredRefreshToken, refreshAndStoreTokens } from './tokenRefresh';
+import { refreshAndStoreTokens } from './tokenRefresh';
 
 const mockRefresh = refreshAndStoreTokens as unknown as ReturnType<typeof vi.fn>;
-const mockGetRefreshToken = getStoredRefreshToken as unknown as ReturnType<typeof vi.fn>;
 
 function makeResult(accessToken = 'new-access', refreshToken = 'new-refresh') {
   return {
@@ -35,13 +33,12 @@ function makeResult(accessToken = 'new-access', refreshToken = 'new-refresh') {
   };
 }
 
-function makeClient(): AgorClient {
-  return { authenticate: vi.fn() } as unknown as AgorClient;
+function makeClient(): AuthenticatedAgorClient {
+  return { authenticate: vi.fn() } as unknown as AuthenticatedAgorClient;
 }
 
 beforeEach(() => {
   mockRefresh.mockReset();
-  mockGetRefreshToken.mockReset();
   // The unrecoverable latch is a module-level singleton — reset between
   // tests so order-dependent state doesn't leak.
   resetRefreshFailureState();
@@ -178,6 +175,24 @@ describe('refreshTokensSingleFlight', () => {
     }
   });
 
+  it('broadcasts once when a refreshed credential still cannot authenticate', () => {
+    const listener = vi.fn();
+    const cause = Object.assign(new Error('tenant claim rejected'), { code: 401 });
+    window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, listener);
+    try {
+      const first = markAuthenticationUnrecoverable(cause);
+      const second = markAuthenticationUnrecoverable(cause);
+
+      expect(first).toBeInstanceOf(RefreshUnrecoverableError);
+      expect(first.cause).toBe(cause);
+      expect(second).toBeInstanceOf(RefreshUnrecoverableError);
+      expect(isRefreshUnrecoverable()).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, listener);
+    }
+  });
+
   it('clears the unrecoverable latch on the next successful refresh', async () => {
     const authErr = Object.assign(new Error('jwt expired'), {
       name: 'NotAuthenticated',
@@ -196,50 +211,5 @@ describe('refreshTokensSingleFlight', () => {
     const recovered = await refreshTokensSingleFlight(client, 'rt');
     expect(recovered.accessToken).toBe('fresh');
     expect(isRefreshUnrecoverable()).toBe(false);
-  });
-});
-
-describe('refreshAndReauthenticate', () => {
-  it('returns null when no refresh token is stored', async () => {
-    mockGetRefreshToken.mockReturnValue(null);
-    const client = makeClient();
-    const result = await refreshAndReauthenticate(client);
-    expect(result).toBeNull();
-    expect(mockRefresh).not.toHaveBeenCalled();
-    expect(client.authenticate).not.toHaveBeenCalled();
-  });
-
-  it('refreshes and re-authenticates the client with the new access token', async () => {
-    mockGetRefreshToken.mockReturnValue('stored-rt');
-    mockRefresh.mockResolvedValueOnce(makeResult('new-access'));
-    const client = makeClient();
-
-    const result = await refreshAndReauthenticate(client);
-
-    expect(result?.accessToken).toBe('new-access');
-    expect(client.authenticate).toHaveBeenCalledWith({
-      strategy: 'jwt',
-      accessToken: 'new-access',
-    });
-  });
-
-  it('propagates refresh errors (does not call authenticate)', async () => {
-    mockGetRefreshToken.mockReturnValue('stored-rt');
-    mockRefresh.mockRejectedValueOnce(new Error('refresh-failed'));
-    const client = makeClient();
-
-    await expect(refreshAndReauthenticate(client)).rejects.toThrow('refresh-failed');
-    expect(client.authenticate).not.toHaveBeenCalled();
-  });
-
-  it('propagates authenticate errors', async () => {
-    mockGetRefreshToken.mockReturnValue('stored-rt');
-    mockRefresh.mockResolvedValueOnce(makeResult());
-    const client = makeClient();
-    (client.authenticate as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error('auth-failed')
-    );
-
-    await expect(refreshAndReauthenticate(client)).rejects.toThrow('auth-failed');
   });
 });

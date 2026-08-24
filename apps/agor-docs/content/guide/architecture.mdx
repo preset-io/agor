@@ -12,10 +12,15 @@ Agor is a **multi-client agent orchestration platform** with real-time collabora
 ### Current architecture (execution substrates)
 
 The daemon owns trusted state and authorization. Executors contain agent SDKs
-and terminal work, authenticate back to the daemon with scoped tokens, and have
-no direct database connection. Their launch policy is explicit: trusted local
-execution (`simple`), fail-closed Linux bubblewrap filesystem isolation
-(`sandbox`), or a configured external launcher (`delegated`).
+and terminal work and have no direct database connection. A task executor
+authenticates as the user who initiated it, with tenant and task context signed
+by the daemon. Ordinary Feathers calls then use the same role and resource
+authorization as that user's UI, CLI, or client calls. Exact task context is
+checked again only for executor-only operations such as lifecycle reporting,
+streaming publication, and plaintext runtime credential resolution. Launch
+policy is explicit: trusted local execution (`simple`), fail-closed Linux
+bubblewrap filesystem isolation (`sandbox`), or a configured external launcher
+(`delegated`).
 
 ```mermaid
 graph LR
@@ -28,15 +33,16 @@ graph LR
   L --> SDK[Agent SDK / terminal]
   B --> SDK2[Agent SDK / terminal]
   X --> SDK3[Agent SDK]
-  SDK -->|scoped service token| D
-  SDK2 -->|scoped service token| D
-  SDK3 -->|trusted tenant/user route| D
+  SDK -->|tenant-bound user delegation| D
+  SDK2 -->|tenant-bound user delegation| D
+  SDK3 -->|tenant-bound user delegation| D
 ```
 
 Key properties:
 
 - Application RBAC and trusted tenant context are enforced at daemon boundaries.
 - Executors do not receive database credentials or direct database access.
+- Task executors are not service accounts and do not bypass normal user RBAC.
 - Sandbox mode derives read/write/hidden mounts from RBAC and never falls back
   to simple mode when bubblewrap is unavailable.
 - Delegated launchers receive stable tenant/user identifiers and own runtime,
@@ -78,10 +84,14 @@ The unified model is no longer used in current Agor releases.
 The UI and CLI both consume the daemon through a published, fully-typed client package. It's the same shape of API your own scripts and integrations use. There is no second-class "internal API."
 
 ```typescript
-import { createAgorClient } from '@agor-live/client';
+import { createClient, createRestClient } from '@agor-live/client';
 
-const agor = createAgorClient({ url: 'http://localhost:3030' });
-await agor.authenticate({ strategy: 'local', email, password });
+const url = 'http://localhost:3030';
+const loginClient = await createRestClient(url);
+const { accessToken } = await loginClient.authenticate({ strategy: 'local', email, password });
+const agor = createClient(url, true, {
+  socketAuthentication: { accessToken },
+});
 
 // Strongly-typed CRUD across every service
 const { data: branches } = await agor.service('branches').find({
@@ -95,7 +105,7 @@ const session = await agor.service('sessions').create({
 });
 
 // Real-time WebSocket events with typed payloads
-agor.service('messages').on('created', (msg) => {
+agor.service('messages').on('created', msg => {
   console.log(`${msg.role}: ${msg.content}`);
 });
 ```
@@ -105,7 +115,7 @@ agor.service('messages').on('created', (msg) => {
 - **Branded ID types**: `BranchId`, `SessionId`, `BoardId` aren't interchangeable; the compiler catches mix-ups.
 - **Service hooks across REST + WebSocket**: One subscription, one event API; the same `created`/`patched`/`removed` pattern for every entity.
 - **Schema-driven types**: Generated from Drizzle ORM models so DB schema changes propagate to clients at compile time.
-- **Authentication strategies built in**: `local`, `jwt`, `api-key`, and session-token strategies share one client surface.
+- **Authentication strategies built in**: `local`, `jwt`, and `api-key` share one client surface; delegated executor JWTs carry daemon-signed tenant/user identity, while exact task or bounded command claims protect only executor-specific capabilities.
 - **Same client the UI uses**: Whatever pattern works for an Agor screen works for your script.
 
 > If you're integrating Agor into your own tooling, prefer `@agor-live/client` over raw HTTP. You'll inherit every type and event the product evolves.
@@ -137,21 +147,26 @@ sequenceDiagram
     D->>DB: INSERT session
     DB-->>D: Session created
     D->>U1: 'created' event
-    D->>U2: 'created' event (broadcast)
+    D->>U2: 'created' event (when U2 is authorized)
 
     U2->>D: Update session position
     D->>DB: UPDATE session
-    D->>U1: 'patched' event (broadcast)
-    D->>U2: 'patched' event
+    D->>U1: 'patched' event
+    D->>U2: 'patched' event (when U2 is authorized)
 
-    Note over U1,U2: All connected clients<br/>receive real-time updates
+    Note over U1,U2: Authenticated clients receive only<br/>tenant- and resource-authorized updates
 ```
 
 **Key Features:**
 
-- **Automatic broadcasting** - FeathersJS emits events to all connected clients
+- **Authorized publication** - FeathersJS emits only to authenticated
+  connections in the event's tenant, further filtered by board/branch/resource
+  access where applicable
 - **Service-level events** - `created`, `patched`, `removed`, `updated`
-- **Custom events** - Cursor position, presence updates (100ms throttle)
+- **Custom events** - Board-authorized cursor position and tenant-scoped
+  presence updates (100ms throttle)
+- **Fail-closed routing** - Missing/conflicting tenant context has no global
+  broadcast fallback; clients cannot select tenant rooms
 - **Optimistic UI** - React hooks listen to events and update state immediately
 
 ## Core Services
@@ -164,8 +179,8 @@ The daemon exposes 12 FeathersJS services via REST and WebSocket:
 | **tasks**               | Work units within sessions    | CRUD, completion tracking           |
 | **messages**            | Conversation history          | CRUD, pagination, streaming         |
 | **boards**              | Spatial session organization  | CRUD, session positioning           |
-| **branches**           | Git branch isolation        | Create, list, delete branches      |
-| **repos**               | Git repository management     | Clone, list, branch operations    |
+| **branches**            | Git branch isolation          | Create, list, delete branches       |
+| **repos**               | Git repository management     | Clone, list, branch operations      |
 | **users**               | User accounts & auth          | CRUD, JWT authentication            |
 | **mcp-servers**         | MCP server configs            | CRUD, capability queries            |
 | **session-mcp-servers** | Session MCP links             | Associate MCP servers with sessions |
@@ -422,23 +437,21 @@ Every session requires a branch (foreign key constraint):
 
 ## Authentication
 
-Four authentication strategies (all require credentials; there is no anonymous path):
+Three authentication strategies (all require credentials; there is no anonymous path):
 
 1. **Local** (email/password) - JWT-based authentication for user login
-2. **JWT** - Token refresh and validation for user sessions
+2. **JWT** - Token validation for user, service, terminal, and task-executor credentials
 3. **API Key** - Long-lived `agor_sk_…` tokens for scripts and CI
-4. **Session Token** - Opaque UUID tokens for executor-to-daemon authentication
 
 On a fresh install with zero users, the daemon auto-creates an admin user on first start (`ensureFirstRunAdmin`), writing the generated password to `~/.agor/admin-credentials` (mode 0600) and printing it once to the daemon log.
 
-**Session Token Strategy Details:**
+**Executor-session JWT details:**
 
 - Used exclusively by executor processes to authenticate with daemon
-- Tokens are opaque UUIDs (not JWTs) generated by `SessionTokenService`
-- 24-hour expiration with automatic cleanup
-- Validated via custom `SessionTokenStrategy` in FeathersJS authentication
-- Scoped to the user who created the session
-- Never exposed to untrusted execution contexts
+- Signed, expiring JWTs are generated by `SessionTokenService` and verified by the shared JWT strategy
+- PostgreSQL authority stores only a SHA-256 fingerprint plus tenant, user, session, task, branch, expiry, revocation, and use-policy facts
+- Every connection revalidates durable authority; active exact-token revocation retires the matching executor connection across replicas
+- The accepted Socket.IO connection owns an immutable tenant/user/session/task/branch projection and may join only its exact task-control room
 
 All strategies use FeathersJS authentication with configurable storage.
 

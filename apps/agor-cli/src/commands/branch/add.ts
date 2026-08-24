@@ -133,8 +133,11 @@ export default class BranchAdd extends BaseCommand {
         }
       }
 
-      // Call daemon API to create branch
-      const newBranch = (await client.service('repos').createBranch(repo.repo_id, {
+      // Create through the `/repos/:id/branches` route — the same one the UI uses.
+      // `reposService.createBranch()` is an in-process method with an `(id, data)`
+      // signature, not a Feathers custom method, so it is not reachable over any
+      // transport; calling it from here threw "createBranch is not a function".
+      const newBranch = (await client.service(`repos/${repo.repo_id}/branches`).create({
         name: args.name,
         ref,
         createBranch,

@@ -5,8 +5,8 @@
  * Does NOT test FeathersJS internals, Socket.io, or HTTP libraries.
  */
 
-import type { AuthenticationResult, Session } from '@agor/core/types';
-import authClient from '@feathersjs/authentication-client';
+import type { AuthenticationResult, Session, Task, UserID } from '@agor/core/types';
+import { TaskStatus } from '@agor/core/types';
 import type { Socket } from 'socket.io-client';
 import io from 'socket.io-client';
 import { beforeEach, describe, expect, it, type MockedFunction, vi } from 'vitest';
@@ -193,9 +193,37 @@ describe('createClient', () => {
       expect(client.io).toBeDefined();
       expect(client.io).toBe(mockSocket);
     });
+
+    it('does not install Feathers live-authentication methods on a socket client', () => {
+      const client = createClient('http://localhost:3030', false, {
+        socketAuthentication: { accessToken: 'access-token' },
+      });
+
+      expect(client).not.toHaveProperty('authenticate');
+      expect(client).not.toHaveProperty('reAuthenticate');
+      expect(client).not.toHaveProperty('logout');
+    });
   });
 
   describe('socket configuration', () => {
+    it('reads the latest access token for every authenticated handshake', () => {
+      let token = 'token-a';
+      createClient('http://localhost:3030', false, {
+        socketAuthentication: { accessToken: () => token },
+      });
+
+      const authorize = vi.fn();
+      const auth = ioMock.mock.calls[0]?.[1]?.auth as
+        | ((callback: (data: Record<string, string>) => void) => void)
+        | undefined;
+      auth?.(authorize);
+      token = 'token-b';
+      auth?.(authorize);
+
+      expect(authorize).toHaveBeenNthCalledWith(1, { token: 'token-a' });
+      expect(authorize).toHaveBeenNthCalledWith(2, { token: 'token-b' });
+    });
+
     it('forwards an explicit acknowledgement timeout without enabling retries', () => {
       createClient('http://localhost:3030', true, { ackTimeout: 60_000 });
 
@@ -371,126 +399,6 @@ describe('createClient', () => {
       expect(consoleLogSpy).not.toHaveBeenCalled();
 
       consoleLogSpy.mockRestore();
-    });
-  });
-
-  describe('authentication configuration', () => {
-    it('should configure authentication with localStorage in browser', () => {
-      // Mock browser environment
-      const mockLocalStorage = {
-        getItem: vi.fn(),
-        setItem: vi.fn(),
-        removeItem: vi.fn(),
-        clear: vi.fn(),
-        length: 0,
-        key: vi.fn(),
-      };
-
-      (globalThis as any).localStorage = mockLocalStorage;
-
-      const authMock = authClient as unknown as MockedFunction<any>;
-
-      createClient();
-
-      expect(authMock).toHaveBeenCalledWith({ storage: mockLocalStorage });
-
-      // Cleanup
-      delete (globalThis as any).localStorage;
-    });
-
-    it('should configure authentication without storage in Node.js', () => {
-      // Ensure no localStorage
-      delete (globalThis as any).localStorage;
-
-      const authMock = authClient as unknown as MockedFunction<any>;
-
-      createClient();
-
-      expect(authMock).toHaveBeenCalledWith({ storage: undefined });
-    });
-
-    it('should prefer explicit auth storage over localStorage', () => {
-      const mockLocalStorage = {
-        getItem: vi.fn(),
-        setItem: vi.fn(),
-        removeItem: vi.fn(),
-        clear: vi.fn(),
-        length: 0,
-        key: vi.fn(),
-      };
-      const explicitStorage = {
-        getItem: vi.fn(),
-        setItem: vi.fn(),
-        removeItem: vi.fn(),
-      };
-
-      (globalThis as any).localStorage = mockLocalStorage;
-
-      const authMock = authClient as unknown as MockedFunction<any>;
-
-      createClient('http://localhost:3030', false, { authStorage: explicitStorage });
-
-      expect(authMock).toHaveBeenCalledWith({ storage: explicitStorage });
-
-      delete (globalThis as any).localStorage;
-    });
-
-    it('should handle globalThis without localStorage gracefully', () => {
-      const _globalThisBackup = globalThis;
-
-      // Create globalThis without localStorage
-      const mockGlobalThis = {} as typeof globalThis;
-      Object.setPrototypeOf(mockGlobalThis, Object.getPrototypeOf(globalThis));
-
-      expect(() => createClient()).not.toThrow();
-    });
-
-    // Regression coverage for Node 25 compat: it exposes `globalThis.localStorage`
-    // but the object lacks `setItem`, so the Feathers auth client throws
-    // `_a.setItem is not a function` on first authenticate(). createClient()
-    // must treat that as "no storage" rather than passing it straight through.
-    it('should reject a localStorage stub without setItem (Node 25)', () => {
-      const brokenLocalStorage = {
-        getItem: vi.fn(),
-        // setItem intentionally absent — this is what Node 25 ships
-        removeItem: vi.fn(),
-        clear: vi.fn(),
-        length: 0,
-        key: vi.fn(),
-      };
-
-      (globalThis as any).localStorage = brokenLocalStorage;
-
-      const authMock = authClient as unknown as MockedFunction<any>;
-
-      createClient();
-
-      expect(authMock).toHaveBeenCalledWith({ storage: undefined });
-
-      delete (globalThis as any).localStorage;
-    });
-
-    it('should reject a localStorage stub whose setItem is not a function', () => {
-      // Defensive sibling case: anything truthy at .setItem that isn't
-      // callable would otherwise pass `'setItem' in storage` style checks.
-      const oddLocalStorage = {
-        getItem: vi.fn(),
-        setItem: 'not-a-function' as unknown as Storage['setItem'],
-        removeItem: vi.fn(),
-        clear: vi.fn(),
-        length: 0,
-        key: vi.fn(),
-      };
-
-      (globalThis as any).localStorage = oddLocalStorage;
-
-      const authMock = authClient as unknown as MockedFunction<any>;
-
-      createClient();
-
-      expect(authMock).toHaveBeenCalledWith({ storage: undefined });
-
-      delete (globalThis as any).localStorage;
     });
   });
 
@@ -841,7 +749,7 @@ describe('createClient', () => {
     // service.methods(...) call on the client, calling these threw
     // "client.service(...).<method> is not a function" — observed during prod branch
     // creation. These assertions guard the client-side mirror of the daemon's methods list.
-    it('registers users.getGitEnvironment custom method on client', () => {
+    it('registers users custom methods on client', () => {
       const client = createClient();
       const usersService = client.service('users') as unknown as {
         methods: MockedFunction<(...names: string[]) => unknown>;
@@ -850,7 +758,12 @@ describe('createClient', () => {
         'getGitEnvironment',
         'getAvatarSettings',
         'updateAvatarSettings',
-        'syncAvatars'
+        'syncAvatars',
+        'getPrimaryTeammate',
+        'getPrimaryTeammateCandidates',
+        'setPrimaryTeammate',
+        'setPrimaryTeammateIfUnset',
+        'setPrimaryAgenticToolIfUnset'
       );
     });
 
@@ -891,13 +804,23 @@ describe('createClient', () => {
       const client = createClient();
       const routeService = client.service('sessions/session-123/prompt');
       const createMock = routeService.create as unknown as MockedFunction<any>;
+      const admittedTask: Task = {
+        task_id: 'task-123' as Task['task_id'],
+        session_id: 'session-123' as Task['session_id'],
+        created_by: 'user-123',
+        full_prompt: 'Fix failing tests',
+        status: TaskStatus.DISPATCHING,
+        created_at: '2026-08-20T00:00:00.000Z',
+        message_range: {
+          start_index: 0,
+          end_index: 0,
+          start_timestamp: '2026-08-20T00:00:00.000Z',
+        },
+        tool_use_count: 0,
+        git_state: { ref_at_start: 'feature', sha_at_start: 'abc123' },
+      };
 
-      createMock.mockResolvedValue({
-        success: true,
-        taskId: 'task-123',
-        status: 'running',
-        streaming: true,
-      });
+      createMock.mockResolvedValue(admittedTask);
 
       const result = await client.sessions.prompt('session-123', 'Fix failing tests', {
         permissionMode: 'auto',
@@ -912,12 +835,35 @@ describe('createClient', () => {
         },
         undefined
       );
-      expect(result).toEqual({
-        success: true,
-        taskId: 'task-123',
-        status: 'running',
-        streaming: true,
+      expect(result).toBe(admittedTask);
+    });
+
+    it('should expose sessions.initialize helper for backend-owned setup', async () => {
+      const client = createClient();
+      const routeService = client.service('sessions/session-123/initialize');
+      const createMock = routeService.create as unknown as MockedFunction<any>;
+      const resultValue = { sessionId: 'session-123', task: { task_id: 'task-1' } };
+      createMock.mockResolvedValue(resultValue);
+
+      const result = await client.sessions.initialize('session-123', {
+        expectedUserId: 'user-123' as UserID,
+        mcpServerIds: ['mcp-1'],
+        envVarNames: ['TOKEN'],
+        prompt: 'Start here',
+        permissionMode: 'auto',
       });
+
+      expect(createMock).toHaveBeenCalledWith(
+        {
+          expectedUserId: 'user-123',
+          mcpServerIds: ['mcp-1'],
+          envVarNames: ['TOKEN'],
+          prompt: 'Start here',
+          permissionMode: 'auto',
+        },
+        undefined
+      );
+      expect(result).toBe(resultValue);
     });
 
     // The pure-REST counterpart to client.sessions.prompt() — a thin wrapper

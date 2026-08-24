@@ -91,6 +91,19 @@ describe('MCPServerRepository.create', () => {
 
     expect(created.enabled).toBe(true);
   });
+
+  dbTest('rejects internal and unknown OAuth compatibility modes on create', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    for (const mode of ['marketplace', 'future-mode']) {
+      await expect(
+        repo.create(
+          createMCPServerData({
+            auth: { type: 'oauth', oauth_compatibility_mode: mode } as never,
+          })
+        )
+      ).rejects.toThrow(/must be either strict or legacy/);
+    }
+  });
 });
 
 // ============================================================================
@@ -234,6 +247,19 @@ describe('MCPServerRepository.update', () => {
     await expect(repo.update(nonExistentId, { enabled: false })).rejects.toThrow(
       EntityNotFoundError
     );
+  });
+
+  dbTest('rejects internal OAuth compatibility mode on patch/update', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({ auth: { type: 'oauth', oauth_compatibility_mode: 'strict' } })
+    );
+
+    await expect(
+      repo.update(created.mcp_server_id, {
+        auth: { type: 'oauth', oauth_compatibility_mode: 'marketplace' } as never,
+      })
+    ).rejects.toThrow(/must be either strict or legacy/);
   });
 });
 
@@ -395,6 +421,20 @@ describe('MCPServerRepository custom headers', () => {
     const found = await repo.findById(created.mcp_server_id);
 
     expect(found?.headers).toBeUndefined();
+  });
+
+  dbTest('should reject case-insensitive duplicate custom headers', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    await expect(
+      repo.create(
+        createMCPServerData({
+          name: 'ambiguous-headers',
+          transport: 'http',
+          url: 'https://mcp.example.test',
+          headers: { 'X-Route': 'a', 'x-route': 'b' },
+        })
+      )
+    ).rejects.toThrow(/Duplicate custom HTTP header names/);
   });
 
   dbTest(

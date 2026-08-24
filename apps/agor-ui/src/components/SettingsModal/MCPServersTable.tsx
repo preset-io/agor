@@ -21,10 +21,8 @@ import {
   Badge,
   Button,
   Descriptions,
-  Flex,
   Form,
   Input,
-  Modal,
   Popconfirm,
   Space,
   Table,
@@ -32,11 +30,13 @@ import {
   Tag,
   Tooltip,
   Typography,
-  theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
+import { useAgorStore } from '@/store/agorStore';
+import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
 import { mapToSortedArray } from '@/utils/mapHelpers';
+import { mcpServerNeedsAuth } from '@/utils/mcpAuth';
 import { useThemedMessage } from '@/utils/message';
 import { userSelectLabel } from '@/utils/selectSearch';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
@@ -59,7 +59,9 @@ import {
   explainManageRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface MCPServersTableProps {
@@ -80,9 +82,24 @@ const POLICY_LOADING_HINT = "Checking what this workspace's MCP policy allows…
 const POLICY_UNREADABLE_HINT =
   "This workspace's MCP policy could not be read, so nothing is offered here.";
 
-const getServerHealth = (server: MCPServer) => {
+const getServerHealth = (
+  server: MCPServer,
+  userAuthenticatedMcpServerIds: Set<string> = new Set()
+) => {
   const toolCount = server.tools?.length || 0;
   const transport = server.transport || (server.url ? 'http' : 'stdio');
+
+  // Ahead of every other reading, because it is the one that makes the row
+  // unusable. Connecting a catalog entry writes the install before anybody
+  // signs in, so an OAuth row that was never authenticated is enabled, owned,
+  // and indistinguishable from a working server — this is the only thing in
+  // the table that says the connect never finished.
+  if (mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)) {
+    return {
+      status: 'warning' as const,
+      text: 'Not signed in',
+    };
+  }
 
   if (transport === 'stdio') {
     return {
@@ -124,7 +141,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   onDelete,
 }) => {
   const { showError } = useThemedMessage();
-  const { token } = theme.useToken();
+  // Same set the session panel and the picker read, so an install is
+  // "unfinished" in exactly one sense across all three.
+  const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
   const memberPolicy = useMcpMemberPolicy(client);
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   // Which transports a user may configure turns on role alone, so this is known
@@ -471,7 +490,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         key: 'health',
         width: 120,
         render: (_: unknown, server: MCPServer) => {
-          const health = getServerHealth(server);
+          const health = getServerHealth(server, userAuthenticatedMcpServerIds);
           return <Badge status={health.status} text={health.text} />;
         },
       },
@@ -590,6 +609,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       policyPending,
       policyPendingHint,
       searchTerm,
+      userAuthenticatedMcpServerIds,
     ]
   );
 
@@ -617,37 +637,39 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
 
   const serversPane = (
     <>
-      <Flex vertical gap={token.marginMD} style={{ marginBottom: token.marginMD }}>
-        <Typography.Text type="secondary">
-          Configure Model Context Protocol servers for enhanced AI capabilities.
-        </Typography.Text>
-        {/* Search and add take the ends of their own row, so the caption above
-            keeps its full width instead of being squeezed into four lines by a
-            search box that cannot shrink. The input's cap leaves the slack
-            between them as the gap. */}
-        <Flex justify="space-between" align="center" gap={token.marginXS} wrap>
-          <Input
-            allowClear
-            placeholder="Search name, owner, URL, command, tools, transport, or scope"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ flex: '1 1 220px', maxWidth: 360 }}
-          />
-          {canAdd ? (
-            <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateModalOpen(true)}>
-              New MCP Server
-            </Button>
-          ) : (
-            <Tooltip title={policyPending ? policyPendingHint : explainAddRestriction(capability)}>
-              <span>
-                <Button type="primary" icon={<PlusOutlined />} disabled>
-                  New MCP Server
-                </Button>
-              </span>
-            </Tooltip>
-          )}
-        </Flex>
-      </Flex>
+      <ResponsiveSettingsHeader
+        description="Configure Model Context Protocol servers for enhanced AI capabilities."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="Search name, owner, URL, command, tools, transport, or scope"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: compact ? '100%' : 360, flex: compact ? '1 1 100%' : undefined }}
+            />
+            {canAdd ? (
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={() => setCreateModalOpen(true)}
+              >
+                New MCP Server
+              </Button>
+            ) : (
+              <Tooltip
+                title={policyPending ? policyPendingHint : explainAddRestriction(capability)}
+              >
+                <span>
+                  <Button type="primary" icon={<PlusOutlined />} disabled>
+                    New MCP Server
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
+          </Space>
+        )}
+      />
 
       <Table
         dataSource={servers}
@@ -655,10 +677,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         rowKey="mcp_server_id"
         pagination={{ defaultPageSize: 10, showSizeChanger: true }}
         size="small"
+        scroll={{ x: 1000 }}
       />
 
       {/* Create MCP Server Modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title="Add MCP Server"
         open={createModalOpen}
         onCancel={resetCreateModal}
@@ -704,7 +727,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             formRevision={formRevision}
           />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
 
       {/* Edit MCP Server Modal — self-contained */}
       <MCPServerEditModal
@@ -717,7 +740,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       />
 
       {/* View MCP Server Modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title="MCP Server Details"
         open={viewModalOpen}
         onCancel={() => {
@@ -833,7 +856,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             )}
           </Descriptions>
         )}
-      </Modal>
+      </AdaptiveSettingsModal>
     </>
   );
 

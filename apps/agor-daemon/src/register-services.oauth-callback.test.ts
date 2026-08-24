@@ -93,6 +93,41 @@ describe('register-services OAuth callback URL regression', () => {
     expect(codeOnly).toMatch(/reuseDynamicClientRegistration:\s*false/);
   });
 
+  it('binds durable pending flows to the authoritative compatibility policy', () => {
+    const flowHelper = codeOnly.slice(
+      codeOnly.indexOf('async function startTwoPhaseMCPOAuthFlowInternal'),
+      codeOnly.indexOf('const tenantIdFromParams')
+    );
+    expect(flowHelper).toMatch(/resolveMCPOAuthCompatibilityPolicy\s*\(\s*server\s*\)/);
+    expect(flowHelper).toMatch(/effectiveClientId\s*=\s*server\.auth\.oauth_client_id/);
+    expect(flowHelper).toMatch(/effectiveCompatibilityMode\s*=\s*compatibilityPolicy\.mode/);
+    expect(flowHelper).toMatch(/compatibilityMode:\s*context\.compatibilityMode/);
+
+    const callbackAuthority = codeOnly.slice(
+      codeOnly.indexOf('const assertPendingFlowStillAuthorized'),
+      codeOnly.indexOf('const persistOAuthTokenForPendingFlow')
+    );
+    expect(callbackAuthority).toMatch(
+      /compatibilityPolicy\?\.mode\s*!==\s*pendingFlow\.context\.compatibilityMode/
+    );
+    expect(callbackAuthority).toMatch(
+      /compatibilityMode:\s*pendingFlow\.context\.compatibilityMode/
+    );
+  });
+
+  it('validates test-oauth transient policy before outbound work and reloads saved authority', () => {
+    const testOauth = codeOnly.slice(
+      codeOnly.indexOf("app.use('/mcp-servers/test-oauth'"),
+      codeOnly.indexOf("app.service('mcp-servers/test-oauth').hooks")
+    );
+    expect(testOauth.indexOf('assertPublicMCPOAuthCompatibilityMode')).toBeLessThan(
+      testOauth.indexOf('oauthFetch(')
+    );
+    expect(testOauth).toMatch(/effectiveMcpUrl\s*=\s*authoritativeServer\?\.url/);
+    expect(testOauth).toMatch(/compatibilityPolicy\?\.mode\s*\?\?/);
+    expect(testOauth).toMatch(/effectiveClientId\s*=\s*authoritativeServer/);
+  });
+
   it('uses durable hashed state claims on PostgreSQL and never broadcasts raw flow state', () => {
     expect(codeOnly).toMatch(/durableOAuthFlows\.claimForCallback\s*\(\s*state\s*\)/);
     expect(codeOnly).toMatch(/cacheToken:\s*false/);
@@ -113,6 +148,46 @@ describe('register-services OAuth callback URL regression', () => {
       .map((match) => match[1])
       .join('\n');
     expect(loggedExpressions).not.toMatch(/\b(?:code|state|tokenResponse|pendingFlow\.context)\b/);
+  });
+
+  it('persists the grant and notifies the initiating UI before serving the closing page', () => {
+    const callbackBody = rawSource.slice(
+      rawSource.indexOf('const oauthCallbackHandler'),
+      rawSource.indexOf("app.use('/mcp-servers',")
+    );
+    const successBody = callbackBody.slice(
+      callbackBody.indexOf(
+        "persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback')"
+      ),
+      callbackBody.indexOf('} catch (innerErr)')
+    );
+
+    const persistIndex = successBody.indexOf('persistOAuthTokenForPendingFlow');
+    const notifyIndex = successBody.indexOf('emitOAuthCompletion(pendingFlow, true)');
+    const resolveIndex = successBody.indexOf('pendingFlow.tokenResolve?.(tokenResponse)');
+    const renderIndex = successBody.indexOf('sendOAuthResultPage(res, true');
+
+    expect(persistIndex).toBeGreaterThanOrEqual(0);
+    expect(notifyIndex).toBeGreaterThan(persistIndex);
+    expect(resolveIndex).toBeGreaterThan(notifyIndex);
+    expect(renderIndex).toBeGreaterThan(resolveIndex);
+  });
+
+  it('marks callback responses no-store and renders denied/error states without success mode', () => {
+    const callbackBody = codeOnly.slice(
+      codeOnly.indexOf('const oauthCallbackHandler'),
+      codeOnly.indexOf("app.use('/mcp-servers',")
+    );
+
+    expect(callbackBody).toMatch(
+      /setHeader\s*\(\s*['"]Cache-Control['"]\s*,\s*['"]no-store['"]\s*\)/
+    );
+    expect(callbackBody).toMatch(
+      /if\s*\(\s*error\s*\)[\s\S]*sendOAuthResultPage\s*\(\s*res\s*,\s*false/
+    );
+    expect(callbackBody).toMatch(
+      /if\s*\(\s*!code\s*\|\|\s*!state\s*\)[\s\S]*sendOAuthResultPage\s*\(\s*res\s*,\s*false/
+    );
   });
 
   it('uses one phase-aware failure classifier for callback and manual completion', () => {

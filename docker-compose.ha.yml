@@ -14,14 +14,14 @@ x-daemon-environment: &daemon-environment
   AGOR_REDIS_KEY_PREFIX: ${AGOR_REDIS_KEY_PREFIX:?set a deployment-unique Redis prefix}
   AGOR_JWT_SECRET: ${AGOR_JWT_SECRET:?set a stable shared JWT secret (32+ characters)}
   AGOR_MASTER_SECRET: ${AGOR_MASTER_SECRET:?set a stable shared master secret (32+ characters)}
-  AGOR_ADMIN_PASSWORD: ${AGOR_ADMIN_PASSWORD:?set the initial admin password}
-  # This checked-in stack is a disposable development smoke environment. The
-  # explicit double gate keeps admin/admin unavailable to production-mode
-  # daemon deployments while matching the repository's other dev variants.
-  AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: ${AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN:-false}
+  # Keep a development-only fallback so lifecycle commands rendered before
+  # the multi-tenant HA cutover can still parse this Compose file for down,
+  # nuke, or restart. Production-shaped manual runs should always override it.
+  AGOR_EXTERNAL_LAUNCH_SHARED_SECRET: ${AGOR_EXTERNAL_LAUNCH_SHARED_SECRET:-agor-ha-dev-launch-secret-000000000000000000000000}
   # The production image serves the UI from the daemon. Browsers still send
   # an Origin header on Socket.IO/auth requests, so the externally reachable
   # ingress origin must be shared by both replicas' CORS configuration.
+  AGOR_HA_PUBLIC_ORIGIN: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}
   AGOR_BASE_URL: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}
   CORS_ORIGIN: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}
   DAEMON_PORT: '3030'
@@ -37,13 +37,18 @@ x-daemon-common: &daemon-common
     args:
       AGOR_BUILD_SHA: ${AGOR_BUILD_SHA:-dev}
   environment: *daemon-environment
+  # This disposable smoke stack runs bubblewrap inside Docker. Permit the
+  # unprivileged user/mount namespaces required by the fail-closed sandbox; the
+  # container remains the outer development security boundary.
+  security_opt:
+    - apparmor=unconfined
+    - seccomp=unconfined
   volumes:
-    # The smoke profile has one shared Unix execution identity. Mount its
-    # complete home so short-lived auth helpers and Tasks on either daemon see
-    # the same CLI-native credential files. Keep Agor's own state/workspaces
-    # on the separately named historical volume: existing managed HA projects
-    # already have PostgreSQL rows whose absolute paths point into this mount.
-    # Nested Docker mounts are intentional. This is not per-user isolation.
+    # Mount the container home plus the nested historical Agor workspace volume
+    # at identical paths. Sandbox per-user homes live below the nested volume,
+    # so short-lived auth helpers, Tasks, and terminals on either daemon see the
+    # same exact tenant/user credential store. Keeping the historical nested
+    # mount also preserves absolute paths in already-rendered HA projects.
     - agor-ha-user-home:/home/agor
     - agor-ha-home:/home/agor/.agor
   restart: unless-stopped
@@ -61,6 +66,31 @@ x-daemon-common: &daemon-common
     start_period: 20s
 
 services:
+  dev-launcher:
+    image: node:22-alpine
+    command: ['node', '/opt/agor-ha-dev-launcher/dev-launcher.mjs']
+    environment:
+      PORT: '4000'
+      AGOR_HA_PUBLIC_ORIGIN: ${AGOR_HA_PUBLIC_ORIGIN:-http://localhost:3030}
+      AGOR_EXTERNAL_LAUNCH_ISSUER: http://dev-launcher:4000
+      AGOR_EXTERNAL_LAUNCH_AUDIENCE: agor-runtime:ha-dev
+      AGOR_EXTERNAL_LAUNCH_INSTANCE_ID: agor-ha-dev
+      AGOR_EXTERNAL_LAUNCH_SHARED_SECRET: ${AGOR_EXTERNAL_LAUNCH_SHARED_SECRET:-agor-ha-dev-launch-secret-000000000000000000000000}
+    volumes:
+      - ./docker/ha/dev-launcher.mjs:/opt/agor-ha-dev-launcher/dev-launcher.mjs:ro
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:4000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+    restart: unless-stopped
+
   postgres:
     build:
       context: .
@@ -117,6 +147,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      dev-launcher:
+        condition: service_healthy
     ports:
       - '127.0.0.1:${HA_DAEMON_A_PORT:-13031}:3030'
 
@@ -132,6 +164,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      dev-launcher:
+        condition: service_healthy
     ports:
       - '127.0.0.1:${HA_DAEMON_B_PORT:-13032}:3030'
 
@@ -145,6 +179,8 @@ services:
       daemon-a:
         condition: service_healthy
       daemon-b:
+        condition: service_healthy
+      dev-launcher:
         condition: service_healthy
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8080/nginx-health']

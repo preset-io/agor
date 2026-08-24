@@ -5,7 +5,6 @@
 import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, UserRole } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
-import { executorRuntimeScopeGuard } from '../auth/executor-runtime-scope.js';
 
 export type Role = UserRole;
 
@@ -13,7 +12,7 @@ export type Role = UserRole;
  * Ensure the request is authenticated and has the minimum required role.
  *
  * Internal calls (params.provider is falsy) bypass authorization checks.
- * Service accounts (_isServiceAccount) also bypass authorization checks.
+ * Explicit daemon service accounts (_isServiceAccount) also bypass checks.
  */
 export function ensureMinimumRole(
   params: AuthenticatedParams | undefined,
@@ -29,7 +28,8 @@ export function ensureMinimumRole(
     throw new NotAuthenticated('Authentication required');
   }
 
-  // Skip authorization for service accounts (executor, etc.)
+  // Skip authorization for explicit daemon service accounts. Task executors
+  // authenticate as the initiating user and deliberately do not use this path.
   // biome-ignore lint/suspicious/noExplicitAny: Service account flag is added dynamically by auth strategy
   if ((params.user as any)._isServiceAccount === true) {
     return;
@@ -92,7 +92,7 @@ export function requireAdminForEnvConfig() {
       return context;
     }
 
-    // Internal calls and service accounts bypass (handled by ensureMinimumRole)
+    // Internal calls and explicit daemon service accounts bypass (handled by ensureMinimumRole)
     ensureMinimumRole(
       context.params,
       ROLES.ADMIN,
@@ -153,11 +153,7 @@ export function registerAuthenticatedRoute(
   > = {};
 
   for (const [method, config] of Object.entries(authConfig)) {
-    hooks[method] = [
-      requireAuth,
-      executorRuntimeScopeGuard(),
-      requireMinimumRole(config.role, config.action),
-    ];
+    hooks[method] = [requireAuth, requireMinimumRole(config.role, config.action)];
   }
 
   // Apply hooks

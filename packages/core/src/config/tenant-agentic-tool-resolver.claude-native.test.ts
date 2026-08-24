@@ -1,9 +1,9 @@
 import { beforeAll, describe, expect } from 'vitest';
 import type { Database } from '../db/client';
 import { encryptApiKey } from '../db/encryption';
-import { UsersRepository } from '../db/repositories/users';
+import { UsersRepository, type UsersRepositoryCreate } from '../db/repositories/users';
 import { dbTest } from '../db/test-helpers';
-import type { InternalUser, StoredAgenticTools } from '../types';
+import type { StoredAgenticTools } from '../types';
 import { resolveProviderConnection } from './tenant-agentic-tool-resolver';
 
 /**
@@ -22,7 +22,7 @@ async function seedUser(
 ) {
   // `agentic_tools_raw` is consumed by the repository's insert mapper but isn't
   // on the public create DTO; widen the input so the encrypted blob flows through.
-  const input: Partial<InternalUser> & { agentic_tools_raw?: StoredAgenticTools } = {
+  const input: UsersRepositoryCreate & { agentic_tools_raw?: StoredAgenticTools } = {
     email: `${Math.random().toString(36).slice(2)}@example.com`,
     name: 'resolver-test',
     agentic_tools_raw: opts.tools,

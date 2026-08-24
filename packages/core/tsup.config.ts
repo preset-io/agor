@@ -17,6 +17,7 @@ export default defineConfig({
     'git/exec': 'src/git/exec.ts',
     'api/index': 'src/api/index.ts',
     'codex/auth-file': 'src/codex/auth-file.ts', // Pure Codex auth.json schema inspection
+    'codex/credential-file': 'src/codex/credential-file.ts', // Node-only race-safe Codex credential I/O
     'config/index': 'src/config/index.ts',
     'config/agor-yml': 'src/config/agor-yml.ts', // Node-only .agor.yml file I/O
     'config/browser': 'src/config/browser.ts', // Browser-safe config utilities
@@ -111,5 +112,11 @@ export default defineConfig({
     // The curated catalog overlay is data, not code — tsup would not emit it.
     cpSync('src/mcp-catalog/curated.yaml', 'dist/mcp-catalog/curated.yaml');
     console.log('✅ Copied curated.yaml to dist/');
+
+    // Keep the versioned password corpus as one runtime asset instead of
+    // duplicating ten thousand literals into every bundled Node entry point.
+    cpSync('src/config/password-blocklist-v1.txt', 'dist/config/password-blocklist-v1.txt');
+    cpSync('src/config/password-blocklist-v1.LICENSE', 'dist/config/password-blocklist-v1.LICENSE');
+    console.log('✅ Copied offline password blocklist and license to dist/');
   },
 });

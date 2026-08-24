@@ -473,6 +473,28 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     return (await this.findVisibleBoardIds(userId)).includes(board.board_id);
   }
 
+  /** Resolve a board only when the caller can currently view it. */
+  async findVisibleById(userId: UUID, boardId: string): Promise<Board | null> {
+    try {
+      const resolvedId = await resolveByShortIdPrefix(boardId, 'Board', async (pattern) => {
+        const rows = await select(this.db, { board_id: boards.board_id })
+          .from(boards)
+          .where(and(like(boards.board_id, pattern), this.visibleBoardCondition(userId)))
+          .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
+          .all();
+        return rows.map((row: { board_id: string }) => row.board_id);
+      });
+      const [board] = await this.findAll({
+        boardIds: [resolvedId as BoardID],
+        visibleToUserId: userId,
+      });
+      return board ?? null;
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return null;
+      throw error;
+    }
+  }
+
   async getOwners(boardId: string): Promise<UUID[]> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);

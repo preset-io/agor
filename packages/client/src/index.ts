@@ -3,7 +3,9 @@
  *
  * Usage:
  *   import { createClient } from '@agor-live/client';
- *   const client = createClient('http://localhost:3030');
+ *   const client = createClient('http://localhost:3030', true, {
+ *     socketAuthentication: { accessToken }
+ *   });
  */
 
 import {
@@ -42,24 +44,15 @@ import {
   type ToolExecutionState,
 } from './reactive-session';
 
-export type {
-  AgorClient,
-  AgorService,
-  BoardsService,
-  BranchesService,
-  ClientInput,
-  FindResult,
-  GatewayChannelsService,
-  MessagesService,
-  ReposCloneService,
-  ReposLocalService,
-  ReposService,
-  SchedulesService,
-  ServiceTypes,
-  SessionsService,
-  TasksService,
-} from '@agor/core/client';
+// @agor/core/client is the canonical browser-safe client surface. Keep this
+// wildcard so new public core client types do not require a synchronized list.
 export * from '@agor/core/client';
+
+// Derive this public alias from the function we wrap instead of asking the DTS
+// bundler to resolve the same named type through @agor/core's source and
+// declaration export conditions. This keeps clean packaged builds deterministic
+// while preserving the exact core client contract.
+export type AuthenticatedAgorClient = Awaited<ReturnType<typeof createCoreRestClient>>;
 
 // Preserve the published client contract while keeping registry values package-owned.
 export const TOOL_API_KEY_NAMES: Partial<Record<AgenticToolName, ApiKeyName>> =
@@ -70,13 +63,6 @@ export const AGENTIC_TOOL_KEY_CREATION_URL: Partial<Record<AgenticToolName, stri
   PRIVATE_AGENTIC_TOOL_KEY_CREATION_URL;
 export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapabilities> =
   PRIVATE_AGENTIC_TOOL_CAPABILITIES;
-// `shortId` is the canonical display helper (always SHORT_ID_LENGTH chars).
-// Use it for any UUID rendered to a user — URLs, pills, logs, notifications.
-// `toShortId(id, length)` is the lower-level primitive for rare cases that
-// need a non-canonical length (e.g. `findMinimumPrefixLength`).
-export { shortId } from '@agor/core/client';
-export { isValidSlug, REPO_SLUG_PATTERN } from '@agor/core/config/browser';
-export type { PaginatedResult } from '@agor/core/types';
 export * from './models';
 export type {
   ReactiveAgorClient,
@@ -99,7 +85,7 @@ export function createClient(...args: Parameters<typeof createCoreClient>): Reac
 
 export async function createRestClient(
   ...args: Parameters<typeof createCoreRestClient>
-): Promise<CoreAgorClient> {
+): Promise<AuthenticatedAgorClient> {
   return createCoreRestClient(...args);
 }
 

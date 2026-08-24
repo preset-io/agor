@@ -8,7 +8,17 @@
  */
 
 import type { McpServer } from '@modelcontextprotocol/server';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { mockGetOAuthToken, mockFindMCPServer, mockGrantAuthority } = vi.hoisted(() => ({
+  mockGetOAuthToken: vi.fn(async () => null),
+  mockFindMCPServer: vi.fn(async (mcpServerId: string) => ({
+    mcp_server_id: mcpServerId,
+    enabled: true,
+    auth: { type: 'oauth', oauth_mode: 'per_user' },
+  })),
+  mockGrantAuthority: vi.fn(async () => true),
+}));
 
 vi.mock('../resolve-ids.js', () => ({
   resolveBoardId: async (_ctx: unknown, id: string) => id,
@@ -19,12 +29,27 @@ vi.mock('../resolve-ids.js', () => ({
 
 vi.mock('@agor/core/db', () => ({
   BranchRepository: class FakeBranchRepository {},
+  MCPServerRepository: class FakeMCPServerRepository {
+    findById = mockFindMCPServer;
+  },
   UserMCPOAuthTokenRepository: class FakeUserMCPOAuthTokenRepository {
-    getToken = vi.fn(async () => null);
+    getToken = mockGetOAuthToken;
   },
 }));
 
-import { vi } from 'vitest';
+vi.mock('../../services/mcp-oauth-grant-authority.js', () => ({
+  isMCPOAuthGrantAuthorizedForServer: mockGrantAuthority,
+}));
+
+beforeEach(() => {
+  mockGetOAuthToken.mockReset().mockResolvedValue(null);
+  mockFindMCPServer.mockReset().mockImplementation(async (mcpServerId: string) => ({
+    mcp_server_id: mcpServerId,
+    enabled: true,
+    auth: { type: 'oauth', oauth_mode: 'per_user' },
+  }));
+  mockGrantAuthority.mockReset().mockResolvedValue(true);
+});
 
 type ServiceStub = Record<string, (...args: unknown[]) => unknown>;
 function makeFakeApp(services: Record<string, ServiceStub>) {
@@ -341,6 +366,37 @@ describe('agor_mcp_servers_list', () => {
       mcp_server_id: 'owned-server',
       oauth_authenticated: false,
     });
+  });
+
+  it('does not report raw token presence when the authoritative binding is invalid', async () => {
+    mockGetOAuthToken.mockResolvedValue({
+      oauth_access_token: 'raw-but-mismatched',
+      oauth_token_expires_at: new Date(Date.now() + 60_000),
+      refresh_status: 'idle',
+    });
+    mockGrantAuthority.mockResolvedValue(false);
+    const app = makeFakeApp({
+      'mcp-servers': {
+        get: async () => ({
+          mcp_server_id: 'owned-server',
+          name: 'private-owned',
+          transport: 'http',
+          scope: 'session',
+          source: 'user',
+          owner_user_id: 'user-1',
+          enabled: true,
+          auth: { type: 'oauth' },
+        }),
+      },
+    });
+    const authStatus = await captureTool(
+      { app, userId: 'user-1', sessionId: 'sess-1' },
+      'agor_mcp_servers_auth_status'
+    );
+
+    const result = await authStatus({ mcpServerId: 'owned-server' });
+    expect(JSON.parse(result.content[0].text)).toMatchObject({ oauth_authenticated: false });
+    expect(mockGrantAuthority).toHaveBeenCalledOnce();
   });
 });
 

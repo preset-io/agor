@@ -101,6 +101,7 @@ import {
   ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
+import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import type { SessionParams } from './sessions.js';
 
 /**
@@ -391,6 +392,9 @@ function oneLineForPrompt(text: string, maxChars = 900): string {
 
 const SLACK_GATEWAY_REPLY_NOTE =
   'Note: Any assistant message you send in this current Agor session is streamed back directly to the Slack conversation. Only use outbound gateway tools when you intentionally need to start a separate thread, DM, or message.';
+
+const GATEWAY_STARTUP_BOOTSTRAP_HINT =
+  'Startup/bootstrap note: Follow any startup/bootstrap instructions defined by the working directory before answering the gateway message above.';
 
 function prependSlackGatewayReplyNote(prompt: string): string {
   if (prompt.includes(SLACK_GATEWAY_REPLY_NOTE)) return prompt;
@@ -2475,11 +2479,19 @@ export class GatewayService {
               // before handing it to the executor. This avoids spurious
               // "not authenticated" warnings for users who are one refresh away.
               const row = await this.userTokenRepo.getToken(tokenUserId, serverId as MCPServerID);
+              const bindingValid =
+                !!row && (await isMCPOAuthGrantAuthorizedForServer(this.db, server, row));
               const accessValid = !!(
-                row?.oauth_access_token &&
+                bindingValid &&
+                row?.refresh_status === 'idle' &&
+                row.oauth_access_token &&
                 (!row.oauth_token_expires_at || row.oauth_token_expires_at > new Date())
               );
-              const refreshable = !!row?.oauth_refresh_token;
+              const refreshable = !!(
+                bindingValid &&
+                row?.refresh_status !== 'ambiguous' &&
+                row?.oauth_refresh_token
+              );
               if (!accessValid && !refreshable) {
                 unauthedMcpNames.push(server.display_name || server.name);
               }
@@ -2756,6 +2768,13 @@ export class GatewayService {
       ) {
         throw new Error('Gateway listener ownership lost before Task admission');
       }
+
+      // Best-effort nudge for initial gateway delivery. Keep this after all
+      // other transformations so the hint remains the final prompt block.
+      if (created) {
+        promptText = `${promptText}\n\n${GATEWAY_STARTUP_BOOTSTRAP_HINT}`;
+      }
+
       const task = await promptService.create(
         {
           prompt: promptText,
