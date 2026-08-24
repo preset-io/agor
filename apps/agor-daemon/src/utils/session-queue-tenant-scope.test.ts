@@ -212,9 +212,17 @@ describe('session queue tenant scope', () => {
     consoleError.mockRestore();
   });
 
-  it('defers promptable-session queue drains with active tenant params', async () => {
-    const { db } = makePgDb();
-    const seen: string[] = [];
+  it('waits for commit and defers queue work with tenant identity but no retained transaction', async () => {
+    const events: string[] = [];
+    const tx = { execute: vi.fn(async () => []) };
+    const db = {
+      transaction: vi.fn(async (callback: (transaction: unknown) => Promise<unknown>) => {
+        events.push('tx:start');
+        const result = await callback(tx);
+        events.push('tx:committed');
+        return result;
+      }),
+    };
 
     const drained = new Promise<void>((resolve, reject) => {
       void runWithTenantDatabaseScope(db as never, 'tenant-active', async () => {
@@ -231,17 +239,24 @@ describe('session queue tenant scope', () => {
           },
           async (params) => {
             expect(getCurrentTenantDatabaseScope()).toBeUndefined();
-            seen.push(`tenant:${getCurrentTenantId()}`);
-            seen.push(`params:${params.tenant?.tenant_id}`);
+            events.push(`work:${getCurrentTenantId()}:${params.tenant?.tenant_id}`);
             resolve();
           },
           reject
         );
+        events.push('scheduled');
       }).catch(reject);
     });
     await drained;
 
-    expect(seen).toEqual(['tenant:tenant-active', 'params:tenant-active']);
+    expect(events).toEqual([
+      'tx:start',
+      'scheduled',
+      'tx:committed',
+      'tx:start',
+      'tx:committed',
+      'work:tenant-active:tenant-active',
+    ]);
   });
 
   it('does not defer request-less queue drains in required tenant mode without params or ALS', async () => {

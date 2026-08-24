@@ -7,7 +7,6 @@ import {
 import {
   assertTenantWritable,
   enqueueAfterTenantDatabaseCommit,
-  enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   isTenantWriteMethodName,
@@ -92,15 +91,16 @@ export function createTenantWriteAdmissionAroundHook(db: TenantScopeAwareDatabas
   return async (context: HookContext, next: () => Promise<void>): Promise<void> => {
     if (isTenantWriteMethodName(context.method)) {
       const tenantId = context.params.tenant?.tenant_id ?? getCurrentTenantId();
-      if (tenantId) {
-        try {
-          await assertTenantWriteAdmission(db, tenantId);
-        } catch (error) {
-          if (error instanceof TenantWriteGateActiveError) {
-            throw new Unavailable(error.message);
-          }
-          throw error;
+      if (!tenantId) {
+        throw new NotAuthenticated('Missing tenant context for tenant write admission');
+      }
+      try {
+        await assertTenantWriteAdmission(db, tenantId);
+      } catch (error) {
+        if (error instanceof TenantWriteGateActiveError) {
+          throw new Unavailable(error.message);
         }
+        throw error;
       }
     }
     await next();
@@ -143,57 +143,6 @@ export function assertTenantWriteAdmission(
   tenantId: string | undefined
 ): Promise<void> {
   return withFreshTenantWrite(db, tenantId, async () => undefined);
-}
-
-/**
- * Schedule asynchronous work outside the current ALS store, then re-enter a
- * fresh tenant database scope for the captured tenant. Use this for delayed
- * executor/queue/gateway work: bare setImmediate inherits possibly-committed
- * transaction objects, but a bare runWithoutTenantDatabaseScope loses Postgres
- * RLS context entirely.
- */
-export function deferWithTenantDatabaseScope(
-  db: TenantScopeAwareDatabase,
-  params: unknown,
-  work: () => Promise<void>,
-  onError?: (error: unknown) => void
-): void {
-  const tenantId = resolveTenantIdForDeferredScope(params);
-  if (!tenantId) {
-    const error = new Error('Missing tenant context for deferred tenant-scoped work');
-    if (onError) {
-      onError(error);
-    } else {
-      console.error('[tenant-db-scope] Deferred tenant-scoped work skipped:', error);
-    }
-    return;
-  }
-
-  const schedule = () => {
-    runWithoutTenantDatabaseScope(() => {
-      setImmediate(() => {
-        // Deferred tenant writer: fail closed at the write gate (see
-        // assertTenantWritable) inside the fresh transaction before the work.
-        void withFreshTenantWrite(db, tenantId, work).catch((error) => {
-          if (onError) {
-            onError(error);
-            return;
-          }
-          console.error('[tenant-db-scope] Deferred tenant-scoped work failed:', error);
-        });
-      });
-    });
-  };
-
-  // If the caller is inside a tenant DB transaction, wait until the
-  // transaction commits before opening the fresh scope. Otherwise executor
-  // startup can race ahead and read rows (sessions/tasks/messages) that are
-  // still invisible on its new connection.
-  if (enqueueTenantDatabasePostCommitCallback(async () => schedule())) {
-    return;
-  }
-
-  schedule();
 }
 
 /** Defer long orchestration work after commit with tenant identity only. */

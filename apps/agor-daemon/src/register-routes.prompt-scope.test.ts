@@ -5,14 +5,14 @@ import { describe, expect, it } from 'vitest';
 describe('prompt and widget transaction scopes', () => {
   const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
 
-  it('uses the long-route identity scope and short Task repository units for prompt admission', () => {
+  it('uses long-route admission and short Task repository units without a duplicate gate check', () => {
     const promptStart = source.indexOf("'/sessions/:id/prompt'");
     const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart - 100, promptEnd);
 
     expect(promptStart).toBeGreaterThan(0);
     expect(prompt).toContain('registerLongAuthenticatedRoute(');
-    expect(prompt).toContain('assertTenantWriteAdmission(db, promptTenantId)');
+    expect(prompt).not.toContain('assertTenantWriteAdmission(');
     expect(prompt).toContain('bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db))');
     expect(prompt).toContain(
       'isAgenticToolEnabledForTenant(db, promptTenantId, activeAgenticTool)'

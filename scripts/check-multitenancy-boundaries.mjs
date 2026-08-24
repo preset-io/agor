@@ -151,10 +151,9 @@ const checks = [
       'apps/agor-daemon/src/setup/socketio.ts': 1,
       // Event-loop flushes for the exact-token disconnect assertions above.
       'apps/agor-daemon/src/setup/socketio.test.ts': 2,
-      'apps/agor-daemon/src/utils/tenant-db-scope.test.ts': 1,
-      // The two tenant-aware deferral helpers deliberately leave the current
-      // ALS store before scheduling and then re-enter identity or DB scope.
-      'apps/agor-daemon/src/utils/tenant-db-scope.ts': 2,
+      // The tenant-aware deferral helper deliberately leaves the current ALS
+      // database store before scheduling and then re-enters tenant identity.
+      'apps/agor-daemon/src/utils/tenant-db-scope.ts': 1,
     },
   },
   {

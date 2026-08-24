@@ -15,7 +15,6 @@ import {
   createTenantDatabaseScopeAroundHook,
   createTenantWriteAdmissionAroundHook,
   deferWithTenantContext,
-  deferWithTenantDatabaseScope,
   withFreshTenantWrite,
 } from './tenant-db-scope.js';
 
@@ -106,6 +105,41 @@ describe('withFreshTenantWrite', () => {
 });
 
 describe('createTenantWriteAdmissionAroundHook', () => {
+  it('fails closed before a recognized write when tenant identity is missing', async () => {
+    const { db } = makePgDb();
+    const hook = createTenantWriteAdmissionAroundHook(db as never);
+    const next = vi.fn(async () => undefined);
+
+    await expect(hook({ method: 'create', params: {} } as never, next)).rejects.toBeInstanceOf(
+      NotAuthenticated
+    );
+
+    expect(next).not.toHaveBeenCalled();
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('composes with the installed identity-only scope without retaining its admission transaction', async () => {
+    const { db, tx } = makePgDb();
+    const identity = createTenantDatabaseScopeAroundHook({
+      db: db as never,
+      jwtSecret: 'secret',
+      config: { multi_tenancy: { mode: 'static', static_tenant_id: 'tenant-long' } },
+      transaction: false,
+    });
+    const admission = createTenantWriteAdmissionAroundHook(db as never);
+    const context = { method: 'create', params: {} } as never;
+    const next = vi.fn(async () => {
+      expect(getCurrentTenantId()).toBe('tenant-long');
+      expect(getCurrentTenantDatabaseScope()).toBeUndefined();
+    });
+
+    await identity(context, () => admission(context, next));
+
+    expect(next).toHaveBeenCalledOnce();
+    expect(db.transaction).toHaveBeenCalledOnce();
+    expect(tx.execute).toHaveBeenCalledTimes(2);
+  });
+
   it('checks a mutation in one short unit without holding it across long work', async () => {
     const { db, tx } = makePgDb();
     const hook = createTenantWriteAdmissionAroundHook(db as never);
@@ -378,133 +412,6 @@ describe('createTenantDatabaseScopeAroundHook', () => {
       tenant_id: 'tenant-a',
       source: 'explicit',
     });
-  });
-
-  it('re-enters a fresh tenant scope for deferred executor session startup', async () => {
-    const { db } = makePgDb();
-    const hook = createTenantDatabaseScopeAroundHook({
-      db: db as never,
-      jwtSecret: 'secret',
-      config: {
-        database: { dialect: 'postgresql' },
-        multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
-      },
-    });
-    const context = {
-      params: { provider: 'rest', authentication: { payload: { tenant_id: 'tenant-a' } } },
-    } as never;
-    const sessionRepo = {
-      async findById(sessionId: string) {
-        return getCurrentTenantId() === 'tenant-a'
-          ? { session_id: sessionId, tenant_id: 'tenant-a' }
-          : null;
-      },
-    };
-
-    await new Promise<void>((resolve, reject) => {
-      hook(context, async () => {
-        deferWithTenantDatabaseScope(
-          db as never,
-          (context as { params: { tenant?: { tenant_id?: string } } }).params,
-          async () => {
-            const session = await sessionRepo.findById('session-1');
-            expect(session).toEqual({ session_id: 'session-1', tenant_id: 'tenant-a' });
-            resolve();
-          },
-          reject
-        );
-      }).catch(reject);
-    });
-  });
-
-  it('waits until the active tenant transaction commits before running deferred work', async () => {
-    const events: string[] = [];
-    const tx = { execute: vi.fn(async () => []) };
-    const db = {
-      transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => {
-        events.push('tx:start');
-        const result = await callback(tx);
-        events.push('tx:committed');
-        return result;
-      }),
-    };
-
-    const done = new Promise<void>((resolve, reject) => {
-      runWithTenantDatabaseScope(db as never, 'tenant-a', async () => {
-        deferWithTenantDatabaseScope(
-          db as never,
-          {},
-          async () => {
-            events.push(`work:${getCurrentTenantId()}`);
-            resolve();
-          },
-          reject
-        );
-        events.push('scheduled');
-      }).catch(reject);
-    });
-
-    await done;
-    await new Promise((resolve) => setImmediate(resolve));
-
-    expect(events).toEqual([
-      'tx:start',
-      'scheduled',
-      'tx:committed',
-      'tx:start',
-      'tx:committed',
-      'tx:start',
-      'work:tenant-a',
-      'tx:committed',
-    ]);
-  });
-
-  it('fails deferred tenant-scoped work loudly when no tenant can be resolved', async () => {
-    const { db } = makePgDb();
-    const onError = vi.fn();
-    const work = vi.fn(async () => undefined);
-
-    deferWithTenantDatabaseScope(db as never, {}, work, onError);
-
-    expect(work).not.toHaveBeenCalled();
-    expect(onError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: 'Missing tenant context for deferred tenant-scoped work',
-      })
-    );
-  });
-
-  it('blocks deferred mutation work at the gate inside its fresh tenant transaction', async () => {
-    const work = vi.fn(async () => undefined);
-    const tx = {
-      execute: vi
-        .fn()
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
-          {
-            value_text: JSON.stringify({
-              generation: 'deferred-gate-generation',
-              acquiredAt: '2026-08-24T00:00:00.000Z',
-            }),
-          },
-        ]),
-    };
-    const db = {
-      transaction: vi.fn(async (callback: (scoped: unknown) => Promise<unknown>) => callback(tx)),
-    };
-
-    const error = await new Promise<unknown>((resolve) => {
-      deferWithTenantDatabaseScope(
-        db as never,
-        { tenant: { tenant_id: 'tenant-frozen' } },
-        work,
-        resolve
-      );
-    });
-
-    expect(error).toBeInstanceOf(TenantWriteGateActiveError);
-    expect(work).not.toHaveBeenCalled();
-    expect(db.transaction).toHaveBeenCalledOnce();
   });
 
   it('documents the failed startup mode when deferred work only exits ALS', async () => {

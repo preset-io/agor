@@ -215,7 +215,6 @@ import { buildTaskLaunchState } from './utils/task-launch-state.js';
 import { normalizeMessageSource, runExistingTask } from './utils/task-runner.js';
 import { isAgenticToolEnabledForTenant } from './utils/tenant-agentic-tool-validation.js';
 import {
-  assertTenantWriteAdmission,
   createTenantDatabaseScopeAroundHook,
   createTenantWriteAdmissionAroundHook,
   createTenantWriteGateAroundHook,
@@ -1787,7 +1786,6 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
         const promptTenantId = getCurrentTenantId();
         if (!promptTenantId) throw new Error('Missing active tenant context for prompt admission');
-        await assertTenantWriteAdmission(db, promptTenantId);
 
         // Derive external provenance server-side. Only provider-less,
         // daemon-internal producers may preserve an explicit gateway source.
