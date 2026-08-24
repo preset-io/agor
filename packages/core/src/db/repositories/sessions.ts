@@ -6,7 +6,20 @@
 
 import type { BranchID, Session, SessionID, SessionUpdate, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, like, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  lte,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, shortId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
@@ -151,6 +164,10 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         scheduled_run_at: row.scheduled_run_at ?? undefined,
         scheduled_from_branch: row.scheduled_from_branch ?? false,
         schedule_id: (row.schedule_id as UUID | null) ?? undefined,
+        scheduler_init_failure_code: row.scheduler_init_failure_code ?? undefined,
+        scheduler_init_failure_stage: row.scheduler_init_failure_stage ?? undefined,
+        scheduler_init_attempt_count: row.scheduler_init_attempt_count,
+        scheduler_init_retry_at: row.scheduler_init_retry_at?.toISOString(),
         ready_for_prompt: row.ready_for_prompt ?? false,
         archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
         archived_reason: row.archived_reason ?? undefined,
@@ -192,6 +209,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       scheduled_run_at: session.scheduled_run_at ?? null,
       scheduled_from_branch: session.scheduled_from_branch ?? false,
       schedule_id: session.schedule_id ?? null,
+      scheduler_init_failure_code: session.scheduler_init_failure_code ?? null,
+      scheduler_init_failure_stage: session.scheduler_init_failure_stage ?? null,
+      scheduler_init_attempt_count: session.scheduler_init_attempt_count ?? 0,
+      scheduler_init_retry_at: session.scheduler_init_retry_at
+        ? new Date(session.scheduler_init_retry_at)
+        : null,
       ready_for_prompt: session.ready_for_prompt ?? false,
       archived: session.archived ?? false, // Default false for new sessions
       archived_reason: session.archived_reason ?? null,
@@ -1049,7 +1072,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   /** Bounded routing-only discovery for recoverable scheduler initialization. */
   async findIncompleteScheduledRefs(
     limit = 25,
-    after?: IncompleteScheduledSessionCursor
+    after?: IncompleteScheduledSessionCursor,
+    now = Date.now()
   ): Promise<IncompleteScheduledSessionRef[]> {
     if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
       throw new RepositoryError('Incomplete scheduled Session limit must be between 1 and 1000');
@@ -1078,6 +1102,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           eq(sessions.scheduled_from_branch, true),
           isNotNull(sessions.scheduled_run_at),
           isNull(sessions.scheduler_init_completed_at),
+          or(
+            isNull(sessions.scheduler_init_failure_code),
+            and(
+              isNotNull(sessions.scheduler_init_retry_at),
+              lte(sessions.scheduler_init_retry_at, new Date(now))
+            )
+          ),
           afterCondition
         )
       )
@@ -1109,10 +1140,65 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   /** Conditional/idempotent completion marker written after schedule finalization. */
   async markScheduledInitializationComplete(sessionId: SessionID): Promise<boolean> {
     const result = await update(this.db, sessions)
-      .set({ scheduler_init_completed_at: new Date() })
+      .set({
+        scheduler_init_completed_at: new Date(),
+        scheduler_init_failure_code: null,
+        scheduler_init_failure_stage: null,
+        scheduler_init_retry_at: null,
+      })
       .where(
         and(
           eq(sessions.session_id, sessionId),
+          eq(sessions.scheduled_from_branch, true),
+          isNull(sessions.scheduler_init_completed_at)
+        )
+      )
+      .run();
+    return result.rowsAffected === 1;
+  }
+
+  /** Persist a sanitized retry diagnosis without reviving a completed occurrence. */
+  async markScheduledInitializationRetry(input: {
+    sessionId: SessionID;
+    code: string;
+    stage: string;
+    retryAt: number;
+  }): Promise<boolean> {
+    const result = await update(this.db, sessions)
+      .set({
+        scheduler_init_failure_code: input.code,
+        scheduler_init_failure_stage: input.stage,
+        scheduler_init_attempt_count: sql`${sessions.scheduler_init_attempt_count} + 1`,
+        scheduler_init_retry_at: new Date(input.retryAt),
+      })
+      .where(
+        and(
+          eq(sessions.session_id, input.sessionId),
+          eq(sessions.scheduled_from_branch, true),
+          isNull(sessions.scheduler_init_completed_at)
+        )
+      )
+      .run();
+    return result.rowsAffected === 1;
+  }
+
+  /** Permanently diagnose an occurrence while retaining its incomplete marker. */
+  async markScheduledInitializationPermanentFailure(input: {
+    sessionId: SessionID;
+    code: string;
+    stage: string;
+  }): Promise<boolean> {
+    const result = await update(this.db, sessions)
+      .set({
+        status: SessionStatus.FAILED,
+        scheduler_init_failure_code: input.code,
+        scheduler_init_failure_stage: input.stage,
+        scheduler_init_attempt_count: sql`${sessions.scheduler_init_attempt_count} + 1`,
+        scheduler_init_retry_at: null,
+      })
+      .where(
+        and(
+          eq(sessions.session_id, input.sessionId),
           eq(sessions.scheduled_from_branch, true),
           isNull(sessions.scheduler_init_completed_at)
         )
@@ -1260,7 +1346,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
               // scheduler writes its internal completion marker. Migrations
               // backfill historical Sessions so old no-Task rows do not block
               // a schedule forever.
-              isNull(sessions.scheduler_init_completed_at),
+              and(
+                isNull(sessions.scheduler_init_completed_at),
+                or(
+                  isNull(sessions.scheduler_init_failure_code),
+                  isNotNull(sessions.scheduler_init_retry_at)
+                )
+              ),
               sql`EXISTS (SELECT 1 FROM ${tasks} WHERE ${tasks.session_id} = ${sessions.session_id} AND ${taskIsActive})`
             )
           )

@@ -1433,6 +1433,51 @@ describe('SessionRepository schedule-link queries', () => {
     }
   );
 
+  dbTest('applies durable scheduler retry eligibility and permanent diagnosis', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const scheduleId = await createTestSchedule(db, branch.branch_id);
+    const retrying = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        schedule_id: scheduleId,
+        scheduled_run_at: 1_700_000_000_010,
+        scheduled_from_branch: true,
+      })
+    );
+    const permanent = await repo.create(
+      createSessionData({
+        branch_id: branch.branch_id,
+        schedule_id: scheduleId,
+        scheduled_run_at: 1_700_000_000_011,
+        scheduled_from_branch: true,
+      })
+    );
+
+    await repo.markScheduledInitializationRetry({
+      sessionId: retrying.session_id,
+      code: 'initialization_transient',
+      stage: 'prompt_admission',
+      retryAt: 20_000,
+    });
+    await repo.markScheduledInitializationPermanentFailure({
+      sessionId: permanent.session_id,
+      code: 'mcp_server_not_usable',
+      stage: 'mcp_attachment',
+    });
+
+    expect(await repo.findIncompleteScheduledRefs(10, undefined, 19_999)).toEqual([]);
+    expect(
+      (await repo.findIncompleteScheduledRefs(10, undefined, 20_000)).map((ref) => ref.session_id)
+    ).toEqual([retrying.session_id]);
+    expect(await repo.findById(permanent.session_id)).toMatchObject({
+      status: SessionStatus.FAILED,
+      scheduler_init_failure_code: 'mcp_server_not_usable',
+      scheduler_init_failure_stage: 'mcp_attachment',
+      scheduler_init_attempt_count: 1,
+    });
+  });
+
   dbTest('findScheduleRun does not match a different scheduled_run_at', async ({ db }) => {
     const repo = new SessionRepository(db);
     const branch = await createTestBranch(db);

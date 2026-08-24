@@ -375,6 +375,12 @@ export interface Session {
    */
   schedule_id?: ScheduleID;
 
+  /** Safe durable scheduler initialization diagnosis (internal lifecycle). */
+  scheduler_init_failure_code?: string;
+  scheduler_init_failure_stage?: string;
+  scheduler_init_attempt_count?: number;
+  scheduler_init_retry_at?: string;
+
   /**
    * Whether this session is ready to receive a new prompt
    *

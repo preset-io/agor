@@ -539,6 +539,119 @@ describe('scheduler HA occurrence recovery', () => {
   });
 
   dbTest(
+    'diagnoses an unusable snapshotted MCP server and does not poison future runs',
+    async ({ db }) => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        const { creator, schedule } = await seedRunnableSchedule(
+          db,
+          { email: `scheduler-owner-${generateId()}@example.test`, name: 'Schedule creator' },
+          { agentic_tool: 'claude-code' }
+        );
+        const other = await new UsersRepository(db).create({
+          email: `scheduler-other-${generateId()}@example.test`,
+          name: 'Other owner',
+        });
+        const privateServer = await new MCPServerRepository(db).create({
+          name: `scheduler-private-${generateId()}`,
+          transport: 'stdio',
+          command: 'node',
+          args: [],
+          scope: 'session',
+          source: 'user',
+          enabled: true,
+          owner_user_id: other.user_id,
+        });
+        await new ScheduleRepository(db).update(schedule.schedule_id, {
+          mcp_server_ids: [privateServer.mcp_server_id],
+        });
+        const { app, prompt } = createSchedulerApp(db);
+        const scheduler = new SchedulerService(db, app);
+
+        await expect(
+          scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).rejects.toThrow('Scheduled occurrence initialization failed');
+
+        const [poison] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+        expect(poison).toMatchObject({
+          status: SessionStatus.FAILED,
+          scheduler_init_failure_code: 'mcp_server_not_usable',
+          scheduler_init_failure_stage: 'mcp_attachment',
+          scheduler_init_attempt_count: 1,
+        });
+        expect(poison.scheduler_init_retry_at).toBeUndefined();
+        expect(
+          await new SessionRepository(db).isScheduledInitializationComplete(poison.session_id)
+        ).toBe(false);
+        expect(prompt).not.toHaveBeenCalled();
+
+        await new ScheduleRepository(db).update(schedule.schedule_id, { mcp_server_ids: [] });
+        nowSpy.mockReturnValue(NOW + 60_000);
+        await expect(
+          scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).resolves.toBeDefined();
+        expect(await new SessionRepository(db).findByScheduleId(schedule.schedule_id)).toHaveLength(
+          2
+        );
+        expect(prompt).toHaveBeenCalledOnce();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    }
+  );
+
+  dbTest(
+    'persists bounded retry backoff for transient prompt admission failure',
+    async ({ db }) => {
+      const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
+      try {
+        const { creator, schedule } = await seedRunnableSchedule(
+          db,
+          { email: `scheduler-retry-${generateId()}@example.test`, name: 'Schedule creator' },
+          { agentic_tool: 'claude-code' }
+        );
+        const { app, prompt } = createSchedulerApp(db);
+        prompt.mockRejectedValueOnce(new Error('temporary prompt boundary outage'));
+        const scheduler = new SchedulerService(db, app, { tenantId: 'default' });
+
+        await expect(
+          scheduler.executeScheduleNow({
+            scheduleId: schedule.schedule_id,
+            triggeredBy: creator.user_id,
+          })
+        ).rejects.toThrow('Scheduled occurrence initialization failed');
+
+        const [session] = await new SessionRepository(db).findByScheduleId(schedule.schedule_id);
+        expect(session).toMatchObject({
+          status: SessionStatus.IDLE,
+          scheduler_init_failure_code: 'initialization_transient',
+          scheduler_init_failure_stage: 'prompt_admission',
+          scheduler_init_attempt_count: 1,
+        });
+        expect(Date.parse(session.scheduler_init_retry_at!)).toBe(NOW + 5_000);
+
+        await (scheduler as unknown as { tick(): Promise<unknown> }).tick();
+        expect(prompt).toHaveBeenCalledOnce();
+
+        nowSpy.mockReturnValue(NOW + 5_000);
+        await (scheduler as unknown as { tick(): Promise<unknown> }).tick();
+        expect(prompt).toHaveBeenCalledTimes(2);
+        expect(
+          await new SessionRepository(db).isScheduledInitializationComplete(session.session_id)
+        ).toBe(true);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    }
+  );
+
+  dbTest(
     'allow_concurrent_runs=false does not treat a completed no-task history row as busy',
     async ({ db }) => {
       const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(NOW);
