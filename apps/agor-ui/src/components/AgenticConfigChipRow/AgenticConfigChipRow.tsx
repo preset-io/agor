@@ -318,7 +318,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           managedNote={managedNote}
           width={440}
           testid="model-chip"
-          renderContent={() => (
+          renderContent={(close) => (
             <ModelSelector
               value={resolved.modelConfig as ModelConfig | undefined}
               onChange={onModelChange}
@@ -327,6 +327,8 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
               branchId={branchId}
               catalogEnabled={catalogEnabled}
               showAdvisor={false}
+              variant="list"
+              onSelect={close}
             />
           )}
         />
