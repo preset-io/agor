@@ -15,6 +15,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import {
+  EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS,
   type ResolvedMultiTenancyConfig,
   SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
 } from '@agor/core/config';
@@ -273,10 +274,6 @@ export interface SocketIOResult {
  * user stays on the same board.
  */
 const GLOBAL_PRESENCE_EMIT_INTERVAL_MS = 10_000;
-// Longer than the executor's 60s Feathers acknowledgement deadline. The
-// authority is fenced synchronously; this timer bounds only transport cleanup.
-const EXECUTOR_REVOCATION_DRAIN_TIMEOUT_MS = 65_000;
-
 function deferExecutorTransportWork(work: () => void): void {
   // Transport-only callback: it must never perform database or tenant-owned
   // work while retaining the revoking request's async context.
@@ -363,7 +360,7 @@ function disconnectRevokedExecutorAfterTransportDrain(
   };
 
   socket.once('disconnect', onSocketDisconnect);
-  deadline = setTimeout(disconnect, EXECUTOR_REVOCATION_DRAIN_TIMEOUT_MS);
+  deadline = setTimeout(disconnect, EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS);
   deadline.unref?.();
   if (!waitForAcknowledgement) deferExecutorTransportWork(inspectTransport);
   return () => {
@@ -825,20 +822,21 @@ export function createSocketIOConfig(
       // call caused it. A next-turn/idle-transport heuristic is insufficient:
       // Feathers invokes this callback only after the service promise returns,
       // and a disconnect may otherwise overtake the response encoder.
-      socket.use?.((packet, next) => {
-        const lastIndex = packet.length - 1;
-        const acknowledgement = packet[lastIndex];
-        if (typeof acknowledgement !== 'function') {
-          next();
-          return;
-        }
-        const rpc: ExecutorRpcAcknowledgement = { socket, revoked: false };
-        packet[lastIndex] = (...args: unknown[]) => {
-          acknowledgement(...args);
-          if (rpc.revoked) rpc.acknowledgeRetirement?.();
-        };
-        executorRpcAcknowledgement.run(rpc, next);
-      });
+      if (authority?.principal.kind === 'executor')
+        socket.use?.((packet, next) => {
+          const lastIndex = packet.length - 1;
+          const acknowledgement = packet[lastIndex];
+          if (typeof acknowledgement !== 'function') {
+            next();
+            return;
+          }
+          const rpc: ExecutorRpcAcknowledgement = { socket, revoked: false };
+          packet[lastIndex] = (...args: unknown[]) => {
+            acknowledgement(...args);
+            if (rpc.revoked) rpc.acknowledgeRetirement?.();
+          };
+          executorRpcAcknowledgement.run(rpc, next);
+        });
       bindTerminalRequestJoin(feathersSocket);
       console.debug(
         `🔌 Socket.io connection established: ${socket.id} (auth: handshake, principal: ${authority?.principal.kind ?? 'invalid'}, user: ${authority?.principal.kind === 'user' ? shortId(authority.principal.userId) : 'none'}, total: ${activeConnections})`

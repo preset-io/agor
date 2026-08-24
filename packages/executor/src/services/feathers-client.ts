@@ -8,7 +8,10 @@
  */
 
 import { type AgorClient, createClient } from '@agor/core/api';
-import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
+import {
+  EXECUTOR_FEATHERS_ACK_TIMEOUT_MS,
+  SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
+} from '@agor/core/config';
 import { isTerminalTaskStatus } from '@agor/core/types';
 
 // Re-export AgorClient type for use in other executor files
@@ -20,7 +23,6 @@ const DEBUG_FEATHERS_CLIENT =
 const SERVER_DISCONNECT_RECONNECT_BASE_DELAY_MS = 1000;
 const SERVER_DISCONNECT_RECONNECT_MAX_DELAY_MS = 30_000;
 const SERVER_DISCONNECT_RECONNECT_MAX_ATTEMPTS = 8;
-const EXECUTOR_ACK_TIMEOUT_MS = 60_000;
 
 export const EXECUTOR_REQUEST_DATA_BUDGET_BYTES = SOCKET_IO_MAX_BUFFER_SIZE_BYTES - 200_000;
 
@@ -30,10 +32,7 @@ function feathersClientDebug(...args: unknown[]): void {
   }
 }
 
-export function registerExecutorClientHooks(
-  client: AgorClient,
-  onTerminalTaskAcknowledged?: () => void
-): void {
+export function registerExecutorRequestSizeGuard(client: AgorClient): void {
   client.hooks({
     before: {
       all: [
@@ -61,6 +60,14 @@ export function registerExecutorClientHooks(
         },
       ],
     },
+  });
+}
+
+export function registerTerminalTaskAcknowledgementHook(
+  client: AgorClient,
+  onTerminalTaskAcknowledged: () => void
+): void {
+  client.hooks({
     after: {
       all: [
         async (context) => {
@@ -69,7 +76,7 @@ export function registerExecutorClientHooks(
             context.method === 'patch' &&
             isTerminalTaskStatus(context.result?.status)
           ) {
-            onTerminalTaskAcknowledged?.();
+            onTerminalTaskAcknowledged();
           }
           return context;
         },
@@ -125,11 +132,12 @@ export async function createExecutorClient(
     // credential's lifetime. Every automatic reconnect performs a fresh
     // authenticated handshake with the same bearer.
     reconnectionAttempts: Number.POSITIVE_INFINITY,
-    ackTimeout: EXECUTOR_ACK_TIMEOUT_MS,
+    ackTimeout: EXECUTOR_FEATHERS_ACK_TIMEOUT_MS,
     socketAuthentication: { accessToken: sessionToken },
   });
   let terminalTaskAcknowledged = false;
-  registerExecutorClientHooks(client, () => {
+  registerExecutorRequestSizeGuard(client);
+  registerTerminalTaskAcknowledgementHook(client, () => {
     terminalTaskAcknowledged = true;
   });
 

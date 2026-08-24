@@ -115,7 +115,7 @@ describe('executor acknowledgement failure convergence', () => {
               if (typeof acknowledge === 'function') {
                 packet[packet.length - 1] = (...args: unknown[]) => {
                   acknowledge(...args);
-                  setTimeout(() => socket.disconnect(true), 0);
+                  socket.disconnect(true);
                 };
               }
             }

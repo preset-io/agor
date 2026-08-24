@@ -3,7 +3,8 @@ import { SOCKET_IO_MAX_BUFFER_SIZE_BYTES } from '@agor/core/config';
 import { describe, expect, it } from 'vitest';
 import {
   EXECUTOR_REQUEST_DATA_BUDGET_BYTES,
-  registerExecutorClientHooks,
+  registerExecutorRequestSizeGuard,
+  registerTerminalTaskAcknowledgementHook,
 } from './feathers-client.js';
 
 describe('executor transport budget', () => {
@@ -13,7 +14,7 @@ describe('executor transport budget', () => {
   });
 });
 
-describe('registerExecutorClientHooks – size guard', () => {
+describe('executor client hooks', () => {
   type HookFn = (ctx: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
   function captureHook(onTerminalTaskAcknowledged?: () => void): {
@@ -24,12 +25,13 @@ describe('registerExecutorClientHooks – size guard', () => {
     let hook: HookFn | undefined;
     let afterHook: HookFn | undefined;
     const client = {
-      hooks(config: { before: { all: HookFn[] }; after: { all: HookFn[] } }) {
-        hook = config.before.all[0];
-        afterHook = config.after.all[0];
+      hooks(config: { before?: { all: HookFn[] }; after?: { all: HookFn[] } }) {
+        hook ??= config.before?.all[0];
+        afterHook ??= config.after?.all[0];
       },
     } as unknown as AgorClient;
-    registerExecutorClientHooks(client, onTerminalTaskAcknowledged);
+    registerExecutorRequestSizeGuard(client);
+    registerTerminalTaskAcknowledgementHook(client, onTerminalTaskAcknowledged ?? (() => {}));
     if (!hook || !afterHook) throw new Error('hook was not registered');
     return { hook, afterHook, client };
   }
