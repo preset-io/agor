@@ -124,7 +124,7 @@ describe('Marketplace OAuth prompt handoff', () => {
       isCurrent: () => true,
     });
 
-    savePromptDraft(pending.sessionId, 'Draft from another tab');
+    savePromptDraft(authority.userId, pending.sessionId, 'Draft from another tab');
     resolveAttempt({
       attempt_id: pending.attemptId,
       mcp_server_id: pending.serverId,
@@ -133,9 +133,9 @@ describe('Marketplace OAuth prompt handoff', () => {
     const prompt = await claim;
 
     expect(prompt).toMatchObject({ prompt: pending.prompt, attemptId: pending.attemptId });
-    const sharedDraftAtFinalBoundary = getPromptDraft(pending.sessionId);
-    expect(getPromptDraft(pending.sessionId)).toBe('Draft from another tab');
-    expect(getPromptDraft(pending.sessionId)).toBe(sharedDraftAtFinalBoundary);
+    const sharedDraftAtFinalBoundary = getPromptDraft(authority.userId, pending.sessionId);
+    expect(getPromptDraft(authority.userId, pending.sessionId)).toBe('Draft from another tab');
+    expect(getPromptDraft(authority.userId, pending.sessionId)).toBe(sharedDraftAtFinalBoundary);
     expect(consumeMarketplacePromptSuggestion(pending.sessionId, authority)).toBe(pending.prompt);
     expect(consumeMarketplacePromptSuggestion(pending.sessionId, authority)).toBeNull();
   });

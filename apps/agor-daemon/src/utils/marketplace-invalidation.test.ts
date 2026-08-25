@@ -1,6 +1,7 @@
 import type { Application } from '@agor/core/feathers';
 import type { HookContext, UserID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { tenantUserChannelName } from '../realtime/routing';
 import {
   captureMarketplaceInvalidationTargets,
   emitMarketplaceInvalidation,
@@ -16,8 +17,8 @@ describe('Marketplace invalidation routing', () => {
     emitMarketplaceInvalidation(app, 'tenant-a', ['alice', 'removed-member', 'alice']);
 
     expect(to.mock.calls.map(([room]) => room)).toEqual([
-      'tenant:tenant-a:user:alice',
-      'tenant:tenant-a:user:removed-member',
+      tenantUserChannelName('tenant-a', 'alice'),
+      tenantUserChannelName('tenant-a', 'removed-member'),
     ]);
     expect(emit).toHaveBeenCalledTimes(2);
     for (const [event, payload] of emit.mock.calls) {
@@ -54,8 +55,8 @@ describe('Marketplace invalidation routing', () => {
     users.listUserIds.mockResolvedValue([]);
     publishCapturedMarketplaceInvalidation(context, app);
 
-    expect(to).toHaveBeenCalledWith('tenant:tenant-a:user:removed-owner');
-    expect(to).toHaveBeenCalledWith('tenant:tenant-a:user:removed-group-member');
+    expect(to).toHaveBeenCalledWith(tenantUserChannelName('tenant-a', removedOwner));
+    expect(to).toHaveBeenCalledWith(tenantUserChannelName('tenant-a', removedGroupMember));
     expect(users.listUserIds).toHaveBeenCalledOnce();
   });
 });

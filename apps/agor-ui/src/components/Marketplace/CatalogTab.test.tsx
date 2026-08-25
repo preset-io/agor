@@ -4,8 +4,8 @@ import { sessionPath } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getPromptDraft } from '../../utils/promptDrafts';
 import { consumeMarketplacePromptSuggestion } from '../../utils/marketplaceOAuthPrompt';
+import { getPromptDraft } from '../../utils/promptDrafts';
 import { CatalogTab } from './CatalogTab';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
