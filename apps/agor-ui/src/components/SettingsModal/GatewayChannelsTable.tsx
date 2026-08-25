@@ -1,6 +1,16 @@
 // Import the manifest helpers from the connector-free subpath so the browser
 // bundle never pulls in @slack/web-api / @slack/socket-mode (node-only) via the
 // gateway barrel.
+
+import {
+  buildDiscordSetupArtifact,
+  DISCORD_DEVELOPER_PORTAL_URL,
+  DISCORD_MINIMUM_BOT_PERMISSION_BITMASK,
+  DISCORD_MINIMUM_BOT_PERMISSION_NAMES,
+  type DiscordSetupDecisions,
+  discordBotInviteUrl,
+  evaluateDiscordConnectionVerification,
+} from '@agor/core/gateway/discord-setup';
 import {
   buildSlackManifest,
   requiredBotEvents,
@@ -42,7 +52,6 @@ import {
 } from '@agor-live/client';
 import {
   CheckCircleOutlined,
-  CloseCircleOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -599,13 +608,28 @@ const CompactAlert: React.FC<{
 const ConnectionTestResultView: React.FC<{ result: GatewayConnectionTestResult }> = ({
   result,
 }) => {
-  const hasFollowups = result.failures.length > 0 || result.notVerifiable.length > 0;
+  const verification = result.verification;
+  const hasVerificationWarning = verification?.status === 'warning';
+  const hasFollowups =
+    result.failures.length > 0 || result.notVerifiable.length > 0 || hasVerificationWarning;
   return (
     <div style={{ marginBottom: 16 }}>
       <CompactAlert
-        type={result.ok ? 'success' : 'error'}
-        icon={result.ok ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-        heading={result.ok ? 'Connection succeeded' : 'Connection failed'}
+        type={result.ok && !hasVerificationWarning ? 'success' : result.ok ? 'warning' : 'error'}
+        icon={
+          result.ok && !hasVerificationWarning ? (
+            <CheckCircleOutlined />
+          ) : (
+            <ExclamationCircleOutlined />
+          )
+        }
+        heading={
+          !result.ok
+            ? 'Connection failed'
+            : hasVerificationWarning
+              ? 'Connection reachable; verification incomplete'
+              : 'Connection succeeded'
+        }
         description={
           <>
             {result.team && (
@@ -644,6 +668,12 @@ const ConnectionTestResultView: React.FC<{ result: GatewayConnectionTestResult }
                 ))}
               </Typography.Paragraph>
             )}
+            {hasVerificationWarning &&
+              verification?.warnings.map((warning) => (
+                <div key={warning}>
+                  <strong>Verification warning:</strong> {warning}
+                </div>
+              ))}
           </>
         }
         style={{ marginBottom: hasFollowups ? 12 : 0 }}
@@ -1480,8 +1510,9 @@ const DiscordSetupFields: React.FC<{
   userById: Map<string, User>;
   testResult: GatewayConnectionTestResult | null;
   testLoading: boolean;
+  draftCreated?: boolean;
   onTest: () => void;
-}> = ({ mode, step, editingChannel, userById, testResult, testLoading, onTest }) => {
+}> = ({ mode, step, editingChannel, userById, testResult, testLoading, draftCreated, onTest }) => {
   const form = Form.useFormInstance();
   const config = editingChannel?.config as Record<string, unknown> | undefined;
   const enabled = (Form.useWatch('enabled', form) as boolean | undefined) ?? true;
@@ -1489,6 +1520,11 @@ const DiscordSetupFields: React.FC<{
     (Form.useWatch('discord_align_users', form) as boolean | undefined) ??
     (config?.align_discord_users as boolean | undefined) ??
     false;
+  const applicationId = Form.useWatch('discord_application_id', form) as string | undefined;
+  const allowedUserIds =
+    (Form.useWatch('discord_allowed_user_ids', form) as string[] | undefined) ?? [];
+  const allowedRoleIds =
+    (Form.useWatch('discord_allowed_role_ids', form) as string[] | undefined) ?? [];
   const show = (stepNumber: number) => mode === 'edit' || step === stepNumber;
   const sectionStyle = (stepNumber: number): React.CSSProperties => ({
     display: show(stepNumber) ? undefined : 'none',
@@ -1532,6 +1568,12 @@ const DiscordSetupFields: React.FC<{
     }
     return Promise.resolve();
   };
+  const validateAuthorAllowlist = (_: unknown, value: unknown) => {
+    if (allowedUserIds.length === 0 && allowedRoleIds.length === 0) {
+      return Promise.reject(new Error('Add at least one allowed user or role ID.'));
+    }
+    return validateSnowflakes(_, value);
+  };
   return (
     <div style={{ paddingTop: 8 }}>
       <CompactAlert
@@ -1549,7 +1591,7 @@ const DiscordSetupFields: React.FC<{
               <span>
                 Open the{' '}
                 <Typography.Link
-                  href="https://discord.com/developers/applications"
+                  href={DISCORD_DEVELOPER_PORTAL_URL}
                   target="_blank"
                   rel="noopener noreferrer"
                 >
@@ -1563,6 +1605,23 @@ const DiscordSetupFields: React.FC<{
             }
             style={{ marginBottom: 16 }}
           />
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+            Required Gateway Intents: Guilds, Guild Messages, and Message Content. Minimum bot
+            permissions ({DISCORD_MINIMUM_BOT_PERMISSION_BITMASK}):{' '}
+            {DISCORD_MINIMUM_BOT_PERMISSION_NAMES.join(', ')}.
+            {applicationId ? (
+              <>
+                {' '}
+                <Typography.Link
+                  href={discordBotInviteUrl(applicationId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open the exact bot invite URL
+                </Typography.Link>
+              </>
+            ) : null}
+          </Typography.Paragraph>
           <Form.Item
             label="Application ID"
             name="discord_application_id"
@@ -1580,7 +1639,6 @@ const DiscordSetupFields: React.FC<{
           <Form.Item
             name="discord_message_content_enabled"
             valuePropName="checked"
-            initialValue={true}
             rules={[
               {
                 validator: (_, value) =>
@@ -1630,7 +1688,7 @@ const DiscordSetupFields: React.FC<{
           <Form.Item
             label="Allowed user IDs"
             name="discord_allowed_user_ids"
-            rules={[{ validator: validateSnowflakes }]}
+            rules={[{ validator: validateAuthorAllowlist }]}
             tooltip="At least one user or role allowlist entry is required."
           >
             <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="User snowflakes" />
@@ -1638,7 +1696,7 @@ const DiscordSetupFields: React.FC<{
           <Form.Item
             label="Allowed role IDs"
             name="discord_allowed_role_ids"
-            rules={[{ validator: validateSnowflakes }]}
+            rules={[{ validator: validateAuthorAllowlist }]}
             tooltip="At least one user or role allowlist entry is required."
           >
             <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="Role snowflakes" />
@@ -1772,18 +1830,21 @@ const DiscordSetupFields: React.FC<{
             style={{ marginBottom: 16 }}
           />
           <Form.Item
-            label="Bot token"
+            label="Discord bot token"
             name="discord_bot_token"
             rules={
-              mode === 'create' && enabled !== false
+              mode === 'create' && draftCreated === true && enabled !== false
                 ? [{ required: true, message: 'Bot token is required' }]
                 : []
             }
             tooltip="Discord Developer Portal → Bot. Stored encrypted; never paste it into chat."
           >
             <Input.Password
+              disabled={mode === 'create' && draftCreated !== true}
               placeholder={
-                mode === 'edit' && isSecretStored(config, 'bot_token') ? '••••••••' : 'Bot token'
+                mode === 'edit' && isSecretStored(config, 'bot_token')
+                  ? '••••••••'
+                  : 'Discord bot token'
               }
             />
           </Form.Item>
@@ -1816,47 +1877,107 @@ const DiscordSetupFields: React.FC<{
   );
 };
 
-function discordConfigFromFormValues(values: Record<string, unknown>): Record<string, unknown> {
-  const userMap = (() => {
-    if (typeof values.discord_user_map !== 'string' || !values.discord_user_map.trim())
-      return undefined;
-    try {
-      return JSON.parse(values.discord_user_map) as Record<string, string>;
-    } catch {
-      return undefined;
-    }
-  })();
+function readFormString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readFormStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const strings = value.filter((item): item is string => typeof item === 'string');
+  return strings.length === value.length ? strings : [];
+}
+
+function readFormBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return fallback;
+}
+
+function readFormNumber(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function readFormStringRecord(value: unknown): Record<string, string> | undefined {
+  const serialized = readFormString(value);
+  if (!serialized?.trim()) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    return undefined;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined;
+  }
+
+  const record: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(parsed)) {
+    if (typeof entry !== 'string') return undefined;
+    record[key] = entry;
+  }
+  return record;
+}
+
+function toDiscordSetupDecisions(values: Record<string, unknown>): DiscordSetupDecisions {
+  const alignUsers = readFormBoolean(values.discord_align_users, false);
   const catch_up = {
-    max_pages: values.discord_catch_up_max_pages ?? DEFAULT_DISCORD_CATCH_UP.max_pages,
-    max_messages: values.discord_catch_up_max_messages ?? DEFAULT_DISCORD_CATCH_UP.max_messages,
-    max_prompt_bytes:
-      values.discord_catch_up_max_prompt_bytes ?? DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes,
-    request_timeout_ms:
-      values.discord_catch_up_request_timeout_ms ?? DEFAULT_DISCORD_CATCH_UP.request_timeout_ms,
-    rate_limit_max_retries:
-      values.discord_catch_up_rate_limit_max_retries ??
-      DEFAULT_DISCORD_CATCH_UP.rate_limit_max_retries,
-    rate_limit_max_total_delay_ms:
-      values.discord_catch_up_rate_limit_max_total_delay_ms ??
-      DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms,
+    max_pages: readFormNumber(
+      values.discord_catch_up_max_pages,
+      DEFAULT_DISCORD_CATCH_UP.max_pages
+    ),
+    max_messages: readFormNumber(
+      values.discord_catch_up_max_messages,
+      DEFAULT_DISCORD_CATCH_UP.max_messages
+    ),
+    max_prompt_bytes: readFormNumber(
+      values.discord_catch_up_max_prompt_bytes,
+      DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes
+    ),
+    request_timeout_ms: readFormNumber(
+      values.discord_catch_up_request_timeout_ms,
+      DEFAULT_DISCORD_CATCH_UP.request_timeout_ms
+    ),
+    rate_limit_max_retries: readFormNumber(
+      values.discord_catch_up_rate_limit_max_retries,
+      DEFAULT_DISCORD_CATCH_UP.rate_limit_max_retries
+    ),
+    rate_limit_max_total_delay_ms: readFormNumber(
+      values.discord_catch_up_rate_limit_max_total_delay_ms,
+      DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms
+    ),
   };
+  const userMap = readFormStringRecord(values.discord_user_map);
+
   return {
-    ...(values.discord_bot_token ? { bot_token: values.discord_bot_token } : {}),
-    application_id: values.discord_application_id,
-    guild_id: values.discord_guild_id,
-    allowed_channel_ids: values.discord_allowed_channel_ids,
-    allowed_user_ids: values.discord_allowed_user_ids ?? [],
-    allowed_role_ids: values.discord_allowed_role_ids ?? [],
-    message_content_enabled: values.discord_message_content_enabled ?? true,
-    thread_mode: values.discord_thread_mode ?? 'public_thread_per_summon',
-    thread_auto_archive_minutes: values.discord_thread_auto_archive_minutes ?? 1440,
-    align_discord_users: values.discord_align_users ?? false,
-    ...(values.discord_align_users && userMap ? { user_map: userMap } : {}),
-    catch_up,
-    files: false,
-    agent_tools: [],
-    outbound_enabled: values.discord_outbound_enabled ?? false,
-    default_outbound_target: values.discord_default_outbound_target || null,
+    applicationId: readFormString(values.discord_application_id) ?? '',
+    guildId: readFormString(values.discord_guild_id) ?? '',
+    messageContentAcknowledged: readFormBoolean(values.discord_message_content_enabled, false),
+    allowedChannelIds: readFormStringArray(values.discord_allowed_channel_ids),
+    allowedUserIds: readFormStringArray(values.discord_allowed_user_ids),
+    allowedRoleIds: readFormStringArray(values.discord_allowed_role_ids),
+    agorUserId: alignUsers ? null : readFormString(values.agor_user_id),
+    alignUsers,
+    userMap: alignUsers ? userMap : undefined,
+    outboundEnabled: readFormBoolean(values.discord_outbound_enabled, false),
+    defaultOutboundTarget: readFormString(values.discord_default_outbound_target) || null,
+    catchUp: catch_up,
+    threadAutoArchiveMinutes: readFormNumber(values.discord_thread_auto_archive_minutes, 1440),
+  };
+}
+
+function discordConfigFromFormValues(values: Record<string, unknown>): Record<string, unknown> {
+  const artifact = buildDiscordSetupArtifact(toDiscordSetupDecisions(values));
+  const botToken = readFormString(values.discord_bot_token);
+  return {
+    ...artifact.draft.config,
+    ...(botToken ? { bot_token: botToken } : {}),
   };
 }
 
@@ -1883,6 +2004,8 @@ const ChannelFormFields: React.FC<{
   /** Slack guided-setup state (create mode only). */
   connectionTestResult: GatewayConnectionTestResult | null;
   connectionTestLoading: boolean;
+  /** Discord draft id; token entry is write-only and starts after draft creation. */
+  discordDraftId?: string | null;
   onSlackTest: () => void;
   onShortcutTest: () => void;
   onDiscordTest: () => void;
@@ -1907,6 +2030,7 @@ const ChannelFormFields: React.FC<{
   githubError,
   connectionTestResult,
   connectionTestLoading,
+  discordDraftId,
   onSlackTest,
   onShortcutTest,
   onDiscordTest,
@@ -2150,6 +2274,7 @@ const ChannelFormFields: React.FC<{
             userById={userById}
             testResult={connectionTestResult}
             testLoading={connectionTestLoading}
+            draftCreated={mode === 'edit' || Boolean(discordDraftId)}
             onTest={onDiscordTest}
           />
         )}
@@ -3504,6 +3629,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // ── Unified create-wizard step (0 = universal "Channel" step) ──
   const [createStep, setCreateStep] = useState(0);
   const [creating, setCreating] = useState(false);
+  const [discordDraftId, setDiscordDraftId] = useState<string | null>(null);
 
   // ── GitHub App Setup State (create mode) ──
   const [githubLoading, setGithubLoading] = useState(false);
@@ -3604,6 +3730,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // Reset the whole create flow back to its universal first step.
   const resetCreateFlow = useCallback(() => {
     setCreateStep(0);
+    setDiscordDraftId(null);
     resetGithubState();
     resetConnectionTest();
   }, [resetGithubState, resetConnectionTest]);
@@ -3645,10 +3772,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       channelType: ChannelType,
       config: Record<string, unknown>,
       gatewayChannelId?: string
-    ) => {
+    ): Promise<GatewayConnectionTestResult | null> => {
       if (!client) {
         showError('Not connected to server');
-        return;
+        return null;
       }
       setConnectionTestLoading(true);
       setConnectionTestResult(null);
@@ -3665,8 +3792,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
           .service('gateway-channels/test')
           .create(payload)) as GatewayConnectionTestResult;
         setConnectionTestResult(result);
+        return result;
       } catch (error) {
-        setConnectionTestResult({
+        const result: GatewayConnectionTestResult = {
           ok: false,
           failures: [
             {
@@ -3675,7 +3803,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             },
           ],
           notVerifiable: [],
-        });
+        };
+        setConnectionTestResult(result);
+        return result;
       } finally {
         setConnectionTestLoading(false);
       }
@@ -3730,12 +3860,30 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     const form = editModalOpen ? editForm : createForm;
     const values = form.getFieldsValue(true);
     const config = discordConfigFromFormValues(values);
+    const draftId = editModalOpen ? undefined : (discordDraftId ?? undefined);
+    if (draftId && client) {
+      // A Discord draft is the probe authority. Persist the complete form
+      // configuration while it is still disabled, then probe only the stored
+      // configuration so a later enable cannot bind a different draft.
+      await client.service('gateway-channels').patch(draftId, {
+        config,
+        enabled: false,
+      });
+    }
     await runConnectionProbe(
       'discord',
       config,
-      editModalOpen ? (editingChannel?.id ?? undefined) : undefined
+      editModalOpen ? (editingChannel?.id ?? undefined) : draftId
     );
-  }, [editModalOpen, editForm, createForm, editingChannel, runConnectionProbe]);
+  }, [
+    client,
+    editModalOpen,
+    editForm,
+    createForm,
+    editingChannel,
+    discordDraftId,
+    runConnectionProbe,
+  ]);
 
   // Probe an existing Slack channel via the `gateway-channels/test` service. The
   // backend resolves the stored decrypted tokens from `gatewayChannelId`, so the
@@ -3937,14 +4085,58 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       // panels that validateFields() may omit.
       const values = createForm.getFieldsValue(true);
       if (values.channel_type === 'discord') {
-        if (values.enabled !== false) {
-          const validation = validateDiscordConfig(discordConfigFromFormValues(values), {
-            requireBotToken: true,
-          });
+        const discordConfig = discordConfigFromFormValues(values);
+        if (!discordDraftId) {
+          const validation = validateDiscordConfig(discordConfig, { requireBotToken: false });
           if (!validation.ok) {
-            throw new Error(`Invalid Discord configuration: ${validation.errors.join('; ')}`);
+            throw new Error(`Invalid Discord draft: ${validation.errors.join('; ')}`);
           }
+          const draftData = extractFormData(values, undefined, selectedAgent);
+          delete draftData.config.bot_token;
+          draftData.enabled = false;
+          if (!client) {
+            showError('Not connected to server');
+            return;
+          }
+          const created = (await client
+            .service('gateway-channels')
+            .create(draftData)) as GatewayChannel;
+          if (!created?.id) throw new Error('Discord draft did not return a channel id');
+          setDiscordDraftId(created.id);
+          showSuccess('Discord draft created. Enter the bot token in the secure field, then test.');
+          return;
         }
+        if (!values.discord_bot_token) {
+          throw new Error('Discord bot token is required after the draft is created');
+        }
+        if (!client) {
+          showError('Not connected to server');
+          return;
+        }
+        // Persist the exact form configuration in the encrypted, disabled
+        // draft. The following probe reads that stored draft, and the service
+        // performs a generation-fenced verification again before enabling.
+        await client.service('gateway-channels').patch(discordDraftId, {
+          config: discordConfig,
+          enabled: false,
+        });
+        const result = await runConnectionProbe('discord', {}, discordDraftId);
+        const verification = evaluateDiscordConnectionVerification(
+          result,
+          values.discord_application_id
+        );
+        if (!verification.verified) {
+          throw new Error(
+            `${verification.failure.warnings.join('; ') || verification.failure.reason}; the draft remains disabled`
+          );
+        }
+        await client.service('gateway-channels').patch(discordDraftId, { enabled: true });
+        showSuccess('Discord gateway verified and enabled.');
+        createForm.resetFields();
+        setCreateModalOpen(false);
+        setChannelType('slack');
+        resetCreateFlow();
+        return;
       }
       // The whitelist only applies when the wizard limits public channels to a
       // specific set; "all public channels" (or no public channels) must clear it.
@@ -4433,7 +4625,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             <Space style={{ marginLeft: 'auto' }}>
               <Button onClick={closeCreateModal}>Cancel</Button>
               <Button type="primary" loading={creating} onClick={handleCreatePrimary}>
-                {isFinalCreateStep ? 'Create channel' : 'Continue'}
+                {isFinalCreateStep
+                  ? channelType === 'discord'
+                    ? discordDraftId
+                      ? 'Verify and enable'
+                      : 'Create secure draft'
+                    : 'Create channel'
+                  : 'Continue'}
               </Button>
             </Space>
           </div>
@@ -4464,6 +4662,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             githubError={githubError}
             connectionTestResult={connectionTestResult}
             connectionTestLoading={connectionTestLoading}
+            discordDraftId={discordDraftId}
             onSlackTest={handleSlackTest}
             onShortcutTest={handleShortcutTest}
             onDiscordTest={handleDiscordTest}
@@ -4525,6 +4724,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             githubError={null}
             connectionTestResult={connectionTestResult}
             connectionTestLoading={connectionTestLoading}
+            discordDraftId={null}
             onSlackTest={handleSlackEditTest}
             onShortcutTest={handleShortcutTest}
             onDiscordTest={handleDiscordTest}

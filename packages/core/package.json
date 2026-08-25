@@ -406,6 +406,12 @@
       "import": "./dist/gateway/connectors/slack-manifest.js",
       "require": "./dist/gateway/connectors/slack-manifest.cjs"
     },
+    "./gateway/discord-setup": {
+      "source": "./src/gateway/connectors/discord-setup.ts",
+      "types": "./dist/gateway/connectors/discord-setup.d.ts",
+      "import": "./dist/gateway/connectors/discord-setup.js",
+      "require": "./dist/gateway/connectors/discord-setup.cjs"
+    },
     "./git/pure": {
       "source": "./src/git/pure.ts",
       "types": "./dist/git/pure.d.ts",

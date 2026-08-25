@@ -42,6 +42,7 @@ vi.mock('@agor/core/gateway', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/gateway')>();
   return {
     ...actual,
+    gatewayFailureCode: vi.fn(() => 'provider_request_failed'),
     getConnector: vi.fn(),
   };
 });
@@ -249,27 +250,24 @@ function makeGatewayHarness(args: {
         return true;
       }
     ),
-    mergeGatewayReplyAliases: vi.fn(
-      async (_id: string, aliases: string[], _reason: string, lastMessageId?: string) => {
-        if (mapping) {
-          const current = (mapping.metadata as Record<string, unknown>) ?? {};
-          const previous = Array.isArray(current.gateway_reply_aliases)
-            ? current.gateway_reply_aliases.filter(
-                (alias): alias is string => typeof alias === 'string'
-              )
-            : [];
-          mapping = {
-            ...mapping,
-            metadata: {
-              ...current,
-              gateway_reply_aliases: [...new Set([...previous, ...aliases])],
-              ...(lastMessageId ? { gateway_last_message_id: lastMessageId } : {}),
-            },
-          } as ThreadSessionMap;
-        }
-        return mapping;
+    mergeGatewayReplyAliases: vi.fn(async (_id: string, aliases: string[]) => {
+      if (mapping) {
+        const current = (mapping.metadata as Record<string, unknown>) ?? {};
+        const previous = Array.isArray(current.gateway_reply_aliases)
+          ? current.gateway_reply_aliases.filter(
+              (alias): alias is string => typeof alias === 'string'
+            )
+          : [];
+        mapping = {
+          ...mapping,
+          metadata: {
+            ...current,
+            gateway_reply_aliases: [...new Set([...previous, ...aliases])],
+          },
+        } as ThreadSessionMap;
       }
-    ),
+      return mapping;
+    }),
     mergeMetadata: vi.fn(async (_id: string, patch: Record<string, unknown>) => {
       if (mapping) {
         mapping = {
@@ -280,9 +278,9 @@ function makeGatewayHarness(args: {
       return mapping;
     }),
     findById: vi.fn(async () => mapping),
-    advanceLastAdmittedProviderCursor: vi.fn(async (_id: string, cursor: string) => {
+    advanceDiscordLastAdmittedMessageId: vi.fn(async (_id: string, cursor: string) => {
       if (mapping)
-        mapping = { ...mapping, last_admitted_provider_cursor: cursor } as ThreadSessionMap;
+        mapping = { ...mapping, discord_last_admitted_message_id: cursor } as ThreadSessionMap;
       return true;
     }),
     create: vi.fn(async (data: Partial<ThreadSessionMap>) => {
@@ -1796,7 +1794,7 @@ describe('GatewayService durable listener delivery fences', () => {
     ).resolves.toMatchObject({ success: true, taskId });
     expect(history).not.toHaveBeenCalled();
     expect(harness.promptCreate).not.toHaveBeenCalled();
-    expect(harness.threadMapRepo.advanceLastAdmittedProviderCursor).toHaveBeenCalledWith(
+    expect(harness.threadMapRepo.advanceDiscordLastAdmittedMessageId).toHaveBeenCalledWith(
       mapping.id,
       '923456789012345678'
     );
@@ -2665,12 +2663,12 @@ describe('GatewayService Discord beta routing', () => {
     const persistedMapping = await harness.threadMapRepo.findById('map-new');
     expect(JSON.stringify(persistedMapping?.metadata)).not.toContain('ambient context');
     expect(JSON.stringify(persistedMapping?.metadata)).not.toContain('live summon');
-    expect(harness.threadMapRepo.advanceLastAdmittedProviderCursor).toHaveBeenCalledWith(
+    expect(harness.threadMapRepo.advanceDiscordLastAdmittedMessageId).toHaveBeenCalledWith(
       'map-new',
       '923456789012345678'
     );
     expect(harness.promptCreate.mock.invocationCallOrder[0]).toBeLessThan(
-      harness.threadMapRepo.advanceLastAdmittedProviderCursor.mock.invocationCallOrder[0]
+      harness.threadMapRepo.advanceDiscordLastAdmittedMessageId.mock.invocationCallOrder[0]
     );
   });
 
@@ -2772,7 +2770,65 @@ describe('GatewayService Discord beta routing', () => {
       })
     ).rejects.toThrow('history coverage unavailable');
     expect(harness.promptCreate).not.toHaveBeenCalled();
-    expect(harness.threadMapRepo.advanceLastAdmittedProviderCursor).not.toHaveBeenCalled();
+    expect(harness.threadMapRepo.advanceDiscordLastAdmittedMessageId).not.toHaveBeenCalled();
+  });
+
+  it('rejects malformed stored Discord starter metadata before history or admission', async () => {
+    const fetchProviderHistory = vi.fn(async () => ({
+      threadId: '723456789012345678',
+      complete: true,
+      messages: [],
+    }));
+    const mapping = makeMapping({
+      channel_id: discordChannel.id,
+      thread_id: '723456789012345678',
+      metadata: {
+        discord_thread: {
+          guild_id: '223456789012345678',
+          parent_channel_id: '323456789012345678',
+          thread_channel_id: '723456789012345678',
+          starter_message_id: 'malformed',
+        },
+      },
+    });
+    const harness = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: mapping,
+      connector: { fetchProviderHistory },
+    });
+    (harness.service as unknown as { durableListenerOwnership: boolean }).durableListenerOwnership =
+      true;
+    const inbound = validDiscordInbound();
+    inbound.thread_id = '723456789012345678';
+    inbound.metadata = {
+      ...inbound.metadata,
+      discord_channel_id: '723456789012345678',
+      discord_message_id: '923456789012345678',
+      discord_is_thread: true,
+      discord_parent_channel_id: '323456789012345678',
+      discord_thread_id: '723456789012345678',
+      discord_thread: {
+        guild_id: '223456789012345678',
+        parent_channel_id: '323456789012345678',
+        thread_channel_id: '723456789012345678',
+        starter_message_id: '723456789012345678',
+      },
+      discord_thread_type: 11,
+      discord_thread_accessible: true,
+      discord_starter_message_accessible: true,
+    };
+
+    await expect(
+      harness.service.create({
+        ...inbound,
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000399' as never,
+        listener_claim_token: 'opaque-owner',
+        listener_channel_id: discordChannel.id,
+      })
+    ).rejects.toThrow('Stored Discord authority metadata was malformed');
+    expect(fetchProviderHistory).not.toHaveBeenCalled();
+    expect(harness.promptCreate).not.toHaveBeenCalled();
+    expect(harness.threadMapRepo.advanceDiscordLastAdmittedMessageId).not.toHaveBeenCalled();
   });
 
   it('labels a proactive Discord seed with Discord context in the initial prompt', async () => {
@@ -2864,7 +2920,8 @@ describe('GatewayService Discord beta routing', () => {
     expect(providerMessages).not.toContain('discord.example.test');
     expect(providerMessages).not.toContain('/srv/agor/secrets');
     expect(providerMessages).not.toContain('\nunsafe');
-    expect(providerMessages).toContain('[redacted-discord-token]');
+    expect(providerMessages).toContain('provider_request_failed');
+    expect(providerMessages).not.toContain('Bot');
     errorLog.mockRestore();
   });
 
@@ -3165,7 +3222,7 @@ describe('GatewayService Discord beta routing', () => {
     ]);
   });
 
-  it('stores provider-neutral aliases for every structured response chunk', async () => {
+  it('uses the canonical public Discord thread without storing ordinary response aliases', async () => {
     const sendMessage = vi.fn(async () => ({
       messageId: '623456789012345678',
       messageIds: ['623456789012345678', '723456789012345678'],
@@ -3191,15 +3248,8 @@ describe('GatewayService Discord beta routing', () => {
     const result = await service.routeMessage({ session_id: mapping.session_id, message: 'reply' });
 
     expect(result).toEqual({ routed: true, channelType: 'discord' });
-    expect(threadMapRepo.mergeGatewayReplyAliases).toHaveBeenCalledWith(
-      mapping.id,
-      [
-        'discord:message:323456789012345678:623456789012345678',
-        'discord:message:323456789012345678:723456789012345678',
-      ],
-      'message',
-      '623456789012345678'
-    );
+    expect(threadMapRepo.mergeGatewayReplyAliases).not.toHaveBeenCalled();
+    expect(mapping.metadata).not.toHaveProperty('gateway_reply_aliases');
   });
 
   it('suppresses the legacy after-hook send when a durable Discord intent exists', async () => {
@@ -3286,8 +3336,8 @@ describe('GatewayService Discord beta routing', () => {
     expect(proactiveSend).toHaveBeenCalledOnce();
   });
 
-  it('keeps the first Discord response chunk routable after more than one hundred aliases', async () => {
-    let currentMapping = makeMapping({
+  it('does not accumulate ordinary Discord response aliases after more than one hundred replies', async () => {
+    const currentMapping = makeMapping({
       channel_id: discordChannel.id,
       thread_id: 'discord:message:323456789012345678:523456789012345678',
       metadata: {},
@@ -3314,26 +3364,6 @@ describe('GatewayService Discord beta routing', () => {
     );
     harness.threadMapRepo.findByChannel.mockImplementation(async () => [currentMapping]);
     harness.threadMapRepo.findBySession.mockImplementation(async () => currentMapping);
-    harness.threadMapRepo.mergeGatewayReplyAliases.mockImplementation(
-      async (_id: string, aliases: string[], _reason: string, lastMessageId?: string) => {
-        const metadata = (currentMapping.metadata as Record<string, unknown>) ?? {};
-        const previous = Array.isArray(metadata.gateway_reply_aliases)
-          ? metadata.gateway_reply_aliases.filter(
-              (alias): alias is string => typeof alias === 'string'
-            )
-          : [];
-        currentMapping = {
-          ...currentMapping,
-          metadata: {
-            ...metadata,
-            gateway_reply_aliases: [...new Set([...previous, ...aliases])],
-            ...(lastMessageId ? { gateway_last_message_id: lastMessageId } : {}),
-          },
-        } as ThreadSessionMap;
-        return currentMapping;
-      }
-    );
-
     for (let index = 0; index < 101; index += 1) {
       await harness.service.routeMessage({
         session_id: currentMapping.session_id,
@@ -3341,24 +3371,9 @@ describe('GatewayService Discord beta routing', () => {
       });
     }
 
-    const aliases = currentMapping.metadata?.gateway_reply_aliases as string[];
-    expect(aliases).toHaveLength(101);
-    const firstAlias = aliases[0];
-    const firstAliasMessageId = firstAlias.split(':').at(-1)!;
-    const inbound = validDiscordInbound();
-    inbound.thread_id = firstAlias;
-    inbound.metadata = {
-      ...inbound.metadata,
-      discord_message_id: '823456789012345678',
-      discord_reply_to_message_id: firstAliasMessageId,
-    };
-
-    await expect(harness.service.create(inbound)).resolves.toMatchObject({
-      success: true,
-      sessionId: currentMapping.session_id,
-      created: false,
-    });
-    expect(harness.sessionsCreate).not.toHaveBeenCalled();
+    expect(currentMapping.metadata).not.toHaveProperty('gateway_reply_aliases');
+    expect(currentMapping.metadata).not.toHaveProperty('gateway_last_message_id');
+    expect(harness.threadMapRepo.mergeGatewayReplyAliases).not.toHaveBeenCalled();
   });
 
   it('keeps Discord proactive target resolution and seed audit in the service boundary', async () => {

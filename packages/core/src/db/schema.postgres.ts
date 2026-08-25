@@ -2203,7 +2203,7 @@ export const threadSessionMap = pgTable(
     metadata: t.json<Record<string, unknown>>('metadata'),
 
     // Durable Discord catch-up cursor. Provider history itself is never stored.
-    last_admitted_provider_cursor: text('last_admitted_provider_cursor'),
+    discord_last_admitted_message_id: text('discord_last_admitted_message_id'),
   },
   (table) => ({
     tenantIdx: index('thread_session_map_tenant_id_idx').on(table.tenant_id),
@@ -2223,10 +2223,10 @@ export const threadSessionMap = pgTable(
  * The message body is intentionally absent: workers reload canonical Messages
  * and checkpoint only bounded provider receipts and aliases.
  */
-export const gatewayMessageDeliveries = pgTable(
-  'gateway_message_deliveries',
+export const discordMessageDeliveries = pgTable(
+  'discord_message_deliveries',
   {
-    tenant_id: text('tenant_id').notNull().default('default'),
+    tenant_id: text('tenant_id').notNull(),
     delivery_id: varchar('delivery_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at').notNull(),
@@ -2252,8 +2252,10 @@ export const gatewayMessageDeliveries = pgTable(
     claim_expires_at: t.timestamp('claim_expires_at'),
     claim_generation: integer('claim_generation').notNull().default(0),
     ambiguous_chunk_index: integer('ambiguous_chunk_index'),
+    effect_started_at: t.timestamp('effect_started_at'),
+    effect_recovery_grace_until: t.timestamp('effect_recovery_grace_until'),
     chunk_receipts: t
-      .json<import('../types/gateway').GatewayMessageDeliveryChunkReceipt[]>('chunk_receipts')
+      .json<import('../types/gateway').DiscordMessageDeliveryChunkReceipt[]>('chunk_receipts')
       .notNull(),
     reply_aliases: t.json<string[]>('reply_aliases').notNull(),
     last_error_code: text('last_error_code'),
@@ -2262,15 +2264,15 @@ export const gatewayMessageDeliveries = pgTable(
     dead_lettered_at: t.timestamp('dead_lettered_at'),
   },
   (table) => ({
-    tenantIdx: index('gateway_message_deliveries_tenant_id_idx').on(table.tenant_id),
-    messageUnique: uniqueIndex('gateway_message_deliveries_message_unique').on(table.message_id),
-    dueIdx: index('gateway_message_deliveries_due_idx').on(
+    tenantIdx: index('discord_message_deliveries_tenant_id_idx').on(table.tenant_id),
+    messageUnique: uniqueIndex('discord_message_deliveries_message_unique').on(table.message_id),
+    dueIdx: index('discord_message_deliveries_due_idx').on(
       table.tenant_id,
       table.status,
       table.next_attempt_at,
       table.delivery_id
     ),
-    claimIdx: index('gateway_message_deliveries_claim_idx').on(
+    claimIdx: index('discord_message_deliveries_claim_idx').on(
       table.tenant_id,
       table.status,
       table.claim_expires_at,
@@ -2896,8 +2898,8 @@ export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
 export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
 export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
-export type GatewayMessageDeliveryRow = typeof gatewayMessageDeliveries.$inferSelect;
-export type GatewayMessageDeliveryInsert = typeof gatewayMessageDeliveries.$inferInsert;
+export type DiscordMessageDeliveryRow = typeof discordMessageDeliveries.$inferSelect;
+export type DiscordMessageDeliveryInsert = typeof discordMessageDeliveries.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;

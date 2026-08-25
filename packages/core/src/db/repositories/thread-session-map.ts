@@ -65,7 +65,7 @@ export class ThreadSessionMapRepository
       last_message_at: new Date(row.last_message_at).toISOString(),
       status: row.status as ThreadStatus,
       metadata: (row.metadata as Record<string, unknown>) ?? null,
-      last_admitted_provider_cursor: row.last_admitted_provider_cursor ?? null,
+      discord_last_admitted_message_id: row.discord_last_admitted_message_id ?? null,
     };
   }
 
@@ -86,7 +86,7 @@ export class ThreadSessionMapRepository
       branch_id: data.branch_id ?? '',
       status: data.status ?? 'active',
       metadata: data.metadata ?? null,
-      last_admitted_provider_cursor: data.last_admitted_provider_cursor ?? null,
+      discord_last_admitted_message_id: data.discord_last_admitted_message_id ?? null,
     };
   }
 
@@ -208,7 +208,7 @@ export class ThreadSessionMapRepository
           status: insertData.status,
           last_message_at: insertData.last_message_at,
           metadata: insertData.metadata,
-          last_admitted_provider_cursor: insertData.last_admitted_provider_cursor,
+          discord_last_admitted_message_id: insertData.discord_last_admitted_message_id,
         })
         .where(eq(threadSessionMap.id, fullId))
         .run();
@@ -377,16 +377,16 @@ export class ThreadSessionMapRepository
   }
 
   /**
-   * Advance the canonical Discord history cursor only after Task admission.
+   * Advance the canonical Discord message ID only after Task admission.
    * The row lock makes retries and concurrent listener owners monotonic; a
    * lower/equal Snowflake is a harmless no-op.
    */
-  async advanceLastAdmittedProviderCursor(
+  async advanceDiscordLastAdmittedMessageId(
     id: ThreadSessionMapID,
     cursor: string
   ): Promise<boolean> {
     if (!isDiscordSnowflake(cursor)) {
-      throw new RepositoryError('Invalid Discord provider cursor');
+      throw new RepositoryError('Invalid Discord message ID');
     }
 
     return runDatabaseTransaction(
@@ -398,10 +398,10 @@ export class ThreadSessionMapRepository
           .where(eq(threadSessionMap.id, id))
           .one();
         if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
-        const previous = row.last_admitted_provider_cursor;
+        const previous = row.discord_last_admitted_message_id;
         if (previous && compareDiscordSnowflakes(cursor, previous) <= 0) return false;
         await update(txDb, threadSessionMap)
-          .set({ last_admitted_provider_cursor: cursor })
+          .set({ discord_last_admitted_message_id: cursor })
           .where(eq(threadSessionMap.id, id))
           .run();
         return true;
@@ -483,9 +483,7 @@ export class ThreadSessionMapRepository
   /** Atomically merge provider reply aliases so concurrent chunks cannot lose one another. */
   async mergeGatewayReplyAliases(
     id: ThreadSessionMapID,
-    aliasesToAdd: string[],
-    reason: string,
-    lastMessageId?: string
+    aliasesToAdd: string[]
   ): Promise<ThreadSessionMap> {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
@@ -516,8 +514,6 @@ export class ThreadSessionMapRepository
                 metadata: {
                   ...current,
                   ...(mergedAliases.length > 0 ? { gateway_reply_aliases: mergedAliases } : {}),
-                  ...(lastMessageId ? { gateway_last_message_id: lastMessageId } : {}),
-                  gateway_reply_alias_last_reason: reason,
                 },
               })
               .where(eq(threadSessionMap.id, id))

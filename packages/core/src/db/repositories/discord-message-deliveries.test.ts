@@ -5,11 +5,11 @@ import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { runDatabaseTransaction, update } from '../database-wrapper';
-import { gatewayMessageDeliveries } from '../schema';
+import { discordMessageDeliveries } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
+import { DiscordMessageDeliveryRepository } from './discord-message-deliveries';
 import { GatewayChannelRepository } from './gateway-channels';
-import { GatewayMessageDeliveryRepository } from './gateway-message-deliveries';
 import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
@@ -68,7 +68,8 @@ async function seedMappedDiscord(db: Database, metadata: Record<string, unknown>
   const channel = await channels.updateWithVerifiedDiscordInstallation(
     draft.id,
     { enabled: true, agor_user_id: generateId() as UUID },
-    discordConfig.application_id
+    discordConfig.application_id,
+    draft.provider_config_generation
   );
   const mapping = await new ThreadSessionMapRepository(db).create({
     channel_id: channel.id,
@@ -96,7 +97,7 @@ function assistantMessage(sessionId: SessionID, overrides: Partial<Message> = {}
 
 async function createDelivery(db: Database) {
   const { mapping, session } = await seedMappedDiscord(db);
-  const deliveries = new GatewayMessageDeliveryRepository(db);
+  const deliveries = new DiscordMessageDeliveryRepository(db);
   const messages = new MessagesRepository(db, (tx, message) =>
     deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
   );
@@ -106,12 +107,12 @@ async function createDelivery(db: Database) {
   return { delivery, deliveries, mapping };
 }
 
-describe('GatewayMessageDeliveryRepository', () => {
+describe('DiscordMessageDeliveryRepository', () => {
   dbTest(
     'enqueues exactly once in the Message transaction and preserves canonical text outside the intent',
     async ({ db }) => {
       const { mapping, session } = await seedMappedDiscord(db);
-      const deliveries = new GatewayMessageDeliveryRepository(db);
+      const deliveries = new DiscordMessageDeliveryRepository(db);
       const messages = new MessagesRepository(db, (tx, message) =>
         deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
       );
@@ -152,7 +153,7 @@ describe('GatewayMessageDeliveryRepository', () => {
   dbTest(
     'does not enqueue non-routable assistant variants or proactive seed mappings',
     async ({ db }) => {
-      const deliveries = new GatewayMessageDeliveryRepository(db);
+      const deliveries = new DiscordMessageDeliveryRepository(db);
       const { session: mappedSession, mapping: mappedMapping } = await seedMappedDiscord(db);
       const messages = new MessagesRepository(db, (tx, message) =>
         deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
@@ -248,10 +249,10 @@ describe('GatewayMessageDeliveryRepository', () => {
       expect(completed.status).toBe('completed');
       expect(
         (await new ThreadSessionMapRepository(db).findById(mapping.id))?.metadata
-      ).toMatchObject({
-        gateway_reply_aliases: ['discord:message:333333333333333333:777777777777777777'],
-        gateway_last_message_id: 'provider-0',
-      });
+      ).not.toHaveProperty('gateway_last_message_id');
+      expect(
+        (await new ThreadSessionMapRepository(db).findById(mapping.id))?.metadata
+      ).not.toHaveProperty('gateway_reply_aliases');
       await expect(
         deliveries.completeClaim({
           deliveryId: delivery.delivery_id,
@@ -269,13 +270,17 @@ describe('GatewayMessageDeliveryRepository', () => {
       const { delivery, deliveries } = await createDelivery(db);
       const now = new Date();
       await expect(deliveries.findDueRefs(db, { now })).resolves.toEqual([
-        { tenant_id: 'default', delivery_id: delivery.delivery_id },
+        {
+          tenant_id: 'default',
+          delivery_id: delivery.delivery_id,
+          thread_session_map_id: delivery.thread_session_map_id,
+        },
       ]);
 
       const old = new Date(now.getTime() - 8 * 24 * 60 * 60 * 1000);
-      await update(db, gatewayMessageDeliveries)
+      await update(db, discordMessageDeliveries)
         .set({ status: 'completed', updated_at: old, completed_at: old })
-        .where(eq(gatewayMessageDeliveries.delivery_id, delivery.delivery_id))
+        .where(eq(discordMessageDeliveries.delivery_id, delivery.delivery_id))
         .run();
       await expect(deliveries.purgeExpired(now)).resolves.toBe(1);
       await expect(deliveries.findById(delivery.delivery_id)).resolves.toBeNull();

@@ -41,9 +41,9 @@ CREATE INDEX `gateway_channels_listener_lease_idx` ON `gateway_channels` (`enabl
 PRAGMA foreign_keys=ON;
 
 --> statement-breakpoint
-ALTER TABLE `thread_session_map` ADD `last_admitted_provider_cursor` text;
+ALTER TABLE `thread_session_map` ADD `discord_last_admitted_message_id` text;
 --> statement-breakpoint
-CREATE TABLE `gateway_message_deliveries` (
+CREATE TABLE `discord_message_deliveries` (
 	`delivery_id` text(36) PRIMARY KEY NOT NULL,
 	`created_at` integer NOT NULL,
 	`updated_at` integer NOT NULL,
@@ -59,6 +59,8 @@ CREATE TABLE `gateway_message_deliveries` (
 	`claim_expires_at` integer,
 	`claim_generation` integer DEFAULT 0 NOT NULL,
 	`ambiguous_chunk_index` integer,
+	`effect_started_at` integer,
+	`effect_recovery_grace_until` integer,
 	`chunk_receipts` text NOT NULL,
 	`reply_aliases` text NOT NULL,
 	`last_error_code` text,
@@ -70,6 +72,6 @@ CREATE TABLE `gateway_message_deliveries` (
 	FOREIGN KEY (`thread_session_map_id`) REFERENCES `thread_session_map`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `gateway_message_deliveries_message_unique` ON `gateway_message_deliveries` (`message_id`);--> statement-breakpoint
-CREATE INDEX `gateway_message_deliveries_due_idx` ON `gateway_message_deliveries` (`status`,`next_attempt_at`,`delivery_id`);--> statement-breakpoint
-CREATE INDEX `gateway_message_deliveries_claim_idx` ON `gateway_message_deliveries` (`status`,`claim_expires_at`,`delivery_id`);
+CREATE UNIQUE INDEX `discord_message_deliveries_message_unique` ON `discord_message_deliveries` (`message_id`);--> statement-breakpoint
+CREATE INDEX `discord_message_deliveries_due_idx` ON `discord_message_deliveries` (`status`,`next_attempt_at`,`delivery_id`);--> statement-breakpoint
+CREATE INDEX `discord_message_deliveries_claim_idx` ON `discord_message_deliveries` (`status`,`claim_expires_at`,`delivery_id`);

@@ -5,6 +5,7 @@ import {
   ThreadSessionMapRepository,
 } from '@agor/core/db';
 import {
+  buildDiscordSetupArtifact,
   buildSlackManifest,
   getConnector,
   isSlackFileSourceAllowed,
@@ -18,11 +19,13 @@ import {
   type SlackThreadHistoryRequest,
   type SlackThreadHistoryResult,
   type SlackWizardOptions,
+  validateDiscordSetup,
 } from '@agor/core/gateway';
 import {
   AGENTIC_TOOL_NAMES,
   type Branch,
   type BranchID,
+  type ChannelType,
   DEFAULT_DISCORD_CATCH_UP,
   GATEWAY_REDACTED_SENTINEL,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
@@ -44,7 +47,6 @@ import {
   type SlackAgentToolCapability,
   type UserID,
   type UUID,
-  validateDiscordConfig,
   withDiscordConfigDefaults,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -53,6 +55,7 @@ import type { GatewayService } from '../../services/gateway.js';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
+import { redactGatewayChannelForTransport } from '../../utils/gateway-channel-redaction.js';
 import {
   generateScopedServiceToken,
   getDaemonUrl,
@@ -188,7 +191,7 @@ const GATEWAY_INTERNAL_CONFIG_KEYS = new Set([
   'listener_instance_id',
   'listener_boot_id',
   'listener_generation',
-  'last_admitted_provider_cursor',
+  'discord_last_admitted_message_id',
   'delivery_id',
   'delivery_claim',
   'delivery_claim_token',
@@ -250,6 +253,19 @@ function addPublicConfigIssues(
         message: `config.${key} is not part of the accepted public Discord configuration.`,
       });
     }
+  }
+}
+
+function assertStoredProviderConfig(
+  channelType: ChannelType,
+  config: Record<string, unknown> | undefined
+): void {
+  if (channelType !== 'discord' || !config) return;
+  const unknown = Object.keys(config).filter((key) => !DISCORD_PUBLIC_CONFIG_KEYS.has(key));
+  if (unknown.length > 0) {
+    throw new Error(
+      `config.${unknown[0]} is not part of the accepted public Discord configuration`
+    );
   }
 }
 
@@ -351,7 +367,21 @@ const gatewayChannelCreateSchema = z
       .describe('MCP server IDs to attach independently of the agentic configuration.'),
   })
   .superRefine((value, issue) => {
-    const config = value.config ?? {};
+    const rawConfig = value.config ?? {};
+    if (
+      value.channelType === 'discord' &&
+      value.enabled === false &&
+      Object.hasOwn(rawConfig, 'bot_token')
+    ) {
+      issue.addIssue({
+        code: 'custom',
+        path: ['config', 'bot_token'],
+        message:
+          'config.bot_token is not accepted on a disabled Discord draft; use the secure gateway token widget.',
+      });
+    }
+    const config =
+      value.channelType === 'discord' ? withDiscordConfigDefaults(rawConfig) : rawConfig;
     addPublicConfigIssues(config, issue, value.channelType === 'discord', false);
 
     // Disabled channels are drafts: they may omit required credentials so they
@@ -404,28 +434,18 @@ const gatewayChannelCreateSchema = z
       });
     }
 
-    if (value.channelType === 'discord' && value.enabled !== false) {
-      const validation = validateDiscordConfig(config, { requireBotToken: false });
+    if (value.channelType === 'discord') {
+      // A fresh disabled Discord row is a complete nonsecret draft, not an
+      // untyped placeholder. The token and provider binding are deliberately
+      // deferred; identity, allowlists, intents, and all other public config
+      // remain required before the row can be created.
+      const validation = validateDiscordSetup(config, value.agorUserId);
       for (const message of validation.errors) {
         if (message === 'bot_token is required') continue;
         issue.addIssue({
           code: 'custom',
           path: ['config'],
           message: `Invalid Discord gateway configuration: ${message}.`,
-        });
-      }
-      if (config.align_discord_users === true && value.agorUserId) {
-        issue.addIssue({
-          code: 'custom',
-          path: ['agorUserId'],
-          message: 'Aligned Discord channels cannot also set agorUserId.',
-        });
-      } else if (config.align_discord_users !== true && !value.agorUserId) {
-        issue.addIssue({
-          code: 'custom',
-          path: ['agorUserId'],
-          message:
-            'Fixed Discord identity requires agorUserId; set align_discord_users:true for user_map identity.',
         });
       }
     }
@@ -828,7 +848,8 @@ type GatewayChannelSummary = Omit<
 };
 
 function redactGatewayChannel(channel: GatewayChannel): GatewayChannelSummary {
-  const config = { ...(channel.config ?? {}) };
+  const redacted = redactGatewayChannelForTransport(channel);
+  const config = { ...(redacted.config ?? {}) };
   for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
     if (config[field]) config[field] = GATEWAY_REDACTED_SENTINEL;
   }
@@ -836,22 +857,11 @@ function redactGatewayChannel(channel: GatewayChannel): GatewayChannelSummary {
     delete config[field];
   }
 
-  let agentic_config = channel.agentic_config;
-  if (agentic_config?.envVars) {
-    agentic_config = {
-      ...agentic_config,
-      envVars: agentic_config.envVars.map((envVar) => ({
-        ...envVar,
-        value: GATEWAY_REDACTED_SENTINEL,
-      })),
-    };
-  }
-
   const {
     provider_installation_id: _providerInstallationId,
     provider_config_generation: _providerConfigGeneration,
     ...publicChannel
-  } = channel;
+  } = redacted;
 
   return {
     ...publicChannel,
@@ -859,13 +869,15 @@ function redactGatewayChannel(channel: GatewayChannel): GatewayChannelSummary {
     agor_user_id: channel.agor_user_id,
     channel_key: GATEWAY_REDACTED_SENTINEL,
     config,
-    agentic_config,
+    agentic_config: redacted.agentic_config,
   };
 }
 
 function toServiceCreateData(
   args: z.infer<typeof gatewayChannelCreateSchema>
 ): GatewayChannelCreateData {
+  const config =
+    args.channelType === 'discord' ? withDiscordConfigDefaults(args.config) : args.config;
   return {
     name: args.name,
     channel_type: args.channelType,
@@ -874,7 +886,7 @@ function toServiceCreateData(
       ? { agor_user_id: args.agorUserId as GatewayChannelCreateData['agor_user_id'] }
       : {}),
     enabled: args.enabled ?? true,
-    config: args.config,
+    config,
     mcp_server_ids: args.mcpServerIds,
     agentic_config: args.agenticConfig
       ? {
@@ -989,75 +1001,117 @@ const slackManifestGenerateSchema = z.strictObject({
     ),
 });
 
-const discordSetupSchema = z.strictObject({
-  applicationId: z.string().refine(isDiscordSnowflake, 'Must be a Discord application snowflake.'),
-  guildId: z.string().refine(isDiscordSnowflake, 'Must be a Discord guild snowflake.'),
-  allowedChannelIds: z
-    .array(z.string().refine(isDiscordSnowflake, 'Must be a Discord channel snowflake.'))
-    .min(1)
-    .describe('One or more public text channel snowflakes allowed for inbound traffic.'),
-  allowedUserIds: z
-    .array(z.string().refine(isDiscordSnowflake, 'Must be a Discord user snowflake.'))
-    .default([])
-    .describe('Discord user snowflakes allowed to prompt the bot.'),
-  allowedRoleIds: z
-    .array(z.string().refine(isDiscordSnowflake, 'Must be a Discord role snowflake.'))
-    .default([])
-    .describe('Discord role snowflakes allowed to prompt the bot.'),
-  outbound: z.boolean().default(false),
-  alignUsers: z.boolean().default(false),
-  userMap: z.record(z.string(), z.string().min(1)).optional(),
-  catchUp: z
-    .strictObject({
-      maxPages: z
-        .number()
-        .int()
-        .min(MIN_DISCORD_CATCH_UP.max_pages)
-        .max(MAX_DISCORD_CATCH_UP.max_pages)
-        .default(DEFAULT_DISCORD_CATCH_UP.max_pages),
-      maxMessages: z
-        .number()
-        .int()
-        .min(MIN_DISCORD_CATCH_UP.max_messages)
-        .max(MAX_DISCORD_CATCH_UP.max_messages)
-        .default(DEFAULT_DISCORD_CATCH_UP.max_messages),
-      maxPromptBytes: z
-        .number()
-        .int()
-        .min(MIN_DISCORD_CATCH_UP.max_prompt_bytes)
-        .max(MAX_DISCORD_CATCH_UP.max_prompt_bytes)
-        .default(DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes),
-      requestTimeoutMs: z
-        .number()
-        .int()
-        .min(MIN_DISCORD_CATCH_UP.request_timeout_ms)
-        .max(MAX_DISCORD_CATCH_UP.request_timeout_ms)
-        .default(DEFAULT_DISCORD_CATCH_UP.request_timeout_ms),
-      rateLimitMaxRetries: z
-        .number()
-        .int()
-        .min(MIN_DISCORD_CATCH_UP.rate_limit_max_retries)
-        .max(MAX_DISCORD_CATCH_UP.rate_limit_max_retries)
-        .default(DEFAULT_DISCORD_CATCH_UP.rate_limit_max_retries),
-      rateLimitMaxTotalDelayMs: z
-        .number()
-        .int()
-        .min(MIN_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms)
-        .max(MAX_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms)
-        .default(DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms),
-    })
-    .default({
-      maxPages: DEFAULT_DISCORD_CATCH_UP.max_pages,
-      maxMessages: DEFAULT_DISCORD_CATCH_UP.max_messages,
-      maxPromptBytes: DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes,
-      requestTimeoutMs: DEFAULT_DISCORD_CATCH_UP.request_timeout_ms,
-      rateLimitMaxRetries: DEFAULT_DISCORD_CATCH_UP.rate_limit_max_retries,
-      rateLimitMaxTotalDelayMs: DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms,
-    }),
-  threadAutoArchiveMinutes: z
-    .union([z.literal(60), z.literal(1440), z.literal(4320), z.literal(10080)])
-    .default(1440),
-});
+const discordSetupSchema = z
+  .strictObject({
+    applicationId: z
+      .string()
+      .refine(isDiscordSnowflake, 'Must be a Discord application snowflake.'),
+    guildId: z.string().refine(isDiscordSnowflake, 'Must be a Discord guild snowflake.'),
+    messageContentAcknowledged: z
+      .boolean()
+      .describe('Explicitly acknowledge that the privileged Message Content intent is enabled.'),
+    allowedChannelIds: z
+      .array(z.string().refine(isDiscordSnowflake, 'Must be a Discord channel snowflake.'))
+      .min(1)
+      .describe('One or more public text channel snowflakes allowed for inbound traffic.'),
+    allowedUserIds: z
+      .array(z.string().refine(isDiscordSnowflake, 'Must be a Discord user snowflake.'))
+      .default([])
+      .describe('Discord user snowflakes allowed to prompt the bot.'),
+    allowedRoleIds: z
+      .array(z.string().refine(isDiscordSnowflake, 'Must be a Discord role snowflake.'))
+      .default([])
+      .describe('Discord role snowflakes allowed to prompt the bot.'),
+    agorUserId: mcpOptionalId(
+      'agorUserId',
+      'User',
+      'Fixed Agor run-as user. Required unless alignUsers:true with a tenant-owned userMap.'
+    ),
+    outbound: z.boolean().default(false),
+    alignUsers: z.boolean().default(false),
+    userMap: z.record(z.string(), z.string().min(1)).optional(),
+    catchUp: z
+      .strictObject({
+        maxPages: z
+          .number()
+          .int()
+          .min(MIN_DISCORD_CATCH_UP.max_pages)
+          .max(MAX_DISCORD_CATCH_UP.max_pages)
+          .default(DEFAULT_DISCORD_CATCH_UP.max_pages),
+        maxMessages: z
+          .number()
+          .int()
+          .min(MIN_DISCORD_CATCH_UP.max_messages)
+          .max(MAX_DISCORD_CATCH_UP.max_messages)
+          .default(DEFAULT_DISCORD_CATCH_UP.max_messages),
+        maxPromptBytes: z
+          .number()
+          .int()
+          .min(MIN_DISCORD_CATCH_UP.max_prompt_bytes)
+          .max(MAX_DISCORD_CATCH_UP.max_prompt_bytes)
+          .default(DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes),
+        requestTimeoutMs: z
+          .number()
+          .int()
+          .min(MIN_DISCORD_CATCH_UP.request_timeout_ms)
+          .max(MAX_DISCORD_CATCH_UP.request_timeout_ms)
+          .default(DEFAULT_DISCORD_CATCH_UP.request_timeout_ms),
+        rateLimitMaxRetries: z
+          .number()
+          .int()
+          .min(MIN_DISCORD_CATCH_UP.rate_limit_max_retries)
+          .max(MAX_DISCORD_CATCH_UP.rate_limit_max_retries)
+          .default(DEFAULT_DISCORD_CATCH_UP.rate_limit_max_retries),
+        rateLimitMaxTotalDelayMs: z
+          .number()
+          .int()
+          .min(MIN_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms)
+          .max(MAX_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms)
+          .default(DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms),
+      })
+      .default({
+        maxPages: DEFAULT_DISCORD_CATCH_UP.max_pages,
+        maxMessages: DEFAULT_DISCORD_CATCH_UP.max_messages,
+        maxPromptBytes: DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes,
+        requestTimeoutMs: DEFAULT_DISCORD_CATCH_UP.request_timeout_ms,
+        rateLimitMaxRetries: DEFAULT_DISCORD_CATCH_UP.rate_limit_max_retries,
+        rateLimitMaxTotalDelayMs: DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms,
+      }),
+    threadAutoArchiveMinutes: z
+      .union([z.literal(60), z.literal(1440), z.literal(4320), z.literal(10080)])
+      .default(1440),
+  })
+  .superRefine((value, issue) => {
+    if (value.allowedUserIds.length === 0 && value.allowedRoleIds.length === 0) {
+      issue.addIssue({
+        code: 'custom',
+        path: ['allowedUserIds'],
+        message: 'Provide at least one allowed Discord user or role ID.',
+      });
+    }
+    if (value.alignUsers) {
+      if (!value.userMap || Object.keys(value.userMap).length === 0) {
+        issue.addIssue({
+          code: 'custom',
+          path: ['userMap'],
+          message: 'alignUsers:true requires a non-empty tenant-owned userMap.',
+        });
+      }
+      if (value.agorUserId) {
+        issue.addIssue({
+          code: 'custom',
+          path: ['agorUserId'],
+          message: 'Mapped Discord identity cannot include agorUserId.',
+        });
+      }
+    } else if (!value.agorUserId) {
+      issue.addIssue({
+        code: 'custom',
+        path: ['agorUserId'],
+        message: 'Fixed Discord identity requires agorUserId.',
+      });
+    }
+  });
 
 function toSlackWizardOptions(
   args: z.infer<typeof slackManifestGenerateSchema>
@@ -1537,7 +1591,13 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       return textResult({
         gateway_channel: redactGatewayChannel(created),
         next_steps: [
-          'If this channel was created disabled without tokens (the recommended interactive path), collect its credentials by calling agor_widgets_request_gateway_token for this channel so the user enters the tokens in the secure form that appears at the end of this message. Do NOT ask the user to paste xoxb-/xapp- tokens into the chat, and do NOT pass tokens as agor_gateway_channels_create arguments during interactive setup.',
+          ...(created.channel_type === 'discord'
+            ? [
+                'This is a Discord draft: call agor_widgets_request_gateway_token next so the admin enters the Discord bot token in the secure form. Never ask for it in chat or pass it as an MCP argument; the widget probes identity, guild/access, parent permissions, one-shard support, and Message Content before enabling.',
+              ]
+            : [
+                'If this channel was created disabled without tokens (the recommended interactive path), collect its credentials by calling agor_widgets_request_gateway_token for this channel so the user enters the provider credentials in the secure form that appears at the end of this message. Do NOT ask the user to paste Slack xoxb-/xapp- tokens into the chat, and do NOT pass tokens as agor_gateway_channels_create arguments during interactive setup.',
+              ]),
           ...(created.channel_type === 'slack'
             ? [
                 identityModeSetupStep(
@@ -1591,57 +1651,51 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_discord_setup',
     {
       description:
-        'Generate the Discord gateway setup checklist and a secret-free public configuration hint. This is pure: it creates no Discord application, no Agor channel, and makes no provider calls.',
+        'Generate the Discord gateway setup artifact: Developer Portal guidance, exact minimum permission bitmask, OAuth2 bot invite URL, Message Content instruction, an explicit acknowledgement decision, a secret-free config-complete disabled draft, and canonical validation. This is pure: it creates no Discord application, no Agor channel, and makes no provider calls.',
       annotations: { readOnlyHint: true },
       inputSchema: discordSetupSchema,
     },
     async (args) => {
       requireAdmin(ctx, 'generate Discord setup guidance');
-      const catchUp = args.catchUp ?? {
-        maxPages: DEFAULT_DISCORD_CATCH_UP.max_pages,
-        maxMessages: DEFAULT_DISCORD_CATCH_UP.max_messages,
-        maxPromptBytes: DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes,
-        requestTimeoutMs: DEFAULT_DISCORD_CATCH_UP.request_timeout_ms,
-        rateLimitMaxRetries: DEFAULT_DISCORD_CATCH_UP.rate_limit_max_retries,
-        rateLimitMaxTotalDelayMs: DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms,
-      };
-      const config = withDiscordConfigDefaults({
-        application_id: args.applicationId,
-        guild_id: args.guildId,
-        allowed_channel_ids: args.allowedChannelIds ?? [],
-        allowed_user_ids: args.allowedUserIds ?? [],
-        allowed_role_ids: args.allowedRoleIds ?? [],
-        message_content_enabled: true,
-        thread_mode: 'public_thread_per_summon',
-        thread_auto_archive_minutes: args.threadAutoArchiveMinutes ?? 1440,
-        align_discord_users: args.alignUsers ?? false,
-        ...(args.userMap ? { user_map: args.userMap } : {}),
-        catch_up: {
-          max_pages: catchUp.maxPages,
-          max_messages: catchUp.maxMessages,
-          max_prompt_bytes: catchUp.maxPromptBytes,
-          request_timeout_ms: catchUp.requestTimeoutMs,
-          rate_limit_max_retries: catchUp.rateLimitMaxRetries,
-          rate_limit_max_total_delay_ms: catchUp.rateLimitMaxTotalDelayMs,
-        },
-        files: false,
-        agent_tools: [],
-        outbound_enabled: args.outbound ?? false,
-        ...(args.outbound && args.allowedChannelIds?.[0]
-          ? { default_outbound_target: `channel:${args.allowedChannelIds[0]}` }
-          : {}),
+      const artifact = buildDiscordSetupArtifact({
+        applicationId: args.applicationId,
+        guildId: args.guildId,
+        messageContentAcknowledged: args.messageContentAcknowledged,
+        allowedChannelIds: args.allowedChannelIds,
+        allowedUserIds: args.allowedUserIds,
+        allowedRoleIds: args.allowedRoleIds,
+        agorUserId: args.agorUserId,
+        alignUsers: args.alignUsers,
+        userMap: args.userMap,
+        outboundEnabled: args.outbound,
+        defaultOutboundTarget:
+          args.outbound && args.allowedChannelIds[0]
+            ? `channel:${args.allowedChannelIds[0]}`
+            : null,
+        catchUp: args.catchUp
+          ? {
+              max_pages: args.catchUp.maxPages,
+              max_messages: args.catchUp.maxMessages,
+              max_prompt_bytes: args.catchUp.maxPromptBytes,
+              request_timeout_ms: args.catchUp.requestTimeoutMs,
+              rate_limit_max_retries: args.catchUp.rateLimitMaxRetries,
+              rate_limit_max_total_delay_ms: args.catchUp.rateLimitMaxTotalDelayMs,
+            }
+          : undefined,
+        threadAutoArchiveMinutes: args.threadAutoArchiveMinutes,
       });
-      const validation = validateDiscordConfig(config, { requireBotToken: false });
       return textResult({
-        config_hint: config,
+        setup_artifact: artifact,
+        config_hint: artifact.draft.config,
         setup_steps: [
-          'Create one Discord application and bot in the Developer Portal; enable the privileged Message Content intent. Agor requests GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT and will not silently fall back to partial message content.',
-          'Invite the bot to the configured guild and each allowed public text channel with the minimum View Channel, Read Message History, Send Messages, Create Public Threads, and Send Messages in Threads permissions.',
-          'Copy the bot token into agor_widgets_request_gateway_token; never paste it into chat or an MCP argument.',
-          `Create the Agor channel with channelType:"discord", this config hint, and ${args.alignUsers ? 'a user_map with no agorUserId' : 'a fixed agorUserId'}, then collect the bot credential securely and enable it.`,
+          ...artifact.developerPortal.guidance,
+          `Invite URL (exact minimum permissions bitmask ${artifact.permissions.bitmask}): ${artifact.botInviteUrl}`,
+          artifact.messageContent.instruction,
+          'First create the secret-free config-complete draft with channelType:"discord" and enabled:false. Then call agor_widgets_request_gateway_token; never request or pass the Discord bot token in chat or an MCP argument.',
+          'Wait for the verified/redacted widget result before enabling or reporting the channel as connected.',
           'Keep the channel and author allowlists explicit. Discord ignores DMs, attachments/rich messages, webhooks, bot/self messages, wrong guild/channel, and unmentioned messages.',
         ],
-        validation,
+        validation: artifact.validation,
         caveats: [
           'Generated only; no Discord or Agor mutation occurred.',
           'A verified Discord application can be enabled on only one channel globally; duplicate attempts receive a generic conflict without tenant or channel details.',
@@ -1660,13 +1714,31 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     },
     async (args) => {
       requireAdmin(ctx, 'update gateway channels');
-      const updated = (await ctx.app
-        .service('gateway-channels')
-        .patch(
-          args.gatewayChannelId,
-          toServiceUpdateData(args),
-          ctx.baseServiceParams
-        )) as GatewayChannel;
+      const gatewayChannelsService = ctx.app.service('gateway-channels') as unknown as {
+        get?: (id: string, params?: unknown) => Promise<GatewayChannel>;
+        patch: (...args: unknown[]) => Promise<unknown>;
+      };
+      const existing =
+        args.config &&
+        args.channelType === undefined &&
+        typeof gatewayChannelsService.get === 'function'
+          ? await gatewayChannelsService.get(args.gatewayChannelId, ctx.baseServiceParams)
+          : undefined;
+      const effectiveType = args.channelType ?? existing?.channel_type;
+      assertStoredProviderConfig(effectiveType as ChannelType, args.config);
+      if (effectiveType === 'discord' && args.config && existing) {
+        const mergedConfig = { ...(existing.config ?? {}), ...args.config };
+        const identity = args.agorUserId !== undefined ? args.agorUserId : existing.agor_user_id;
+        const validation = validateDiscordSetup(mergedConfig, identity);
+        if (!validation.ok) {
+          throw new Error(`Invalid Discord gateway configuration: ${validation.errors.join('; ')}`);
+        }
+      }
+      const updated = (await gatewayChannelsService.patch(
+        args.gatewayChannelId,
+        toServiceUpdateData(args),
+        ctx.baseServiceParams
+      )) as GatewayChannel;
 
       return textResult({
         gateway_channel: redactGatewayChannel(updated),

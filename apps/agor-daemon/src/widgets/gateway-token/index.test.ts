@@ -11,6 +11,7 @@
  *   - result_meta + prompts never carry a token value or prefix
  */
 
+import { buildDiscordSetupArtifact } from '@agor/core/gateway';
 import type { SlackTestResult, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { _resetWidgetRegistryForTests, getWidget } from '../registry';
@@ -39,7 +40,14 @@ const defaultSubmit = {
 interface MakeCtxOpts {
   submitterRole?: string | undefined;
   channel?:
-    | { id: string; name: string; channel_type: string; target_branch_id: string }
+    | {
+        id: string;
+        name: string;
+        channel_type: string;
+        target_branch_id: string;
+        config?: Record<string, unknown>;
+        provider_config_generation?: number;
+      }
     | null
     | undefined;
   session?: { branch_id?: string };
@@ -49,8 +57,19 @@ interface MakeCtxOpts {
 function makeCtx(opts: MakeCtxOpts = {}) {
   const channel =
     opts.channel === undefined
-      ? { id: 'chan-1', name: 'Eng Slack', channel_type: 'slack', target_branch_id: 'wt-1' }
-      : opts.channel;
+      ? {
+          id: 'chan-1',
+          name: 'Eng Slack',
+          channel_type: 'slack',
+          target_branch_id: 'wt-1',
+          config: {},
+          provider_config_generation: 1,
+        }
+      : opts.channel && {
+          config: {},
+          provider_config_generation: 1,
+          ...opts.channel,
+        };
   const session = opts.session ?? { branch_id: 'wt-1' };
   const patchSpy = vi.fn(async () => ({}));
   const verifiedPatchSpy = vi.fn(async () => ({}));
@@ -186,10 +205,13 @@ describe('gateway_token widget — applySubmit admin guard', () => {
         name: 'Eng Discord',
         channel_type: 'discord',
         target_branch_id: 'wt-1',
+        config: { application_id: '666666666666666666' },
       },
       testResult: {
         ok: true,
         verifiedInstallationId: '666666666666666666',
+        bot: { userId: '666666666666666666', name: 'Agor' },
+        verification: { status: 'verified', warnings: [] },
         failures: [],
         notVerifiable: [],
       } as SlackTestResult,
@@ -207,6 +229,7 @@ describe('gateway_token widget — applySubmit admin guard', () => {
       'chan-1',
       { config: submit.tokens, enabled: true },
       '666666666666666666',
+      1,
       expect.anything()
     );
   });
@@ -591,6 +614,71 @@ describe('classifyGatewayTokenTest', () => {
     expect(result.enable).toBe(false);
     expect(result.status).toBe('failed');
   });
+
+  it('keeps Discord disabled when Message Content capability is unknown', () => {
+    const result = classifyGatewayTokenTest(
+      {
+        ok: true,
+        verifiedInstallationId: '111111111111111111',
+        verification: {
+          status: 'warning',
+          warnings: ['Message Content capability could not be verified'],
+        },
+        failures: [],
+        notVerifiable: [],
+      } as SlackTestResult,
+      false,
+      'discord',
+      '111111111111111111'
+    );
+    expect(result).toEqual({
+      enable: false,
+      status: 'unverifiable',
+      summary: 'Message Content capability could not be verified',
+    });
+  });
+
+  it.each(['guild_access', 'gateway_shards', 'channel_access', 'bot_identity', 'bot_token'])(
+    'blocks Discord enablement for the known %s failure class',
+    (capability) => {
+      const result = classifyGatewayTokenTest(
+        {
+          ok: false,
+          bot: { userId: '111111111111111111', name: 'Agor' },
+          verifiedInstallationId: '111111111111111111',
+          verification: { status: 'verified', warnings: [] },
+          failures: [{ capability, reason: `${capability} failed` }],
+          notVerifiable: [],
+        },
+        false,
+        'discord',
+        '111111111111111111'
+      );
+      expect(result.enable).toBe(false);
+      expect(result.status).toBe('failed');
+    }
+  );
+
+  it('does not let a mismatched Discord identity impersonate verification', () => {
+    const result = classifyGatewayTokenTest(
+      {
+        ok: true,
+        bot: { userId: '999999999999999999', name: 'Other app' },
+        verifiedInstallationId: '999999999999999999',
+        verification: { status: 'verified', warnings: [] },
+        failures: [],
+        notVerifiable: [],
+      },
+      false,
+      'discord',
+      '111111111111111111'
+    );
+    expect(result).toEqual({
+      enable: false,
+      status: 'failed',
+      summary: 'Discord application identity could not be verified',
+    });
+  });
 });
 
 describe('gateway_token widget — buildResultMeta', () => {
@@ -615,6 +703,90 @@ describe('gateway_token widget — buildResultMeta', () => {
     const rm = gatewayTokenWidget.buildResultMeta({ tokens: { bot_token: 'xoxb-leak' } });
     expect(rm.fieldsSet).toEqual(['bot_token']);
     expect(JSON.stringify(rm)).not.toContain('xoxb-');
+  });
+});
+
+describe('Discord setup vertical contract', () => {
+  it('keeps the draft disabled until a provider-aware probe verifies the binding', async () => {
+    const artifact = buildDiscordSetupArtifact({
+      applicationId: '111111111111111111',
+      guildId: '222222222222222222',
+      messageContentAcknowledged: true,
+      allowedChannelIds: ['333333333333333333'],
+      allowedUserIds: ['444444444444444444'],
+      agorUserId: '00000000-0000-4000-8000-000000000001',
+    });
+    expect(artifact.validation.ok).toBe(true);
+    const params = {
+      ...defaultParams,
+      gatewayChannelId: 'discord-draft',
+      channelType: 'discord' as const,
+      channelName: 'Discord draft',
+      fields: ['bot_token'],
+    };
+    const passing = makeCtx({
+      channel: {
+        id: 'discord-draft',
+        name: 'Discord draft',
+        channel_type: 'discord',
+        target_branch_id: 'wt-1',
+        config: { application_id: '111111111111111111' },
+      },
+      testResult: {
+        ok: true,
+        verifiedInstallationId: '111111111111111111',
+        bot: { userId: '111111111111111111', name: 'Agor' },
+        verification: { status: 'verified', warnings: [] },
+        failures: [],
+        notVerifiable: [],
+      },
+    });
+    await gatewayTokenWidget.applySubmit(
+      passing.ctx,
+      { tokens: { bot_token: 'discord-write-only-secret' } },
+      params
+    );
+    expect(passing.verifiedPatchSpy).toHaveBeenCalledWith(
+      'discord-draft',
+      { config: { bot_token: 'discord-write-only-secret' }, enabled: true },
+      '111111111111111111',
+      1,
+      expect.anything()
+    );
+    expect(
+      JSON.stringify(gatewayTokenWidget.buildResultMeta({ tokens: { bot_token: 'secret' } }))
+    ).not.toContain('secret');
+
+    const failing = makeCtx({
+      channel: {
+        id: 'discord-draft',
+        name: 'Discord draft',
+        channel_type: 'discord',
+        target_branch_id: 'wt-1',
+      },
+      testResult: {
+        ok: false,
+        verifiedInstallationId: '111111111111111111',
+        failures: [
+          {
+            capability: 'message_content',
+            reason: 'Message Content is not enabled',
+          },
+        ],
+        notVerifiable: [],
+      },
+    });
+    await gatewayTokenWidget.applySubmit(
+      failing.ctx,
+      { tokens: { bot_token: 'discord-write-only-secret' } },
+      params
+    );
+    expect(failing.verifiedPatchSpy).not.toHaveBeenCalled();
+    expect(failing.patchSpy).toHaveBeenCalledWith(
+      'discord-draft',
+      { config: { bot_token: 'discord-write-only-secret' }, enabled: false },
+      expect.anything()
+    );
   });
 });
 

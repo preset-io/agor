@@ -17,12 +17,12 @@ import {
 import {
   BranchRepository,
   bindRepositoryToTenantUnitOfWork,
+  DiscordMessageDeliveryRepository,
   GatewayChannelRepository,
   GatewayInboundEventRepository,
   type GatewayListenerDiscoveryCursor,
   GatewayListenerDiscoveryRepository,
   type GatewayListenerLease,
-  GatewayMessageDeliveryRepository,
   GatewayOutboundMessageRepository,
   generateId,
   getCurrentTenantId,
@@ -54,15 +54,21 @@ import type {
   SlackThreadHistoryResult,
 } from '@agor/core/gateway';
 import {
+  buildDiscordLegacyThreadKey,
+  buildDiscordMessageThreadKey,
+  DISCORD_METADATA_KEY,
+  extractDiscordStarterMessageId,
   formatGatewayContext,
   formatGatewayFollowUpRoutingMessage,
   formatGatewaySessionCreatedMessage,
   formatGatewaySystemPayload,
+  gatewayFailureCode,
   gatewayListenerFailure,
   getConnector,
   hasConnector,
   normalizeOutbound,
   normalizeSendReceipt,
+  parseDiscordAuthorityMetadata,
   parseGitHubThreadId,
   sanitizeGatewayProviderError,
 } from '@agor/core/gateway';
@@ -91,7 +97,6 @@ import {
   DEFAULT_DISCORD_CATCH_UP,
   hasMinimumRole,
   isDiscordSnowflake,
-  isDiscordThreadCoordinates,
   ROLES,
   SessionStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
@@ -107,11 +112,7 @@ import {
   buildPromptWithAttachments,
   ingestInboundAttachments,
 } from '../utils/gateway-attachments.js';
-import {
-  discordStarterCursor,
-  fetchGatewayCatchUp,
-  GatewayCatchUpError,
-} from '../utils/gateway-catch-up.js';
+import { fetchGatewayCatchUp, GatewayCatchUpError } from '../utils/gateway-catch-up.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import type { SessionParams } from './sessions.js';
@@ -238,7 +239,8 @@ interface SlackHistoryConnector extends GatewayConnector {
 }
 
 function discordInboundCursor(metadata?: Record<string, unknown>): string | undefined {
-  const cursor = metadata?.discord_message_id;
+  const parsed = parseDiscordAuthorityMetadata(metadata);
+  const cursor = parsed?.[DISCORD_METADATA_KEY.messageId];
   return typeof cursor === 'string' && isDiscordSnowflake(cursor) ? cursor : undefined;
 }
 
@@ -315,23 +317,22 @@ function discordInboundMetadataIsAuthoritative(
   channel: GatewayChannel,
   data: PostMessageData
 ): boolean {
-  const metadata = data.metadata;
   const config = channel.config as Record<string, unknown>;
   if (channel.channel_type !== 'discord') return true;
+  const metadata = parseDiscordAuthorityMetadata(data.metadata);
   if (!metadata) return false;
   const snowflake = isDiscordSnowflake;
   const guildId = config.guild_id;
   const allowedChannels = config.allowed_channel_ids;
-  const authorId = metadata.discord_author_id;
-  const channelId = metadata.discord_channel_id;
-  const messageId = metadata.discord_message_id;
-  const botUserId = metadata.discord_bot_user_id;
-  const isThread = metadata.discord_is_thread;
-  const parentChannelId = metadata.discord_parent_channel_id;
-  const roles = metadata.discord_role_ids;
-  const providerThreadId = metadata.discord_thread_id;
-  const providerThread = metadata.discord_thread;
-  const verifiedProviderThread = isDiscordThreadCoordinates(providerThread) ? providerThread : null;
+  const authorId = metadata[DISCORD_METADATA_KEY.authorId];
+  const channelId = metadata[DISCORD_METADATA_KEY.channelId];
+  const messageId = metadata[DISCORD_METADATA_KEY.messageId];
+  const botUserId = metadata[DISCORD_METADATA_KEY.botUserId];
+  const isThread = metadata[DISCORD_METADATA_KEY.isThread];
+  const parentChannelId = metadata[DISCORD_METADATA_KEY.parentChannelId];
+  const roles = metadata[DISCORD_METADATA_KEY.roleIds];
+  const providerThreadId = metadata[DISCORD_METADATA_KEY.threadId];
+  const verifiedProviderThread = metadata[DISCORD_METADATA_KEY.thread];
   const userAllowlist = Array.isArray(config.allowed_user_ids) ? config.allowed_user_ids : [];
   const roleAllowlist = Array.isArray(config.allowed_role_ids) ? config.allowed_role_ids : [];
   if (
@@ -339,8 +340,8 @@ function discordInboundMetadataIsAuthoritative(
     !Array.isArray(allowedChannels) ||
     allowedChannels.length === 0 ||
     allowedChannels.some((id) => !snowflake(id)) ||
-    !snowflake(metadata.discord_guild_id) ||
-    metadata.discord_guild_id !== guildId ||
+    !snowflake(metadata[DISCORD_METADATA_KEY.guildId]) ||
+    metadata[DISCORD_METADATA_KEY.guildId] !== guildId ||
     !snowflake(authorId) ||
     !snowflake(botUserId) ||
     botUserId !== config.application_id ||
@@ -353,7 +354,7 @@ function discordInboundMetadataIsAuthoritative(
     roles.some((role) => !snowflake(role)) ||
     userAllowlist.some((id) => !snowflake(id)) ||
     roleAllowlist.some((id) => !snowflake(id)) ||
-    metadata.discord_has_mention !== true ||
+    metadata[DISCORD_METADATA_KEY.hasMention] !== true ||
     typeof isThread !== 'boolean'
   ) {
     return false;
@@ -374,18 +375,18 @@ function discordInboundMetadataIsAuthoritative(
         verifiedProviderThread.parent_channel_id !== parentChannelId ||
         verifiedProviderThread.thread_channel_id !== channelId ||
         verifiedProviderThread.starter_message_id !== channelId ||
-        ![10, 11].includes(metadata.discord_thread_type as number) ||
-        metadata.discord_thread_accessible !== true ||
-        metadata.discord_starter_message_accessible !== true
+        ![10, 11].includes(metadata[DISCORD_METADATA_KEY.threadType] as number) ||
+        metadata[DISCORD_METADATA_KEY.threadAccessible] !== true ||
+        metadata[DISCORD_METADATA_KEY.starterMessageAccessible] !== true
       ) {
         return false;
       }
-    } else if (data.thread_id !== `discord:thread:${parentChannelId}:${channelId}`) {
+    } else if (data.thread_id !== buildDiscordLegacyThreadKey(parentChannelId, channelId)) {
       return false;
     }
   } else {
     if (!allowedChannels.includes(channelId) || parentChannelId !== undefined) return false;
-    const replyTo = metadata.discord_reply_to_message_id;
+    const replyTo = metadata[DISCORD_METADATA_KEY.replyToMessageId];
     if (replyTo !== undefined && !snowflake(replyTo)) return false;
     if (providerThreadId !== undefined) {
       if (
@@ -397,39 +398,42 @@ function discordInboundMetadataIsAuthoritative(
         verifiedProviderThread.parent_channel_id !== channelId ||
         verifiedProviderThread.thread_channel_id !== providerThreadId ||
         verifiedProviderThread.starter_message_id !== messageId ||
-        ![10, 11].includes(metadata.discord_thread_type as number) ||
-        metadata.discord_thread_accessible !== true ||
-        metadata.discord_starter_message_accessible !== true
+        ![10, 11].includes(metadata[DISCORD_METADATA_KEY.threadType] as number) ||
+        metadata[DISCORD_METADATA_KEY.threadAccessible] !== true ||
+        metadata[DISCORD_METADATA_KEY.starterMessageAccessible] !== true
       ) {
         return false;
       }
     } else {
       const expectedMessage = snowflake(replyTo) ? replyTo : messageId;
-      if (data.thread_id !== `discord:message:${channelId}:${expectedMessage}`) return false;
+      if (data.thread_id !== buildDiscordMessageThreadKey(channelId, expectedMessage)) return false;
     }
   }
   return true;
 }
 
 function discordCanonicalThreadId(data: PostMessageData): string {
-  const candidate = data.metadata?.discord_thread_id;
+  const metadata = parseDiscordAuthorityMetadata(data.metadata);
+  const candidate = metadata?.[DISCORD_METADATA_KEY.threadId];
   return typeof candidate === 'string' ? candidate : data.thread_id;
 }
 
 /** Legacy composite lookup retained only to adopt mappings written by DG-01. */
 function discordLegacyThreadId(data: PostMessageData): string | undefined {
-  if (data.metadata?.discord_is_thread === true) {
-    const parent = data.metadata.discord_parent_channel_id;
-    const channel = data.metadata.discord_channel_id;
+  const metadata = parseDiscordAuthorityMetadata(data.metadata);
+  if (metadata?.[DISCORD_METADATA_KEY.isThread] === true) {
+    const parent = metadata[DISCORD_METADATA_KEY.parentChannelId];
+    const channel = metadata[DISCORD_METADATA_KEY.channelId];
     return typeof parent === 'string' && typeof channel === 'string'
-      ? `discord:thread:${parent}:${channel}`
+      ? buildDiscordLegacyThreadKey(parent, channel)
       : undefined;
   }
-  if (data.metadata?.discord_is_thread === false) {
-    const channel = data.metadata.discord_channel_id;
-    const message = data.metadata.discord_reply_to_message_id ?? data.metadata.discord_message_id;
+  if (metadata?.[DISCORD_METADATA_KEY.isThread] === false) {
+    const channel = metadata[DISCORD_METADATA_KEY.channelId];
+    const message =
+      metadata[DISCORD_METADATA_KEY.replyToMessageId] ?? metadata[DISCORD_METADATA_KEY.messageId];
     return typeof channel === 'string' && typeof message === 'string'
-      ? `discord:message:${channel}:${message}`
+      ? buildDiscordMessageThreadKey(channel, message)
       : undefined;
   }
   return undefined;
@@ -583,12 +587,13 @@ function buildSeededThreadInitialPrompt(args: {
   metadata?: Record<string, unknown>;
 }): string {
   const isDiscord = args.channel.channel_type === 'discord';
+  const discordMetadata = isDiscord ? parseDiscordAuthorityMetadata(args.metadata) : null;
   const provider = isDiscord ? 'Discord' : 'Slack';
   const senderName =
     typeof args.metadata?.slack_user_name === 'string' ? args.metadata.slack_user_name : undefined;
   const senderId = isDiscord
-    ? typeof args.metadata?.discord_author_id === 'string'
-      ? args.metadata.discord_author_id
+    ? typeof discordMetadata?.[DISCORD_METADATA_KEY.authorId] === 'string'
+      ? discordMetadata[DISCORD_METADATA_KEY.authorId]
       : undefined
     : typeof args.metadata?.slack_user_id === 'string'
       ? args.metadata.slack_user_id
@@ -598,8 +603,8 @@ function buildSeededThreadInitialPrompt(args: {
       ? args.metadata.slack_user_email
       : undefined;
   const channelName = isDiscord
-    ? typeof args.metadata?.discord_channel_id === 'string'
-      ? args.metadata.discord_channel_id
+    ? typeof discordMetadata?.[DISCORD_METADATA_KEY.channelId] === 'string'
+      ? discordMetadata[DISCORD_METADATA_KEY.channelId]
       : args.seed.platform_channel_id
     : typeof args.metadata?.slack_channel_name === 'string'
       ? args.metadata.slack_channel_name
@@ -836,7 +841,7 @@ export class GatewayService {
   private usersRepo: UsersRepository;
   private messagesRepo: MessagesRepository;
   private inboundEventRepo: GatewayInboundEventRepository;
-  private deliveryRepo: GatewayMessageDeliveryRepository;
+  private deliveryRepo: DiscordMessageDeliveryRepository;
 
   private mcpServerRepo: MCPServerRepository;
   private userTokenRepo: UserMCPOAuthTokenRepository;
@@ -918,7 +923,7 @@ export class GatewayService {
     );
     this.deliveryRepo = bindRepositoryToTenantUnitOfWork(
       db,
-      new GatewayMessageDeliveryRepository(db)
+      new DiscordMessageDeliveryRepository(db)
     );
 
     this.mcpServerRepo = bindRepositoryToTenantUnitOfWork(db, new MCPServerRepository(db));
@@ -1146,13 +1151,11 @@ export class GatewayService {
   /** Store provider-neutral reply aliases without disturbing legacy Slack metadata. */
   private async addGatewayReplyAliases(
     mapping: ThreadSessionMap,
-    aliasesToAdd: string[],
-    reason: string,
-    lastMessageId?: string
+    aliasesToAdd: string[]
   ): Promise<void> {
     const aliases = aliasesToAdd.filter((alias) => typeof alias === 'string' && alias.length > 0);
-    if (aliases.length === 0 && !lastMessageId) return;
-    await this.threadMapRepo.mergeGatewayReplyAliases(mapping.id, aliases, reason, lastMessageId);
+    if (aliases.length === 0) return;
+    await this.threadMapRepo.mergeGatewayReplyAliases(mapping.id, aliases);
   }
 
   /**
@@ -1925,10 +1928,12 @@ export class GatewayService {
         })
       );
     } catch (error) {
+      const failure =
+        channel.channel_type === 'discord'
+          ? gatewayFailureCode(error)
+          : sanitizeGatewayProviderError(error);
       throw new Error(
-        `${channel.channel_type === 'slack' ? 'Slack' : 'Discord'} API failure: ${sanitizeGatewayProviderError(
-          error
-        )}`
+        `${channel.channel_type === 'slack' ? 'Slack' : 'Discord'} API failure: ${failure}`
       );
     }
 
@@ -1967,7 +1972,7 @@ export class GatewayService {
 
     await this.channelRepo.updateLastMessage(channel.id);
     console.log(
-      `[gateway] Proactive ${channel.channel_type} outbound ${shortId(row.id)} sent via ${shortId(channel.id)} to ${target}`
+      `[gateway] Proactive ${channel.channel_type} outbound ${shortId(row.id)} sent via ${shortId(channel.id)}`
     );
 
     return {
@@ -2048,6 +2053,8 @@ export class GatewayService {
       console.debug('[gateway] IGNORED: Discord inbound metadata failed authorization checks');
       return { success: false, sessionId: '', created: false };
     }
+    const discordMetadata =
+      channel.channel_type === 'discord' ? parseDiscordAuthorityMetadata(data.metadata) : null;
 
     // 2. Look up existing thread mapping. New Discord admissions use the raw
     // provider thread Snowflake; a legacy composite is consulted only to
@@ -2126,7 +2133,7 @@ export class GatewayService {
           // The stable Task is the admission fence. A retry after a process
           // crash repairs only the cursor; it never fetches history or creates
           // another prompt.
-          await this.threadMapRepo.advanceLastAdmittedProviderCursor(
+          await this.threadMapRepo.advanceDiscordLastAdmittedMessageId(
             existingMapping.id,
             liveDiscordCursor
           );
@@ -2192,7 +2199,10 @@ export class GatewayService {
       }
     }
 
-    if (channel.channel_type === 'discord' && data.metadata?.discord_has_mention !== true) {
+    if (
+      channel.channel_type === 'discord' &&
+      discordMetadata?.[DISCORD_METADATA_KEY.hasMention] !== true
+    ) {
       console.debug(
         `[gateway] IGNORED: Discord message without explicit mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
       );
@@ -2279,7 +2289,7 @@ export class GatewayService {
     if (alignDiscordUsers && !alignSlackUsers && !alignGitHubUsers && !alignShortcutUsers) {
       const matchedUser = await this.resolveAlignedUser({
         platform: 'Discord',
-        externalId: data.metadata?.discord_author_id as string | undefined,
+        externalId: discordMetadata?.[DISCORD_METADATA_KEY.authorId],
         email: undefined,
         userMap: channelConfig.user_map as Record<string, string> | undefined,
       });
@@ -2510,14 +2520,24 @@ export class GatewayService {
       channel.channel_type === 'discord' &&
       !existingMapping &&
       !outboundAdmission &&
-      data.metadata?.discord_thread_id === undefined &&
-      data.metadata?.discord_is_thread === false &&
-      typeof data.metadata.discord_channel_id === 'string' &&
-      typeof data.metadata.discord_message_id === 'string'
+      (() => {
+        const discordMetadata = parseDiscordAuthorityMetadata(data.metadata);
+        return (
+          discordMetadata?.[DISCORD_METADATA_KEY.threadId] === undefined &&
+          discordMetadata?.[DISCORD_METADATA_KEY.isThread] === false &&
+          typeof discordMetadata?.[DISCORD_METADATA_KEY.channelId] === 'string' &&
+          typeof discordMetadata?.[DISCORD_METADATA_KEY.messageId] === 'string'
+        );
+      })()
     ) {
+      const discordMetadata = parseDiscordAuthorityMetadata(data.metadata);
+      if (!discordMetadata) throw new Error('Malformed Discord authority metadata');
       data = {
         ...data,
-        thread_id: `discord:message:${data.metadata.discord_channel_id}:${data.metadata.discord_message_id}`,
+        thread_id: buildDiscordMessageThreadKey(
+          discordMetadata[DISCORD_METADATA_KEY.channelId] as string,
+          discordMetadata[DISCORD_METADATA_KEY.messageId] as string
+        ),
       };
     }
 
@@ -2577,19 +2597,15 @@ export class GatewayService {
       }
 
       if (outboundSeed) {
-        await this.addGatewayReplyAliases(
-          mappingForCursor,
-          [
-            outboundSeed.platform_thread_id,
-            data.thread_id,
-            ...(Array.isArray(outboundSeed.metadata?.provider_reply_aliases)
-              ? outboundSeed.metadata.provider_reply_aliases.filter(
-                  (alias): alias is string => typeof alias === 'string'
-                )
-              : []),
-          ],
-          'outbound_seed'
-        );
+        await this.addGatewayReplyAliases(mappingForCursor, [
+          outboundSeed.platform_thread_id,
+          data.thread_id,
+          ...(Array.isArray(outboundSeed.metadata?.provider_reply_aliases)
+            ? outboundSeed.metadata.provider_reply_aliases.filter(
+                (alias): alias is string => typeof alias === 'string'
+              )
+            : []),
+        ]);
         if (outboundAdmission) {
           await this.outboundRepo.completeReplyAdmission(
             outboundSeed.id as GatewayOutboundMessageID,
@@ -2909,7 +2925,7 @@ export class GatewayService {
       }
 
       if (outboundAdmission && mappingForCursor) {
-        await this.addGatewayReplyAliases(mappingForCursor, outboundReplyAliases, 'outbound_seed');
+        await this.addGatewayReplyAliases(mappingForCursor, outboundReplyAliases);
         await this.outboundRepo.completeReplyAdmission(
           outboundSeed!.id as GatewayOutboundMessageID,
           sessionId
@@ -2990,25 +3006,29 @@ export class GatewayService {
         const connector =
           this.getActiveListener(channel.id) ??
           getConnector(channel.channel_type as ChannelType, channel.config);
+        const liveCursor = discordInboundCursor(data.metadata);
+        if (!liveCursor) {
+          throw new GatewayCatchUpError('malformed', 'Discord mention had no canonical message ID');
+        }
+        const mappingMetadata = mappingForCursor?.metadata ?? data.metadata ?? {};
+        if (!parseDiscordAuthorityMetadata(mappingMetadata)) {
+          throw new GatewayCatchUpError(
+            'malformed',
+            'Stored Discord authority metadata was malformed'
+          );
+        }
+        const discordMetadata = parseDiscordAuthorityMetadata(data.metadata);
         if (connector?.fetchProviderHistory) {
-          const liveCursor = discordInboundCursor(data.metadata);
-          if (!liveCursor) {
-            throw new GatewayCatchUpError(
-              'malformed',
-              'Discord mention had no canonical provider cursor'
-            );
-          }
-          const mappingMetadata =
-            (mappingForCursor?.metadata as Record<string, unknown> | null) ?? data.metadata ?? {};
           const afterCursor =
-            mappingForCursor?.last_admitted_provider_cursor ??
-            discordStarterCursor(mappingMetadata);
+            mappingForCursor?.discord_last_admitted_message_id ??
+            extractDiscordStarterMessageId(mappingMetadata);
           if (!afterCursor) {
             throw new GatewayCatchUpError(
               'incomplete',
               'Discord history bootstrap lacked a verified public-thread starter'
             );
           }
+          const discordChannelId = discordMetadata?.[DISCORD_METADATA_KEY.channelId];
           const catchUp = await fetchGatewayCatchUp({
             connector,
             request: {
@@ -3018,9 +3038,9 @@ export class GatewayService {
               // actually stored it; later thread mentions are read from the
               // canonical provider thread as usual.
               threadId:
-                data.metadata?.discord_is_thread === false &&
-                typeof data.metadata.discord_channel_id === 'string'
-                  ? data.metadata.discord_channel_id
+                discordMetadata?.[DISCORD_METADATA_KEY.isThread] === false &&
+                discordChannelId !== undefined
+                  ? discordChannelId
                   : (mappingForCursor?.thread_id ?? data.thread_id),
               afterProviderCursor: afterCursor,
               throughProviderCursor: liveCursor,
@@ -3232,7 +3252,7 @@ export class GatewayService {
       // stable Task reconciliation above advances the cursor without a second
       // prompt.
       if (channel.channel_type === 'discord' && discordCursorToWrite && mappingForCursor) {
-        await this.threadMapRepo.advanceLastAdmittedProviderCursor(
+        await this.threadMapRepo.advanceDiscordLastAdmittedMessageId(
           mappingForCursor.id,
           discordCursorToWrite
         );
@@ -3282,7 +3302,10 @@ export class GatewayService {
         });
       }
     } catch (error) {
-      const safeError = sanitizeGatewayProviderError(error);
+      const safeError =
+        channel.channel_type === 'discord'
+          ? gatewayFailureCode(error)
+          : sanitizeGatewayProviderError(error);
       console.error('[gateway] Failed to send prompt to session:', safeError);
       this.sendSystemMessage(channel, data.thread_id, `Error sending prompt: ${safeError}`);
       this.updateProgressAfterCommit({
@@ -3397,20 +3420,20 @@ export class GatewayService {
           await this.addSlackThreadAlias(mapping, sent, 'message');
         }
       }
-      if (receipt.replyAliases?.length) {
-        await this.addGatewayReplyAliases(
-          mapping,
-          receipt.replyAliases ?? [],
-          'message',
-          receipt.messageId
-        );
+      // Discord's canonical public-thread mapping is already the routing
+      // identity. Only preserve aliases for providers/legacy paths that still
+      // need them; ordinary Discord final responses must not grow metadata.
+      if (channel.channel_type !== 'discord' && receipt.replyAliases?.length) {
+        await this.addGatewayReplyAliases(mapping, receipt.replyAliases ?? []);
       }
 
       console.log(`[gateway] Routed message to ${channel.channel_type} thread ${threadId}`);
     } catch (error) {
-      console.error(
-        `[gateway] Failed to route message to ${channel.channel_type}: ${sanitizeGatewayProviderError(error)}`
-      );
+      const failure =
+        channel.channel_type === 'discord'
+          ? gatewayFailureCode(error)
+          : sanitizeGatewayProviderError(error);
+      console.error(`[gateway] Failed to route message to ${channel.channel_type}: ${failure}`);
       return { routed: false, channelType: channel.channel_type };
     }
 
@@ -4245,15 +4268,25 @@ export class GatewayService {
           let skipProviderThreadMaterialization = false;
           if (
             channel.channel_type === 'discord' &&
-            msg.metadata?.discord_is_thread === false &&
-            typeof msg.metadata.discord_channel_id === 'string' &&
-            typeof msg.metadata.discord_reply_to_message_id === 'string'
+            (() => {
+              const discordMetadata = parseDiscordAuthorityMetadata(msg.metadata);
+              return (
+                discordMetadata?.[DISCORD_METADATA_KEY.isThread] === false &&
+                typeof discordMetadata?.[DISCORD_METADATA_KEY.channelId] === 'string' &&
+                typeof discordMetadata?.[DISCORD_METADATA_KEY.replyToMessageId] === 'string'
+              );
+            })()
           ) {
             // A proactive Discord seed is intentionally a legacy top-level
             // message.  Resolve it before the connector's provider-side
             // preparation so the first human reply does not create a second
             // public thread.
-            const seedThreadId = `discord:message:${msg.metadata.discord_channel_id}:${msg.metadata.discord_reply_to_message_id}`;
+            const discordMetadata = parseDiscordAuthorityMetadata(msg.metadata);
+            if (!discordMetadata) throw new Error('Malformed Discord authority metadata');
+            const seedThreadId = buildDiscordMessageThreadKey(
+              discordMetadata[DISCORD_METADATA_KEY.channelId] as string,
+              discordMetadata[DISCORD_METADATA_KEY.replyToMessageId] as string
+            );
             // Reserve the existing seed admission here as a read-before-
             // preparation gate. The create path repeats the same atomic
             // admission and receives the reserved identity.
@@ -4304,8 +4337,12 @@ export class GatewayService {
           const result = await this.create({
             channel_key: channel.channel_key,
             thread_id:
-              channel.channel_type === 'discord' && typeof metadata?.discord_thread_id === 'string'
-                ? metadata.discord_thread_id
+              channel.channel_type === 'discord' &&
+              typeof parseDiscordAuthorityMetadata(metadata)?.[DISCORD_METADATA_KEY.threadId] ===
+                'string'
+                ? (parseDiscordAuthorityMetadata(metadata)?.[
+                    DISCORD_METADATA_KEY.threadId
+                  ] as string)
                 : msg.threadId,
             text: msg.text,
             user_name: msg.userId,

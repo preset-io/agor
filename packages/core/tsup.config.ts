@@ -69,6 +69,7 @@ export default defineConfig({
     'mcp/member-policy': 'src/mcp/member-policy.ts', // Browser-safe mcp_member_policy predicates (no scoping deps)
     'gateway/index': 'src/gateway/index.ts', // Gateway platform connectors (Slack, etc.)
     'gateway/connectors/slack-manifest': 'src/gateway/connectors/slack-manifest.ts', // Browser-safe Slack manifest/scope derivation (no connector deps)
+    'gateway/discord-setup': 'src/gateway/connectors/discord-setup.ts', // Browser-safe Discord setup artifact
     'yaml/index': 'src/yaml/index.ts', // Browser-safe js-yaml re-export
     'knowledge/index': 'src/knowledge/index.ts', // Knowledge editing helpers
     'mcp-catalog/index': 'src/mcp-catalog/index.ts', // MCP marketplace catalog: the checked-in file, and the connect probe

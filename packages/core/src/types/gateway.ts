@@ -33,8 +33,8 @@ export type GatewayOutboundMessageID = UUID;
 /** Durable identity for one provider-delivered inbound gateway event. */
 export type GatewayInboundEventID = UUID;
 
-/** Durable identity for one assistant-message delivery attempt. */
-export type GatewayMessageDeliveryID = UUID;
+/** Durable identity for one Discord assistant-message delivery attempt. */
+export type DiscordMessageDeliveryID = UUID;
 
 // ============================================================================
 // Enums
@@ -64,7 +64,7 @@ export type ThreadStatus = 'active' | 'archived' | 'paused';
 /** Internal processing state for a provider event idempotency occurrence. */
 export type GatewayInboundEventStatus = 'processing' | 'completed';
 
-export type GatewayMessageDeliveryStatus =
+export type DiscordMessageDeliveryStatus =
   | 'pending'
   | 'processing'
   | 'completed'
@@ -72,21 +72,21 @@ export type GatewayMessageDeliveryStatus =
   | 'dead_letter';
 
 /** Bounded, content-free receipt for one Discord delivery chunk. */
-export interface GatewayMessageDeliveryChunkReceipt {
+export interface DiscordMessageDeliveryChunkReceipt {
   chunk_index: number;
   nonce: string;
   provider_message_id: string;
   reply_aliases: string[];
 }
 
-export interface GatewayMessageDelivery {
-  delivery_id: GatewayMessageDeliveryID;
+export interface DiscordMessageDelivery {
+  delivery_id: DiscordMessageDeliveryID;
   message_id: UUID;
   gateway_channel_id: GatewayChannelID;
   thread_session_map_id: ThreadSessionMapID;
   provider_installation_id: string;
   provider_config_generation: number;
-  status: GatewayMessageDeliveryStatus;
+  status: DiscordMessageDeliveryStatus;
   attempt_count: number;
   next_attempt_at: string;
   claim_token: string | null;
@@ -94,7 +94,11 @@ export interface GatewayMessageDelivery {
   claim_generation: number;
   /** Chunk whose provider effect may have started but lacks a durable receipt. */
   ambiguous_chunk_index: number | null;
-  chunk_receipts: GatewayMessageDeliveryChunkReceipt[];
+  /** Durable fence timestamp written before the nonce-protected provider call. */
+  effect_started_at: string | null;
+  /** Recovery must remain retryable until this persisted instant. */
+  effect_recovery_grace_until: string | null;
+  chunk_receipts: DiscordMessageDeliveryChunkReceipt[];
   reply_aliases: string[];
   last_error_code: string | null;
   created_at: string;
@@ -560,8 +564,67 @@ export interface GatewayConnectionTestResult {
   verifiedInstallationId?: string;
   appTokenValid?: boolean;
   channelAccess?: GatewayConnectionTestChannelAccess[];
+  /** Provider verification state. Discord uses `warning` when a required
+   * capability could not be determined; warnings never authorize enablement. */
+  verification?: {
+    status: 'verified' | 'warning';
+    warnings: string[];
+  };
   failures: GatewayConnectionTestFailure[];
   notVerifiable: string[];
+}
+
+export interface GatewayCredentialPresentation {
+  label: string;
+  placeholder: string;
+  hint?: string;
+  /** Optional provider-specific prefix for light client-side validation. */
+  prefix?: string;
+}
+
+/** Browser-safe provider-aware presentation for write-only gateway secrets. */
+export function getGatewayCredentialPresentation(
+  channelType: ChannelType,
+  field: string
+): GatewayCredentialPresentation {
+  if (channelType === 'discord' && field === 'bot_token') {
+    return {
+      label: 'Discord bot token',
+      placeholder: 'Discord bot token',
+      hint: 'Discord bot token from Developer Portal → Bot. It is never returned.',
+    };
+  }
+  if (channelType === 'slack' && field === 'bot_token') {
+    return {
+      label: 'Bot token',
+      placeholder: 'xoxb-…',
+      hint: 'Slack bot token, starts with xoxb-',
+      prefix: 'xoxb-',
+    };
+  }
+  if (channelType === 'slack' && field === 'app_token') {
+    return {
+      label: 'App-level token',
+      placeholder: 'xapp-…',
+      hint: 'Slack app-level token for Socket Mode, starts with xapp-',
+      prefix: 'xapp-',
+    };
+  }
+  const fallback: Record<string, GatewayCredentialPresentation> = {
+    private_key: {
+      label: 'Private key',
+      placeholder: '-----BEGIN PRIVATE KEY-----',
+      hint: 'GitHub App private key (PEM)',
+    },
+    app_password: {
+      label: 'App password',
+      placeholder: 'Teams app password',
+      hint: 'Microsoft Teams app password',
+    },
+    signing_secret: { label: 'Signing secret', placeholder: 'Signing secret' },
+    webhook_secret: { label: 'Webhook secret', placeholder: 'Webhook secret' },
+  };
+  return fallback[field] ?? { label: field, placeholder: `Enter ${field}` };
 }
 
 /** @deprecated Use {@link GatewayConnectionTestFailure}. */
@@ -727,6 +790,38 @@ export const GATEWAY_CHANNEL_WRITE_FIELDS: ExhaustiveWriteFields<
   typeof GATEWAY_CHANNEL_WRITE_FIELD_VALUES
 > = GATEWAY_CHANNEL_WRITE_FIELD_VALUES;
 
+/** Merge one public config patch with the decrypted stored configuration. */
+export function mergeGatewayChannelConfigPatch(
+  currentConfig: Record<string, unknown>,
+  patchConfig: Record<string, unknown> | undefined,
+  channelType: ChannelType,
+  enabled: boolean
+): Record<string, unknown> {
+  const merged = { ...currentConfig, ...(patchConfig ?? {}) };
+  for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
+    const updateValue = patchConfig?.[field];
+    if ((!updateValue || updateValue === GATEWAY_REDACTED_SENTINEL) && currentConfig[field]) {
+      merged[field] = currentConfig[field];
+    }
+  }
+  return channelType === 'discord' && enabled ? withDiscordConfigDefaults(merged) : merged;
+}
+
+/** Fields that change the provider authority generation and binding. */
+export function isGatewayProviderAuthorityPatch(patch: {
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+  channel_type?: ChannelType;
+  agor_user_id?: UserID | null;
+}): boolean {
+  return (
+    patch.enabled !== undefined ||
+    patch.config !== undefined ||
+    patch.channel_type !== undefined ||
+    patch.agor_user_id !== undefined
+  );
+}
+
 /**
  * Thread-Session Mapping - Links a platform thread to an Agor session
  *
@@ -743,8 +838,8 @@ export interface ThreadSessionMap {
   last_message_at: string;
   status: ThreadStatus;
   metadata: Record<string, unknown> | null;
-  /** Last Discord provider cursor whose mention Task was durably admitted. */
-  last_admitted_provider_cursor: string | null;
+  /** Last Discord message ID whose mention Task was durably admitted. */
+  discord_last_admitted_message_id: string | null;
 }
 
 /**

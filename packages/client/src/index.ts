@@ -77,6 +77,7 @@ export const AGENTIC_TOOL_CAPABILITIES: Record<AgenticToolName, AgenticToolCapab
 export { shortId } from '@agor/core/client';
 export { isValidSlug, REPO_SLUG_PATTERN } from '@agor/core/config/browser';
 export type { PaginatedResult } from '@agor/core/types';
+export { getGatewayCredentialPresentation } from '@agor/core/types';
 export * from './models';
 export type {
   ReactiveAgorClient,

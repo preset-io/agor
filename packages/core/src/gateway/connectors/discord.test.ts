@@ -1,7 +1,8 @@
 import { GatewayCloseCodes } from 'discord-api-types/v10';
 import { describe, expect, it, vi } from 'vitest';
-import { validateDiscordConfig } from '../../types/gateway';
+import { type DiscordMessageDeliveryID, validateDiscordConfig } from '../../types/gateway';
 import type { GatewayListenerOptions } from '../connector';
+import { buildDiscordDeliveryMetadata, buildDiscordDeliveryNonce } from '../discord-identifiers';
 import {
   chunkDiscordMessage,
   DiscordConnector,
@@ -215,13 +216,17 @@ describe('Discord connector beta', () => {
 
   it('sends one nonce-enforced delivery chunk and recovers that nonce', async () => {
     const { transport, rest } = makeTransport();
+    const nonce = buildDiscordDeliveryNonce(
+      '018f5f63-0fd1-7c2e-9e7d-8fb27d4a6e1a' as DiscordMessageDeliveryID,
+      0
+    );
     rest.get.mockImplementation(async (route: string) => {
       if (route.includes('/messages?limit=100')) {
         return [
           {
             id: '777777777777777777',
             channel_id: '333333333333333333',
-            nonce: 'delivery-nonce-0',
+            nonce,
             timestamp: new Date().toISOString(),
           },
         ];
@@ -237,21 +242,18 @@ describe('Discord connector beta', () => {
     await connector.sendMessage({
       threadId: 'discord:message:333333333333333333:888888888888888888',
       text: 'recoverable reply',
-      metadata: {
-        discord_delivery_nonce: 'delivery-nonce-0',
-        discord_enforce_nonce: true,
-      },
+      metadata: buildDiscordDeliveryMetadata(nonce),
     });
     expect(rest.post).toHaveBeenCalledWith(
       '/channels/333333333333333333/messages',
       expect.objectContaining({
-        body: expect.objectContaining({ nonce: 'delivery-nonce-0', enforce_nonce: true }),
+        body: expect.objectContaining({ nonce, enforce_nonce: true }),
       })
     );
     await expect(
       connector.recoverMessageByNonce?.({
         threadId: 'discord:message:333333333333333333:888888888888888888',
-        nonce: 'delivery-nonce-0',
+        nonce,
       })
     ).resolves.toMatchObject({ messageId: '777777777777777777' });
   });
@@ -672,7 +674,7 @@ describe('Discord connector beta', () => {
       target: 'channel:333333333333333333',
       text: 'hello',
     });
-    await expect(result).rejects.toThrow(/redacted|provider-url|path/);
+    await expect(result).rejects.toThrow('Discord API failure: provider_request_failed');
     await expect(result).rejects.not.toThrow('Bot abcdefghijklmnopqrst');
     await expect(result).rejects.not.toThrow('https://discord.example.test');
   });
@@ -726,6 +728,27 @@ describe('Discord connector beta', () => {
       code: 'discord_message_content_unavailable',
     });
     expect(gateway.connect).not.toHaveBeenCalled();
+  });
+
+  it('does not call an unknown Message Content capability verified', async () => {
+    const { transport, rest } = makeTransport();
+    rest.get.mockImplementation(async (route: string) => {
+      if (route.includes('/oauth2/applications/@me')) return { name: 'opaque flags' };
+      if (route.startsWith('/users/')) return { id: config.application_id };
+      if (route.includes('/gateway/bot')) return { shards: 1 };
+      if (route.includes('/members/')) {
+        return { user: { id: config.application_id }, roles: [], permissions: '309237713920' };
+      }
+      if (route.startsWith('/guilds/')) return { id: config.guild_id, roles: [] };
+      return { id: config.allowed_channel_ids[0], guild_id: config.guild_id, type: 0 };
+    });
+    const result = await new DiscordConnector(config, transport as never).testConnection();
+    expect(result.ok).toBe(true);
+    expect(result.verification).toEqual({
+      status: 'warning',
+      warnings: [expect.stringMatching(/not expose.*Message Content/i)],
+    });
+    expect(result.verifiedInstallationId).toBe(config.application_id);
   });
 
   it('rejects a multi-shard recommendation before opening the gateway', async () => {

@@ -32,9 +32,9 @@ import type { Application, SessionsServiceImpl, TasksServiceImpl } from './decla
 import { beginExecutorResponseDrain } from './executor-response-channel.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
 import { type DaemonMetrics, getDaemonMetrics, NOOP_METRICS } from './metrics/index.js';
+import { DiscordMessageDeliveryWorker } from './services/discord-message-delivery-worker.js';
 import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
 import type { GatewayService } from './services/gateway.js';
-import { GatewayMessageDeliveryWorker } from './services/gateway-message-delivery-worker.js';
 import { HealthMonitor } from './services/health-monitor.js';
 import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexer.js';
 import { SchedulerService } from './services/scheduler.js';
@@ -858,13 +858,13 @@ export async function startup(ctx: StartupContext): Promise<void> {
   // 10. Start final Discord delivery independently from listener ownership and
   // inbound Task processing. Claims and provider effects are recoverable across
   // daemon replicas; this loop is deliberately a separate lifecycle.
-  const gatewayMessageDeliveryWorker = new GatewayMessageDeliveryWorker(db, {
+  const discordMessageDeliveryWorker = new DiscordMessageDeliveryWorker(db, {
     tenantId:
       startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
   });
-  app.set('gatewayMessageDeliveryWorker', gatewayMessageDeliveryWorker);
-  gatewayMessageDeliveryWorker.start();
-  console.log('📨 Gateway message delivery worker started');
+  app.set('discordMessageDeliveryWorker', discordMessageDeliveryWorker);
+  discordMessageDeliveryWorker.start();
+  console.log('📨 Discord message delivery worker started');
 
   // 11. Graceful shutdown handler
   let shutdownStarted = false;
@@ -921,8 +921,8 @@ export async function startup(ctx: StartupContext): Promise<void> {
       }
 
       // Stop gateway listeners
-      console.log('📨 Stopping gateway message delivery worker...');
-      gatewayMessageDeliveryWorker.stop();
+      console.log('📨 Stopping discord message delivery worker...');
+      await discordMessageDeliveryWorker.stop();
 
       if (gatewayService) {
         console.log('🌐 Stopping gateway listeners...');

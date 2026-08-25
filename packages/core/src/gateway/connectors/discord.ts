@@ -39,8 +39,18 @@ import type {
   GatewaySendReceipt,
   InboundMessage,
 } from '../connector';
+import type { DiscordDeliveryNonce } from '../discord-identifiers';
+import {
+  buildDiscordInboundMetadata,
+  buildDiscordLegacyThreadKey,
+  buildDiscordMessageThreadKey,
+  buildDiscordVerifiedThreadMetadata,
+  DISCORD_METADATA_KEY,
+  parseDiscordAuthorityMetadata,
+  parseDiscordThreadKey,
+} from '../discord-identifiers';
 import { GatewayListenerError } from '../listener-error';
-import { sanitizeGatewayProviderError } from '../provider-error';
+import { gatewayFailureCode } from '../provider-error';
 import { fetchDiscordProviderHistory } from './discord-history';
 
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -220,11 +230,11 @@ function configuredChannelIds(config: DiscordGatewayConfig): string[] {
 }
 
 function messageThreadId(channelId: string, messageId: string): string {
-  return `discord:message:${channelId}:${messageId}`;
+  return buildDiscordMessageThreadKey(channelId, messageId);
 }
 
 function existingThreadId(parentChannelId: string, threadChannelId: string): string {
-  return `discord:thread:${parentChannelId}:${threadChannelId}`;
+  return buildDiscordLegacyThreadKey(parentChannelId, threadChannelId);
 }
 
 function parseThreadId(threadId: string): {
@@ -234,26 +244,25 @@ function parseThreadId(threadId: string): {
   existingThread: boolean;
   providerThread: boolean;
 } {
-  const threadMatch = /^discord:thread:(\d{17,20}):(\d{17,20})$/.exec(threadId);
-  if (threadMatch) {
+  const parsed = parseDiscordThreadKey(threadId);
+  if (parsed?.kind === 'legacy_thread') {
     return {
-      channelId: threadMatch[2],
-      parentChannelId: threadMatch[1],
+      channelId: parsed.threadChannelId,
+      parentChannelId: parsed.parentChannelId,
       existingThread: true,
       providerThread: false,
     };
   }
-  const messageMatch = /^discord:message:(\d{17,20}):(\d{17,20})$/.exec(threadId);
-  if (messageMatch) {
+  if (parsed?.kind === 'message') {
     return {
-      channelId: messageMatch[1],
-      messageId: messageMatch[2],
+      channelId: parsed.channelId,
+      messageId: parsed.messageId,
       existingThread: false,
       providerThread: false,
     };
   }
-  if (isDiscordSnowflake(threadId)) {
-    return { channelId: threadId, existingThread: true, providerThread: true };
+  if (parsed?.kind === 'provider_thread') {
+    return { channelId: parsed.channelId, existingThread: true, providerThread: true };
   }
   throw new Error(`Invalid Discord thread ID: ${threadId}`);
 }
@@ -409,7 +418,7 @@ export function stripDiscordBotMention(text: string, botUserId: string): string 
 }
 
 function providerError(error: unknown): string {
-  return sanitizeGatewayProviderError(error);
+  return gatewayFailureCode(error);
 }
 
 function replyAliases(channelId: string, messageIds: string[]): string[] {
@@ -671,9 +680,7 @@ export class DiscordConnector implements GatewayConnector {
       // provider create.
       const afterConflict = await this.lookupThreadForStarter(parentChannelId, starterMessageId);
       if (afterConflict) return afterConflict;
-      throw new Error(
-        `Discord public thread creation failed: ${sanitizeGatewayProviderError(error)}`
-      );
+      throw new Error(`Discord public thread creation failed: ${gatewayFailureCode(error)}`);
     }
 
     const createdRecord = asRecord(created);
@@ -732,20 +739,14 @@ export class DiscordConnector implements GatewayConnector {
           prepared.channelId
         )
       : await this.reconcilePublicSummonThread(prepared.channelId, prepared.messageId);
-    return {
-      discord_thread_id: verified.coordinates.thread_channel_id,
-      discord_thread: verified.coordinates,
-      discord_thread_type: verified.type,
-      discord_thread_accessible: true,
-      discord_starter_message_accessible: true,
-    };
+    return buildDiscordVerifiedThreadMetadata(verified.coordinates, verified.type);
   }
 
   private async sendChunk(
     channelId: string,
     content: string,
     replyToMessageId?: string,
-    delivery?: { nonce: string; enforceNonce: true }
+    delivery?: { nonce: DiscordDeliveryNonce; enforceNonce: true }
   ): Promise<{ id: string }> {
     const body = {
       content,
@@ -765,10 +766,7 @@ export class DiscordConnector implements GatewayConnector {
     try {
       raw = asRecord(await this.transport.rest.post(Routes.channelMessages(channelId), { body }));
     } catch (error) {
-      throw withDeliveryErrorMetadata(
-        error,
-        `Discord API failure: ${sanitizeGatewayProviderError(error)}`
-      );
+      throw withDeliveryErrorMetadata(error, `Discord API failure: ${gatewayFailureCode(error)}`);
     }
     const id = snowflake(raw?.id);
     if (!id) throw new Error('Discord API response did not include a message id');
@@ -806,6 +804,10 @@ export class DiscordConnector implements GatewayConnector {
   }): Promise<GatewaySendReceipt> {
     this.validate();
     const parsed = parseThreadId(req.threadId);
+    const metadata = parseDiscordAuthorityMetadata(req.metadata);
+    if (req.metadata !== undefined && !metadata) {
+      throw new Error('Discord outbound metadata contains a malformed authority field');
+    }
     let parentChannelId = parsed.parentChannelId ?? parsed.channelId;
     if (parsed.providerThread) {
       const thread = await this.getProviderRecord(Routes.channel(parsed.channelId));
@@ -822,18 +824,18 @@ export class DiscordConnector implements GatewayConnector {
     if (!configuredChannelIds(this.config).includes(parentChannelId)) {
       throw new Error('Discord replies must remain in an allowed channel');
     }
-    const explicitReply =
-      typeof req.metadata?.discord_reply_to_message_id === 'string'
-        ? req.metadata.discord_reply_to_message_id
-        : undefined;
+    const explicitReply = metadata?.[DISCORD_METADATA_KEY.replyToMessageId];
     const replyTo = explicitReply ?? parsed.messageId;
     const ids: string[] = [];
     const chunks = chunkDiscordMessage(req.text);
-    const deliveryNonce = req.metadata?.discord_delivery_nonce;
-    const enforceNonce = req.metadata?.discord_enforce_nonce === true;
-    if (enforceNonce && (typeof deliveryNonce !== 'string' || chunks.length !== 1)) {
+    const deliveryNonce = metadata?.[DISCORD_METADATA_KEY.deliveryNonce];
+    const enforceNonce = metadata?.[DISCORD_METADATA_KEY.enforceNonce] === true;
+    if (enforceNonce && (!deliveryNonce || chunks.length !== 1)) {
       throw new Error('Discord delivery nonce requires exactly one bounded message chunk');
     }
+    const nonceOptions = enforceNonce
+      ? { nonce: deliveryNonce as DiscordDeliveryNonce, enforceNonce: true as const }
+      : undefined;
     for (const chunk of chunks) {
       ids.push(
         (
@@ -841,7 +843,7 @@ export class DiscordConnector implements GatewayConnector {
             parsed.channelId,
             chunk,
             parsed.providerThread ? undefined : replyTo,
-            enforceNonce ? { nonce: deliveryNonce as string, enforceNonce: true } : undefined
+            nonceOptions
           )
         ).id
       );
@@ -999,18 +1001,17 @@ export class DiscordConnector implements GatewayConnector {
       accepted: true,
       threadId,
       text,
-      metadata: {
-        discord_guild_id: guildId,
-        discord_channel_id: channelId,
-        discord_message_id: messageId,
-        discord_author_id: authorId,
-        discord_role_ids: roles,
-        discord_bot_user_id: botUserId,
-        discord_is_thread: isThread,
-        ...(isThread ? { discord_parent_channel_id: parentId } : {}),
-        ...(referencedMessageId ? { discord_reply_to_message_id: referencedMessageId } : {}),
-        discord_has_mention: true,
-      },
+      metadata: buildDiscordInboundMetadata({
+        guildId,
+        channelId,
+        messageId,
+        authorId,
+        roleIds: roles,
+        botUserId,
+        isThread,
+        ...(isThread && parentId ? { parentChannelId: parentId } : {}),
+        ...(referencedMessageId ? { replyToMessageId: referencedMessageId } : {}),
+      }),
       prepareDelivery: async (context) =>
         this.prepareInboundDelivery(
           {
@@ -1035,7 +1036,7 @@ export class DiscordConnector implements GatewayConnector {
     const messageId = snowflake(message.id);
     if (!result.accepted || !result.threadId || !result.text || !messageId) return { messageId };
     const inbound: InboundMessage = {
-      providerEventId: `discord:${configuredString(this.config, 'guild_id')}:${result.metadata?.discord_channel_id ?? ''}:${messageId}`,
+      providerEventId: `discord:${configuredString(this.config, 'guild_id')}:${result.metadata?.[DISCORD_METADATA_KEY.channelId] ?? ''}:${messageId}`,
       threadId: result.threadId,
       text: result.text,
       userId: String(asRecord(message.author)?.id ?? ''),
@@ -1302,6 +1303,16 @@ export class DiscordConnector implements GatewayConnector {
         ...(botOk && botUserId ? { verifiedInstallationId: botUserId } : {}),
         team: { id: String(guild?.id ?? this.config.guild_id), name: String(guild?.name ?? '') },
         channelAccess,
+        ...(messageContent === undefined
+          ? {
+              verification: {
+                status: 'warning' as const,
+                warnings: [
+                  'Discord application flags did not expose a parseable Message Content capability; this result is not verified.',
+                ],
+              },
+            }
+          : { verification: { status: 'verified' as const, warnings: [] } }),
         failures,
         notVerifiable: [
           'End-to-end send/reply permission for every configured channel and thread cannot be proven by this REST-only probe; sampled view, send, history, public-thread creation, and thread-reply bits are reported in channelAccess.',

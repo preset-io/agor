@@ -17,7 +17,7 @@ Discord should adopt the same correctness model as Slack:
 The Discord Gateway connection is a restartable transport, not a conversation
 store. A live mention is the only trigger for a Task. On that trigger, Agor
 authorizes the event, resolves or creates the public thread, reads the last
-admitted provider cursor, fetches a bounded ordered slice from Discord REST,
+admitted Discord message ID, fetches a bounded ordered slice from Discord REST,
 admits one Agor Task, and advances the cursor only after admission. Response
 delivery is downstream of that boundary.
 
@@ -66,7 +66,7 @@ Durable correctness is limited to these facts:
 3. **Thread/session mapping.** A tenant and gateway channel map a canonical
    Discord public thread to one Agor session, with compatibility aliases where
    required.
-4. **Last-admitted provider cursor.** Each mapping records the greatest
+4. **Last-admitted Discord message ID.** Each mapping records the greatest
    provider message ID whose bounded context was admitted into a Task. This is
    a Snowflake cursor, compared as an unsigned integer, never as a JavaScript
    floating-point number.
@@ -188,7 +188,7 @@ introduced without its own authorization, idempotency, and delivery contract.
 ### 4. Load the mapping and cursor
 
 The lookup key is tenant + gateway channel + canonical Discord provider thread.
-If a mapping exists, load its session and `last_admitted_provider_cursor`. If
+If a mapping exists, load its session and `discord_last_admitted_message_id`. If
 it does not, use an empty cursor and create the mapping as part of the normal
 first-admission race; database uniqueness elects one mapping when two accepted
 deliveries contend.
@@ -237,7 +237,7 @@ Build the gateway context and ordered catch-up packet, then call the normal
 session prompt admission path. A new session and mapping may be admitted only
 for this authorized live summon. A busy session receives a queued Task under
 the normal session queue rules; that is still Task admission and is the point
-at which the provider cursor becomes eligible to advance.
+at which the Discord message ID becomes eligible to advance.
 
 Inbound event idempotency and stable Task identity cover the crash window where
 the Task is committed but the provider callback has not yet completed. A

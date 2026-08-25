@@ -146,10 +146,10 @@ describe('GatewayOutboundMessageRepository', () => {
     });
     const repo = new ThreadSessionMapRepository(db);
 
-    await repo.mergeGatewayReplyAliases(mapping.id, ['C123-171234.000101'], 'sequential');
+    await repo.mergeGatewayReplyAliases(mapping.id, ['C123-171234.000101']);
     await Promise.all([
-      repo.mergeGatewayReplyAliases(mapping.id, ['C123-171234.000102'], 'concurrent-a'),
-      repo.mergeGatewayReplyAliases(mapping.id, ['C123-171234.000103'], 'concurrent-b'),
+      repo.mergeGatewayReplyAliases(mapping.id, ['C123-171234.000102']),
+      repo.mergeGatewayReplyAliases(mapping.id, ['C123-171234.000103']),
     ]);
 
     const updated = await repo.findById(mapping.id);
@@ -177,7 +177,7 @@ describe('GatewayOutboundMessageRepository', () => {
     const repo = new ThreadSessionMapRepository(db);
 
     for (const alias of aliases) {
-      await repo.mergeGatewayReplyAliases(mapping.id, [alias], 'chunk');
+      await repo.mergeGatewayReplyAliases(mapping.id, [alias]);
     }
 
     const updated = await repo.findById(mapping.id);
@@ -185,33 +185,36 @@ describe('GatewayOutboundMessageRepository', () => {
     expect(updated?.metadata?.gateway_reply_aliases).toEqual(expect.arrayContaining(aliases));
   });
 
-  dbTest('advances the provider cursor only monotonically after Task admission', async ({ db }) => {
-    const { user, branch, channel } = await seedGateway(db);
-    const sessionId = generateId();
-    await seedSession(db, branch.branch_id, user.user_id, sessionId);
-    const repo = new ThreadSessionMapRepository(db);
-    const mapping = await repo.create({
-      channel_id: channel.id,
-      thread_id: '900000000000000001',
-      session_id: sessionId as never,
-      branch_id: branch.branch_id,
-      metadata: { discord_thread: { starter_message_id: '900000000000000001' } },
-    });
+  dbTest(
+    'advances the Discord message ID only monotonically after Task admission',
+    async ({ db }) => {
+      const { user, branch, channel } = await seedGateway(db);
+      const sessionId = generateId();
+      await seedSession(db, branch.branch_id, user.user_id, sessionId);
+      const repo = new ThreadSessionMapRepository(db);
+      const mapping = await repo.create({
+        channel_id: channel.id,
+        thread_id: '900000000000000001',
+        session_id: sessionId as never,
+        branch_id: branch.branch_id,
+        metadata: { discord_thread: { starter_message_id: '900000000000000001' } },
+      });
 
-    expect(mapping.last_admitted_provider_cursor).toBeNull();
-    await expect(
-      repo.advanceLastAdmittedProviderCursor(mapping.id, '900000000000000010')
-    ).resolves.toBe(true);
-    await expect(
-      repo.advanceLastAdmittedProviderCursor(mapping.id, '900000000000000009')
-    ).resolves.toBe(false);
-    await expect(
-      repo.advanceLastAdmittedProviderCursor(mapping.id, '900000000000000011')
-    ).resolves.toBe(true);
-    await expect(repo.findById(mapping.id)).resolves.toMatchObject({
-      last_admitted_provider_cursor: '900000000000000011',
-    });
-  });
+      expect(mapping.discord_last_admitted_message_id).toBeNull();
+      await expect(
+        repo.advanceDiscordLastAdmittedMessageId(mapping.id, '900000000000000010')
+      ).resolves.toBe(true);
+      await expect(
+        repo.advanceDiscordLastAdmittedMessageId(mapping.id, '900000000000000009')
+      ).resolves.toBe(false);
+      await expect(
+        repo.advanceDiscordLastAdmittedMessageId(mapping.id, '900000000000000011')
+      ).resolves.toBe(true);
+      await expect(repo.findById(mapping.id)).resolves.toMatchObject({
+        discord_last_admitted_message_id: '900000000000000011',
+      });
+    }
+  );
 
   dbTest('completes seed initial prompt only for its matching event', async ({ db }) => {
     const { user, branch, channel } = await seedGateway(db);

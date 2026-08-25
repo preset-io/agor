@@ -227,7 +227,7 @@ describe('agor_gateway_channels MCP tools', () => {
       'provider_installation_id',
       'provider_config_generation',
       'listener_checkpoint',
-      'last_admitted_provider_cursor',
+      'discord_last_admitted_message_id',
       'delivery_status',
       'repair',
       'redrive',
@@ -382,6 +382,56 @@ describe('agor_gateway_channels MCP tools', () => {
       config: { app_id: '123', installation_id: '456', watch_repos: ['org/repo'] },
     });
     expect(githubDraftComplete.success).toBe(true);
+
+    const discordDraftIncomplete = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft Discord',
+      targetBranchId: 'branch-1',
+      channelType: 'discord',
+      enabled: false,
+      agorUserId: 'user-runner',
+      config: { application_id: '111111111111111111' },
+    });
+    expect(discordDraftIncomplete.success).toBe(false);
+
+    const discordDraftComplete = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft Discord',
+      targetBranchId: 'branch-1',
+      channelType: 'discord',
+      enabled: false,
+      agorUserId: 'user-runner',
+      config: {
+        application_id: '111111111111111111',
+        guild_id: '222222222222222222',
+        allowed_channel_ids: ['333333333333333333'],
+        allowed_user_ids: ['444444444444444444'],
+        allowed_role_ids: [],
+        message_content_enabled: true,
+        thread_mode: 'public_thread_per_summon',
+        align_discord_users: false,
+      },
+    });
+    expect(discordDraftComplete.success).toBe(true);
+
+    const discordDraftWithToken = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft Discord',
+      targetBranchId: 'branch-1',
+      channelType: 'discord',
+      enabled: false,
+      agorUserId: 'user-runner',
+      config: {
+        application_id: '111111111111111111',
+        guild_id: '222222222222222222',
+        allowed_channel_ids: ['333333333333333333'],
+        allowed_user_ids: ['444444444444444444'],
+        allowed_role_ids: [],
+        message_content_enabled: true,
+        thread_mode: 'public_thread_per_summon',
+        align_discord_users: false,
+        bot_token: 'discord-secret',
+      },
+    });
+    expect(discordDraftWithToken.success).toBe(false);
+    expect(String(discordDraftWithToken.error)).toContain('secure gateway token widget');
   });
 
   it('requires agorUserId for run-as-selected-user Slack channels', async () => {
@@ -497,6 +547,63 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(JSON.stringify(payload)).not.toContain('raw-channel-key');
     expect(JSON.stringify(payload)).not.toContain('raw-env-secret');
     expect(JSON.stringify(payload.next_steps)).toContain('agor_widgets_request_gateway_token');
+  });
+
+  it('normalizes a fresh disabled Discord draft before service persistence', async () => {
+    const createCalls: Array<Record<string, unknown>> = [];
+    const app = makeFakeApp({
+      'gateway-channels': {
+        create: async (data: Record<string, unknown>) => {
+          createCalls.push(data);
+          return {
+            id: 'discord-draft',
+            created_by: 'admin-1',
+            name: data.name,
+            channel_type: 'discord',
+            target_branch_id: data.target_branch_id,
+            agor_user_id: data.agor_user_id,
+            channel_key: 'raw-key',
+            config: data.config,
+            agentic_config: null,
+            enabled: false,
+            created_at: '2026-06-22T00:00:00.000Z',
+            updated_at: '2026-06-22T00:00:00.000Z',
+            last_message_at: null,
+          };
+        },
+      },
+    });
+    const tools = await captureTools('admin', app);
+
+    await tools.agor_gateway_channels_create.handler({
+      name: 'Draft Discord',
+      targetBranchId: 'branch-1',
+      channelType: 'discord',
+      enabled: false,
+      agorUserId: 'user-runner',
+      config: {
+        application_id: '111111111111111111',
+        guild_id: '222222222222222222',
+        allowed_channel_ids: ['333333333333333333'],
+        allowed_user_ids: ['444444444444444444'],
+        allowed_role_ids: [],
+        message_content_enabled: true,
+        thread_mode: 'public_thread_per_summon',
+        align_discord_users: false,
+      },
+    });
+
+    expect(createCalls).toHaveLength(1);
+    expect(createCalls[0]?.config).toMatchObject({
+      catch_up: expect.objectContaining({
+        max_pages: 5,
+        max_messages: 200,
+        max_prompt_bytes: 32768,
+      }),
+      files: false,
+      agent_tools: [],
+    });
+    expect(createCalls[0]?.config).not.toHaveProperty('bot_token');
   });
 
   it('lists with filters and redacts Teams app_password', async () => {
@@ -636,6 +743,88 @@ describe('agor_gateway_channels MCP tools', () => {
     });
 
     expect(patchCalls).toEqual([{ id: 'chan-1', data: { agentic_config: null } }]);
+  });
+
+  it('validates the stored Discord provider when channelType is omitted', async () => {
+    const patch = vi.fn(async (id: string, data: Record<string, unknown>) => ({
+      id,
+      created_by: 'admin-1',
+      name: 'Discord',
+      channel_type: 'discord',
+      target_branch_id: 'branch-1',
+      agor_user_id: 'user-1',
+      channel_key: 'raw-key',
+      config: {
+        application_id: '111111111111111111',
+        guild_id: '222222222222222222',
+        allowed_channel_ids: ['333333333333333333'],
+        allowed_user_ids: ['444444444444444444'],
+        allowed_role_ids: [],
+        message_content_enabled: true,
+        thread_mode: 'public_thread_per_summon',
+        thread_auto_archive_minutes: 1440,
+        align_discord_users: false,
+        catch_up: {
+          max_pages: 5,
+          max_messages: 200,
+          max_prompt_bytes: 32768,
+          request_timeout_ms: 30000,
+          rate_limit_max_retries: 2,
+          rate_limit_max_total_delay_ms: 10000,
+        },
+        files: false,
+        agent_tools: [],
+        ...(data.config as Record<string, unknown>),
+      },
+      agentic_config: null,
+      enabled: false,
+      created_at: '2026-06-22T00:00:00.000Z',
+      updated_at: '2026-06-22T00:00:00.000Z',
+      last_message_at: null,
+    }));
+    const app = makeFakeApp({
+      'gateway-channels': {
+        get: async () => ({
+          id: 'chan-1',
+          name: 'Discord',
+          channel_type: 'discord',
+          target_branch_id: 'branch-1',
+          agor_user_id: 'user-1',
+          config: {
+            application_id: '111111111111111111',
+            guild_id: '222222222222222222',
+            allowed_channel_ids: ['333333333333333333'],
+            allowed_user_ids: ['444444444444444444'],
+            allowed_role_ids: [],
+            message_content_enabled: true,
+            thread_mode: 'public_thread_per_summon',
+            thread_auto_archive_minutes: 1440,
+            align_discord_users: false,
+            catch_up: {
+              max_pages: 5,
+              max_messages: 200,
+              max_prompt_bytes: 32768,
+              request_timeout_ms: 30000,
+              rate_limit_max_retries: 2,
+              rate_limit_max_total_delay_ms: 10000,
+            },
+            files: false,
+            agent_tools: [],
+          },
+        }),
+        patch,
+      },
+    });
+    const tools = await captureTools('admin', app);
+    await tools.agor_gateway_channels_update.handler({
+      gatewayChannelId: 'chan-1',
+      config: { bot_token: '••••••••' },
+    });
+    expect(patch).toHaveBeenCalledWith(
+      'chan-1',
+      { config: { bot_token: '••••••••' } },
+      expect.anything()
+    );
   });
 
   it('denies list/create/update for non-admin users before service calls', async () => {
@@ -2470,9 +2659,11 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     const result = await tools.agor_gateway_discord_setup.handler({
       applicationId: '111111111111111111',
       guildId: '222222222222222222',
+      messageContentAcknowledged: true,
       allowedChannelIds: ['333333333333333333'],
       allowedUserIds: ['444444444444444444'],
       allowedRoleIds: [],
+      agorUserId: '00000000-0000-4000-8000-000000000001',
       outbound: true,
     });
     const payload = JSON.parse(result.content[0].text);
@@ -2501,6 +2692,10 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       default_outbound_target: 'channel:333333333333333333',
     });
     expect(payload.validation).toEqual({ ok: true, errors: [] });
+    expect(payload.setup_artifact.permissions.bitmask).toBe('309237713920');
+    expect(payload.setup_artifact.botInviteUrl).toContain('permissions=309237713920');
+    expect(payload.setup_artifact.draft.enabled).toBe(false);
+    expect(payload.setup_artifact.draft.config.bot_token).toBeUndefined();
     expect(JSON.stringify(payload)).not.toContain('bot_token');
   });
 
@@ -2510,6 +2705,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
       memberTools.agor_gateway_discord_setup.handler({
         applicationId: '111111111111111111',
         guildId: '222222222222222222',
+        messageContentAcknowledged: true,
         allowedChannelIds: ['333333333333333333'],
       })
     ).rejects.toThrow(/admin role required/);
@@ -2528,9 +2724,22 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
           allowed_channel_ids: ['333333333333333333'],
           allowed_user_ids: ['444444444444444444'],
           allowed_role_ids: [],
+          message_content_enabled: true,
+          thread_mode: 'public_thread_per_summon',
+          align_discord_users: false,
         },
       }).success
     ).toBe(true);
+    const setupSchema = memberTools.agor_gateway_discord_setup.cfg.inputSchema;
+    expect(
+      setupSchema.safeParse({
+        applicationId: '111111111111111111',
+        guildId: '222222222222222222',
+        messageContentAcknowledged: true,
+        allowedChannelIds: ['333333333333333333'],
+        allowedUserIds: ['444444444444444444'],
+      }).success
+    ).toBe(false);
   });
 
   it('exposes bounded Discord catch-up settings without internal state', async () => {
@@ -2539,6 +2748,7 @@ describe('agor_gateway_slack_manifest_generate MCP tool', () => {
     const base = {
       applicationId: '111111111111111111',
       guildId: '222222222222222222',
+      messageContentAcknowledged: true,
       allowedChannelIds: ['333333333333333333'],
     };
     expect(setupSchema.safeParse({ ...base, catchUp: { maxPages: 11 } }).success).toBe(false);

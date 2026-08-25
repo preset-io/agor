@@ -2057,7 +2057,7 @@ export const threadSessionMap = sqliteTable(
     metadata: t.json<Record<string, unknown>>('metadata'),
 
     // Durable Discord catch-up cursor. Provider history itself is never stored.
-    last_admitted_provider_cursor: text('last_admitted_provider_cursor'),
+    discord_last_admitted_message_id: text('discord_last_admitted_message_id'),
   },
   (table) => ({
     uniqueChannelThread: uniqueIndex('uniq_thread_map_channel_thread').on(
@@ -2071,8 +2071,8 @@ export const threadSessionMap = sqliteTable(
 );
 
 /** Standalone SQLite mirror of the narrow Discord final-delivery intent. */
-export const gatewayMessageDeliveries = sqliteTable(
-  'gateway_message_deliveries',
+export const discordMessageDeliveries = sqliteTable(
+  'discord_message_deliveries',
   {
     delivery_id: text('delivery_id', { length: 36 }).primaryKey(),
     created_at: t.timestamp('created_at').notNull(),
@@ -2099,8 +2099,10 @@ export const gatewayMessageDeliveries = sqliteTable(
     claim_expires_at: t.timestamp('claim_expires_at'),
     claim_generation: integer('claim_generation').notNull().default(0),
     ambiguous_chunk_index: integer('ambiguous_chunk_index'),
+    effect_started_at: t.timestamp('effect_started_at'),
+    effect_recovery_grace_until: t.timestamp('effect_recovery_grace_until'),
     chunk_receipts: t
-      .json<import('../types/gateway').GatewayMessageDeliveryChunkReceipt[]>('chunk_receipts')
+      .json<import('../types/gateway').DiscordMessageDeliveryChunkReceipt[]>('chunk_receipts')
       .notNull(),
     reply_aliases: t.json<string[]>('reply_aliases').notNull(),
     last_error_code: text('last_error_code'),
@@ -2109,13 +2111,13 @@ export const gatewayMessageDeliveries = sqliteTable(
     dead_lettered_at: t.timestamp('dead_lettered_at'),
   },
   (table) => ({
-    messageUnique: uniqueIndex('gateway_message_deliveries_message_unique').on(table.message_id),
-    dueIdx: index('gateway_message_deliveries_due_idx').on(
+    messageUnique: uniqueIndex('discord_message_deliveries_message_unique').on(table.message_id),
+    dueIdx: index('discord_message_deliveries_due_idx').on(
       table.status,
       table.next_attempt_at,
       table.delivery_id
     ),
-    claimIdx: index('gateway_message_deliveries_claim_idx').on(
+    claimIdx: index('discord_message_deliveries_claim_idx').on(
       table.status,
       table.claim_expires_at,
       table.delivery_id
@@ -2707,8 +2709,8 @@ export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
 export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
 export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
-export type GatewayMessageDeliveryRow = typeof gatewayMessageDeliveries.$inferSelect;
-export type GatewayMessageDeliveryInsert = typeof gatewayMessageDeliveries.$inferInsert;
+export type DiscordMessageDeliveryRow = typeof discordMessageDeliveries.$inferSelect;
+export type DiscordMessageDeliveryInsert = typeof discordMessageDeliveries.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;

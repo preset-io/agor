@@ -1,31 +1,32 @@
 import {
-  type GatewayMessageDeliveryClaim,
-  GatewayMessageDeliveryClaimLostError,
-  type GatewayMessageDeliveryDiscoveryRef,
+  type DiscordMessageDeliveryClaim,
+  DiscordMessageDeliveryClaimLostError,
+  type DiscordMessageDeliveryDiscoveryRef,
 } from '@agor/core/db';
 import type { GatewayConnector, GatewaySendReceipt } from '@agor/core/gateway';
 import type {
+  DiscordMessageDelivery,
+  DiscordMessageDeliveryChunkReceipt,
+  DiscordMessageDeliveryID,
   GatewayChannel,
-  GatewayMessageDelivery,
-  GatewayMessageDeliveryChunkReceipt,
-  GatewayMessageDeliveryID,
   Message,
   ThreadSessionMap,
 } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  DiscordMessageDeliveryWorker,
   deterministicDiscordDeliveryNonce,
-  GatewayMessageDeliveryWorker,
-} from './gateway-message-delivery-worker';
+  fairOrderByTenant,
+} from './discord-message-delivery-worker';
 
-const DELIVERY_ID = '018f5f63-0fd1-7c2e-9e7d-8fb27d4a6e1a' as GatewayMessageDeliveryID;
+const DELIVERY_ID = '018f5f63-0fd1-7c2e-9e7d-8fb27d4a6e1a' as DiscordMessageDeliveryID;
 const MESSAGE_ID = '018f5f63-0fd1-7c2e-9e7d-8fb27d4a6e1b' as never;
 const SESSION_ID = '018f5f63-0fd1-7c2e-9e7d-8fb27d4a6e1c' as never;
 const CHANNEL_ID = '018f5f63-0fd1-7c2e-9e7d-8fb27d4a6d1a' as never;
 const MAPPING_ID = '018f5f63-0fd1-7c2e-9e7d-8fb27d4a6d1b' as never;
 const NOW = new Date('2026-08-20T12:00:00.000Z');
 
-function copyDelivery(delivery: GatewayMessageDelivery): GatewayMessageDelivery {
+function copyDelivery(delivery: DiscordMessageDelivery): DiscordMessageDelivery {
   return {
     ...delivery,
     chunk_receipts: delivery.chunk_receipts.map((receipt) => ({
@@ -37,15 +38,14 @@ function copyDelivery(delivery: GatewayMessageDelivery): GatewayMessageDelivery 
 }
 
 class FakeDeliveryRepository {
-  row: GatewayMessageDelivery;
+  row: DiscordMessageDelivery;
   checkpointLost = 0;
   completeLost = 0;
   completeCalls = 0;
-  aliasMergeCalls = 0;
   crashBeforeComplete = false;
   crashAfterMark = false;
   afterCheckpoint?: () => Promise<void>;
-  onComplete?: (delivery: GatewayMessageDelivery) => void;
+  onComplete?: (delivery: DiscordMessageDelivery) => void;
 
   constructor() {
     this.row = {
@@ -62,6 +62,8 @@ class FakeDeliveryRepository {
       claim_expires_at: null,
       claim_generation: 0,
       ambiguous_chunk_index: null,
+      effect_started_at: null,
+      effect_recovery_grace_until: null,
       chunk_receipts: [],
       reply_aliases: [],
       last_error_code: null,
@@ -86,7 +88,7 @@ class FakeDeliveryRepository {
   async findDueRefs(
     _db: never,
     options: { limit?: number; now?: Date } = {}
-  ): Promise<GatewayMessageDeliveryDiscoveryRef[]> {
+  ): Promise<DiscordMessageDeliveryDiscoveryRef[]> {
     const now = options.now ?? new Date();
     const due =
       new Date(this.row.next_attempt_at) <= now &&
@@ -94,16 +96,22 @@ class FakeDeliveryRepository {
         (this.row.status === 'processing' &&
           (!this.row.claim_expires_at || new Date(this.row.claim_expires_at) <= now)));
     return due && (options.limit ?? 25) > 0
-      ? [{ tenant_id: 'tenant-test', delivery_id: this.row.delivery_id }]
+      ? [
+          {
+            tenant_id: 'tenant-test',
+            delivery_id: this.row.delivery_id,
+            thread_session_map_id: this.row.thread_session_map_id,
+          },
+        ]
       : [];
   }
 
   async claim(
-    deliveryId: GatewayMessageDeliveryID,
+    deliveryId: DiscordMessageDeliveryID,
     claimToken: string,
     leaseDurationMs: number,
     now = new Date()
-  ): Promise<GatewayMessageDeliveryClaim | null> {
+  ): Promise<DiscordMessageDeliveryClaim | null> {
     if (deliveryId !== this.row.delivery_id) return null;
     const claimable =
       new Date(this.row.next_attempt_at) <= now &&
@@ -130,11 +138,11 @@ class FakeDeliveryRepository {
   }
 
   async reloadClaim(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
     now?: Date;
-  }): Promise<GatewayMessageDelivery | null> {
+  }): Promise<DiscordMessageDelivery | null> {
     const now = input.now ?? new Date();
     return input.deliveryId === this.row.delivery_id &&
       this.current(input.claimToken, input.claimGeneration, now)
@@ -142,20 +150,48 @@ class FakeDeliveryRepository {
       : null;
   }
 
-  async checkpointChunk(input: {
-    deliveryId: GatewayMessageDeliveryID;
+  async renewClaim(input: {
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
-    receipt: GatewayMessageDeliveryChunkReceipt;
+    leaseDurationMs: number;
     now?: Date;
-  }): Promise<GatewayMessageDelivery> {
+  }): Promise<DiscordMessageDeliveryClaim | null> {
+    const now = input.now ?? new Date();
+    if (
+      input.deliveryId !== this.row.delivery_id ||
+      !this.current(input.claimToken, input.claimGeneration, now)
+    ) {
+      return null;
+    }
+    this.row = {
+      ...this.row,
+      claim_expires_at: new Date(now.getTime() + input.leaseDurationMs).toISOString(),
+      updated_at: now.toISOString(),
+    };
+    return {
+      delivery_id: this.row.delivery_id,
+      claim_token: input.claimToken,
+      claim_generation: input.claimGeneration,
+      lease_expires_at: this.row.claim_expires_at!,
+      delivery: copyDelivery(this.row),
+    };
+  }
+
+  async checkpointChunk(input: {
+    deliveryId: DiscordMessageDeliveryID;
+    claimToken: string;
+    claimGeneration: number;
+    receipt: DiscordMessageDeliveryChunkReceipt;
+    now?: Date;
+  }): Promise<DiscordMessageDelivery> {
     const now = input.now ?? new Date();
     if (
       input.deliveryId !== this.row.delivery_id ||
       !this.current(input.claimToken, input.claimGeneration, now)
     ) {
       this.checkpointLost += 1;
-      throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
+      throw new DiscordMessageDeliveryClaimLostError(input.deliveryId);
     }
     if (
       this.row.ambiguous_chunk_index !== input.receipt.chunk_index &&
@@ -167,6 +203,8 @@ class FakeDeliveryRepository {
       this.row = {
         ...this.row,
         ambiguous_chunk_index: null,
+        effect_started_at: null,
+        effect_recovery_grace_until: null,
         chunk_receipts: [...this.row.chunk_receipts, input.receipt],
         reply_aliases: [...new Set([...this.row.reply_aliases, ...input.receipt.reply_aliases])],
         updated_at: now.toISOString(),
@@ -177,18 +215,19 @@ class FakeDeliveryRepository {
   }
 
   async markChunkEffectStarted(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
     chunkIndex: number;
+    recoveryGraceMs?: number;
     now?: Date;
-  }): Promise<GatewayMessageDelivery> {
+  }): Promise<DiscordMessageDelivery> {
     const now = input.now ?? new Date();
     if (
       input.deliveryId !== this.row.delivery_id ||
       !this.current(input.claimToken, input.claimGeneration, now)
     ) {
-      throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
+      throw new DiscordMessageDeliveryClaimLostError(input.deliveryId);
     }
     if (
       this.row.ambiguous_chunk_index !== null &&
@@ -199,6 +238,10 @@ class FakeDeliveryRepository {
     this.row = {
       ...this.row,
       ambiguous_chunk_index: input.chunkIndex,
+      effect_started_at: now.toISOString(),
+      effect_recovery_grace_until: new Date(
+        now.getTime() + (input.recoveryGraceMs ?? 60_000)
+      ).toISOString(),
       updated_at: now.toISOString(),
     };
     if (this.crashAfterMark) {
@@ -209,31 +252,37 @@ class FakeDeliveryRepository {
   }
 
   async clearChunkEffectMarker(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
     chunkIndex: number;
     now?: Date;
-  }): Promise<GatewayMessageDelivery> {
+  }): Promise<DiscordMessageDelivery> {
     const now = input.now ?? new Date();
     if (
       input.deliveryId !== this.row.delivery_id ||
       !this.current(input.claimToken, input.claimGeneration, now)
     ) {
-      throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
+      throw new DiscordMessageDeliveryClaimLostError(input.deliveryId);
     }
     if (this.row.ambiguous_chunk_index === input.chunkIndex) {
-      this.row = { ...this.row, ambiguous_chunk_index: null, updated_at: now.toISOString() };
+      this.row = {
+        ...this.row,
+        ambiguous_chunk_index: null,
+        effect_started_at: null,
+        effect_recovery_grace_until: null,
+        updated_at: now.toISOString(),
+      };
     }
     return copyDelivery(this.row);
   }
 
   async completeClaim(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
     now?: Date;
-  }): Promise<GatewayMessageDelivery> {
+  }): Promise<DiscordMessageDelivery> {
     this.completeCalls += 1;
     const now = input.now ?? new Date();
     if (
@@ -241,7 +290,7 @@ class FakeDeliveryRepository {
       !this.current(input.claimToken, input.claimGeneration, now)
     ) {
       this.completeLost += 1;
-      throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
+      throw new DiscordMessageDeliveryClaimLostError(input.deliveryId);
     }
     if (this.crashBeforeComplete) {
       this.crashBeforeComplete = false;
@@ -255,26 +304,25 @@ class FakeDeliveryRepository {
       completed_at: now.toISOString(),
       updated_at: now.toISOString(),
     };
-    this.aliasMergeCalls += 1;
     this.onComplete?.(copyDelivery(this.row));
     return copyDelivery(this.row);
   }
 
   async failClaim(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
     status: 'pending' | 'canceled' | 'dead_letter';
     errorCode: string;
     nextAttemptAt?: Date;
     now?: Date;
-  }): Promise<GatewayMessageDelivery> {
+  }): Promise<DiscordMessageDelivery> {
     const now = input.now ?? new Date();
     if (
       input.deliveryId !== this.row.delivery_id ||
       !this.current(input.claimToken, input.claimGeneration, now)
     ) {
-      throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
+      throw new DiscordMessageDeliveryClaimLostError(input.deliveryId);
     }
     this.row = {
       ...this.row,
@@ -358,7 +406,13 @@ function makeHarness(
   const workerOptions = {
     tenantId: 'tenant-test',
     leaseDurationMs: 30,
-    discover: async () => [{ tenant_id: 'tenant-test', delivery_id: repository.row.delivery_id }],
+    discover: async () => [
+      {
+        tenant_id: 'tenant-test',
+        delivery_id: repository.row.delivery_id,
+        thread_session_map_id: repository.row.thread_session_map_id,
+      },
+    ],
     now: () => new Date(now),
     repositories: {
       delivery: repository,
@@ -369,25 +423,13 @@ function makeHarness(
     connectorFactory: vi.fn(() => connector),
   } as const;
   const makeWorker = (overrides: Record<string, unknown> = {}) =>
-    new GatewayMessageDeliveryWorker(
+    new DiscordMessageDeliveryWorker(
       {} as never,
       {
         ...workerOptions,
         ...overrides,
       } as never
     );
-  repository.onComplete = (delivery) => {
-    const current = (mapping.metadata as Record<string, unknown>) ?? {};
-    const aliases = Array.isArray(current.gateway_reply_aliases)
-      ? current.gateway_reply_aliases.filter((alias): alias is string => typeof alias === 'string')
-      : [];
-    const last = delivery.chunk_receipts.at(-1);
-    mapping.metadata = {
-      ...current,
-      gateway_reply_aliases: [...new Set([...aliases, ...delivery.reply_aliases])],
-      ...(last ? { gateway_last_message_id: last.provider_message_id } : {}),
-    };
-  };
   return {
     repository,
     message,
@@ -407,13 +449,45 @@ function makeHarness(
   };
 }
 
-describe('GatewayMessageDeliveryWorker', () => {
+describe('DiscordMessageDeliveryWorker', () => {
   it('derives stable bounded nonces per delivery chunk', () => {
     const first = deterministicDiscordDeliveryNonce(DELIVERY_ID, 0);
     expect(first).toBe(deterministicDiscordDeliveryNonce(DELIVERY_ID, 0));
     expect(first).not.toBe(deterministicDiscordDeliveryNonce(DELIVERY_ID, 1));
     expect(first).toMatch(/^agor-[0-9a-f]{16}-0$/);
     expect(first.length).toBeLessThanOrEqual(25);
+  });
+
+  it('round-robins discovery across tenants before applying bounded concurrency', () => {
+    const refs: DiscordMessageDeliveryDiscoveryRef[] = [
+      {
+        tenant_id: 'tenant-a',
+        delivery_id: 'a-1' as DiscordMessageDeliveryID,
+        thread_session_map_id: 'map-a' as never,
+      },
+      {
+        tenant_id: 'tenant-a',
+        delivery_id: 'a-2' as DiscordMessageDeliveryID,
+        thread_session_map_id: 'map-a' as never,
+      },
+      {
+        tenant_id: 'tenant-b',
+        delivery_id: 'b-1' as DiscordMessageDeliveryID,
+        thread_session_map_id: 'map-b' as never,
+      },
+      {
+        tenant_id: 'tenant-a',
+        delivery_id: 'a-3' as DiscordMessageDeliveryID,
+        thread_session_map_id: 'map-a' as never,
+      },
+    ];
+
+    expect(fairOrderByTenant(refs).map((ref) => ref.delivery_id)).toEqual([
+      'a-1',
+      'b-1',
+      'a-2',
+      'a-3',
+    ]);
   });
 
   it('lets duplicate discovery and two workers produce one provider effect', async () => {
@@ -427,7 +501,53 @@ describe('GatewayMessageDeliveryWorker', () => {
     expect(harness.repository.row.status).toBe('completed');
   });
 
-  it('rejects a stale checkpoint and completion after a lease takeover', async () => {
+  it('takes over before the first send resolves without dead-lettering or duplicating the receipt', async () => {
+    const harness = makeHarness();
+    let resolveSend!: (receipt: GatewaySendReceipt) => void;
+    harness.sendMessage.mockImplementationOnce(
+      (request: { metadata?: Record<string, unknown>; threadId: string; text: string }) =>
+        new Promise<GatewaySendReceipt>((resolve) => {
+          resolveSend = (receipt) => {
+            const nonce = request.metadata?.discord_delivery_nonce as string;
+            harness.receipts.set(nonce, receipt);
+            resolve(receipt);
+          };
+        })
+    );
+    const workerOptions = {
+      leaseDurationMs: 100,
+      providerCallTimeoutMs: 75,
+      recoveryGraceMs: 1_000,
+    };
+    const workerA = harness.makeWorker(workerOptions);
+    const first = workerA.checkOnce();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+
+    harness.now = new Date(NOW.getTime() + 101);
+    await harness.makeWorker(workerOptions).checkOnce();
+    expect(harness.repository.row).toMatchObject({
+      status: 'pending',
+      ambiguous_chunk_index: 0,
+      effect_recovery_grace_until: expect.any(String),
+    });
+
+    resolveSend({ messageId: 'provider-accepted-after-takeover', replyAliases: [] });
+    await first;
+    expect(harness.repository.row.chunk_receipts).toHaveLength(0);
+
+    harness.now = new Date(harness.repository.row.next_attempt_at);
+    await harness.makeWorker(workerOptions).checkOnce();
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.repository.row).toMatchObject({
+      status: 'completed',
+      chunk_receipts: [
+        expect.objectContaining({ provider_message_id: 'provider-accepted-after-takeover' }),
+      ],
+    });
+  });
+
+  it('fences a stale worker before checkpoint after a lease takeover', async () => {
     const harness = makeHarness();
     const workerA = harness.makeWorker();
     harness.sendMessage.mockImplementationOnce(async (request) => {
@@ -441,11 +561,42 @@ describe('GatewayMessageDeliveryWorker', () => {
     });
 
     await workerA.checkOnce();
-    expect(harness.repository.checkpointLost).toBe(1);
+    expect(harness.repository.checkpointLost).toBe(0);
     expect(harness.repository.completeLost).toBe(0);
 
+    harness.now = new Date(harness.now.getTime() + 31);
     await harness.makeWorker().checkOnce();
     expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.repository.row.status).toBe('completed');
+  });
+
+  it('bounds shutdown drain and leaves an active claim for takeover', async () => {
+    const harness = makeHarness();
+    let resolveSend!: (receipt: GatewaySendReceipt) => void;
+    harness.sendMessage.mockImplementationOnce(
+      (request: { metadata?: Record<string, unknown>; threadId: string; text: string }) =>
+        new Promise<GatewaySendReceipt>((resolve) => {
+          resolveSend = (receipt) => {
+            const nonce = request.metadata?.discord_delivery_nonce as string;
+            harness.receipts.set(nonce, receipt);
+            resolve(receipt);
+          };
+        })
+    );
+    const worker = harness.makeWorker({
+      leaseDurationMs: 100,
+      providerCallTimeoutMs: 75,
+      shutdownTimeoutMs: 5,
+    });
+    const running = worker.checkOnce();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.repository.row.status).toBe('processing');
+
+    await worker.stop();
+    expect(harness.repository.row.status).toBe('processing');
+
+    resolveSend({ messageId: 'provider-accepted-after-drain', replyAliases: [] });
+    await running;
     expect(harness.repository.row.status).toBe('completed');
   });
 
@@ -479,7 +630,7 @@ describe('GatewayMessageDeliveryWorker', () => {
     expect(harness.repository.row.attempt_count).toBe(2);
   });
 
-  it('never sends after a crash leaves a durable ambiguous chunk without a receipt', async () => {
+  it('keeps recovery retryable during the persisted effect grace window', async () => {
     const harness = makeHarness();
     harness.repository.crashAfterMark = true;
 
@@ -488,15 +639,23 @@ describe('GatewayMessageDeliveryWorker', () => {
     expect(harness.repository.row).toMatchObject({
       status: 'pending',
       ambiguous_chunk_index: 0,
+      effect_started_at: NOW.toISOString(),
     });
 
     harness.now = new Date(harness.repository.row.next_attempt_at);
     await harness.makeWorker().checkOnce();
     expect(harness.sendMessage).not.toHaveBeenCalled();
     expect(harness.repository.row).toMatchObject({
-      status: 'dead_letter',
+      status: 'pending',
       last_error_code: 'nonce_acceptance_unproven',
       ambiguous_chunk_index: 0,
+    });
+
+    harness.now = new Date(harness.repository.row.effect_recovery_grace_until!);
+    await harness.makeWorker().checkOnce();
+    expect(harness.repository.row).toMatchObject({
+      status: 'dead_letter',
+      last_error_code: 'nonce_acceptance_unproven',
     });
   });
 
@@ -518,7 +677,7 @@ describe('GatewayMessageDeliveryWorker', () => {
     expect(harness.repository.row.status).toBe('completed');
   });
 
-  it('dead-letters an unresolved ambiguous send instead of blindly retrying', async () => {
+  it('does not blindly retry an unresolved ambiguous send and dead-letters after grace', async () => {
     const harness = makeHarness();
     harness.sendMessage.mockRejectedValueOnce(new Error('connection outcome unknown'));
 
@@ -527,9 +686,13 @@ describe('GatewayMessageDeliveryWorker', () => {
     expect(harness.sendMessage).toHaveBeenCalledOnce();
     expect(harness.recoverMessageByNonce).toHaveBeenCalledTimes(2);
     expect(harness.repository.row).toMatchObject({
-      status: 'dead_letter',
+      status: 'pending',
       last_error_code: 'nonce_acceptance_unproven',
     });
+
+    harness.now = new Date(harness.repository.row.effect_recovery_grace_until!);
+    await harness.makeWorker().checkOnce();
+    expect(harness.repository.row.status).toBe('dead_letter');
   });
 
   it('resumes at the next chunk after a persisted checkpoint', async () => {
@@ -557,7 +720,7 @@ describe('GatewayMessageDeliveryWorker', () => {
     expect(harness.repository.row.status).toBe('completed');
   });
 
-  it('merges aliases exactly once when the worker crashes before alias merge', async () => {
+  it('does not accumulate ordinary Discord response aliases', async () => {
     const harness = makeHarness({ mappingMetadata: { gateway_reply_aliases: ['alias-0'] } });
     harness.repository.crashBeforeComplete = true;
     harness.repository.row.chunk_receipts = [
@@ -572,16 +735,12 @@ describe('GatewayMessageDeliveryWorker', () => {
 
     await harness.makeWorker().checkOnce();
     expect(harness.repository.row.status).toBe('pending');
-    expect(harness.repository.aliasMergeCalls).toBe(0);
+    expect(harness.repository.completeCalls).toBe(1);
 
     harness.now = new Date(harness.repository.row.next_attempt_at);
     await harness.makeWorker().checkOnce();
 
-    expect(harness.mapping.metadata).toMatchObject({
-      gateway_reply_aliases: ['alias-0', 'alias-1'],
-      gateway_last_message_id: 'provider-0',
-    });
-    expect(harness.repository.aliasMergeCalls).toBe(1);
+    expect(harness.mapping.metadata).toEqual({ gateway_reply_aliases: ['alias-0'] });
     expect(harness.repository.completeCalls).toBe(2);
   });
 
@@ -634,10 +793,9 @@ describe('GatewayMessageDeliveryWorker', () => {
   });
 
   it('completes without changing inbound state, cursor, session/task, or Message data', async () => {
-    const harness = makeHarness({ mappingMetadata: { last_admitted_provider_cursor: 'cursor-1' } });
+    const harness = makeHarness({ mappingMetadata: { unrelated: 'value' } });
     const beforeMessage = structuredClone(harness.message);
-    const beforeCursor = (harness.mapping.metadata as Record<string, unknown>)
-      .last_admitted_provider_cursor;
+    const beforeMetadata = structuredClone(harness.mapping.metadata);
     const inboundEvent = { event_id: 'event-1', status: 'completed' };
     const session = { session_id: SESSION_ID, status: 'running' };
     const task = { task_id: 'task-1', status: 'running' };
@@ -645,9 +803,7 @@ describe('GatewayMessageDeliveryWorker', () => {
     await harness.makeWorker().checkOnce();
 
     expect(harness.message).toEqual(beforeMessage);
-    expect(
-      (harness.mapping.metadata as Record<string, unknown>).last_admitted_provider_cursor
-    ).toBe(beforeCursor);
+    expect(harness.mapping.metadata).toEqual(beforeMetadata);
     expect({ inboundEvent, session, task }).toEqual({
       inboundEvent: { event_id: 'event-1', status: 'completed' },
       session: { session_id: SESSION_ID, status: 'running' },

@@ -7,16 +7,16 @@
  */
 
 import type {
+  DiscordMessageDelivery,
+  DiscordMessageDeliveryChunkReceipt,
+  DiscordMessageDeliveryID,
+  DiscordMessageDeliveryStatus,
   GatewayChannelID,
-  GatewayMessageDelivery,
-  GatewayMessageDeliveryChunkReceipt,
-  GatewayMessageDeliveryID,
-  GatewayMessageDeliveryStatus,
   Message,
   MessageID,
   ThreadSessionMapID,
 } from '@agor/core/types';
-import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, lte, or, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database, SystemDatabase } from '../client';
 import {
@@ -29,37 +29,39 @@ import {
   update,
 } from '../database-wrapper';
 import {
-  type GatewayMessageDeliveryInsert,
-  type GatewayMessageDeliveryRow,
+  type DiscordMessageDeliveryInsert,
+  type DiscordMessageDeliveryRow,
+  discordMessageDeliveries,
   gatewayChannels,
-  gatewayMessageDeliveries,
   threadSessionMap,
 } from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
 import { RepositoryError } from './base';
 
-export interface GatewayMessageDeliveryDiscoveryRef {
+export interface DiscordMessageDeliveryDiscoveryRef {
   tenant_id: string;
-  delivery_id: GatewayMessageDeliveryID;
+  delivery_id: DiscordMessageDeliveryID;
+  thread_session_map_id: ThreadSessionMapID;
 }
 
-export interface GatewayMessageDeliveryClaim {
-  delivery_id: GatewayMessageDeliveryID;
+export interface DiscordMessageDeliveryClaim {
+  delivery_id: DiscordMessageDeliveryID;
   claim_token: string;
   claim_generation: number;
   lease_expires_at: string;
-  delivery: GatewayMessageDelivery;
+  delivery: DiscordMessageDelivery;
 }
 
-export class GatewayMessageDeliveryClaimLostError extends Error {
+export class DiscordMessageDeliveryClaimLostError extends Error {
   constructor(deliveryId: string) {
-    super(`Gateway message delivery claim was lost: ${deliveryId}`);
-    this.name = 'GatewayMessageDeliveryClaimLostError';
+    super(`Discord message delivery claim was lost: ${deliveryId}`);
+    this.name = 'DiscordMessageDeliveryClaimLostError';
   }
 }
 
 const MAX_RECEIPTS = 1_000;
 const MAX_ALIASES = 2_000;
+export const DEFAULT_DISCORD_DELIVERY_RECOVERY_GRACE_MS = 60_000;
 
 function asIso(value: Date | string | number): string {
   return new Date(value).toISOString();
@@ -91,13 +93,13 @@ function isRoutableAssistantMessage(message: Message): boolean {
 }
 
 /** Extract text only at the worker boundary; it is never stored in the intent. */
-export function extractGatewayDeliveryText(message: Message): string {
+export function extractDiscordDeliveryText(message: Message): string {
   return messageText(message);
 }
 
-function boundedReceipts(value: unknown): GatewayMessageDeliveryChunkReceipt[] {
+function boundedReceipts(value: unknown): DiscordMessageDeliveryChunkReceipt[] {
   if (!Array.isArray(value)) return [];
-  return value.slice(0, MAX_RECEIPTS) as GatewayMessageDeliveryChunkReceipt[];
+  return value.slice(0, MAX_RECEIPTS) as DiscordMessageDeliveryChunkReceipt[];
 }
 
 function boundedAliases(value: unknown): string[] {
@@ -108,21 +110,25 @@ function boundedAliases(value: unknown): string[] {
   );
 }
 
-function rowToDelivery(row: GatewayMessageDeliveryRow): GatewayMessageDelivery {
+function rowToDelivery(row: DiscordMessageDeliveryRow): DiscordMessageDelivery {
   return {
-    delivery_id: row.delivery_id as GatewayMessageDeliveryID,
+    delivery_id: row.delivery_id as DiscordMessageDeliveryID,
     message_id: row.message_id as MessageID,
     gateway_channel_id: row.gateway_channel_id as GatewayChannelID,
     thread_session_map_id: row.thread_session_map_id as ThreadSessionMapID,
     provider_installation_id: row.provider_installation_id,
     provider_config_generation: row.provider_config_generation,
-    status: row.status as GatewayMessageDeliveryStatus,
+    status: row.status as DiscordMessageDeliveryStatus,
     attempt_count: row.attempt_count,
     next_attempt_at: asIso(row.next_attempt_at),
     claim_token: row.claim_token,
     claim_expires_at: row.claim_expires_at ? asIso(row.claim_expires_at) : null,
     claim_generation: row.claim_generation,
     ambiguous_chunk_index: row.ambiguous_chunk_index ?? null,
+    effect_started_at: row.effect_started_at ? asIso(row.effect_started_at) : null,
+    effect_recovery_grace_until: row.effect_recovery_grace_until
+      ? asIso(row.effect_recovery_grace_until)
+      : null,
     chunk_receipts: boundedReceipts(row.chunk_receipts),
     reply_aliases: boundedAliases(row.reply_aliases),
     last_error_code: row.last_error_code,
@@ -142,7 +148,42 @@ function mergeAliases(existing: string[], incoming: string[]): string[] {
   return [...new Set([...existing, ...incoming])].slice(0, MAX_ALIASES);
 }
 
-export class GatewayMessageDeliveryRepository {
+const NONTERMINAL_DELIVERY_STATUS_SQL = sql`predecessor."status" NOT IN ('completed', 'canceled', 'dead_letter')`;
+
+/**
+ * A mapping is a durable serial lane. The row can be claimed only when no
+ * older nonterminal row exists in that lane; in particular, a retry_wait
+ * predecessor blocks a newer delivery even when the newer row is due.
+ */
+function oldestNonterminalDelivery(db: Database): SQL {
+  const tenantPredicate = isSQLiteDatabase(db)
+    ? sql``
+    : sql` AND predecessor."tenant_id" = "discord_message_deliveries"."tenant_id"`;
+  return sql`NOT EXISTS (
+    SELECT 1
+    FROM "discord_message_deliveries" AS predecessor
+    WHERE predecessor."thread_session_map_id" = ${discordMessageDeliveries.thread_session_map_id}
+      ${tenantPredicate}
+      AND ${NONTERMINAL_DELIVERY_STATUS_SQL}
+      AND (
+        predecessor."created_at" < ${discordMessageDeliveries.created_at}
+        OR (
+          predecessor."created_at" = ${discordMessageDeliveries.created_at}
+          AND predecessor."delivery_id" < ${discordMessageDeliveries.delivery_id}
+        )
+      )
+  )`;
+}
+
+function fairDiscoveryRank(db: Database): SQL<number> | null {
+  if (isSQLiteDatabase(db)) return null;
+  return sql<number>`row_number() OVER (
+    PARTITION BY "discord_message_deliveries"."tenant_id"
+    ORDER BY "discord_message_deliveries"."next_attempt_at", "discord_message_deliveries"."delivery_id"
+  )`;
+}
+
+export class DiscordMessageDeliveryRepository {
   constructor(private readonly db: Database) {}
 
   /**
@@ -153,7 +194,7 @@ export class GatewayMessageDeliveryRepository {
   async enqueueForMessageInTransaction(
     tx: Database,
     message: Message
-  ): Promise<GatewayMessageDelivery | null> {
+  ): Promise<DiscordMessageDelivery | null> {
     if (!isRoutableAssistantMessage(message)) return null;
 
     const candidates = (await select(tx, {
@@ -190,7 +231,13 @@ export class GatewayMessageDeliveryRepository {
     if (!candidate || typeof candidate.provider_installation_id !== 'string') return null;
 
     const now = new Date();
-    const insertData: GatewayMessageDeliveryInsert = {
+    const tenantId = isSQLiteDatabase(tx) ? undefined : getCurrentTenantId();
+    if (!isSQLiteDatabase(tx) && !tenantId) {
+      throw new RepositoryError(
+        'Discord message delivery insertion requires explicit tenant identity'
+      );
+    }
+    const insertData: DiscordMessageDeliveryInsert = {
       delivery_id: generateId(),
       created_at: now,
       updated_at: now,
@@ -206,39 +253,41 @@ export class GatewayMessageDeliveryRepository {
       claim_expires_at: null,
       claim_generation: 0,
       ambiguous_chunk_index: null,
+      effect_started_at: null,
+      effect_recovery_grace_until: null,
       chunk_receipts: [],
       reply_aliases: [],
       last_error_code: null,
       completed_at: null,
       canceled_at: null,
       dead_lettered_at: null,
-      ...(isSQLiteDatabase(tx) ? {} : { tenant_id: getCurrentTenantId() ?? 'default' }),
+      ...(tenantId ? { tenant_id: tenantId } : {}),
     };
 
-    await insert(tx, gatewayMessageDeliveries)
+    await insert(tx, discordMessageDeliveries)
       .values(insertData)
-      .onConflictDoNothing({ target: gatewayMessageDeliveries.message_id })
+      .onConflictDoNothing({ target: discordMessageDeliveries.message_id })
       .run();
     const row = await select(tx)
-      .from(gatewayMessageDeliveries)
-      .where(eq(gatewayMessageDeliveries.message_id, message.message_id))
+      .from(discordMessageDeliveries)
+      .where(eq(discordMessageDeliveries.message_id, message.message_id))
       .one();
     if (!row) throw new RepositoryError('Failed to retrieve Discord delivery intent');
     return rowToDelivery(row);
   }
 
-  async findById(deliveryId: GatewayMessageDeliveryID): Promise<GatewayMessageDelivery | null> {
+  async findById(deliveryId: DiscordMessageDeliveryID): Promise<DiscordMessageDelivery | null> {
     const row = await select(this.db)
-      .from(gatewayMessageDeliveries)
-      .where(eq(gatewayMessageDeliveries.delivery_id, deliveryId))
+      .from(discordMessageDeliveries)
+      .where(eq(discordMessageDeliveries.delivery_id, deliveryId))
       .one();
     return row ? rowToDelivery(row) : null;
   }
 
-  async findByMessageId(messageId: string): Promise<GatewayMessageDelivery | null> {
+  async findByMessageId(messageId: string): Promise<DiscordMessageDelivery | null> {
     const row = await select(this.db)
-      .from(gatewayMessageDeliveries)
-      .where(eq(gatewayMessageDeliveries.message_id, messageId))
+      .from(discordMessageDeliveries)
+      .where(eq(discordMessageDeliveries.message_id, messageId))
       .one();
     return row ? rowToDelivery(row) : null;
   }
@@ -247,80 +296,96 @@ export class GatewayMessageDeliveryRepository {
   async findDueRefs(
     db: SystemDatabase | Database,
     options: { limit?: number; now?: Date } = {}
-  ): Promise<GatewayMessageDeliveryDiscoveryRef[]> {
+  ): Promise<DiscordMessageDeliveryDiscoveryRef[]> {
     const limit = options.limit ?? 25;
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
       throw new RepositoryError(
-        'Gateway message delivery discovery limit must be between 1 and 1000'
+        'Discord message delivery discovery limit must be between 1 and 1000'
       );
     }
     const now = options.now ?? new Date();
     const completedBefore = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const deadLetterBefore = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const activeDue = and(
+      lte(discordMessageDeliveries.next_attempt_at, now),
+      or(
+        eq(discordMessageDeliveries.status, 'pending'),
+        and(
+          eq(discordMessageDeliveries.status, 'processing'),
+          or(
+            isNull(discordMessageDeliveries.claim_expires_at),
+            lte(discordMessageDeliveries.claim_expires_at, now)
+          )
+        )
+      ),
+      oldestNonterminalDelivery(db)
+    );
     const due = and(
       or(
+        activeDue,
         and(
-          lte(gatewayMessageDeliveries.next_attempt_at, now),
-          or(
-            eq(gatewayMessageDeliveries.status, 'pending'),
-            and(
-              eq(gatewayMessageDeliveries.status, 'processing'),
-              or(
-                isNull(gatewayMessageDeliveries.claim_expires_at),
-                lte(gatewayMessageDeliveries.claim_expires_at, now)
-              )
-            )
-          )
+          sql`${discordMessageDeliveries.status} IN ('completed', 'canceled')`,
+          lte(discordMessageDeliveries.updated_at, completedBefore)
         ),
         and(
-          sql`${gatewayMessageDeliveries.status} IN ('completed', 'canceled')`,
-          lte(gatewayMessageDeliveries.updated_at, completedBefore)
-        ),
-        and(
-          eq(gatewayMessageDeliveries.status, 'dead_letter'),
-          lte(gatewayMessageDeliveries.updated_at, deadLetterBefore)
+          eq(discordMessageDeliveries.status, 'dead_letter'),
+          lte(discordMessageDeliveries.updated_at, deadLetterBefore)
         )
       )
     );
     const order = [
-      asc(gatewayMessageDeliveries.next_attempt_at),
-      asc(gatewayMessageDeliveries.delivery_id),
+      asc(discordMessageDeliveries.next_attempt_at),
+      asc(discordMessageDeliveries.delivery_id),
     ];
     if (isSQLiteDatabase(db)) {
-      const rows = await select(db, { delivery_id: gatewayMessageDeliveries.delivery_id })
-        .from(gatewayMessageDeliveries)
+      const rows = await select(db, {
+        delivery_id: discordMessageDeliveries.delivery_id,
+        thread_session_map_id: discordMessageDeliveries.thread_session_map_id,
+      })
+        .from(discordMessageDeliveries)
         .where(due)
         .orderBy(...order)
         .limit(limit)
         .all();
-      return rows.map((row: { delivery_id: string }) => ({
+      return rows.map((row: { delivery_id: string; thread_session_map_id: string }) => ({
         tenant_id: 'default',
-        delivery_id: row.delivery_id as GatewayMessageDeliveryID,
+        delivery_id: row.delivery_id as DiscordMessageDeliveryID,
+        thread_session_map_id: row.thread_session_map_id as ThreadSessionMapID,
       }));
     }
+    const fairRank = fairDiscoveryRank(db);
     const rows = await select(db, {
       tenant_id: sql<string>`tenant_id`,
-      delivery_id: gatewayMessageDeliveries.delivery_id,
+      delivery_id: discordMessageDeliveries.delivery_id,
+      thread_session_map_id: discordMessageDeliveries.thread_session_map_id,
+      ...(fairRank ? { fair_rank: fairRank } : {}),
     })
-      .from(gatewayMessageDeliveries)
+      .from(discordMessageDeliveries)
       .where(due)
-      .orderBy(...order)
+      .orderBy(
+        ...(fairRank
+          ? [asc(fairRank), asc(sql`"discord_message_deliveries"."tenant_id"`), ...order]
+          : order)
+      )
       .limit(limit)
       .all();
-    return rows.map((row: { tenant_id: string; delivery_id: string }) => ({
-      tenant_id: row.tenant_id,
-      delivery_id: row.delivery_id as GatewayMessageDeliveryID,
-    }));
+    return rows.map(
+      (row: { tenant_id: string; delivery_id: string; thread_session_map_id: string }) => ({
+        tenant_id: row.tenant_id,
+        delivery_id: row.delivery_id as DiscordMessageDeliveryID,
+        thread_session_map_id: row.thread_session_map_id as ThreadSessionMapID,
+      })
+    );
   }
 
   async claim(
-    deliveryId: GatewayMessageDeliveryID,
+    deliveryId: DiscordMessageDeliveryID,
     claimToken: string,
     leaseDurationMs: number,
     now = new Date()
-  ): Promise<GatewayMessageDeliveryClaim | null> {
+  ): Promise<DiscordMessageDeliveryClaim | null> {
     if (!Number.isSafeInteger(leaseDurationMs) || leaseDurationMs < 1) {
-      throw new RepositoryError('Gateway message delivery lease must be a positive integer');
+      throw new RepositoryError('Discord message delivery lease must be a positive integer');
     }
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
@@ -330,12 +395,12 @@ export class GatewayMessageDeliveryRepository {
             await lockRowForUpdate(
               tx,
               this.db,
-              gatewayMessageDeliveries,
-              eq(gatewayMessageDeliveries.delivery_id, deliveryId)
+              discordMessageDeliveries,
+              eq(discordMessageDeliveries.delivery_id, deliveryId)
             );
             const row = await select(tx)
-              .from(gatewayMessageDeliveries)
-              .where(eq(gatewayMessageDeliveries.delivery_id, deliveryId))
+              .from(discordMessageDeliveries)
+              .where(eq(discordMessageDeliveries.delivery_id, deliveryId))
               .one();
             if (!row) return null;
             const claimable =
@@ -344,8 +409,18 @@ export class GatewayMessageDeliveryRepository {
                 (row.status === 'processing' &&
                   (!row.claim_expires_at || new Date(row.claim_expires_at) <= now)));
             if (!claimable) return null;
+            const oldest = await select(tx, { delivery_id: discordMessageDeliveries.delivery_id })
+              .from(discordMessageDeliveries)
+              .where(
+                and(
+                  eq(discordMessageDeliveries.delivery_id, deliveryId),
+                  oldestNonterminalDelivery(this.db)
+                )
+              )
+              .one();
+            if (!oldest) return null;
             const leaseExpires = new Date(now.getTime() + leaseDurationMs);
-            const updated = await update(tx, gatewayMessageDeliveries)
+            const updated = await update(tx, discordMessageDeliveries)
               .set({
                 status: 'processing',
                 claim_token: claimToken,
@@ -354,7 +429,7 @@ export class GatewayMessageDeliveryRepository {
                 attempt_count: row.attempt_count + 1,
                 updated_at: now,
               })
-              .where(eq(gatewayMessageDeliveries.delivery_id, deliveryId))
+              .where(eq(discordMessageDeliveries.delivery_id, deliveryId))
               .returning()
               .one();
             const delivery = rowToDelivery(updated);
@@ -381,29 +456,72 @@ export class GatewayMessageDeliveryRepository {
 
   /** Reload a claim in a short tenant transaction before provider work. */
   async reloadClaim(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
     now?: Date;
-  }): Promise<GatewayMessageDelivery | null> {
+  }): Promise<DiscordMessageDelivery | null> {
     const now = input.now ?? new Date();
     const row = await select(this.db)
-      .from(gatewayMessageDeliveries)
-      .where(eq(gatewayMessageDeliveries.delivery_id, input.deliveryId))
+      .from(discordMessageDeliveries)
+      .where(eq(discordMessageDeliveries.delivery_id, input.deliveryId))
       .one();
     return row && this.isClaimCurrent(row, input.claimToken, input.claimGeneration, now)
       ? rowToDelivery(row)
       : null;
   }
 
+  /** Extend a live claim immediately before/after a bounded provider call. */
+  async renewClaim(input: {
+    deliveryId: DiscordMessageDeliveryID;
+    claimToken: string;
+    claimGeneration: number;
+    leaseDurationMs: number;
+    now?: Date;
+  }): Promise<DiscordMessageDeliveryClaim | null> {
+    if (!Number.isSafeInteger(input.leaseDurationMs) || input.leaseDurationMs < 1) {
+      throw new RepositoryError('Discord message delivery lease must be a positive integer');
+    }
+    const now = input.now ?? new Date();
+    return runDatabaseTransaction(this.db, async (tx) => {
+      await lockRowForUpdate(
+        tx,
+        this.db,
+        discordMessageDeliveries,
+        eq(discordMessageDeliveries.delivery_id, input.deliveryId)
+      );
+      const row = await select(tx)
+        .from(discordMessageDeliveries)
+        .where(eq(discordMessageDeliveries.delivery_id, input.deliveryId))
+        .one();
+      if (!row || !this.isClaimCurrent(row, input.claimToken, input.claimGeneration, now)) {
+        return null;
+      }
+      const leaseExpiresAt = new Date(now.getTime() + input.leaseDurationMs);
+      const updated = await update(tx, discordMessageDeliveries)
+        .set({ claim_expires_at: leaseExpiresAt, updated_at: now })
+        .where(this.claimWhere(input.deliveryId, input.claimToken, input.claimGeneration, now))
+        .returning()
+        .one();
+      const delivery = rowToDelivery(updated);
+      return {
+        delivery_id: delivery.delivery_id,
+        claim_token: input.claimToken,
+        claim_generation: input.claimGeneration,
+        lease_expires_at: asIso(leaseExpiresAt),
+        delivery,
+      };
+    });
+  }
+
   private claimWhere(deliveryId: string, token: string, generation: number, now: Date) {
     const claimNow = isSQLiteDatabase(this.db) ? now : now.toISOString();
     return and(
-      eq(gatewayMessageDeliveries.delivery_id, deliveryId),
-      eq(gatewayMessageDeliveries.status, 'processing'),
-      eq(gatewayMessageDeliveries.claim_token, token),
-      eq(gatewayMessageDeliveries.claim_generation, generation),
-      sql`${gatewayMessageDeliveries.claim_expires_at} > ${claimNow}`
+      eq(discordMessageDeliveries.delivery_id, deliveryId),
+      eq(discordMessageDeliveries.status, 'processing'),
+      eq(discordMessageDeliveries.claim_token, token),
+      eq(discordMessageDeliveries.claim_generation, generation),
+      sql`${discordMessageDeliveries.claim_expires_at} > ${claimNow}`
     );
   }
 
@@ -414,12 +532,13 @@ export class GatewayMessageDeliveryRepository {
    * remove it.
    */
   async markChunkEffectStarted(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
     chunkIndex: number;
+    recoveryGraceMs?: number;
     now?: Date;
-  }): Promise<GatewayMessageDelivery> {
+  }): Promise<DiscordMessageDelivery> {
     const now = input.now ?? new Date();
     if (input.chunkIndex < 0 || input.chunkIndex >= MAX_RECEIPTS) {
       throw new RepositoryError('Discord delivery chunk marker bound exceeded');
@@ -428,15 +547,15 @@ export class GatewayMessageDeliveryRepository {
       await lockRowForUpdate(
         tx,
         this.db,
-        gatewayMessageDeliveries,
-        eq(gatewayMessageDeliveries.delivery_id, input.deliveryId)
+        discordMessageDeliveries,
+        eq(discordMessageDeliveries.delivery_id, input.deliveryId)
       );
       const row = await select(tx)
-        .from(gatewayMessageDeliveries)
-        .where(eq(gatewayMessageDeliveries.delivery_id, input.deliveryId))
+        .from(discordMessageDeliveries)
+        .where(eq(discordMessageDeliveries.delivery_id, input.deliveryId))
         .one();
       if (!row || !this.isClaimCurrent(row, input.claimToken, input.claimGeneration, now)) {
-        throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
+        throw new DiscordMessageDeliveryClaimLostError(input.deliveryId);
       }
       if (
         boundedReceipts(row.chunk_receipts).some((item) => item.chunk_index === input.chunkIndex)
@@ -447,8 +566,17 @@ export class GatewayMessageDeliveryRepository {
         throw new RepositoryError('Discord delivery has another ambiguous chunk in flight');
       }
       if (row.ambiguous_chunk_index === input.chunkIndex) return rowToDelivery(row);
-      const updated = await update(tx, gatewayMessageDeliveries)
-        .set({ ambiguous_chunk_index: input.chunkIndex, updated_at: now })
+      const recoveryGraceMs = input.recoveryGraceMs ?? DEFAULT_DISCORD_DELIVERY_RECOVERY_GRACE_MS;
+      if (!Number.isSafeInteger(recoveryGraceMs) || recoveryGraceMs < 1) {
+        throw new RepositoryError('Discord delivery recovery grace must be a positive integer');
+      }
+      const updated = await update(tx, discordMessageDeliveries)
+        .set({
+          ambiguous_chunk_index: input.chunkIndex,
+          effect_started_at: now,
+          effect_recovery_grace_until: new Date(now.getTime() + recoveryGraceMs),
+          updated_at: now,
+        })
         .where(this.claimWhere(input.deliveryId, input.claimToken, input.claimGeneration, now))
         .returning()
         .one();
@@ -458,30 +586,35 @@ export class GatewayMessageDeliveryRepository {
 
   /** Clear an ambiguous marker only after the provider proved non-acceptance. */
   async clearChunkEffectMarker(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
     chunkIndex: number;
     now?: Date;
-  }): Promise<GatewayMessageDelivery> {
+  }): Promise<DiscordMessageDelivery> {
     const now = input.now ?? new Date();
     return runDatabaseTransaction(this.db, async (tx) => {
       await lockRowForUpdate(
         tx,
         this.db,
-        gatewayMessageDeliveries,
-        eq(gatewayMessageDeliveries.delivery_id, input.deliveryId)
+        discordMessageDeliveries,
+        eq(discordMessageDeliveries.delivery_id, input.deliveryId)
       );
       const row = await select(tx)
-        .from(gatewayMessageDeliveries)
-        .where(eq(gatewayMessageDeliveries.delivery_id, input.deliveryId))
+        .from(discordMessageDeliveries)
+        .where(eq(discordMessageDeliveries.delivery_id, input.deliveryId))
         .one();
       if (!row || !this.isClaimCurrent(row, input.claimToken, input.claimGeneration, now)) {
-        throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
+        throw new DiscordMessageDeliveryClaimLostError(input.deliveryId);
       }
       if (row.ambiguous_chunk_index !== input.chunkIndex) return rowToDelivery(row);
-      const updated = await update(tx, gatewayMessageDeliveries)
-        .set({ ambiguous_chunk_index: null, updated_at: now })
+      const updated = await update(tx, discordMessageDeliveries)
+        .set({
+          ambiguous_chunk_index: null,
+          effect_started_at: null,
+          effect_recovery_grace_until: null,
+          updated_at: now,
+        })
         .where(this.claimWhere(input.deliveryId, input.claimToken, input.claimGeneration, now))
         .returning()
         .one();
@@ -490,12 +623,12 @@ export class GatewayMessageDeliveryRepository {
   }
 
   async checkpointChunk(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
-    receipt: GatewayMessageDeliveryChunkReceipt;
+    receipt: DiscordMessageDeliveryChunkReceipt;
     now?: Date;
-  }): Promise<GatewayMessageDelivery> {
+  }): Promise<DiscordMessageDelivery> {
     const now = input.now ?? new Date();
     if (input.receipt.chunk_index < 0 || input.receipt.chunk_index >= MAX_RECEIPTS) {
       throw new RepositoryError('Discord delivery chunk receipt bound exceeded');
@@ -504,22 +637,27 @@ export class GatewayMessageDeliveryRepository {
       await lockRowForUpdate(
         tx,
         this.db,
-        gatewayMessageDeliveries,
-        eq(gatewayMessageDeliveries.delivery_id, input.deliveryId)
+        discordMessageDeliveries,
+        eq(discordMessageDeliveries.delivery_id, input.deliveryId)
       );
       const row = await select(tx)
-        .from(gatewayMessageDeliveries)
-        .where(eq(gatewayMessageDeliveries.delivery_id, input.deliveryId))
+        .from(discordMessageDeliveries)
+        .where(eq(discordMessageDeliveries.delivery_id, input.deliveryId))
         .one();
       if (!row || !this.isClaimCurrent(row, input.claimToken, input.claimGeneration, now)) {
-        throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
+        throw new DiscordMessageDeliveryClaimLostError(input.deliveryId);
       }
       const receipts = boundedReceipts(row.chunk_receipts);
       const existing = receipts.find((item) => item.chunk_index === input.receipt.chunk_index);
       if (existing) {
         if (row.ambiguous_chunk_index !== input.receipt.chunk_index) return rowToDelivery(row);
-        const updated = await update(tx, gatewayMessageDeliveries)
-          .set({ ambiguous_chunk_index: null, updated_at: now })
+        const updated = await update(tx, discordMessageDeliveries)
+          .set({
+            ambiguous_chunk_index: null,
+            effect_started_at: null,
+            effect_recovery_grace_until: null,
+            updated_at: now,
+          })
           .where(this.claimWhere(input.deliveryId, input.claimToken, input.claimGeneration, now))
           .returning()
           .one();
@@ -535,10 +673,12 @@ export class GatewayMessageDeliveryRepository {
       if (nextReceipts.length > MAX_RECEIPTS) {
         throw new RepositoryError('Discord delivery chunk receipt bound exceeded');
       }
-      const updated = await update(tx, gatewayMessageDeliveries)
+      const updated = await update(tx, discordMessageDeliveries)
         .set({
           chunk_receipts: nextReceipts,
           ambiguous_chunk_index: null,
+          effect_started_at: null,
+          effect_recovery_grace_until: null,
           reply_aliases: mergeAliases(
             boundedAliases(row.reply_aliases),
             input.receipt.reply_aliases
@@ -553,7 +693,7 @@ export class GatewayMessageDeliveryRepository {
   }
 
   private isClaimCurrent(
-    row: GatewayMessageDeliveryRow,
+    row: DiscordMessageDeliveryRow,
     token: string,
     generation: number,
     now: Date
@@ -568,59 +708,27 @@ export class GatewayMessageDeliveryRepository {
   }
 
   async completeClaim(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
     now?: Date;
-  }): Promise<GatewayMessageDelivery> {
+  }): Promise<DiscordMessageDelivery> {
     const now = input.now ?? new Date();
     return runDatabaseTransaction(this.db, async (tx) => {
       await lockRowForUpdate(
         tx,
         this.db,
-        gatewayMessageDeliveries,
-        eq(gatewayMessageDeliveries.delivery_id, input.deliveryId)
+        discordMessageDeliveries,
+        eq(discordMessageDeliveries.delivery_id, input.deliveryId)
       );
       const row = await select(tx)
-        .from(gatewayMessageDeliveries)
-        .where(eq(gatewayMessageDeliveries.delivery_id, input.deliveryId))
+        .from(discordMessageDeliveries)
+        .where(eq(discordMessageDeliveries.delivery_id, input.deliveryId))
         .one();
       if (!row || !this.isClaimCurrent(row, input.claimToken, input.claimGeneration, now)) {
-        throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
+        throw new DiscordMessageDeliveryClaimLostError(input.deliveryId);
       }
-      await lockRowForUpdate(
-        tx,
-        this.db,
-        threadSessionMap,
-        eq(threadSessionMap.id, row.thread_session_map_id)
-      );
-      const mapping = await select(tx)
-        .from(threadSessionMap)
-        .where(eq(threadSessionMap.id, row.thread_session_map_id))
-        .one();
-      if (!mapping) throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
-      const currentMetadata = (mapping.metadata as Record<string, unknown> | null) ?? {};
-      const aliases = mergeAliases(
-        Array.isArray(currentMetadata.gateway_reply_aliases)
-          ? currentMetadata.gateway_reply_aliases.filter(
-              (alias): alias is string => typeof alias === 'string'
-            )
-          : [],
-        boundedAliases(row.reply_aliases)
-      );
-      const lastReceipt = boundedReceipts(row.chunk_receipts).at(-1);
-      await update(tx, threadSessionMap)
-        .set({
-          metadata: {
-            ...currentMetadata,
-            ...(aliases.length > 0 ? { gateway_reply_aliases: aliases } : {}),
-            ...(lastReceipt ? { gateway_last_message_id: lastReceipt.provider_message_id } : {}),
-            gateway_reply_alias_last_reason: 'message_delivery',
-          },
-        })
-        .where(eq(threadSessionMap.id, row.thread_session_map_id))
-        .run();
-      const updated = await update(tx, gatewayMessageDeliveries)
+      const updated = await update(tx, discordMessageDeliveries)
         .set({
           status: 'completed',
           claim_token: null,
@@ -636,30 +744,30 @@ export class GatewayMessageDeliveryRepository {
   }
 
   async failClaim(input: {
-    deliveryId: GatewayMessageDeliveryID;
+    deliveryId: DiscordMessageDeliveryID;
     claimToken: string;
     claimGeneration: number;
     status: 'pending' | 'canceled' | 'dead_letter';
     errorCode: string;
     nextAttemptAt?: Date;
     now?: Date;
-  }): Promise<GatewayMessageDelivery> {
+  }): Promise<DiscordMessageDelivery> {
     const now = input.now ?? new Date();
     return runDatabaseTransaction(this.db, async (tx) => {
       await lockRowForUpdate(
         tx,
         this.db,
-        gatewayMessageDeliveries,
-        eq(gatewayMessageDeliveries.delivery_id, input.deliveryId)
+        discordMessageDeliveries,
+        eq(discordMessageDeliveries.delivery_id, input.deliveryId)
       );
       const row = await select(tx)
-        .from(gatewayMessageDeliveries)
-        .where(eq(gatewayMessageDeliveries.delivery_id, input.deliveryId))
+        .from(discordMessageDeliveries)
+        .where(eq(discordMessageDeliveries.delivery_id, input.deliveryId))
         .one();
       if (!row || !this.isClaimCurrent(row, input.claimToken, input.claimGeneration, now)) {
-        throw new GatewayMessageDeliveryClaimLostError(input.deliveryId);
+        throw new DiscordMessageDeliveryClaimLostError(input.deliveryId);
       }
-      const updated = await update(tx, gatewayMessageDeliveries)
+      const updated = await update(tx, discordMessageDeliveries)
         .set({
           status: input.status,
           claim_token: null,
@@ -680,16 +788,16 @@ export class GatewayMessageDeliveryRepository {
   async purgeExpired(now = new Date()): Promise<number> {
     const completedBefore = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const deadLetterBefore = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-    const result = await deleteFrom(this.db, gatewayMessageDeliveries)
+    const result = await deleteFrom(this.db, discordMessageDeliveries)
       .where(
         or(
           and(
-            sql`${gatewayMessageDeliveries.status} IN ('completed', 'canceled')`,
-            lte(gatewayMessageDeliveries.updated_at, completedBefore)
+            sql`${discordMessageDeliveries.status} IN ('completed', 'canceled')`,
+            lte(discordMessageDeliveries.updated_at, completedBefore)
           ),
           and(
-            eq(gatewayMessageDeliveries.status, 'dead_letter'),
-            lte(gatewayMessageDeliveries.updated_at, deadLetterBefore)
+            eq(discordMessageDeliveries.status, 'dead_letter'),
+            lte(discordMessageDeliveries.updated_at, deadLetterBefore)
           )
         )
       )

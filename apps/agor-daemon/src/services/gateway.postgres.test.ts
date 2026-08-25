@@ -316,6 +316,47 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway reply admission (P
     expect(vi.mocked(getConnector)).toHaveBeenCalled();
   }, 30_000);
 
+  it('keeps Discord cursor reads and advances tenant-scoped', async () => {
+    const tenantA = `cursor-owner-${generateId()}` as TenantID;
+    const tenantB = `cursor-other-${generateId()}` as TenantID;
+    const { channel, branch, user } = await seedGateway(db, tenantA);
+    const mapping = await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+      const session = await new SessionRepository(scoped).create({
+        session_id: generateId(),
+        branch_id: branch.branch_id,
+        created_by: user.user_id,
+        title: 'cursor isolation',
+      });
+      return new ThreadSessionMapRepository(scoped).create({
+        channel_id: channel.id,
+        thread_id: '900000000000000001',
+        session_id: session.session_id,
+        branch_id: branch.branch_id,
+      });
+    });
+
+    await runWithTenantDatabaseScope(db, tenantA, (scoped) =>
+      new ThreadSessionMapRepository(scoped).advanceDiscordLastAdmittedMessageId(
+        mapping.id,
+        '900000000000000010'
+      )
+    );
+    await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      const repo = new ThreadSessionMapRepository(scoped);
+      await expect(repo.findById(mapping.id)).resolves.toBeNull();
+      await expect(
+        repo.advanceDiscordLastAdmittedMessageId(mapping.id, '900000000000000011')
+      ).rejects.toThrow();
+    });
+    await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+      await expect(
+        new ThreadSessionMapRepository(scoped).findById(mapping.id)
+      ).resolves.toMatchObject({
+        discord_last_admitted_message_id: '900000000000000010',
+      });
+    });
+  }, 30_000);
+
   it('recovers after mapping persistence before seed completion on retry', async () => {
     const tenantId = `gateway-recovery-${generateId()}` as TenantID;
     const { channel, seed, user } = await seedGateway(db, tenantId);

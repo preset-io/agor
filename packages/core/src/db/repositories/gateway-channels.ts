@@ -23,8 +23,9 @@ import {
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
   getRequiredSecretFields,
   isDiscordSnowflake,
+  isGatewayProviderAuthorityPatch,
+  mergeGatewayChannelConfigPatch,
   validateDiscordConfig,
-  withDiscordConfigDefaults,
 } from '../../types/gateway';
 import { prefixToLikePattern } from '../../types/id';
 import type { Database, SystemDatabase } from '../client';
@@ -582,19 +583,7 @@ export class GatewayChannelRepository
       throw new RepositoryError('GatewayChannel must have a created_by');
     }
 
-    const presetId = data.agentic_config?.presetId;
-    const storesDefaultReference = Boolean(
-      presetId && isAgenticToolDefaultConfigurationReference(presetId)
-    );
-    const { presetId: _presetId, ...agenticConfigWithoutPreset } = data.agentic_config ?? {};
-    const storedAgenticConfig = storesDefaultReference
-      ? (data.agentic_config ?? {})
-      : agenticConfigWithoutPreset;
-    const encryptedAgenticConfig = encryptAgenticConfig(
-      Object.keys(storedAgenticConfig).length > 0
-        ? (storedAgenticConfig as unknown as Record<string, unknown>)
-        : null
-    );
+    const agenticStorage = this.agenticConfigStorage(data.agentic_config);
 
     return {
       id,
@@ -611,9 +600,29 @@ export class GatewayChannelRepository
       enabled: data.enabled ?? true,
       last_message_at: data.last_message_at ? new Date(data.last_message_at) : null,
       config: data.config ? encryptConfig(data.config) : {},
-      agentic_config: encryptedAgenticConfig,
-      agentic_tool_preset_id: storesDefaultReference ? null : (presetId ?? null),
+      ...agenticStorage,
       mcp_server_ids: data.mcp_server_ids ?? null,
+    };
+  }
+
+  private agenticConfigStorage(
+    agenticConfig: GatewayChannel['agentic_config'] | undefined
+  ): Pick<GatewayChannelInsert, 'agentic_config' | 'agentic_tool_preset_id'> {
+    const presetId = agenticConfig?.presetId;
+    const storesDefaultReference = Boolean(
+      presetId && isAgenticToolDefaultConfigurationReference(presetId)
+    );
+    const { presetId: _presetId, ...agenticConfigWithoutPreset } = agenticConfig ?? {};
+    const storedAgenticConfig = storesDefaultReference
+      ? (agenticConfig ?? {})
+      : agenticConfigWithoutPreset;
+    return {
+      agentic_config: encryptAgenticConfig(
+        Object.keys(storedAgenticConfig).length > 0
+          ? (storedAgenticConfig as unknown as Record<string, unknown>)
+          : null
+      ),
+      agentic_tool_preset_id: storesDefaultReference ? null : (presetId ?? null),
     };
   }
 
@@ -673,21 +682,6 @@ export class GatewayChannelRepository
         );
       }
     }
-  }
-
-  /**
-   * Discord's gateway manager is process-local and cannot safely share one
-   * application identity across enabled rows. The partial global index is the
-   * authority; this repository only translates its generic constraint error.
-   */
-  private normalizeConfig(
-    channelType: ChannelType,
-    config: Record<string, unknown>,
-    enabled = true
-  ) {
-    return channelType === 'discord' && enabled !== false
-      ? withDiscordConfigDefaults(config)
-      : config;
   }
 
   private isDiscordInstallationConflict(error: unknown): boolean {
@@ -753,7 +747,7 @@ export class GatewayChannelRepository
       const channelType = data.channel_type ?? 'slack';
       const prepared = {
         ...data,
-        config: this.normalizeConfig(channelType, data.config ?? {}, data.enabled ?? true),
+        config: mergeGatewayChannelConfigPatch({}, data.config, channelType, data.enabled ?? true),
         id: data.id ?? generateId(),
         channel_key: data.channel_key ?? generateId(),
       };
@@ -846,112 +840,44 @@ export class GatewayChannelRepository
   async updateWithVerifiedDiscordInstallation(
     id: string,
     updates: Partial<GatewayChannel>,
-    providerInstallationId: string
+    providerInstallationId: string,
+    expectedProviderConfigGeneration: number
   ): Promise<GatewayChannel> {
     if (!isDiscordSnowflake(providerInstallationId)) {
       throw new RepositoryError('Verified Discord application identity is invalid');
     }
-    return this.updateInternal(id, updates, providerInstallationId);
+    if (
+      !Number.isSafeInteger(expectedProviderConfigGeneration) ||
+      expectedProviderConfigGeneration < 1
+    ) {
+      throw new RepositoryError('Verified Discord installation requires a valid config generation');
+    }
+    return this.updateInternal(
+      id,
+      updates,
+      providerInstallationId,
+      expectedProviderConfigGeneration
+    );
   }
 
   private async updateInternal(
     id: string,
     updates: Partial<GatewayChannel>,
-    verifiedProviderInstallationId?: string
+    verifiedProviderInstallationId?: string,
+    expectedProviderConfigGeneration?: number
   ): Promise<GatewayChannel> {
     try {
       const fullId = await this.resolveId(id);
 
-      const updated = await runDatabaseTransaction(
-        this.db,
-        async (txDb) => {
-          const currentRow = await select(txDb)
-            .from(gatewayChannels)
-            .where(eq(gatewayChannels.id, fullId))
-            .one();
-          if (!currentRow) throw new EntityNotFoundError('GatewayChannel', id);
-          const current = this.rowToChannel(currentRow);
-          const merged = { ...current, ...updates };
-          if (updates.config) {
-            const mergedConfig = { ...current.config, ...updates.config };
-            for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
-              const updateValue = updates.config[field];
-              if (
-                (!updateValue || updateValue === GATEWAY_REDACTED_SENTINEL) &&
-                current.config[field]
-              ) {
-                mergedConfig[field] = current.config[field];
-              }
-            }
-            merged.config = mergedConfig;
-          }
-          merged.config = this.normalizeConfig(
-            merged.channel_type,
-            merged.config,
-            merged.enabled !== false
-          );
-
-          const tokenChanged =
-            updates.config !== undefined && current.config.bot_token !== merged.config.bot_token;
-          const applicationChanged =
-            updates.config !== undefined &&
-            current.config.application_id !== merged.config.application_id;
-          if (merged.channel_type !== 'discord' || tokenChanged || applicationChanged) {
-            merged.provider_installation_id = null;
-          }
-          if (verifiedProviderInstallationId !== undefined) {
-            if (merged.channel_type !== 'discord') {
-              throw new RepositoryError(
-                'Verified Discord application identity requires a Discord gateway channel'
-              );
-            }
-            if (merged.config.application_id !== verifiedProviderInstallationId) {
-              throw new RepositoryError(
-                'Verified Discord application identity does not match the configured application'
-              );
-            }
-            merged.provider_installation_id = verifiedProviderInstallationId;
-          }
-
-          const authorityChanged =
-            updates.enabled !== undefined ||
-            updates.config !== undefined ||
-            updates.channel_type !== undefined ||
-            updates.agor_user_id !== undefined;
-          merged.provider_config_generation = authorityChanged
-            ? current.provider_config_generation + 1
-            : current.provider_config_generation;
-          this.assertRequiredSecretsWhenEnabled(merged);
-          const insertData = this.channelToInsert(merged);
-          await update(txDb, gatewayChannels)
-            .set({
-              name: insertData.name,
-              channel_type: insertData.channel_type,
-              target_branch_id: insertData.target_branch_id,
-              agor_user_id: insertData.agor_user_id,
-              provider_installation_id: insertData.provider_installation_id,
-              provider_config_generation: insertData.provider_config_generation,
-              enabled: insertData.enabled,
-              config: insertData.config,
-              agentic_config: insertData.agentic_config,
-              agentic_tool_preset_id: insertData.agentic_tool_preset_id,
-              mcp_server_ids: insertData.mcp_server_ids,
-              updated_at: new Date(),
-              listener_claim_token: null,
-              listener_claimed_at: null,
-              listener_lease_expires_at: null,
-              listener_instance_id: null,
-              listener_boot_id: null,
-              listener_generation: sql`${gatewayChannels.listener_generation} + 1`,
-              listener_checkpoint: null,
-              listener_checkpoint_updated_at: null,
-            })
-            .where(eq(gatewayChannels.id, fullId))
-            .run();
-          return select(txDb).from(gatewayChannels).where(eq(gatewayChannels.id, fullId)).one();
-        },
-        { sqliteImmediate: true }
-      );
+      const updated = isGatewayProviderAuthorityPatch(updates)
+        ? await this.updateAuthority(
+            id,
+            fullId,
+            updates,
+            verifiedProviderInstallationId,
+            expectedProviderConfigGeneration
+          )
+        : await this.updateNonAuthority(id, fullId, updates);
 
       if (!updated) {
         throw new RepositoryError('Failed to retrieve updated gateway channel');
@@ -969,6 +895,173 @@ export class GatewayChannelRepository
         error
       );
     }
+  }
+
+  private listenerRevocationSet() {
+    return {
+      listener_claim_token: null,
+      listener_claimed_at: null,
+      listener_lease_expires_at: null,
+      listener_instance_id: null,
+      listener_boot_id: null,
+      listener_generation: sql`${gatewayChannels.listener_generation} + 1`,
+      listener_checkpoint: null,
+      listener_checkpoint_updated_at: null,
+    };
+  }
+
+  /**
+   * Serialize every provider-authority mutation. The provider probe is never
+   * part of this transaction; verified callers carry the predecessor
+   * generation into the short locked compare-and-swap below.
+   */
+  private async updateAuthority(
+    id: string,
+    fullId: string,
+    updates: Partial<GatewayChannel>,
+    verifiedProviderInstallationId?: string,
+    expectedProviderConfigGeneration?: number
+  ): Promise<GatewayChannelRow | null> {
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, gatewayChannels, eq(gatewayChannels.id, fullId));
+        const currentRow = await select(txDb)
+          .from(gatewayChannels)
+          .where(eq(gatewayChannels.id, fullId))
+          .one();
+        if (!currentRow) throw new EntityNotFoundError('GatewayChannel', id);
+
+        const current = this.rowToChannel(currentRow);
+        if (
+          expectedProviderConfigGeneration !== undefined &&
+          current.provider_config_generation !== expectedProviderConfigGeneration
+        ) {
+          throw new RepositoryError(
+            'Discord verification became stale while the gateway configuration changed'
+          );
+        }
+
+        const merged = { ...current, ...updates };
+        merged.config = mergeGatewayChannelConfigPatch(
+          current.config,
+          updates.config,
+          merged.channel_type,
+          merged.enabled !== false
+        );
+
+        if (verifiedProviderInstallationId !== undefined) {
+          if (merged.channel_type !== 'discord' || merged.enabled === false) {
+            throw new RepositoryError(
+              'Verified Discord application identity requires an enabled Discord gateway channel'
+            );
+          }
+          if (merged.config.application_id !== verifiedProviderInstallationId) {
+            throw new RepositoryError(
+              'Verified Discord application identity does not match the configured application'
+            );
+          }
+          merged.provider_installation_id = verifiedProviderInstallationId;
+        } else if (merged.channel_type === 'discord' && merged.enabled !== false) {
+          throw new RepositoryError(
+            'verified Discord application binding is required for enabled authority changes'
+          );
+        } else {
+          merged.provider_installation_id = null;
+        }
+
+        merged.provider_config_generation = current.provider_config_generation + 1;
+        this.assertRequiredSecretsWhenEnabled(merged);
+        const insertData = this.channelToInsert(merged);
+        const result = await update(txDb, gatewayChannels)
+          .set({
+            ...(updates.name !== undefined ? { name: insertData.name } : {}),
+            ...(updates.target_branch_id !== undefined
+              ? { target_branch_id: insertData.target_branch_id }
+              : {}),
+            ...(updates.agentic_config !== undefined
+              ? {
+                  agentic_config: insertData.agentic_config,
+                  agentic_tool_preset_id: insertData.agentic_tool_preset_id,
+                }
+              : {}),
+            ...(updates.mcp_server_ids !== undefined
+              ? { mcp_server_ids: insertData.mcp_server_ids }
+              : {}),
+            ...(updates.channel_type !== undefined
+              ? { channel_type: insertData.channel_type }
+              : {}),
+            ...(updates.agor_user_id !== undefined
+              ? { agor_user_id: insertData.agor_user_id }
+              : {}),
+            ...(updates.config !== undefined ? { config: insertData.config } : {}),
+            ...(updates.enabled !== undefined ? { enabled: insertData.enabled } : {}),
+            provider_installation_id: insertData.provider_installation_id,
+            provider_config_generation: insertData.provider_config_generation,
+            updated_at: new Date(),
+            ...this.listenerRevocationSet(),
+          })
+          .where(
+            expectedProviderConfigGeneration === undefined
+              ? eq(gatewayChannels.id, fullId)
+              : and(
+                  eq(gatewayChannels.id, fullId),
+                  eq(gatewayChannels.provider_config_generation, expectedProviderConfigGeneration)
+                )
+          )
+          .run();
+
+        if (expectedProviderConfigGeneration !== undefined && result.rowsAffected !== 1) {
+          throw new RepositoryError(
+            'Discord verification became stale while the gateway configuration changed'
+          );
+        }
+        if (result.rowsAffected !== 1) {
+          throw new EntityNotFoundError('GatewayChannel', id);
+        }
+        return select(txDb).from(gatewayChannels).where(eq(gatewayChannels.id, fullId)).one();
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  /**
+   * Keep non-authority patches sparse so a writer that started from an older
+   * channel cannot restore provider configuration, binding, enabled state, or
+   * provider generation after an authority commit.
+   */
+  private async updateNonAuthority(
+    id: string,
+    fullId: string,
+    updates: Partial<GatewayChannel>
+  ): Promise<GatewayChannelRow | null> {
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        const result = await update(txDb, gatewayChannels)
+          .set({
+            ...(updates.name !== undefined ? { name: updates.name } : {}),
+            ...(updates.target_branch_id !== undefined
+              ? { target_branch_id: updates.target_branch_id }
+              : {}),
+            ...(updates.agentic_config !== undefined
+              ? {
+                  ...this.agenticConfigStorage(updates.agentic_config),
+                }
+              : {}),
+            ...(updates.mcp_server_ids !== undefined
+              ? { mcp_server_ids: updates.mcp_server_ids }
+              : {}),
+            updated_at: new Date(),
+            ...this.listenerRevocationSet(),
+          })
+          .where(eq(gatewayChannels.id, fullId))
+          .run();
+        if (result.rowsAffected !== 1) throw new EntityNotFoundError('GatewayChannel', id);
+        return select(txDb).from(gatewayChannels).where(eq(gatewayChannels.id, fullId)).one();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**

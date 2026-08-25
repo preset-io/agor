@@ -28,10 +28,23 @@ export type {
   DiscordHistoryFailureKind,
   DiscordHistoryRestTransport,
 } from './connectors/discord-history';
+export { DiscordHistoryError, fetchDiscordProviderHistory } from './connectors/discord-history';
+export type {
+  DiscordConnectionVerification,
+  DiscordSetupArtifact,
+  DiscordSetupDecisions,
+  DiscordVerificationFailure,
+} from './connectors/discord-setup';
 export {
-  DiscordHistoryError,
-  fetchDiscordProviderHistory,
-} from './connectors/discord-history';
+  buildDiscordSetupArtifact,
+  DISCORD_DEVELOPER_PORTAL_URL,
+  DISCORD_MINIMUM_BOT_PERMISSION_BITMASK,
+  DISCORD_MINIMUM_BOT_PERMISSION_NAMES,
+  DISCORD_REQUIRED_GATEWAY_INTENTS,
+  discordBotInviteUrl,
+  evaluateDiscordConnectionVerification,
+  validateDiscordSetup,
+} from './connectors/discord-setup';
 export { GitHubConnector, parseThreadId as parseGitHubThreadId } from './connectors/github';
 export {
   buildThreadId as buildShortcutThreadId,
@@ -76,12 +89,32 @@ export {
 } from './connectors/teams';
 export type { GatewayContext } from './context';
 export { formatGatewayContext } from './context';
+export type {
+  DiscordAuthorityMetadata,
+  DiscordDeliveryNonce,
+  DiscordMetadataKey,
+  DiscordThreadKey,
+  ParsedDiscordThreadKey,
+} from './discord-identifiers';
+export {
+  buildDiscordDeliveryMetadata,
+  buildDiscordDeliveryNonce,
+  buildDiscordInboundMetadata,
+  buildDiscordLegacyThreadKey,
+  buildDiscordMessageThreadKey,
+  buildDiscordVerifiedThreadMetadata,
+  DISCORD_METADATA_KEY,
+  extractDiscordStarterMessageId,
+  parseDiscordAuthorityMetadata,
+  parseDiscordDeliveryNonce,
+  parseDiscordThreadKey,
+} from './discord-identifiers';
 export {
   GatewayListenerError,
   type GatewayListenerFailureKind,
   gatewayListenerFailure,
 } from './listener-error';
-export { sanitizeGatewayProviderError } from './provider-error';
+export { gatewayFailureCode, sanitizeGatewayProviderError } from './provider-error';
 export {
   formatGatewayFollowUpRoutingMessage,
   formatGatewayMarkdownSessionReference,

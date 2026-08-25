@@ -12,6 +12,7 @@ import {
   type UUID,
 } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
+import { buildDiscordSetupArtifact } from '../../gateway/connectors/discord-setup';
 import { generateId } from '../../lib/ids';
 import {
   DEFAULT_DISCORD_CATCH_UP,
@@ -81,6 +82,59 @@ describe('GatewayChannelRepository', () => {
   });
 
   describe('enabled requires secrets invariant', () => {
+    dbTest(
+      'accepts a complete secret-free Discord setup artifact before verified enablement',
+      async ({ db }) => {
+        const branch = await seedBranch(db);
+        const repo = new GatewayChannelRepository(db);
+        const artifact = buildDiscordSetupArtifact({
+          applicationId: '666666666666666666',
+          guildId: '222222222222222222',
+          messageContentAcknowledged: true,
+          allowedChannelIds: ['333333333333333333'],
+          allowedUserIds: ['444444444444444444'],
+          agorUserId: generateId() as UUID,
+        });
+        expect(artifact.validation.ok).toBe(true);
+
+        const draft = await repo.create({
+          name: 'Complete Discord draft',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'discord',
+          enabled: false,
+          agor_user_id: artifact.draft.agorUserId as UUID,
+          config: artifact.draft.config,
+        });
+        expect(draft.enabled).toBe(false);
+        expect(draft.config.bot_token).toBeUndefined();
+
+        const withSecret = await repo.update(draft.id, {
+          config: { bot_token: 'discord-write-only-secret' },
+        });
+        const changedDuringProbe = await repo.update(withSecret.id, {
+          config: { thread_auto_archive_minutes: 4320 as const },
+        });
+        await expect(
+          repo.updateWithVerifiedDiscordInstallation(
+            changedDuringProbe.id,
+            { enabled: true },
+            '666666666666666666',
+            withSecret.provider_config_generation
+          )
+        ).rejects.toThrow(/verification became stale/i);
+        const enabled = await repo.updateWithVerifiedDiscordInstallation(
+          changedDuringProbe.id,
+          { enabled: true },
+          '666666666666666666',
+          changedDuringProbe.provider_config_generation
+        );
+        expect(enabled.enabled).toBe(true);
+        expect(enabled.provider_installation_id).toBe('666666666666666666');
+        expect(enabled.config.bot_token).toBe('discord-write-only-secret');
+      }
+    );
+
     dbTest('creates a disabled channel without secrets', async ({ db }) => {
       const branch = await seedBranch(db);
       const repo = new GatewayChannelRepository(db);
@@ -133,7 +187,8 @@ describe('GatewayChannelRepository', () => {
         const enabled = await repo.updateWithVerifiedDiscordInstallation(
           configuredDraft.id,
           { enabled: true, agor_user_id: generateId() as UUID },
-          '666666666666666666'
+          '666666666666666666',
+          configuredDraft.provider_config_generation
         );
         expect(enabled.enabled).toBe(true);
         expect(enabled.agor_user_id).toBeDefined();
@@ -516,6 +571,15 @@ describe('GatewayChannelRepository', () => {
       expect(claim.outcome).toBe('claimed');
       await repo.saveListenerCheckpoint(channel.id, 'generation-test-claim', { sequence: 1 });
       expect((await repo.findById(channel.id))?.provider_config_generation).toBe(1);
+      await expect(
+        repo.update(channel.id, {
+          config: { allowed_channel_ids: ['555555555555555555'] },
+        })
+      ).rejects.toThrow('verified Discord application binding is required');
+      expect(await repo.findById(channel.id)).toMatchObject({
+        provider_installation_id: discordConfig.application_id,
+        provider_config_generation: 1,
+      });
       const disabled = await repo.update(channel.id, { enabled: false });
       expect(disabled.provider_config_generation).toBe(2);
       const rotated = await repo.update(channel.id, { config: { bot_token: 'new-token' } });

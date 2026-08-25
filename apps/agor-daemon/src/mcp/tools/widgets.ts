@@ -229,7 +229,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
     'agor_widgets_request_gateway_token',
     {
       description:
-        "Ask an admin to securely provide a gateway channel's platform tokens (Slack bot/app tokens, GitHub private key, Teams app password) via a compact form that appears at the end of your message, so setup finishes without anyone pasting xoxb-/xapp- tokens into chat. " +
+        "Ask an admin to securely provide a gateway channel's platform credentials (Slack xoxb-/xapp- tokens, Discord bot token, GitHub private key, Teams app password) via a compact form that appears at the end of your message. Never ask for any secret in chat. " +
         'PREFER this tool over telling the admin to open Settings and paste tokens manually: it collects and verifies the credentials inline. ' +
         'FIRE-AND-FORGET: the widget renders inline at the end of your turn; end your turn after calling. You will receive a user-role message when it is resolved. ' +
         'Token values never enter your context — only the channel identity and field NAMES do. ' +
@@ -257,6 +257,12 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       const channel = (await ctx.app
         .service('gateway-channels')
         .get(args.gatewayChannelId, ctx.baseServiceParams)) as GatewayChannel;
+      const hostSession = (await ctx.app
+        .service('sessions')
+        .get(currentSessionId, ctx.baseServiceParams)) as Session;
+      if (!hostSession.branch_id || channel.target_branch_id !== hostSession.branch_id) {
+        throw new Error("Gateway channel is not bound to this session's target branch");
+      }
       const channelType = channel.channel_type as ChannelType;
       if (!isSupportedGatewayTokenChannelType(channelType)) {
         throw new Error(
