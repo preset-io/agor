@@ -2625,7 +2625,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       res.status(status).json({ error: error instanceof Error ? error.message : 'Upload failed' });
     }
   });
-  const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
+  const DEBUG_UPLOAD = process.env.AGOR_DEBUG_UPLOAD === 'true';
 
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
   const authorizeUpload: any = async (req: any, res: any, next: any) => {
@@ -2742,9 +2742,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       if (DEBUG_UPLOAD) {
         console.log(`   Uploaded ${uploadedFiles.length} file(s):`);
-        uploadedFiles.forEach((f) => {
-          console.log(`     - ${f.filename} (${(f.size / 1024).toFixed(2)} KB)`);
-        });
+        console.log(`   Total bytes: ${uploadedFiles.reduce((sum, f) => sum + f.size, 0)}`);
       }
 
       let notificationError: string | null = null;
@@ -2754,7 +2752,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const promptText = message.replace(/\{filepath\}/g, handles);
 
           if (DEBUG_UPLOAD) {
-            console.log(`   Sending prompt to agent: ${promptText.substring(0, 100)}...`);
+            console.log('   Sending upload notification to agent');
           }
 
           const promptService = app.service('/sessions/:id/prompt');
@@ -2766,10 +2764,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             tenant: params.tenant,
           };
           await promptService.create({ prompt: promptText }, promptParams);
-        } catch (error) {
-          console.error('❌ [Upload Handler] Failed to notify agent:', error);
-          notificationError =
-            error instanceof Error ? error.message : 'Failed to send notification to agent';
+        } catch (_error) {
+          console.error('❌ [Upload Handler] Failed to notify agent');
+          notificationError = 'Failed to send notification to agent';
         }
       }
 
@@ -2788,7 +2785,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (DEBUG_UPLOAD) {
       console.log('📥 [Upload Route] Request received');
       console.log('   Method:', req.method);
-      console.log('   URL:', req.url);
+      console.log('   Route: session upload');
       console.log('   Content-Type:', req.headers['content-type']);
       console.log('   Has auth header:', !!req.headers.authorization);
       console.log(
@@ -2840,11 +2837,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     uploadHandler,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((err: any, req: any, res: any, next: any) => {
-      console.error('❌ [Upload Route] Error occurred:', err.message);
-      console.error('   Stack:', err.stack);
+      console.error('❌ [Upload Route] Upload failed');
       res.status(err.status || 500).json({
-        error: err.message || 'Upload failed',
-        details: err.toString(),
+        error: 'Upload failed',
       });
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any
@@ -5427,7 +5422,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         let databaseInfo: { dialect: string; url?: string; path?: string };
 
         if (dialect === 'postgresql') {
-          const maskedUrl = DB_PATH.replace(/:([^:@]+)@/, ':****@');
+          let maskedUrl = '<redacted-database-url>';
+          try {
+            const parsed = new URL(DB_PATH);
+            if (parsed.password) parsed.password = '****';
+            maskedUrl = parsed.toString();
+          } catch {
+            // Invalid connection diagnostics must not echo the original DSN.
+          }
           databaseInfo = { dialect, url: maskedUrl };
         } else {
           databaseInfo = { dialect, path: DB_PATH };

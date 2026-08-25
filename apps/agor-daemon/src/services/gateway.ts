@@ -44,7 +44,7 @@ import {
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
-import { type Application, Forbidden } from '@agor/core/feathers';
+import { type Application, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   GatewayConnector,
   GatewayContext,
@@ -75,6 +75,7 @@ import {
 import { resolveSessionMcpServerIds } from '@agor/core/sessions';
 import type {
   AgenticToolName,
+  AuthenticatedParams,
   BranchPermissionLevel,
   ChannelType,
   GatewayChannel,
@@ -1513,7 +1514,7 @@ export class GatewayService {
         await this.updateProgress(data);
       },
       (error) => {
-        console.warn('[gateway] Failed to update Slack progress after commit:', error);
+        console.warn('[gateway] Failed to update Slack progress after commit');
       }
     );
   }
@@ -1640,8 +1641,8 @@ export class GatewayService {
       if (isTerminal) {
         try {
           await this.stopSlackTaskStream(activeTaskId, connector);
-        } catch (error) {
-          console.warn('[gateway] Failed to stop Slack task stream:', error);
+        } catch (_error) {
+          console.warn('[gateway] Failed to stop Slack task stream');
         }
       }
 
@@ -1673,11 +1674,11 @@ export class GatewayService {
           loadingMessages: loadingMessage ? [loadingMessage] : undefined,
           iconEmoji: ':hourglass_flowing_sand:',
         });
-      } catch (error) {
-        console.warn('[gateway] Failed to set Slack assistant status:', error);
+      } catch (_error) {
+        console.warn('[gateway] Failed to set Slack assistant status');
       }
-    } catch (error) {
-      console.warn('[gateway] Failed to update Slack progress status:', error);
+    } catch (_error) {
+      console.warn('[gateway] Failed to update Slack progress status');
     }
   }
 
@@ -1774,8 +1775,8 @@ export class GatewayService {
               taskKey,
               metadata
             );
-          } catch (error) {
-            console.warn('[gateway] Failed to refresh Slack status after stream start:', error);
+          } catch (_error) {
+            console.warn('[gateway] Failed to refresh Slack status after stream start');
           }
           this.markMessageStreamedToSlack(messageId);
           this.markTaskStreamedToSlack(taskKey);
@@ -1799,8 +1800,8 @@ export class GatewayService {
             taskKey,
             metadata
           );
-        } catch (error) {
-          console.warn('[gateway] Failed to refresh Slack status after stream append:', error);
+        } catch (_error) {
+          console.warn('[gateway] Failed to refresh Slack status after stream append');
         }
         existing.hasContent = true;
         existing.lastMessageId = messageId;
@@ -1822,10 +1823,10 @@ export class GatewayService {
       if (event === 'streaming:error') {
         this.slackStreamTaskByMessage.delete(messageId);
       }
-    } catch (error) {
+    } catch (_error) {
       this.slackStreamsByTask.delete(taskKey);
       this.slackStreamTaskByMessage.delete(messageId);
-      console.warn('[gateway] Failed to mirror message stream to Slack:', error);
+      console.warn('[gateway] Failed to mirror message stream to Slack');
     }
   }
 
@@ -2057,8 +2058,8 @@ export class GatewayService {
       const sessionUrl = getSessionUrl(sessionId, baseUrl);
       if (new URL(sessionUrl).hostname === '0.0.0.0') return null;
       return sessionUrl;
-    } catch (error) {
-      console.warn('[gateway] Failed to build public session URL:', error);
+    } catch (_error) {
+      console.warn('[gateway] Failed to build public session URL');
     }
 
     try {
@@ -2071,8 +2072,8 @@ export class GatewayService {
       const hostname = new URL(sessionUrl).hostname;
       if (hostname === '0.0.0.0') return null;
       return sessionUrl;
-    } catch (error) {
-      console.warn('[gateway] Failed to fetch session URL:', error);
+    } catch (_error) {
+      console.warn('[gateway] Failed to fetch session URL');
       return null;
     }
   }
@@ -2330,8 +2331,8 @@ export class GatewayService {
               text: `⚠️ ${errMsg}`,
               metadata: { edit_comment_id: data.metadata.processing_comment_id },
             });
-          } catch (err) {
-            console.warn('[gateway] Failed to post config error comment:', err);
+          } catch (_err) {
+            console.warn('[gateway] Failed to post config error comment');
           }
         }
         return {
@@ -3171,8 +3172,8 @@ export class GatewayService {
                   : 'current_message',
             });
             slackCursorTsToWrite = currentTs;
-          } catch (error) {
-            console.warn('[gateway] Failed to fetch Slack thread catch-up context:', error);
+          } catch (_error) {
+            console.warn('[gateway] Failed to fetch Slack thread catch-up context');
           }
         } else if (currentTs) {
           slackCursorTsToWrite = currentTs;
@@ -3406,7 +3407,37 @@ export class GatewayService {
    * Looks up session in thread_session_map. If no mapping exists,
    * returns a cheap no-op. Uses platform connectors to send messages.
    */
-  async routeMessage(data: RouteMessageData): Promise<RouteMessageResult> {
+  async routeMessage(
+    data: RouteMessageData,
+    params?: AuthenticatedParams
+  ): Promise<RouteMessageResult> {
+    // Direct service calls are daemon-internal. Every transported invocation
+    // must carry trusted auth and prove authority over the session's branch
+    // before even consulting a mapping or constructing a provider connector.
+    if (params?.provider) {
+      const user = params.user;
+      if (!user) throw new NotAuthenticated('Authentication required');
+      const session = await this.sessionRepo.findById(data.session_id as SessionID);
+      if (!session) throw new Forbidden('Gateway outbound access denied');
+      const branch = await this.branchRepo.findById(session.branch_id);
+      if (!branch) throw new Forbidden('Gateway outbound access denied');
+      const isOwner = await this.branchRepo.isOwner(branch.branch_id, user.user_id);
+      const effectivePermission = await this.branchRepo.resolveUserPermission(branch, user.user_id);
+      if (
+        !hasBranchPermission(
+          branch,
+          user.user_id,
+          isOwner,
+          'all' as BranchPermissionLevel,
+          user.role,
+          true,
+          effectivePermission
+        )
+      ) {
+        throw new Forbidden('Gateway outbound access denied');
+      }
+    }
+
     // Mapped Discord assistant Messages now have a durable intent inserted in
     // the Message transaction. The independent delivery worker owns those
     // rows; never send them through the legacy after-hook path as well.
@@ -3435,6 +3466,13 @@ export class GatewayService {
 
     if (!channel?.enabled) {
       return { routed: false };
+    }
+
+    if (params?.provider) {
+      const session = await this.sessionRepo.findById(data.session_id as SessionID);
+      if (!session || session.branch_id !== channel.target_branch_id) {
+        throw new Forbidden('Gateway outbound access denied');
+      }
     }
 
     // Check if we have a connector for this channel type
@@ -3530,7 +3568,7 @@ export class GatewayService {
         await this.routeMessage(data);
       },
       (error) => {
-        console.warn('[gateway] Failed to route message after commit:', error);
+        console.warn('[gateway] Failed to route message after commit');
       }
     );
   }
@@ -3564,7 +3602,7 @@ export class GatewayService {
       }
     } catch (error) {
       if (!bufferedMessage) throw error;
-      console.warn('[gateway] Falling back to process-local outbound buffer:', error);
+      console.warn('[gateway] Falling back to process-local outbound buffer');
     }
     if (!bufferedMessage) return;
 
@@ -4495,8 +4533,8 @@ export class GatewayService {
         GATEWAY_LISTENER_STOP_TIMEOUT_MS
       );
       callbacksDrained = true;
-    } catch (error) {
-      console.warn('[gateway] In-flight listener callbacks did not drain before shutdown:', error);
+    } catch (_error) {
+      console.warn('[gateway] In-flight listener callbacks did not drain before shutdown');
     }
 
     if (callbacksDrained) {

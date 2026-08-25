@@ -28,7 +28,6 @@ import {
   type ChannelType,
   DEFAULT_DISCORD_CATCH_UP,
   GATEWAY_REDACTED_SENTINEL,
-  GATEWAY_SENSITIVE_CONFIG_FIELDS,
   type GatewayChannel,
   type GatewayChannelCreateData,
   type GatewayChannelPatchData,
