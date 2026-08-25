@@ -31,7 +31,7 @@ import {
   ThunderboltOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Layout, Menu, Modal, theme } from 'antd';
+import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Select, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -102,8 +102,8 @@ export interface SettingsModalProps {
   ) => Promise<Branch | null>;
   onStartEnvironment?: (branchId: string) => void;
   onStopEnvironment?: (branchId: string) => void;
-  onCreateUser?: (data: CreateUserInput) => void;
-  onUpdateUser?: (userId: string, updates: UpdateUserInput) => void;
+  onCreateUser?: (data: CreateUserInput) => Promise<void>;
+  onUpdateUser?: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onDeleteUser?: (userId: string) => void;
   onCreateMCPServer?: (data: CreateMCPServerInput) => void;
   onDeleteMCPServer?: (serverId: string) => void;
@@ -199,6 +199,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   };
 
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
+  const compact = !screens.md;
   const settingsSectionKeys = useMemo(() => new Set<string>(SETTINGS_SECTIONS), []);
 
   // Role gate — Agentic Tools and Gateway Channels are global admin-managed
@@ -338,6 +340,28 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     [isAdmin, token]
   );
 
+  const mobileSectionOptions = useMemo(
+    () => [
+      { label: 'Workspace · Boards', value: 'boards' },
+      { label: 'Workspace · Repositories', value: 'repos' },
+      { label: 'Workspace · Branches', value: 'branches' },
+      { label: 'Workspace · Teammates', value: 'teammates' },
+      { label: 'Workspace · Cards (Beta)', value: 'cards' },
+      { label: 'Workspace · Artifacts', value: 'artifacts' },
+      { label: 'Integrations · MCP Servers', value: 'mcp' },
+      ...(isAdmin
+        ? [
+            { label: 'Integrations · Agentic Tools', value: 'agentic-tools' },
+            { label: 'Integrations · Gateway Channels', value: 'gateway' },
+            { label: 'Admin · Groups', value: 'groups' },
+          ]
+        : []),
+      { label: 'Admin · Users', value: 'users' },
+      { label: 'System · About', value: 'about' },
+    ],
+    [isAdmin]
+  );
+
   // Render content based on active section
   const renderContent = () => {
     switch (activeTab) {
@@ -473,6 +497,85 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
     }
   };
 
+  if (compact) {
+    return (
+      <Drawer
+        title={null}
+        aria-label="Workspace settings"
+        closable={false}
+        placement="bottom"
+        size="94dvh"
+        open={open}
+        onClose={onClose}
+        styles={{ body: { padding: 0, overflow: 'hidden' } }}
+      >
+        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+          <Flex
+            vertical
+            gap={token.marginSM}
+            style={{
+              padding: `${token.paddingSM}px ${token.paddingMD}px`,
+              borderBottom: `1px solid ${token.colorBorderSecondary}`,
+              background: token.colorBgElevated,
+              flex: '0 0 auto',
+            }}
+          >
+            <Flex align="center" justify="space-between" gap={token.marginSM}>
+              <Typography.Title level={5} style={{ margin: 0, minWidth: 0 }}>
+                Workspace settings
+              </Typography.Title>
+              <Button
+                type="text"
+                icon={<CloseOutlined />}
+                aria-label="Close workspace settings"
+                onClick={onClose}
+              />
+            </Flex>
+            <Select
+              aria-label="Settings section"
+              value={activeTab}
+              options={mobileSectionOptions}
+              onChange={(key) => onTabChange?.(key as SettingsSection)}
+              style={{ width: '100%' }}
+              size="large"
+            />
+          </Flex>
+          <Content
+            style={{
+              padding: `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              minWidth: 0,
+              width: '100%',
+              maxWidth: '100%',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>{renderContent()}</div>
+          </Content>
+        </Layout>
+        <BranchModal
+          open={branchModalOpen}
+          onClose={handleBranchModalClose}
+          branch={selectedBranch}
+          repo={selectedRepo}
+          sessions={branchSessions}
+          boardObjects={boardObjects}
+          client={client}
+          currentUser={currentUser}
+          onUpdateBranch={onUpdateBranch}
+          onUpdateRepo={onUpdateRepo}
+          onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
+          onOpenSettings={() => {
+            handleBranchModalClose();
+            onTabChange?.('repos');
+          }}
+          presentation="bottom-sheet"
+        />
+      </Drawer>
+    );
+  }
+
   return (
     <Modal
       title={null}
@@ -480,8 +583,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       onCancel={onClose}
       footer={null}
       closable
-      width={1200}
-      style={{ top: 40 }}
+      width={compact ? 'calc(100vw - 16px)' : 1200}
+      style={{ top: compact ? 8 : 40 }}
       styles={{
         wrapper: {
           padding: 0,
@@ -489,7 +592,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         },
         container: {
           padding: 0,
-          borderRadius: 8,
+          borderRadius: compact ? token.borderRadiusSM : token.borderRadiusLG,
           overflow: 'hidden',
         },
         header: {
@@ -497,28 +600,37 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         },
         body: {
           padding: 0,
-          height: 'calc(100vh - 200px)',
-          minHeight: 500,
-          maxHeight: 800,
+          height: compact ? 'calc(100dvh - 16px)' : 'calc(100vh - 200px)',
+          minHeight: compact ? 0 : 500,
+          maxHeight: compact ? 'none' : 800,
         },
       }}
       closeIcon={<CloseOutlined />}
     >
-      <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+      <Layout
+        style={{
+          height: '100%',
+          background: token.colorBgContainer,
+          flexDirection: compact ? 'column' : 'row',
+        }}
+      >
         <Sider
-          width={240}
+          width={compact ? '100%' : 240}
           style={{
             background: token.colorBgElevated,
-            borderRight: `1px solid ${token.colorBorderSecondary}`,
+            borderRight: compact ? 0 : `1px solid ${token.colorBorderSecondary}`,
+            borderBottom: compact ? `1px solid ${token.colorBorderSecondary}` : 0,
             overflow: 'auto',
-            padding: '20px 0',
+            maxHeight: compact ? 230 : undefined,
+            flex: compact ? '0 0 auto' : undefined,
+            padding: compact ? '12px 0' : '20px 0',
           }}
         >
           <div
             style={{
-              padding: '0 24px 16px',
+              padding: compact ? '0 12px 10px' : '0 24px 16px',
               fontWeight: 600,
-              fontSize: 18,
+              fontSize: compact ? 15 : 18,
               color: token.colorText,
             }}
           >
@@ -539,7 +651,11 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             }}
           />
         </Sider>
-        <Content style={{ padding: '40px 32px 32px', overflow: 'auto' }}>{renderContent()}</Content>
+        <Content
+          style={{ padding: compact ? '40px 12px 20px' : '40px 32px 32px', overflow: 'auto' }}
+        >
+          {renderContent()}
+        </Content>
       </Layout>
       <BranchModal
         open={branchModalOpen}
@@ -553,7 +669,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         onUpdateBranch={onUpdateBranch}
         onUpdateRepo={onUpdateRepo}
         onArchiveOrDelete={handleArchiveOrDeleteBranchWithClose}
-        onOpenSettings={onClose} // Close branch modal and keep settings modal open
+        onOpenSettings={() => {
+          handleBranchModalClose();
+          onTabChange?.('repos');
+        }}
       />
     </Modal>
   );

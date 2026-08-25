@@ -5,8 +5,8 @@
  * Uses the repository pattern from @agor/core/db for type-safe database operations.
  */
 
+import { NotFound } from '@agor/core/feathers';
 import type { Id, NullableId, Paginated, Params, TenantContext } from '@agor/core/types';
-import { NotFoundError } from '@agor/core/utils/errors';
 
 /**
  * Query operators supported by the adapter
@@ -341,11 +341,11 @@ export class DrizzleService<
     const result = await this.repository.findById(String(id));
 
     if (result && !this.rowBelongsToTenant(result, this.getTenant(_params))) {
-      throw new NotFoundError(this.resourceType, String(id));
+      throw new NotFound(`${this.resourceType} not found: ${String(id)}`);
     }
 
     if (!result) {
-      throw new NotFoundError(this.resourceType, String(id));
+      throw new NotFound(`${this.resourceType} not found: ${String(id)}`);
     }
 
     return result;
@@ -379,7 +379,7 @@ export class DrizzleService<
    * callers (see class doc); the adapter does not emit them itself.
    */
   async update(id: Id, data: D, params?: P): Promise<T> {
-    // Verify record exists (throws NotFoundError if not found)
+    // Verify record exists (throws Feathers NotFound if absent)
     await this.get(id, params);
 
     const result = await this.repository.update(
@@ -420,7 +420,7 @@ export class DrizzleService<
     }
 
     // Single patch
-    // Verify record exists (throws NotFoundError if not found)
+    // Verify record exists (throws Feathers NotFound if absent)
     await this.get(id, params);
 
     const result = await this.repository.update(
@@ -455,7 +455,7 @@ export class DrizzleService<
     }
 
     // Single remove
-    // Get record before deletion (throws NotFoundError if not found)
+    // Get record before deletion (throws Feathers NotFound if absent)
     const existing = await this.get(id, params);
 
     await this.repository.delete(String(id));

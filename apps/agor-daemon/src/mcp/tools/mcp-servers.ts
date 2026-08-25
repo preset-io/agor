@@ -1,5 +1,6 @@
 import { NotFound } from '@agor/core/feathers';
 import {
+  findDuplicateMCPCustomHeaderName,
   isReservedMCPCustomHeaderName,
   isValidMCPHeaderName,
 } from '@agor/core/tools/mcp/http-headers';
@@ -12,6 +13,7 @@ import type {
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { isMCPOAuthGrantAuthorizedForServer } from '../../services/mcp-oauth-grant-authority.js';
 import { isMcpServerUsableByCaller } from '../../utils/mcp-server-authorization.js';
 import { resolveMcpServerId, resolveSessionId } from '../resolve-ids.js';
 import {
@@ -51,21 +53,35 @@ async function getOAuthStatus(
   mcpServer: MCPServer
 ): Promise<{ authenticated: boolean; tokenExpiresAt?: number }> {
   const authType = mcpServer.auth?.type || 'none';
-  const oauthMode = mcpServer.auth?.oauth_mode || 'per_user';
 
   if (authType !== 'oauth') {
     return { authenticated: true };
   }
 
   // Both shared and per_user live in `user_mcp_oauth_tokens` — shared rows use
-  // `user_id = NULL`. See migration 0038 (sqlite) / 0027 (postgres).
-  const { UserMCPOAuthTokenRepository } = await import('@agor/core/db');
-  const lookupUserId = oauthMode === 'shared' ? null : ctx.userId;
-  const tokenData = await runWithMcpTenantDatabaseScope(ctx, (db) =>
-    new UserMCPOAuthTokenRepository(db).getToken(lookupUserId, mcpServer.mcp_server_id)
-  );
+  // `user_id = NULL`. See migration 0038 (sqlite) / 0027 (postgres). MCP
+  // service responses have already passed through token injection + secret
+  // redaction hooks, so binding authority must come from the raw stored row.
+  const { MCPServerRepository, UserMCPOAuthTokenRepository } = await import('@agor/core/db');
+  const tokenData = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+    const authoritativeServer = await new MCPServerRepository(db).findById(mcpServer.mcp_server_id);
+    if (!authoritativeServer?.enabled || authoritativeServer.auth?.type !== 'oauth') return null;
+    const lookupUserId =
+      (authoritativeServer.auth.oauth_mode ?? 'per_user') === 'shared' ? null : ctx.userId;
+    const grant = await new UserMCPOAuthTokenRepository(db).getToken(
+      lookupUserId,
+      mcpServer.mcp_server_id
+    );
+    if (!grant) return null;
+    return (await isMCPOAuthGrantAuthorizedForServer(db, authoritativeServer, grant))
+      ? grant
+      : null;
+  });
   if (tokenData) {
-    if (!tokenData.oauth_token_expires_at || tokenData.oauth_token_expires_at > new Date()) {
+    if (
+      tokenData.refresh_status === 'idle' &&
+      (!tokenData.oauth_token_expires_at || tokenData.oauth_token_expires_at > new Date())
+    ) {
       return {
         authenticated: true,
         tokenExpiresAt: tokenData.oauth_token_expires_at?.getTime(),
@@ -482,6 +498,14 @@ const mcpServerUpdateSchema = z
 
 function validateHeaders(headers: Record<string, string> | undefined, issue: z.RefinementCtx) {
   if (!headers) return;
+  const duplicate = findDuplicateMCPCustomHeaderName(headers);
+  if (duplicate) {
+    issue.addIssue({
+      code: 'custom',
+      path: ['headers', duplicate.duplicate],
+      message: `Duplicate case-insensitive HTTP header names are not allowed: ${duplicate.first} and ${duplicate.duplicate}`,
+    });
+  }
   for (const [key, value] of Object.entries(headers)) {
     const name = key.trim();
     if (!name) {

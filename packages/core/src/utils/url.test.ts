@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ArtifactID, BoardID, BranchID, SessionID } from '../types/id';
 import {
+  deriveLoopbackReachableOrigin,
   getArtifactFullscreenUrl,
   getArtifactUrl,
   getBoardUrl,
@@ -244,5 +245,33 @@ describe('isAllowedFactProbeUrl', () => {
     // so that path must NOT be tightened.
     expect(isAllowedHealthCheckUrl('http://localhost:3030/health')).toBe(true);
     expect(isAllowedFactProbeUrl('http://localhost:3030/health')).toBe(false);
+  });
+});
+
+describe('deriveLoopbackReachableOrigin', () => {
+  it('maps wildcard bind addresses to the matching loopback', () => {
+    expect(deriveLoopbackReachableOrigin('0.0.0.0', 3030)).toBe('http://127.0.0.1:3030');
+    expect(deriveLoopbackReachableOrigin('::', 3030)).toBe('http://[::1]:3030');
+    expect(deriveLoopbackReachableOrigin('0:0:0:0:0:0:0:0', 3030)).toBe('http://[::1]:3030');
+    expect(deriveLoopbackReachableOrigin('[::]', 3030)).toBe('http://[::1]:3030');
+  });
+
+  it('maps an empty host to IPv4 loopback rather than producing an invalid URL', () => {
+    expect(deriveLoopbackReachableOrigin('', 3030)).toBe('http://127.0.0.1:3030');
+    expect(() => new URL(deriveLoopbackReachableOrigin('', 3030))).not.toThrow();
+  });
+
+  it('preserves concrete hosts and literals, bracketing IPv6', () => {
+    expect(deriveLoopbackReachableOrigin('localhost', 3030)).toBe('http://localhost:3030');
+    expect(deriveLoopbackReachableOrigin('daemon-0.internal', 8080)).toBe(
+      'http://daemon-0.internal:8080'
+    );
+    expect(deriveLoopbackReachableOrigin('127.0.0.1', 3030)).toBe('http://127.0.0.1:3030');
+    expect(deriveLoopbackReachableOrigin('fd00::1', 3030)).toBe('http://[fd00::1]:3030');
+    expect(deriveLoopbackReachableOrigin('[fd00::1]', 3030)).toBe('http://[fd00::1]:3030');
+  });
+
+  it('accepts a string port', () => {
+    expect(deriveLoopbackReachableOrigin('0.0.0.0', '3030')).toBe('http://127.0.0.1:3030');
   });
 });

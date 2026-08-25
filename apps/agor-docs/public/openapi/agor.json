@@ -2,7 +2,7 @@
   "info": {
     "title": "Agor API",
     "description": "REST and WebSocket API for Agor agent orchestration platform",
-    "version": "0.1.0"
+    "version": "0.24.0"
   },
   "servers": [
     {

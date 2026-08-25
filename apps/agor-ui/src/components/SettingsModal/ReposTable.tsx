@@ -1,13 +1,15 @@
 import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Input, Modal, Space, Typography } from 'antd';
+import { Button, Card, Empty, Form, Input, Space, Typography } from 'antd';
 import { useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { RepoFormFields } from '../forms/RepoFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { Tag } from '../Tag';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 
 interface ReposTableProps {
   repoById: Map<string, Repo>;
@@ -141,30 +143,23 @@ export const ReposTable: React.FC<ReposTableProps> = ({
 
   return (
     <div>
-      <div
-        style={{
-          marginBottom: 16,
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-        }}
-      >
-        <Typography.Text type="secondary">
-          Connect remote or local git repositories for your sessions.
-        </Typography.Text>
-        <Space>
-          <Input
-            allowClear
-            placeholder="Search name, slug, URL, path, type, or branch"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 340 }}
-          />
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreateModal}>
-            New Repository
-          </Button>
-        </Space>
-      </div>
+      <ResponsiveSettingsHeader
+        description="Connect remote or local git repositories for your sessions."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="Search name, slug, URL, path, type, or branch"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: compact ? '100%' : 340, flex: compact ? '1 1 100%' : undefined }}
+            />
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleOpenCreateModal}>
+              New Repository
+            </Button>
+          </Space>
+        )}
+      />
 
       {repos.length === 0 && (
         <div
@@ -276,7 +271,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       )}
 
       {/* Create/Edit Repository Modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title={modalTitle}
         open={repoModalOpen}
         onOk={handleSaveRepo}
@@ -291,10 +286,10 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             onRepoModeChange={handleModeChange}
           />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
 
       {/* Delete Repository Modal */}
-      <Modal
+      <AdaptiveSettingsModal
         title="Delete Repository"
         open={deleteModalOpen}
         onCancel={() => {
@@ -365,7 +360,7 @@ export const ReposTable: React.FC<ReposTableProps> = ({
             )}
           </Space>
         )}
-      </Modal>
+      </AdaptiveSettingsModal>
     </div>
   );
 };

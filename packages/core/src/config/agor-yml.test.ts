@@ -266,6 +266,18 @@ describe('parseAgorYml — misc', () => {
 });
 
 describe('parseAgorYml — repo .agor.yml demo variants', () => {
+  it('renders HA as the auth-resolved multi-tenant development profile', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+    const ha = resolveVariant(env!, 'ha');
+    if (ha === null) throw new Error('ha variant must resolve');
+
+    expect(ha.start).toContain('AGOR_EXTERNAL_LAUNCH_SHARED_SECRET=');
+    expect(ha.start).not.toContain('AGOR_ADMIN_PASSWORD=');
+    expect(ha.app).toMatch(/\/dev-auth\/$/);
+    expect(ha.description).toMatch(/auth-resolved tenants/);
+  });
+
   it('forwards the RBAC fixture flag used by .env.postgres', () => {
     const compose = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
     expect(compose).toMatch(/- CREATE_RBAC_TEST_USERS=\$\{CREATE_RBAC_TEST_USERS:-\}/);

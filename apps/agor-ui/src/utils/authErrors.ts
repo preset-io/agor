@@ -2,7 +2,7 @@
  * Shared classification helpers for Feathers/HTTP auth errors.
  *
  * Consolidates logic that was previously duplicated across useAuth,
- * singleFlightRefresh, and useAgorClient's around-hook — those diverged on
+ * singleFlightRefresh, and useAgorClient handshake recovery — those diverged on
  * 403 / 429 / 500 handling over time, which is exactly the kind of drift
  * that produces reconnect/refresh loops.
  *
@@ -23,6 +23,7 @@ type FeathersLikeError = {
   statusCode?: unknown;
   className?: string;
   message?: string;
+  data?: unknown;
 };
 
 function statusOf(err: unknown): number | undefined {
@@ -31,6 +32,7 @@ function statusOf(err: unknown): number | undefined {
   if (typeof e.code === 'number') return e.code;
   if (typeof e.statusCode === 'number') return e.statusCode;
   if (typeof e.status === 'number') return e.status;
+  if (e.data && typeof e.data === 'object') return statusOf(e.data);
   return undefined;
 }
 
@@ -47,6 +49,7 @@ export function isDefiniteAuthFailure(err: unknown): boolean {
   const e = err as FeathersLikeError;
   if (e.name === 'NotAuthenticated') return true;
   if (e.className === 'not-authenticated') return true;
+  if (e.data && typeof e.data === 'object') return isDefiniteAuthFailure(e.data);
   return false;
 }
 

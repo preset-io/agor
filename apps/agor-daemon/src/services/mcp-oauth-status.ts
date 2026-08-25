@@ -3,9 +3,10 @@
  *
  * The answer drives an auth badge in the UI, so it is a read of durable state
  * rather than of whatever a realtime hint last said: a grant is advertised only
- * if it has not expired, is not mid-refresh in an ambiguous state, and — on
- * Postgres, where durable flows live — still binds to the server it was issued
- * against.
+ * if it has not expired, is not mid-refresh in an ambiguous state, and still
+ * binds to the server it was issued against. Historical standalone grants
+ * predate binding and are intentionally grandfathered; newly issued SQLite
+ * grants carry the same versioned configuration envelope.
  *
  * Grants come from two places and only one of them is the caller's. Shared
  * grants belong to a server, not to a user, so the set they contribute is
@@ -30,10 +31,11 @@ export interface OAuthStatusDeps {
   findServer(serverId: string): Promise<MCPServer | null>;
   /**
    * Whether to recompute each grant's binding to its server's configuration.
-   * Only durable (Postgres) flows carry the fields that makes this answerable.
+   * The daemon may keep this false for a legacy caller; production enables it
+   * and lets the verifier grandfather only historical unbound SQLite rows.
    */
   requireGrantBinding: boolean;
-  isGrantBoundToServer(server: MCPServer, grant: UserMCPOAuthToken): boolean;
+  isGrantBoundToServer(server: MCPServer, grant: UserMCPOAuthToken): boolean | Promise<boolean>;
   now?: Date;
 }
 
@@ -67,7 +69,7 @@ export async function resolveAuthenticatedServerIds(deps: OAuthStatusDeps): Prom
 
     // Durable status is authoritative. A realtime hint or stale row must never
     // make the UI advertise a grant which the request path would refuse to use.
-    if (deps.requireGrantBinding && !deps.isGrantBoundToServer(server, token)) continue;
+    if (deps.requireGrantBinding && !(await deps.isGrantBoundToServer(server, token))) continue;
 
     authenticatedServerIds.add(token.mcp_server_id);
   }

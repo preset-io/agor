@@ -12,8 +12,9 @@
  */
 
 import type { UserID } from '@agor/core/types';
+import bcrypt from 'bcryptjs';
 import { eq } from 'drizzle-orm';
-import { beforeAll, describe, expect } from 'vitest';
+import { beforeAll, describe, expect, vi } from 'vitest';
 import { select, update } from '../database-wrapper';
 import { users } from '../schema';
 import { dbTest } from '../test-helpers';
@@ -37,6 +38,59 @@ async function makeUser(repo: UsersRepository): Promise<UserID> {
   });
   return u.user_id as UserID;
 }
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+describe('UsersRepository password boundary', () => {
+  dbTest('rejects plaintext and pre-hashed credential smuggling', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    await expect(
+      repo.create({ email: 'plaintext-smuggle@example.com', password: 'not-a-hash' } as never)
+    ).rejects.toThrow(/does not accept password credential fields/);
+    await expect(
+      repo.create({
+        email: 'hash-smuggle@example.com',
+        password_hash: await bcrypt.hash('smuggled password', 10),
+      } as never)
+    ).rejects.toThrow(/does not accept password credential fields/);
+
+    const id = await makeUser(repo);
+    await expect(repo.update(id, { password: 'field-smuggle' } as never)).rejects.toThrow(
+      /credential fields/
+    );
+    await expect(repo.update(id, { password_hash: 'field-smuggle' } as never)).rejects.toThrow(
+      /credential fields/
+    );
+    await expect(repo.update(id, { credential_generation: 99 } as never)).rejects.toThrow(
+      /credential fields/
+    );
+    await expect(repo.update(id, { tokens_valid_after: new Date(0) } as never)).rejects.toThrow(
+      /credential fields/
+    );
+  });
+
+  dbTest('preserves an opaque fixture hash during unrelated updates', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    const fixturePassword = 'fixture-password-long-enough';
+    const password_hash = await bcrypt.hash(fixturePassword, 10);
+    const user = await repo.create({ email: 'opaque-fixture@example.com' });
+    await update(db, users)
+      .set({ password: password_hash })
+      .where(eq(users.user_id, user.user_id))
+      .run();
+
+    await repo.update(user.user_id, { name: 'Updated fixture' });
+    const row = await select(db).from(users).where(eq(users.user_id, user.user_id)).one();
+    expect(row?.password).toBe(password_hash);
+    expect(row && (await bcrypt.compare(fixturePassword, row.password))).toBe(true);
+  });
+});
 
 describe('UsersRepository execution home key validation', () => {
   dbTest('rejects invalid keys on create and update', async ({ db }) => {
@@ -290,5 +344,61 @@ describe('UsersRepository.update — credential blob preservation', () => {
     const after = await select(db).from(users).where(eq(users.user_id, userId)).one();
     const afterData = (after?.data ?? {}) as { env_vars?: typeof seedEnvVars };
     expect(afterData.env_vars).toEqual(seedEnvVars);
+  });
+
+  dbTest('writes only supplied fields and preserves opaque concurrent data', async ({ db }) => {
+    const repo = new UsersRepository(db);
+    const userId = await makeUser(repo);
+    const readSnapshot = deferred();
+    const releaseUpdate = deferred();
+    const findById = repo.findById.bind(repo);
+    vi.spyOn(repo, 'findById').mockImplementation(async (id) => {
+      const snapshot = await findById(id);
+      readSnapshot.resolve();
+      await releaseUpdate.promise;
+      return snapshot;
+    });
+
+    const profileUpdate = repo.update(userId, { name: 'Only this field changes' });
+    await readSnapshot.promise;
+    const row = await select(db).from(users).where(eq(users.user_id, userId)).one();
+    const externalIdentities = [
+      {
+        key: 'external-key',
+        provider: 'test-provider',
+        issuer: 'https://issuer.example.test',
+        subject: 'subject-1',
+        last_login_at: new Date().toISOString(),
+      },
+    ];
+    try {
+      await update(db, users)
+        .set({
+          role: 'admin',
+          must_change_password: true,
+          data: {
+            ...row?.data,
+            external_identities: externalIdentities,
+            future_opaque_field: { preserved: true },
+          },
+        })
+        .where(eq(users.user_id, userId))
+        .run();
+    } finally {
+      releaseUpdate.resolve();
+    }
+    await profileUpdate;
+
+    const after = await select(db).from(users).where(eq(users.user_id, userId)).one();
+    expect(after).toMatchObject({
+      name: 'Only this field changes',
+      role: 'admin',
+      must_change_password: true,
+    });
+    const afterData = (after?.data ?? {}) as Record<string, unknown>;
+    expect(afterData.external_identities).toEqual(externalIdentities);
+    expect(afterData.future_opaque_field).toEqual({
+      preserved: true,
+    });
   });
 });

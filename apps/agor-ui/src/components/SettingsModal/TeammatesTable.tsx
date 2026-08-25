@@ -16,6 +16,7 @@ import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { HighlightMatch } from '../HighlightMatch';
 import { MarkdownRenderer } from '../MarkdownRenderer/MarkdownRenderer';
 import { UserAvatar } from '../metadata/UserAvatar';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface TeammatesTableProps {
@@ -229,33 +230,31 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
 
   return (
     <div>
-      <Space
-        orientation="vertical"
-        size={token.sizeUnit * 2}
-        style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
-      >
-        <Typography.Text type="secondary">
-          Teammates are persistent AI companions backed by a framework repo. They maintain memory,
-          orchestrate work across branches, and run on scheduled heartbeats.
-        </Typography.Text>
-        <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
-          <Input
-            allowClear
-            placeholder="Search teammates..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            style={{ maxWidth: token.sizeUnit * 40 }}
-          />
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={onCreateTeammate}
-            disabled={!onCreateTeammate}
-          >
-            Create AI teammate
-          </Button>
-        </Space>
-      </Space>
+      <ResponsiveSettingsHeader
+        description="Teammates are persistent AI companions backed by a framework repo. They maintain memory, orchestrate work across branches, and run on scheduled heartbeats."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
+            <Input
+              allowClear
+              placeholder="Search teammates..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              style={{
+                width: compact ? '100%' : token.sizeUnit * 40,
+                flex: compact ? '1 1 100%' : undefined,
+              }}
+            />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={onCreateTeammate}
+              disabled={!onCreateTeammate}
+            >
+              Create AI teammate
+            </Button>
+          </Space>
+        )}
+      />
 
       {teammates.length === 0 && !searchTerm && (
         <div
@@ -281,6 +280,7 @@ export const TeammatesTable: React.FC<TeammatesTableProps> = ({
         <Table
           dataSource={teammates}
           columns={columns}
+          scroll={{ x: 720 }}
           rowKey="branch_id"
           pagination={{ defaultPageSize: 10 }}
           size="small"

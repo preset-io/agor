@@ -22,13 +22,10 @@ import type {
   ReposServiceImpl,
 } from '../../declarations.js';
 import type { BranchParams } from '../../services/branches.js';
+import { issueExecutorCommandToken } from '../../services/session-token-service.js';
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  runExecutorCommand,
-} from '../../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -354,11 +351,13 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         })
       );
 
-      const statusResult = await runExecutorCommand(
+      const statusResult = await requestExecutor(
         {
           command: 'branch.filesystem.status',
-          sessionToken: generateScopedServiceToken(
-            ctx.app as unknown as { settings: { authentication?: { secret?: string } } }
+          sessionToken: await issueExecutorCommandToken(
+            ctx.app,
+            'branch-filesystem-status',
+            ctx.userId
           ),
           daemonUrl: getDaemonUrl(),
           params: { branchIds: branches.map((branch) => branch.branch_id) },

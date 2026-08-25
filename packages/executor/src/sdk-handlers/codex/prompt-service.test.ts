@@ -459,7 +459,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expectedApps: undefined,
     },
   ])(
-    'builds session config for $name permissions and uses the configured accessor',
+    'builds policy-enforced session config for $name permissions and uses the configured accessor',
     async ({
       persistedPermissionMode,
       promptPermissionMode,
@@ -504,7 +504,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
           ...(persistedPermissionMode ? { mode: persistedPermissionMode } : {}),
           codex: codexPermissions,
         },
-        model_config: { effort: 'medium' },
+        model_config: { model: 'gpt-5.4', effort: 'medium' },
         mcp_token: 'test-token',
       });
       mockSessionsRepo.update.mockResolvedValue(undefined);
@@ -533,7 +533,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
       expect(mockInstanceCount).toBe(1);
       expect(mockInstanceConfigs).toEqual([
         {
-          features: { goals: false },
+          features: { goals: false, multi_agent: false },
           model_instructions_file: '/tmp/agor-codex-instructions-flow.md',
           mcp_servers: {
             agor: {
@@ -548,6 +548,7 @@ describe('CodexPromptService - prompt flow client initialization', () => {
         threadId: 'mock-thread-id',
       });
       expect(mockStartThreadOptions.at(-1)).toMatchObject({
+        model: 'gpt-5.4',
         modelReasoningEffort: 'medium',
       });
     }

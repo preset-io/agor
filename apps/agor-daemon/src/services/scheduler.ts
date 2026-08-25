@@ -39,6 +39,7 @@
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
+import { MCPServerNotUsableError } from '@agor/core';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
   type DeploymentAgenticToolPolicy,
@@ -56,10 +57,12 @@ import {
 import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import {
   BranchRepository,
+  bindRepositoryToTenantUnitOfWork,
   EntityNotFoundError,
   generateId,
   getCurrentTenantId,
   isDatabaseUniqueConstraintError,
+  isPostgresDatabaseHandle,
   runWithSystemDatabaseScope,
   runWithTenantContext,
   runWithTenantDatabaseScope,
@@ -76,6 +79,8 @@ import type {
   PersistedScheduleAgenticToolConfig,
   Schedule,
   ScheduleID,
+  SchedulerInitializationFailureCode,
+  SchedulerInitializationStage,
   Session,
   SessionID,
   Task,
@@ -219,12 +224,14 @@ export class ScheduleNotReadyError extends Error {
   public readonly code:
     | 'schedule_disabled'
     | 'schedule_incomplete'
+    | 'schedule_initialization_retry_pending'
     | 'schedule_agentic_tool_removed'
     | 'schedule_invalid_config';
   constructor(
     code:
       | 'schedule_disabled'
       | 'schedule_incomplete'
+      | 'schedule_initialization_retry_pending'
       | 'schedule_agentic_tool_removed'
       | 'schedule_invalid_config',
     message: string
@@ -233,6 +240,45 @@ export class ScheduleNotReadyError extends Error {
     this.name = 'ScheduleNotReadyError';
     this.code = code;
   }
+}
+
+class ScheduledInitializationError extends Error {
+  constructor(
+    readonly stage: SchedulerInitializationStage,
+    readonly cause: unknown
+  ) {
+    super('Scheduled occurrence initialization failed');
+    this.name = 'ScheduledInitializationError';
+  }
+}
+
+class PermanentScheduledInitializationError extends Error {
+  constructor(
+    readonly code: Exclude<SchedulerInitializationFailureCode, 'initialization_transient'>,
+    readonly stage: SchedulerInitializationStage
+  ) {
+    super('Scheduled occurrence initialization cannot be completed');
+    this.name = 'PermanentScheduledInitializationError';
+  }
+}
+
+function permanentInitializationDiagnosis(
+  error: ScheduledInitializationError
+): PermanentScheduledInitializationError | null {
+  if (error.cause instanceof PermanentScheduledInitializationError) return error.cause;
+  if (error.stage === 'mcp_attachment' && error.cause instanceof MCPServerNotUsableError) {
+    return new PermanentScheduledInitializationError('mcp_server_not_usable', error.stage);
+  }
+  return null;
+}
+
+function isInjectedSchedulerCrash(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4 && current && typeof current === 'object'; depth += 1) {
+    if (current instanceof Error && current.message.startsWith('simulated kill at ')) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 export interface SchedulerConfig {
@@ -330,12 +376,20 @@ export class SchedulerService {
       workIdentity,
       testHooks: config.testHooks,
     };
-    this.branchRepo = new BranchRepository(db);
-    this.scheduleRepo = new ScheduleRepository(db);
-    this.sessionRepo = new SessionRepository(db);
-    this.userRepo = new UsersRepository(db);
-    this.sessionMCPRepo = new SessionMCPServerRepository(db);
-    this.taskRepo = new TaskRepository(db);
+    // The HA scheduler is a system-discovered, tenant-reentered workflow rather
+    // than a Feathers request. Bind its PostgreSQL repositories at the shared
+    // short-unit boundary so reads remain available during a tenant freeze
+    // while every create/update/delete checks the gate in the transaction that
+    // owns the mutation. SQLite has no tenant write gate; keep its direct
+    // repository calls unchanged, including their concurrency timing.
+    const bindTenantRepository = <T extends object>(repository: T): T =>
+      isPostgresDatabaseHandle(db) ? bindRepositoryToTenantUnitOfWork(db, repository) : repository;
+    this.branchRepo = bindTenantRepository(new BranchRepository(db));
+    this.scheduleRepo = bindTenantRepository(new ScheduleRepository(db));
+    this.sessionRepo = bindTenantRepository(new SessionRepository(db));
+    this.userRepo = bindTenantRepository(new UsersRepository(db));
+    this.sessionMCPRepo = bindTenantRepository(new SessionMCPServerRepository(db));
+    this.taskRepo = bindTenantRepository(new TaskRepository(db));
 
     if (
       !Number.isInteger(this.config.scanBatchSize) ||
@@ -958,25 +1012,65 @@ export class SchedulerService {
     ) {
       return admission.session;
     }
+    if (
+      recovering &&
+      admission.session.scheduler_init_failure_code &&
+      !admission.session.scheduler_init_retry_at
+    ) {
+      if (manual) {
+        throw new ScheduleNotReadyError(
+          'schedule_incomplete',
+          'This scheduled occurrence has a permanent initialization failure.'
+        );
+      }
+      await this.advanceScheduleCursor(schedule, now);
+      return admission.session;
+    }
+    if (
+      recovering &&
+      admission.session.scheduler_init_retry_at &&
+      Date.parse(admission.session.scheduler_init_retry_at) > now
+    ) {
+      if (manual) {
+        throw new ScheduleNotReadyError(
+          'schedule_initialization_retry_pending',
+          'This scheduled occurrence is waiting for its durable initialization retry.'
+        );
+      }
+      await this.advanceScheduleCursor(schedule, now);
+      return admission.session;
+    }
     await this.config.testHooks?.afterSessionAdmission?.(admission.session);
+    try {
+      await this.initializeScheduledSession({
+        scheduleId: schedule.schedule_id,
+        session: admission.session,
+        creator,
+        fallbackPrompt: renderedPrompt,
+        fallbackMcpIds: effectiveMcpIds,
+        recovering,
+      });
 
-    await this.initializeScheduledSession({
-      scheduleId: schedule.schedule_id,
-      session: admission.session,
-      creator,
-      fallbackPrompt: renderedPrompt,
-      fallbackMcpIds: effectiveMcpIds,
-      recovering,
-    });
-
-    await this.finalizeScheduledSession({
-      schedule,
-      scheduleId: schedule.schedule_id,
-      session: admission.session,
-      scheduledRunAt,
-      now,
-      runTestHooks: true,
-    });
+      await this.atInitializationStage('finalization', () =>
+        this.finalizeScheduledSession({
+          schedule,
+          scheduleId: schedule.schedule_id,
+          session: admission.session,
+          scheduledRunAt,
+          now,
+          runTestHooks: true,
+        })
+      );
+    } catch (error) {
+      // Deterministic kill hooks model abrupt process death and must leave the
+      // row untouched so replacement-daemon tests exercise crash recovery.
+      if (this.config.testHooks && isInjectedSchedulerCrash(error)) {
+        throw error instanceof ScheduledInitializationError ? error.cause : error;
+      }
+      await this.recordInitializationFailure(admission.session, error);
+      if (!manual) await this.advanceScheduleCursor(schedule, now);
+      throw error;
+    }
     return admission.session;
   }
 
@@ -985,7 +1079,9 @@ export class SchedulerService {
     scheduledRunAt: number,
     now: number
   ): Promise<void> {
-    const session = await this.withTenantDatabase(() => this.sessionRepo.findById(sessionId));
+    const session = await this.atInitializationStage('recovery_load', () =>
+      this.withTenantDatabase(() => this.sessionRepo.findById(sessionId))
+    );
     if (!session?.scheduled_from_branch || session.scheduled_run_at !== scheduledRunAt) {
       return;
     }
@@ -1001,9 +1097,14 @@ export class SchedulerService {
       | ScheduleID
       | undefined;
     if (!scheduleId) {
-      throw new Error(
-        `Scheduled Session ${session.session_id} has no live or snapshotted schedule identity`
+      await this.recordInitializationFailure(
+        session,
+        new ScheduledInitializationError(
+          'snapshot',
+          new PermanentScheduledInitializationError('schedule_identity_unavailable', 'snapshot')
+        )
       );
+      return;
     }
     const schedule = await this.withTenantDatabase(() => this.scheduleRepo.findById(scheduleId));
 
@@ -1017,7 +1118,19 @@ export class SchedulerService {
       const branch = await this.withTenantDatabase(() =>
         this.branchRepo.findById(session.branch_id)
       );
-      if (!branch) return;
+      if (!branch) {
+        await this.recordInitializationFailure(
+          session,
+          new ScheduledInitializationError(
+            'recovery_load',
+            new PermanentScheduledInitializationError(
+              'schedule_branch_unavailable',
+              'recovery_load'
+            )
+          )
+        );
+        return;
+      }
       fallbackPrompt ??= renderSchedulePrompt(schedule.prompt, branch, schedule, scheduledRunAt);
       fallbackMcpIds ??=
         schedule.mcp_server_ids !== undefined
@@ -1027,26 +1140,94 @@ export class SchedulerService {
             : [];
     }
     if (fallbackPrompt === undefined) {
-      throw new Error(
-        `Scheduled Session ${session.session_id} has no snapshotted prompt and its Schedule no longer exists`
+      await this.recordInitializationFailure(
+        session,
+        new ScheduledInitializationError(
+          'snapshot',
+          new PermanentScheduledInitializationError('schedule_prompt_unavailable', 'snapshot')
+        )
       );
+      return;
+    }
+    try {
+      await this.initializeScheduledSession({
+        scheduleId,
+        session,
+        fallbackPrompt,
+        fallbackMcpIds: fallbackMcpIds ?? [],
+        recovering: true,
+      });
+      await this.atInitializationStage('finalization', () =>
+        this.finalizeScheduledSession({
+          schedule,
+          scheduleId,
+          session,
+          scheduledRunAt,
+          now,
+          runTestHooks: false,
+        })
+      );
+    } catch (error) {
+      await this.recordInitializationFailure(session, error);
+    }
+  }
+
+  private async atInitializationStage<T>(
+    stage: SchedulerInitializationStage,
+    work: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await work();
+    } catch (error) {
+      if (error instanceof ScheduledInitializationError) throw error;
+      throw new ScheduledInitializationError(stage, error);
+    }
+  }
+
+  private async recordInitializationFailure(session: Session, error: unknown): Promise<void> {
+    const diagnosed =
+      error instanceof ScheduledInitializationError
+        ? error
+        : new ScheduledInitializationError('recovery_load', error);
+    const permanent = permanentInitializationDiagnosis(diagnosed);
+    if (permanent) {
+      const outcome = await this.withTenantDatabase(() =>
+        this.sessionRepo.markScheduledInitializationPermanentFailure({
+          sessionId: session.session_id,
+          code: permanent.code,
+          stage: permanent.stage,
+        })
+      );
+      if (outcome === 'recorded') {
+        this.logWorkEvent('error', 'occurrence_initialization_permanent_failure', {
+          schedule_id: session.schedule_id,
+          session_id: session.session_id,
+          failure_code: permanent.code,
+          failure_stage: permanent.stage,
+          retryable: false,
+        });
+      }
+      return;
     }
 
-    await this.initializeScheduledSession({
-      scheduleId,
-      session,
-      fallbackPrompt,
-      fallbackMcpIds: fallbackMcpIds ?? [],
-      recovering: true,
-    });
-    await this.finalizeScheduledSession({
-      schedule,
-      scheduleId,
-      session,
-      scheduledRunAt,
-      now,
-      runTestHooks: false,
-    });
+    const transition = await this.withTenantDatabase(() =>
+      this.sessionRepo.markScheduledInitializationRetry({
+        sessionId: session.session_id,
+        code: 'initialization_transient',
+        stage: diagnosed.stage,
+      })
+    );
+    if (transition.recorded) {
+      const delayMs = Math.min(15 * 60_000, 5_000 * 2 ** Math.min(transition.attempt - 1, 8));
+      this.logWorkEvent('warn', 'occurrence_initialization_retry_scheduled', {
+        schedule_id: session.schedule_id,
+        session_id: session.session_id,
+        failure_code: 'initialization_transient',
+        failure_stage: diagnosed.stage,
+        retryable: true,
+        retry_delay_ms: delayMs,
+      });
+    }
   }
 
   /**
@@ -1114,11 +1295,14 @@ export class SchedulerService {
     const existingInitialTask = existingTasks.find((task) => task.task_id === initialTaskId);
     let creator = input.creator;
     if (!creator && (!existingInitialTask || isTaskPendingDispatch(existingInitialTask))) {
-      const recoveredCreator = await this.withTenantDatabase(() =>
-        this.userRepo.findById(session.created_by)
+      const recoveredCreator = await this.atInitializationStage('creator_load', () =>
+        this.withTenantDatabase(() => this.userRepo.findById(session.created_by))
       );
       if (!recoveredCreator) {
-        throw new Error(`Scheduled Session creator ${session.created_by} not found`);
+        throw new ScheduledInitializationError(
+          'creator_load',
+          new PermanentScheduledInitializationError('creator_unavailable', 'creator_load')
+        );
       }
       creator = recoveredCreator;
     }
@@ -1146,8 +1330,10 @@ export class SchedulerService {
 
     for (const serverId of effectiveMcpIds) {
       try {
-        await this.withTenantDatabase(() =>
-          this.sessionMCPRepo.addServer(session.session_id, serverId as MCPServerID)
+        await this.atInitializationStage('mcp_attachment', () =>
+          this.withTenantDatabase(() =>
+            this.sessionMCPRepo.addServer(session.session_id, serverId as MCPServerID)
+          )
         );
         emitServiceEvent(this.app, {
           path: 'session-mcp-servers',
@@ -1163,7 +1349,8 @@ export class SchedulerService {
         // Preserve settled behavior for an optional server deleted between
         // schedule configuration and initialization. Transient database
         // failures must escape so this occurrence remains recoverable.
-        if (!(error instanceof EntityNotFoundError)) throw error;
+        const cause = error instanceof ScheduledInitializationError ? error.cause : error;
+        if (!(cause instanceof EntityNotFoundError)) throw error;
         this.logWorkEvent('warn', 'mcp_attachment_missing', {
           schedule_id: scheduleId,
           session_id: session.session_id,
@@ -1174,20 +1361,24 @@ export class SchedulerService {
     await this.config.testHooks?.afterMcpAttachments?.(session);
 
     const tenantId = getCurrentTenantId();
-    const task = (await this.app.service('/sessions/:id/prompt').create(
-      {
-        prompt: renderedPrompt,
-        permissionMode: session.permission_config?.mode || 'acceptEdits',
-        stream: true,
-        idempotencyTaskId: initialTaskId,
-      },
-      {
-        route: { id: session.session_id },
-        provider: undefined,
-        ...(creator ? { user: creator } : {}),
-        ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
-      } as import('@agor/core/types').AuthenticatedParams & { route: { id: string } }
-    )) as Task;
+    const task = await this.atInitializationStage(
+      'prompt_admission',
+      async () =>
+        (await this.app.service('/sessions/:id/prompt').create(
+          {
+            prompt: renderedPrompt,
+            permissionMode: session.permission_config?.mode || 'acceptEdits',
+            stream: true,
+            idempotencyTaskId: initialTaskId,
+          },
+          {
+            route: { id: session.session_id },
+            provider: undefined,
+            ...(creator ? { user: creator } : {}),
+            ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
+          } as import('@agor/core/types').AuthenticatedParams & { route: { id: string } }
+        )) as Task
+    );
     await this.config.testHooks?.afterPromptDispatch?.(task);
 
     this.logWorkEvent(

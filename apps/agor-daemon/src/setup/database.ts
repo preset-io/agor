@@ -7,6 +7,8 @@
 
 import { constants } from 'node:fs';
 import { access, mkdir } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { ensureAgorHome, getAgorHome } from '@agor/core/config';
 import {
   checkMigrationStatus,
   createDatabaseAsync,
@@ -43,14 +45,21 @@ async function ensureDatabaseDirectory(dbPath: string): Promise<void> {
 
   // Extract file path from DB_PATH (remove 'file:' prefix and expand ~)
   const dbFilePath = extractDbFilePath(dbPath);
-  const dbDir = dbFilePath.substring(0, dbFilePath.lastIndexOf('/'));
+  const dbDir = dirname(dbFilePath);
 
   // Ensure database directory exists
   try {
     await access(dbDir, constants.F_OK);
   } catch {
     console.log('[database] creating sqlite directory');
-    await mkdir(dbDir, { recursive: true });
+    if (resolve(dbDir) === resolve(getAgorHome())) {
+      await ensureAgorHome(dbDir);
+    } else {
+      // A custom SQLite parent is operator-managed and may intentionally use
+      // group ownership or default ACLs; only the canonical Agor home receives
+      // Agor's private-state policy.
+      await mkdir(dbDir, { recursive: true });
+    }
   }
 
   // Check if database file exists (create message if needed)

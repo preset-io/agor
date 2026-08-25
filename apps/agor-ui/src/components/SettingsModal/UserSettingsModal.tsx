@@ -1,5 +1,6 @@
 import { AGENTIC_TOOL_CAPABILITIES, AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import { type AgenticToolReadiness, getAgenticToolUIIntegration } from '@agor/agentic-tools/ui';
+import { AgorUserLifecycleAuthority } from '@agor/core/config/browser';
 import { EXECUTION_HOME_KEY_PATTERN } from '@agor/core/types';
 import type {
   AgenticAuthMethod,
@@ -15,6 +16,7 @@ import type {
   User,
 } from '@agor-live/client';
 import {
+  AGENTIC_TOOL_NAMES,
   canAssignUserRole,
   hasMinimumRole,
   hasRoleAuthorityOver,
@@ -42,7 +44,10 @@ import {
   Checkbox,
   ConfigProvider,
   Divider,
+  Drawer,
+  Flex,
   Form,
+  Grid,
   Input,
   Layout,
   Menu,
@@ -58,11 +63,17 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { isIdentityCapabilityAvailable, useAuthConfig } from '../../hooks/useAuthConfig';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { copyToClipboard } from '../../utils/clipboard';
+import {
+  passwordPolicyHelp,
+  passwordPolicyRequirements,
+  passwordRules,
+} from '../../utils/passwordPolicy';
 import { searchableSelectProps, toGroupSelectOption } from '../../utils/selectSearch';
 import { getSettingsSearchTokens, matchesSettingsSearchTokens } from '../../utils/settingsSearch';
 import {
@@ -81,20 +92,14 @@ import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { AudioSettingsTab } from './AudioSettingsTab';
 import { syncGroupsForUser } from './groupMembershipSync';
 import { PersonalApiKeysTab } from './PersonalApiKeysTab';
-import { FieldRow, PanelHeader, SectionDivider } from './panelPrimitives';
+import { PrimaryTeammatePicker } from './PrimaryTeammatePicker';
+import { FieldRow, PanelHeader, SectionDivider, SettingsSection } from './panelPrimitives';
 import { UploadsTab } from './UploadsTab';
 import { UserAgenticDefaultEditor } from './UserAgenticDefaultEditor';
 
 const { Sider, Content } = Layout;
 
-const AGENTIC_TOOL_TABS = [
-  'claude-code',
-  'codex',
-  'gemini',
-  'opencode',
-  'copilot',
-  'cursor',
-] as const satisfies readonly AgenticToolName[];
+const AGENTIC_TOOL_TABS = AGENTIC_TOOL_NAMES;
 
 // Panels that own the shared `form` instance. Every other panel (tokens,
 // env-vars, providers) keeps the instance alive via a hidden connector.
@@ -172,6 +177,7 @@ const toolFromProviderKey = (key: string): AgenticToolName =>
 const LEGACY_TAB_ALIASES: Record<string, string> = {
   general: 'profile',
   audio: 'preferences',
+  'primary-teammate': 'preferences',
   groups: 'access',
   'personal-api-keys': 'tokens',
 };
@@ -204,7 +210,8 @@ const PANEL_META: Record<string, { title: string; icon: React.ReactNode; keyword
   preferences: {
     title: 'Preferences',
     icon: <BellOutlined />,
-    keywords: 'audio sound interface chime',
+    keywords:
+      'assistant teammate primary coding agent agentic tool audio sound notification chime event stream',
   },
   security: { title: 'Security', icon: <LockOutlined />, keywords: 'account password credentials' },
   tokens: { title: 'API tokens', icon: <KeyOutlined />, keywords: 'api token key ci pipeline' },
@@ -244,7 +251,7 @@ export interface UserSettingsModalProps {
   user: User | null;
   client: AgorClient | null;
   currentUser?: User | null;
-  onUpdate?: (userId: string, updates: UpdateUserInput) => void;
+  onUpdate?: (userId: string, updates: UpdateUserInput) => Promise<void>;
   onRestartOnboarding?: () => void | Promise<void>;
   initialTab?: string;
 }
@@ -260,6 +267,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   initialTab,
 }) => {
   const { token } = theme.useToken();
+  const { config: authConfig, identityContractState } = useAuthConfig();
+  const screens = Grid.useBreakpoint();
+  const compact = !screens.md;
 
   // Entity maps are read from the store rather than drilled through props so
   // the App shell doesn't have to forward them into every modal.
@@ -292,11 +302,38 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     null
   );
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const externallyManaged =
+    authConfig?.identity?.userLifecycle === AgorUserLifecycleAuthority.EXTERNAL;
+  const identityWriteAvailable = isIdentityCapabilityAvailable(
+    authConfig,
+    identityContractState,
+    'identityWrite'
+  );
+  const roleWriteAvailable = isIdentityCapabilityAvailable(
+    authConfig,
+    identityContractState,
+    'roleWrite'
+  );
+  const passwordWriteAvailable = isIdentityCapabilityAvailable(
+    authConfig,
+    identityContractState,
+    'passwordWrite'
+  );
+  const passwordRequirements = passwordPolicyRequirements(authConfig?.passwordPolicy);
   const isEditingOther = !!user && !!currentUser && user.user_id !== currentUser.user_id;
   const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
   const canEditTarget =
     !isEditingOther || (isAdmin && hasRoleAuthorityOver(currentUser?.role, user?.role));
   const canAdministerTarget = isAdmin && canEditTarget;
+  const canWriteIdentity = canEditTarget && identityWriteAvailable;
+  const canWriteRole = canAdministerTarget && !isSelf && roleWriteAvailable;
+  const canWritePassword = canEditTarget && passwordWriteAvailable;
+  const canWriteExecutionHome = canAdministerTarget && identityWriteAvailable;
+  const identityWriteHelp = !identityWriteAvailable
+    ? 'Managed by your identity provider'
+    : canWriteIdentity
+      ? undefined
+      : 'You do not have authority to edit this user';
   const assignableRoleOptions = ROLE_OPTIONS.filter((option) =>
     canAssignUserRole(currentUser?.role, option.value)
   );
@@ -319,6 +356,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         ? rawActiveKey
         : 'profile';
     }
+    if (rawActiveKey === 'security' && !canWriteExecutionHome && !canWritePassword)
+      return 'profile';
     if ((rawActiveKey === 'tokens' || rawActiveKey === 'uploads') && isEditingOther)
       return 'profile';
     if (rawActiveKey === 'access' && !canAdministerTarget) return 'profile';
@@ -333,6 +372,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [copilotForm] = Form.useForm();
   const [cursorForm] = Form.useForm();
   const [audioForm] = Form.useForm();
+  const [primaryToolForm] = Form.useForm();
 
   const agenticFormByTool = useMemo<Record<AgenticToolName, ReturnType<typeof Form.useForm>[0]>>(
     () => ({
@@ -431,8 +471,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         useSlackAvatar: userData.preferences?.use_slack_avatar !== false,
         must_change_password: userData.must_change_password ?? false,
       });
+      primaryToolForm.setFieldValue('primaryAgenticTool', userData.primary_agentic_tool);
     },
-    [form, initialTab]
+    [form, initialTab, primaryToolForm]
   );
 
   const loadUserGroups = useCallback(async () => {
@@ -684,8 +725,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       const toValidate: string[] = [];
-      if (panels.has('profile')) toValidate.push('email', 'name', 'role');
-      if (panels.has('security')) toValidate.push('unix_username');
+      if (panels.has('profile') && canWriteIdentity) toValidate.push('email', 'name');
+      if (panels.has('profile') && canWriteRole) toValidate.push('role');
+      if (panels.has('security') && canWriteExecutionHome) toValidate.push('unix_username');
+      if (panels.has('security') && canWritePassword && form.getFieldValue('password') !== '') {
+        toValidate.push('password');
+      }
       if (toValidate.length) await form.validateFields(toValidate);
 
       const updates: UpdateUserInput = {};
@@ -694,21 +739,25 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
       if (panels.has('profile')) {
         const values = form.getFieldsValue(['email', 'name', 'role', 'useSlackAvatar']);
-        updates.email = values.email;
-        updates.name = values.name;
-        updates.role = values.role;
+        if (canWriteIdentity) {
+          updates.email = values.email;
+          updates.name = values.name;
+        }
         if (values.useSlackAvatar === false) {
           nextPreferences.use_slack_avatar = false;
         } else {
           delete nextPreferences.use_slack_avatar;
         }
         preferencesTouched = true;
+        if (canWriteRole) updates.role = values.role;
       }
 
       if (panels.has('security')) {
         const values = form.getFieldsValue(['unix_username', 'password']);
-        updates.unix_username = values.unix_username;
-        if (values.password?.trim()) updates.password = values.password;
+        if (canWriteExecutionHome) updates.unix_username = values.unix_username;
+        if (canWritePassword && typeof values.password === 'string' && values.password !== '') {
+          updates.password = values.password;
+        }
       }
 
       if (panels.has('preferences')) {
@@ -720,10 +769,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           minDurationSeconds: audioValues.minDurationSeconds,
         };
         nextPreferences.eventStream = { enabled: form.getFieldValue('eventStreamEnabled') ?? true };
+        const primaryAgenticTool = primaryToolForm.getFieldValue('primaryAgenticTool') as
+          | AgenticToolName
+          | undefined;
+        if (primaryAgenticTool !== undefined) {
+          updates.primary_agentic_tool = primaryAgenticTool;
+        }
         preferencesTouched = true;
       }
 
-      if (panels.has('access') && canAdministerTarget && isEditingOther) {
+      if (panels.has('access') && canAdministerTarget && isEditingOther && canWritePassword) {
         updates.must_change_password = form.getFieldValue('must_change_password');
       }
 
@@ -1026,10 +1081,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         children: [
           { key: 'profile', ...PANEL_META.profile },
           { key: 'preferences', ...PANEL_META.preferences },
-          { key: 'security', ...PANEL_META.security },
+          ...(!canWriteExecutionHome && !canWritePassword
+            ? []
+            : [{ key: 'security', ...PANEL_META.security }]),
           // Personal API tokens and uploads are scoped to the signed-in caller,
           // so they are meaningless (and misleading) when an admin edits another
-          // user.
+          // user. The caller-scoped Primary Assistant control lives within
+          // Preferences and is hidden there while editing another user.
           ...(isEditingOther
             ? []
             : [
@@ -1062,7 +1120,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       });
     }
     return groups;
-  }, [canAdministerTarget, canEditTarget, visibleAgenticToolTabs, isEditingOther, resolveProvider]);
+  }, [
+    canAdministerTarget,
+    canEditTarget,
+    canWriteExecutionHome,
+    canWritePassword,
+    isEditingOther,
+    resolveProvider,
+    visibleAgenticToolTabs,
+  ]);
 
   const menuItems: MenuProps['items'] = useMemo(
     () =>
@@ -1123,18 +1189,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'profile',
       },
       {
-        label: 'Password',
-        kind: 'setting',
-        keywords: 'credentials security',
-        panelKey: 'security',
-      },
-      {
-        label: 'Execution home key',
-        kind: 'setting',
-        keywords: 'impersonation os process user',
-        panelKey: 'security',
-      },
-      {
         label: 'Enable chimes',
         kind: 'setting',
         keywords: 'sound audio notification',
@@ -1165,6 +1219,36 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'preferences',
       },
     ];
+    if (canWritePassword) {
+      entries.push({
+        label: 'Password',
+        kind: 'setting',
+        keywords: 'credentials security',
+        panelKey: 'security',
+      });
+    }
+    if (canWriteExecutionHome) {
+      entries.push({
+        label: 'Execution home key',
+        kind: 'setting',
+        keywords: 'impersonation os process user',
+        panelKey: 'security',
+      });
+    }
+    if (!isEditingOther) {
+      entries.push({
+        label: 'Primary assistant',
+        kind: 'setting',
+        keywords: 'teammate default agent personal ambient work',
+        panelKey: 'preferences',
+      });
+      entries.push({
+        label: 'Primary coding agent',
+        kind: 'setting',
+        keywords: 'agentic tool default claude codex gemini opencode copilot cursor',
+        panelKey: 'preferences',
+      });
+    }
     if (isSelf && onRestartOnboarding) {
       entries.push({
         label: 'Restart onboarding',
@@ -1181,7 +1265,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'tokens',
       });
     }
-    if (isAdmin) {
+    if (canAdministerTarget) {
       entries.push({
         label: 'Groups',
         kind: 'setting',
@@ -1189,7 +1273,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'access',
       });
     }
-    if (isAdmin && isEditingOther) {
+    if (canAdministerTarget && isEditingOther && canWritePassword) {
       entries.push({
         label: 'Force password change on next login',
         kind: 'setting',
@@ -1328,10 +1412,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     navGroups,
     visibleAgenticToolTabs,
     resolveProvider,
-    isAdmin,
+    canAdministerTarget,
     isEditingOther,
     isSelf,
     onRestartOnboarding,
+    canWriteExecutionHome,
+    canWritePassword,
   ]);
 
   const searchActive = search.trim().length > 0;
@@ -1462,9 +1548,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const renderProfilePanel = () => (
     <>
       <PanelHeader title={PANEL_META.profile.title} />
+      {externallyManaged && (
+        <Alert
+          type="info"
+          showIcon
+          title="Identity and role are managed by your workspace"
+          description="Changes appear after the next workspace sign-in. Your Agor preferences and connections remain editable."
+          style={{ marginBottom: 20 }}
+        />
+      )}
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('profile')}>
-        <FieldRow label="Name" name="name">
-          <Input placeholder="John Doe" disabled={!canEditTarget} />
+        <FieldRow label="Name" name="name" help={identityWriteHelp}>
+          <Input placeholder="John Doe" disabled={!canWriteIdentity} />
         </FieldRow>
 
         <FieldRow
@@ -1475,8 +1570,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             { required: true, message: 'Please enter an email' },
             { type: 'email', message: 'Please enter a valid email' },
           ]}
+          help={identityWriteHelp}
         >
-          <Input placeholder="user@example.com" disabled={!canEditTarget} />
+          <Input placeholder="user@example.com" disabled={!canWriteIdentity} />
         </FieldRow>
 
         <FieldRow
@@ -1493,10 +1589,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           required
           name="role"
           rules={[{ required: true, message: 'Please select a role' }]}
-          help={canAdministerTarget ? undefined : 'Maintained by administrators'}
+          help={
+            !roleWriteAvailable
+              ? 'Managed by your identity provider'
+              : canWriteRole
+                ? undefined
+                : 'Maintained by administrators'
+          }
         >
           <Select
-            disabled={!canAdministerTarget || isSelf}
+            disabled={!canWriteRole}
             style={{ maxWidth: 320 }}
             options={assignableRoleOptions.map((opt) => ({
               value: opt.value,
@@ -1540,29 +1642,34 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     <>
       <PanelHeader title={PANEL_META.security.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('security')}>
-        <FieldRow label="Password" name="password" help="Leave blank to keep current password">
-          <Input.Password placeholder="••••••••" disabled={!canEditTarget} />
-        </FieldRow>
+        {canWritePassword && (
+          <FieldRow
+            label="Password"
+            name="password"
+            help={`Leave blank to keep current password. ${passwordPolicyHelp(passwordRequirements)}`}
+            rules={passwordRules(passwordRequirements, { required: false })}
+          >
+            <Input.Password placeholder="••••••••" autoComplete="new-password" />
+          </FieldRow>
+        )}
 
-        <FieldRow
-          label="Execution home key"
-          name="unix_username"
-          help={
-            canAdministerTarget
-              ? 'Transitional home key used only by delegated execution'
-              : 'Maintained by administrators'
-          }
-          rules={[
-            {
-              pattern: EXECUTION_HOME_KEY_PATTERN,
-              message:
-                'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
-            },
-            { max: 32, message: 'Execution home key must be 32 characters or less' },
-          ]}
-        >
-          <Input placeholder="johnsmith" maxLength={32} disabled={!canAdministerTarget} />
-        </FieldRow>
+        {canWriteExecutionHome && (
+          <FieldRow
+            label="Execution home key"
+            name="unix_username"
+            help="Transitional home key used only by delegated execution"
+            rules={[
+              {
+                pattern: EXECUTION_HOME_KEY_PATTERN,
+                message:
+                  'Start with a lowercase letter or underscore; then use lowercase letters, numbers, hyphens, or underscores',
+              },
+              { max: 32, message: 'Execution home key must be 32 characters or less' },
+            ]}
+          >
+            <Input placeholder="johnsmith" maxLength={32} />
+          </FieldRow>
+        )}
       </Form>
     </>
   );
@@ -1570,23 +1677,91 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const renderPreferencesPanel = () => (
     <>
       <PanelHeader title={PANEL_META.preferences.title} />
-      <AudioSettingsTab form={audioForm} onValuesChange={() => markMainPanelDirty('preferences')} />
-      <SectionDivider label="Interface" />
-      <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('preferences')}>
-        <FieldRow
-          label="Live event stream"
-          badge={
-            <Tag color={token.colorPrimary} style={{ fontSize: token.fontSizeSM }}>
-              BETA
-            </Tag>
-          }
-          name="eventStreamEnabled"
-          valuePropName="checked"
-          tooltip="Adds an icon to the navbar to inspect live WebSocket events for debugging."
+
+      {!isEditingOther && hasMinimumRole(currentUser?.role, ROLES.MEMBER) && (
+        <SettingsSection title="Assistant">
+          <Typography.Text strong>Primary assistant</Typography.Text>
+          <Typography.Paragraph
+            type="secondary"
+            style={{ maxWidth: 560, marginTop: token.marginXXS, marginBottom: token.marginMD }}
+          >
+            Choose the teammate Agor uses by default for personal and ambient work.
+          </Typography.Paragraph>
+          <PrimaryTeammatePicker
+            key={currentUser?.user_id ?? 'anonymous'}
+            client={client}
+            currentUserId={currentUser?.user_id}
+            compact
+          />
+
+          <SectionDivider label="Coding sessions" />
+          <Form
+            form={primaryToolForm}
+            layout="vertical"
+            onValuesChange={() => markMainPanelDirty('preferences')}
+          >
+            <FieldRow
+              name="primaryAgenticTool"
+              label="Primary coding agent"
+              help={
+                user?.primary_agentic_tool
+                  ? 'Preselected for new sessions. Choosing another agent while composing affects only that session.'
+                  : 'Once you successfully use a coding agent, Agor will remember it here. You can choose one now instead.'
+              }
+              style={{ maxWidth: 560, marginBottom: 0 }}
+            >
+              <Select
+                placeholder="Not set — Claude Code is used initially"
+                loading={!tenantToolSettingsHydrated}
+                disabled={!tenantToolSettingsHydrated}
+                options={AGENTIC_TOOL_TABS.map((tool) => ({
+                  value: tool,
+                  disabled:
+                    tenantToolSettings.get(tool as TenantAgenticToolName)?.enabled === false,
+                  label: (
+                    <Space size={8}>
+                      <ToolIcon tool={tool} size={16} />
+                      <span>{AGENTIC_TOOL_DISPLAY_NAMES[tool]}</span>
+                      {tenantToolSettings.get(tool as TenantAgenticToolName)?.enabled === false && (
+                        <Typography.Text type="secondary">Disabled</Typography.Text>
+                      )}
+                    </Space>
+                  ),
+                }))}
+              />
+            </FieldRow>
+          </Form>
+        </SettingsSection>
+      )}
+
+      <SettingsSection title="Notifications">
+        <AudioSettingsTab
+          form={audioForm}
+          onValuesChange={() => markMainPanelDirty('preferences')}
+        />
+      </SettingsSection>
+
+      <SettingsSection title="Developer tools">
+        <Form
+          form={form}
+          layout="vertical"
+          onValuesChange={() => markMainPanelDirty('preferences')}
         >
-          <Switch />
-        </FieldRow>
-      </Form>
+          <FieldRow
+            label="Live event stream"
+            badge={
+              <Tag color={token.colorPrimary} style={{ fontSize: token.fontSizeSM }}>
+                BETA
+              </Tag>
+            }
+            name="eventStreamEnabled"
+            valuePropName="checked"
+            help="Show a navbar shortcut for inspecting live WebSocket events while debugging."
+          >
+            <Switch />
+          </FieldRow>
+        </Form>
+      </SettingsSection>
     </>
   );
 
@@ -1640,7 +1815,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           />
         </FieldRow>
 
-        {canAdministerTarget && isEditingOther && (
+        {canAdministerTarget && isEditingOther && canWritePassword && (
           <>
             <SectionDivider label="Danger zone" />
             <Form.Item
@@ -1999,6 +2174,93 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </Button>,
       ];
 
+  const mobileSectionOptions = navGroups.flatMap((group) =>
+    group.children.map((child) => ({
+      label: `${group.label} · ${child.title}`,
+      value: child.key,
+    }))
+  );
+
+  const hiddenForms = (
+    <div hidden aria-hidden="true">
+      {!MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number]) && (
+        <Form component={false} form={form} />
+      )}
+      {activeKey !== 'preferences' && <Form component={false} form={audioForm} />}
+      {visibleAgenticToolTabs.map((tool) =>
+        activeTool === tool ? null : (
+          <Form key={tool} component={false} form={agenticFormByTool[tool]} />
+        )
+      )}
+    </div>
+  );
+
+  if (compact) {
+    return (
+      <Drawer
+        open={open}
+        onClose={handleClose}
+        title={null}
+        aria-label="User settings"
+        closable={false}
+        placement="bottom"
+        size="94dvh"
+        footer={<Space style={{ width: '100%', justifyContent: 'flex-end' }}>{footer}</Space>}
+        styles={{ body: { padding: 0, overflow: 'hidden' } }}
+      >
+        {hiddenForms}
+        <ConfigProvider theme={scopedTheme}>
+          <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+            <Flex
+              vertical
+              gap={token.marginSM}
+              style={{
+                padding: `${token.paddingSM}px ${token.paddingMD}px`,
+                borderBottom: `1px solid ${token.colorBorderSecondary}`,
+                background: token.colorBgElevated,
+                flex: '0 0 auto',
+              }}
+            >
+              <Flex align="center" justify="space-between" gap={token.marginSM}>
+                <div style={{ minWidth: 0 }}>{siderTitle}</div>
+                <Button
+                  type="text"
+                  icon={<CloseOutlined />}
+                  aria-label="Close user settings"
+                  onClick={handleClose}
+                />
+              </Flex>
+              <Select
+                aria-label="User settings section"
+                showSearch
+                optionFilterProp="label"
+                value={activeInNav ? activeKey : undefined}
+                placeholder="Choose a settings section"
+                options={mobileSectionOptions}
+                onChange={setActiveKey}
+                style={{ width: '100%' }}
+                size="large"
+              />
+            </Flex>
+            <Content
+              style={{
+                padding: `${token.paddingLG}px ${token.paddingMD}px ${token.paddingXL}px`,
+                overflowY: 'auto',
+                overflowX: 'hidden',
+                minWidth: 0,
+                width: '100%',
+                maxWidth: '100%',
+                boxSizing: 'border-box',
+              }}
+            >
+              <div style={{ minWidth: 0, width: '100%', maxWidth: '100%' }}>{renderContent()}</div>
+            </Content>
+          </Layout>
+        </ConfigProvider>
+      </Drawer>
+    );
+  }
+
   return (
     <Modal
       open={open}
@@ -2011,7 +2273,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       footer={footer}
       closable
       closeIcon={<CloseOutlined />}
-      width="min(1050px, calc(100vw - 32px))"
+      width={compact ? 'calc(100vw - 16px)' : 'min(1050px, calc(100vw - 32px))'}
+      style={{ top: compact ? 8 : undefined }}
       styles={{
         // Zero the card's default 20px 24px frame and clip to the rounded
         // corners so the inner Layout fills the card edge-to-edge — the Sider
@@ -2022,9 +2285,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         header: { display: 'none' },
         body: {
           padding: 0,
-          height: 'calc(100vh - 280px)',
-          minHeight: 450,
-          maxHeight: 650,
+          height: compact ? 'calc(100dvh - 88px)' : 'calc(100vh - 280px)',
+          minHeight: compact ? 0 : 450,
+          maxHeight: compact ? 'none' : 650,
         },
         // With the card frame gone, the footer supplies its own padding and a
         // top divider so it reads as one bar across the bottom of the card.
@@ -2039,26 +2302,25 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       {/* Keep inactive form instances connected to Ant Form. Without these
           lightweight hidden connectors, calling form methods while switching
           panels can produce noisy "useForm is not connected" console warnings. */}
-      <div hidden aria-hidden="true">
-        {!MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number]) && (
-          <Form component={false} form={form} />
-        )}
-        {activeKey !== 'preferences' && <Form component={false} form={audioForm} />}
-        {visibleAgenticToolTabs.map((tool) =>
-          activeTool === tool ? null : (
-            <Form key={tool} component={false} form={agenticFormByTool[tool]} />
-          )
-        )}
-      </div>
+      {hiddenForms}
       <ConfigProvider theme={scopedTheme}>
-        <Layout style={{ height: '100%', background: token.colorBgContainer }}>
+        <Layout
+          style={{
+            height: '100%',
+            background: token.colorBgContainer,
+            flexDirection: compact ? 'column' : 'row',
+          }}
+        >
           <Sider
-            width={220}
+            width={compact ? '100%' : 220}
             style={{
               background: token.colorBgElevated,
-              borderRight: `1px solid ${token.colorBorderSecondary}`,
+              borderRight: compact ? 0 : `1px solid ${token.colorBorderSecondary}`,
+              borderBottom: compact ? `1px solid ${token.colorBorderSecondary}` : 0,
               overflow: 'auto',
-              padding: `20px ${token.marginSM}px`,
+              maxHeight: compact ? 240 : undefined,
+              flex: compact ? '0 0 auto' : undefined,
+              padding: compact ? `${token.paddingSM}px` : `20px ${token.marginSM}px`,
             }}
           >
             <div style={{ padding: `0 ${token.marginXXS}px ${token.marginMD}px` }}>

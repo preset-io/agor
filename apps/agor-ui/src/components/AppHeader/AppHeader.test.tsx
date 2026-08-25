@@ -116,6 +116,14 @@ describe('AppHeader navigation entries', () => {
     expect(marketplaceLinks).toEqual([]);
     expect(screen.queryByText('Marketplace')).not.toBeInTheDocument();
   });
+
+  it('bounds the always-visible board switcher slot', () => {
+    renderHeader();
+
+    const slot = screen.getByTestId('board-switcher').parentElement;
+    expect(slot).toHaveStyle({ width: '200px' });
+    expect(slot?.style.minWidth).toBe('');
+  });
 });
 
 describe('AppHeader settings dropdown', () => {

@@ -247,10 +247,15 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   );
   const showMcpNotice =
     unauthedMcpServers.length > 0 && dismissedMcpSignature !== unauthedSignature;
+  // A disconnected install needs a working recovery control even when the
+  // user previously unpinned Tools. Reveal the MCP badge for as long as any
+  // attached server needs authentication; once recovered, the saved pin
+  // preference takes effect again.
+  const showMcpControl = pinnedChips.includes('tools') || unauthedMcpServers.length > 0;
   const mcpNoticeMessage =
     unauthedMcpServers.length === 1
-      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Click the MCP badge to connect it.`
-      : `${unauthedMcpServers.length} MCP servers aren’t connected. Click the MCP badge to connect them.`;
+      ? `${unauthedMcpServers[0].display_name || unauthedMcpServers[0].name} isn’t connected. Open the MCP badge to connect it.`
+      : `${unauthedMcpServers.length} MCP servers aren’t connected. Open the MCP badge to connect them.`;
 
   const composerAttachmentActionTooltip = 'Attachments are only supported for normal Send for now';
   const composerUploadTooltip = 'Uploading files...';
@@ -1343,7 +1348,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
 
       <div style={{ position: 'relative', zIndex: 1 }}>
         {/* Row 1 — Info bar */}
-        {(pinnedChips.includes('tools') ||
+        {(showMcpControl ||
           (footerTimerTask && pinnedChips.includes('timer')) ||
           (modelName && pinnedChips.includes('model')) ||
           (tokenDisplay !== null && pinnedChips.includes('tokens')) ||
@@ -1380,7 +1385,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </div>
             )}
 
-            {pinnedChips.includes('tools') && (
+            {showMcpControl && (
               <SessionMcpFooterControl
                 client={client}
                 sessionId={session.session_id}
@@ -1544,6 +1549,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             align="center"
             gap={token.sizeXS}
             data-testid="mcp-disconnected-notice"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
             style={{
               marginBottom: token.sizeUnit * 2,
               padding: `${token.sizeXXS}px ${token.sizeSM}px`,

@@ -19,10 +19,10 @@
 import { join } from 'node:path';
 import {
   type AgorConfig,
+  hasCrossReplicaExecutorCredentialLock,
   hasTenantSafeExecutorCredentialHome,
-  unixUserModeRequiresExecutionHomeKey,
 } from '@agor/core/config';
-import { getCurrentTenantId, type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
+import { getCurrentTenantId, type TenantScopedDatabase } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type {
   AgenticAuthMethods,
@@ -31,15 +31,30 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { resolveDelegatedHomeKey, type UnixUserMode } from '@agor/core/unix';
 import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
-import { writeCodexAuthViaExecutor } from '../utils/executor-codex-auth.js';
-import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
+import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
+import {
+  ExecutionCredentialHomeResolutionError,
+  resolveExecutionCredentialHome,
+} from './credential-home-identity.js';
 
 export interface AppLike {
   get(name: 'config'): DeepReadonly<AgorConfig>;
   service(path: string): unknown;
 }
+
+/** Narrow authority required by import/logout to serialize credential-file mutations. */
+export interface CodexCredentialMutationCoordinator {
+  runCredentialMutation<T>(
+    tenantId: string,
+    userId: UserID,
+    reason: 'credentials_imported' | 'credentials_removed',
+    work: (authorityGeneration: number) => Promise<T>
+  ): Promise<T>;
+}
+
+/** In-process users-service flag: publish this mutation only after its outer DB commit. */
+export const CODEX_AUTH_DEFER_USER_REALTIME = Symbol('codex-auth-defer-user-realtime');
 
 /** Minimal users-service surface — mirrors the widget handlers' structural typing. */
 interface UsersServiceLike {
@@ -69,7 +84,11 @@ export type CodexCredentialRouteResolution =
     }
   | {
       ok: false;
-      reason: 'missing-username' | 'resolve-failed' | 'unsupported-mode';
+      reason:
+        | 'missing-username'
+        | 'resolve-failed'
+        | 'unsupported-mode'
+        | 'unsupported-home-override';
       message: string;
     };
 
@@ -88,7 +107,18 @@ export async function resolveCodexCredentialRoute(
   withTenantDatabase: <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) => Promise<T>,
   config: DeepReadonly<AgorConfig>
 ): Promise<CodexCredentialRouteResolution> {
-  const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
+  const mode = config.execution?.unix_user_mode ?? 'simple';
+
+  if (config.deployment?.mode === 'ha' && !hasCrossReplicaExecutorCredentialLock(config)) {
+    return {
+      ok: false,
+      reason: 'unsupported-mode',
+      message:
+        'HA Codex credential operations require ' +
+        'execution.executor_storage.user_home_locking: cross-replica-flock. ' +
+        'Verify the shared storage propagates flock across every replica, or use an API key.',
+    };
+  }
 
   if (!hasTenantSafeExecutorCredentialHome(config)) {
     return {
@@ -118,36 +148,7 @@ export async function resolveCodexCredentialRoute(
     };
   }
 
-  let unixUsername: string | null = null;
-  // Delegated execution requires a stable per-user home key. A missing value
-  // must surface as the actionable `missing-username` result.
-  if (unixUserModeRequiresExecutionHomeKey(mode)) {
-    if (!userId) {
-      return {
-        ok: false,
-        reason: 'resolve-failed',
-        message: 'Delegated execution mode requires an authenticated user context.',
-      };
-    }
-    const row = await withTenantDatabase((tenantDb) =>
-      new UsersRepository(tenantDb).findById(userId)
-    );
-    unixUsername = row?.unix_username ?? null;
-    if (!unixUsername) {
-      return {
-        ok: false,
-        reason: 'missing-username',
-        message:
-          'Delegated execution mode requires a unix_username — ask an admin to set one for your account.',
-      };
-    }
-  }
-
   try {
-    const resolved = resolveDelegatedHomeKey({
-      mode,
-      executionHomeKey: unixUsername,
-    });
     if (!userId) {
       return {
         ok: false,
@@ -155,26 +156,25 @@ export async function resolveCodexCredentialRoute(
         message: 'Codex credential routing requires an authenticated user identity.',
       };
     }
-    // In sandbox mode the executor runs as the daemon user with the caller's
-    // per-user store overlaid at `~`. Auth must be written to THAT store's
-    // `.codex` (honoring an explicit filesystem_home), so both the auth flow and
-    // later sandboxed sessions agree on where auth.json lives.
-    let codexHome: string | undefined;
-    if (mode === 'sandbox') {
-      const tenantId = getCurrentTenantId();
-      const row = await withTenantDatabase((tenantDb) =>
-        new UsersRepository(tenantDb).findById(userId)
-      );
-      codexHome = join(
-        resolveOwnerHomeStore({
-          config,
-          tenantId,
-          ownerUserId: userId,
-          filesystemHome: row?.filesystem_home,
-        }),
-        '.codex'
-      );
+    // Resolve the exact same identity used by the session execution path. The
+    // native-auth safety check compares these values, so deriving the write
+    // route independently would make that check vulnerable to semantic drift.
+    const resolved = await resolveExecutionCredentialHome({
+      userId,
+      tenantId: getCurrentTenantId(),
+      config,
+      withTenantDatabase,
+    });
+    if (config.deployment?.mode === 'ha' && resolved.homeStoreSource === 'override') {
+      return {
+        ok: false,
+        reason: 'unsupported-home-override',
+        message:
+          'HA Codex subscription auth requires Agor’s canonical tenant/user home. ' +
+          'Remove the filesystem_home override for this account or use an API key.',
+      };
     }
+    const codexHome = resolved.homeStore ? join(resolved.homeStore, '.codex') : undefined;
     return {
       ok: true,
       delegatedHomeKey: resolved.delegatedHomeKey,
@@ -184,15 +184,18 @@ export async function resolveCodexCredentialRoute(
   } catch (err) {
     return {
       ok: false,
-      reason: 'resolve-failed',
+      reason:
+        err instanceof ExecutionCredentialHomeResolutionError && err.reason === 'missing-username'
+          ? 'missing-username'
+          : 'resolve-failed',
       message: err instanceof Error ? err.message : String(err),
     };
   }
 }
 
 /**
- * Persist a validated auth.json for a user: write it 0600 as the target Unix
- * user, verify by reading it back, then flip the user's Codex auth method to
+ * Persist a validated auth.json for a user: write it 0600 through the selected
+ * credential route, verify it, then flip the user's Codex auth method to
  * `subscription` so executors resolve native auth. Shared by the paste-import
  * and device-code sign-in flows. Throws `BadRequest` with user-facing,
  * secret-free messages.
@@ -205,16 +208,23 @@ export async function persistVerifiedCodexAuth(options: {
   authUser: NonNullable<AuthenticatedParams['user']>;
   /** Per-user store `.codex` for sandbox mode (see CodexCredentialRouteResolution.codexHome). */
   codexHome?: string;
+  /** PostgreSQL authority generation for HA filesystem fencing. */
+  authorityGeneration?: number;
 }): Promise<CodexAuthSummary> {
-  const { app, normalized, delegatedHomeKey, userId, authUser, codexHome } = options;
+  const { app, normalized, delegatedHomeKey, userId, authUser, codexHome, authorityGeneration } =
+    options;
 
   let summary: CodexAuthSummary;
   try {
-    summary = await writeCodexAuthViaExecutor(normalized, {
-      delegatedHomeKey,
-      userId,
-      codexHome,
-    });
+    summary = await writeCodexAuthCredential(
+      normalized,
+      {
+        delegatedHomeKey,
+        userId,
+        codexHome,
+      },
+      authorityGeneration
+    );
   } catch (err) {
     // The error may carry launcher stderr; log a class-level summary only
     // so token material (or its absence) never reaches daemon logs.
@@ -231,7 +241,11 @@ export async function persistVerifiedCodexAuth(options: {
   await usersService.patch(
     userId,
     { agentic_auth_methods: { ...current.agentic_auth_methods, codex: 'subscription' } },
-    { user: authUser, authenticated: true }
+    {
+      user: authUser,
+      authenticated: true,
+      ...(authorityGeneration === undefined ? {} : { [CODEX_AUTH_DEFER_USER_REALTIME]: true }),
+    }
   );
 
   return summary;

@@ -127,21 +127,32 @@ describe('SessionsService.remove — swap-replace TOCTOU guard', () => {
   });
 
   dbTest(
-    'a normal (non-swap) delete of a session with tasks is unaffected — no confirmation gate added',
+    'refuses a normal delete while a task is unfinished so its executor lease cannot be orphaned',
     async ({ db }) => {
       const service = new SessionsService(db, STUB_APP);
       const branchId = await createBranch(db);
       const sessionId = await createSession(db, branchId);
-      await createTask(db, sessionId);
+      const taskId = await createTask(db, sessionId);
 
-      // No `_swapReplace` marker — this is a user deleting a real session
-      // with history via the normal delete affordance, which must keep
-      // working exactly as before.
-      const removed = (await service.remove(sessionId)) as Session;
-      expect(removed.session_id).toBe(sessionId);
+      await expect(service.remove(sessionId)).rejects.toThrow(/unfinished tasks/i);
 
       const sessionRepo = new SessionRepository(db);
-      expect(await sessionRepo.findById(sessionId)).toBeNull();
+      const taskRepo = new TaskRepository(db);
+      expect(await sessionRepo.findById(sessionId)).not.toBeNull();
+      expect(await taskRepo.findById(taskId)).not.toBeNull();
     }
   );
+
+  dbTest('allows a normal delete after every task reaches a terminal state', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const sessionId = await createSession(db, branchId);
+    await createTask(db, sessionId, { status: TaskStatus.COMPLETED });
+
+    const removed = (await service.remove(sessionId)) as Session;
+    expect(removed.session_id).toBe(sessionId);
+
+    const sessionRepo = new SessionRepository(db);
+    expect(await sessionRepo.findById(sessionId)).toBeNull();
+  });
 });

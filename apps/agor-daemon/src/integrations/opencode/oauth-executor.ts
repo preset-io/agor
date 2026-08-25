@@ -92,9 +92,13 @@ export function startOpenCodeOAuthExecutor(
         'OpenCode OAuth cleanup could not be verified.'
       ),
       missingResult: (stderrSeen) =>
-        failure('EXECUTOR_RESULT_MISSING', 'OpenCode OAuth executor did not emit a result.', {
-          stderr: stderrSeen ? '[redacted]' : '',
-        }),
+        failure(
+          'EXECUTOR_RESULT_MISSING',
+          'OpenCode OAuth executor did not deliver a final response.',
+          {
+            stderr: stderrSeen ? '[redacted]' : '',
+          }
+        ),
     },
     onEvent(value, input) {
       const event = parseEvent(value);

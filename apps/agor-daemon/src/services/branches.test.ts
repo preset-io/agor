@@ -3,6 +3,7 @@ import {
   BranchRepository,
   type Database,
   GroupRepository,
+  generateId,
   KnowledgeNamespaceRepository,
   RepoRepository,
   runWithTenantDatabaseScope,
@@ -13,7 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
 import { BRANCH_REMOVAL_VISIBILITY_PARAM } from '../utils/realtime-publish.js';
-import { runExecutorCommand, spawnExecutor } from '../utils/spawn-executor.js';
+import { requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
 import { BranchesService } from './branches';
 
 vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
@@ -21,14 +22,17 @@ vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
   return {
     ...actual,
     spawnExecutor: vi.fn(),
-    runExecutorCommand: vi.fn(),
-    generateScopedServiceToken: vi.fn(() => 'service-token'),
+    requestExecutor: vi.fn(),
     getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   };
 });
 
 function createTenantScopeTestDb() {
-  return { run: vi.fn() };
+  const db = {
+    run: vi.fn(),
+    transaction: vi.fn(async (work: (scoped: unknown) => Promise<unknown>) => work(db)),
+  };
+  return db;
 }
 
 function createRenderEnvHarness(opts: {
@@ -50,7 +54,7 @@ function createRenderEnvHarness(opts: {
   const app = {
     get: () => ({}),
     sessionTokenService: {
-      generateToken: vi.fn(async () => 'executor-token'),
+      generateCommandToken: vi.fn(async () => 'executor-token'),
     },
     service(path: string) {
       if (path === 'repos') return { get: reposGet };
@@ -97,7 +101,7 @@ function createPatchHarness(opts: {
   const app = {
     get: () => ({}),
     sessionTokenService: {
-      generateToken: vi.fn(async () => 'executor-token'),
+      generateCommandToken: vi.fn(async () => 'executor-token'),
     },
     service(path: string) {
       if (path === 'board-objects') return boardObjectsService;
@@ -177,7 +181,7 @@ function createServiceHarness() {
   };
 
   const sessionTokenService = {
-    generateToken: vi.fn(async () => 'executor-token'),
+    generateCommandToken: vi.fn(async () => 'executor-token'),
   };
   const app = {
     get: () => ({}),
@@ -198,9 +202,16 @@ function createServiceHarness() {
       branchRepo: BranchRepository;
     }
   ).branchRepo;
+  const taskRepo = (
+    service as unknown as {
+      taskRepo: { hasNonterminalForBranch: ReturnType<typeof vi.fn> };
+    }
+  ).taskRepo;
+  taskRepo.hasNonterminalForBranch = vi.fn(async () => false);
   return {
     service,
     branchRepo,
+    taskRepo,
     boardObjectsService,
     sessionsService,
     branchesService,
@@ -217,12 +228,12 @@ function waitForDeferredWork(): Promise<void> {
 }
 
 const mockedSpawnExecutor = vi.mocked(spawnExecutor);
-const mockedRunExecutorCommand = vi.mocked(runExecutorCommand);
+const mockedRequestExecutor = vi.mocked(requestExecutor);
 
 beforeEach(() => {
   mockedSpawnExecutor.mockReset();
-  mockedRunExecutorCommand.mockReset();
-  mockedRunExecutorCommand.mockResolvedValue({
+  mockedRequestExecutor.mockReset();
+  mockedRequestExecutor.mockResolvedValue({
     success: true,
     data: { exists: true, kind: 'directory' },
   });
@@ -521,14 +532,14 @@ describe('BranchesService environment start async behavior', () => {
       };
       return { ...branch, environment_instance: currentEnvironment } as never;
     });
-    mockedRunExecutorCommand.mockResolvedValue({
+    mockedRequestExecutor.mockResolvedValue({
       success: true,
       data: { branchId: branch.branch_id, action: 'stop' },
     });
 
     await service.restartEnvironment(branch.branch_id);
 
-    expect(mockedRunExecutorCommand).toHaveBeenCalledWith(
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'environment.lifecycle',
         params: expect.objectContaining({
@@ -551,7 +562,7 @@ describe('BranchesService environment start async behavior', () => {
   it('uses a reusable branch-scoped token when fetching shell logs via executor', async () => {
     const { service } = createServiceHarness();
     const app = (service as unknown as { app: Application }).app as unknown as {
-      sessionTokenService: { generateToken: ReturnType<typeof vi.fn> };
+      sessionTokenService: { generateCommandToken: ReturnType<typeof vi.fn> };
     };
     const branch = {
       branch_id: 'wt-logs' as BranchID,
@@ -573,7 +584,7 @@ describe('BranchesService environment start async behavior', () => {
       env: { PATH: '/usr/bin:/bin' },
       delegatedHomeKey: undefined,
     } as never);
-    mockedRunExecutorCommand.mockResolvedValue({
+    mockedRequestExecutor.mockResolvedValue({
       success: true,
       data: { logs: 'line 1\nline 2', timestamp: '2026-06-19T00:00:00.000Z' },
     });
@@ -582,12 +593,12 @@ describe('BranchesService environment start async behavior', () => {
       logs: 'line 1\nline 2',
     });
 
-    expect(app.sessionTokenService.generateToken).toHaveBeenCalledWith(
+    expect(app.sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
       'environment-logs',
       branch.created_by,
-      { branchId: branch.branch_id, maxUses: -1 }
+      branch.branch_id
     );
-    expect(mockedRunExecutorCommand).toHaveBeenCalledWith(
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
       expect.objectContaining({
         command: 'environment.logs',
         sessionToken: 'executor-token',
@@ -918,6 +929,27 @@ describe('BranchesService environment start async behavior', () => {
 });
 
 describe('BranchesService.patch primary teammate invariants', () => {
+  it('rejects changing the trusted template remote after creation', async () => {
+    const branchId = 'teammate-template-remote' as BranchID;
+    const { service, repository } = createPatchHarness({
+      current: {
+        branch_id: branchId,
+        board_id: 'board-a' as BoardID,
+        base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
+      },
+      updated: {
+        branch_id: branchId,
+        board_id: 'board-a' as BoardID,
+        base_remote_url: 'https://attacker.example/template.git',
+      },
+    });
+
+    await expect(
+      service.patch(branchId, { base_remote_url: 'https://attacker.example/template.git' })
+    ).rejects.toThrow(/immutable/);
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
   it('clears the old primary and sets the new board primary when a teammate moves boards', async () => {
     const boardA = 'board-a' as BoardID;
     const boardB = 'board-b' as BoardID;
@@ -1116,6 +1148,8 @@ describe('BranchesService one-shot teammate creation wiring', () => {
 });
 
 describe('BranchesService.unarchive', () => {
+  const userParams = { user: { user_id: 'user-1' as UUID, role: 'member' } } as never;
+
   it('preserves existing board_id when options.boardId is not provided', async () => {
     const { service, boardObjectsService, sessionsService } = createServiceHarness();
     const branchId = 'wt-1' as BranchID;
@@ -1140,7 +1174,7 @@ describe('BranchesService.unarchive', () => {
       y: 222,
     });
 
-    await service.unarchive(branchId);
+    await service.unarchive(branchId, undefined, userParams);
 
     expect(patchSpy).toHaveBeenCalledWith(
       branchId,
@@ -1150,7 +1184,7 @@ describe('BranchesService.unarchive', () => {
         archived_by: undefined,
         filesystem_status: undefined,
       }),
-      undefined
+      userParams
     );
     expect(patchSpy.mock.calls[0][1]).not.toHaveProperty('board_id');
 
@@ -1186,7 +1220,7 @@ describe('BranchesService.unarchive', () => {
     } as never);
     boardObjectsService.findByBranchId.mockResolvedValue({ object_id: 'existing' });
 
-    await service.unarchive(branchId);
+    await service.unarchive(branchId, undefined, userParams);
 
     expect(boardObjectsService.findByBranchId).toHaveBeenCalledWith(branchId);
     expect(boardObjectsService.create).not.toHaveBeenCalled();
@@ -1217,7 +1251,7 @@ describe('BranchesService.unarchive', () => {
       y: 8,
     });
 
-    await service.unarchive(branchId, { boardId: newBoardId });
+    await service.unarchive(branchId, { boardId: newBoardId }, userParams);
 
     expect(patchSpy).toHaveBeenCalledWith(
       branchId,
@@ -1225,7 +1259,7 @@ describe('BranchesService.unarchive', () => {
         archived: false,
         board_id: newBoardId,
       }),
-      undefined
+      userParams
     );
     expect(boardObjectsService.create).toHaveBeenCalledWith({
       board_id: newBoardId,
@@ -1297,6 +1331,49 @@ describe('BranchesService.archiveOrDelete', () => {
     );
   });
 
+  it('delegates filesystem deletion with authoritative paths and no daemon bearer', async () => {
+    const { service, sessionTokenService } = createServiceHarness();
+    const branchId = 'wt-delete-files' as BranchID;
+    const branch = {
+      branch_id: branchId,
+      name: 'WT Delete Files',
+      path: '/safe/worktrees/repo/feature',
+      archived: false,
+      board_id: 'board-a',
+      storage_mode: 'clone',
+      environment_instance: { status: 'stopped' },
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(branch);
+    vi.spyOn(service, 'patch').mockResolvedValue({ ...branch, archived: true });
+    const params = {
+      user: { user_id: 'user-1' as UUID },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
+
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'archive', filesystemAction: 'deleted' },
+      params
+    );
+
+    expect(mockedSpawnExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'git.branch.remove',
+        params: expect.objectContaining({
+          branchId,
+          branchPath: branch.path,
+          storageMode: 'clone',
+        }),
+      }),
+      expect.objectContaining({ logPrefix: `[BranchesService.delete ${branch.name}]` })
+    );
+    const payload = mockedSpawnExecutor.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty('sessionToken');
+    expect(payload).not.toHaveProperty('daemonUrl');
+    expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
+  });
+
   it('deletes metadata without re-entering unrelated remove hooks and emits one tombstone', async () => {
     const { service, branchRepo, branchesService } = createServiceHarness();
     const branchId = 'wt-delete-op' as BranchID;
@@ -1344,6 +1421,39 @@ describe('BranchesService.archiveOrDelete', () => {
         params,
       })
     );
+  });
+
+  it('refuses metadata deletion while a descendant task is unfinished', async () => {
+    const { service, branchRepo, taskRepo, branchesService } = createServiceHarness();
+    const branchId = 'wt-delete-running' as BranchID;
+    const params = {
+      user: { user_id: 'user-1' as UUID },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    const branch = {
+      branch_id: branchId,
+      name: 'WT Delete Running',
+      path: '/tmp/wt-delete-running',
+      archived: false,
+      environment_instance: { status: 'stopped' },
+    } as never;
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue(branch);
+    vi.spyOn(service, 'get').mockResolvedValue(branch);
+    taskRepo.hasNonterminalForBranch.mockResolvedValue(true);
+    const repositoryDelete = vi.spyOn(branchRepo, 'delete');
+    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
+
+    await expect(
+      service.archiveOrDelete(
+        branchId,
+        { metadataAction: 'delete', filesystemAction: 'deleted' },
+        params
+      )
+    ).rejects.toThrow(/unfinished tasks/i);
+
+    expect(repositoryDelete).not.toHaveBeenCalled();
+    expect(branchesService.emit).not.toHaveBeenCalled();
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 
   it('captures hard-delete visibility after authorization, inside the metadata transaction', async () => {
@@ -1412,7 +1522,7 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(get).not.toHaveBeenCalled();
     expect(stopEnvironment).not.toHaveBeenCalled();
     expect(remove).not.toHaveBeenCalled();
-    expect(sessionTokenService.generateToken).not.toHaveBeenCalled();
+    expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
     expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 });
@@ -2165,16 +2275,14 @@ describe('BranchesService.create permission defaults', () => {
   );
 });
 
-describe('BranchesService environment health recovery', () => {
+describe('BranchesService environment health requests', () => {
   const originalFetch = globalThis.fetch;
 
   beforeEach(() => {
     globalThis.fetch = originalFetch;
   });
 
-  // Recovery now requires consecutive successes (ENVIRONMENT_READY_PROBE_THRESHOLD),
-  // so that one transient 200 cannot flap an environment back to running.
-  it('recovers an errored environment to running after sustained successful probes', async () => {
+  it('reports a healthy errored environment without reviving or persisting it', async () => {
     const branch = {
       branch_id: 'wt-health-recover' as BranchID,
       repo_id: 'repo-1',
@@ -2218,15 +2326,252 @@ describe('BranchesService environment health recovery', () => {
       branch.health_check_url,
       expect.objectContaining({ method: 'GET' })
     );
-    expect(updateEnvironment).toHaveBeenCalledWith(
-      branch.branch_id,
-      expect.objectContaining({
-        status: 'running',
-        last_health_check: expect.objectContaining({ status: 'healthy', message: 'HTTP 200' }),
-      }),
-      undefined
-    );
-    expect(result.environment_instance?.status).toBe('running');
+    expect(updateEnvironment).not.toHaveBeenCalled();
+    expect(result.environment_instance).toMatchObject({
+      status: 'error',
+      last_health_check: { status: 'healthy', message: 'HTTP 200' },
+    });
+  });
+
+  it('does not probe an errored environment for an automatic observation', async () => {
+    const branch = {
+      branch_id: 'wt-health-error-automatic' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-error-automatic',
+      path: '/tmp/wt-health-error-automatic',
+      branch_unique_id: 2,
+      health_check_url: 'http://localhost:3030/health',
+      environment_instance: { status: 'error' },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    globalThis.fetch = vi.fn();
+
+    await expect(
+      service.checkHealth(branch.branch_id, undefined, { intent: 'automatic' })
+    ).resolves.toBe(branch);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('returns a blocked diagnostic without logging a user-authored health URL', async () => {
+    const branch = {
+      branch_id: 'wt-health-blocked-url' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-blocked-url',
+      path: '/tmp/wt-health-blocked-url',
+      branch_unique_id: 3,
+      health_check_url: 'http://169.254.169.254/latest?credential=secret',
+      environment_instance: { status: 'error' },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(result.environment_instance?.last_health_check).toMatchObject({
+      status: 'unhealthy',
+      message: 'Health check URL blocked by security policy',
+    });
+    warn.mockRestore();
+  });
+
+  it.each([
+    { status: 'stopped' as const, archived: false },
+    { status: 'stopping' as const, archived: false },
+    { status: 'running' as const, archived: true },
+  ])('does not probe an inactive environment (%o)', async ({ status, archived }) => {
+    const branch = {
+      branch_id: `wt-health-${status}-${archived}` as BranchID,
+      repo_id: 'repo-1',
+      name: 'inactive-health',
+      path: '/tmp/inactive-health',
+      archived,
+      health_check_url: 'http://localhost:3030/health',
+      environment_instance: { status },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    globalThis.fetch = vi.fn();
+
+    await expect(service.checkHealth(branch.branch_id)).resolves.toBe(branch);
+
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  dbTest(
+    'treats repeated automatic and explicit startup network failures as unrecorded observations',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        email: `${generateId()}@example.com`,
+        name: 'Startup health no-op',
+      });
+      const repo = await new RepoRepository(db).create({
+        repo_id: generateId(),
+        slug: `startup-health-noop-${generateId()}`,
+        name: 'Startup health no-op',
+        repo_type: 'remote',
+        remote_url: 'https://example.invalid/startup-health-noop.git',
+        local_path: `/tmp/${generateId()}`,
+        default_branch: 'main',
+      });
+      const branchRepo = new BranchRepository(db);
+      const branch = await branchRepo.create({
+        branch_id: generateId() as BranchID,
+        repo_id: repo.repo_id,
+        name: `startup-health-noop-${generateId()}`,
+        ref: 'main',
+        branch_unique_id: 8_700_000,
+        path: `/tmp/${generateId()}`,
+        created_by: user.user_id,
+        health_check_url: 'https://example.invalid/health',
+        environment_instance: { status: 'starting' },
+      });
+      const branchesService = { emit: vi.fn() };
+      const app = {
+        get(name: string) {
+          return name === 'distributedWorkIdentity'
+            ? { instanceId: 'daemon-a', bootId: 'boot-a' }
+            : {};
+        },
+        service(path: string) {
+          if (path === 'repos') return { get: vi.fn(async () => repo) };
+          if (path === 'branches') return branchesService;
+          throw new Error(`Unknown service: ${path}`);
+        },
+      } as unknown as Application;
+      const service = new BranchesService(db as never, app);
+      const fetchMock = vi.fn(async () => {
+        throw new Error('Health endpoint unreachable');
+      });
+      const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const warnLog = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      globalThis.fetch = fetchMock;
+
+      try {
+        for (let cycle = 0; cycle < 3; cycle += 1) {
+          await expect(
+            service.checkHealth(branch.branch_id, undefined, { intent: 'automatic' })
+          ).resolves.toMatchObject({
+            environment_instance: { status: 'starting' },
+          });
+        }
+        await expect(service.checkHealth(branch.branch_id)).resolves.toMatchObject({
+          environment_instance: { status: 'starting' },
+        });
+
+        expect(fetchMock).toHaveBeenCalledTimes(4);
+        expect(
+          (await branchRepo.findById(branch.branch_id))?.environment_instance?.last_health_check
+        ).toBeUndefined();
+        expect(branchesService.emit).not.toHaveBeenCalled();
+        expect(errorLog).not.toHaveBeenCalled();
+        expect(warnLog).not.toHaveBeenCalled();
+      } finally {
+        errorLog.mockRestore();
+        warnLog.mockRestore();
+      }
+    }
+  );
+
+  dbTest('fences late health success across stop and archive races', async ({ db }) => {
+    const user = await new UsersRepository(db).create({
+      email: `${generateId()}@example.com`,
+      name: 'Health race',
+    });
+    const repo = await new RepoRepository(db).create({
+      repo_id: generateId(),
+      slug: `health-race-${generateId()}`,
+      name: 'Health race',
+      repo_type: 'remote',
+      remote_url: 'https://example.invalid/health-race.git',
+      local_path: `/tmp/${generateId()}`,
+      default_branch: 'main',
+    });
+    const branchRepo = new BranchRepository(db);
+    const branchesService = { emit: vi.fn() };
+    const app = {
+      get(name: string) {
+        return name === 'distributedWorkIdentity'
+          ? { instanceId: 'daemon-a', bootId: 'boot-a' }
+          : {};
+      },
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => repo) };
+        if (path === 'branches') return branchesService;
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(db as never, app);
+    vi.spyOn(service, 'get').mockImplementation(async (id) => {
+      const current = await branchRepo.findById(id);
+      if (!current) throw new Error('branch disappeared');
+      return current as never;
+    });
+
+    for (const [index, transition] of (['stop', 'archive'] as const).entries()) {
+      const branch = await branchRepo.create({
+        branch_id: generateId() as BranchID,
+        repo_id: repo.repo_id,
+        name: `health-race-${transition}`,
+        ref: `health-race-${transition}`,
+        branch_unique_id: 8_800_000 + index,
+        path: `/tmp/health-race-${transition}`,
+        created_by: user.user_id,
+        health_check_url: 'https://example.invalid/health',
+        environment_instance: { status: 'running' },
+      });
+      let finishFetch: (() => void) | undefined;
+      const fetchMock = vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            finishFetch = () => resolve(new Response('', { status: 200 }));
+          })
+      );
+      globalThis.fetch = fetchMock;
+
+      const health = service.checkHealth(branch.branch_id);
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      await branchRepo.update(
+        branch.branch_id,
+        transition === 'stop' ? { environment_instance: { status: 'stopped' } } : { archived: true }
+      );
+      finishFetch?.();
+
+      const result = await health;
+      expect(result).toMatchObject(
+        transition === 'stop'
+          ? { environment_instance: { status: 'stopped' } }
+          : { archived: true, environment_instance: { status: 'running' } }
+      );
+      expect(result.environment_instance?.last_health_check).toBeUndefined();
+    }
+    expect(branchesService.emit).not.toHaveBeenCalled();
   });
 });
 
@@ -2305,324 +2650,6 @@ describe('BranchesService.startEnvironment concurrency guard', () => {
         /already (running|starting)|stopping/i
       );
     }
-  });
-});
-
-describe('BranchesService remote environment readiness gate', () => {
-  const originalFetch = globalThis.fetch;
-
-  beforeEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  /**
-   * Remote envs (a Codespace) have no frozen health_check_url — the reachable
-   * address only exists after `start`, so the lifecycle command reports it as a
-   * `health` fact. These cover the gate + catch-up sync added for that path.
-   */
-  const remoteBranch = (overrides: Record<string, unknown> = {}) => ({
-    branch_id: 'wt-remote-health' as BranchID,
-    repo_id: 'repo-1',
-    name: 'wt-remote-health',
-    path: '/tmp/wt-remote-health',
-    branch_unique_id: 1,
-    // deliberately no health_check_url — this is the remote-env shape
-    environment_instance: {
-      status: 'starting',
-      facts: {
-        url: 'https://cs-8088.app.github.dev',
-        health: 'https://cs-8088.app.github.dev/health',
-      },
-      last_command: { action: 'start', status: 'succeeded' },
-      ...overrides,
-    },
-  });
-
-  const serviceFor = (branch: unknown) => {
-    const app = {
-      get: () => ({}),
-      service(path: string) {
-        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
-        throw new Error(`Unknown service: ${path}`);
-      },
-    } as unknown as Application;
-    const service = new BranchesService(createTenantScopeTestDb() as never, app);
-    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
-    return service;
-  };
-
-  it('does NOT promote on a single success — a resuming tunnel can emit one stale 200', async () => {
-    const branch = remoteBranch();
-    const service = serviceFor(branch);
-    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      // Mutates rather than clones: the readiness/demotion streak is persisted
-      // in last_health_check.consecutive, so a mock that discards each write
-      // would leave every probe looking like the first one.
-      async (_id, update) => {
-        Object.assign(branch.environment_instance, update as Record<string, unknown>);
-        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
-      }
-    );
-    const syncEnvironment = vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
-    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
-
-    const result = await service.checkHealth(branch.branch_id);
-
-    // Observed live: a resuming Codespace answered one 200 through its tunnel
-    // and then immediately 502'd. One success must not be enough.
-    expect(result.environment_instance?.status).toBe('starting');
-    expect(updateEnvironment).not.toHaveBeenCalledWith(
-      branch.branch_id,
-      expect.objectContaining({ status: 'running' }),
-      undefined
-    );
-    expect(syncEnvironment).not.toHaveBeenCalled();
-  });
-
-  it('probes the `health` fact and fires a catch-up sync on starting -> running', async () => {
-    const branch = remoteBranch();
-    const service = serviceFor(branch);
-    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      // Mutates rather than clones: the readiness/demotion streak is persisted
-      // in last_health_check.consecutive, so a mock that discards each write
-      // would leave every probe looking like the first one.
-      async (_id, update) => {
-        Object.assign(branch.environment_instance, update as Record<string, unknown>);
-        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
-      }
-    );
-    const syncEnvironment = vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
-    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
-
-    // Promotion requires sustained reachability, so probe twice.
-    await service.checkHealth(branch.branch_id);
-    const result = await service.checkHealth(branch.branch_id);
-
-    // The fact URL is what gets probed — not a frozen health_check_url.
-    expect(globalThis.fetch).toHaveBeenCalledWith(
-      'https://cs-8088.app.github.dev/health',
-      expect.objectContaining({ method: 'GET' })
-    );
-    expect(updateEnvironment).toHaveBeenCalledWith(
-      branch.branch_id,
-      expect.objectContaining({ status: 'running' }),
-      undefined
-    );
-    // Commits made while the codespace was still building land now.
-    expect(syncEnvironment).toHaveBeenCalledWith(branch.branch_id, undefined);
-    expect(result.environment_instance?.status).toBe('running');
-  });
-
-  it('holds at starting while the app is not yet serving, and does not sync', async () => {
-    const branch = remoteBranch();
-    const service = serviceFor(branch);
-    const updateEnvironment = vi
-      .spyOn(service, 'updateEnvironment')
-      .mockImplementation(async (_id, update) => {
-        Object.assign(branch.environment_instance, update as Record<string, unknown>);
-        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
-      });
-    const syncEnvironment = vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
-    // Connection refused: the codespace exists but the app is still building.
-    globalThis.fetch = vi.fn(async () => {
-      throw new Error('ECONNREFUSED');
-    });
-
-    const result = await service.checkHealth(branch.branch_id);
-
-    // This is the whole point of the gate: a start that "succeeded" must NOT
-    // be reported as running until the app actually answers.
-    expect(result.environment_instance?.status).toBe('starting');
-    expect(syncEnvironment).not.toHaveBeenCalled();
-    // The failure IS recorded — the startup timeout counts these — but it must
-    // not carry a status change out of `starting`.
-    expect(updateEnvironment).toHaveBeenCalledWith(
-      branch.branch_id,
-      expect.not.objectContaining({ status: expect.anything() }),
-      undefined
-    );
-  });
-
-  it('times out a startup that never becomes reachable, instead of spinning forever', async () => {
-    const branch = remoteBranch();
-    const service = serviceFor(branch);
-    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      // Mutates rather than clones: the readiness/demotion streak is persisted
-      // in last_health_check.consecutive, so a mock that discards each write
-      // would leave every probe looking like the first one.
-      async (_id, update) => {
-        Object.assign(branch.environment_instance, update as Record<string, unknown>);
-        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
-      }
-    );
-    globalThis.fetch = vi.fn(async () => {
-      throw new Error('ECONNREFUSED');
-    });
-
-    // A real cold Codespace create takes 12-27 min, so the gate must NOT fire
-    // during a legitimate build. 5 min of failures changes nothing.
-    for (let i = 0; i < 60; i++) {
-      const r = await service.checkHealth(branch.branch_id);
-      expect(r.environment_instance?.status).toBe('starting');
-    }
-    // Each failure is persisted (that is what the timeout counts), but none of
-    // them may change status while the environment is still within its budget.
-    expect(updateEnvironment).not.toHaveBeenCalledWith(
-      branch.branch_id,
-      expect.objectContaining({ status: expect.anything() }),
-      undefined
-    );
-
-    // Past the one-hour budget it must give up, so the UI re-enables Start
-    // (which is disabled while `isStarting`) rather than spinning indefinitely.
-    let result = branch as unknown as { environment_instance?: { status?: string } };
-    for (let i = 0; i < 720; i++) {
-      result = (await service.checkHealth(branch.branch_id)) as never;
-      if (result.environment_instance?.status === 'error') break;
-    }
-    expect(result.environment_instance?.status).toBe('error');
-  });
-
-  it('still reaches running when the variant defines no sync command', async () => {
-    const branch = remoteBranch();
-    const service = serviceFor(branch);
-    vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      // Mutates rather than clones: the readiness/demotion streak is persisted
-      // in last_health_check.consecutive, so a mock that discards each write
-      // would leave every probe looking like the first one.
-      async (_id, update) => {
-        Object.assign(branch.environment_instance, update as Record<string, unknown>);
-        return { ...branch, environment_instance: { ...branch.environment_instance } } as never;
-      }
-    );
-    vi.spyOn(service, 'syncEnvironment').mockRejectedValue(
-      new Error('Environment variant "local" defines no sync command')
-    );
-    globalThis.fetch = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
-
-    // The catch-up sync is fire-and-forget; a variant without `sync` must not
-    // break the health check that triggered it.
-    await service.checkHealth(branch.branch_id);
-    const result = await service.checkHealth(branch.branch_id);
-
-    expect(result.environment_instance?.status).toBe('running');
-  });
-});
-
-describe('BranchesService no-probe startup exit', () => {
-  /**
-   * An environment with NO probe at all — neither a frozen health_check_url nor
-   * a `health` fact — takes an early-return path that never reaches the
-   * probe-based startup timeout. Observed live: a branch pinned at `starting`
-   * for ten days (no health_check_url, no facts, dead pid) while the UI
-   * disables Start, so the user could not recover without DB surgery.
-   *
-   * `starting` must always have an exit, in both directions.
-   */
-  const STARTUP_TIMEOUT_MS = 60 * 60 * 1000;
-
-  const noProbeBranch = (envOverrides: Record<string, unknown> = {}) => ({
-    branch_id: 'wt-no-probe' as BranchID,
-    repo_id: 'repo-1',
-    name: 'wt-no-probe',
-    path: '/tmp/wt-no-probe',
-    branch_unique_id: 1,
-    // deliberately no health_check_url AND no facts
-    environment_instance: {
-      status: 'starting',
-      last_command: { action: 'start', status: 'succeeded' },
-      ...envOverrides,
-    },
-  });
-
-  const serviceFor = (branch: unknown) => {
-    const app = {
-      get: () => ({}),
-      service(path: string) {
-        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
-        throw new Error(`Unknown service: ${path}`);
-      },
-    } as unknown as Application;
-    const service = new BranchesService(createTenantScopeTestDb() as never, app);
-    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
-    vi.spyOn(service, 'updateEnvironment').mockImplementation(
-      async (_id, update) =>
-        ({
-          ...(branch as Record<string, unknown>),
-          environment_instance: {
-            ...(branch as { environment_instance: Record<string, unknown> }).environment_instance,
-            ...(update as Record<string, unknown>),
-          },
-        }) as never
-    );
-    return service;
-  };
-
-  it('demotes a stalled start to `error` once the startup window has elapsed', async () => {
-    const branch = noProbeBranch({
-      process: { started_at: new Date(Date.now() - STARTUP_TIMEOUT_MS - 60_000).toISOString() },
-    });
-    const service = serviceFor(branch);
-
-    const result = await service.checkHealth(branch.branch_id);
-
-    expect(result.environment_instance?.status).toBe('error');
-  });
-
-  it('does NOT demote while still inside the startup window', async () => {
-    const branch = noProbeBranch({
-      process: { started_at: new Date(Date.now() - 5 * 60_000).toISOString() },
-    });
-    const service = serviceFor(branch);
-
-    const result = await service.checkHealth(branch.branch_id);
-
-    // A cold Codespace create legitimately takes 12-27 min.
-    expect(result.environment_instance?.status).toBe('starting');
-  });
-
-  it('falls back to last_command.timestamp when no process anchor exists', async () => {
-    const branch = noProbeBranch({
-      last_command: {
-        action: 'start',
-        status: 'succeeded',
-        timestamp: new Date(Date.now() - STARTUP_TIMEOUT_MS - 60_000).toISOString(),
-      },
-    });
-    const service = serviceFor(branch);
-
-    const result = await service.checkHealth(branch.branch_id);
-
-    expect(result.environment_instance?.status).toBe('error');
-  });
-
-  it('exits UP to `running` when the daemon still owns a live process', async () => {
-    const branch = noProbeBranch({
-      process: { started_at: new Date(Date.now() - STARTUP_TIMEOUT_MS - 60_000).toISOString() },
-    });
-    const service = serviceFor(branch);
-    // Reporting 'healthy' ("Process running") while pinned at `starting` is
-    // incoherent, and the wall-clock timeout would otherwise mark a live
-    // environment `error`.
-    (service as unknown as { processes: Map<string, unknown> }).processes.set(branch.branch_id, {
-      process: { killed: false },
-    });
-
-    const result = await service.checkHealth(branch.branch_id);
-
-    expect(result.environment_instance?.status).toBe('running');
-  });
-
-  it('leaves a `running` no-probe environment alone', async () => {
-    const branch = noProbeBranch({
-      status: 'running',
-      process: { started_at: new Date(Date.now() - STARTUP_TIMEOUT_MS - 60_000).toISOString() },
-    });
-    const service = serviceFor(branch);
-
-    const result = await service.checkHealth(branch.branch_id);
-
-    expect(result.environment_instance?.status).toBe('running');
   });
 });
 
@@ -2783,198 +2810,6 @@ describe('BranchesService.updateEnvironment clear semantics', () => {
   });
 });
 
-describe('environment health transition thresholds (characterization)', () => {
-  /**
-   * Pins the EXACT transition thresholds as observed behaviour, driving real
-   * consecutive probes through checkHealth. These exist so the transition rules
-   * can be moved (out of in-process streak Maps, into shared durable state that
-   * the distributed monitor can also apply) without changing what they decide.
-   *
-   * If a refactor changes a threshold, one of these goes red.
-   */
-  const originalFetch = globalThis.fetch;
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  /** Service whose environment_instance actually persists between probes. */
-  const statefulService = (initialStatus: string) => {
-    const env: Record<string, unknown> = { status: initialStatus };
-    const branch = {
-      branch_id: 'wt-thresholds' as BranchID,
-      repo_id: 'repo-1',
-      name: 'wt-thresholds',
-      path: '/tmp/wt-thresholds',
-      branch_unique_id: 1,
-      health_check_url: 'http://localhost:3030/health',
-      environment_instance: env,
-    };
-    const app = {
-      get: () => ({}),
-      service(path: string) {
-        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
-        throw new Error(`Unknown service: ${path}`);
-      },
-    } as unknown as Application;
-    const service = new BranchesService(createTenantScopeTestDb() as never, app);
-    vi.spyOn(service, 'get').mockImplementation(
-      async () => ({ ...branch, environment_instance: { ...env } }) as never
-    );
-    vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
-      Object.assign(env, update as Record<string, unknown>);
-      return { ...branch, environment_instance: { ...env } } as never;
-    });
-    vi.spyOn(service, 'syncEnvironment').mockResolvedValue({} as never);
-    return { service, branch, env };
-  };
-
-  const setProbe = (ok: boolean) => {
-    globalThis.fetch = vi.fn(
-      async () =>
-        ({
-          ok,
-          status: ok ? 200 : 503,
-          statusText: ok ? 'OK' : 'Service Unavailable',
-        }) as Response
-    );
-  };
-
-  const probe = async (service: BranchesService, ok: boolean, times: number) => {
-    setProbe(ok);
-    for (let i = 0; i < times; i += 1) {
-      await service.checkHealth('wt-thresholds' as BranchID);
-    }
-  };
-
-  it('promotes starting -> running only on the SECOND consecutive success', async () => {
-    const { service, env } = statefulService('starting');
-
-    await probe(service, true, 1);
-    expect(env.status).toBe('starting');
-
-    await probe(service, true, 1);
-    expect(env.status).toBe('running');
-  });
-
-  it('demotes running -> error only on the THIRD consecutive failure', async () => {
-    const { service, env } = statefulService('running');
-
-    await probe(service, false, 1);
-    expect(env.status).toBe('running');
-    await probe(service, false, 1);
-    expect(env.status).toBe('running');
-
-    await probe(service, false, 1);
-    expect(env.status).toBe('error');
-  });
-
-  it('resets the failure streak on any success, so blips cannot accumulate', async () => {
-    const { service, env } = statefulService('running');
-
-    await probe(service, false, 2);
-    expect(env.status).toBe('running');
-    await probe(service, true, 1); // one good probe clears the streak
-    await probe(service, false, 2); // two more failures must NOT be enough
-    expect(env.status).toBe('running');
-  });
-
-  it('recovers error -> running only on the SECOND consecutive success', async () => {
-    const { service, env } = statefulService('error');
-
-    await probe(service, true, 1);
-    expect(env.status).toBe('error');
-
-    await probe(service, true, 1);
-    expect(env.status).toBe('running');
-  });
-
-  it('resets the success streak on any failure, so flapping cannot promote', async () => {
-    const { service, env } = statefulService('starting');
-
-    await probe(service, true, 1);
-    await probe(service, false, 1); // clears the success streak
-    await probe(service, true, 1); // back to a streak of one
-    expect(env.status).toBe('starting');
-  });
-});
-
-describe('checkHealth concurrency', () => {
-  /**
-   * checkHealth is reachable from three places — the health monitor's interval,
-   * `GET /branches/:id/health`, and the MCP environment tool — and only the
-   * monitor held an in-flight guard. Since the readiness/demotion streak is now
-   * a read-modify-write on persisted state (read the branch, probe for seconds,
-   * write the new count), two overlapping callers both read the same count and
-   * both write the same value: one observation is silently lost, and the later
-   * write can carry the older probe's verdict.
-   */
-  const originalFetch = globalThis.fetch;
-  afterEach(() => {
-    globalThis.fetch = originalFetch;
-  });
-
-  const slowProbeService = () => {
-    const env: Record<string, unknown> = { status: 'running' };
-    const branch = {
-      branch_id: 'wt-race' as BranchID,
-      repo_id: 'repo-1',
-      name: 'wt-race',
-      path: '/tmp/wt-race',
-      branch_unique_id: 1,
-      health_check_url: 'http://localhost:3030/health',
-      environment_instance: env,
-    };
-    const app = {
-      get: () => ({}),
-      service(path: string) {
-        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
-        throw new Error(`Unknown service: ${path}`);
-      },
-    } as unknown as Application;
-    const service = new BranchesService(createTenantScopeTestDb() as never, app);
-    vi.spyOn(service, 'get').mockImplementation(
-      async () => ({ ...branch, environment_instance: { ...env } }) as never
-    );
-    const updateEnvironment = vi
-      .spyOn(service, 'updateEnvironment')
-      .mockImplementation(async (_id, update) => {
-        Object.assign(env, update as Record<string, unknown>);
-        return { ...branch, environment_instance: { ...env } } as never;
-      });
-    const fetchSpy = vi.fn(
-      () =>
-        new Promise<Response>((resolve) => {
-          setTimeout(() => resolve({ ok: false, status: 503, statusText: 'Down' } as Response), 20);
-        })
-    );
-    globalThis.fetch = fetchSpy as never;
-    return { service, env, updateEnvironment, fetchSpy };
-  };
-
-  it('collapses overlapping checks into a single observation', async () => {
-    const { service, updateEnvironment, fetchSpy } = slowProbeService();
-
-    await Promise.all([
-      service.checkHealth('wt-race' as BranchID),
-      service.checkHealth('wt-race' as BranchID),
-    ]);
-
-    // Two racing probes would each read consecutive=undefined and each write 1,
-    // losing an observation and letting the second write land after the first.
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(updateEnvironment).toHaveBeenCalledTimes(1);
-  });
-
-  it('records consecutive observations correctly once they no longer overlap', async () => {
-    const { service, env } = slowProbeService();
-
-    await service.checkHealth('wt-race' as BranchID);
-    await service.checkHealth('wt-race' as BranchID);
-
-    expect((env.last_health_check as { consecutive?: number }).consecutive).toBe(2);
-  });
-});
-
 describe('syncEnvironment concurrency', () => {
   /**
    * Sync force-pushes a scratch ref, then SSHes into the environment to
@@ -3077,5 +2912,80 @@ describe('syncEnvironment concurrency', () => {
 
     expect(first.status).toBe('rejected');
     expect(second.status).toBe('fulfilled');
+  });
+});
+
+describe('BranchesService remote environment probe resolution', () => {
+  /**
+   * A remote environment (a Codespace) has no frozen `health_check_url` — its
+   * address does not exist until it starts, so the lifecycle command reports it
+   * as a `health` fact. Without this fallback every remote environment is
+   * permanently unobservable and can never leave `starting`.
+   *
+   * The transition RULES this feeds live in
+   * `@agor/core/environment/health-transition` and are tested there; this covers
+   * only how the daemon chooses what to probe.
+   */
+  const CS_HEALTH = 'https://cs-abc-8088.app.github.dev/health';
+
+  const observe = async (environmentInstance: Record<string, unknown>, healthCheckUrl?: string) => {
+    const { service } = createServiceHarness();
+    const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
+    globalThis.fetch = fetchSpy as never;
+    const observation = await (
+      service as unknown as {
+        fetchEnvironmentHealthObservation(b: unknown): Promise<Record<string, unknown> | null>;
+      }
+    ).fetchEnvironmentHealthObservation({
+      branch_id: 'wt-probe' as BranchID,
+      name: 'wt-probe',
+      ...(healthCheckUrl ? { health_check_url: healthCheckUrl } : {}),
+      environment_instance: environmentInstance,
+    });
+    return { observation, fetchSpy };
+  };
+
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('probes the `health` fact when no health_check_url is configured', async () => {
+    const { observation, fetchSpy } = await observe({
+      status: 'starting',
+      facts: { health: CS_HEALTH },
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(CS_HEALTH, expect.anything());
+    expect(observation).toMatchObject({ status: 'healthy' });
+  });
+
+  it('prefers an operator-configured health_check_url over the fact', async () => {
+    const { fetchSpy } = await observe(
+      { status: 'running', facts: { health: CS_HEALTH } },
+      'http://localhost:8088/health'
+    );
+
+    expect(fetchSpy).toHaveBeenCalledWith('http://localhost:8088/health', expect.anything());
+  });
+
+  it('refuses a fact aimed at an internal destination and does not probe it', async () => {
+    // Facts are lifecycle-command output — untrusted input, so an SSRF target
+    // must not be probed just because a script emitted it.
+    const { observation, fetchSpy } = await observe({
+      status: 'starting',
+      facts: { health: 'http://169.254.169.254/latest/meta-data' },
+    });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(observation).toMatchObject({ status: 'unknown' });
+    expect(String((observation as { message: string }).message)).toContain('disallowed');
+  });
+
+  it('reports unobservable when there is neither a URL nor a fact', async () => {
+    const { observation, fetchSpy } = await observe({ status: 'starting' });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(observation).toMatchObject({ status: 'unknown' });
   });
 });

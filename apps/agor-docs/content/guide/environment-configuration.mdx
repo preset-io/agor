@@ -312,6 +312,28 @@ The reason members **cannot** hand-edit rendered commands: admins curate the set
 
 Start, Stop, Restart, Nuke, Logs, and Render controls require branch `all` permission or admin access. Health/status reads can remain available to users who can view the branch because they do not run the configured shell/log commands.
 
+### Health-check lifecycle
+
+Automatic health monitoring is active only while a non-archived environment is
+`starting` or `running`. A healthy `starting` observation promotes the durable
+state to `running`. Stop, failure, archive, and deletion remove the environment
+from monitoring; daemon startup reconciliation likewise rediscovers only
+non-archived `starting` and `running` rows.
+
+The rendered `health` value is stored as branch configuration even when it is
+not currently a usable URL. This keeps an inactive or optional managed
+environment from blocking branch and session creation. Agor validates the URL
+against its outbound-request policy immediately before an actual server-side
+probe. An unsafe target is never contacted and is reported as unhealthy while
+the environment is active.
+
+An explicit health/status request does not turn monitoring back on for a
+stopped, stopping, archived, or deleted environment. It may return a transient
+diagnostic probe for an environment already in `error`, but that result does not
+change durable lifecycle state. Active observations are fenced against
+concurrent stop, archive, delete, restart, and health-URL changes, so a late
+success cannot restore an older lifecycle state.
+
 ---
 
 ## Migration from pre-variants Agor

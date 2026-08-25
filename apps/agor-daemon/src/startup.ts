@@ -29,6 +29,7 @@ import {
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
+import { beginExecutorResponseDrain } from './executor-response-channel.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
 import { type DaemonMetrics, getDaemonMetrics, NOOP_METRICS } from './metrics/index.js';
 import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
@@ -42,9 +43,9 @@ import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
 import {
-  generateScopedServiceToken,
+  generateDaemonServiceToken,
   getDaemonUrl,
-  runExecutorCommand,
+  requestExecutor,
 } from './utils/spawn-executor.js';
 
 const DEBUG_STARTUP =
@@ -701,10 +702,10 @@ export async function startup(ctx: StartupContext): Promise<void> {
           // one global executor cannot assume every tenant checkout is mounted.
           return;
         }
-        const result = await runExecutorCommand(
+        const result = await requestExecutor(
           {
             command: 'git.managed-credentials.reconcile',
-            sessionToken: generateScopedServiceToken(
+            sessionToken: generateDaemonServiceToken(
               app as unknown as { settings: { authentication?: { secret?: string } } }
             ),
             daemonUrl: getDaemonUrl(),
@@ -871,6 +872,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
       // Fail readiness before waiting on any worker drain so ingress stops
       // assigning new HTTP/Engine.IO sessions immediately.
       ctx.realtimeRuntime?.beginDrain();
+      beginExecutorResponseDrain();
 
       // Refuse new cost-bearing claims before any other shutdown work can wait.
       // stop() also aborts the local provider wait and drains its active DB step.

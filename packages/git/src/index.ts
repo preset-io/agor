@@ -5,6 +5,7 @@
  * Supports SSH keys, user environment variables (GITHUB_TOKEN), and system credential helpers.
  */
 
+import { randomUUID } from 'node:crypto';
 import { existsSync, type Stats } from 'node:fs';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
@@ -989,7 +990,9 @@ export async function createBranch(
   pullLatest: boolean = true,
   sourceBranch?: string,
   env?: Record<string, string>,
-  refType?: 'branch' | 'tag'
+  refType?: 'branch' | 'tag',
+  /** Remote that owns sourceBranch when it differs from repoPath's origin. */
+  sourceRemoteUrl?: string
 ): Promise<void> {
   console.log('🔍 createBranch called with:', {
     repoPath,
@@ -999,6 +1002,7 @@ export async function createBranch(
     pullLatest,
     sourceBranch,
     refType,
+    sourceRemoteUrl: sourceRemoteUrl ? redactGitUrlCredentials(sourceRemoteUrl) : sourceRemoteUrl,
   });
 
   if (!repoPath) {
@@ -1034,18 +1038,56 @@ export async function createBranch(
     await validateGitRef(sourceBranch);
   }
 
+  const safeSourceRemoteUrl = sourceRemoteUrl ? stripGitUrlCredentials(sourceRemoteUrl) : undefined;
+  if (safeSourceRemoteUrl && (!createBranch || !sourceBranch)) {
+    throw new Error('sourceRemoteUrl requires createBranch=true and a sourceBranch');
+  }
+  if (
+    safeSourceRemoteUrl &&
+    (safeSourceRemoteUrl.startsWith('-') || /[\0\r\n]/.test(safeSourceRemoteUrl))
+  ) {
+    throw new Error('Invalid sourceRemoteUrl');
+  }
+
   // Derive the auth-header host from the repo's origin remote so the same
   // refactor works against GitHub Enterprise / self-hosted forges without
   // per-deployment config. Skip the extra `git remote -v` spawn when there's
   // no token to scope (the host would be unused).
   const hasToken = !!(env?.GITHUB_TOKEN ?? env?.GH_TOKEN);
-  const authHost = hasToken ? await resolveAuthHost(repoPath) : undefined;
+  const authHost = hasToken
+    ? safeSourceRemoteUrl
+      ? parseHostFromGitUrl(safeSourceRemoteUrl)
+      : await resolveAuthHost(repoPath)
+    : undefined;
   const { git } = createGit(repoPath, env, authHost);
 
   let fetchSucceeded = false;
+  let effectiveSourceBranch = sourceBranch;
+  let temporarySourceRef: string | undefined;
 
-  // Pull latest from remote if requested
-  if (pullLatest) {
+  // When the base ref belongs to another repository, fetch exactly that ref
+  // into an operation-local namespace. Do not add a persistent remote: origin
+  // must remain the destination repository for future pushes and restores.
+  if (safeSourceRemoteUrl && sourceBranch) {
+    const namespace = refType === 'tag' ? 'refs/tags' : 'refs/heads';
+    temporarySourceRef = `refs/agor/base/${randomUUID()}`;
+    try {
+      await git.fetch([safeSourceRemoteUrl, `+${namespace}/${sourceBranch}:${temporarySourceRef}`]);
+    } catch (error) {
+      // A failed fetch is normally atomic, but clean defensively in case the
+      // transport updated the temporary ref before failing later.
+      try {
+        await git.raw(['update-ref', '-d', temporarySourceRef]);
+      } catch {
+        // Preserve the authoritative fetch failure.
+      }
+      throw error;
+    }
+    effectiveSourceBranch = temporarySourceRef;
+    console.log(
+      `✅ Fetched base ${namespace}/${sourceBranch} from ${redactGitUrlCredentials(safeSourceRemoteUrl)}`
+    );
+  } else if (pullLatest) {
     try {
       // Fetch branches, and tags only if working with a tag
       const fetchArgs = refType === 'tag' ? ['origin', '--tags'] : ['origin'];
@@ -1093,7 +1135,7 @@ export async function createBranch(
     branchPath,
     ref,
     createBranch,
-    sourceBranch,
+    sourceBranch: effectiveSourceBranch,
     refType,
     fetchSucceeded,
   });
@@ -1103,37 +1145,50 @@ export async function createBranch(
   }
 
   try {
-    await git.raw(worktreeAddArgs);
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    try {
+      await git.raw(worktreeAddArgs);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
 
-    // Handle stale branch from previously deleted branch
-    if (createBranch && errorMessage.includes('already exists')) {
-      console.warn(
-        `⚠️  Branch '${ref}' already exists. Checking if it's orphaned (stale from a deleted branch)...`
-      );
+      // Handle stale branch from previously deleted branch
+      if (createBranch && errorMessage.includes('already exists')) {
+        console.warn(
+          `⚠️  Branch '${ref}' already exists. Checking if it's orphaned (stale from a deleted branch)...`
+        );
 
-      // Check if the branch is in use by another git worktree
-      const worktrees = await listGitWorktrees(repoPath);
-      const branchInUse = worktrees.some((wt) => wt.ref === ref);
+        // Check if the branch is in use by another git worktree
+        const worktrees = await listGitWorktrees(repoPath);
+        const branchInUse = worktrees.some((wt) => wt.ref === ref);
 
-      if (branchInUse) {
-        throw new Error(
-          `A branch named '${ref}' already exists and is in use by another branch. ` +
-            `Please choose a different name.`
+        if (branchInUse) {
+          throw new Error(
+            `A branch named '${ref}' already exists and is in use by another branch. ` +
+              `Please choose a different name.`
+          );
+        }
+
+        // Branch exists but is orphaned — delete it and retry.
+        // `git branch -D` doesn't support `--`; ref was validated above.
+        console.log(`🧹 Deleting orphaned branch '${ref}' and retrying branch creation...`);
+        await git.raw(['branch', '-D', ref]);
+
+        // Retry the branch creation
+        await git.raw(worktreeAddArgs);
+        console.log(`✅ Successfully created branch after cleaning up stale branch '${ref}'`);
+      } else {
+        throw error;
+      }
+    }
+  } finally {
+    if (temporarySourceRef) {
+      try {
+        await git.raw(['update-ref', '-d', temporarySourceRef]);
+      } catch (error) {
+        console.warn(
+          `⚠️  Failed to clean temporary base ref '${temporarySourceRef}':`,
+          error instanceof Error ? error.message : String(error)
         );
       }
-
-      // Branch exists but is orphaned — delete it and retry.
-      // `git branch -D` doesn't support `--`; ref was validated above.
-      console.log(`🧹 Deleting orphaned branch '${ref}' and retrying branch creation...`);
-      await git.raw(['branch', '-D', ref]);
-
-      // Retry the branch creation
-      await git.raw(worktreeAddArgs);
-      console.log(`✅ Successfully created branch after cleaning up stale branch '${ref}'`);
-    } else {
-      throw error;
     }
   }
 
@@ -1157,6 +1212,11 @@ export async function createBranch(
 export interface CreateBranchAsCloneOptions {
   /** Remote URL to clone from (https://, ssh://, git@host:path, file://, or local path). */
   remoteUrl: string;
+  /**
+   * Destination URL to retain as origin after cloning from remoteUrl.
+   * Use when the base ref is hosted by a separate template repository.
+   */
+  originRemoteUrl?: string;
   /** Absolute path where the new clone should land. Must not already exist. */
   targetPath: string;
   /**
@@ -1201,9 +1261,23 @@ export interface CreateBranchAsCloneOptions {
    * correct. Git rejects shallow reference repositories outright, so this is
    * part of the correctness fallback rather than only an optimization.
    *
-   * NEVER paired with `--dissociate`: dissociate copies all reachable
-   * objects out of the reference into the new clone (~equivalent to a
-   * naïve clone), defeating the purpose. See design doc §5.
+   * That probe only covers *this* process's view. The alternates pointer it
+   * writes is consumed by every later git command in the branch, from a
+   * context that may not see `<path>` at all — Agor's own `git.branch.add`
+   * runs unsandboxed while the sessions that later run git in that branch are
+   * bubblewrap-wrapped, and `sandbox.home_mode: per_user` masks the daemon's
+   * `repos/`. Nothing observable here can predict that, so the decision is
+   * made from configuration upstream: `shouldUseCloneReferencePath`
+   * (apps/agor-daemon/src/utils/clone-reference.ts) stops the daemon passing a
+   * `referencePath` at all for those deployments.
+   *
+   * NEVER paired with `--dissociate` for the normal path: dissociate repacks
+   * the borrowed objects into the new clone, so the disk win is gone
+   * (~equivalent to a naïve clone) even though the network transfer is still
+   * saved. See design doc §5. It remains the right tool for *repairing* a
+   * clone whose borrow already turned out to be unresolvable — `git repack -a
+   * -d` (no `-l`, which would exclude exactly the borrowed objects) followed
+   * by deleting `.git/objects/info/alternates`.
    *
    * Operational caveat: `git gc --prune=now` against the reference can
    * orphan objects that branches' alternates pointers still depend on.
@@ -1242,14 +1316,16 @@ export interface AssertRemoteRefVisibleForCloneOptions {
 }
 
 /**
- * Preflight a clone-mode base ref before Agor persists any branch/session
- * records. Clone mode can only materialise refs visible from the clone remote
- * (typically `origin`); a local-only branch in the daemon's base clone is not
- * cloneable via `git clone --branch`.
+ * Check whether a clone-mode ref is visible from a remote.
+ *
+ * An empty, successful `ls-remote` means the ref is absent. Transport,
+ * authentication, and other lookup failures are deliberately thrown so a
+ * restore caller never mistakes an unavailable destination for a missing
+ * branch and replaces it with a fresh base.
  */
-export async function assertRemoteRefVisibleForClone(
+export async function isRemoteRefVisibleForClone(
   options: AssertRemoteRefVisibleForCloneOptions
-): Promise<void> {
+): Promise<boolean> {
   const remoteUrl = stripGitUrlCredentials(options.remoteUrl);
   const refType = options.refType ?? 'branch';
   const ref = options.ref;
@@ -1280,10 +1356,24 @@ export async function assertRemoteRefVisibleForClone(
     );
   }
 
-  if (output.trim().length === 0) {
+  return output.trim().length > 0;
+}
+
+/**
+ * Preflight a clone-mode base ref before Agor persists any branch/session
+ * records. Clone mode can only materialise refs visible from the clone remote
+ * (typically `origin`); a local-only branch in the daemon's base clone is not
+ * cloneable via `git clone --branch`.
+ */
+export async function assertRemoteRefVisibleForClone(
+  options: AssertRemoteRefVisibleForCloneOptions
+): Promise<void> {
+  if (!(await isRemoteRefVisibleForClone(options))) {
+    const remoteUrl = stripGitUrlCredentials(options.remoteUrl);
+    const refType = options.refType ?? 'branch';
     throw new Error(
-      `Clone mode cannot clone local-only or missing ${refType} '${ref}' because it is not visible on ` +
-        `the remote ${redactGitUrlCredentials(remoteUrl)}. Push '${ref}' to origin, choose a remote ` +
+      `Clone mode cannot clone local-only or missing ${refType} '${options.ref}' because it is not visible on ` +
+        `the remote ${redactGitUrlCredentials(remoteUrl)}. Push '${options.ref}' to origin, choose a remote ` +
         `${refType}, or use storage_mode='worktree' if it is enabled.`
     );
   }
@@ -1320,6 +1410,9 @@ export async function createBranchAsClone(
 ): Promise<CreateBranchAsCloneResult> {
   const { targetPath, ref, newBranchName, depth, referencePath, env } = options;
   const remoteUrl = stripGitUrlCredentials(options.remoteUrl);
+  const originRemoteUrl = options.originRemoteUrl
+    ? stripGitUrlCredentials(options.originRemoteUrl)
+    : undefined;
   const singleBranch = options.singleBranch ?? true;
 
   if (!remoteUrl) {
@@ -1329,6 +1422,9 @@ export async function createBranchAsClone(
     console.warn(
       `🔒 Stripped credentials from clone-mode remote URL before use: ${redactGitUrlCredentials(options.remoteUrl)}`
     );
+  }
+  if (options.originRemoteUrl && !originRemoteUrl) {
+    throw new Error('originRemoteUrl is required when provided');
   }
   if (!targetPath) {
     throw new Error('targetPath is required');
@@ -1419,6 +1515,40 @@ export async function createBranchAsClone(
     finalRef = newBranchName;
   }
 
+  // A template repository may own the base ref while the newly-created
+  // branch belongs to a private destination repository. Clone the former to
+  // materialize the right content, then restore origin to the latter so
+  // future push/pull operations never target the template repository.
+  if (originRemoteUrl && originRemoteUrl !== remoteUrl) {
+    await ensureGitRemoteUrl(targetPath, 'origin', originRemoteUrl, env);
+    const { git: cloneGit } = createGit(targetPath, env);
+
+    // `--single-branch` leaves origin's fetch refspec pinned to the template
+    // branch. Once origin points at the destination, that refspec would make
+    // ordinary fetches ignore every destination branch. Reset it to the
+    // normal full-heads mapping and remove remote-tracking refs that describe
+    // the template source, not the newly configured origin.
+    await cloneGit.raw([
+      'config',
+      '--replace-all',
+      'remote.origin.fetch',
+      '+refs/heads/*:refs/remotes/origin/*',
+    ]);
+    const staleOriginRefs = (
+      await cloneGit.raw(['for-each-ref', '--format=%(refname)', 'refs/remotes/origin'])
+    )
+      .split('\n')
+      .map((value) => value.trim())
+      .filter(Boolean);
+    for (const staleOriginRef of staleOriginRefs) {
+      await cloneGit.raw(['update-ref', '-d', staleOriginRef]);
+    }
+    const localBranches = await cloneGit.branchLocal();
+    if (newBranchName && localBranches.all.includes(ref)) {
+      await cloneGit.deleteLocalBranch(ref, true);
+    }
+  }
+
   await addSafeDirectoryBestEffort(targetPath, '[createBranchAsClone]');
 
   return { path: targetPath, ref: finalRef };
@@ -1456,13 +1586,17 @@ export interface RestoreBranchResult {
  * @param ref - Branch name to restore
  * @param baseRef - Fallback base branch (e.g., 'main') if ref doesn't exist on remote
  * @param env - Optional environment variables for git operations (GITHUB_TOKEN, etc.)
+ * @param baseRemoteUrl - Optional remote that owns baseRef when it differs from origin
+ * @param baseRefType - Namespace of baseRef when creating the fallback branch
  */
 export async function restoreBranchFilesystem(
   repoPath: string,
   branchPath: string,
   ref: string,
   baseRef: string,
-  env?: Record<string, string>
+  env?: Record<string, string>,
+  baseRemoteUrl?: string,
+  baseRefType: 'branch' | 'tag' = 'branch'
 ): Promise<RestoreBranchResult> {
   // Validate refs early — this function both passes them to createBranch
   // (which re-validates) and to ls-remote (which does not).
@@ -1497,13 +1631,29 @@ export async function restoreBranchFilesystem(
   try {
     const lsRemoteOutput = await git.listRemote(['--heads', 'origin', ref]);
     branchExistsOnRemote = lsRemoteOutput.trim().length > 0;
-  } catch {
-    // ls-remote failed, fall through to local branch check
+  } catch (error) {
+    // A cached remote-tracking branch is still safe to restore while the
+    // destination is temporarily unavailable. Without one, however, the
+    // failure is not evidence that the branch is absent: creating from the
+    // template could discard work that was already pushed to the destination.
     try {
       const branches = await git.branch(['-r']);
       branchExistsOnRemote = branches.all.includes(`origin/${ref}`);
+      if (!branchExistsOnRemote) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          success: false,
+          strategy: 'checkout',
+          error: `Cannot determine whether branch '${ref}' exists on origin: ${message}`,
+        };
+      }
     } catch {
-      // Can't determine remote state
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        strategy: 'checkout',
+        error: `Cannot determine whether branch '${ref}' exists on origin: ${message}`,
+      };
     }
   }
 
@@ -1518,7 +1668,17 @@ export async function restoreBranchFilesystem(
 
     // Branch doesn't exist on remote — create new branch from base ref
     console.log(`[restoreBranch] Branch '${ref}' not on remote, creating from base '${baseRef}'`);
-    await createBranch(repoPath, branchPath, ref, true, true, baseRef, env);
+    await createBranch(
+      repoPath,
+      branchPath,
+      ref,
+      true,
+      true,
+      baseRef,
+      env,
+      baseRefType,
+      baseRemoteUrl
+    );
     return { success: true, strategy: 'create' };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

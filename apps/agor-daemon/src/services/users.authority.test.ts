@@ -8,7 +8,7 @@ import { createUsersService, UsersService } from './users';
 async function createUser(service: UsersService, role: UserRole, label: string): Promise<User> {
   return service.create({
     email: `${label}-${Math.random().toString(36).slice(2)}@example.test`,
-    password: 'password-1234',
+    password: 'test-password-1234',
     name: label,
     role,
   });
@@ -36,7 +36,7 @@ describe('UsersService role authority', () => {
         service.create(
           {
             email: `created-superadmin-${provider}@example.test`,
-            password: 'password-1234',
+            password: 'test-password-1234',
             role: 'superadmin',
           },
           params
@@ -75,7 +75,7 @@ describe('UsersService role authority', () => {
       service.create(
         {
           email: 'created-superadmin@example.test',
-          password: 'password-1234',
+          password: 'test-password-1234',
           role: 'superadmin',
         },
         externalParams(admin)
@@ -85,7 +85,7 @@ describe('UsersService role authority', () => {
       service.create(
         {
           email: 'created-owner-alias@example.test',
-          password: 'password-1234',
+          password: 'test-password-1234',
           role: 'owner',
         } as never,
         externalParams(admin)
@@ -109,7 +109,7 @@ describe('UsersService role authority', () => {
       service.create(
         {
           email: 'created-admin@example.test',
-          password: 'password-1234',
+          password: 'test-password-1234',
           role: 'admin',
         },
         externalParams(superadmin)
@@ -119,7 +119,7 @@ describe('UsersService role authority', () => {
     await expect(
       service.patch(
         admin.user_id as UserID,
-        { name: 'Managed admin', password: 'reset-password', role: 'member' },
+        { name: 'Managed admin', password: 'reset-password-safe', role: 'member' },
         externalParams(superadmin)
       )
     ).resolves.toMatchObject({ name: 'Managed admin', role: 'member' });
@@ -137,7 +137,7 @@ describe('UsersService role authority', () => {
       service.create(
         {
           email: 'created-member@example.test',
-          password: 'password-1234',
+          password: 'test-password-1234',
           role: 'member',
         },
         externalParams(admin)
@@ -147,7 +147,7 @@ describe('UsersService role authority', () => {
     await expect(
       service.patch(
         member.user_id as UserID,
-        { name: 'Managed member', password: 'reset-password', must_change_password: true },
+        { name: 'Managed member', password: 'reset-password-safe', must_change_password: true },
         externalParams(admin)
       )
     ).resolves.toMatchObject({ name: 'Managed member', must_change_password: true });
@@ -209,7 +209,7 @@ describe('UsersService role authority', () => {
         [
           {
             email: 'bulk@example.test',
-            password: 'password-1234',
+            password: 'test-password-1234',
             role: 'superadmin',
           },
         ] as never,
@@ -299,12 +299,12 @@ describe('UsersService role authority', () => {
     const service = app.service('users');
     const superadmin = await service.create({
       email: 'hook-superadmin@example.test',
-      password: 'password-1234',
+      password: 'test-password-1234',
       role: 'superadmin',
     });
     const admin = await service.create({
       email: 'hook-admin@example.test',
-      password: 'password-1234',
+      password: 'test-password-1234',
       role: 'admin',
     });
     service.hooks({

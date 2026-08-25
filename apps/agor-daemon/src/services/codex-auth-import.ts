@@ -29,11 +29,16 @@ import type { AuthenticatedParams, CodexAuthImportResult, UserID } from '@agor/c
 import { parseCodexAuthJson } from '../utils/codex-auth-file.js';
 import {
   type AppLike,
+  type CodexCredentialMutationCoordinator,
   persistVerifiedCodexAuth,
   resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
 
-export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareDatabase) {
+export function createCodexAuthImportService(
+  app: AppLike,
+  db: TenantScopeAwareDatabase,
+  credentialMutations?: CodexCredentialMutationCoordinator
+) {
   return {
     async create(
       data: { authJson?: string },
@@ -70,14 +75,24 @@ export function createCodexAuthImportService(app: AppLike, db: TenantScopeAwareD
         );
       }
 
-      const summary = await persistVerifiedCodexAuth({
-        app,
-        normalized: parsed.normalized,
-        delegatedHomeKey: identity.delegatedHomeKey,
-        userId,
-        authUser,
-        codexHome: identity.codexHome,
-      });
+      const persist = (authorityGeneration?: number) =>
+        persistVerifiedCodexAuth({
+          app,
+          normalized: parsed.normalized,
+          delegatedHomeKey: identity.delegatedHomeKey,
+          userId,
+          authUser,
+          codexHome: identity.codexHome,
+          authorityGeneration,
+        });
+      const summary = credentialMutations
+        ? await credentialMutations.runCredentialMutation(
+            String(tenantId),
+            userId,
+            'credentials_imported',
+            persist
+          )
+        : await persist();
 
       return {
         status: 'authenticated',

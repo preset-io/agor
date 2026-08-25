@@ -14,7 +14,6 @@ import {
   Form,
   Input,
   Layout,
-  Modal,
   Popconfirm,
   Space,
   Table,
@@ -36,6 +35,8 @@ import { MetaRow } from '../MetaRow';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 const { Sider, Content } = Layout;
+
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 
 interface CardsTableProps {
   client: AgorClient | null;
@@ -462,12 +463,13 @@ export const CardsTable: React.FC<CardsTableProps> = ({
                   placeholder="Search title, board, zone, or data"
                   value={cardSearchTerm}
                   onChange={(event) => setCardSearchTerm(event.target.value)}
-                  style={{ width: 300 }}
+                  style={{ width: 'min(100%, 300px)' }}
                 />
               </div>
               <Table
                 dataSource={cardsForType}
                 columns={cardColumns}
+                scroll={{ x: 720 }}
                 rowKey="card_id"
                 size="small"
                 pagination={{ defaultPageSize: 20, hideOnSinglePage: true }}
@@ -513,7 +515,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
 
       {/* Create CardType Modal */}
       {createTypeModalMounted && (
-        <Modal
+        <AdaptiveSettingsModal
           title="Create Card Type"
           open={createTypeModalOpen}
           onOk={handleCreateType}
@@ -527,12 +529,12 @@ export const CardsTable: React.FC<CardsTableProps> = ({
           okText="Create"
         >
           {typeFormContent}
-        </Modal>
+        </AdaptiveSettingsModal>
       )}
 
       {/* Edit CardType Modal */}
       {editingType && (
-        <Modal
+        <AdaptiveSettingsModal
           title="Edit Card Type"
           open={editTypeModalOpen}
           onOk={handleUpdateType}
@@ -546,7 +548,7 @@ export const CardsTable: React.FC<CardsTableProps> = ({
           okText="Save"
         >
           {typeFormContent}
-        </Modal>
+        </AdaptiveSettingsModal>
       )}
 
       {/* Card Detail Modal (reuse Phase 2 component) */}

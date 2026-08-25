@@ -2153,6 +2153,60 @@ describe('GatewayService MCP resolution', () => {
     });
     expect(emitted).toHaveBeenCalledOnce();
   });
+
+  it('warns when raw OAuth tokens exist but their authoritative binding is invalid', async () => {
+    const channel = {
+      ...slackChannel,
+      mcp_server_ids: [channelMcpId],
+    } as unknown as GatewayChannel;
+    const { service, promptCreate } = makeGatewayHarness({ channel, existingMapping: null });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      mcpServerRepo: {
+        findById: vi.fn(async () => ({
+          mcp_server_id: channelMcpId,
+          name: 'bound-oauth',
+          display_name: 'Bound OAuth',
+          transport: 'http',
+          scope: 'global',
+          enabled: true,
+          source: 'user',
+          url: 'https://mcp.example.test',
+          auth: { type: 'oauth', oauth_mode: 'per_user' },
+        })),
+      },
+      userTokenRepo: {
+        getToken: vi.fn(async () => ({
+          user_id: user.user_id,
+          mcp_server_id: channelMcpId,
+          oauth_access_token: 'raw-token-must-not-suppress-warning',
+          oauth_refresh_token: 'raw-refresh-must-not-suppress-warning',
+          grant_generation: 1,
+          grant_binding_version: 5,
+          refresh_status: 'idle',
+          refresh_generation: 0,
+          refresh_success_generation: 0,
+          created_at: new Date(),
+        })),
+      },
+    });
+
+    await service.create({
+      channel_key: channel.channel_key,
+      thread_id: 'C123-100.000000',
+      text: 'start',
+      metadata: {
+        channel: 'C123',
+        channel_type: 'channel',
+        slack_has_mention: true,
+        slack_message_ts: '100.000000',
+      },
+    });
+
+    expect(promptCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: expect.stringContaining('Bound OAuth') }),
+      expect.anything()
+    );
+  });
 });
 
 describe('GatewayService Slack system message routing', () => {

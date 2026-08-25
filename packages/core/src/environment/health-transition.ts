@@ -63,6 +63,12 @@ export interface EnvironmentHealthTransition {
  * is not evidence either way, and treating it as failure would demote every
  * environment whose probe is merely unconfigured.
  */
+
+/** Startup budget expressed in probes, so changing the cadence cannot silently change it. */
+function startupProbeBudget(probeIntervalMs: number): number {
+  return Math.ceil(ENVIRONMENT_STARTUP_TIMEOUT_MS / Math.max(1, probeIntervalMs));
+}
+
 export function decideEnvironmentHealthTransition(
   input: EnvironmentHealthTransitionInput
 ): EnvironmentHealthTransition {
@@ -84,6 +90,19 @@ export function decideEnvironmentHealthTransition(
     return { consecutive };
   }
 
+  // A `starting` environment that keeps reporting `unknown` — no probe is
+  // configured, or its address is not observable — must still be bounded. It is
+  // not evidence of failure, so it never demotes a `running` environment, but an
+  // environment that has been unobservable for the whole startup budget has not
+  // started, and `starting` disables Start in the UI. Without this it spins
+  // forever with no way out.
+  if (observation === 'unknown') {
+    if (currentStatus === 'starting' && consecutive >= startupProbeBudget(probeIntervalMs)) {
+      return { consecutive, nextStatus: 'error', reason: 'startup-timeout' };
+    }
+    return { consecutive };
+  }
+
   if (observation === 'unhealthy') {
     // A running environment that has actually gone away is demoted quickly, but
     // only after consecutive failures so one blip — a redeploy, a slow request,
@@ -95,11 +114,8 @@ export function decideEnvironmentHealthTransition(
     // `starting` gets a long grace period — it may legitimately be building for
     // many minutes — but it must not spin forever, because the UI disables
     // Start while starting and the user would have no way out.
-    if (currentStatus === 'starting') {
-      const allowed = Math.ceil(ENVIRONMENT_STARTUP_TIMEOUT_MS / Math.max(1, probeIntervalMs));
-      if (consecutive >= allowed) {
-        return { consecutive, nextStatus: 'error', reason: 'startup-timeout' };
-      }
+    if (currentStatus === 'starting' && consecutive >= startupProbeBudget(probeIntervalMs)) {
+      return { consecutive, nextStatus: 'error', reason: 'startup-timeout' };
     }
 
     return { consecutive };

@@ -66,6 +66,26 @@ A delegated executor must receive trusted `{tenant_id}` and `{user_id}` values a
 
 The daemon validates its declared storage contract but cannot prove the external substrate's claims. Use an immutable image, least-privilege service identity, tenant-separated storage, and explicit Stop/orphan cleanup.
 
+If your executors mount the branch workspace but **not** the daemon's `repos/` directory, also turn
+off the clone-mode object borrow:
+
+```yaml
+execution:
+  branch_storage:
+    borrow_base_objects: false
+```
+
+Otherwise clone-mode branches are created with an `alternates` pointer into a base clone the
+executor cannot read, and every git command inside the branch fails with
+`unable to normalize alternate object path`. Declaring
+`execution.executor_storage.base_repository: unavailable` implies the same thing.
+
+This one has to be declared: Agor infers it automatically for its own bubblewrap sandbox, but it
+cannot inspect an external launcher's mounts. Branch materialization runs on the daemon host, where
+the base clone is visible, so nothing detects the mismatch at create time — the failure only shows
+up later, inside sessions. See [Borrowed objects](/guide/branches) for the full explanation and for
+how to repair a branch that already has an unresolvable pointer.
+
 ## Shared Filesystem Setup
 
 ### Persistence Must Match the Database
@@ -219,6 +239,18 @@ The daemon spawns executors using a configurable template:
 # ~/.agor/config.yaml
 
 execution:
+  executor_response:
+    max_response_bytes: 8388608
+    max_active_requests: 16
+    timeout_ms:
+      default: 300000
+      by_command:
+        branch.files.read: 60000
+    # Required for templated operations whose caller waits for a result.
+    external_protocol: executor-response-v1
+    # Must reach this exact daemon replica, never a load-balanced Service.
+    origin_url: http://daemon-0.agor-daemon-headless.agor.svc.cluster.local:3030
+
   # Local execution (default)
   # executor_command_template: null
 
@@ -252,6 +284,11 @@ execution:
 
 ### Template Variables
 
+Executor command templates use literal `{variable}` substitution, not
+Handlebars evaluation. `{command}` is populated for both autonomous and
+request-mode launches, so a shell template may use it in a `case` statement
+when the external launcher needs command-specific behavior.
+
 | Variable          | Description                             | Example               |
 | ----------------- | --------------------------------------- | --------------------- |
 | `{task_id}`       | Unique task identifier (auto-generated) | `a1b2c3d4`            |
@@ -277,13 +314,15 @@ to execute the template when the value is malformed — it is rendered into a
 In `unix_user_mode: delegated` it carries the session user's `unix_username`;
 in delegated mode it carries the compatibility home key.
 
-> **Codex subscription credentials caveat:** Codex auth-file operations already run through an
-> executor, but correctness requires every auth helper and Task for one trusted tenant/user identity
-> to receive the same persistent home. Declare that guarantee as
+> **Codex subscription credentials caveat:** correctness requires every auth-file operation and Task
+> for one trusted tenant/user identity to use the same persistent home. Declare that guarantee as
 > `execution.executor_storage.user_home: persistent-per-user`; the launcher must actually implement
-> it. The constrained HA profile admits auth-file check/import/logout only with a consistent
-> declared home. Declaring storage does not make the process-affine device-code poller durable, so
-> device sign-in remains gated.
+> it. The constrained HA profile admits auth-file check/import/logout with a consistent declared
+> home. Device sign-in is narrower: it currently requires Agor's local sandbox per-user home and is
+> not enabled for a delegated launcher. Its generation-fenced mutation runs in the authority-owning
+> daemon, not a detached writer, and a Linux kernel lock fails closed rather than letting a retry
+> overtake a still-live writer. Ambiguous exchange or credential-write outcomes surface to the user
+> and are retried by starting a new code, not by automatic side-effect replay.
 
 ### How It Works
 
@@ -292,14 +331,23 @@ in delegated mode it carries the compatibility home key.
 3. Daemon substitutes template variables
 4. Daemon executes template command via `sh -c`
 5. Payload is piped to executor via stdin
-6. **Daemon returns immediately** (fire-and-forget)
+6. For an autonomous lifecycle command, **daemon returns immediately**
+   (fire-and-forget)
 7. Executor connects back to daemon via WebSocket
 8. Executor performs work, updates database via Feathers API
 9. Pod terminates when executor exits
 
-### Fire-and-Forget Design
+For the narrower request/response command class, the initiating daemon instead
+creates a bounded in-memory waiter and passes a one-attempt response capability
+inside the stdin payload. The executor sends its final result to that exact
+daemon over authenticated HTTP NDJSON. The waiter returns as soon as the daemon
+accepts the final frame; launcher exit is not the result transport. Stdout and
+stderr remain logs only.
 
-The daemon **never waits** for executor completion. This is critical for:
+### Autonomous Fire-and-Forget Design
+
+The daemon **does not wait** for completion of autonomous executor work. This
+is critical for:
 
 - **Responsiveness**: UI gets immediate feedback
 - **Scalability**: Daemon doesn't hold connections open
@@ -856,6 +904,10 @@ daemon:
   public_url: http://agor-daemon.agor.svc.cluster.local:3030
 
 execution:
+  executor_response:
+    external_protocol: executor-response-v1
+    # Example only: use this replica's executor-reachable Pod IP or stable DNS.
+    origin_url: http://10.42.1.23:3030
   executor_command_template: |
     kubectl run executor-{task_id} \
       --image=ghcr.io/preset-io/agor-executor:latest \
@@ -869,7 +921,10 @@ execution:
 Remote executors may be deployed independently, but they are part of the same
 runtime contract as the daemon. Upgrade remote executor images to the same Agor
 release when upgrading the daemon; mixed-version daemon/executor deployments are
-not a supported rollout mode. Before downgrading to a release that predates the
+not a supported rollout mode. A request-mode launch is refused unless
+`execution.executor_response.external_protocol` declares
+`executor-response-v1` and `origin_url` identifies the initiating daemon.
+Before downgrading to a release that predates the
 `dispatching` state, stop or settle pending dispatches with the current daemon.
 
 ### SDK Health Watchdog

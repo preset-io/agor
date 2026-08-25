@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { StreamdownPortalApp } from '../components/StreamdownPortalApp';
 
@@ -14,7 +14,7 @@ import { useThemedMessage } from './message';
 const sleep = (duration: number) => new Promise((resolve) => setTimeout(resolve, duration));
 
 function MessageHarness({ onClose = () => {} }: { onClose?: () => void }) {
-  const { showError, showLoading, showSuccess } = useThemedMessage();
+  const { showError, showInfo, showLoading, showSuccess, showWarning } = useThemedMessage();
 
   return (
     <>
@@ -51,6 +51,30 @@ function MessageHarness({ onClose = () => {} }: { onClose?: () => void }) {
       <button type="button" onClick={() => showSuccess('Operation complete', { key: 'operation' })}>
         Show keyed success
       </button>
+      <button
+        type="button"
+        onClick={() => showSuccess('Success severity', { key: 'severity-success' })}
+      >
+        Show success severity
+      </button>
+      <button type="button" onClick={() => showInfo('Info severity', { key: 'severity-info' })}>
+        Show info severity
+      </button>
+      <button
+        type="button"
+        onClick={() => showWarning('Warning severity', { key: 'severity-warning' })}
+      >
+        Show warning severity
+      </button>
+      <button
+        type="button"
+        onClick={() => showLoading('Loading severity', { key: 'severity-loading' })}
+      >
+        Show loading severity
+      </button>
+      <button type="button" onClick={() => showError('Error severity', { key: 'severity-error' })}>
+        Show error severity
+      </button>
     </>
   );
 }
@@ -72,14 +96,24 @@ describe('useThemedMessage', () => {
   it('keeps errors past the former timeout and preserves an explicit duration escape hatch', async () => {
     renderHarness();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Show persistent error' }));
+    const trigger = screen.getByRole('button', { name: 'Show persistent error' });
+    trigger.focus();
+    fireEvent.click(trigger);
     expect(await screen.findByText('Persistent failure')).toBeInTheDocument();
 
     await act(() => sleep(6_100));
     expect(screen.getByText('Persistent failure')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss error message' }));
+    const dismissButton = screen.getByRole('button', { name: 'Dismiss error message' });
+    expect(dismissButton.tagName).toBe('BUTTON');
+    expect(dismissButton).toHaveAccessibleName('Dismiss error message');
+    expect(dismissButton).toHaveAttribute('title', 'Dismiss error message');
+    expect(dismissButton).toHaveTextContent(/^$/);
+
+    dismissButton.focus();
+    fireEvent.click(dismissButton);
     await waitFor(() => expect(screen.queryByText('Persistent failure')).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
 
     fireEvent.click(screen.getByRole('button', { name: 'Show transient error' }));
     expect(await screen.findByText('Transient failure')).toBeInTheDocument();
@@ -119,6 +153,31 @@ describe('useThemedMessage', () => {
     );
     expect(copyButton).toHaveAccessibleName('Copy failed for error message');
     expect(copyButton).toHaveFocus();
+  });
+
+  it('renders an icon-only semantic copy button for every message severity', async () => {
+    renderHarness();
+
+    const severities = [
+      ['Show success severity', 'Success severity', 'Copy message'],
+      ['Show info severity', 'Info severity', 'Copy message'],
+      ['Show warning severity', 'Warning severity', 'Copy message'],
+      ['Show loading severity', 'Loading severity', 'Copy message'],
+      ['Show error severity', 'Error severity', 'Copy error message'],
+    ] as const;
+
+    for (const [triggerName, content, copyName] of severities) {
+      fireEvent.click(screen.getByRole('button', { name: triggerName }));
+      const messageText = await screen.findByText(content);
+      expect(messageText).toBeInTheDocument();
+
+      const copyButton = within(messageText.closest('[role="alert"]') as HTMLElement).getByRole(
+        'button',
+        { name: copyName }
+      );
+      expect(copyButton.tagName).toBe('BUTTON');
+      expect(copyButton).toHaveTextContent(/^$/);
+    }
   });
 
   it('keeps multiple errors independently reviewable and moves focus to the next error on dismiss', async () => {

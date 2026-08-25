@@ -285,6 +285,43 @@ export function normalizeOptionalHttpUrl(value: unknown, fieldName = 'value'): s
   }
 }
 
+/**
+ * Derive an HTTP origin a co-located process can reach, given the address the
+ * daemon binds and the port it listens on.
+ *
+ * A wildcard bind address is a *listen* directive, not a *reachable* address:
+ * `0.0.0.0` / `::` / an empty host mean "every interface", and connecting to
+ * them is not portable. This maps those to the matching loopback (`127.0.0.1`
+ * or `::1`), which always reaches this host, and leaves a concrete host (name
+ * or literal) untouched. IPv6 literals are returned bracketed so the result is
+ * a valid URL authority.
+ *
+ * Used to build the local executor response-callback origin: a local executor
+ * is a child of this replica, so loopback is the correct — and safest — target.
+ */
+export function deriveLoopbackReachableOrigin(host: string, port: number | string): string {
+  const stripped = String(host ?? '')
+    .trim()
+    .replace(/^\[(.*)\]$/, '$1');
+  const isIPv6 = stripped.includes(':');
+  const ipv4 = isIPv6 ? null : parseIPv4Literal(stripped);
+  const ipv6 = isIPv6 ? parseIPv6(stripped) : null;
+
+  let reachableHost: string;
+  if (!stripped || ipv4 === 0) {
+    // Empty or the IPv4 unspecified address (0.0.0.0) → IPv4 loopback.
+    reachableHost = '127.0.0.1';
+  } else if (ipv6?.every((group) => group === 0)) {
+    // Any spelling of the IPv6 unspecified address (::, 0:0:…:0) → IPv6 loopback.
+    reachableHost = '::1';
+  } else {
+    reachableHost = stripped;
+  }
+
+  const authority = reachableHost.includes(':') ? `[${reachableHost}]` : reachableHost;
+  return `http://${authority}:${port}`;
+}
+
 /** Normalize a required HTTP(S) service base URL for safe path composition. */
 export function normalizeHttpBaseUrl(value: unknown, fieldName = 'base URL'): string {
   const normalized = normalizeOptionalHttpUrl(value, fieldName);

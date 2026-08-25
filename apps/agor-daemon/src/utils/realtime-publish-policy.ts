@@ -45,6 +45,10 @@ export type RealtimePublishAudience =
   | 'none'
   /** Every authenticated connection in the event's tenant. */
   | 'tenant'
+  /** Connections whose user can currently view the referenced board. */
+  | 'board'
+  /** Attached rows require every referenced branch; unattached rows inherit board visibility. */
+  | 'board-resource'
   /** Branch-scoped; branch id read from the row (`branch_id`), or `context.id`. */
   | 'branch'
   /** Branch-scoped; branch id read from `params.route.id` of a `/branches/:id/…` route. */
@@ -127,11 +131,11 @@ export const REALTIME_PUBLISH_POLICY = {
   // Board-attached resources that may or may not hang off a branch.
   // ---------------------------------------------------------------------------
   'board-objects': {
-    audience: 'branch-optional',
+    audience: 'board-resource',
     why: 'useAgorData and BoardBranchList track card/zone placement live.',
   },
   'board-comments': {
-    audience: 'branch-optional',
+    audience: 'board-resource',
     why: 'useAgorData renders comment threads live.',
   },
   artifacts: {
@@ -144,10 +148,10 @@ export const REALTIME_PUBLISH_POLICY = {
   // member through an unscoped `find`, so the event adds no reach.
   // ---------------------------------------------------------------------------
   boards: {
-    audience: 'tenant',
+    audience: 'board',
     why: 'useAgorData tracks boards and board-object mutations emitted as boards.patched.',
   },
-  cards: { audience: 'tenant', why: 'useAgorData tracks cards.' },
+  cards: { audience: 'board', why: 'useAgorData tracks cards for boards the viewer can access.' },
   'card-types': { audience: 'tenant', why: 'useAgorData tracks card type definitions.' },
   repos: { audience: 'tenant', why: 'useAgorData and App.tsx track repo rows and clone progress.' },
   users: {
@@ -314,6 +318,10 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'none',
     why: `${NO_CONSUMER} The task arrives as tasks.created/queued.`,
   },
+  'sessions/:id/initialize': {
+    audience: 'none',
+    why: `${NO_CONSUMER} Setup and task changes arrive through their owning services.`,
+  },
   'sessions/:id/spawn-prompt': { audience: 'none', why: NO_CONSUMER },
   'sessions/:id/stop': { audience: 'none', why: `${NO_CONSUMER} Stop lands as tasks.patched.` },
   'sessions/:id/archive': { audience: 'none', why: `${NO_CONSUMER} Lands as sessions.patched.` },
@@ -366,6 +374,10 @@ export const REALTIME_PUBLISH_POLICY = {
     why: `${NO_CONSUMER} Lands as board-comments.created.`,
   },
   'board-comments/:id/toggle-reaction': {
+    audience: 'none',
+    why: `${NO_CONSUMER} Lands as board-comments.patched.`,
+  },
+  'board-comments/:id/reposition': {
     audience: 'none',
     why: `${NO_CONSUMER} Lands as board-comments.patched.`,
   },

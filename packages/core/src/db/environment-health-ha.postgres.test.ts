@@ -27,7 +27,7 @@ let branchUnique = (Date.now() % 1_000_000) + 8_000_000;
 async function seedBranch(
   db: Database,
   tenantId: TenantID,
-  status: 'starting' | 'running' | 'stopped' | 'error' = 'running'
+  status: 'starting' | 'running' | 'stopped' = 'running'
 ) {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     const user = await new UsersRepository(scoped).create({
@@ -231,6 +231,36 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const branch = await seedBranch(dbA, tenantId, 'starting');
       await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
         const health = new EnvironmentHealthRepository(scoped);
+        const unrecorded = await health.claim({
+          branchId: branch.branch_id,
+          claimToken: 'starting-network-failure',
+          leaseDurationMs: 30_000,
+          identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+        });
+        if (unrecorded.outcome !== 'claimed') throw new Error('Expected startup failure claim');
+        expect(
+          await health.commit({
+            branchId: branch.branch_id,
+            claimToken: unrecorded.claim.claim_token,
+            environmentGeneration: unrecorded.claim.environment_generation,
+            observation: {
+              status: 'unhealthy',
+              message: 'Health endpoint unreachable',
+              recordWhileStarting: false,
+            },
+          })
+        ).toEqual({
+          outcome: 'committed',
+          mutated: false,
+          stateChanged: false,
+          environmentStatus: 'starting',
+        });
+        expect(
+          (await new BranchRepository(scoped).findById(branch.branch_id))?.environment_instance
+            ?.last_health_check
+        ).toBeUndefined();
+        expect(await health.release(branch.branch_id, unrecorded.claim.claim_token)).toBe(true);
+
         const first = await health.claim({
           branchId: branch.branch_id,
           claimToken: 'starting-owner',
@@ -338,10 +368,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const tenantA = `env-a-${generateId()}` as TenantID;
       const tenantB = `env-b-${generateId()}` as TenantID;
       const active = await seedBranch(dbA, tenantA, 'running');
-      // A demoted environment must stay discoverable, or it is never probed
-      // again and can never be seen recovering — demotion would be a one-way
-      // door.
-      const demoted = await seedBranch(dbA, tenantA, 'error');
       const stopped = await seedBranch(dbA, tenantA, 'stopped');
       const archived = await seedBranch(dbA, tenantB, 'running');
       await runWithTenantDatabaseScope(dbA, tenantB, (scoped) =>
@@ -356,7 +382,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         { capability: 'environment_health_discovery' }
       );
       expect(refs).toContainEqual({ branch_id: active.branch_id, tenant_id: tenantA });
-      expect(refs).toContainEqual({ branch_id: demoted.branch_id, tenant_id: tenantA });
       expect(refs.some((ref) => ref.branch_id === stopped.branch_id)).toBe(false);
       expect(refs.some((ref) => ref.branch_id === archived.branch_id)).toBe(false);
 

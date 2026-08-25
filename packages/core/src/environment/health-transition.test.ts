@@ -145,14 +145,25 @@ describe('decideEnvironmentHealthTransition', () => {
   });
 
   describe('unknown observations', () => {
-    it('never transitions on unknown, in either direction', () => {
+    it('bounds a `starting` environment that stays unobservable', () => {
+      // "We cannot tell" is not failure, but an environment nobody can observe
+      // for the whole startup budget has not started — and `starting` disables
+      // Start in the UI, so without this it spins with no way out.
+      const allowed = Math.ceil(ENVIRONMENT_STARTUP_TIMEOUT_MS / INTERVAL);
+      expect(
+        decide('starting', 'unknown', { status: 'unknown', consecutive: allowed - 1 })
+      ).toMatchObject({ nextStatus: 'error', reason: 'startup-timeout' });
+      // ...but not while it is still within the budget.
+      expect(
+        decide('starting', 'unknown', { status: 'unknown', consecutive: 5 }).nextStatus
+      ).toBeUndefined();
+    });
+
+    it('never demotes a running environment on unknown', () => {
       // "We could not tell" is not evidence. Treating it as failure would demote
       // every environment whose probe is merely unconfigured.
       expect(
         decide('running', 'unknown', { status: 'unknown', consecutive: 99 }).nextStatus
-      ).toBeUndefined();
-      expect(
-        decide('starting', 'unknown', { status: 'unknown', consecutive: 99 }).nextStatus
       ).toBeUndefined();
       expect(
         decide('error', 'unknown', { status: 'unknown', consecutive: 99 }).nextStatus

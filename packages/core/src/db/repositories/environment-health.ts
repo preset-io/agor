@@ -1,4 +1,5 @@
 import { and, asc, eq, gt, or, sql } from 'drizzle-orm';
+import { ENVIRONMENT } from '../../config/constants';
 import type { DistributedWorkIdentity } from '../../coordination';
 import { decideEnvironmentHealthTransition } from '../../environment/health-transition';
 import type { BranchEnvironmentInstance, BranchID, TenantID } from '../../types';
@@ -54,6 +55,12 @@ export type EnvironmentHealthCommitResult =
       outcome: 'committed';
       mutated: boolean;
       stateChanged: boolean;
+      /**
+       * Status AFTER the observation. Includes `error`: an environment is only
+       * admitted for observation while `starting`/`running`, but the transition
+       * rules can demote it here (unreachable, or a startup that never became
+       * reachable).
+       */
       environmentStatus: 'starting' | 'running' | 'error';
     };
 
@@ -95,14 +102,7 @@ export class EnvironmentHealthDiscoveryRepository {
     })
       .from(branches)
       .where(
-        and(
-          eq(branches.archived, false),
-          // `error` is observable too: a demoted environment has to keep being
-          // probed, otherwise demotion is a one-way door and it can never be
-          // seen recovering.
-          or(eq(status, 'starting'), eq(status, 'running'), eq(status, 'error')),
-          after
-        )
+        and(eq(branches.archived, false), or(eq(status, 'starting'), eq(status, 'running')), after)
       )
       .orderBy(asc(tenantColumn), asc(branches.branch_id))
       .limit(options.limit)
@@ -159,6 +159,8 @@ export class EnvironmentHealthRepository {
     claimToken: string;
     leaseDurationMs: number;
     identity: DistributedWorkIdentity;
+    /** Explicit user probes may bypass cadence cooldown, never a live owner. */
+    ignoreCooldown?: boolean;
   }): Promise<EnvironmentHealthClaimResult> {
     this.validateClaimInput(input);
     return runDatabaseTransaction(
@@ -172,11 +174,7 @@ export class EnvironmentHealthRepository {
         const status = (
           row?.data as { environment_instance?: BranchEnvironmentInstance } | undefined
         )?.environment_instance?.status;
-        if (
-          !row ||
-          row.archived ||
-          (status !== 'starting' && status !== 'running' && status !== 'error')
-        ) {
+        if (!row || row.archived || (status !== 'starting' && status !== 'running')) {
           return { outcome: 'unavailable' };
         }
         const now = await this.mutationNow(txDb, input.branchId);
@@ -194,6 +192,7 @@ export class EnvironmentHealthRepository {
         // fleet-wide cooldown. An expired token means its owner died, so
         // takeover is admitted after lease expiry regardless of the cooldown.
         if (
+          !input.ignoreCooldown &&
           !row.environment_health_claim_token &&
           row.environment_health_next_observation_at &&
           new Date(row.environment_health_next_observation_at).getTime() > now.getTime()
@@ -263,7 +262,7 @@ export class EnvironmentHealthRepository {
         if (
           !row ||
           row.archived ||
-          (status !== 'starting' && status !== 'running' && status !== 'error') ||
+          (status !== 'starting' && status !== 'running') ||
           row.environment_generation !== input.environmentGeneration ||
           row.environment_health_claim_token !== input.claimToken
         ) {
@@ -316,10 +315,7 @@ export class EnvironmentHealthRepository {
         and(
           eq(branches.branch_id, input.branchId),
           eq(branches.archived, false),
-          // `error` is observable too: a demoted environment has to keep being
-          // probed, otherwise demotion is a one-way door and it can never be seen
-          // recovering.
-          or(eq(status, 'starting'), eq(status, 'running'), eq(status, 'error')),
+          or(eq(status, 'starting'), eq(status, 'running')),
           eq(branches.environment_generation, input.environmentGeneration),
           eq(branches.environment_health_claim_token, input.claimToken),
           expiry
@@ -339,8 +335,14 @@ export class EnvironmentHealthRepository {
     claimToken: string;
     environmentGeneration: number;
     observation: EnvironmentHealthObservation;
-    /** Poll cadence, so the startup budget stays expressed in wall-clock time. */
-    probeIntervalMs: number;
+    /**
+     * Poll cadence of the monitor taking this observation. The shared
+     * transition rules express the startup budget in wall-clock time and
+     * convert it using this, so a monitor running on a different cadence must
+     * pass its own. Defaults to the standard interval, which is what every
+     * caller that does not tune its loop is using anyway.
+     */
+    probeIntervalMs?: number;
   }): Promise<EnvironmentHealthCommitResult> {
     return runDatabaseTransaction(
       this.db,
@@ -359,7 +361,7 @@ export class EnvironmentHealthRepository {
         if (
           !row ||
           row.archived ||
-          (status !== 'starting' && status !== 'running' && status !== 'error') ||
+          (status !== 'starting' && status !== 'running') ||
           row.environment_generation !== input.environmentGeneration ||
           row.environment_health_claim_token !== input.claimToken ||
           !row.environment_health_claim_expires_at ||
@@ -371,7 +373,6 @@ export class EnvironmentHealthRepository {
 
         const shouldRecord =
           status === 'running' ||
-          status === 'error' ||
           input.observation.status === 'healthy' ||
           input.observation.recordWhileStarting;
         // Same rules the standalone monitor applies, so an environment reaches
@@ -384,7 +385,7 @@ export class EnvironmentHealthRepository {
           currentStatus: status,
           observation: input.observation.status,
           previous: activeEnvironment.last_health_check,
-          probeIntervalMs: input.probeIntervalMs,
+          probeIntervalMs: input.probeIntervalMs ?? ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS,
         });
         const nextStatus = decision.nextStatus ?? status;
         const previousHealth = activeEnvironment.last_health_check;
@@ -405,18 +406,27 @@ export class EnvironmentHealthRepository {
               },
             }
           : activeEnvironment;
-        await update(txDb, branches)
-          .set({
-            ...(shouldRecord ? { data: { ...data, environment_instance: nextEnvironment } } : {}),
-            ...(stateChanged ? { updated_at: now } : {}),
-          })
-          .where(
-            and(
-              eq(branches.branch_id, input.branchId),
-              eq(branches.environment_health_claim_token, input.claimToken)
+        // A network failure while an environment is still starting is a
+        // legitimate, deliberately unrecorded observation: startup grace
+        // keeps the prior durable state until a recordable result arrives.
+        // The row lock and fences above still authorize it as a completed
+        // observation, but there are no branch columns to mutate. Do not hand
+        // an empty update to Drizzle, whose dialect-independent set mapper
+        // rejects it with "No values to set".
+        if (shouldRecord) {
+          await update(txDb, branches)
+            .set({
+              data: { ...data, environment_instance: nextEnvironment },
+              ...(stateChanged ? { updated_at: now } : {}),
+            })
+            .where(
+              and(
+                eq(branches.branch_id, input.branchId),
+                eq(branches.environment_health_claim_token, input.claimToken)
+              )
             )
-          )
-          .run();
+            .run();
+        }
         return {
           outcome: 'committed',
           mutated: shouldRecord,

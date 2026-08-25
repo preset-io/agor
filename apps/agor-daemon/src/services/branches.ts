@@ -22,16 +22,17 @@ import {
   BoardRepository,
   BranchRepository,
   type BranchWithZoneAndSessions,
+  type EnvironmentHealthObservation,
+  EnvironmentHealthRepository,
+  generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
+  TaskRepository,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
 } from '@agor/core/db';
-import {
-  decideEnvironmentHealthTransition,
-  ENVIRONMENT_STARTUP_TIMEOUT_MS,
-  type EnvironmentObservationStatus,
-} from '@agor/core/environment/health-transition';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
   MANAGED_ENV_EXECUTION_MODE_DEFAULT,
@@ -42,7 +43,14 @@ import {
   validateManagedEnvLifecyclePolicy,
   validateRenderedManagedEnvUrlFields,
 } from '@agor/core/environment/webhook';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Conflict,
+  Forbidden,
+  NotAuthenticated,
+  NotFound,
+} from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
   Board,
@@ -62,6 +70,7 @@ import {
   BRANCH_ENVIRONMENT_CLEARABLE_FIELDS,
   getTeammateConfig,
   isTeammate,
+  TEAMMATE_FRAMEWORK_REPO_URL,
 } from '@agor/core/types';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedFactProbeUrl, isAllowedHealthCheckUrl } from '@agor/core/utils/url';
@@ -74,14 +83,10 @@ import { shouldUseCloneReferencePath } from '../utils/clone-reference.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  runExecutorCommand,
-  spawnExecutor,
-} from '../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
+import { issueExecutorCommandToken } from './session-token-service.js';
 import type { InternalEnrichmentParams } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
 
@@ -139,9 +144,21 @@ interface ManagedProcess {
 
 /**
  * Health transition thresholds and the rule that applies them live in
- * `@agor/core/environment/health-transition`, shared with the distributed
- * monitor so an environment reaches the same status under either monitor.
+ * `@agor/core/environment/health-transition`, shared by both monitors so an
+ * environment reaches the same status whichever one observes it.
  */
+
+/**
+ * Identifies whether a health observation was requested by a user-facing
+ * status action or by the background lifecycle monitor.
+ *
+ * Explicit requests may bypass the periodic cooldown and may return an
+ * ephemeral diagnostic for an errored environment. Automatic observations
+ * are restricted to active lifecycle states.
+ */
+export type EnvironmentHealthCheckOptions =
+  | { intent: 'automatic'; signal?: AbortSignal }
+  | { intent: 'explicit'; signal?: AbortSignal };
 
 /**
  * Extended branches service with custom methods
@@ -149,15 +166,10 @@ interface ManagedProcess {
 export class BranchesService extends DrizzleService<Branch, Partial<Branch>, BranchParams> {
   private branchRepo: BranchRepository;
   private boardRepo: BoardRepository;
+  private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
-  /**
-   * Branches with a health observation in flight. Recording an observation is a
-   * read-modify-write on persisted state, and checkHealth has three callers, so
-   * the guard belongs with the state rather than in one of them.
-   */
-  private healthChecksInFlight = new Set<BranchID>();
   /**
    * Tail of the per-branch sync queue. Syncs mutate one working tree inside the
    * environment, so they must not overlap; see syncEnvironment.
@@ -188,8 +200,37 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     this.branchRepo = branchRepo;
     this.boardRepo = new BoardRepository(db);
+    this.taskRepo = new TaskRepository(db);
     this.db = db;
     this.app = app;
+  }
+
+  /** Refuse a metadata cascade that would orphan a live executor lease. */
+  private async assertNoUnfinishedTasks(
+    branchId: BranchID,
+    taskRepo: TaskRepository = this.taskRepo
+  ): Promise<void> {
+    if (await taskRepo.hasNonterminalForBranch(branchId)) {
+      throw new Conflict(
+        `Cannot delete branch ${branchId} while it has unfinished tasks. Stop them first.`
+      );
+    }
+  }
+
+  private removalRepositories(scoped: TenantScopedDatabase): {
+    branchRepo: BranchRepository;
+    taskRepo: TaskRepository;
+  } {
+    // Lightweight service tests use one in-memory repository seam. Native
+    // production transactions provide a distinct scoped handle, which must
+    // own every query participating in the check-and-cascade invariant.
+    if (Object.is(scoped, this.db)) {
+      return { branchRepo: this.branchRepo, taskRepo: this.taskRepo };
+    }
+    return {
+      branchRepo: new BranchRepository(scoped),
+      taskRepo: new TaskRepository(scoped),
+    };
   }
 
   /** Short tenant/RLS unit of work for custom methods that bypass Feathers hooks. */
@@ -398,20 +439,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const userId =
       ((params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined) ??
       branch.created_by;
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-    const sessionToken = await this.withTenantDatabase(
-      params,
-      () =>
-        appWithToken.sessionTokenService?.generateToken(`environment-${action}`, userId, {
-          branchId: branch.branch_id,
-          maxUses: -1,
-        }) ?? Promise.resolve(undefined)
+    const sessionToken = await this.withTenantDatabase(params, () =>
+      issueExecutorCommandToken(this.app, `environment-${action}`, userId, branch.branch_id)
     );
-    if (!sessionToken) {
-      throw new Error(`Session token service unavailable; cannot dispatch environment ${action}`);
-    }
 
     const { delegatedHomeKey, env } = await this.resolveEnvironmentExecutorContext(
       branch,
@@ -508,7 +538,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const { branch, action } = options;
     const { payload, delegatedHomeKey, env } = await this.createEnvironmentExecutorPayload(options);
 
-    const result = await runExecutorCommand(payload, {
+    const result = await requestExecutor(payload, {
       logPrefix: `[Environment.${action} ${branch.name}]`,
       delegatedHomeKey,
       preparedEnv: env,
@@ -541,23 +571,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const userId =
       ((params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined) ??
       branch.created_by;
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-    const sessionToken = await this.withTenantDatabase(
-      params,
-      () =>
-        appWithToken.sessionTokenService?.generateToken('environment-logs', userId, {
-          branchId: branch.branch_id,
-          maxUses: -1,
-        }) ?? Promise.resolve(undefined)
+    const sessionToken = await this.withTenantDatabase(params, () =>
+      issueExecutorCommandToken(this.app, 'environment-logs', userId, branch.branch_id)
     );
-    if (!sessionToken) {
-      throw new Error('Session token service unavailable; cannot fetch environment logs');
-    }
 
     const { delegatedHomeKey, env } = await this.resolveEnvironmentExecutorContext(branch, params);
-    const result = await runExecutorCommand(
+    const result = await requestExecutor(
       {
         command: 'environment.logs',
         sessionToken,
@@ -686,12 +705,21 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   private async applyBranchCreateDefaults(data: Partial<Branch>): Promise<Partial<Branch>> {
     const withDefaults: Partial<Branch> = { ...data };
-    const { defaultMode } = resolveBranchStorageConfig();
+    if (
+      withDefaults.base_remote_url !== undefined &&
+      withDefaults.base_remote_url !== TEAMMATE_FRAMEWORK_REPO_URL
+    ) {
+      throw new BadRequest(
+        'base_remote_url is restricted to the canonical Agor teammate template repository.'
+      );
+    }
+    const config = this.app.get('config');
+    const { defaultMode } = resolveBranchStorageConfig(config);
     const storageMode = withDefaults.storage_mode ?? defaultMode;
-    ensureBranchStorageModeAllowed(storageMode);
+    ensureBranchStorageModeAllowed(storageMode, config);
     if (
       storageMode === 'worktree' &&
-      resolveMultiTenancyConfig(this.app.get('config')).mode === 'required_from_auth'
+      resolveMultiTenancyConfig(config).mode === 'required_from_auth'
     ) {
       throw new BadRequest(
         "storage_mode='worktree' is unavailable in hosted multi-tenant mode; use clone storage."
@@ -705,7 +733,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         throw new BadRequest('clone_depth must be a positive integer when set.');
       }
       try {
-        ensureBranchCloneDepthAllowed(withDefaults.clone_depth);
+        ensureBranchCloneDepthAllowed(withDefaults.clone_depth, config);
       } catch (error) {
         throw new BadRequest(error instanceof Error ? error.message : String(error));
       }
@@ -1058,6 +1086,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     data: Partial<Branch>,
     params?: BranchParams
   ): Promise<BranchWithZoneAndSessions> {
+    if (Object.hasOwn(data, 'base_remote_url')) {
+      throw new BadRequest('base_remote_url is immutable after branch creation.');
+    }
     // Get current branch to check type/board changes
     const currentBranch = await super.get(id, params);
     await this.assertCanMutateTeammateKnowledgeConfig(currentBranch, data, params);
@@ -1303,14 +1334,26 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const { deleteFromFilesystem } = params?.query || {};
     const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
 
-    // Get branch details before deletion
-    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    // Remove from database FIRST for instant UI feedback
-    // CASCADE will clean up related comments automatically
-    const result = await super.remove(id, params);
+    // The active-task guard and metadata cascade are one native transaction on
+    // both databases. Otherwise a task could start between the check and the
+    // delete and leave a valid executor lease with no owning task row.
+    const { branch, result } = await runWithTenantDatabaseTransaction(
+      this.db,
+      tenantId,
+      async (scoped) => {
+        const { branchRepo, taskRepo } = this.removalRepositories(scoped);
+        const branch = await branchRepo.findById(id);
+        if (!branch) throw new NotFound(`Branch not found: ${id}`);
+        await this.assertNoUnfinishedTasks(branch.branch_id, taskRepo);
+        // Remove from database FIRST for instant UI feedback. CASCADE cleans
+        // up related comments and terminal tasks.
+        await branchRepo.delete(id);
+        return { branch, result: branch };
+      }
+    );
 
-    // Then remove from filesystem via executor (fire-and-forget)
-    // Executor handles its own logging and error reporting via Feathers
+    // Then remove from filesystem via a one-purpose executor (fire-and-forget).
+    // The daemon owns metadata; the payload contains only authoritative paths.
     if (deleteFromFilesystem) {
       console.log(`🗑️  Spawning executor to remove branch from filesystem: ${branch.path}`);
 
@@ -1318,52 +1361,30 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // never selects or impersonates a host account.
       const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
-        branch.created_by,
+        (params as AuthenticatedParams).user!.user_id,
         this.app.get('config')
       );
-
-      // Generate session token for executor authentication. Hook chain
-      // enforces auth before we get here, so non-null assertion is safe.
-      const userId = (params as AuthenticatedParams).user!.user_id as UserID;
-      const appWithToken = this.app as unknown as {
-        sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-      };
-
-      // Generate token and spawn executor (fire-and-forget)
-      appWithToken.sessionTokenService
-        ?.generateToken('branch-remove', userId, { branchId: branch.branch_id, maxUses: -1 })
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.remove',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchId: branch.branch_id,
-                branchPath: branch.path,
-                branchesRoot: getBranchesDir(tenantId),
-                deleteDbRecord: false, // Already deleted above
-                // Clean up the branch if it was created by Agor
-                branch: branch.ref,
-                deleteBranch: branch.new_branch,
-                // Branch storage mode — executor needs this to pick the right
-                // teardown path (clone-mode just rm -rf; worktree-mode also
-                // runs `git worktree remove --force` against the base repo).
-                storageMode: branch.storage_mode ?? 'worktree',
-              },
-            },
-            {
-              logPrefix: `[BranchesService.remove ${branch.name}]`,
-              delegatedHomeKey: delegatedHomeKey,
-            }
-          );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch removal:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
+      spawnExecutor(
+        {
+          command: 'git.branch.remove',
+          params: {
+            branchId: branch.branch_id,
+            branchPath: branch.path,
+            branchesRoot: getBranchesDir(tenantId),
+            // Clean up the branch if it was created by Agor.
+            branch: branch.ref,
+            deleteBranch: branch.new_branch,
+            // Branch storage mode — executor needs this to pick the right
+            // teardown path (clone-mode just rm -rf; worktree-mode also runs
+            // `git worktree remove --force` against the base repo).
+            storageMode: branch.storage_mode ?? 'worktree',
+          },
+        },
+        {
+          logPrefix: `[BranchesService.remove ${branch.name}]`,
+          delegatedHomeKey,
+        }
+      );
     }
 
     return result as Branch;
@@ -1379,18 +1400,23 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    */
   async removeMetadataWithRealtime(id: BranchID, params?: BranchParams): Promise<Branch> {
     const removalParams = params ?? ({} as BranchParams);
-    return this.withTenantDatabase(removalParams, async () => {
-      const branch = (await super.get(id, removalParams)) as Branch;
+    const tenantId = removalParams.tenant?.tenant_id ?? getCurrentTenantId();
+    return runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
+      const { branchRepo, taskRepo } = this.removalRepositories(scoped);
+      const branch = await branchRepo.findById(id);
+      if (!branch) throw new NotFound(`Branch not found: ${id}`);
+      await this.assertNoUnfinishedTasks(branch.branch_id, taskRepo);
       await captureBranchRemovalRealtimeVisibility({
         params: removalParams,
-        branchRepository: this.branchRepo,
+        branchRepository: branchRepo,
         branchId: branch.branch_id,
       });
 
-      // Feathers replaces registered standard methods with event-producing
-      // wrappers. The adapter call performs only the metadata deletion; the
-      // explicit event below is the single authoritative tombstone.
-      const removedBranch = (await super.remove(branch.branch_id, removalParams)) as Branch;
+      // This custom method deliberately bypasses Feathers' standard method
+      // wrapper. The explicit event below is the single authoritative
+      // tombstone and drains only after the transaction commits.
+      await branchRepo.delete(branch.branch_id);
+      const removedBranch = branch;
       emitServiceEvent(this.app, {
         path: 'branches',
         event: 'removed',
@@ -1443,112 +1469,72 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
     }
 
-    // Perform filesystem action via executor (fire-and-forget)
-    // Executor handles its own logging and error reporting via Feathers
-    // Use the executor so filesystem operations follow the selected substrate.
+    // Prepare the one-purpose filesystem action now, but dispatch it only
+    // after metadata succeeds. In particular, an unfinished-task delete guard
+    // must fail before any branch directory can be removed.
     const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
-    const appWithToken = this.app as unknown as {
-      sessionTokenService?: import('../services/session-token-service').SessionTokenService;
-    };
-
-    if (filesystemAction === 'cleaned') {
-      console.log(`🧹 Spawning executor to clean branch filesystem: ${branch.path}`);
-
-      // Infrastructure cleanup uses the canonical branch path supplied by the
-      // daemon rather than reconstructing it from an execution home.
-
-      void this.withTenantDatabase(
-        params,
-        () =>
-          appWithToken.sessionTokenService?.generateToken('branch-clean', userId ?? currentUserId, {
-            branchId: branch.branch_id,
-            maxUses: -1,
-          }) ?? Promise.reject(new Error('Session token service unavailable'))
-      )
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.clean',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchPath: branch.path,
-              },
-            },
-            {
-              logPrefix: `[BranchesService.clean ${branch.name}]`,
-            }
+    const delegatedHomeKey =
+      filesystemAction === 'preserved'
+        ? undefined
+        : await resolveDelegatedExecutionHomeKey(
+            this.db,
+            userId ?? currentUserId,
+            this.app.get('config')
           );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch cleaning:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
-    } else if (filesystemAction === 'deleted') {
+    const dispatchFilesystemAction = (): void => {
+      if (filesystemAction === 'cleaned') {
+        console.log(`🧹 Spawning executor to clean branch filesystem: ${branch.path}`);
+        spawnExecutor(
+          {
+            command: 'git.branch.clean',
+            params: { branchPath: branch.path },
+          },
+          {
+            logPrefix: `[BranchesService.clean ${branch.name}]`,
+            delegatedHomeKey,
+          }
+        );
+        return;
+      }
+      if (filesystemAction !== 'deleted') return;
+
       console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
       const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+      spawnExecutor(
+        {
+          command: 'git.branch.remove',
+          params: {
+            branchId: branch.branch_id,
+            branchPath: branch.path,
+            branchesRoot: getBranchesDir(tenantId),
+            // Clean up the branch if it was created by Agor.
+            branch: branch.ref,
+            deleteBranch: branch.new_branch,
+            // Branch storage mode — see sibling call site comment in
+            // `BranchesService.remove` above for why this matters.
+            storageMode: branch.storage_mode ?? 'worktree',
+          },
+        },
+        {
+          logPrefix: `[BranchesService.delete ${branch.name}]`,
+          delegatedHomeKey,
+        }
+      );
+    };
 
-      // Infrastructure cleanup uses the canonical branch path supplied by the
-      // daemon rather than reconstructing it from an execution home.
-
-      void this.withTenantDatabase(
-        params,
-        () =>
-          appWithToken.sessionTokenService?.generateToken(
-            'branch-delete',
-            userId ?? currentUserId,
-            {
-              branchId: branch.branch_id,
-              maxUses: -1,
-            }
-          ) ?? Promise.reject(new Error('Session token service unavailable'))
-      )
-        .then((sessionToken) => {
-          spawnExecutor(
-            {
-              command: 'git.branch.remove',
-              sessionToken,
-              daemonUrl: getDaemonUrl(),
-              params: {
-                branchId: branch.branch_id,
-                branchPath: branch.path,
-                branchesRoot: getBranchesDir(tenantId),
-                deleteDbRecord: false, // Daemon handles DB deletion separately
-                // Clean up the branch if it was created by Agor
-                branch: branch.ref,
-                deleteBranch: branch.new_branch,
-                // Branch storage mode — see sibling call site comment in
-                // `BranchesService.remove` above for why this matters.
-                storageMode: branch.storage_mode ?? 'worktree',
-              },
-            },
-            {
-              logPrefix: `[BranchesService.delete ${branch.name}]`,
-            }
-          );
-        })
-        .catch((error) => {
-          console.error(
-            `⚠️  Failed to generate session token for branch deletion:`,
-            error instanceof Error ? error.message : String(error)
-          );
-        });
-    }
-
-    // Retire branch-scoped terminal attachments before archive/delete. The
-    // local event handles this replica; serverSideEmit carries only trusted
-    // tenant/branch lifecycle metadata (never terminal contents) to peer
-    // replicas when the HA adapter is available.
+    // Retire branch-scoped terminals only after the metadata transition wins.
+    // The local event handles this replica; serverSideEmit carries only the
+    // trusted tenant/branch lifecycle tuple to peers.
     const terminalTenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
     if (!terminalTenantId) throw new Error('Missing tenant context for branch terminal cleanup');
-    const terminalClose = {
-      tenantId: String(terminalTenantId),
-      branchId: branch.branch_id,
+    const retireBranchTerminals = (): void => {
+      const terminalClose = {
+        tenantId: String(terminalTenantId),
+        branchId: branch.branch_id,
+      };
+      this.app.emit?.('terminal:close-branch', terminalClose);
+      this.app.io?.serverSideEmit?.('terminal:close-branch', terminalClose);
     };
-    this.app.emit?.('terminal:close-branch', terminalClose);
-    this.app.io?.serverSideEmit?.('terminal:close-branch', terminalClose);
 
     // Metadata action: archive or delete
     if (metadataAction === 'archive') {
@@ -1604,6 +1590,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       console.log(`✅ Archived branch ${branch.name} and ${sessions.length} session(s)`);
 
+      retireBranchTerminals();
+      dispatchFilesystemAction();
       return archivedBranch;
     } else {
       // Delete: Hard delete (CASCADE will remove sessions, messages, tasks)
@@ -1612,6 +1600,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       await this.removeMetadataWithRealtime(id, params);
 
       console.log(`✅ Permanently deleted branch ${branch.name}`);
+      retireBranchTerminals();
+      dispatchFilesystemAction();
       return { deleted: true, branch_id: id };
     }
   }
@@ -1668,10 +1658,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     // Recreate the git branch on filesystem if the directory is missing
     // (e.g., it was archived with filesystemAction: 'deleted')
-    const statusToken = generateScopedServiceToken(
-      this.app as unknown as { settings: { authentication?: { secret?: string } } }
+    const userId = params?.user?.user_id;
+    if (!userId) throw new NotAuthenticated('Authentication required');
+    const statusToken = await issueExecutorCommandToken(
+      this.app,
+      'branch-filesystem-status',
+      userId,
+      branch.branch_id
     );
-    const statusResult = await runExecutorCommand(
+    const statusResult = await requestExecutor(
       {
         command: 'branch.filesystem.status',
         sessionToken: statusToken,
@@ -1730,12 +1725,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       }
 
       try {
-        // Use a service JWT so the executor can patch rendered env command
-        // templates without tripping requireAdminForEnvConfig when unarchive
-        // is performed by a non-admin user.
-        const sessionToken = generateScopedServiceToken(
-          this.app as unknown as { settings: { authentication?: { secret?: string } } },
-          { command: 'git.branch.add', branch_id: branch.branch_id, repo_id: repo.repo_id }
+        const sessionToken = await issueExecutorCommandToken(
+          this.app,
+          'git.branch.add',
+          userId,
+          branch.branch_id
         );
         spawnExecutor(
           {
@@ -2498,363 +2492,200 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   /**
    * Custom method: Check health
    */
-  async checkHealth(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+  async checkHealth(
+    id: BranchID,
+    params?: BranchParams,
+    internalOptions?: EnvironmentHealthCheckOptions
+  ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.withTenantDatabase(params, () => this.get(id, params));
     const _repo = await this.withTenantDatabase(
       params,
       () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
     );
 
-    // Only check active environments, plus errored environments that may have been
-    // started successfully out-of-band. Allowing explicit health checks to recover
-    // from `error` prevents stale start failures from keeping a live environment red.
     const currentStatus = branch.environment_instance?.status;
-    const canProbeHealth =
-      currentStatus === 'running' || currentStatus === 'starting' || currentStatus === 'error';
-    if (!canProbeHealth) {
+    if (
+      branch.archived ||
+      (currentStatus !== 'running' && currentStatus !== 'starting' && currentStatus !== 'error')
+    ) {
       return branch;
     }
 
-    // Serialize observations per branch. checkHealth is reachable from the
-    // health monitor's interval, `GET /branches/:id/health` and the MCP
-    // environment tool; only the monitor held a guard, so the others could
-    // overlap it. That matters because recording an observation is a
-    // read-modify-write on persisted state — read the branch, probe for
-    // seconds, write the new streak — so two overlapping callers both read the
-    // same count and both write the same value, losing an observation and
-    // letting the older probe's verdict land last.
-    //
-    // The guard sits AFTER the tenant-scoped get above, so every caller is
-    // still authorized and scoped independently; only the probe-and-write is
-    // shared. A caller arriving mid-observation gets the current state rather
-    // than a second probe of the same window.
-    if (this.healthChecksInFlight.has(id)) {
-      return branch;
+    // An explicit status request may still diagnose an errored environment,
+    // but an inactive lifecycle must not acquire monitoring ownership or be
+    // revived by that observation. Return the observation ephemerally.
+    if (currentStatus === 'error') {
+      if (internalOptions?.intent === 'automatic') return branch;
+      const observation = await this.fetchEnvironmentHealthObservation(
+        branch,
+        internalOptions?.signal
+      );
+      if (!observation) return branch;
+      return {
+        ...branch,
+        environment_instance: {
+          ...branch.environment_instance,
+          status: currentStatus,
+          last_health_check: {
+            timestamp: new Date().toISOString(),
+            status: observation.status,
+            message: observation.message,
+          },
+        },
+      };
     }
-    this.healthChecksInFlight.add(id);
+
+    // Active observations leave the database while doing HTTP. A durable
+    // one-observation claim plus lifecycle generation fences the result from a
+    // concurrent stop, archive, delete, URL change, daemon, or replica.
+    const claimToken = generateId();
+    const identity = this.app.get('distributedWorkIdentity') ?? {
+      instanceId: `branches-service-${process.pid}`,
+      bootId: `branches-service-${process.pid}`,
+    };
+    const claimResult = await this.withTenantDatabase(params, () =>
+      new EnvironmentHealthRepository(this.db).claim({
+        branchId: id,
+        claimToken,
+        leaseDurationMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS + 5_000,
+        identity,
+        ignoreCooldown: internalOptions?.intent !== 'automatic',
+      })
+    );
+    if (claimResult.outcome !== 'claimed') {
+      return this.withTenantDatabase(params, () => this.get(id, params));
+    }
+
     try {
-      return await this.probeAndRecordHealth(branch, id, currentStatus, params);
+      const observation = await this.fetchEnvironmentHealthObservation(
+        branch,
+        internalOptions?.signal
+      );
+      if (!observation) {
+        return this.withTenantDatabase(params, () => this.get(id, params));
+      }
+      const commitResult = await this.withTenantDatabase(params, () =>
+        new EnvironmentHealthRepository(this.db).commit({
+          branchId: id,
+          claimToken,
+          environmentGeneration: claimResult.claim.environment_generation,
+          observation,
+          // The shared transition rules express the startup budget in
+          // wall-clock time, so they need this monitor's cadence to convert
+          // it into a probe count.
+          probeIntervalMs: ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS,
+        })
+      );
+      const current = await this.withTenantDatabase(params, () => this.get(id, params));
+      if (commitResult.outcome === 'committed' && commitResult.stateChanged) {
+        emitServiceEvent(this.app, {
+          path: 'branches',
+          event: 'patched',
+          data: current,
+          params,
+          id,
+        });
+
+        // Catch-up sync: the environment just became reachable for the first
+        // time. Commits that landed while it was still building were never
+        // pushed into it — the task-completion auto-sync no-ops against an
+        // unreachable remote and nothing retries it — so fire one sync now and
+        // the running environment reflects the branch's latest committed state.
+        // Fire-and-forget; syncEnvironment throws for variants without a `sync`
+        // command (e.g. local), which we swallow.
+        if (currentStatus === 'starting' && commitResult.environmentStatus === 'running') {
+          void this.syncEnvironment(id, params).catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            if (message.includes('defines no sync command')) return;
+            console.warn(`⚠️ Catch-up sync after readiness failed for ${branch.name}: ${message}`);
+          });
+        }
+      }
+      return current;
     } finally {
-      this.healthChecksInFlight.delete(id);
+      await this.withTenantDatabase(params, () =>
+        new EnvironmentHealthRepository(this.db).release(id, claimToken)
+      ).catch(() => undefined);
     }
   }
 
-  /**
-   * Probe the environment and record what came back. Callers must hold the
-   * per-branch in-flight guard — see checkHealth.
-   */
-  private async probeAndRecordHealth(
-    branch: BranchWithZoneAndSessions,
-    id: BranchID,
-    currentStatus: EnvironmentInstance['status'] | undefined,
-    params?: BranchParams
-  ): Promise<BranchWithZoneAndSessions> {
-    // Effective health probe target. Local envs freeze a `health_check_url` at
-    // branch creation. Remote/managed envs (e.g. a Codespace) have no static URL
-    // — their reachable address only exists after `start` — so we fall back to a
-    // `health` fact the lifecycle command emits (AGOR_FACT health=<url>). Either
-    // source feeds the same probe below, which is the real readiness signal:
-    // during a long first build the probe fails and the env stays `starting`;
-    // once the app answers it transitions to `running`.
-    // A fact-sourced probe URL is UNTRUSTED input: it is parsed from a lifecycle
-    // command's stdout, so whoever controls that script chooses the address the
-    // daemon will GET every few seconds — with the status reflected back into
-    // last_health_check.message. Validate it with the stricter rule that also
-    // rejects loopback/private/internal destinations, rather than the permissive
-    // one used for the admin-rendered health_check_url (local environments
-    // legitimately probe localhost, so that path must stay permissive).
+  private async fetchEnvironmentHealthObservation(
+    branch: Branch,
+    cancellationSignal?: AbortSignal
+  ): Promise<EnvironmentHealthObservation | null> {
+    // A REMOTE environment (a Codespace) has no frozen health_check_url — its
+    // reachable address does not exist until it starts, so the lifecycle command
+    // reports it as a `health` fact. Without this fallback every remote
+    // environment is permanently "not observable" and can never leave
+    // `starting`, which is the whole point of the codespaces variant.
+    //
+    // Facts are command output, so the URL is untrusted input and gets the
+    // stricter fact guard (loopback / RFC1918 / link-local / .internal) rather
+    // than the plain health-check guard applied to operator-authored config.
     const rawFactsHealthUrl = branch.environment_instance?.facts?.health;
-    let factsHealthUrl: string | undefined;
-    if (rawFactsHealthUrl) {
-      if (isAllowedFactProbeUrl(rawFactsHealthUrl)) {
-        factsHealthUrl = rawFactsHealthUrl;
-      } else {
-        console.warn(
-          `⚠️ ${branch.name}: ignoring health fact pointing at a disallowed destination (${rawFactsHealthUrl})`
-        );
-      }
+    const factsHealthUrl =
+      rawFactsHealthUrl && isAllowedFactProbeUrl(rawFactsHealthUrl) ? rawFactsHealthUrl : undefined;
+    const healthUrl = branch.health_check_url || factsHealthUrl;
+    if (!healthUrl) {
+      const managedProcess = this.processes.get(branch.branch_id);
+      const isProcessAlive = Boolean(managedProcess?.process && !managedProcess.process.killed);
+      return {
+        status: 'unknown',
+        message: rawFactsHealthUrl
+          ? 'Health fact points at a disallowed destination; environment health is not observable'
+          : isProcessAlive
+            ? 'Process running; no health check configured'
+            : 'No health check configured',
+        recordWhileStarting: true,
+      };
     }
-    const effectiveHealthUrl = branch.health_check_url || factsHealthUrl;
-
-    // No probe available at all (neither a frozen URL nor a health fact).
-    if (!effectiveHealthUrl) {
-      const managedProcess = this.processes.get(id);
-      const isProcessAlive = managedProcess?.process && !managedProcess.process.killed;
-
-      // Fallback for remote / managed environments (e.g. a Codespace) that
-      // report NO health fact: Agor has nothing to poll, so the lifecycle
-      // command is the source of truth — a start that SUCCEEDED and reported
-      // facts (an address) means the environment is up, so transition
-      // starting → running instead of spinning on 'starting' forever. This is
-      // optimistic (it cannot confirm the app is actually serving); a variant
-      // that DOES emit `AGOR_FACT health=<url>` skips this branch entirely and
-      // gets true readiness gating via the probe below. Local envs always
-      // render a health_check_url and never reach this branch either.
-      const lastCommand = branch.environment_instance?.last_command;
-      const facts = branch.environment_instance?.facts;
-      const startReportedUp =
-        !!facts &&
-        Object.keys(facts).length > 0 &&
-        (lastCommand?.action === 'start' || lastCommand?.action === 'restart') &&
-        lastCommand?.status === 'succeeded';
-
-      // `starting` MUST have an exit here too, in BOTH directions — the same
-      // principle as the probe-based startup timeout further below. Without
-      // one, an environment with no probe pins at `starting` forever while the
-      // UI disables Start, leaving the user no way to recover. Observed live:
-      // a branch stuck `starting` for ten days with no health_check_url, no
-      // facts and a dead pid.
-      //
-      // Exit UP when there is positive evidence the environment is up: either
-      // the lifecycle command reported success with facts, or the daemon still
-      // owns a live process for it (which we already report as 'healthy'
-      // below — pinning at `starting` while claiming healthy is incoherent).
-      const shouldTransitionToRunning =
-        currentStatus === 'starting' && (startReportedUp || !!isProcessAlive);
-
-      // Exit DOWN once the startup window has elapsed with no such evidence.
-      // Anchored on wall-clock rather than a probe streak because there are no
-      // probes to count on this path, and because the anchor has to survive a
-      // daemon restart — an in-memory streak would grant a fresh hour on every
-      // restart and never fire for an already-stalled environment.
-      const startedAt = branch.environment_instance?.process?.started_at ?? lastCommand?.timestamp;
-      const startupElapsedMs = startedAt ? Date.now() - new Date(startedAt).getTime() : 0;
-      const shouldDemoteStalledStart =
-        currentStatus === 'starting' &&
-        !shouldTransitionToRunning &&
-        startupElapsedMs > ENVIRONMENT_STARTUP_TIMEOUT_MS;
-
-      if (shouldTransitionToRunning) {
-        console.log(
-          `✅ ${branch.name}: ${
-            startReportedUp ? 'start reported success with facts' : 'managed process is alive'
-          } and no health probe configured - transitioning to 'running'`
-        );
-      } else if (shouldDemoteStalledStart) {
-        console.warn(
-          `🔌 ${branch.name}: never reported readiness and no health probe is configured - marking 'error' so it can be started again`
-        );
-      }
-
-      return await this.updateEnvironment(
-        id,
-        {
-          ...(shouldTransitionToRunning
-            ? { status: 'running' as const }
-            : shouldDemoteStalledStart
-              ? { status: 'error' as const }
-              : {}),
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: startReportedUp || isProcessAlive ? 'healthy' : 'unknown',
-            message: startReportedUp
-              ? 'Started (reported by lifecycle command; no health probe configured)'
-              : isProcessAlive
-                ? 'Process running'
-                : shouldDemoteStalledStart
-                  ? 'Environment never reported readiness (no health check configured)'
-                  : 'No health check configured',
-          },
-        },
-        params
-      );
-    }
-
-    // Probe the effective URL: the frozen health_check_url for local envs, or the
-    // `health` fact for remote envs like a Codespace.
-    const healthUrl = effectiveHealthUrl;
-
-    // Validate URL to prevent SSRF against cloud metadata or internal services
     if (!isAllowedHealthCheckUrl(healthUrl)) {
-      console.warn(`⚠️ Blocked health check to disallowed URL: ${healthUrl}`);
-      return await this.updateEnvironment(
-        id,
-        {
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unhealthy',
-            message: 'Health check URL blocked by security policy',
-          },
-        },
-        params
-      );
+      return {
+        status: 'unhealthy',
+        message: 'Health check URL blocked by security policy',
+        recordWhileStarting: true,
+      };
     }
 
-    // Track previous health status to detect changes
-    const previousHealthStatus = branch.environment_instance?.last_health_check?.status;
-
+    const controller = new AbortController();
+    let timedOut = false;
+    const cancel = () =>
+      controller.abort(cancellationSignal?.reason ?? new Error('Health check cancelled'));
+    if (cancellationSignal?.aborted) return null;
+    cancellationSignal?.addEventListener('abort', cancel, { once: true });
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort(new Error('Health check timeout'));
+    }, ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
+    timeout.unref?.();
     try {
-      // Perform HTTP health check with timeout
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
-
       const response = await fetch(healthUrl, {
         signal: controller.signal,
         method: 'GET',
+        // Do not follow redirects: an otherwise-allowed health URL could 302 to
+        // a link-local metadata endpoint (169.254.169.254), bypassing
+        // isAllowedHealthCheckUrl. A 3xx returns not-ok and is reported
+        // unhealthy. Mirrors the managed-env webhook fetch.
+        redirect: 'manual',
       });
-
-      clearTimeout(timeout);
-
-      const isHealthy = response.ok;
-      const newHealthStatus = isHealthy ? 'healthy' : 'unhealthy';
-
-      // Only log if health status changed
-      if (previousHealthStatus !== newHealthStatus) {
-        console.log(
-          `🏥 Health status changed for ${branch.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (HTTP ${response.status})`
-        );
-      }
-
-      // If health check succeeds and we're in 'starting' or 'error' state,
-      // transition/recover to 'running'. The explicit 'error' recovery path matters
-      // when a lifecycle command failed or raced but the configured app is now live.
-      //
-      // Requires CONSECUTIVE successes, mirroring the demotion below. A single
-      // success is not trustworthy while a remote environment is coming up: a
-      // resuming Codespace was observed answering one 200 through its tunnel and
-      // then immediately 502-ing, which flipped the environment to `running`
-      // while the app was in fact still booting.
-      const decision = this.decideHealthTransition(branch, currentStatus, newHealthStatus);
-      const shouldTransitionToRunning = decision.nextStatus === 'running';
-
-      if (shouldTransitionToRunning) {
-        console.log(`✅ Successful health check for ${branch.name} - transitioning to 'running'`);
-        // Catch-up sync: the environment just became reachable for the first
-        // time (or recovered from error). Commits that landed while it was still
-        // building/starting were never pushed into it — the task-completion
-        // auto-sync no-ops against an unreachable remote and nothing retries it.
-        // Fire one sync now so the running env reflects the branch's latest
-        // committed state. Fire-and-forget; syncEnvironment throws for variants
-        // without a `sync` command (e.g. local), which we swallow. Reuses the
-        // params the health monitor already runs under (tenant context, no
-        // executor token), so no extra plumbing is required.
-        void this.syncEnvironment(id, params).catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          if (message.includes('defines no sync command')) return;
-          console.warn(`⚠️ Catch-up sync after readiness failed for ${branch.name}: ${message}`);
-        });
-      }
-
-      // An HTTP error (e.g. the 404 GitHub serves for a shut-down Codespace)
-      // does NOT throw, so unreachability has to be handled here too, not only
-      // in the catch below.
-      const shouldDemote = decision.nextStatus === 'error';
-      if (shouldDemote) {
-        console.warn(
-          `🔌 ${branch.name}: environment ${
-            currentStatus === 'starting' ? 'never became reachable' : 'unreachable'
-          } (HTTP ${response.status}) - marking 'error' so it can be started again`
-        );
-      }
-
-      return await this.updateEnvironment(
-        id,
-        {
-          status: shouldTransitionToRunning ? 'running' : shouldDemote ? 'error' : currentStatus,
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: newHealthStatus,
-            message: isHealthy
-              ? `HTTP ${response.status}`
-              : `HTTP ${response.status} ${response.statusText}`,
-            consecutive: decision.consecutive,
-          },
-        },
-        params
-      );
+      return {
+        status: response.ok ? 'healthy' : 'unhealthy',
+        message: response.ok
+          ? `HTTP ${response.status}`
+          : `HTTP ${response.status} ${response.statusText}`,
+        recordWhileStarting: true,
+      };
     } catch (error) {
-      // Health check failed
-      const message =
-        error instanceof Error
-          ? error.name === 'AbortError'
-            ? 'Timeout'
-            : error.message
-          : 'Unknown error';
-
-      // Count the failure BEFORE the `starting` early-return below, so a startup
-      // that never succeeds can eventually time out instead of retrying forever.
-      const decision = this.decideHealthTransition(branch, currentStatus, 'unhealthy');
-      const shouldDemoteOnThrow = decision.nextStatus === 'error';
-
-      // During 'starting', keep retrying quietly — an environment may legitimately
-      // be building for many minutes and should not be flipped out of `starting`
-      // meanwhile. The exception is the startup timeout, handled just above.
-      //
-      // The observation is still PERSISTED, because the streak that eventually
-      // fires that timeout now lives in `last_health_check.consecutive` rather
-      // than in daemon memory. Returning early without writing would leave the
-      // count permanently at 1 and `starting` unbounded again — the bug the
-      // timeout exists to prevent. Repeated identical failures do not publish
-      // (updateEnvironment treats the count as bookkeeping, like the
-      // timestamp), so this does not spam the realtime channel.
-      if (currentStatus === 'starting' && !shouldDemoteOnThrow) {
-        return await this.updateEnvironment(
-          id,
-          {
-            last_health_check: {
-              timestamp: new Date().toISOString(),
-              status: 'unhealthy',
-              message,
-              consecutive: decision.consecutive,
-            },
-          },
-          params
-        );
-      }
-
-      if (shouldDemoteOnThrow) {
-        console.warn(
-          `🔌 ${branch.name}: environment ${
-            currentStatus === 'starting' ? 'never became reachable' : 'unreachable'
-          } (${message}) - marking 'error' so it can be started again`
-        );
-      }
-
-      const newHealthStatus = 'unhealthy';
-
-      // Only log if health status changed or if this is an error
-      if (previousHealthStatus !== newHealthStatus) {
-        console.log(
-          `🏥 Health status changed for ${branch.name}: ${previousHealthStatus || 'unknown'} → ${newHealthStatus} (${message})`
-        );
-      }
-
-      const shouldDemote = shouldDemoteOnThrow;
-
-      return await this.updateEnvironment(
-        id,
-        {
-          ...(shouldDemote ? { status: 'error' as const } : {}),
-          last_health_check: {
-            timestamp: new Date().toISOString(),
-            status: 'unhealthy',
-            message: shouldDemote ? `Environment unreachable: ${message}` : message,
-            consecutive: decision.consecutive,
-          },
-        },
-        params
-      );
+      if (cancellationSignal?.aborted) return null;
+      return {
+        status: 'unhealthy',
+        message: timedOut ? 'Timeout' : error instanceof Error ? error.message : 'Unknown error',
+        recordWhileStarting: false,
+      };
+    } finally {
+      clearTimeout(timeout);
+      cancellationSignal?.removeEventListener('abort', cancel);
     }
-  }
-
-  /**
-   * Apply the shared transition rules to one observation.
-   *
-   * The streak comes from the PERSISTED previous observation rather than from
-   * daemon memory, so it survives a restart and means the same thing to the
-   * distributed monitor, which observes the same branch from another node.
-   */
-  private decideHealthTransition(
-    branch: Branch,
-    currentStatus: string | undefined,
-    observation: EnvironmentObservationStatus
-  ) {
-    return decideEnvironmentHealthTransition({
-      currentStatus,
-      observation,
-      previous: branch.environment_instance?.last_health_check,
-      probeIntervalMs: ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS,
-    });
   }
 
   /**
@@ -3021,7 +2852,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     await this.validateRenderedEnvironmentActions(snapshot);
     validateRenderedManagedEnvUrlFields({
-      health: snapshot.health,
       app: snapshot.app,
     });
 

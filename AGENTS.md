@@ -380,7 +380,7 @@ There is no catalog table and no ingestion job: the marketplace offers exactly
 what that file names, so adding a server is a pull request and removing one
 takes it off the shelf on the next deploy.
 
-The file lists ~50 entries across two keys. `entries:` are servers the public
+The file lists reviewed entries across two keys. `entries:` are servers the public
 [MCP registry](https://registry.modelcontextprotocol.io) publishes under exactly
 that `name`; `unpublished:` are vendor-run endpoints whose reverse-DNS name Agor
 inferred. The split is a curation record only — both lists are offered on one
@@ -390,7 +390,7 @@ written down, since parsing flattens the two.
 `name` is the identity. It is what an installed server records in
 `catalog_entry_name`, so renaming an entry orphans every install of it.
 
-The read path is one endpoint. `find` takes no query and returns all ~50 entries
+The read path is one endpoint. `find` takes no query and returns every entry
 at once; the Marketplace holds them and does its own searching, filtering,
 sorting and paging. So there is no server-side filter to add a case to —
 narrowing lives in `packages/core/src/mcp-catalog/query.ts`, which the browser
@@ -403,17 +403,72 @@ how connect turns a `catalog_key` into a URL and transport.
 Each entry states an `auth_type` (`none` / `oauth` / `credentials`), or omits it
 where nobody has established the answer. It decides what the marketplace tells a
 user before they press Connect, and nothing else: `mcp-catalog-connect.ts`
-probes the endpoint on every connect, whatever the entry says, and installs only
-on a valid JSON-RPC `initialize` result. Servers the probe finds behind an
-account are refused — there is no credential model for them yet. When the probe
-contradicts the entry, the daemon logs it at `warn` with the stated and probed
-values; that log is the only thing that can catch a stale `auth_type`, because
-nothing else compares the file against the servers it describes.
+probes the endpoint on every connect, whatever the entry says. A valid JSON-RPC
+`initialize` result installs the server open. An OAuth challenge installs a
+`per_user` OAuth row; a non-OAuth challenge installs only when the entry carries
+a reviewed bearer-credential recipe and the caller supplies a key that passes a
+second `initialize`. When the probe contradicts the entry, the daemon logs it at
+`warn` with the stated and probed values; that log is the only thing that can
+catch a stale `auth_type`, because nothing else compares the file against the
+servers it describes.
 
-That probe goes through `createPinnedFetch`
+OAuth entries that omit `oauth.compatibility_mode` use an internal,
+non-persistable `marketplace` profile. This is not a general relaxed default: it
+is derived only while the saved row remains a canonical install of the current
+OAuth catalog entry (provenance, endpoint, transport, auth prescription, and
+empty custom headers all match). It admits only the reviewed interoperability
+differences implemented in `oauth-mcp-transport.ts`, while retaining
+same-origin bounds on those fallbacks, resource/issuer binding, the exact MCP
+URL as the RFC 8707 resource, PKCE S256, and callback issuer validation. An
+explicit saved-row `strict` or `legacy` mode always wins. The catalog explicitly
+keeps Monday, Cloudflare, and ClickUp on `strict`; an edited/imported install, a
+removed entry, or any catalog configuration drift falls back to `strict`.
+GitHub, Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi were removed
+from the shelf because the review could not establish a safely bound
+client-registration or issuer path; do not re-add one merely because its
+endpoint still challenges for OAuth.
+
+An endpoint the probe finds behind a non-OAuth challenge is installed with a key
+the user pastes into the marketplace drawer. The key never goes in
+`curated.yaml` — that file is checked in, public, and byte-identical for every
+tenant. It arrives as `bearer_token` on the connect request, the only field on that
+request that is the caller's rather than the catalog's: URL, transport, and the
+kind of credential still derive server-side from the entry, so a client holding
+a key cannot name where it is sent. It is stored as `auth.token` on the
+installed `mcp_servers` row, which is where every bearer credential in Agor
+lives and therefore what `redactMCPAuthSecrets` already covers on read. Before
+the authenticated probe, Connect durably claims the caller's generation for
+that catalog install so an older concurrent request cannot later overwrite a
+newer key. It then tries the key against the endpoint (`probeRemoteBearerToken`)
+and writes the server/session only after acceptance, rather than installing a
+server whose every tool would fail. Reuse of a row that
+keeps a secret in its own columns is restricted to the row's owner, so two users
+connecting the same entry get two rows and two keys; re-connecting with a new
+key rotates the one row rather than leaving the old key live beside it.
+
+OAuth Connect also looks for a credential the caller already holds. It may reuse
+or refresh a live `per_user` grant only when the row is a credential peer for the
+same catalog endpoint, requested scope, compatibility/DCR/client policy, and
+recorded protected resource. Shared grants, another user's grants, routing
+overrides, custom headers, stale bindings, and mismatched resources are not
+eligible. This can reuse a user-configured peer without converting its
+provenance or lifecycle into a catalog install.
+
+Every successful Connect creates and attaches a new idle session, then the UI
+navigates there. Open, bearer-key, and already-authenticated OAuth results stage
+the entry's starter prompt. A fresh OAuth result with no reusable grant does
+not: the session instead shows the dismissible disconnected notice and warning
+MCP badge, and the user opens the badge and activates the server pill to sign
+in. The OAuth window is deliberately not auto-started after navigation because
+the navigation and async start request no longer have the transient user
+activation browsers require for a reliable popup.
+
+Both probes go through `createPinnedFetch`
 (`packages/core/src/utils/pinned-fetch.ts`), which resolves the hostname,
-refuses it unless every resolved address is public, and connects to the address
-it checked. It is one request, to the entry's URL and nowhere else.
+refuses it unless every resolved address is public, connects to the address it
+checked, and does not follow redirects. Each is one request, to the entry's URL
+and nowhere else — which is what keeps the authenticated probe from handing the
+key to whatever a redirect names.
 
 The `mcp_catalog:` config section is retired. It stays loadable — an
 unrecognized top-level key throws, so removing it would stop the daemon of

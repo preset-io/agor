@@ -6,6 +6,8 @@
  *   `SHORT_ID_LENGTH` chars via `shortId(id)`; collision-safe even when
  *   parents fan out children in the same millisecond)
  * - childSessionFullId: Full UUIDv7 of child session
+ * - childSessionTitle: Title of the completed child session (falls back to
+ *   the empty string when the child session has no title set)
  * - childTaskId: Short ID of completed task (same shape)
  * - childTaskFullId: Full UUIDv7 of task
  * - parentSessionId: Short ID of callback target session (alias: callbackSessionId)
@@ -43,6 +45,7 @@ Review what went wrong and decide whether to retry or take a different approach.
 export interface ChildCompletionContext {
   childSessionId: string; // Canonical short ID (shortId(childSession.session_id))
   childSessionFullId: string; // Full UUIDv7
+  childSessionTitle: string; // Title of the completed child session (empty string if unset)
   childTaskId: string; // Canonical short ID
   childTaskFullId: string; // Full UUIDv7 of task
   parentSessionId: string; // Canonical short ID of callback target (kept for backward compat)

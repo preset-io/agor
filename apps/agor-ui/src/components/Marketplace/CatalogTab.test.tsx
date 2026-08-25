@@ -4,6 +4,7 @@ import { sessionPath } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getPromptDraft } from '../../utils/promptDrafts';
 import { CatalogTab } from './CatalogTab';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -14,6 +15,7 @@ vi.mock('react-router-dom', async () => {
 });
 
 const SESSION_ID = '019fd25a-7065-75f8-b6e6-f1963f9817d6';
+const CURRENT_USER_ID = '019fd25a-7065-75f8-b6e6-f1963f9817d7';
 
 const DEEPWIKI = {
   name: 'com.deepwiki/mcp',
@@ -89,7 +91,7 @@ function makeClient(): AgorClient {
 function renderTab({ connected = true }: { connected?: boolean } = {}) {
   return render(
     <MemoryRouter>
-      <CatalogTab client={makeClient()} connected={connected} />
+      <CatalogTab client={makeClient()} connected={connected} currentUserId={CURRENT_USER_ID} />
     </MemoryRouter>
   );
 }
@@ -265,7 +267,6 @@ describe('catalog browsing', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
       target: { value: 'deep' },
     });
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
 
     await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
     expect(queryCard('DeepWiki')).toBeInTheDocument();
@@ -278,40 +279,26 @@ describe('catalog browsing', () => {
     await findCard('DeepWiki');
     expect(screen.queryByText(/servers match/)).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
-    expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search MCP servers' }), {
+      target: { value: 'deep' },
+    });
+    expect(await screen.findByText('1 of 2 servers match')).toBeInTheDocument();
   });
 
-  it('keeps servers with no stated auth when hiding account-only ones', async () => {
-    // An entry the file says nothing about is still worth offering: connecting
-    // checks the endpoint. A filter that demanded `none` would hide it while
-    // the card beside it called it connectable.
+  it('offers every entry whatever auth it states, and no longer filters on it', async () => {
+    // The "Hide key-only" switch is gone with the thing it hid: an entry
+    // needing an API key is installed from the drawer like any other, so there
+    // is no unusable subset left for a filter to remove. A switch that cannot
+    // change the result set reads as a broken filter.
     catalogRows = [
-      { ...DEEPWIKI, auth_type: 'unknown' },
+      { ...DEEPWIKI, auth_type: 'credentials' },
       { ...LINEAR, auth_type: 'unknown' },
     ];
     renderTab();
-    await findCard('DeepWiki');
 
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
-
-    expect(await screen.findByText('2 of 2 servers match')).toBeInTheDocument();
-    expect(queryCard('DeepWiki')).toBeInTheDocument();
-    expect(screen.queryByText('No servers match')).not.toBeInTheDocument();
-  });
-
-  it('drops servers known to need an API key', async () => {
-    catalogRows = [
-      { ...DEEPWIKI, auth_type: 'unknown' },
-      { ...LINEAR, auth_type: 'credentials' },
-    ];
-    renderTab();
-    await findCard('Linear');
-
-    fireEvent.click(screen.getByRole('switch', { name: /known to need an API key/i }));
-
-    await waitFor(() => expect(queryCard('Linear')).not.toBeInTheDocument());
-    expect(queryCard('DeepWiki')).toBeInTheDocument();
+    expect(await findCard('DeepWiki')).toBeInTheDocument();
+    expect(queryCard('Linear')).toBeInTheDocument();
+    expect(screen.queryByRole('switch', { name: /API key/i })).not.toBeInTheDocument();
   });
 
   it('narrows on the keystroke, with no debounce and no round trip', async () => {
@@ -422,19 +409,18 @@ describe('connect', () => {
     await waitFor(() =>
       expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID))
     );
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBe(DEEPWIKI.starter_prompt);
+    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe(DEEPWIKI.starter_prompt);
   });
 
   /**
-   * 42 of the 48 catalog entries are OAuth, and an OAuth install lands with no
-   * credentials — the row is written before anyone signs in. A starter prompt
-   * is written to exercise the server it ships with, so arming the composer
-   * with one here means the modal outcome of pressing Connect is a loaded
-   * prompt whose only result is a tool-less answer.
+   * A new OAuth install with no reusable grant lands without credentials. A
+   * starter prompt is written to exercise the server it ships with, so arming
+   * the composer with one here means pressing Connect produces a loaded prompt
+   * whose only result is a tool-less answer.
    *
    * These pin the split. Landing in the session is unchanged: the session is
-   * where the sign-in lives (the alert above the composer, the red MCP badge,
-   * the pill that starts OAuth on click). Only the loaded gun is withheld.
+   * where the sign-in lives (the notice above the composer, the warning MCP badge,
+   * the pill that starts OAuth on activation). Only the loaded gun is withheld.
    */
   async function connectAndLand(mcpServer: Record<string, unknown>) {
     connectImpl = async () => ({
@@ -456,7 +442,7 @@ describe('connect', () => {
   it('does not arm the composer when the install still needs signing in', async () => {
     await connectAndLand({ mcp_server_id: 'server-1', auth: { type: 'oauth' } });
 
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe('');
   });
 
   it('still lands in the session so the sign-in is reachable', async () => {
@@ -481,7 +467,7 @@ describe('connect', () => {
       },
     });
 
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBe(DEEPWIKI.starter_prompt);
+    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe(DEEPWIKI.starter_prompt);
   });
 
   it('withholds the prompt when the token the install carries has expired', async () => {
@@ -494,7 +480,7 @@ describe('connect', () => {
       },
     });
 
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe('');
   });
 
   it('keeps the drawer open and reports why when connect fails', async () => {

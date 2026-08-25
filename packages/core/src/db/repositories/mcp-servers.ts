@@ -21,9 +21,24 @@ import {
   normalizeMCPCustomHeaders,
   restoreRedactedMCPCustomHeaders,
 } from '../../tools/mcp/http-headers';
+import { assertPublicMCPOAuthCompatibilityMode } from '../../types/mcp';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
-import { type MCPServerInsert, type MCPServerRow, mcpServers } from '../schema';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
+import {
+  appVariables,
+  type MCPServerInsert,
+  type MCPServerRow,
+  mcpServers,
+  sessionMcpServers,
+} from '../schema';
+import { AppVariableRepository } from './app-variables';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -40,6 +55,22 @@ export class MCPServerRepository
   implements BaseRepository<MCPServer, CreateMCPServerInput | UpdateMCPServerInput>
 {
   constructor(private db: Database) {}
+
+  private static readonly CATALOG_CONNECT_GENERATION_NAMESPACE = 'mcp-catalog-connect-generation';
+
+  static catalogConnectGenerationKey(ownerUserId: string, catalogEntryName: string): string {
+    return JSON.stringify([ownerUserId, catalogEntryName]);
+  }
+
+  async claimCatalogConnectGeneration(
+    ownerUserId: string,
+    catalogEntryName: string
+  ): Promise<number> {
+    return new AppVariableRepository(this.db).incrementPlainInteger(
+      MCPServerRepository.CATALOG_CONNECT_GENERATION_NAMESPACE,
+      MCPServerRepository.catalogConnectGenerationKey(ownerUserId, catalogEntryName)
+    );
+  }
 
   /**
    * Convert database row to MCPServer type
@@ -59,7 +90,7 @@ export class MCPServerRepository
       display_name: row.data.display_name,
       description: row.data.description,
       import_path: row.data.import_path,
-      catalog_entry_name: row.data.catalog_entry_name,
+      catalog_entry_name: row.catalog_entry_name ?? row.data.catalog_entry_name,
 
       // Transport config
       command: row.data.command,
@@ -86,6 +117,7 @@ export class MCPServerRepository
    * Convert MCPServer to database insert format
    */
   private mcpServerToInsert(data: CreateMCPServerInput | Partial<MCPServer>): MCPServerInsert {
+    assertPublicMCPOAuthCompatibilityMode('auth' in data ? data.auth : undefined);
     const now = Date.now();
     const serverId =
       'mcp_server_id' in data && data.mcp_server_id ? data.mcp_server_id : generateId();
@@ -107,6 +139,7 @@ export class MCPServerRepository
       scope: data.scope!,
       enabled: data.enabled ?? true,
       source: data.source ?? 'user',
+      catalog_entry_name: data.catalog_entry_name ?? null,
 
       // Scope foreign key (only for global scope)
       owner_user_id: data.owner_user_id ?? null,
@@ -227,6 +260,9 @@ export class MCPServerRepository
       if (filters?.source) {
         conditions.push(eq(mcpServers.source, filters.source));
       }
+      if (filters?.catalogEntryName) {
+        conditions.push(eq(mcpServers.catalog_entry_name, filters.catalogEntryName));
+      }
 
       if (filters?.usableByUserId) {
         conditions.push(
@@ -321,6 +357,84 @@ export class MCPServerRepository
   }
 
   /**
+   * Apply a catalog reconnect only if it is still the newest request begun for
+   * this tenant/owner/catalog identity. The generation row is locked through
+   * the credential update, so a newer request cannot claim its generation
+   * between the check and the write.
+   */
+  async updateIfCatalogConnectGeneration(
+    id: string,
+    ownerUserId: string,
+    catalogEntryName: string,
+    expectedGeneration: number,
+    updates: UpdateMCPServerInput
+  ): Promise<MCPServer | null> {
+    const fullId = await this.resolveId(id);
+    const key = MCPServerRepository.catalogConnectGenerationKey(ownerUserId, catalogEntryName);
+    return runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        const generationWhere = and(
+          eq(appVariables.namespace, MCPServerRepository.CATALOG_CONNECT_GENERATION_NAMESPACE),
+          eq(appVariables.key, key)
+        );
+        await lockRowForUpdate(tx, this.db, appVariables, generationWhere!);
+        const generationRow = await select(tx).from(appVariables).where(generationWhere).one();
+        if (Number(generationRow?.value_text) !== expectedGeneration) return null;
+
+        await lockRowForUpdate(tx, this.db, mcpServers, eq(mcpServers.mcp_server_id, fullId));
+        const row = await select(tx)
+          .from(mcpServers)
+          .where(eq(mcpServers.mcp_server_id, fullId))
+          .one();
+        if (!row) throw new EntityNotFoundError('MCPServer', id);
+        const current = this.rowToMCPServer(row as MCPServerRow);
+        if (
+          current.source !== 'catalog' ||
+          current.owner_user_id !== ownerUserId ||
+          current.catalog_entry_name !== catalogEntryName
+        ) {
+          throw new RepositoryError('Catalog connect generation does not match the install');
+        }
+        const merged = { ...current, ...updates };
+        if ('headers' in updates) {
+          merged.headers = restoreRedactedMCPCustomHeaders({
+            current: current.headers,
+            next: updates.headers,
+          });
+        }
+        if ('auth' in updates) {
+          merged.auth = restoreRedactedMCPAuthSecrets({
+            current: current.auth,
+            next: updates.auth,
+          });
+        }
+        if ('env' in updates) {
+          merged.env = restoreRedactedMCPEnvSecrets({ current: current.env, next: updates.env });
+        }
+        const insertData = this.mcpServerToInsert(merged);
+        await update(tx, mcpServers)
+          .set({
+            enabled: insertData.enabled,
+            scope: insertData.scope,
+            transport: insertData.transport,
+            updated_at: new Date(),
+            data: insertData.data,
+          })
+          .where(eq(mcpServers.mcp_server_id, fullId))
+          .run();
+        const updated = await select(tx)
+          .from(mcpServers)
+          .where(eq(mcpServers.mcp_server_id, fullId))
+          .one();
+        if (!updated) throw new RepositoryError('Failed to retrieve updated MCP server');
+        return this.rowToMCPServer(updated as MCPServerRow);
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  /**
    * Delete MCP server by ID
    */
   async delete(id: string): Promise<void> {
@@ -338,6 +452,50 @@ export class MCPServerRepository
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
         `Failed to delete MCP server: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Delete an install only while no session has adopted it.
+   *
+   * Serialize cleanup against attachment through the parent row. PostgreSQL
+   * attachment inserts take a foreign-key key-share lock on that row. Taking
+   * FOR UPDATE here therefore waits for an already-running adoption, and the
+   * following SELECT is a new READ COMMITTED statement with a fresh snapshot.
+   * This ordering matters: a single DELETE ... NOT EXISTS statement takes its
+   * snapshot before a lock wait and can miss the attachment that just committed.
+   *
+   * SQLite starts an IMMEDIATE transaction instead. That acquires the writer
+   * reservation before the liveness read, so an attachment either commits
+   * first and is observed or starts only after cleanup has completed.
+   */
+  async deleteIfUnattached(id: string): Promise<boolean> {
+    try {
+      const fullId = await this.resolveId(id);
+      return await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await lockRowForUpdate(tx, this.db, mcpServers, eq(mcpServers.mcp_server_id, fullId));
+          const attachment = await select(tx)
+            .from(sessionMcpServers)
+            .where(eq(sessionMcpServers.mcp_server_id, fullId))
+            .limit(1)
+            .one();
+          if (attachment) return false;
+
+          const result = await deleteFrom(tx, mcpServers)
+            .where(eq(mcpServers.mcp_server_id, fullId))
+            .run();
+          return result.rowsAffected > 0;
+        },
+        { sqliteImmediate: true }
+      );
+    } catch (error) {
+      if (error instanceof EntityNotFoundError) return false;
+      throw new RepositoryError(
+        `Failed to delete unattached MCP server: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

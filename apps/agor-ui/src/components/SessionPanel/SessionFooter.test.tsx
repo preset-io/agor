@@ -3,6 +3,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  MCPServer,
   PermissionMode,
   Session,
 } from '@agor-live/client';
@@ -264,8 +265,11 @@ describe('SessionFooter', () => {
 
   it('MCP chip shows 0 count when no MCP servers are attached', () => {
     render(<SessionFooter {...baseProps} sessionMcpServerIds={[]} />, { wrapper: Wrapper });
-    const chip = screen.getByTitle(/No MCP servers attached/);
+    const chip = screen.getByRole('button', {
+      name: 'MCP servers. No MCP servers attached. Open to add or change MCP servers.',
+    });
     expect(chip).toBeInTheDocument();
+    expect(chip.tagName).toBe('BUTTON');
     expect(chip.textContent).toContain('0');
   });
 
@@ -277,6 +281,59 @@ describe('SessionFooter', () => {
     const chip = screen.getByTitle(/3 MCP servers need attention/);
     expect(chip).toBeInTheDocument();
     expect(chip.textContent).toContain('3');
+  });
+
+  it('names the disconnected server in the MCP disclosure control', () => {
+    const oauthServer = {
+      mcp_server_id: 'oauth-server-id',
+      name: 'oauth-server',
+      display_name: 'OAuth Server',
+      transport: 'http',
+      scope: 'session',
+      enabled: true,
+      auth: { type: 'oauth' },
+    } as MCPServer;
+
+    render(
+      <SessionFooter
+        {...baseProps}
+        sessionMcpServerIds={[oauthServer.mcp_server_id]}
+        mcpServerById={new Map([[oauthServer.mcp_server_id, oauthServer]])}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    const disclosure = screen.getByRole('button', {
+      name: 'MCP servers. OAuth Server isn’t connected. Open to connect.',
+    });
+    act(() => disclosure.focus());
+    expect(disclosure).toHaveFocus();
+  });
+
+  it('exposes dialog popup state and restores disclosure focus when Escape dismisses it', () => {
+    render(<SessionFooter {...baseProps} client={{} as never} />, { wrapper: Wrapper });
+    const disclosure = screen.getByRole('button', {
+      name: 'MCP servers. No MCP servers attached. Open to add or change MCP servers.',
+    });
+
+    expect(disclosure).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    act(() => disclosure.focus());
+    fireEvent.click(disclosure);
+
+    const popup = screen.getByRole('dialog', { name: 'Session MCP servers' });
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(disclosure).toHaveAttribute('aria-controls', popup.id);
+    expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+    const selector = within(popup).getByRole('combobox');
+    act(() => selector.focus());
+    expect(selector).toHaveFocus();
+    fireEvent.keyDown(selector, { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog', { name: 'Session MCP servers' })).not.toBeInTheDocument();
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    expect(disclosure).toHaveFocus();
   });
 
   it('tones the MCP badge count as a warning (not an error) when servers need attention', () => {
@@ -330,7 +387,11 @@ describe('SessionFooter', () => {
       wrapper: Wrapper,
     });
 
-    fireEvent.click(screen.getByTitle(/No MCP servers attached/));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'MCP servers. No MCP servers attached. Open to add or change MCP servers.',
+      })
+    );
 
     expect(await screen.findByText('Session MCP servers')).toBeInTheDocument();
     expect(screen.queryByText('Open session settings')).not.toBeInTheDocument();
@@ -352,10 +413,42 @@ describe('SessionFooter', () => {
       { wrapper: Wrapper }
     );
     const notice = screen.getByTestId('mcp-disconnected-notice');
+    expect(notice).toHaveAttribute('role', 'status');
+    expect(notice).toHaveAttribute('aria-live', 'polite');
+    expect(notice).toHaveAttribute('aria-atomic', 'true');
     expect(notice).toHaveTextContent(/2 MCP servers aren.t connected/);
+    expect(notice).toHaveTextContent(/Open the MCP badge/);
     expect(
       screen.getByRole('button', { name: 'Dismiss MCP connection notice' })
     ).toBeInTheDocument();
+  });
+
+  it('reveals the advertised MCP recovery badge while Tools is unpinned', () => {
+    const disconnected = {
+      ...mcpServer('a', 'Alpha'),
+      transport: 'http',
+      scope: 'session',
+      enabled: true,
+      auth: { type: 'oauth' },
+    } as MCPServer;
+    localStorage.setItem('agor-footer-prefs', JSON.stringify({ pinnedChips: ['model'] }));
+
+    render(
+      <SessionFooter
+        {...baseProps}
+        sessionMcpServerIds={[disconnected.mcp_server_id]}
+        unauthedMcpServers={[disconnected]}
+        mcpServerById={new Map([[disconnected.mcp_server_id, disconnected]])}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent(/Open the MCP badge/);
+    const disclosure = screen.getByRole('button', {
+      name: 'MCP servers. Alpha isn’t connected. Open to connect.',
+    });
+    fireEvent.click(disclosure);
+    expect(screen.getByRole('dialog', { name: 'Session MCP servers' })).toBeInTheDocument();
   });
 
   it('hides the notice after dismissal and keeps it hidden across re-renders', () => {

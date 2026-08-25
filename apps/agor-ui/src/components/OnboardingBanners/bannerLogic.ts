@@ -15,7 +15,7 @@ import type {
   TenantAgenticToolSettings,
   User,
 } from '@agor-live/client';
-import { PROVIDER_CREDENTIAL_FIELDS } from '@agor-live/client';
+import { getUserPrimaryAgenticTool, PROVIDER_CREDENTIAL_FIELDS } from '@agor-live/client';
 
 const CLAUDE_CREDENTIAL_FIELDS = [
   'ANTHROPIC_API_KEY',
@@ -91,13 +91,18 @@ function onboardingSelectedAgent(user: User | null | undefined): AgenticToolName
 }
 
 /**
- * The single tool to probe for a given user: a stored key's tool, else the
- * onboarding-selected default, else Claude Code, mapped to its probe target.
+ * The single tool to probe for a given user: their explicit primary tool, a
+ * stored key's tool, the onboarding-selected default, then Claude Code.
  * Always resolves so the probe can run even when no DB key is present (the
  * false-positive case).
  */
 export function resolveProbeAgent(user: User | null | undefined): AgenticToolName {
-  return primaryAgentForUser(user) ?? onboardingSelectedAgent(user) ?? 'claude-code';
+  return (
+    getUserPrimaryAgenticTool(user) ??
+    primaryAgentForUser(user) ??
+    onboardingSelectedAgent(user) ??
+    'claude-code'
+  );
 }
 
 /** Pick one enabled, policy-governed provider for the persistent auth banner. */

@@ -42,6 +42,7 @@ import type {
   TaskPendingDispatchStatus,
 } from '@agor/core/types';
 import type { DaemonMetrics } from './metrics/index.js';
+import type { EnvironmentHealthCheckOptions } from './services/branches.js';
 import type {
   ExecuteTaskData,
   SessionArchiveOptions,
@@ -225,6 +226,7 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
       createBranch?: boolean;
       pullLatest?: boolean;
       sourceBranch?: string;
+      sourceRemoteUrl?: string;
       issue_url?: string;
       pull_request_url?: string;
       boardId: string;
@@ -334,7 +336,11 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
     data: { variant?: string } | undefined,
     params?: FeathersParams
   ): Promise<Branch>;
-  checkHealth(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  checkHealth(
+    id: BranchID,
+    params?: FeathersParams,
+    internalOptions?: EnvironmentHealthCheckOptions
+  ): Promise<Branch>;
   getLogs(
     id: BranchID,
     params?: FeathersParams

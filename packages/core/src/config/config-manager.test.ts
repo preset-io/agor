@@ -11,6 +11,7 @@ import {
   __resetConfigCacheForTests,
   AtomicConfigPublicationUnsupportedError,
   assertValidEffectiveExecutionConfig,
+  assertValidRawConfig,
   ConfigAlreadyExistsError,
   createInitialConfig,
   ensureBranchCloneDepthAllowed,
@@ -94,6 +95,7 @@ describe('getDefaultConfig', () => {
     expect(defaults.daemon?.host).toBe('localhost');
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
+    expect(defaults.identity?.password_policy).toBe('secure');
     expect(defaults.analytics?.enabled).toBe(false);
     expect(defaults.metrics?.statsd).toEqual({
       enabled: false,
@@ -106,6 +108,14 @@ describe('getDefaultConfig', () => {
 });
 
 describe('resolveEffectiveConfig', () => {
+  it('keeps the fail-safe password profile out of environment-variable override space', () => {
+    const resolved = resolveEffectiveConfig(
+      { identity: { password_policy: 'secure' } },
+      { AGOR_PASSWORD_POLICY: 'development' }
+    );
+    expect(resolved.identity?.password_policy).toBe('secure');
+  });
+
   it('materializes defaults and supported environment overrides without mutating input', () => {
     const input: AgorConfig = { daemon: { host: 'yaml-host', port: 1234 } };
     const resolved = resolveEffectiveConfig(input, {
@@ -132,6 +142,34 @@ describe('resolveEffectiveConfig', () => {
       { AGOR_DATA_HOME: '/from-environment' }
     );
     expect(resolved.paths?.data_home).toBe('/from-environment');
+  });
+
+  it('projects the replica-local executor response origin without mutating YAML', () => {
+    const input: AgorConfig = {
+      execution: {
+        executor_response: {
+          max_response_bytes: 2 * 1024 * 1024,
+          timeout_ms: {
+            default: 300_000,
+            by_command: { 'branch.files.read': 60_000 },
+          },
+          origin_url: 'https://yaml-daemon.internal',
+        },
+      },
+    };
+    const resolved = resolveEffectiveConfig(input, {
+      AGOR_EXECUTOR_RESPONSE_ORIGIN_URL: 'http://daemon-2.agor.svc:3030',
+    });
+
+    expect(resolved.execution?.executor_response).toEqual({
+      max_response_bytes: 2 * 1024 * 1024,
+      timeout_ms: {
+        default: 300_000,
+        by_command: { 'branch.files.read': 60_000 },
+      },
+      origin_url: 'http://daemon-2.agor.svc:3030',
+    });
+    expect(input.execution?.executor_response?.origin_url).toBe('https://yaml-daemon.internal');
   });
 
   it('materializes StatsD YAML and strict environment overrides', () => {
@@ -283,6 +321,60 @@ describe('assertValidEffectiveExecutionConfig', () => {
     }
   );
 
+  it('requires templated execution to declare request-response support at startup', () => {
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: { executor_command_template: 'launcher -- {command}' },
+      })
+    ).toThrow(/requires request-mode response support/);
+
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: {
+          executor_command_template: 'launcher -- {command}',
+          executor_response: {
+            external_protocol: 'executor-response-v1',
+            origin_url: 'http://daemon-0.internal:3030',
+          },
+        },
+      })
+    ).not.toThrow();
+  });
+
+  it('boots the shared-yaml/per-replica-env executor response split', () => {
+    // Regression: one config.yaml declares external_protocol for every
+    // replica while the exact origin arrives only via
+    // AGOR_EXECUTOR_RESPONSE_ORIGIN_URL (Kubernetes downward-API Pod IP). The
+    // raw validation must accept it, and after environment projection the
+    // effective config must pass with the env-supplied origin.
+    const rawYamlForm: AgorConfig = {
+      execution: {
+        executor_command_template: 'launcher -- {command}',
+        executor_response: { external_protocol: 'executor-response-v1' },
+      },
+    };
+    expect(() => assertValidRawConfig(rawYamlForm)).not.toThrow();
+
+    const resolved = resolveEffectiveConfig(rawYamlForm, {
+      AGOR_EXECUTOR_RESPONSE_ORIGIN_URL: 'http://10.35.69.131:3030',
+    });
+    expect(resolved.execution?.executor_response?.origin_url).toBe('http://10.35.69.131:3030');
+    expect(() => assertValidEffectiveExecutionConfig(resolved)).not.toThrow();
+  });
+
+  it('still requires an origin for the declared protocol on the effective config', () => {
+    // Without an origin from YAML or environment, the declared protocol is
+    // unusable; the effective-config gate keeps the raw parser's former
+    // guarantee, one projection step later.
+    expect(() =>
+      assertValidEffectiveExecutionConfig({
+        execution: {
+          executor_response: { external_protocol: 'executor-response-v1' },
+        },
+      })
+    ).toThrow(/external_protocol requires an exact origin_url/);
+  });
+
   it('rejects sandboxing combined with an external executor template', () => {
     expect(() =>
       assertValidEffectiveExecutionConfig({
@@ -414,6 +506,73 @@ describe('loadConfig', () => {
     );
     __resetConfigCacheForTests();
     await expect(loadConfig()).rejects.toThrow(/preserve_canonical_home_alias must be a boolean/);
+  });
+
+  it('accepts branch_storage.borrow_base_objects and rejects a non-boolean value', async () => {
+    // The escape hatch for deployments whose executors cannot see the
+    // daemon's repos/ mount; must survive the strict unknown-key sweep.
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      'execution:\n  branch_storage:\n    borrow_base_objects: false\n',
+      'utf-8'
+    );
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      execution: { branch_storage: { borrow_base_objects: false } },
+    });
+
+    await fs.writeFile(
+      configPath,
+      'execution:\n  branch_storage:\n    borrow_base_objects: "false"\n',
+      'utf-8'
+    );
+    __resetConfigCacheForTests();
+    await expect(loadConfig()).rejects.toThrow(
+      /execution\.branch_storage\.borrow_base_objects must be a boolean/
+    );
+  });
+
+  describe('AGOR_UNKNOWN_CONFIG_KEYS forward-compatibility policy', () => {
+    const writeConfigWithFutureKey = async () => {
+      const agorDir = path.join(tempDir, '.agor');
+      await fs.mkdir(agorDir, { recursive: true });
+      // A key an older daemon would not recognize (as if written by a newer one).
+      await fs.writeFile(
+        path.join(agorDir, 'config.yaml'),
+        'execution:\n  a_future_additive_key: true\n',
+        'utf-8'
+      );
+    };
+
+    afterEach(() => {
+      delete process.env.AGOR_UNKNOWN_CONFIG_KEYS;
+    });
+
+    it('rejects unknown keys by default (fails closed, catches typos)', async () => {
+      await writeConfigWithFutureKey();
+      __resetConfigCacheForTests();
+      await expect(loadConfig()).rejects.toThrow(/execution\.a_future_additive_key/);
+    });
+
+    it('tolerates unknown keys and warns when set to warn', async () => {
+      process.env.AGOR_UNKNOWN_CONFIG_KEYS = 'warn';
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      await writeConfigWithFutureKey();
+      __resetConfigCacheForTests();
+
+      await expect(loadConfig()).resolves.toBeTruthy();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('execution.a_future_additive_key'));
+    });
+
+    it('rejects an invalid policy value', async () => {
+      process.env.AGOR_UNKNOWN_CONFIG_KEYS = 'lenient';
+      await writeConfigWithFutureKey();
+      __resetConfigCacheForTests();
+      await expect(loadConfig()).rejects.toThrow(/AGOR_UNKNOWN_CONFIG_KEYS must be/);
+    });
   });
 
   it('boots with a full mcp_catalog block from before the catalog moved into the repository', async () => {
@@ -757,11 +916,17 @@ describe('loadConfig', () => {
     await fs.mkdir(agorDir, { recursive: true });
     await fs.writeFile(
       configPath,
-      yaml.dump({ daemon: { surprise: true }, execution: { branch_storage: { mystery: 1 } } }),
+      yaml.dump({
+        daemon: { surprise: true },
+        execution: {
+          branch_storage: { mystery: 1 },
+          executor_response: { timeout_ms: { unexpected: 1 } },
+        },
+      }),
       'utf-8'
     );
     await expect(loadConfig()).rejects.toThrow(
-      /daemon\.surprise.*execution\.branch_storage\.mystery/
+      /daemon\.surprise.*execution\.executor_response\.timeout_ms\.unexpected.*execution\.branch_storage\.mystery/
     );
   });
 
@@ -812,6 +977,84 @@ describe('loadConfig', () => {
     expect(loaded.external_launch?.login_redirect_url).toBeUndefined();
   });
 
+  it('loads the explicit external identity authority contract', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({
+        identity: {
+          user_lifecycle: 'external',
+          role_authority: 'claims',
+          local_auth: 'disabled',
+          external: { provider: 'external_launch', provisioning: 'jit' },
+        },
+      }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      identity: {
+        user_lifecycle: 'external',
+        role_authority: 'claims',
+        local_auth: 'disabled',
+        external: { provider: 'external_launch', provisioning: 'jit' },
+      },
+    });
+  });
+
+  it('accepts only the named secure password profile and fails closed on weak profiles', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump({ identity: { password_policy: 'secure' } }), 'utf-8');
+    await expect(loadConfig()).resolves.toMatchObject({
+      identity: { password_policy: 'secure' },
+    });
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ identity: { password_policy: 'development' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/identity\.password_policy must be 'secure'/);
+  });
+
+  it('rejects unknown identity keys and unsupported authority values', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ identity: { user_lifecycle: 'remote', surprise: true } }),
+      'utf-8'
+    );
+
+    await expect(loadConfig()).rejects.toThrow(/identity\.user_lifecycle|identity\.surprise/);
+  });
+
+  it('rejects scalar identity and external launch sections', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+
+    await fs.writeFile(configPath, 'identity: external\n', 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/identity must be an object/);
+
+    await fs.writeFile(configPath, 'external_launch: enabled\n', 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/external_launch must be an object/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(configPath, 'identity: 2026-08-20\n', 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/identity must be an object/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(configPath, 'external_launch: 2026-08-20\n', 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/external_launch must be an object/);
+  });
+
   it('accepts an HTTP(S) external launch login redirect URL', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
@@ -829,7 +1072,8 @@ describe('loadConfig', () => {
     );
 
     const loaded = await loadConfig();
-    expect(loaded.external_launch?.login_redirect_url).toBe('https://workspace.example.com/open');
+    // Validation is non-mutating; startup's retained provider owns normalization.
+    expect(loaded.external_launch?.login_redirect_url).toBe(' https://workspace.example.com/open ');
   });
 
   it('rejects a non-HTTP(S) external launch login redirect URL', async () => {
@@ -1388,11 +1632,16 @@ describe('initConfig', () => {
     expect(await fs.readdir(path.dirname(getConfigPath()))).toEqual([]);
   });
 
-  it('preserves existing permission bits during an explicit atomic rewrite', async () => {
+  it('preserves existing permission bits during an explicit atomic rewrite under any umask', async () => {
     await createInitialConfig({ daemon: { port: 3001 } });
     const configPath = getConfigPath();
     await fs.chmod(configPath, 0o640);
-    await rewriteConfigForTests({ daemon: { port: 3002 } });
+    const previousUmask = process.platform === 'win32' ? undefined : process.umask(0o077);
+    try {
+      await rewriteConfigForTests({ daemon: { port: 3002 } });
+    } finally {
+      if (previousUmask !== undefined) process.umask(previousUmask);
+    }
     expect((await fs.stat(configPath)).mode & 0o777).toBe(0o640);
     expect((await loadConfig()).daemon?.port).toBe(3002);
   });
@@ -1948,6 +2197,29 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     const resolved = resolveBranchStorageConfig();
     expect(resolved.defaultMode).toBe('clone');
     expect(resolved.allowedModes).toEqual(['worktree', 'clone']);
+  });
+
+  it('can resolve the daemon-owned effective config without consulting ambient files', () => {
+    const effectiveConfig: AgorConfig = {
+      execution: {
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['clone'],
+          allow_shallow_clones: false,
+        },
+      },
+    };
+
+    expect(resolveBranchStorageConfig(effectiveConfig)).toEqual({
+      defaultMode: 'clone',
+      allowedModes: ['clone'],
+      allowShallowClones: false,
+    });
+    expect(() => ensureBranchStorageModeAllowed('clone', effectiveConfig)).not.toThrow();
+    expect(() => ensureBranchStorageModeAllowed('worktree', effectiveConfig)).toThrow(
+      /not enabled/
+    );
+    expect(() => ensureBranchCloneDepthAllowed(1, effectiveConfig)).toThrow(/full clone/);
   });
 
   it('falls back default_mode into allowed_modes when operator misconfigures them', async () => {

@@ -19,6 +19,15 @@ describe('isDefiniteAuthFailure', () => {
     expect(isDefiniteAuthFailure({ className: 'not-authenticated' })).toBe(true);
   });
 
+  it('recognizes structured Socket.IO middleware error data', () => {
+    expect(
+      isDefiniteAuthFailure({
+        message: 'Invalid or expired authentication token',
+        data: { code: 401, className: 'not-authenticated' },
+      })
+    ).toBe(true);
+  });
+
   it('returns false for transient / unknown errors', () => {
     expect(isDefiniteAuthFailure({ code: 500 })).toBe(false);
     expect(isDefiniteAuthFailure({ code: 429 })).toBe(false);

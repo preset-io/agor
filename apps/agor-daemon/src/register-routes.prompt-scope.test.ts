@@ -5,13 +5,14 @@ import { describe, expect, it } from 'vitest';
 describe('prompt and widget transaction scopes', () => {
   const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
 
-  it('uses the long-route identity scope and short Task repository units for prompt admission', () => {
+  it('uses long-route admission and short Task repository units without a duplicate gate check', () => {
     const promptStart = source.indexOf("'/sessions/:id/prompt'");
     const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart - 100, promptEnd);
 
     expect(promptStart).toBeGreaterThan(0);
     expect(prompt).toContain('registerLongAuthenticatedRoute(');
+    expect(prompt).not.toContain('assertTenantWriteAdmission(');
     expect(prompt).toContain('bindRepositoryToTenantUnitOfWork(db, new TaskRepository(db))');
     expect(prompt).toContain(
       'isAgenticToolEnabledForTenant(db, promptTenantId, activeAgenticTool)'
@@ -36,7 +37,7 @@ describe('prompt and widget transaction scopes', () => {
     expect(rbacCheck).toBeLessThan(taskAdmission);
 
     // Internal/daemon callers (spawn-prompt forward, widgets, scheduler,
-    // gateway) and executor service accounts are exempt from the user-facing
+    // gateway) and explicit daemon service accounts are exempt from the user-facing
     // branch check.
     expect(prompt).toContain('const isInternalPrompt = !params.provider;');
     expect(prompt).toContain('_isServiceAccount');
@@ -61,6 +62,30 @@ describe('prompt and widget transaction scopes', () => {
     expect(prompt).toContain('normalizeMessageSource(data.messageSource, params)');
     expect(prompt).toContain('buildPromptTaskMetadata(data.metadata, messageSource, createdBy');
     expect(run).toContain('messageSource: normalizeMessageSource(data.messageSource, params)');
+  });
+
+  it('commits required session configuration before using ordinary prompt admission', () => {
+    const start = source.indexOf("'/sessions/:id/initialize'");
+    const end = source.indexOf('// Health endpoint', start);
+    const initialization = source.slice(start - 100, end);
+
+    expect(start).toBeGreaterThan(0);
+    expect(initialization).toContain('registerLongAuthenticatedRoute(');
+    expect(initialization).toContain('data?.expectedUserId !== callerId');
+    const scopedAuthorization = initialization.indexOf(
+      'await inCurrentTenantDatabaseScope(() =>\n          authorizeAndLoadSessionForMcpConfig(id, params)'
+    );
+    const stagedInitialization = initialization.indexOf('runSessionInitializationStages({');
+    expect(scopedAuthorization).toBeGreaterThan(0);
+    expect(stagedInitialization).toBeGreaterThan(scopedAuthorization);
+    const mcpSetup = initialization.indexOf('sessionMCPServersService.setServers(');
+    const envSetup = initialization.indexOf('sessionEnvSelectionsService.setAll(');
+    const promptAdmission = initialization.indexOf("service('/sessions/:id/prompt').create(");
+    expect(mcpSetup).toBeGreaterThan(0);
+    expect(envSetup).toBeGreaterThan(mcpSetup);
+    expect(promptAdmission).toBeGreaterThan(envSetup);
+    expect(initialization.indexOf("path: 'session-mcp-servers'")).toBeLessThan(promptAdmission);
+    expect(initialization.indexOf("path: 'session-env-selections'")).toBeLessThan(promptAdmission);
   });
 
   it('restores the queued user before hooked Session recovery under branch RBAC', () => {

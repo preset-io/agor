@@ -113,6 +113,7 @@ const buildHarness = (options: {
  * identity on the wire and only the token payload marks it as executor-scoped.
  */
 const executorAuthentication = (sessionId: string) => ({
+  strategy: 'jwt',
   payload: {
     type: 'executor-session',
     purpose: 'executor-task',
@@ -211,9 +212,9 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
     });
 
     /**
-     * The exemption is bound to the token's own session claim rather than to
-     * "an executor token is present", so it cannot be widened by registering
-     * this hook where `executorRuntimeScopeGuard` has not pinned the claims.
+     * The exemption is bound to the task token's own session claim rather than
+     * to "an executor credential is present", so a taskless command credential
+     * or a token for another task cannot widen it.
      */
     it('does not exempt an executor token scoped to another session', async () => {
       const harness = buildHarness({

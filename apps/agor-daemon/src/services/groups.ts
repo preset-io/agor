@@ -38,6 +38,7 @@ import {
   hasRoleAuthorityOver,
   ROLES,
 } from '@agor/core/types';
+import { requireAuthorizedBoardRoute } from '../utils/board-route-authorization.js';
 import { PERMISSION_RANK } from '../utils/branch-authorization.js';
 import { lockUserAuthorityMutation } from './user-authority-lock.js';
 
@@ -338,47 +339,12 @@ export function setupBranchGroupGrantsService(
   });
 }
 
-async function requireBoardGrantViewer(
-  db: TenantScopeAwareDatabase,
-  context: HookContext
-): Promise<HookContext> {
-  if (!context.params.provider) return context;
-  if (context.params.user?._isServiceAccount) return context;
-  const user = context.params.user;
-  if (!user) throw new NotAuthenticated('Authentication required');
-  if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
-  const boardId = context.params.route?.id;
-  if (!boardId) throw new BadRequest('Board ID is required');
-  const boardRepo = new BoardRepository(db);
-  if (!(await boardRepo.canView(boardId, user.user_id as UserID))) {
-    throw new Forbidden('You need board access to see board group grants');
-  }
-  return context;
-}
-
-async function requireBoardGrantManager(
-  db: TenantScopeAwareDatabase,
-  context: HookContext
-): Promise<HookContext> {
-  if (!context.params.provider) return context;
-  if (context.params.user?._isServiceAccount) return context;
-  const user = context.params.user;
-  if (!user) throw new NotAuthenticated('Authentication required');
-  if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
-  const boardId = context.params.route?.id;
-  if (!boardId) throw new BadRequest('Board ID is required');
-  const boardRepo = new BoardRepository(db);
-  if (!(await boardRepo.canMutate(boardId, user.user_id as UserID))) {
-    throw new Forbidden("You need board owner or board group 'all' access to manage board groups");
-  }
-  return context;
-}
-
 export function setupBoardGroupGrantsService(
   app: import('@agor/core/feathers').Application,
   db: TenantScopeAwareDatabase
 ) {
   const repo = new GroupRepository(db);
+  const boardRepo = new BoardRepository(db);
   app.use(
     'boards/:id/group-grants',
     {
@@ -438,10 +404,10 @@ export function setupBoardGroupGrantsService(
 
   app.service('boards/:id/group-grants').hooks({
     before: {
-      find: [(context: HookContext) => requireBoardGrantViewer(db, context)],
-      create: [(context: HookContext) => requireBoardGrantManager(db, context)],
-      patch: [(context: HookContext) => requireBoardGrantManager(db, context)],
-      remove: [(context: HookContext) => requireBoardGrantManager(db, context)],
+      find: [requireAuthorizedBoardRoute(boardRepo, 'view', 'view board group grants')],
+      create: [requireAuthorizedBoardRoute(boardRepo, 'mutate', 'manage board group grants')],
+      patch: [requireAuthorizedBoardRoute(boardRepo, 'mutate', 'manage board group grants')],
+      remove: [requireAuthorizedBoardRoute(boardRepo, 'mutate', 'manage board group grants')],
     },
   });
 }

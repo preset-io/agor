@@ -6,6 +6,11 @@ const fsMocks = vi.hoisted(() => ({
   mkdir: vi.fn(),
 }));
 
+const configMocks = vi.hoisted(() => ({
+  ensureAgorHome: vi.fn(),
+  getAgorHome: vi.fn(() => '/home/agor/.agor'),
+}));
+
 const dbMocks = vi.hoisted(() => ({
   checkMigrationStatus: vi.fn(),
   createDatabaseAsync: vi.fn(),
@@ -24,6 +29,11 @@ vi.mock('@agor/core/db', async (importOriginal) => ({
   ...dbMocks,
 }));
 
+vi.mock('@agor/core/config', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...configMocks,
+}));
+
 describe('initializeDatabase logging', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
 
@@ -34,6 +44,7 @@ describe('initializeDatabase logging', () => {
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     fsMocks.access.mockResolvedValue(undefined);
     fsMocks.mkdir.mockResolvedValue(undefined);
+    configMocks.ensureAgorHome.mockResolvedValue(undefined);
     dbMocks.createDatabaseAsync.mockResolvedValue(rawDb);
     dbMocks.createTenantScopedDatabaseProxy.mockReturnValue(scopedDb);
     dbMocks.checkMigrationStatus.mockResolvedValue({ hasPending: false, pending: [] });
@@ -119,5 +130,15 @@ describe('initializeDatabase logging', () => {
       'SQLITE_DIRECTORY_SENTINEL'
     );
     expect(dbMocks.createDatabaseAsync).toHaveBeenCalledWith({ url });
+  });
+
+  it('uses the private-home bootstrap for the canonical SQLite directory', async () => {
+    const url = 'file:/home/agor/.agor/agor.db';
+    fsMocks.access.mockRejectedValueOnce(new Error('missing directory'));
+
+    await initializeDatabase(url, { skipFirstRunAdminBootstrap: true });
+
+    expect(configMocks.ensureAgorHome).toHaveBeenCalledWith('/home/agor/.agor');
+    expect(fsMocks.mkdir).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,7 @@ const externalParams = { provider: 'rest' } as never;
 const executorParams = {
   provider: 'socketio',
   authentication: {
+    strategy: 'jwt',
     payload: {
       type: 'executor-session',
       purpose: 'executor-task',

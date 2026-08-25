@@ -25,12 +25,27 @@ execution:
   # These are assertions about the named shared home and nested Agor workspace
   # volumes mounted at the same paths on both daemons. They do not configure mounts.
   executor_storage:
-    # One shared execution home for this static smoke profile. This makes
-    # auth-file import/logout and Tasks replica-consistent, but is not Cloud's
-    # per-user isolation contract. The device-code poller remains gated.
-    user_home: shared
+    # The nested Agor volume contains the tenant/user-keyed sandbox home stores
+    # at the same path on both replicas. Device completion and later Codex Tasks
+    # therefore resolve the same exact user's `.codex/auth.json` without
+    # sharing a credential directory across development tenants.
+    user_home: persistent-per-user
+    # Docker's same-host named volume propagates kernel flock between these
+    # replicas. Multi-host operators must verify this for their storage.
+    user_home_locking: cross-replica-flock
     branch_workspace: shared
     base_repository: shared
+  # Auth-resolved tenants cannot share native worktree metadata. Keep branch
+  # creation clone-only, including callers (such as onboarding) that omit an
+  # explicit storage mode and rely on the daemon-owned default.
+  branch_storage:
+    default_mode: clone
+    allowed_modes:
+      - clone
+  # The checked-in HA smoke must exercise the same exact-user credential route
+  # it advertises. Sandbox mode forces branch RBAC, per-user home overlays, and
+  # fail-closed bubblewrap isolation; it does not impersonate host accounts.
+  unix_user_mode: sandbox
   # PTY transport is replica-local and ephemeral. Sticky Socket.IO keeps the
   # create/control connection on its owner; owner loss is a visible disconnect
   # and reconnect creates a new attachment (possibly reattaching local Zellij).
@@ -42,11 +57,33 @@ execution:
 database:
   dialect: postgresql
 multi_tenancy:
-  # First runnable HA topology. Publication code remains tenant-scoped and is
-  # adversarially tested, but auth-resolved multi-tenant operations are not yet
-  # claimed by this Compose example.
-  mode: static
-  static_tenant_id: default
+  # The Compose-only dev launcher returns a signed tenant_id assertion. Agor
+  # copies that verified claim into its own access/refresh tokens; browser
+  # query parameters, headers, and Socket.IO payloads never select the tenant.
+  mode: required_from_auth
+  auth_claim: tenant_id
+  filesystem_isolation_enabled: true
+identity:
+  # Every fixed HA persona is projected on first login. There is deliberately
+  # no password login in this disposable environment.
+  user_lifecycle: external
+  role_authority: claims
+  local_auth: disabled
+  external:
+    provider: external_launch
+    provisioning: jit
+external_launch:
+  enabled: true
+  exchange_url: http://dev-launcher:4000/exchange
+  issuer: http://dev-launcher:4000
+  audience: agor-runtime:ha-dev
+  instance_id: agor-ha-dev
+  provider_id: agor-ha-dev-launcher
+  dev_shared_secret_env: AGOR_EXTERNAL_LAUNCH_SHARED_SECRET
+  allow_admin_roles: true
+  # Materialized by docker/ha/docker-entrypoint.sh from the branch-specific
+  # public ingress origin. The launcher itself remains outside the product UI.
+  login_redirect_url: __AGOR_HA_PUBLIC_ORIGIN__/dev-auth/
 daemon:
   # Stable identity shared by both replicas in the checked-in disposable
   # Compose deployment. Production deployments must supply their own UUID.

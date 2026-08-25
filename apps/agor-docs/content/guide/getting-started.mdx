@@ -27,17 +27,16 @@ Repeat the readiness check with `agor doctor`; see
 
 ## Follow the onboarding wizard
 
-The first time you open the UI, the **Onboarding Wizard** runs — five quick steps that end with your first AI teammate ready to work:
+The first time a member opens the UI, the **Onboarding Wizard** runs — four quick steps that end on a new board. Read-only viewers enter the workspace directly because their role cannot provision boards, repos, branches, or sessions.
 
 1. **Goals.** Pick up to two outcomes, such as _Ship without the busywork_ or _Dig into anything_. The recommendations and your teammate's first briefing are tailored to what you want done. You can skip this step for a neutral start.
-2. **AI.** Connect a model: Claude (recommended), GPT, Gemini, or a custom endpoint. Paste an API key, use a Claude subscription token, or sign in with ChatGPT; Agor verifies the credential on the spot.
-3. **Workspace.** Name your AI teammate and pick its emoji. Agor creates a board named after it — the teammate's home for every branch and session it works on.
-4. **Tools.** Review goal-tailored integration suggestions such as Slack, GitHub, Sentry, HubSpot, Linear, or Figma. An admin can connect them from **Marketplace**; other members can ask a workspace admin. This step recommends tools but does not connect them automatically.
-5. **You're ready.** Agor seeds the teammate from the [framework repo](https://github.com/preset-io/agor-teammate) onto your board. If you connected an AI model, it also launches the teammate's first session.
+2. **Teammate.** Name your AI teammate and choose a starter template, or skip this step to create a plain board without a teammate.
+3. **AI.** Connect a model: Claude (recommended), GPT, Gemini, or a custom endpoint. Paste an API key, use a Claude subscription token, or sign in with ChatGPT; Agor verifies the credential on the spot. You can also skip and connect one later.
+4. **You're ready.** Agor creates the board. If you named a teammate, it seeds that teammate from the [framework repo](https://github.com/preset-io/agor-teammate) and, when an AI model is connected, launches the first session.
 
-Goals and AI are optional. Workspace and Tools are required so onboarding always finishes with a board and an explicit review of the recommendations.
+Goals, teammate setup, and AI are optional; the final action always creates or resumes one board. If setup is interrupted after that board is created, reopening the wizard resumes the same board instead of creating another.
 
-When the board opens, a connected teammate's first session picks up where the wizard left off — it already knows its name, the goals you selected, and which tools were recommended. From there it can register repos, organize its board, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the teammate can do too.** It has full access to the [Agor MCP Server](/guide/internal-mcp). If you skipped AI setup, connect a model later from **Settings → AI & Agents** and start a session from the board.
+When the board opens, a connected teammate's first session picks up where the wizard left off — it already knows its name, goals, and goal-tailored tool suggestions. Each suggestion carries its actual setup route: curated services go to **Marketplace**, custom endpoints such as Slack go to **Settings → MCP Servers**, and GitHub work uses a repository connected to Agor rather than inventing an MCP install. Workspace MCP policy may require an admin to enable or install a service. From there the teammate can register repos, organize its board, structure a workflow, or just be a thinking partner. **Anything a user can do in Agor, the teammate can do too.** It has full access to the [Agor MCP Server](/guide/internal-mcp). If you skipped AI setup, connect a model later from **Settings → AI & Agents** and start a session from the board.
 
 ## Customize your install
 

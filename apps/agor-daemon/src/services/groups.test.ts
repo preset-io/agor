@@ -87,17 +87,17 @@ describe('group membership target authority', () => {
     const group = await new GroupRepository(db).create({ name: 'Authority group' });
     const superadmin = await users.create({
       email: 'group-superadmin@example.test',
-      password: 'password-1234',
+      password: 'test-password-1234',
       role: 'superadmin',
     });
     const admin = await users.create({
       email: 'group-admin@example.test',
-      password: 'password-1234',
+      password: 'test-password-1234',
       role: 'admin',
     });
     const member = await users.create({
       email: 'group-member@example.test',
-      password: 'password-1234',
+      password: 'test-password-1234',
       role: 'member',
     });
     const params = (actor: User): AuthenticatedParams => ({
@@ -149,12 +149,12 @@ describe('group membership target authority', () => {
       const group = await new GroupRepository(db).create({ name: 'Atomic authority group' });
       const admin = await users.create({
         email: 'atomic-group-admin@example.test',
-        password: 'password-1234',
+        password: 'test-password-1234',
         role: 'admin',
       });
       const member = await users.create({
         email: 'atomic-group-member@example.test',
-        password: 'password-1234',
+        password: 'test-password-1234',
         role: 'member',
       });
       const addMember = GroupRepository.prototype.addMember;

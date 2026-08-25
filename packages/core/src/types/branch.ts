@@ -163,6 +163,17 @@ export interface Branch {
   base_ref?: string;
 
   /**
+   * Remote that owns {@link base_ref} when the branch was seeded from a
+   * different repository than {@link repo_id}.
+   *
+   * The branch's configured `origin` still comes from `repo_id`; this field
+   * only qualifies the creation base so cross-repository templates can be
+   * materialized and later restored without pretending the ref exists on the
+   * destination remote.
+   */
+  base_remote_url?: string;
+
+  /**
    * SHA at branch creation (base commit)
    *
    * Tracks where this branch started.
@@ -802,6 +813,10 @@ export interface RepoEnvironment {
 export type RepoEnvironmentConfig = RepoEnvironmentConfigV1;
 
 // ===== Teammates =====
+
+/** Public framework repository that owns Agor's built-in teammate templates. */
+export const TEAMMATE_FRAMEWORK_REPO_SLUG = 'preset-io/agor-teammate';
+export const TEAMMATE_FRAMEWORK_REPO_URL = 'https://github.com/preset-io/agor-teammate.git';
 
 export type TeammateKnowledgeGrantAccess = 'none' | 'read' | 'write';
 export interface TeammateKnowledgeGrant {

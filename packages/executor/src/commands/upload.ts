@@ -51,7 +51,12 @@ export async function handleBranchUploadMaterialize(
     destination = confined.absolute;
     const response = await fetch(
       `${payload.daemonUrl || 'http://localhost:3030'}/executor/uploads/${payload.params.uploadRef}/content`,
-      { headers: { Authorization: `Bearer ${payload.sessionToken}` } }
+      {
+        headers: {
+          Authorization: `Bearer ${payload.sessionToken}`,
+          'X-Agor-Session-Id': payload.params.sessionId,
+        },
+      }
     );
     if (!response.ok || !response.body) {
       throw new Error(`Upload transfer failed with HTTP ${response.status}`);

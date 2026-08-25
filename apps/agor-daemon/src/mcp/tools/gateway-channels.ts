@@ -43,15 +43,16 @@ import {
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import {
+  gatewaySlackUploadExecutorCommandId,
+  uploadMaterializeExecutorCommandId,
+} from '../../auth/executor-command-ids.js';
 import type { GatewayService } from '../../services/gateway.js';
+import { issueExecutorCommandToken } from '../../services/session-token-service.js';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  runExecutorCommand,
-} from '../../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import { getUploadLimits } from '../../utils/upload.js';
 import { getUploadStagingStore } from '../../utils/upload-staging.js';
 import {
@@ -1221,19 +1222,14 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
         branchId: session.branch_id,
         ref,
       });
-      const result = await runExecutorCommand(
+      const result = await requestExecutor(
         {
           command: 'branch.upload.materialize',
-          sessionToken: generateScopedServiceToken(
-            ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
-            {
-              executor_action: 'upload.materialize',
-              executor_user_id: ctx.authenticatedUser.user_id,
-              executor_branch_id: session.branch_id,
-              executor_session_id: ctx.sessionId,
-              executor_upload_ref: ref,
-            },
-            '10m'
+          sessionToken: await issueExecutorCommandToken(
+            ctx.app,
+            uploadMaterializeExecutorCommandId(ctx.sessionId, ref),
+            ctx.authenticatedUser.user_id,
+            session.branch_id
           ),
           daemonUrl: getDaemonUrl(),
           params: {
@@ -1714,18 +1710,14 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       const branch = target.branch;
       if (!branch) throw new Error('Gateway target branch is unavailable');
       if (args.source.kind === 'branch') {
-        const result = await runExecutorCommand(
+        const result = await requestExecutor(
           {
             command: 'branch.gateway.slack-file-upload',
-            sessionToken: generateScopedServiceToken(
-              ctx.app as unknown as { settings: { authentication?: { secret?: string } } },
-              {
-                executor_action: 'gateway.slack-file-upload',
-                executor_user_id: ctx.authenticatedUser.user_id,
-                executor_branch_id: target.channel.target_branch_id,
-                executor_gateway_channel_id: target.channel.id,
-                executor_slack_channel_id: target.slackChannelId,
-              }
+            sessionToken: await issueExecutorCommandToken(
+              ctx.app,
+              gatewaySlackUploadExecutorCommandId(target.channel.id, target.slackChannelId),
+              ctx.authenticatedUser.user_id,
+              target.channel.target_branch_id
             ),
             daemonUrl: getDaemonUrl(),
             params: {

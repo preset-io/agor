@@ -12,6 +12,8 @@ import type {
   Artifact,
   ArtifactBuildStatus,
   ArtifactID,
+  ArtifactListFieldWithoutFiles,
+  ArtifactMetadataListField,
   BoardID,
   BranchID,
   SandpackTemplate,
@@ -45,6 +47,48 @@ function canonicalGrantsOrNull(input: unknown): AgorGrants | null {
   return canonicalGrantsOrUndefined(input) ?? null;
 }
 
+export type ArtifactListProjection = 'full' | 'without-files' | 'metadata';
+
+type ArtifactComputedListField = 'fullscreen_url' | 'url';
+type ArtifactMetadataDatabaseField = Exclude<ArtifactMetadataListField, ArtifactComputedListField>;
+type ArtifactWithoutFilesDatabaseField = Exclude<
+  ArtifactListFieldWithoutFiles,
+  ArtifactComputedListField
+>;
+
+const artifactMetadataColumns = {
+  artifact_id: artifacts.artifact_id,
+  branch_id: artifacts.branch_id,
+  source_session_id: artifacts.source_session_id,
+  board_id: artifacts.board_id,
+  name: artifacts.name,
+  description: artifacts.description,
+  path: artifacts.path,
+  template: artifacts.template,
+  build_status: artifacts.build_status,
+  build_errors: artifacts.build_errors,
+  content_hash: artifacts.content_hash,
+  public: artifacts.public,
+  created_by: artifacts.created_by,
+  created_at: artifacts.created_at,
+  updated_at: artifacts.updated_at,
+  archived: artifacts.archived,
+  archived_at: artifacts.archived_at,
+} satisfies Record<ArtifactMetadataDatabaseField, unknown>;
+
+type ArtifactMetadataRow = Partial<ArtifactRow> &
+  Pick<ArtifactRow, keyof typeof artifactMetadataColumns>;
+
+const artifactWithoutFilesColumns = {
+  ...artifactMetadataColumns,
+  dependencies: artifacts.dependencies,
+  entry: artifacts.entry,
+  sandpack_config: artifacts.sandpack_config,
+  required_env_vars: artifacts.required_env_vars,
+  agor_grants: artifacts.agor_grants,
+  agor_runtime: artifacts.agor_runtime,
+} satisfies Record<ArtifactWithoutFilesDatabaseField, unknown>;
+
 export class ArtifactRepository implements BaseRepository<Artifact, Partial<Artifact>> {
   constructor(private db: Database) {}
 
@@ -56,7 +100,7 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    * board (the `/a/<short>/` URL would resolve the artifact but have
    * nowhere to switch the canvas to).
    */
-  private rowToArtifact(row: ArtifactRow, baseUrl?: string): Artifact {
+  private rowToArtifact(row: ArtifactMetadataRow, baseUrl?: string): Artifact {
     const artifactId = row.artifact_id as ArtifactID;
     const url = baseUrl && row.board_id ? getArtifactUrl(artifactId, baseUrl) : null;
     const fullscreenUrl = baseUrl ? getArtifactFullscreenUrl(artifactId, baseUrl) : null;
@@ -194,12 +238,15 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
    *   visible to this user under branch RBAC, pushed down as a correlated SQL
    *   EXISTS instead of a preloaded `branch_id IN (...)` list. Null-branch
    *   artifacts are excluded, matching the existing RBAC find-hook behavior.
+   * @param filter.projection - Exclude source/runtime JSON columns from the SQL
+   *   select when a list caller explicitly requested a lean response.
    */
   async findAll(filter?: {
     board_id?: BoardID;
     archived?: boolean;
     branchIds?: BranchID[];
     visibleToUserId?: UUID;
+    projection?: ArtifactListProjection;
   }): Promise<Artifact[]> {
     try {
       // An explicit empty id set can never match a row; short-circuit so we skip
@@ -224,11 +271,21 @@ export class ArtifactRepository implements BaseRepository<Artifact, Partial<Arti
         );
       }
 
-      const query = select(this.db).from(artifacts);
-      const rows =
-        conditions.length > 0 ? await query.where(and(...conditions)).all() : await query.all();
+      const predicate = conditions.length > 0 ? and(...conditions) : undefined;
+      const projection = filter?.projection ?? 'full';
+      let rows: ArtifactMetadataRow[];
+      if (projection === 'metadata') {
+        const query = select(this.db, artifactMetadataColumns).from(artifacts);
+        rows = predicate ? await query.where(predicate).all() : await query.all();
+      } else if (projection === 'without-files') {
+        const query = select(this.db, artifactWithoutFilesColumns).from(artifacts);
+        rows = predicate ? await query.where(predicate).all() : await query.all();
+      } else {
+        const query = select(this.db).from(artifacts);
+        rows = predicate ? await query.where(predicate).all() : await query.all();
+      }
       const baseUrl = await getBaseUrl();
-      return rows.map((row: ArtifactRow) => this.rowToArtifact(row, baseUrl));
+      return rows.map((row) => this.rowToArtifact(row, baseUrl));
     } catch (error) {
       throw new RepositoryError(
         `Failed to find all artifacts: ${error instanceof Error ? error.message : String(error)}`,

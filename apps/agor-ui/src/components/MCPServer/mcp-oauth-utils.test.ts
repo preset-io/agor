@@ -169,6 +169,26 @@ describe('extractOAuthConfigForTesting', () => {
     expect(result).not.toBeNull();
     expect(result!.token_url).toBe('{{ env.TOKEN_URL }}');
   });
+
+  it('binds a managed Marketplace test to the saved row without submitting the internal mode', () => {
+    expect(
+      extractOAuthConfigForTesting({
+        url: 'https://mcp.example.com',
+        mcp_server_id: 'saved-server',
+        oauth_compatibility_mode: 'marketplace',
+      })
+    ).toMatchObject({
+      mcp_url: 'https://mcp.example.com',
+      mcp_server_id: 'saved-server',
+    });
+    expect(
+      extractOAuthConfigForTesting({
+        url: 'https://mcp.example.com',
+        mcp_server_id: 'saved-server',
+        oauth_compatibility_mode: 'marketplace',
+      })
+    ).not.toHaveProperty('compatibility_mode');
+  });
 });
 
 describe('buildAuthFromValues', () => {
@@ -192,6 +212,50 @@ describe('buildAuthFromValues', () => {
         { preserveAbsentDcrMode: true }
       )
     ).toMatchObject({ oauth_dcr_mode: 'fallback' });
+  });
+
+  it('preserves a derived compatibility mode across an unrelated edit', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_compatibility_mode: 'strict',
+          oauth_scope: 'unchanged',
+        },
+        { preserveAbsentCompatibilityMode: true }
+      )
+    ).not.toHaveProperty('oauth_compatibility_mode');
+  });
+
+  it('never persists the read-only managed Marketplace display value', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_compatibility_mode: 'marketplace',
+          oauth_scope: 'unchanged',
+        },
+        { preserveAbsentCompatibilityMode: true }
+      )
+    ).not.toHaveProperty('oauth_compatibility_mode');
+  });
+
+  it('materializes compatibility after the operator changes the policy', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'oauth', oauth_compatibility_mode: 'legacy' },
+        { preserveAbsentCompatibilityMode: true }
+      )
+    ).toMatchObject({ oauth_compatibility_mode: 'legacy' });
+  });
+
+  it('preserves an absent OAuth grant type across an unrelated edit', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'oauth', oauth_grant_type: 'client_credentials' },
+        { preserveAbsentGrantType: true }
+      )
+    ).not.toHaveProperty('oauth_grant_type');
   });
 
   it('returns undefined when auth_type is none / missing / unrecognized', () => {
@@ -296,6 +360,9 @@ describe('validateHeadersJSON', () => {
     );
     expect(validateHeadersJSON('{"X-Count": 42}')).toBe(
       'Custom HTTP header values must be strings'
+    );
+    expect(validateHeadersJSON('{"X-Route": "a", "x-route": "b"}')).toMatch(
+      /Duplicate case-insensitive custom HTTP header names/
     );
   });
 });

@@ -109,5 +109,8 @@ export async function persistOAuthToken(
     grantBinding: pendingFlow.grantBinding,
   });
 
-  console.log(`[${logPrefix}] OAuth token persisted mode=${oauthMode} expiry=${expiry.source}`);
+  console.log(
+    `[${logPrefix}] OAuth token persisted mode=${oauthMode} ` +
+      `binding_version=${pendingFlow.grantBinding?.version ?? 'legacy_unbound'} expiry=${expiry.source}`
+  );
 }

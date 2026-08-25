@@ -4,7 +4,7 @@
  * Reduces boilerplate by providing common functionality like daemon connection checking.
  */
 
-import type { AgorClient } from '@agor-live/client';
+import type { AgorClient, AuthenticatedAgorClient } from '@agor-live/client';
 import { createRestClient, getApiKeyFromEnv } from '@agor-live/client';
 import { Command } from '@oclif/core';
 import chalk from 'chalk';
@@ -26,7 +26,7 @@ export abstract class BaseCommand extends Command {
    *
    * @returns Feathers client instance
    */
-  protected async connectToDaemon(): Promise<AgorClient> {
+  protected async connectToDaemon(): Promise<AuthenticatedAgorClient> {
     const storedAuth = await loadToken();
     const apiKey = getApiKeyFromEnv();
     const target = await resolveConnectedDeploymentTarget();
@@ -93,7 +93,7 @@ export abstract class BaseCommand extends Command {
   }
 
   /** Connect to the authenticated daemon for this machine's local deployment. */
-  protected async connectToLocalDaemon(): Promise<AgorClient> {
+  protected async connectToLocalDaemon(): Promise<AuthenticatedAgorClient> {
     const localTarget = await resolveLocalDeploymentTarget();
     const connectedTarget = await resolveConnectedDeploymentTarget();
     if (!connectedTarget || connectedTarget.deploymentId !== localTarget.deploymentId) {

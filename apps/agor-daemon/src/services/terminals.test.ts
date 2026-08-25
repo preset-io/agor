@@ -1,5 +1,6 @@
 import type { BranchID, UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { LOCAL_AUTHORIZATION_INVALIDATION_EVENT } from '../realtime/routing.js';
 import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from '../utils/agentic-tool-runtime.js';
 
@@ -19,7 +20,7 @@ const mocks = vi.hoisted(() => {
     databaseScopeDepth: 0,
     branchesById: new Map<string, typeof branch>([[branch.branch_id, branch]]),
     spawnExecutorFireAndForget: vi.fn(),
-    generateScopedServiceToken: vi.fn(() => 'terminal-token'),
+    generateTerminalExecutorToken: vi.fn(() => 'terminal-token'),
     getDaemonUrl: vi.fn(() => 'http://daemon.internal:3030'),
     resolveDelegatedHomeKey: vi.fn(() => ({
       unixUser: null,
@@ -44,11 +45,14 @@ vi.mock('@agor/core/db', () => ({
     async findById(branchId: string) {
       return mocks.branchesById.get(branchId) ?? null;
     }
-    async isOwner() {
-      return true;
-    }
-    async resolveUserPermission() {
-      return 'session';
+    async findAccessibleById(
+      branchId: string,
+      _userId: string,
+      options: { enforceAccess?: boolean }
+    ) {
+      const branch = mocks.branchesById.get(branchId) ?? null;
+      if (!branch || (options.enforceAccess !== false && !mocks.canOpen)) return null;
+      return branch;
     }
   },
   getCurrentTenantId: () => mocks.tenantId,
@@ -80,16 +84,16 @@ vi.mock('@agor/core/unix', () => ({
 }));
 
 vi.mock('../utils/branch-authorization.js', () => ({
-  hasBranchPermission: () => mocks.canOpen,
+  isSuperAdmin: (role: string | undefined, allow: boolean) => allow && role === 'superadmin',
 }));
 
 vi.mock('../utils/spawn-executor.js', () => ({
-  generateScopedServiceToken: mocks.generateScopedServiceToken,
+  generateTerminalExecutorToken: mocks.generateTerminalExecutorToken,
   getDaemonUrl: mocks.getDaemonUrl,
   spawnExecutorFireAndForget: mocks.spawnExecutorFireAndForget,
 }));
 
-import { buildZellijSessionName, TerminalsService } from './terminals';
+import { buildZellijSessionName, TerminalsService, terminalChannelName } from './terminals';
 
 function makeApp() {
   const emit = vi.fn();
@@ -236,8 +240,8 @@ describe('process-affine attachment creation', () => {
       isNew: true,
       ready: false,
     });
-    expect(result.channel).toBe(`tenant/tenant-x/user/user-1/terminal/${result.terminalId}`);
-    expect(mocks.generateScopedServiceToken).toHaveBeenCalledWith(
+    expect(result.channel).toBe(terminalChannelName('tenant-x', 'user-1', result.terminalId));
+    expect(mocks.generateTerminalExecutorToken).toHaveBeenCalledWith(
       expect.anything(),
       {
         terminal_user_id: 'user-1',
@@ -291,16 +295,25 @@ describe('process-affine attachment creation', () => {
     expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledTimes(2);
   });
 
-  it('enforces branch session permission', async () => {
+  it('makes missing and inaccessible branch acknowledgements indistinguishable', async () => {
     mocks.canOpen = false;
     mocks.config = {
       daemon: { port: 3030 },
       execution: { branch_rbac: true, unix_user_mode: 'simple' },
     };
     const service = new TerminalsService(makeApp() as never, {} as never);
-    await expect(
-      service.create({ branchId: 'branch-1' as BranchID }, params as never)
-    ).rejects.toThrow("need 'session' permission");
+    const inaccessible = service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    const missing = service.create({ branchId: 'missing' as BranchID }, params as never);
+    await expect(inaccessible).rejects.toMatchObject({
+      code: 404,
+      className: 'not-found',
+      message: 'Branch not found',
+    });
+    await expect(missing).rejects.toMatchObject({
+      code: 404,
+      className: 'not-found',
+      message: 'Branch not found',
+    });
     expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 });
@@ -405,6 +418,61 @@ describe('attachment lifecycle', () => {
       terminalId: terminal.terminalId,
       userId: 'user-1',
     });
+  });
+
+  it('tenant authorization invalidation retires every stale terminal capability', async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+    const terminal = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+
+    service.closeTenant('tenant-x');
+
+    expect(app.emit).toHaveBeenCalledWith('terminal:shutdown-local', {
+      terminalId: terminal.terminalId,
+      userId: 'user-1',
+    });
+    expect(
+      service.matchesOwnedAttachment({
+        terminalId: terminal.terminalId,
+        tenantId: 'tenant-x',
+        userId: 'user-1',
+        branchId: 'branch-1',
+        ownerBootId: 'daemon-a-boot',
+      })
+    ).toBe(false);
+  });
+
+  it('a replica-wide realtime outage retires terminal capabilities for every tenant', async () => {
+    const app = makeApp();
+    const service = new TerminalsService(app as never, {} as never);
+    const tenantX = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    mocks.tenantId = 'tenant-y';
+    const tenantY = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    const outageHandler = app.on.mock.calls.find(
+      ([event]) => event === LOCAL_AUTHORIZATION_INVALIDATION_EVENT
+    )?.[1] as ((data: { tenantId?: string }) => void) | undefined;
+
+    outageHandler?.({});
+
+    expect(outageHandler).toBeDefined();
+    expect(
+      service.matchesOwnedAttachment({
+        terminalId: tenantX.terminalId,
+        tenantId: 'tenant-x',
+        userId: 'user-1',
+        branchId: 'branch-1',
+        ownerBootId: 'daemon-a-boot',
+      })
+    ).toBe(false);
+    expect(
+      service.matchesOwnedAttachment({
+        terminalId: tenantY.terminalId,
+        tenantId: 'tenant-y',
+        userId: 'user-1',
+        branchId: 'branch-1',
+        ownerBootId: 'daemon-a-boot',
+      })
+    ).toBe(false);
   });
 
   it('fails closed without tenant context and rejects removed CLI compatibility input', async () => {

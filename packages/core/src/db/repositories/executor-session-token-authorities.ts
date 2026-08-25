@@ -220,25 +220,33 @@ export class ExecutorSessionTokenAuthorityRepository {
     }
   }
 
-  async revokeSession(sessionId: string, tenantId: string): Promise<number> {
+  /** Revoke every credential issued for one exact Task and return only fingerprints. */
+  async revokeByTask(taskId: string, tenantId: string): Promise<string[]> {
+    if (!taskId || !tenantId) {
+      throw new RepositoryError('Executor task token revocation scope is incomplete');
+    }
     try {
       const result = await executeRaw(
         this.db,
         sql`
-          WITH revoked AS (
-            UPDATE ${executorSessionTokenAuthorities}
-            SET revoked_at = CURRENT_TIMESTAMP
-            WHERE tenant_id = ${tenantId}
-              AND session_id = ${sessionId}
-              AND revoked_at IS NULL
-            RETURNING 1
-          )
-          SELECT count(*) AS count FROM revoked
+          UPDATE ${executorSessionTokenAuthorities}
+          SET revoked_at = CURRENT_TIMESTAMP
+          WHERE tenant_id = ${tenantId}
+            AND task_id = ${taskId}
+            AND revoked_at IS NULL
+          RETURNING token_fingerprint
         `
       );
-      return Number(rowsOf(result)[0]?.count ?? 0);
+      return rowsOf(result).map((row) => {
+        if (typeof row.token_fingerprint !== 'string') {
+          throw new RepositoryError('Executor task token revocation returned invalid authority');
+        }
+        assertFingerprint(row.token_fingerprint);
+        return row.token_fingerprint;
+      });
     } catch (error) {
-      throw databaseFailure('session revocation', error);
+      if (error instanceof RepositoryError) throw error;
+      throw databaseFailure('task revocation', error);
     }
   }
 

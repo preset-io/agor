@@ -11,6 +11,7 @@
 import type { MCPCatalogEntry } from '@agor/core/types';
 import {
   CheckCircleOutlined,
+  KeyOutlined,
   LockOutlined,
   LoginOutlined,
   QuestionCircleOutlined,
@@ -95,6 +96,11 @@ const CatalogCardInner: React.FC<CatalogCardProps> = ({ entry, onOpen }) => {
               // (`MCPServerPill`), so the card and the thing it installs are
               // recognisably about the same step.
               <LoginOutlined style={{ color: token.colorTextTertiary }} />
+            ) : connect.readiness === 'api-key' ? (
+              // A key, not the padlock: the padlock is what `blocked` wears,
+              // and this entry is connectable — it just wants something from
+              // the user first.
+              <KeyOutlined style={{ color: token.colorTextTertiary }} />
             ) : connect.readiness === 'unchecked' ? (
               <QuestionCircleOutlined style={{ color: token.colorTextTertiary }} />
             ) : (

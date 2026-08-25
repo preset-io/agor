@@ -1,40 +1,92 @@
 /**
- * Per-session composer drafts.
+ * The one persisted composer draft for the current browser.
  *
- * localStorage-backed so a draft survives the session panel unmounting, and
- * shared so anything that wants to seed a composer writes through the same key
- * the panel reads — the marketplace connect flow pre-loads a starter prompt
- * into a session it has just created, on a surface that never mounts the panel.
+ * A draft is tied to both its user and session, so account switches cannot
+ * expose it and opening another session does not move text into the wrong
+ * conversation. Saving in another composer replaces the record instead of
+ * accumulating one localStorage namespace per session.
  */
 
-const DRAFT_KEY_PREFIX = 'agor-draft-';
+const DRAFT_KEY = 'agor:prompt-draft';
+const LEGACY_DRAFT_KEY_PREFIX = 'agor-draft-';
 
-const draftKey = (sessionId: string): string => `${DRAFT_KEY_PREFIX}${sessionId}`;
+interface StoredPromptDraft {
+  ownerId: string;
+  sessionId: string;
+  text: string;
+}
 
-export function getPromptDraft(sessionId: string): string {
+function pruneLegacyDraftKeys(): void {
   try {
-    return localStorage.getItem(draftKey(sessionId)) || '';
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const key = localStorage.key(index);
+      if (key?.startsWith(LEGACY_DRAFT_KEY_PREFIX)) localStorage.removeItem(key);
+    }
   } catch {
-    return '';
+    // localStorage unavailable
   }
 }
 
-/** Store a draft, or clear it when the value is blank. */
-export function savePromptDraft(sessionId: string, value: string): void {
+function readStoredDraft(): StoredPromptDraft | null {
+  pruneLegacyDraftKeys();
+  try {
+    const value = localStorage.getItem(DRAFT_KEY);
+    if (!value) return null;
+    const parsed = JSON.parse(value) as Partial<StoredPromptDraft>;
+    return typeof parsed.ownerId === 'string' &&
+      typeof parsed.sessionId === 'string' &&
+      typeof parsed.text === 'string'
+      ? (parsed as StoredPromptDraft)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function getPromptDraft(ownerId: string | undefined, sessionId: string): string {
+  if (!ownerId) return '';
+  const draft = readStoredDraft();
+  return draft?.ownerId === ownerId && draft.sessionId === sessionId ? draft.text : '';
+}
+
+/** Store a draft, replacing any draft for a different composer. */
+export function savePromptDraft(
+  ownerId: string | undefined,
+  sessionId: string,
+  value: string
+): void {
+  if (!ownerId) return;
+  pruneLegacyDraftKeys();
   try {
     if (value.trim()) {
-      localStorage.setItem(draftKey(sessionId), value);
+      localStorage.setItem(DRAFT_KEY, JSON.stringify({ ownerId, sessionId, text: value }));
     } else {
-      localStorage.removeItem(draftKey(sessionId));
+      deletePromptDraft(ownerId, sessionId);
     }
   } catch {
     // localStorage full or unavailable
   }
 }
 
-export function deletePromptDraft(sessionId: string): void {
+/**
+ * Clear only the draft this operation owns. `expectedText` prevents a delayed
+ * send from deleting a replacement typed before its response arrived.
+ */
+export function deletePromptDraft(
+  ownerId: string | undefined,
+  sessionId: string,
+  expectedText?: string
+): void {
+  if (!ownerId) return;
   try {
-    localStorage.removeItem(draftKey(sessionId));
+    const draft = readStoredDraft();
+    if (
+      draft?.ownerId === ownerId &&
+      draft.sessionId === sessionId &&
+      (expectedText === undefined || draft.text === expectedText)
+    ) {
+      localStorage.removeItem(DRAFT_KEY);
+    }
   } catch {
     // ignore
   }

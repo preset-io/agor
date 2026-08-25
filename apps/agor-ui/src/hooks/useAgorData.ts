@@ -27,7 +27,12 @@ import type {
   Session,
   User,
 } from '@agor-live/client';
-import { ENTITY_PATH_SEGMENTS, findByShortIdPrefix, PAGINATION } from '@agor-live/client';
+import {
+  ARTIFACT_METADATA_LIST_FIELDS,
+  ENTITY_PATH_SEGMENTS,
+  findByShortIdPrefix,
+  PAGINATION,
+} from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   bumpFirstPaintMergeRevisions,
@@ -141,13 +146,15 @@ function parseEntityPath(pathname: string): ParsedEntityPath {
   return { kind, token };
 }
 
-// The mobile comments deep link (`/m/comments/<board_id>`) lives OUTSIDE the
-// main entity route table (ENTITY_PATH_SEGMENTS) but still displays a single
-// board's annotations (zones drive comment anchoring) at first paint. Match it
-// here so a cold deep-link resolves its board scope and triggers the targeted
-// full-board `get` — otherwise `board.objects` stays undefined until the boards
-// background hydration lands. The `:boardId` is a full board_id.
-const MOBILE_COMMENTS_PATH_RE = /\/m\/comments\/([^/]+)/;
+// The mobile routes (`/m/board/<board_id>`, `/m/session/<session_id>`,
+// `/m/comments/<board_id>`) live OUTSIDE the main entity route table
+// (ENTITY_PATH_SEGMENTS) and use full ids rather than short ids, so
+// `parseEntityPath` never matches them. Each still displays a single board at
+// first paint, so match them here: a cold deep-link then resolves its board
+// scope and triggers the targeted full-board `get`. Without this the load
+// falls back to a GLOBAL first paint and `board.objects` stays undefined until
+// the background boards hydration lands.
+const MOBILE_PATH_RE = /\/m\/(board|session|comments)\/([^/]+)/;
 
 // Resolve the board the app will ACTUALLY display on first paint from the
 // current URL, reusing the same slug/short-id resolvers `useUrlState` uses.
@@ -158,7 +165,7 @@ const MOBILE_COMMENTS_PATH_RE = /\/m\/comments\/([^/]+)/;
 //   - `/a/<artifact>/`: artifacts aren't in the gated light batch (they load
 //     in the background), so the board can't be resolved synchronously here.
 //   - Unresolvable / ambiguous short id or a board_id we can't chain to.
-function resolveDisplayedBoardId(
+export function resolveDisplayedBoardId(
   pathname: string,
   boardById: Map<string, { board_id: string; slug?: string }>,
   branchById: Map<string, { branch_id: string; board_id?: string | null }>,
@@ -167,9 +174,22 @@ function resolveDisplayedBoardId(
     { session_id: string; branch_id?: string; branch_board_id?: string | null }
   >
 ): string | null {
-  const mobileComments = pathname.match(MOBILE_COMMENTS_PATH_RE);
-  if (mobileComments) {
-    return resolveBoardFromUrlPure(mobileComments[1], boardById);
+  const mobile = pathname.match(MOBILE_PATH_RE);
+  if (mobile) {
+    const [, mobileSegment, token] = mobile;
+    if (mobileSegment === 'session') {
+      // Mobile routes normally carry a full ID, but a cold responsive handoff
+      // preserves the desktop short token until the targeted get heals it.
+      const sessionId = sessionById.has(token)
+        ? token
+        : resolveSessionFromShortIdPure(token, sessionById);
+      const session = sessionId ? sessionById.get(sessionId) : undefined;
+      if (!session) return null;
+      if (session.branch_board_id) return session.branch_board_id;
+      const branchId = session.branch_id;
+      return branchId ? (branchById.get(branchId)?.board_id ?? null) : null;
+    }
+    return resolveBoardFromUrlPure(token, boardById);
   }
 
   const parsed = parseEntityPath(pathname);
@@ -277,16 +297,14 @@ export function useAgorData(
   const [hasInitiallyFetched, setHasInitiallyFetched] = useState(false);
 
   // Single-flight guard for reconnect-triggered refetches. Prevents stampedes
-  // when the socket flaps (e.g. waking from sleep on a flaky network) — the
-  // around-hook on the socket client already single-flights the underlying
-  // auth refresh, but we also don't want to issue 14 parallel service calls
-  // multiple times in a row.
+  // when the socket flaps (e.g. waking from sleep on a flaky network). We also
+  // don't want to issue 14 parallel service calls multiple times in a row.
   const refetchInflightRef = useRef(false);
 
   // Tracks whether the most recent silent refetch failed. Set by the silent
   // catch branch in `fetchData`, cleared on success. Read by the
   // TOKENS_REFRESHED_EVENT listener below so a token replacement that lands
-  // AFTER a failed reconnect refetch (auth race during socket re-auth) gets to
+  // AFTER a failed reconnect refetch (for example a transient daemon failure) gets to
   // retry — without this, the byId maps would stay stale until the next
   // physical reconnect or page refresh. We use a ref rather than state since
   // we only consume it in event handlers, never in render.
@@ -298,7 +316,7 @@ export function useAgorData(
   // must not flip the global `loading` / `error` state — those are wired to the
   // fullscreen "Connecting to daemon..." spinner and "Failed to load data"
   // alert in App.tsx, which would be wildly disruptive if a transient
-  // reconnect-time 401 (auth race with the re-auth handler in useAgorClient)
+  // reconnect-time error
   // bubbled up. Silent failures are logged for observability; the UI continues
   // to render whatever byId state was last successfully fetched, and the next
   // reconnect or token replacement gets another shot.
@@ -410,27 +428,7 @@ export function useAgorData(
             client.service('artifacts').findAll({
               query: {
                 $limit: PAGINATION.DEFAULT_LIMIT,
-                $select: [
-                  'artifact_id',
-                  'branch_id',
-                  'source_session_id',
-                  'board_id',
-                  'name',
-                  'description',
-                  'path',
-                  'template',
-                  'build_status',
-                  'build_errors',
-                  'content_hash',
-                  'public',
-                  'created_by',
-                  'created_at',
-                  'updated_at',
-                  'archived',
-                  'archived_at',
-                  'fullscreen_url',
-                  'url',
-                ],
+                $select: [...ARTIFACT_METADATA_LIST_FIELDS],
               },
             }),
           (list) =>
@@ -976,8 +974,8 @@ export function useAgorData(
         }
       } catch (err) {
         if (silent) {
-          // Background refetch failed (e.g. transient 401 racing the socket
-          // re-auth, or a 5xx). Don't escalate to the fullscreen error overlay —
+          // Background refetch failed (e.g. transient 401 racing an authenticated
+          // reconnect, or a 5xx). Don't escalate to the fullscreen error overlay —
           // we still have last-known good byId state on screen. Latch the
           // failure so the next TOKENS_REFRESHED_EVENT (or reconnect) retries.
           console.warn('[useAgorData] silent refetch failed:', err);
@@ -1328,9 +1326,8 @@ export function useAgorData(
     // `hasInitiallyFetched`) is already running or has just completed, and
     // re-running it would just be wasted bandwidth at startup.
     //
-    // `silent: true` so a transient failure (e.g. racing the re-auth handler
-    // in useAgorClient on reconnect, then 401-ing once before the around-hook
-    // refresh lands) doesn't blank the whole app via App.tsx's `dataError`
+    // `silent: true` so a transient failure during reconnect
+    // doesn't blank the whole app via App.tsx's `dataError`
     // path — see the silent branch in `fetchData`.
     const refetchSilently = async () => {
       if (!hasInitiallyFetched) return;
@@ -1344,10 +1341,9 @@ export function useAgorData(
     };
     client.io.on('connect', refetchSilently);
 
-    // If the prior reconnect refetch failed silently — typical scenario: the
-    // socket reconnected, the around-hook hadn't refreshed the access token
-    // yet, fetchData hit a 401 that bubbled up — retry once a token
-    // replacement lands. Without this, byId state stays stale until the next
+    // If the prior reconnect refetch failed silently, retry once a token
+    // replacement lands (one signal that authentication and connectivity are
+    // healthy again). Without this, byId state stays stale until the next
     // physical reconnect or a page refresh. We gate on the latch so we don't
     // refetch 14 services on every routine token rotation.
     const handleTokensRefreshed = () => {

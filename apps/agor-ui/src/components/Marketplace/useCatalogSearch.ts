@@ -11,9 +11,10 @@
  * This has no writers a browser can observe and nothing to keep live — it
  * changes when the daemon is redeployed, which reloads the page anyway.
  *
- * Reads wait for `ready`. The client object exists from the moment the socket
- * is being built, well before it has connected and authenticated, so a surface
- * that fetches on `client !== null` asks an anonymous socket and is refused.
+ * Reads wait for `ready`. The client object exists while its authenticated
+ * namespace handshake is still pending, so a surface that fetches on
+ * `client !== null` can otherwise queue work against a connection that has not
+ * been accepted (or that may fail authentication).
  *
  * Filtering and ordering come from `@agor/core/mcp-catalog/query` rather than
  * being written here, so that "search matches the same things it used to" holds
@@ -24,7 +25,6 @@ import { filterCatalog } from '@agor/core/mcp-catalog/query';
 import type { MCPCatalogCategory, MCPCatalogEntry, MCPCatalogSort } from '@agor/core/types';
 import type { AgorClient, FindResult } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { CONNECTABLE_AUTH_TYPES } from './catalogPresentation';
 
 /** The catalog service always paginates; an array is only a defensive fallback. */
 function asEntries(result: FindResult<MCPCatalogEntry>): MCPCatalogEntry[] {
@@ -37,14 +37,11 @@ export interface CatalogFilterState {
   search: string;
   category?: MCPCatalogCategory;
   capability?: string;
-  connectableOnly: boolean;
   sort: MCPCatalogSort;
 }
 
 export function isFilterActive(filters: CatalogFilterState): boolean {
-  return Boolean(
-    filters.search.trim() || filters.category || filters.capability || filters.connectableOnly
-  );
+  return Boolean(filters.search.trim() || filters.category || filters.capability);
 }
 
 /**
@@ -80,7 +77,7 @@ export function useCatalogSearch(
   const [error, setError] = useState<string | null>(null);
   const [retryToken, setRetryToken] = useState(0);
 
-  const { search, category, capability, connectableOnly, sort } = filters;
+  const { search, category, capability, sort } = filters;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: retryToken is a manual re-run trigger, not a value the effect reads
   useEffect(() => {
@@ -128,9 +125,8 @@ export function useCatalogSearch(
             sort,
             // The toolbar's one auth control means a set: "not known to need an
             // account" is stated-open *or* not stated.
-            ...(connectableOnly ? { auth_types: CONNECTABLE_AUTH_TYPES } : {}),
           }),
-    [catalog, search, category, capability, connectableOnly, sort]
+    [catalog, search, category, capability, sort]
   );
 
   const entries = useMemo(() => {

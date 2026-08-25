@@ -1,11 +1,11 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
 import { ApiOutlined } from '@ant-design/icons';
-import { Tag as AntTag, Popover, Space, Typography, theme } from 'antd';
+import { Tag as AntTag, Space, Typography, theme } from 'antd';
 import React from 'react';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { updateSessionMcpServers } from '../../utils/sessionMcpServers';
-import { MCPServerPill } from '../MCPServer';
+import { MCPServerEditModal, MCPServerPill } from '../MCPServer';
 import { summarizeSessionMcpServers } from '../MCPServer/mcp-session-summary';
 import { MCPServerSelect } from '../MCPServerSelect';
 import { Tag } from '../Tag';
@@ -28,6 +28,57 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
   const [saving, setSaving] = React.useState(false);
+  const [open, setOpen] = React.useState(false);
+  const [editingServer, setEditingServer] = React.useState<MCPServer | null>(null);
+  const [editModalOpen, setEditModalOpen] = React.useState(false);
+  const rootRef = React.useRef<HTMLDivElement>(null);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const popupRef = React.useRef<HTMLDivElement>(null);
+  const generatedId = React.useId().replaceAll(':', '');
+  const popupId = `session-mcp-popup-${generatedId}`;
+  const headingId = `${popupId}-heading`;
+
+  React.useEffect(() => {
+    if (!open) return;
+    const dismissOutside = (event: PointerEvent) => {
+      if (
+        rootRef.current &&
+        event.target instanceof Node &&
+        !rootRef.current.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('pointerdown', dismissOutside);
+    return () => document.removeEventListener('pointerdown', dismissOutside);
+  }, [open]);
+
+  const dismissAndRestoreFocus = React.useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, []);
+  const handleEscape = (event: React.KeyboardEvent) => {
+    if (open && event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      dismissAndRestoreFocus();
+    }
+  };
+
+  const handleEditServer = React.useCallback((server: MCPServer) => {
+    // AntD Modal portals to document.body. Close this disclosure deliberately
+    // before opening the modal, and keep the modal's state at this overlay
+    // owner, so interacting with the portal cannot be mistaken for an outside
+    // click or unmount the editor with the disclosure contents.
+    setOpen(false);
+    setEditingServer(server);
+    setEditModalOpen(true);
+  }, []);
+
+  const finishEditModalClose = React.useCallback(() => {
+    setEditingServer(null);
+    triggerRef.current?.focus();
+  }, []);
 
   const summary = React.useMemo(
     () =>
@@ -54,7 +105,8 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
       ? `${unauthedServers[0].display_name || unauthedServers[0].name} isn’t connected. Open to connect.`
       : unauthedServers.length > 1
         ? `${unauthedServers.length} MCP servers aren’t connected. Open to connect.`
-        : `${summary.tooltip}. Click to add or change MCP servers.`;
+        : `${summary.tooltip}. Open to add or change MCP servers.`;
+  const badgeAccessibleName = `MCP servers. ${badgeTitle}`;
 
   const handleChange = async (nextIds: string[]) => {
     if (!client) return;
@@ -73,9 +125,11 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
 
   const content = (
     <div style={{ width: 340, maxWidth: 'min(340px, 80vw)' }}>
-      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+      <Space orientation="vertical" size={10} style={{ width: '100%' }}>
         <div>
-          <Typography.Text strong>Session MCP servers</Typography.Text>
+          <Typography.Text id={headingId} strong>
+            Session MCP servers
+          </Typography.Text>
           <Typography.Paragraph type="secondary" style={{ margin: `${token.sizeUnit}px 0 0` }}>
             Attach tools/connectors that the agent can use in this conversation.
           </Typography.Paragraph>
@@ -89,6 +143,7 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
                 server={server}
                 needsAuth={mcpServerNeedsAuth(server, userAuthenticatedMcpServerIds)}
                 client={client}
+                onEdit={handleEditServer}
               />
             ))}
           </Space>
@@ -102,60 +157,120 @@ export const SessionMcpFooterControl: React.FC<SessionMcpFooterControlProps> = (
           loading={saving}
           disabled={!client || saving}
           style={{ width: '100%' }}
+          getPopupContainer={(trigger) =>
+            popupRef.current ?? trigger.parentElement ?? document.body
+          }
         />
       </Space>
     </div>
   );
 
   return (
-    <Popover
-      trigger="click"
-      placement="top"
-      getPopupContainer={(trigger) => trigger.parentElement ?? document.body}
-      title={null}
-      content={content}
-    >
-      <Tag
-        icon={<ApiOutlined />}
-        color="default"
+    <div ref={rootRef} style={{ position: 'relative', display: 'inline-flex' }}>
+      {/* Tag renders a span, but this popover contains the only in-session
+          sign-in action for a fresh Marketplace OAuth install. Keep the Tag's
+          appearance inside a native disclosure control so Enter/Space, focus,
+          and the stateful accessible name do not depend on click handlers on a
+          span. */}
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label={badgeAccessibleName}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={popupId}
         title={badgeTitle}
-        style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
-        // antd nests children in a content span, so the root's align-items never reaches the chip.
-        styles={{ content: { display: 'inline-flex', alignItems: 'center' } }}
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={handleEscape}
+        style={{
+          margin: 0,
+          padding: 0,
+          border: 'none',
+          background: 'transparent',
+          color: 'inherit',
+          font: 'inherit',
+          lineHeight: 1,
+          cursor: 'pointer',
+          display: 'inline-flex',
+          alignItems: 'center',
+        }}
       >
-        <span>MCP</span>
-        <AntTag
+        <Tag
+          icon={<ApiOutlined aria-hidden />}
+          color="default"
+          style={{ cursor: 'pointer', height: 22, display: 'inline-flex', alignItems: 'center' }}
+          // antd nests children in a content span, so the root's align-items never reaches the chip.
+          styles={{ content: { display: 'inline-flex', alignItems: 'center' } }}
+        >
+          <span>MCP</span>
+          <AntTag
+            style={{
+              marginInlineStart: token.sizeUnit,
+              marginInlineEnd: 0,
+              // Round notification counter: a 16px circle at one digit
+              // (minWidth === height), growing into a pill for 2+ digits. The
+              // large radius fully rounds the ends (clamped to height/2) in both.
+              boxSizing: 'border-box',
+              minWidth: 16,
+              height: 16,
+              paddingInline: 4,
+              borderRadius: 999,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              lineHeight: 1,
+              fontSize: 10,
+              textAlign: 'center',
+              fontVariantNumeric: 'tabular-nums',
+              // Recolor the count amber via semantic tokens only — the neutral chip's
+              // geometry (size, radius, shape) is untouched, so the not-connected
+              // state differs from the healthy state purely in color, theme-aware
+              // in light and dark. Avoids AntD's `color="warning"` preset, whose own
+              // fill/border/radius would shift the box vs. the neutral chip.
+              ...(summary.tone === 'warning'
+                ? { backgroundColor: token.colorWarningBg, color: token.colorWarning }
+                : {}),
+            }}
+          >
+            {summary.attachedCount}
+          </AntTag>
+        </Tag>
+      </button>
+
+      {open && (
+        <div
+          ref={popupRef}
+          id={popupId}
+          role="dialog"
+          aria-labelledby={headingId}
+          onKeyDown={handleEscape}
           style={{
-            marginInlineStart: token.sizeUnit,
-            marginInlineEnd: 0,
-            // Round notification counter: a 16px circle at one digit
-            // (minWidth === height), growing into a pill for 2+ digits. The
-            // large radius fully rounds the ends (clamped to height/2) in both.
-            boxSizing: 'border-box',
-            minWidth: 16,
-            height: 16,
-            paddingInline: 4,
-            borderRadius: 999,
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            lineHeight: 1,
-            fontSize: 10,
-            textAlign: 'center',
-            fontVariantNumeric: 'tabular-nums',
-            // Recolor the count amber via semantic tokens only — the neutral chip's
-            // geometry (size, radius, shape) is untouched, so the not-connected
-            // state differs from the healthy state purely in color, theme-aware
-            // in light and dark. Avoids AntD's `color="warning"` preset, whose own
-            // fill/border/radius would shift the box vs. the neutral chip.
-            ...(summary.tone === 'warning'
-              ? { backgroundColor: token.colorWarningBg, color: token.colorWarning }
-              : {}),
+            position: 'absolute',
+            bottom: `calc(100% + ${token.sizeXS}px)`,
+            left: 0,
+            zIndex: token.zIndexPopupBase,
+            padding: token.paddingSM,
+            background: token.colorBgElevated,
+            borderWidth: token.lineWidth,
+            borderStyle: 'solid',
+            borderColor: token.colorBorderSecondary,
+            borderRadius: token.borderRadiusLG,
+            boxShadow: token.boxShadowSecondary,
           }}
         >
-          {summary.attachedCount}
-        </AntTag>
-      </Tag>
-    </Popover>
+          {content}
+        </div>
+      )}
+      {editingServer && (
+        <MCPServerEditModal
+          server={editingServer}
+          open={editModalOpen}
+          client={client}
+          onClose={() => setEditModalOpen(false)}
+          afterClose={finishEditModalClose}
+          focusTriggerAfterClose={false}
+        />
+      )}
+    </div>
   );
 };

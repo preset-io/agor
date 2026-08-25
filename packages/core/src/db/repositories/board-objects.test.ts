@@ -117,7 +117,7 @@ describe('BoardObjectRepository.findVisibleToUser', () => {
         branch_id: visibleBranch.branch_id,
         position: { x: 100, y: 100 },
       });
-      await boRepo.create({
+      const hiddenBranchObject = await boRepo.create({
         board_id: privateBoardId,
         branch_id: hiddenBranch.branch_id,
         position: { x: 200, y: 200 },
@@ -130,13 +130,29 @@ describe('BoardObjectRepository.findVisibleToUser', () => {
       await expect(boRepo.countVisibleToUser(userId, { board_id: privateBoardId })).resolves.toBe(
         2
       );
+      await expect(
+        boRepo.findVisibleByObjectId(userId, visibleBranchObject.object_id)
+      ).resolves.toMatchObject({ object_id: visibleBranchObject.object_id });
+      await expect(boRepo.findVisibleByObjectId(userId, looseObjectId)).resolves.toMatchObject({
+        object_id: looseObjectId,
+      });
+      await expect(
+        boRepo.findVisibleByObjectId(userId, hiddenBranchObject.object_id)
+      ).resolves.toBeNull();
+      await expect(boRepo.canViewBranchReference(userId, visibleBranch.branch_id)).resolves.toBe(
+        true
+      );
+      await expect(boRepo.canViewBranchReference(userId, hiddenBranch.branch_id)).resolves.toBe(
+        false
+      );
 
       const isolatedPrivateBoardId = await createBoard(db, {
         name: 'Isolated Private Board',
         access_mode: 'private',
       });
+      const isolatedLooseObjectId = generateId();
       await (db as any).insert(boardObjects).values({
-        object_id: generateId(),
+        object_id: isolatedLooseObjectId,
         board_id: isolatedPrivateBoardId,
         branch_id: null,
         card_id: null,
@@ -146,6 +162,7 @@ describe('BoardObjectRepository.findVisibleToUser', () => {
       await expect(
         boRepo.countVisibleToUser(userId, { board_id: isolatedPrivateBoardId })
       ).resolves.toBe(0);
+      await expect(boRepo.findVisibleByObjectId(userId, isolatedLooseObjectId)).resolves.toBeNull();
     }
   );
 });

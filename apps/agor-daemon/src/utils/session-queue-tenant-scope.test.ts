@@ -2,6 +2,7 @@ import {
   getCurrentTenantDatabaseScope,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
+  TenantWriteGateActiveError,
 } from '@agor/core/db';
 import type { SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -211,9 +212,17 @@ describe('session queue tenant scope', () => {
     consoleError.mockRestore();
   });
 
-  it('defers promptable-session queue drains with active tenant params', async () => {
-    const { db } = makePgDb();
-    const seen: string[] = [];
+  it('waits for commit and defers queue work with tenant identity but no retained transaction', async () => {
+    const events: string[] = [];
+    const tx = { execute: vi.fn(async () => []) };
+    const db = {
+      transaction: vi.fn(async (callback: (transaction: unknown) => Promise<unknown>) => {
+        events.push('tx:start');
+        const result = await callback(tx);
+        events.push('tx:committed');
+        return result;
+      }),
+    };
 
     const drained = new Promise<void>((resolve, reject) => {
       void runWithTenantDatabaseScope(db as never, 'tenant-active', async () => {
@@ -230,17 +239,24 @@ describe('session queue tenant scope', () => {
           },
           async (params) => {
             expect(getCurrentTenantDatabaseScope()).toBeUndefined();
-            seen.push(`tenant:${getCurrentTenantId()}`);
-            seen.push(`params:${params.tenant?.tenant_id}`);
+            events.push(`work:${getCurrentTenantId()}:${params.tenant?.tenant_id}`);
             resolve();
           },
           reject
         );
+        events.push('scheduled');
       }).catch(reject);
     });
     await drained;
 
-    expect(seen).toEqual(['tenant:tenant-active', 'params:tenant-active']);
+    expect(events).toEqual([
+      'tx:start',
+      'scheduled',
+      'tx:committed',
+      'tx:start',
+      'tx:committed',
+      'work:tenant-active:tenant-active',
+    ]);
   });
 
   it('does not defer request-less queue drains in required tenant mode without params or ALS', async () => {
@@ -265,6 +281,47 @@ describe('session queue tenant scope', () => {
 
     expect(work).not.toHaveBeenCalled();
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.any(String) }));
+  });
+
+  it('blocks a deferred queue drain at short tenant write admission', async () => {
+    const tx = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            value_text: JSON.stringify({
+              generation: 'queue-gate-generation',
+              acquiredAt: '2026-08-24T00:00:00.000Z',
+            }),
+          },
+        ]),
+    };
+    const db = {
+      transaction: vi.fn(async (callback: (scoped: unknown) => Promise<unknown>) => callback(tx)),
+    };
+    const work = vi.fn(async () => undefined);
+
+    const error = await new Promise<unknown>((resolve) => {
+      deferWithSessionQueueTenantScope(
+        {
+          db: db as never,
+          config: {
+            database: { dialect: 'postgresql' },
+            multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+          },
+          sessionId: 'session-1' as SessionID,
+          params: { tenant: { tenant_id: 'tenant-frozen', source: 'explicit' } },
+          label: 'frozen queue drain',
+        },
+        work,
+        resolve
+      );
+    });
+
+    expect(error).toBeInstanceOf(TenantWriteGateActiveError);
+    expect(work).not.toHaveBeenCalled();
+    expect(db.transaction).toHaveBeenCalledOnce();
   });
 
   it('defers request-less queue drains with a trusted tenant hint', async () => {

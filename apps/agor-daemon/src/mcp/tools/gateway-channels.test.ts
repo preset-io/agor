@@ -17,7 +17,7 @@ import {
 import { AGENTIC_TOOL_NAMES, getRequiredSecretFields } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { runExecutorCommand } from '../../utils/spawn-executor.js';
+import { requestExecutor } from '../../utils/spawn-executor.js';
 import { getUploadDirectory, MAX_UPLOAD_FILE_SIZE } from '../../utils/upload.js';
 
 const uploadStoreMock = vi.hoisted(() => ({
@@ -60,9 +60,11 @@ vi.mock('../../utils/executor-delegated-home.js', () => ({
   resolveDelegatedExecutionHomeKey: vi.fn(async () => undefined),
 }));
 vi.mock('../../utils/spawn-executor.js', () => ({
-  generateScopedServiceToken: vi.fn(() => 'service-token'),
   getDaemonUrl: vi.fn(() => 'http://daemon.test'),
-  runExecutorCommand: vi.fn(),
+  requestExecutor: vi.fn(),
+}));
+vi.mock('../../services/session-token-service.js', () => ({
+  issueExecutorCommandToken: vi.fn(async () => 'delegated-user-token'),
 }));
 vi.mock('../../utils/upload-staging.js', () => ({
   getUploadStagingStore: () => uploadStoreMock,
@@ -211,7 +213,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(getConnector).mockReset();
   vi.mocked(getUploadDirectory).mockReset();
-  vi.mocked(runExecutorCommand).mockReset();
+  vi.mocked(requestExecutor).mockReset();
   uploadStoreMock.inspect.mockReset();
   uploadStoreMock.read.mockReset();
   uploadStoreMock.consume.mockClear();
@@ -1702,7 +1704,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
 
         const tools = await captureTools('member');
-        vi.mocked(runExecutorCommand).mockResolvedValue({
+        vi.mocked(requestExecutor).mockResolvedValue({
           success: true,
           data: { uploaded: { id: 'F999', name: 'screenshot.png' } },
         });
@@ -1712,7 +1714,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         });
         const payload = JSON.parse(result.content[0].text);
 
-        expect(runExecutorCommand).toHaveBeenCalledWith(
+        expect(requestExecutor).toHaveBeenCalledWith(
           expect.objectContaining({
             params: expect.objectContaining({ channel: 'D123', filePath: 'screenshot.png' }),
           }),
@@ -1786,7 +1788,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
     });
 
     it('uploads a file from a path relative to the branch workspace', async () => {
-      vi.mocked(runExecutorCommand).mockResolvedValue({
+      vi.mocked(requestExecutor).mockResolvedValue({
         success: true,
         data: { uploaded: { id: 'F456', name: 'chart.png' } },
       });
@@ -1803,7 +1805,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       });
       const payload = JSON.parse(result.content[0].text);
 
-      expect(runExecutorCommand).toHaveBeenCalledWith(
+      expect(requestExecutor).toHaveBeenCalledWith(
         expect.objectContaining({
           command: 'branch.gateway.slack-file-upload',
           params: expect.objectContaining({
@@ -1815,7 +1817,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         }),
         expect.any(Object)
       );
-      const executorPayload = vi.mocked(runExecutorCommand).mock.calls[0]?.[0];
+      const executorPayload = vi.mocked(requestExecutor).mock.calls[0]?.[0];
       expect(JSON.stringify(executorPayload)).not.toContain('xoxb');
       expect(executorPayload?.params).not.toHaveProperty('connectorConfig');
       expect(payload).toMatchObject({ uploaded: true });
@@ -1827,7 +1829,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       const outsideFile = path.join(outsideDir, 'secret.txt');
       fs.writeFileSync(outsideFile, 'nope');
       try {
-        vi.mocked(runExecutorCommand).mockResolvedValue({
+        vi.mocked(requestExecutor).mockResolvedValue({
           success: false,
           error: { code: 'BRANCH_SLACK_FILE_UPLOAD_FAILED', message: 'Path must be relative' },
         });
@@ -1850,7 +1852,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
     });
 
     it('surfaces executor rejection for relative path traversal', async () => {
-      vi.mocked(runExecutorCommand).mockResolvedValue({
+      vi.mocked(requestExecutor).mockResolvedValue({
         success: false,
         error: { code: 'BRANCH_SLACK_FILE_UPLOAD_FAILED', message: 'Path escapes branch root' },
       });
@@ -1877,7 +1879,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
       const symlinkPath = path.join(dir, 'innocuous.png');
       fs.symlinkSync(outsideFile, symlinkPath);
       try {
-        vi.mocked(runExecutorCommand).mockResolvedValue({
+        vi.mocked(requestExecutor).mockResolvedValue({
           success: false,
           error: { code: 'BRANCH_SLACK_FILE_UPLOAD_FAILED', message: 'Path must be relative' },
         });
@@ -1927,7 +1929,7 @@ describe('gateway agent-tool capability gating (MCP)', () => {
         fileUploadEnabled as any
       );
       vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
-      vi.mocked(runExecutorCommand).mockResolvedValue({
+      vi.mocked(requestExecutor).mockResolvedValue({
         success: false,
         error: { code: 'BRANCH_SLACK_FILE_UPLOAD_FAILED', message: 'File exceeds the limit' },
       });

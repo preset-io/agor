@@ -1,4 +1,4 @@
-import type { BranchID, UserID } from './id';
+import type { BoardID, BranchID, UserID } from './id';
 
 /** Canonical discriminants for branch visibility at realtime boundaries. */
 export const BranchRealtimeVisibilityMode = {
@@ -28,6 +28,18 @@ export type BranchRemovalRealtimeVisibilitySnapshot =
     }
   | {
       branchId: BranchID;
+      mode: typeof BranchRealtimeVisibilityMode.EXPLICIT_USERS;
+      userIds: UserID[];
+    };
+
+/** Serializable authorization snapshot for a committed board tombstone. */
+export type BoardRemovalRealtimeVisibilitySnapshot =
+  | {
+      boardId: BoardID;
+      mode: typeof BranchRealtimeVisibilityMode.ALL_AUTHENTICATED;
+    }
+  | {
+      boardId: BoardID;
       mode: typeof BranchRealtimeVisibilityMode.EXPLICIT_USERS;
       userIds: UserID[];
     };

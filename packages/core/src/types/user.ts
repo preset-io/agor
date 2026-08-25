@@ -1,10 +1,6 @@
-import type {
-  AgenticToolName,
-  CodexApprovalPolicy,
-  CodexNetworkAccess,
-  CodexSandboxMode,
-} from './agentic-tool';
-import type { UserID } from './id';
+import type { CodexApprovalPolicy, CodexNetworkAccess, CodexSandboxMode } from './agentic-tool';
+import { type AgenticToolName, DEFAULT_AGENTIC_TOOL_NAME, isAgenticToolName } from './agentic-tool';
+import type { BranchID, UserID } from './id';
 import type { EffortLevel, PermissionMode } from './session';
 
 /** Canonical syntax for the transitional delegated execution-home key. */
@@ -448,6 +444,8 @@ export interface OnboardingState {
   assistantDisplayName?: string;
   /** Teammate emoji captured during onboarding identity step */
   teammateEmoji?: string;
+  /** Starter-template id selected for the first teammate (for resumable setup). */
+  teammateTemplateId?: string;
   /** @deprecated Use teammateEmoji. Read for pre-rename preferences compatibility only. */
   assistantEmoji?: string;
 }
@@ -550,6 +548,10 @@ export interface User extends BaseUserFields {
   // tolerated on read but not yet exposed by the UI.
   env_vars?: Record<string, EnvVarMetadata>;
   // Default agentic tool configuration (prepopulates session creation forms)
+  /** Agentic coding tool preselected for new sessions. */
+  primary_agentic_tool?: AgenticToolName;
+  /** Teammate branch preselected by quick compose and user preferences. */
+  primary_teammate_id?: BranchID;
   default_agentic_config?: DefaultAgenticConfig;
   default_agentic_selection?: UserAgenticDefaultSelections;
   // Default MCP selection, independent of the selected agentic tool.
@@ -565,11 +567,39 @@ export interface User extends BaseUserFields {
 export type UserAuthMetadata = object & {
   /** Tokens issued at or before this timestamp are no longer valid. */
   tokens_valid_after?: Date;
+  /**
+   * Monotonic local-credential generation captured in interactive JWTs.
+   * Password changes increment this atomically so a token minted by a racing
+   * login or refresh against an older credential snapshot is fail-closed.
+   */
+  credential_generation?: number;
   /** Backend-only tenant id used while issuing/validating runtime tokens. */
   tenant_id?: string;
 };
 
-export type InternalUser = User & UserAuthMetadata;
+/** Required backend metadata for any user used to validate or mint interactive credentials. */
+export type AuthenticationUserAuthMetadata = Omit<UserAuthMetadata, 'credential_generation'> & {
+  credential_generation: number;
+};
+
+export type AuthenticationUser = User & AuthenticationUserAuthMetadata;
+
+/** Database-backed internal users always carry the non-null generation column. */
+export type InternalUser = AuthenticationUser;
+
+/**
+ * Read an explicitly stored primary coding agent, tolerating malformed JSON.
+ */
+export function getUserPrimaryAgenticTool(
+  user: User | null | undefined
+): AgenticToolName | undefined {
+  return isAgenticToolName(user?.primary_agentic_tool) ? user.primary_agentic_tool : undefined;
+}
+
+/** Resolve the primary coding agent, falling back only while it is unset. */
+export function resolveUserPrimaryAgenticTool(user: User | null | undefined): AgenticToolName {
+  return getUserPrimaryAgenticTool(user) ?? DEFAULT_AGENTIC_TOOL_NAME;
+}
 
 /**
  * Env var scope values.
@@ -694,6 +724,8 @@ export interface UpdateUserInput extends Partial<BaseUserFields> {
    */
   env_var_scopes?: Record<string, EnvVarScope>;
   // Default agentic tool configuration
+  /** Agentic coding tool preselected for new sessions. */
+  primary_agentic_tool?: AgenticToolName;
   default_agentic_config?: DefaultAgenticConfig;
   default_agentic_selection?: UserAgenticDefaultSelections;
   // Default MCP selection, independent of the selected agentic tool.

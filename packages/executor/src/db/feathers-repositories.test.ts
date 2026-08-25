@@ -68,21 +68,6 @@ describe('FeathersMCPOAuthAuthHeadersRepository', () => {
     expect(create).toHaveBeenCalledWith({ mcp_server_ids: ['mcp-1'] });
     expect(result).toEqual({ 'mcp-1': { authorization: 'Bearer token' } });
   });
-
-  it('includes the explicit executor session token when socket params drop JWT claims', async () => {
-    const create = vi.fn().mockResolvedValue({ headers: {} });
-    const repo = new FeathersMCPOAuthAuthHeadersRepository({
-      executorSessionToken: 'executor-jwt',
-      service: () => ({ create }),
-    } as unknown as AgorClient);
-
-    await repo.getAuthHeaders(['mcp-1'] as never);
-
-    expect(create).toHaveBeenCalledWith({
-      mcp_server_ids: ['mcp-1'],
-      executorSessionToken: 'executor-jwt',
-    });
-  });
 });
 
 describe('FeathersSessionMCPServersRepository', () => {

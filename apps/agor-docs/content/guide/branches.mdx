@@ -100,6 +100,9 @@ execution:
       - clone
     # Optional: reject clone_depth and require complete history.
     allow_shallow_clones: false
+    # Optional: stop clone-mode branches from borrowing objects from the
+    # daemon's base clone. Usually inferred — see "Borrowed objects" below.
+    borrow_base_objects: false
 ```
 
 If `branch_storage` is omitted, Agor keeps the backwards-compatible default: `worktree` is selected by default and both `worktree` and `clone` are available. When an operator restricts `allowed_modes`, the create-branch UI disables unavailable options and the daemon rejects disallowed API/MCP requests.
@@ -108,6 +111,74 @@ If `branch_storage` is omitted, Agor keeps the backwards-compatible default: `wo
 `clone_depth`; callers must omit the field to create a full clone. This is independent of mount
 topology: both full and shallow clones are self-standing, while a native worktree always requires
 the registered base repository's Git metadata.
+
+### Borrowed objects (`borrow_base_objects`)
+
+By default, clone-mode branches are created with `git clone --reference` against the daemon-managed
+base clone at `<data_home>/repos/<slug>/`. Instead of copying the whole object store, the new branch
+gets an `alternates` pointer into it — per-branch `.git/` drops from "full pack copy" to a few MB.
+Only immutable objects are shared; `.git/config`, remotes, and credentials stay branch-local, so the
+isolation clone mode buys is preserved.
+
+That pointer is baked in at create time and re-read by **every** later git command in the branch.
+It therefore requires the base clone to be readable from wherever **sessions** run — not merely from
+wherever the branch was materialized. If sessions execute in a different mount (a containerized or
+templated executor that only binds the branch workspace and never `repos/`), git in that branch
+breaks as soon as a session touches it:
+
+```
+error: unable to normalize alternate object path: /…/.agor/repos/<org>/<repo>/.git/objects
+error: Could not read <sha>
+fatal: Failed to traverse parents of commit <sha>
+```
+
+On a freshly created branch that is total: `git status`, `git log`, `git show` and `git commit` all
+exit non-zero on `fatal: bad object HEAD` before the agent can do anything. A later `git fetch` or
+`git pull` against a reachable remote can quietly backfill the missing objects and make the branch
+look healthy again — but the pointer is still there, still unresolvable, and still erroring on every
+command, and anything git could not re-download from the remote stays lost.
+
+Set `borrow_base_objects: false` on those deployments. Every clone-mode branch then carries its own
+complete object store: more disk, no cross-mount dependency.
+
+Agor turns the borrow off by itself in two cases, so most operators never touch the setting:
+
+- **`execution.sandbox` is enabled with `home_mode: per_user`** — which the named
+  `unix_user_mode: sandbox` mode forces. The owner-home overlay deliberately hides the entire daemon
+  `.agor` tree — `repos/` included — and re-exposes only the branch and the managed agentic-tools
+  directory. Branch creation itself is never sandboxed, so without this the daemon would happily
+  write a pointer its own sessions cannot follow.
+- **[`execution.executor_storage.base_repository`](/guide/containerized-execution) is
+  `unavailable`** — already an operator assertion that executors cannot see the base checkout.
+
+Setting `borrow_base_objects: true` explicitly overrides the sandbox inference, for operators who
+have made the base clone reachable another way (for example
+`execution.sandbox.extra_allow_write: ['<data_home>/repos']` — note that is a read-**write** bind,
+so a session could rewrite the object store every other borrowed branch depends on).
+`base_repository: unavailable` is not overridable.
+
+#### Repairing a branch that already has an unresolvable borrow
+
+The setting only affects branches created after the change. An existing branch keeps its pointer.
+
+Do **not** just delete `.git/objects/info/alternates`. The borrowed objects were never copied into
+the branch, so dropping the pointer strands everything that lived behind it. On a branch with no
+in-session commits that is every object (`fatal: bad object HEAD`). On one that has been worked in,
+the session's own commits survive as local objects but their history does not, so git can no longer
+walk them out — `git push` and `git format-patch` both die on `Could not read <sha>` /
+`fatal: Failed to traverse parents of commit <sha>`, and the unpushed work is unrecoverable.
+Materialize the objects first, from a context where the base clone **is** readable (the daemon host,
+not a sandboxed session):
+
+```bash
+cd <data_home>/worktrees/<repo>/<branch>
+git repack -a -d          # copies borrowed objects into a local pack — no -l/--local
+rm -f .git/objects/info/alternates
+git fsck --connectivity-only   # verify before trusting it
+```
+
+Recreating the branch also works, but it allocates a new `branch_id` and orphans anything bound to
+the old one (schedules, gateway channels).
 
 ---
 

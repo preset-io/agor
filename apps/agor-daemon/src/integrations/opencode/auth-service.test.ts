@@ -46,7 +46,7 @@ vi.mock('@agor/core/unix', async () => {
 
 const runCommand = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/spawn-executor.js', () => ({
-  runExecutorCommand: runCommand,
+  requestExecutor: runCommand,
   startContainedExecutorCommand: (payload: unknown, options: unknown) => ({
     result: runCommand(payload, options),
     verifyAbsence: vi.fn(async () => true),

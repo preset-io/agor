@@ -3,8 +3,9 @@ import {
   buildCompletedOnboardingPreferences,
   buildGoalBootstrapGuidance,
   findOnboardingGoal,
-  mergeGoalMcpRecs,
+  mergeGoalIntegrationRecs,
   ONBOARDING_GOALS,
+  ONBOARDING_INTEGRATION_RECOMMENDATIONS,
 } from './onboardingGoals';
 
 describe('buildCompletedOnboardingPreferences', () => {
@@ -29,9 +30,36 @@ describe('buildCompletedOnboardingPreferences', () => {
       },
     });
   });
+
+  it('persists resumable teammate identity and clears it on an authoritative skip', () => {
+    const withTeammate = buildCompletedOnboardingPreferences(undefined, {
+      boardId: 'board-1',
+      branchId: 'branch-1',
+      path: 'teammate',
+      goals: ['ship-without-busywork'],
+      teammateName: 'Rusty',
+      teammateEmoji: '⚖️',
+      templateId: 'legal-analyst',
+    });
+    expect(withTeammate.onboarding).toMatchObject({
+      teammateDisplayName: 'Rusty',
+      teammateEmoji: '⚖️',
+      teammateTemplateId: 'legal-analyst',
+    });
+
+    const skipped = buildCompletedOnboardingPreferences(withTeammate, {
+      boardId: 'board-2',
+      branchId: '',
+      path: 'teammate',
+      goals: [],
+    });
+    expect(skipped.onboarding).not.toHaveProperty('teammateDisplayName');
+    expect(skipped.onboarding).not.toHaveProperty('teammateEmoji');
+    expect(skipped.onboarding).not.toHaveProperty('teammateTemplateId');
+  });
 });
 
-const names = (goalIds: string[]) => mergeGoalMcpRecs(goalIds).map((rec) => rec.name);
+const names = (goalIds: string[]) => mergeGoalIntegrationRecs(goalIds).map((rec) => rec.name);
 
 describe('ONBOARDING_GOALS', () => {
   it('defines exactly the six goal cards with unique ids and non-empty recs + bootstrap lines', () => {
@@ -40,7 +68,7 @@ describe('ONBOARDING_GOALS', () => {
     expect(new Set(ids).size).toBe(6);
     for (const goal of ONBOARDING_GOALS) {
       expect(goal.title.length).toBeGreaterThan(0);
-      expect(goal.mcpRecs.length).toBeGreaterThan(0);
+      expect(goal.integrationRecs.length).toBeGreaterThan(0);
       expect(goal.bootstrapLine.length).toBeGreaterThan(0);
     }
   });
@@ -52,7 +80,7 @@ describe('ONBOARDING_GOALS', () => {
   });
 });
 
-describe('mergeGoalMcpRecs', () => {
+describe('mergeGoalIntegrationRecs', () => {
   it('falls back to the default set when no goal is picked', () => {
     expect(names([])).toEqual(['Slack', 'GitHub', 'Linear', 'Notion']);
   });
@@ -65,26 +93,26 @@ describe('mergeGoalMcpRecs', () => {
     // hand-off-build has only two recs — the list stays two long.
     expect(names(['hand-off-build'])).toEqual(['GitHub', 'Figma']);
     // status-updates already has four.
-    expect(names(['status-updates'])).toEqual(['Linear', 'Shortcut / Jira', 'Slack', 'Calendar']);
+    expect(names(['status-updates'])).toEqual(['Linear', 'Atlassian', 'Notion', 'Slack']);
   });
 
   it('merges two goals: first two of primary, first two of secondary', () => {
-    // primary ship-without-busywork [GitHub, Sentry, Datadog], secondary dig-into-anything [Amplitude, HubSpot]
+    // primary ship-without-busywork [GitHub, Sentry, Datadog], secondary dig-into-anything [Amplitude, Firecrawl]
     expect(names(['ship-without-busywork', 'dig-into-anything'])).toEqual([
       'GitHub',
       'Sentry',
       'Amplitude',
-      'HubSpot',
+      'Firecrawl',
     ]);
   });
 
   it('dedups across goals then refills from primary remaining before secondary remaining', () => {
-    // primary team-teammate [Slack, HubSpot, Linear, Datadog], secondary personal-teammate [Slack]
-    // step1+2: Slack, HubSpot, (Slack deduped) → [Slack, HubSpot]
-    // refill from primary remaining: Linear, Datadog → [Slack, HubSpot, Linear, Datadog]
+    // primary team-teammate [Slack, Notion, Linear, Datadog], secondary personal-teammate [Slack]
+    // step1+2: Slack, Notion, (Slack deduped) → [Slack, Notion]
+    // refill from primary remaining: Linear, Datadog → [Slack, Notion, Linear, Datadog]
     expect(names(['team-teammate', 'personal-teammate'])).toEqual([
       'Slack',
-      'HubSpot',
+      'Notion',
       'Linear',
       'Datadog',
     ]);
@@ -93,7 +121,7 @@ describe('mergeGoalMcpRecs', () => {
   it('respects selection order (primary vs secondary is swap-sensitive)', () => {
     expect(names(['dig-into-anything', 'ship-without-busywork'])).toEqual([
       'Amplitude',
-      'HubSpot',
+      'Firecrawl',
       'GitHub',
       'Sentry',
     ]);
@@ -102,14 +130,35 @@ describe('mergeGoalMcpRecs', () => {
   it('caps the merged list at four even when both goals are rec-rich', () => {
     const merged = names(['status-updates', 'team-teammate']);
     expect(merged).toHaveLength(4);
-    // first two of each: Linear, Shortcut/Jira, Slack, HubSpot
-    expect(merged).toEqual(['Linear', 'Shortcut / Jira', 'Slack', 'HubSpot']);
+    // first two of each: Linear, Atlassian, Slack, Notion
+    expect(merged).toEqual(['Linear', 'Atlassian', 'Slack', 'Notion']);
   });
 
   it('flags only the first rec as featured', () => {
-    const recs = mergeGoalMcpRecs(['ship-without-busywork']);
+    const recs = mergeGoalIntegrationRecs(['ship-without-busywork']);
     expect(recs[0].featured).toBe(true);
     expect(recs.slice(1).every((rec) => !rec.featured)).toBe(true);
+  });
+
+  it('routes recommendations only to their real current Agor surface', () => {
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack.setup).toEqual({
+      surface: 'mcp-settings',
+      endpoint: 'https://mcp.slack.com/mcp',
+    });
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.github.setup).toEqual({
+      surface: 'connected-repository',
+    });
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.linear.setup).toEqual({
+      surface: 'marketplace',
+      catalogEntryName: 'app.linear/linear',
+    });
+    expect(Object.values(ONBOARDING_INTEGRATION_RECOMMENDATIONS)).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'HubSpot' }),
+        expect.objectContaining({ name: 'Shortcut / Jira' }),
+        expect.objectContaining({ name: 'Calendar' }),
+      ])
+    );
   });
 });
 
@@ -131,8 +180,8 @@ describe('buildGoalBootstrapGuidance', () => {
     const lines = buildGoalBootstrapGuidance(['hand-off-build', 'dig-into-anything']);
     expect(lines[0]).toBe(findOnboardingGoal('hand-off-build')?.bootstrapLine);
     expect(lines[1]).toBe(findOnboardingGoal('dig-into-anything')?.bootstrapLine);
-    // Bridging line names the primary as the concrete opener and the secondary as the follow-up.
-    expect(lines[2]).toContain('"Hand off the build"');
+    // Bridging line names primary and secondary without adding another opening command.
+    expect(lines[2]).toContain('"Build me an app"');
     expect(lines[2]).toContain('"Dig into anything"');
     expect(lines[2]).toMatch(/do not ask which matters more/i);
   });

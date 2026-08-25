@@ -47,6 +47,7 @@ describe('buildTenantInsertOrder', () => {
   it('deletes but never exports transient authorities or deployment-bound grants', () => {
     const nonPortable = nonPortableTenantTableNames();
     expect(nonPortable).toEqual([
+      'codex_device_auth_attempts',
       'executor_session_token_authorities',
       'github_install_states',
       'mcp_oauth_pending_flows',
@@ -62,7 +63,7 @@ describe('buildTenantInsertOrder', () => {
 describe('tenantPortabilityForeignKeys', () => {
   it('freezes the exact schema-derived movable FK set', () => {
     const foreignKeys = tenantPortabilityForeignKeys();
-    expect(foreignKeys).toHaveLength(92);
+    expect(foreignKeys).toHaveLength(93);
     expect(Object.isFrozen(foreignKeys)).toBe(true);
     const structuralKeys = foreignKeys.map((foreignKey) =>
       [
@@ -83,6 +84,20 @@ describe('tenantPortabilityForeignKeys', () => {
   it('does not classify deployment-bound MCP OAuth grant relations as movable', () => {
     expect(tenantPortabilityForeignKeys()).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ childTable: 'user_mcp_oauth_tokens' })])
+    );
+  });
+
+  it('moves external identity bindings with their projected users', () => {
+    expect(tenantPortabilityForeignKeys()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          childTable: 'user_external_identities',
+          childColumns: ['tenant_id', 'user_id'],
+          parentTable: 'users',
+          parentColumns: ['tenant_id', 'user_id'],
+          onDelete: 'cascade',
+        }),
+      ])
     );
   });
 

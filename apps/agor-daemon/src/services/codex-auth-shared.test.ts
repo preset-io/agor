@@ -68,6 +68,32 @@ it('routes credentials using deployment environment overrides from the effective
   });
 });
 
+it('rejects HA credential operations without cross-replica flock admission', async () => {
+  loadConfigSyncMock.mockReturnValue({
+    deployment: { mode: 'ha' },
+    execution: {
+      unix_user_mode: 'sandbox',
+      executor_storage: {
+        user_home: 'persistent-per-user',
+        user_home_locking: 'local-only',
+      },
+    },
+  } as never);
+
+  await expect(
+    resolveCodexCredentialRoute(
+      USER_ID,
+      withTenantDatabase,
+      resolveEffectiveConfig(loadConfigSync())
+    )
+  ).resolves.toEqual({
+    ok: false,
+    reason: 'unsupported-mode',
+    message: expect.stringContaining('cross-replica-flock'),
+  });
+  expect(findById).not.toHaveBeenCalled();
+});
+
 describe('resolveCodexCredentialRoute — delegated mode', () => {
   it('rejects a shared credential home for auth-resolved tenancy before user lookup', async () => {
     loadConfigSyncMock.mockReturnValue({
@@ -210,6 +236,10 @@ describe('resolveCodexCredentialRoute — sandbox mode', () => {
       execution: {
         unix_user_mode: 'sandbox',
         sandbox: { enabled: true, home_mode: 'per_user' },
+        executor_storage: {
+          user_home: 'persistent-per-user',
+          user_home_locking: 'cross-replica-flock',
+        },
       },
     } as never);
     findById.mockResolvedValue({
@@ -231,5 +261,35 @@ describe('resolveCodexCredentialRoute — sandbox mode', () => {
       codexHome: '/srv/agor-homes/alice/.codex',
     });
     expect(findById).toHaveBeenCalledOnce();
+  });
+
+  it('rejects filesystem_home overrides in HA rather than trusting shared ownership', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      deployment: { mode: 'ha' },
+      execution: {
+        unix_user_mode: 'sandbox',
+        sandbox: { enabled: true, home_mode: 'per_user' },
+        executor_storage: {
+          user_home: 'persistent-per-user',
+          user_home_locking: 'cross-replica-flock',
+        },
+      },
+    } as never);
+    findById.mockResolvedValue({
+      user_id: USER_ID,
+      filesystem_home: '/srv/agor-homes/shared',
+    });
+
+    await expect(
+      resolveCodexCredentialRoute(
+        USER_ID,
+        withTenantDatabase,
+        resolveEffectiveConfig(loadConfigSync())
+      )
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'unsupported-home-override',
+      message: expect.stringContaining('canonical tenant/user home'),
+    });
   });
 });

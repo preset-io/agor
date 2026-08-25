@@ -136,8 +136,19 @@ describe('auth_type', () => {
     expect(withAuth('').auth_type).toBe('unknown');
   });
 
-  it.each(['none', 'oauth', 'credentials'] as const)('carries a stated %s', (authType) => {
+  it.each(['none', 'oauth'] as const)('carries a stated %s', (authType) => {
     expect(withAuth(`auth_type: ${authType}`).auth_type).toBe(authType);
+  });
+
+  it('requires a reviewed scheme and acquisition URL for credentials', () => {
+    expect(() => withAuth('auth_type: credentials')).toThrow(CuratedCatalogError);
+    const entry = parseCuratedCatalog(
+      `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n`
+    )[0];
+    expect(entry.credentials).toEqual({
+      scheme: 'bearer',
+      acquisition_url: 'https://example.com/tokens',
+    });
   });
 
   it('refuses a verdict only a live check could produce', () => {
@@ -188,6 +199,22 @@ describe('loadCuratedCatalog', () => {
     expect(
       document.unpublished.length / (document.entries.length + document.unpublished.length)
     ).toBeGreaterThan(0.2);
+  });
+
+  it('files Tavily under its official Registry identity, not an inferred alias', async () => {
+    const source = await fs.readFile(curatedCatalogPath(), 'utf-8');
+    const document = loadYaml(source) as {
+      entries: Array<{ name?: string }>;
+      unpublished: Array<{ name?: string }>;
+    };
+
+    expect(document.entries.map((entry) => entry.name)).toContain('io.github.tavily-ai/tavily-mcp');
+    expect(document.unpublished.map((entry) => entry.name)).not.toContain(
+      'io.github.tavily-ai/tavily-mcp'
+    );
+    expect([...document.entries, ...document.unpublished].map((entry) => entry.name)).not.toContain(
+      'com.tavily/mcp'
+    );
   });
 
   it('loads the checked-in catalog with complete, unique curation', async () => {
@@ -330,6 +357,31 @@ ${block}
     );
   });
 
+  it('refuses dcr_mode: disabled with no client_id, which can never start a flow', () => {
+    // Registration off and no client stated leaves the flow with no client ID
+    // to send, and `startOAuthFlow` throws on exactly that pair. Caught here it
+    // is a diff a reviewer can fix; caught there it is a per-user dead end.
+    expect(() => parseCuratedCatalog(withOAuth('      dcr_mode: disabled'))).toThrow(
+      CuratedCatalogError
+    );
+  });
+
+  it.each(['advertised', 'fallback'] as const)(
+    'accepts dcr_mode: %s with no client_id, because registration can supply one',
+    (dcrMode) => {
+      const [entry] = parseCuratedCatalog(withOAuth(`      dcr_mode: ${dcrMode}`));
+      expect(entry.oauth).toEqual({ dcr_mode: dcrMode });
+    }
+  );
+
+  it('accepts dcr_mode: disabled with the client_id it requires', () => {
+    const [entry] = parseCuratedCatalog(
+      withOAuth(`      client_id: public-client-123
+      dcr_mode: disabled`)
+    );
+    expect(entry.oauth).toEqual({ client_id: 'public-client-123', dcr_mode: 'disabled' });
+  });
+
   it('leaves the block absent when an entry states nothing', () => {
     const [entry] = parseCuratedCatalog(VALID_ENTRY);
     expect(entry.oauth).toBeUndefined();
@@ -337,14 +389,178 @@ ${block}
 });
 
 describe('the shipped catalog', () => {
-  it('states no oauth settings, because discovery covers every entry', async () => {
-    // Not a style rule: each of these is an authored claim about somebody
-    // else's endpoint that nothing in the running system can contradict, so an
-    // entry acquiring one should be a deliberate, reviewed exception rather
-    // than something that accumulates. Delete this expectation with the PR that
-    // adds the first justified one.
+  it('keeps material destructive, sensitive, and operational authority in disclosures', async () => {
     const entries = await loadCuratedCatalog();
-    expect(entries.filter((entry) => entry.oauth !== undefined)).toEqual([]);
+    const disclosure = (name: string): string => {
+      const entry = entries.find((candidate) => candidate.name === name);
+      expect(entry, `missing catalog entry ${name}`).toBeDefined();
+      return entry!.permission_disclosure;
+    };
+
+    const expectTerms = (name: string, terms: string[]): void => {
+      const copy = disclosure(name).toLowerCase();
+      for (const term of terms) expect(copy).toContain(term.toLowerCase());
+    };
+    expectTerms('io.github.cloudinary/asset-management-mcp', [
+      'creates, moves, and deletes folders',
+      'recursive folder deletion',
+      'all assets',
+    ]);
+    expectTerms('com.netlify/mcp', [
+      'user and team',
+      'access controls',
+      'install or remove extensions',
+      'secrets',
+    ]);
+    expectTerms('com.klaviyo/mcp', [
+      'default unparameterized endpoint',
+      'write actions',
+      'user-generated-content tools',
+      'all non-beta toolsets',
+      'send, or clone campaigns',
+      'create, update, or delete flows',
+      'delete lists and segments',
+      'add or remove list members',
+      'profile deletion requests',
+      'delete webhooks and forms',
+      'coupons and coupon codes',
+      'tag groups',
+      'images',
+      'email templates',
+      'custom metrics',
+    ]);
+    expectTerms('io.customer/mcp', [
+      'US-region',
+      'every scope',
+      'sensitive profile',
+      'live messages',
+      'subscriptions',
+      'integrations',
+      'webhooks',
+    ]);
+    expectTerms('io.incident/mcp', [
+      'investigation',
+      'post-mortem',
+      'logs',
+      'metrics',
+      'traces',
+      'dashboards',
+      'Allowed redirect domains',
+    ]);
+    expect(entries.find((entry) => entry.name === 'io.incident/mcp')).toMatchObject({
+      website_url: 'https://docs.incident.io/ai/remote-mcp',
+    });
+  });
+
+  it("uses Firecrawl's documented versioned keyless endpoint", async () => {
+    const entries = await loadCuratedCatalog();
+    expect(entries).toContainEqual(
+      expect.objectContaining({
+        name: 'com.firecrawl/mcp',
+        remote_url: 'https://mcp.firecrawl.dev/v2/mcp',
+        auth_type: 'none',
+        capabilities: ['web-search', 'web-scrape'],
+      })
+    );
+  });
+
+  it('keeps the 2026-08-20 boundary-audited expansion on its reviewed endpoints and auth paths', async () => {
+    // Live provider metadata evidence and the mocked production service-boundary
+    // fixture are documented in the accompanying audit report.
+    // Assert identities rather than a whole-catalog count: unrelated additions
+    // should not require this audit contract to change.
+    const entries = await loadCuratedCatalog();
+    expect(entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'com.postman/postman-mcp-server',
+          remote_url: 'https://mcp.postman.com/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.github.clerk/mcp-server',
+          remote_url: 'https://mcp.clerk.com/mcp',
+          auth_type: 'none',
+        }),
+        expect.objectContaining({
+          name: 'io.github.cloudinary/asset-management-mcp',
+          remote_url: 'https://asset-management.mcp.cloudinary.com/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.github.miroapp/mcp-server',
+          remote_url: 'https://mcp.miro.com/',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'co.axiom/mcp',
+          remote_url: 'https://mcp.axiom.co/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.github.algolia/algolia-productivity',
+          remote_url: 'https://mcp.algolia.com/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'com.netlify/mcp',
+          remote_url: 'https://netlify-mcp.netlify.app/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'com.klaviyo/mcp',
+          remote_url: 'https://mcp.klaviyo.com/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.customer/mcp',
+          remote_url: 'https://mcp.customer.io/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.incident/mcp',
+          remote_url: 'https://mcp.incident.io/mcp',
+          auth_type: 'oauth',
+        }),
+        expect.objectContaining({
+          name: 'io.github.tavily-ai/tavily-mcp',
+          remote_url: 'https://mcp.tavily.com/mcp/',
+          auth_type: 'oauth',
+        }),
+      ])
+    );
+  });
+
+  it('opts the providers that pass the strict production boundary into strict mode', async () => {
+    // Marketplace installs with no statement use the daemon's bounded
+    // interoperability profile. These three publish the exact PRM/issuer,
+    // S256 and RFC 9207 contracts, so keep the stronger policy explicit and
+    // make any later expansion a reviewed curation change.
+    const entries = await loadCuratedCatalog();
+    expect(
+      entries.filter((entry) => entry.oauth !== undefined).map((entry) => [entry.name, entry.oauth])
+    ).toEqual([
+      ['com.monday/monday.com', { compatibility_mode: 'strict' }],
+      ['com.cloudflare/mcp', { compatibility_mode: 'strict' }],
+      ['com.clickup/mcp', { compatibility_mode: 'strict' }],
+    ]);
+  });
+
+  it('does not advertise OAuth endpoints that cannot reach a safely bound client-registration boundary', async () => {
+    const entries = await loadCuratedCatalog();
+    const unsupported = [
+      'io.github.github/github-mcp-server',
+      'io.prisma/mcp',
+      'com.mongodb/mcp',
+      'com.box/mcp',
+      'com.hubspot/mcp',
+      'com.slack/mcp',
+      'com.pagerduty/mcp',
+      'com.kagi/mcp',
+      'com.render/mcp',
+    ];
+
+    expect(entries.filter((entry) => unsupported.includes(entry.name))).toEqual([]);
   });
 
   it('carries no secret-shaped value anywhere in the file', async () => {

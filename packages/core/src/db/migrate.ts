@@ -137,6 +137,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     '0074_knowledge_embedding_claims',
     '0078_mcp_oauth_pending_flows',
     '0082_github_install_state',
+    '0091_codex_device_auth_attempts',
   ].map(
     (name) =>
       [
@@ -161,6 +162,19 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
         userAction: 'required',
         rollbackCompatibility: 'compatible',
         summary: 'Requires a coordinated offline cutover to build indexes; rollback is compatible.',
+      }),
+    },
+  ],
+  [
+    '0092_add_user_credential_generation',
+    {
+      requiresOfflineCutover: true,
+      impact: defineMigrationImpact({
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'compatible',
+        summary:
+          'Requires a coordinated offline cutover so every daemon uses credential-generation token claims; older code may ignore the additive column.',
       }),
     },
   ],

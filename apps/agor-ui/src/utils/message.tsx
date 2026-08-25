@@ -108,24 +108,20 @@ const MessageContent: React.FC<MessageContentProps> = ({
   };
 
   let copyIcon: React.ReactNode;
-  let copyLabel: string;
   let copyAccessibleLabel: string;
   let statusText = '';
   if (copyState === 'copied') {
     copyIcon = <CheckOutlined />;
-    copyLabel = 'Copied';
     copyAccessibleLabel = kind === 'error' ? 'Copied error message' : 'Copied message';
     statusText =
       kind === 'error' ? 'Error message copied to clipboard.' : 'Message copied to clipboard.';
   } else if (copyState === 'failed') {
     copyIcon = <CloseCircleOutlined />;
-    copyLabel = 'Copy failed';
     copyAccessibleLabel =
       kind === 'error' ? 'Copy failed for error message' : 'Copy failed for message';
     statusText = `Could not copy ${kind} message.`;
   } else {
     copyIcon = <CopyOutlined />;
-    copyLabel = 'Copy';
     copyAccessibleLabel = kind === 'error' ? 'Copy error message' : 'Copy message';
   }
 
@@ -145,21 +141,19 @@ const MessageContent: React.FC<MessageContentProps> = ({
           size="small"
           icon={copyIcon}
           aria-label={copyAccessibleLabel}
+          title={copyAccessibleLabel}
           onClick={handleCopy}
-        >
-          {copyLabel}
-        </Button>
+        />
         {onDismiss && (
           <Button
             type="text"
             size="small"
             icon={<CloseOutlined />}
             aria-label="Dismiss error message"
+            title="Dismiss error message"
             data-agor-error-dismiss
             onClick={handleDismiss}
-          >
-            Dismiss
-          </Button>
+          />
         )}
       </Space>
       <output aria-live="polite" aria-atomic="true" style={VISUALLY_HIDDEN_STYLE}>
