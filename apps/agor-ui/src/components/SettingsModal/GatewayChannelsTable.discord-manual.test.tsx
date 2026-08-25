@@ -138,7 +138,7 @@ describe('GatewayChannelsTable Discord manual connection test', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/view ok, send ok, history ok, public threads ok/)
+        screen.getByText(/view ok, send ok, history ok, public threads ok, thread replies no/)
       ).toBeInTheDocument();
     });
     expect(channelPatch).not.toHaveBeenCalled();
