@@ -1425,6 +1425,11 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
     expect(context.params.tenant?.tenant_id).toBe('registration-test');
     expect(tenantDuringCall).toBe('registration-test');
   });
+
+  it('keeps gateway channel provider probes outside the request transaction', () => {
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain('gateway-channels');
+    expect(TENANT_OWNED_SERVICE_PATHS).not.toContain('gateway-channels');
+  });
 });
 
 describe('registered file service RBAC database preload', () => {

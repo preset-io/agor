@@ -24,6 +24,7 @@ import {
   and,
   BoardRepository,
   BranchRepository,
+  DiscordMessageDeliveryRepository,
   eq,
   GatewayChannelRepository,
   generateId,
@@ -362,7 +363,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     events: [...TASKS_SERVICE_CUSTOM_EVENTS],
   });
   app.use('/leaderboard', createLeaderboardService(db));
-  const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
+  const deliveryRepository = new DiscordMessageDeliveryRepository(db);
+  const messagesService = createMessagesService(db, (tx, message) =>
+    deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+  ) as unknown as MessagesServiceImpl;
   const messageOpenApiProperties = {
     message_id: { type: 'string', format: 'uuid' },
     session_id: { type: 'string', format: 'uuid' },

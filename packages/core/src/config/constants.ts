@@ -89,6 +89,15 @@ export const WEBSOCKET = {
 /** Shared Socket.IO packet ceiling used by the daemon transport. */
 export const SOCKET_IO_MAX_BUFFER_SIZE_BYTES = 1_000_000;
 
+/** Executor Feathers RPC acknowledgement deadline. */
+export const EXECUTOR_FEATHERS_ACK_TIMEOUT_MS = 60_000;
+
+/** Extra time for bounded transport cleanup after the executor RPC deadline. */
+export const EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS = 5_000;
+
+export const EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS =
+  EXECUTOR_FEATHERS_ACK_TIMEOUT_MS + EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_MARGIN_MS;
+
 /**
  * Pagination Constants
  *

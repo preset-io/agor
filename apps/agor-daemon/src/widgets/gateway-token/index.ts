@@ -2,7 +2,8 @@
  * gateway_token widget — registry entry and registration.
  *
  * Concrete widget type: an admin supplies a gateway channel's platform
- * credentials (Slack bot/app tokens, GitHub private key, Teams app password)
+ * credentials (Slack bot/app tokens, Discord bot token, GitHub private key,
+ * Teams app password)
  * through an inline form. The values flow browser → daemon via
  * `POST /widgets/:widget_id/submit` and land in the channel's encrypted
  * `config` through the gateway-channels service — never through the agent's
@@ -13,12 +14,13 @@
  */
 
 import { Forbidden } from '@agor/core/feathers';
+import { evaluateDiscordConnectionVerification } from '@agor/core/gateway';
 import {
   type ChannelType,
   GATEWAY_SENSITIVE_CONFIG_FIELDS,
+  type GatewayConnectionTestResult,
   hasMinimumRole,
   ROLES,
-  type SlackTestResult,
   type UserID,
 } from '@agor/core/types';
 import { z } from 'zod';
@@ -31,6 +33,7 @@ import { registerWidget, type WidgetRegistryEntry, type WidgetSubmitCtx } from '
  */
 const SUPPORTED_CHANNEL_TYPES = [
   'slack',
+  'discord',
   'github',
   'teams',
 ] as const satisfies readonly ChannelType[];
@@ -185,13 +188,30 @@ const HARD_CREDENTIAL_SLACK_ERRORS = new Set([
  * channel does not use Socket Mode.
  */
 export function classifyGatewayTokenTest(
-  result: SlackTestResult,
-  appTokenExpected: boolean
+  result: GatewayConnectionTestResult,
+  appTokenExpected: boolean,
+  channelType?: ChannelType,
+  expectedDiscordApplicationId?: string
 ): {
   enable: boolean;
   status: 'verified' | 'unverifiable' | 'failed';
   summary: string;
 } {
+  if (channelType === 'discord') {
+    const verification = evaluateDiscordConnectionVerification(
+      result,
+      expectedDiscordApplicationId
+    );
+    if (!verification.verified) {
+      return {
+        enable: false,
+        status: verification.failure.warnings.length > 0 ? 'unverifiable' : 'failed',
+        summary: verification.failure.warnings.join('; ') || verification.failure.reason,
+      };
+    }
+    return { enable: true, status: 'verified', summary: 'passed' };
+  }
+
   // A `connector`-capability failure is the test service's signal that the
   // channel type has no `testConnection` probe (github/teams — see
   // gateway-channels-test.ts). The credential was never exercised, so the
@@ -208,7 +228,7 @@ export function classifyGatewayTokenTest(
     };
   }
 
-  const isAppTokenFailure = (failure: SlackTestResult['failures'][number]): boolean =>
+  const isAppTokenFailure = (failure: GatewayConnectionTestResult['failures'][number]): boolean =>
     failure.capability === 'app_token';
   const hardFailure = result.failures.find(
     (failure) =>
@@ -248,6 +268,8 @@ interface GatewayChannelSurface {
   name: string;
   channel_type: ChannelType;
   target_branch_id: string;
+  config: Record<string, unknown>;
+  provider_config_generation: number;
 }
 
 /**
@@ -262,13 +284,20 @@ interface GatewayChannelsService {
     data: { config: Record<string, string>; enabled: boolean },
     params: { user: { user_id: UserID; role: string | undefined } }
   ): Promise<unknown>;
+  patchWithVerifiedDiscordInstallation(
+    id: string,
+    data: { config: Record<string, string>; enabled: boolean },
+    providerInstallationId: string,
+    expectedProviderConfigGeneration: number,
+    params: { user: { user_id: UserID; role: string | undefined } }
+  ): Promise<unknown>;
 }
 
 interface GatewayChannelsTestService {
   create(data: {
     gatewayChannelId: string;
     config: Record<string, string>;
-  }): Promise<SlackTestResult>;
+  }): Promise<GatewayConnectionTestResult>;
 }
 
 interface SessionsGetService {
@@ -348,17 +377,54 @@ async function applyGatewayTokenSubmit(
   // app_token (getRequiredSecretFields asked for it). Outbound-only channels
   // omit it, so the probe's unavoidable app_token failure must not block enable.
   const appTokenExpected = params.fields.includes('app_token');
-  const { enable, status, summary } = classifyGatewayTokenTest(testResult, appTokenExpected);
+  let { enable, status, summary } = classifyGatewayTokenTest(
+    testResult,
+    appTokenExpected,
+    channel.channel_type,
+    channel.channel_type === 'discord'
+      ? (channel.config.application_id as string | undefined)
+      : undefined
+  );
+  const strictDiscordVerification =
+    channel.channel_type === 'discord'
+      ? evaluateDiscordConnectionVerification(testResult, channel.config.application_id)
+      : undefined;
+  const verifiedInstallationId = strictDiscordVerification?.verified
+    ? strictDiscordVerification.installationId
+    : channel.channel_type === 'discord'
+      ? undefined
+      : (testResult.verifiedInstallationId ?? testResult.bot?.userId ?? undefined);
+  if (channel.channel_type === 'discord') {
+    if (!strictDiscordVerification?.verified) {
+      enable = false;
+      status = 'failed';
+      summary =
+        strictDiscordVerification?.failure.warnings.join('; ') ||
+        strictDiscordVerification?.failure.reason ||
+        'Discord verification failed';
+    }
+  }
 
   // Single internal patch → encryption + sentinel-preserve +
   // refreshGatewayChannelState (starts the Socket-Mode listener when enabled).
   // Submitter identity is threaded for audit; no `provider` so the internal
   // path runs.
-  await channelsService.patch(
-    params.gatewayChannelId,
-    { config: submit.tokens, enabled: enable },
-    { user: { user_id: ctx.submitterUserId, role: ctx.submitterRole } }
-  );
+  const patchParams = { user: { user_id: ctx.submitterUserId, role: ctx.submitterRole } };
+  if (channel.channel_type === 'discord' && verifiedInstallationId && enable) {
+    await channelsService.patchWithVerifiedDiscordInstallation(
+      params.gatewayChannelId,
+      { config: submit.tokens, enabled: enable },
+      verifiedInstallationId,
+      channel.provider_config_generation,
+      patchParams
+    );
+  } else {
+    await channelsService.patch(
+      params.gatewayChannelId,
+      { config: submit.tokens, enabled: enable },
+      patchParams
+    );
+  }
 
   submitOutcomes.set(submit, {
     channelId: channel.id,

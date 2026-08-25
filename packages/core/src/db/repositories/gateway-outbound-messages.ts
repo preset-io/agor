@@ -9,19 +9,34 @@ import type {
   GatewayChannelID,
   GatewayOutboundMessage,
   GatewayOutboundMessageID,
+  GatewayOutboundReplyAdmission,
   SessionID,
 } from '@agor/core/types';
 import { prefixToLikePattern } from '@agor/core/types';
-import { and, eq, isNull, like } from 'drizzle-orm';
+import { and, eq, isNull, like, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { insert, select, update } from '../database-wrapper';
+import {
+  insert,
+  isSQLiteDatabase,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
 import {
   type GatewayOutboundMessageInsert,
   type GatewayOutboundMessageRow,
   gatewayOutboundMessages,
 } from '../schema';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
+
+function isSqliteBusy(error: unknown): boolean {
+  return (
+    String(error).includes('SQLITE_BUSY') ||
+    String(error).toLowerCase().includes('database is locked')
+  );
+}
 
 export class GatewayOutboundMessageRepository {
   constructor(private db: Database) {}
@@ -131,53 +146,195 @@ export class GatewayOutboundMessageRepository {
     }
   }
 
-  async findUnconsumedByChannelAndThread(
+  private async findReplySeedRow(
+    db: Database,
     gatewayChannelId: string,
     platformThreadId: string
-  ): Promise<GatewayOutboundMessage | null> {
-    try {
-      const row = await select(this.db)
-        .from(gatewayOutboundMessages)
-        .where(
-          and(
-            eq(gatewayOutboundMessages.gateway_channel_id, gatewayChannelId),
-            eq(gatewayOutboundMessages.platform_thread_id, platformThreadId),
-            isNull(gatewayOutboundMessages.consumed_at)
-          )
+  ): Promise<GatewayOutboundMessageRow | null> {
+    const aliasMatch = isSQLiteDatabase(db)
+      ? sql`json_type(${gatewayOutboundMessages.metadata}, '$.provider_reply_aliases') = 'array'
+          AND EXISTS (
+            SELECT 1
+            FROM json_each(${gatewayOutboundMessages.metadata}, '$.provider_reply_aliases') AS reply_alias
+            WHERE reply_alias.value = ${platformThreadId}
+          )`
+      : sql`jsonb_typeof(${gatewayOutboundMessages.metadata}->'provider_reply_aliases') = 'array'
+          AND EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(${gatewayOutboundMessages.metadata}->'provider_reply_aliases') AS reply_alias(value)
+            WHERE reply_alias.value = ${platformThreadId}
+          )`;
+    const rows = await select(db)
+      .from(gatewayOutboundMessages)
+      .where(
+        and(
+          eq(gatewayOutboundMessages.gateway_channel_id, gatewayChannelId),
+          or(eq(gatewayOutboundMessages.platform_thread_id, platformThreadId), aliasMatch)
         )
-        .one();
-      return row ? this.rowToMessage(row) : null;
-    } catch (error) {
+      )
+      .all();
+    const matches = rows.filter((candidate: GatewayOutboundMessageRow) => {
+      if (candidate.platform_thread_id === platformThreadId) return true;
+      const metadata = (candidate.metadata as Record<string, unknown> | null) ?? {};
+      const aliases = Array.isArray(metadata.provider_reply_aliases)
+        ? metadata.provider_reply_aliases
+        : [];
+      return aliases.includes(platformThreadId);
+    });
+    if (matches.length > 1) {
       throw new RepositoryError(
-        `Failed to find gateway outbound seed: ${error instanceof Error ? error.message : String(error)}`,
-        error
+        `Ambiguous gateway outbound reply seed for channel ${gatewayChannelId} and thread ${platformThreadId}`
       );
     }
+    return matches[0] ?? null;
   }
 
-  async markConsumed(
+  /** Reserve the stable session identity for a reply before any session exists. */
+  async admitReplySession(
+    gatewayChannelId: GatewayChannelID,
+    platformThreadId: string
+  ): Promise<GatewayOutboundReplyAdmission | null> {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        return await runDatabaseTransaction(
+          this.db,
+          async (txDb) => {
+            const candidate = await this.findReplySeedRow(txDb, gatewayChannelId, platformThreadId);
+            if (!candidate) return null;
+            await lockRowForUpdate(
+              txDb,
+              this.db,
+              gatewayOutboundMessages,
+              eq(gatewayOutboundMessages.id, candidate.id)
+            );
+            const row = await select(txDb)
+              .from(gatewayOutboundMessages)
+              .where(eq(gatewayOutboundMessages.id, candidate.id))
+              .one();
+            if (!row)
+              throw new RepositoryError('Gateway outbound seed disappeared during admission');
+            if (row.consumed_at) {
+              if (!row.consumed_by_session_id) {
+                throw new RepositoryError(
+                  'Gateway outbound seed is consumed without a session identity'
+                );
+              }
+              return {
+                admitted: false,
+                message: this.rowToMessage(row),
+                sessionId: row.consumed_by_session_id as SessionID,
+              };
+            }
+            const metadata = (row.metadata as Record<string, unknown> | null) ?? {};
+            if (Object.hasOwn(metadata, 'reply_session_admission_id')) {
+              const reservedSessionId = metadata.reply_session_admission_id;
+              if (typeof reservedSessionId !== 'string' || reservedSessionId.trim() === '') {
+                throw new RepositoryError(
+                  'Gateway outbound seed has an invalid session admission reservation'
+                );
+              }
+              return {
+                admitted: false,
+                message: this.rowToMessage(row),
+                sessionId: reservedSessionId as SessionID,
+              };
+            }
+            const sessionId = generateId() as SessionID;
+            const updated = await update(txDb, gatewayOutboundMessages)
+              .set({
+                metadata: { ...metadata, reply_session_admission_id: sessionId },
+                updated_at: new Date(),
+              })
+              .where(eq(gatewayOutboundMessages.id, row.id))
+              .returning()
+              .one();
+            return {
+              admitted: true,
+              message: this.rowToMessage(updated),
+              sessionId,
+            };
+          },
+          { sqliteImmediate: true }
+        );
+      } catch (error) {
+        if (isSqliteBusy(error) && attempt < 4) {
+          await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+          continue;
+        }
+        if (error instanceof RepositoryError) throw error;
+        throw new RepositoryError(
+          `Failed to admit gateway outbound reply: ${error instanceof Error ? error.message : String(error)}`,
+          error
+        );
+      }
+    }
+    throw new RepositoryError('Failed to admit gateway outbound reply after lock retries');
+  }
+
+  /** Complete a previously reserved admission after mapping persistence succeeds. */
+  async completeReplyAdmission(
     id: GatewayOutboundMessageID,
     sessionId: SessionID
   ): Promise<GatewayOutboundMessage> {
-    try {
-      const fullId = await this.resolveId(id);
-      await update(this.db, gatewayOutboundMessages)
-        .set({
-          consumed_by_session_id: sessionId,
-          consumed_at: new Date(),
-          updated_at: new Date(),
-        })
-        .where(eq(gatewayOutboundMessages.id, fullId))
-        .run();
-      const updated = await this.findById(fullId);
-      if (!updated) throw new RepositoryError('Failed to retrieve consumed gateway outbound seed');
-      return updated;
-    } catch (error) {
-      if (error instanceof RepositoryError) throw error;
-      throw new RepositoryError(
-        `Failed to mark gateway outbound seed consumed: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
+    const fullId = await this.resolveId(id);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        return await runDatabaseTransaction(
+          this.db,
+          async (txDb) => {
+            await lockRowForUpdate(
+              txDb,
+              this.db,
+              gatewayOutboundMessages,
+              eq(gatewayOutboundMessages.id, fullId)
+            );
+            const row = await select(txDb)
+              .from(gatewayOutboundMessages)
+              .where(eq(gatewayOutboundMessages.id, fullId))
+              .one();
+            if (!row) throw new RepositoryError('Gateway outbound seed not found');
+            if (row.consumed_at) {
+              if (row.consumed_by_session_id !== sessionId) {
+                throw new RepositoryError('Gateway outbound seed was consumed by another session');
+              }
+              return this.rowToMessage(row);
+            }
+            const metadata = (row.metadata as Record<string, unknown> | null) ?? {};
+            if (metadata.reply_session_admission_id !== sessionId) {
+              throw new RepositoryError(
+                'Gateway outbound reply admission does not match the session'
+              );
+            }
+            const updated = await update(txDb, gatewayOutboundMessages)
+              .set({
+                consumed_by_session_id: sessionId,
+                consumed_at: new Date(),
+                updated_at: new Date(),
+              })
+              .where(
+                and(
+                  eq(gatewayOutboundMessages.id, fullId),
+                  isNull(gatewayOutboundMessages.consumed_at)
+                )
+              )
+              .returning()
+              .one();
+            return this.rowToMessage(updated);
+          },
+          { sqliteImmediate: true }
+        );
+      } catch (error) {
+        if (isSqliteBusy(error) && attempt < 4) {
+          await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+          continue;
+        }
+        if (error instanceof RepositoryError) throw error;
+        throw new RepositoryError(
+          `Failed to complete gateway outbound reply: ${error instanceof Error ? error.message : String(error)}`,
+          error
+        );
+      }
     }
+    throw new RepositoryError('Failed to complete gateway outbound reply after lock retries');
   }
 }

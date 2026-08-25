@@ -7,7 +7,9 @@
 
 import type {
   GatewayChannelID,
+  GatewayInboundEventID,
   SessionID,
+  TaskID,
   ThreadSessionMap,
   ThreadSessionMapID,
   ThreadStatus,
@@ -16,6 +18,7 @@ import type {
 import { prefixToLikePattern } from '@agor/core/types';
 import { and, eq, like, lt } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
+import { compareDiscordSnowflakes, isDiscordSnowflake } from '../../types/gateway';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -32,6 +35,13 @@ import {
   EntityNotFoundError,
   RepositoryError,
 } from './base';
+
+function isSqliteBusy(error: unknown): boolean {
+  return (
+    String(error).includes('SQLITE_BUSY') ||
+    String(error).toLowerCase().includes('database is locked')
+  );
+}
 
 /**
  * Thread-session map repository implementation
@@ -55,6 +65,7 @@ export class ThreadSessionMapRepository
       last_message_at: new Date(row.last_message_at).toISOString(),
       status: row.status as ThreadStatus,
       metadata: (row.metadata as Record<string, unknown>) ?? null,
+      discord_last_admitted_message_id: row.discord_last_admitted_message_id ?? null,
     };
   }
 
@@ -75,6 +86,7 @@ export class ThreadSessionMapRepository
       branch_id: data.branch_id ?? '',
       status: data.status ?? 'active',
       metadata: data.metadata ?? null,
+      discord_last_admitted_message_id: data.discord_last_admitted_message_id ?? null,
     };
   }
 
@@ -196,6 +208,7 @@ export class ThreadSessionMapRepository
           status: insertData.status,
           last_message_at: insertData.last_message_at,
           metadata: insertData.metadata,
+          discord_last_admitted_message_id: insertData.discord_last_admitted_message_id,
         })
         .where(eq(threadSessionMap.id, fullId))
         .run();
@@ -363,6 +376,40 @@ export class ThreadSessionMapRepository
     }
   }
 
+  /**
+   * Advance the canonical Discord message ID only after Task admission.
+   * The row lock makes retries and concurrent listener owners monotonic; a
+   * lower/equal Snowflake is a harmless no-op.
+   */
+  async advanceDiscordLastAdmittedMessageId(
+    id: ThreadSessionMapID,
+    cursor: string
+  ): Promise<boolean> {
+    if (!isDiscordSnowflake(cursor)) {
+      throw new RepositoryError('Invalid Discord message ID');
+    }
+
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, threadSessionMap, eq(threadSessionMap.id, id));
+        const row = await select(txDb)
+          .from(threadSessionMap)
+          .where(eq(threadSessionMap.id, id))
+          .one();
+        if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
+        const previous = row.discord_last_admitted_message_id;
+        if (previous && compareDiscordSnowflakes(cursor, previous) <= 0) return false;
+        await update(txDb, threadSessionMap)
+          .set({ discord_last_admitted_message_id: cursor })
+          .where(eq(threadSessionMap.id, id))
+          .run();
+        return true;
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
   /** Merge metadata under a short row lock without overwriting concurrent fields. */
   async mergeMetadata(
     id: ThreadSessionMapID,
@@ -386,6 +433,105 @@ export class ThreadSessionMapRepository
       },
       { sqliteImmediate: true }
     );
+  }
+
+  /** Atomically complete the initial prompt for the event that owns the seed. */
+  async completeSeedInitialPrompt(
+    id: ThreadSessionMapID,
+    eventId: GatewayInboundEventID | undefined,
+    taskId: TaskID
+  ): Promise<boolean> {
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, threadSessionMap, eq(threadSessionMap.id, id));
+        const row = await select(txDb)
+          .from(threadSessionMap)
+          .where(eq(threadSessionMap.id, id))
+          .one();
+        if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
+
+        const current = (row.metadata as Record<string, unknown> | null) ?? {};
+        if (current.outbound_seed_initial_prompt_pending !== true) return false;
+
+        const storedEventId = current.outbound_seed_initial_event_id;
+        const eventMatches =
+          (storedEventId === undefined && eventId === undefined) ||
+          (typeof storedEventId === 'string' &&
+            storedEventId.length > 0 &&
+            typeof eventId === 'string' &&
+            eventId.length > 0 &&
+            storedEventId === eventId);
+        if (!eventMatches) return false;
+
+        await update(txDb, threadSessionMap)
+          .set({
+            metadata: {
+              ...current,
+              outbound_seed_initial_prompt_pending: false,
+              outbound_seed_initial_task_id: taskId,
+            },
+          })
+          .where(eq(threadSessionMap.id, id))
+          .run();
+        return true;
+      },
+      { sqliteImmediate: true }
+    );
+  }
+
+  /** Atomically merge provider reply aliases so concurrent chunks cannot lose one another. */
+  async mergeGatewayReplyAliases(
+    id: ThreadSessionMapID,
+    aliasesToAdd: string[]
+  ): Promise<ThreadSessionMap> {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        return await runDatabaseTransaction(
+          this.db,
+          async (txDb) => {
+            await lockRowForUpdate(txDb, this.db, threadSessionMap, eq(threadSessionMap.id, id));
+            const row = await select(txDb)
+              .from(threadSessionMap)
+              .where(eq(threadSessionMap.id, id))
+              .one();
+            if (!row) throw new EntityNotFoundError('ThreadSessionMap', id);
+            const current = (row.metadata as Record<string, unknown> | null) ?? {};
+            const previous = Array.isArray(current.gateway_reply_aliases)
+              ? current.gateway_reply_aliases.filter(
+                  (alias): alias is string => typeof alias === 'string'
+                )
+              : [];
+            const aliases = aliasesToAdd.filter(
+              (alias): alias is string => typeof alias === 'string' && alias.length > 0
+            );
+            // Every provider reply alias is a durable inbound identity. Evicting
+            // old aliases makes replies to earlier emitted chunks create a new
+            // session, so retain the complete live set and deduplicate only.
+            const mergedAliases = [...new Set([...previous, ...aliases])];
+            const updated = await update(txDb, threadSessionMap)
+              .set({
+                metadata: {
+                  ...current,
+                  ...(mergedAliases.length > 0 ? { gateway_reply_aliases: mergedAliases } : {}),
+                },
+              })
+              .where(eq(threadSessionMap.id, id))
+              .returning()
+              .one();
+            return this.rowToMapping(updated);
+          },
+          { sqliteImmediate: true }
+        );
+      } catch (error) {
+        if (isSqliteBusy(error) && attempt < 4) {
+          await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new RepositoryError('Failed to merge gateway reply aliases after lock retries');
   }
 
   /**

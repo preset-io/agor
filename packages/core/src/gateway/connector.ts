@@ -44,7 +44,52 @@ export interface InboundMessage {
    * the event occurrence. The returned metadata is merged into the inbound
    * message (for example an editable acknowledgement comment ID).
    */
-  prepareDelivery?: () => Promise<Record<string, unknown> | undefined>;
+  prepareDelivery?: (
+    context?: InboundPreparationContext
+  ) => Promise<Record<string, unknown> | undefined>;
+}
+
+/** Narrow listener-owned hint for provider acknowledgement preparation. */
+export interface InboundPreparationContext {
+  /** A durable proactive seed owns this top-level message; do not materialize a summon thread. */
+  skipProviderThreadMaterialization?: boolean;
+}
+
+/**
+ * One message returned by an optional provider-history capability.
+ *
+ * History is an ephemeral ingest boundary: connectors must not persist or log
+ * these values. The daemon decides which messages are safe to put in a Task
+ * prompt after applying its provider-neutral policy.
+ */
+export interface GatewayProviderHistoryMessage {
+  providerMessageId: string;
+  timestamp: string;
+  actorLabel: string;
+  text: string;
+  isBot: boolean;
+  isSystem: boolean;
+  isRich: boolean;
+  isTrigger: boolean;
+  isMention: boolean;
+}
+
+/** Request for one bounded, exclusive/inclusive provider-history interval. */
+export interface GatewayProviderHistoryRequest {
+  threadId: string;
+  /** The lower bound is exclusive. Omit only for a verified bootstrap. */
+  afterProviderCursor?: string;
+  /** The live mention boundary is inclusive. */
+  throughProviderCursor: string;
+  triggerProviderCursor: string;
+}
+
+/** A complete, ordered provider-history interval. */
+export interface GatewayProviderHistoryResult {
+  threadId: string;
+  messages: GatewayProviderHistoryMessage[];
+  /** False means the connector could not prove complete interval coverage. */
+  complete: boolean;
 }
 
 /** Durable provider polling checkpoint owned by the current listener lease. */
@@ -54,6 +99,8 @@ export interface GatewayListenerOptions {
   durableEventIdempotency?: boolean;
   /** False means the listener lost its durable owner fence and must stop. */
   saveCheckpoint?: (checkpoint: Record<string, unknown>) => Promise<boolean>;
+  /** Called after a running listener stops because ordered processing failed. */
+  onError?: (error: unknown) => void | Promise<void>;
 }
 
 export type GatewayInboundCallback = (msg: InboundMessage) => void | Promise<void>;
@@ -69,6 +116,30 @@ export type GatewayInboundCallback = (msg: InboundMessage) => void | Promise<voi
 export interface OutboundPayload {
   text: string;
   blocks?: unknown[];
+}
+
+/** Provider-neutral receipt returned by connectors after one or more sends. */
+export interface GatewaySendReceipt {
+  /** The last provider message id in this send operation. */
+  messageId: string;
+  /** All provider message ids when the connector chunked the response. */
+  messageIds?: string[];
+  /** Canonical provider thread id used for subsequent sends. */
+  threadId?: string;
+  /** Generic inbound aliases that should resolve to the same thread-session map. */
+  replyAliases?: string[];
+  platformChannelId?: string;
+  platformThreadId?: string;
+  permalink?: string | null;
+  /** Provider-specific non-secret details useful to the audit row. */
+  metadata?: Record<string, unknown>;
+}
+
+export type GatewaySendResult = string | GatewaySendReceipt;
+
+/** Normalize legacy string receipts and structured connector receipts. */
+export function normalizeSendReceipt(result: GatewaySendResult): GatewaySendReceipt {
+  return typeof result === 'string' ? { messageId: result } : result;
 }
 
 /**
@@ -95,14 +166,40 @@ export interface GatewayConnector {
    * `blocks` is optional and platform-specific. Connectors that don't support
    * structured blocks should ignore it and use `text`.
    *
-   * @returns Platform-specific message ID
+   * @returns A legacy platform message ID or a structured receipt.
    */
   sendMessage(req: {
     threadId: string;
     text: string;
     blocks?: unknown[];
     metadata?: Record<string, unknown>;
-  }): Promise<string>;
+  }): Promise<GatewaySendResult>;
+
+  /**
+   * Optional bounded history read used by mention catch-up. The returned
+   * interval is provider-neutral, ordered oldest-first, and remains in memory
+   * until the daemon formats the single admitted Task prompt.
+   */
+  fetchProviderHistory?(req: GatewayProviderHistoryRequest): Promise<GatewayProviderHistoryResult>;
+
+  /**
+   * Send directly to a provider target without an existing thread mapping.
+   * GatewayService owns authorization, audit, and outbound seed persistence;
+   * the connector owns provider target parsing/resolution and transport.
+   */
+  sendDirectMessage?(req: {
+    target: string;
+    text: string;
+    blocks?: unknown[];
+    threadId?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<GatewaySendResult>;
+
+  /** Recover one provider message after an ambiguous nonce-protected send. */
+  recoverMessageByNonce?(req: {
+    threadId: string;
+    nonce: string;
+  }): Promise<GatewaySendReceipt | null>;
 
   /**
    * Delete a previously sent platform message when supported.

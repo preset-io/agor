@@ -21,6 +21,22 @@ const readJournals = () =>
   );
 
 describe('Postgres migrations', () => {
+  it('starts the Discord hybrid migration with its transaction-local lock timeout', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0094_discord_gateway_hybrid.sql', import.meta.url),
+      'utf8'
+    );
+    const statements = migration
+      .split('--> statement-breakpoint')
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+    expect(statements[0]).toBe("SET LOCAL lock_timeout = '3s';");
+    expect(
+      statements.filter((statement) => /^ALTER TABLE /i.test(statement)).length
+    ).toBeGreaterThan(0);
+    expect(migration.match(/SET LOCAL lock_timeout = '3s'/g)).toHaveLength(1);
+  });
+
   it('requires the Knowledge claim protocol migration to be an offline existing-db cutover', () => {
     expect(
       pendingOfflineCutoverMigrations('postgresql', {

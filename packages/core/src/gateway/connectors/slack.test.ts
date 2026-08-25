@@ -452,6 +452,23 @@ describe('markdownToSlackPayload', () => {
 });
 
 describe('SlackConnector outbound target resolution', () => {
+  it('bounds and sanitizes token-shaped provider failures at the connector boundary', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      chat: {
+        postMessage: async () => ({
+          ok: false,
+          error: 'xoxb-leaked-token https://slack.example.test/api /srv/agor/private-key\nunsafe',
+        }),
+      },
+    };
+
+    const result = connector.sendDirectMessage({ target: 'channel:C123', text: 'hello' });
+    await expect(result).rejects.toThrow(/redacted/);
+    await expect(result).rejects.not.toThrow('xoxb-leaked-token');
+    await expect(result).rejects.not.toThrow('https://slack.example.test');
+  });
+
   it('resolves channel names via conversations.list', async () => {
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });
     const calls: unknown[] = [];
@@ -503,9 +520,58 @@ describe('SlackConnector outbound target resolution', () => {
       { method: 'open', args: { users: 'U123' } },
     ]);
   });
+
+  it('sends provider-neutral direct messages while preserving Slack target metadata', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    const calls: unknown[] = [];
+    (connector as unknown as { web: unknown }).web = {
+      chat: {
+        postMessage: async (args: unknown) => {
+          calls.push(args);
+          return { ok: true, ts: '1700000000.000010' };
+        },
+        getPermalink: async () => ({ ok: true, permalink: 'https://slack.example/message' }),
+      },
+    };
+
+    const receipt = await connector.sendDirectMessage({
+      target: 'channel:C123',
+      text: 'direct update',
+      threadId: '1700000000.000000',
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        channel: 'C123',
+        text: 'direct update',
+        thread_ts: '1700000000.000000',
+      }),
+    ]);
+    expect(receipt).toMatchObject({
+      messageId: '1700000000.000010',
+      platformChannelId: 'C123',
+      platformThreadId: 'C123-1700000000.000000',
+      permalink: 'https://slack.example/message',
+    });
+  });
 });
 
 describe('SlackConnector.fetchThreadHistory', () => {
+  it('sanitizes thrown Slack SDK errors before returning them', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        replies: async () => {
+          throw new Error('xoxb-leaked-token https://slack.example.test/api /srv/agor/private-key');
+        },
+      },
+    };
+
+    const result = connector.fetchThreadHistory({ threadId: 'C123-1700000000.000000' });
+    await expect(result).rejects.toThrow(/redacted|provider-url|path/);
+    await expect(result).rejects.not.toThrow('xoxb-leaked-token');
+  });
+
   it('normalizes Slack thread replies and filters bot messages by default', async () => {
     const calls: Array<{ method: string; args: unknown }> = [];
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });
@@ -754,6 +820,21 @@ describe('SlackConnector.getFileInfo', () => {
 });
 
 describe('SlackConnector.fetchChannelHistory', () => {
+  it('sanitizes thrown Slack channel-history SDK errors before returning them', async () => {
+    const connector = new SlackConnector({ bot_token: 'xoxb-test' });
+    (connector as unknown as { web: unknown }).web = {
+      conversations: {
+        history: async () => {
+          throw new Error('xoxb-leaked-token https://slack.example.test/api /srv/agor/private-key');
+        },
+      },
+    };
+
+    const result = connector.fetchChannelHistory({ channelId: 'C123' });
+    await expect(result).rejects.toThrow(/redacted|provider-url|path/);
+    await expect(result).rejects.not.toThrow('xoxb-leaked-token');
+  });
+
   it('normalizes newest-first channel history into chronological order and filters bots', async () => {
     const calls: Array<{ method: string; args: unknown }> = [];
     const connector = new SlackConnector({ bot_token: 'xoxb-test' });

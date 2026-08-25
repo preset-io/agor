@@ -22,6 +22,7 @@ import {
 } from '@agor/core/config';
 import {
   ArtifactRepository,
+  assertTenantWritable,
   BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
@@ -35,6 +36,7 @@ import {
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  TenantWriteGateActiveError,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
 } from '@agor/core/db';
@@ -45,7 +47,13 @@ import {
   validateRepoEnvironmentLifecyclePolicy,
 } from '@agor/core/environment/webhook';
 import type { Application, FeathersService } from '@agor/core/feathers';
-import { BadRequest, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import {
+  BadRequest,
+  Forbidden,
+  NotAuthenticated,
+  NotFound,
+  Unavailable,
+} from '@agor/core/feathers';
 import {
   boardCommentQueryValidator,
   boardObjectQueryValidator,
@@ -67,6 +75,7 @@ import type {
   BoardID,
   Branch,
   DeepReadonly,
+  GatewayChannel,
   HookContext,
   MCPServer,
   MessageID,
@@ -82,7 +91,6 @@ import {
   assertPublicMCPOAuthCompatibilityMode,
   GATEWAY_CHANNEL_WRITE_FIELDS,
   GATEWAY_REDACTED_SENTINEL,
-  GATEWAY_SENSITIVE_CONFIG_FIELDS,
   hasMinimumRole,
   ROLES,
   SCHEDULE_CREATE_WRITE_FIELDS,
@@ -166,6 +174,7 @@ import {
 } from './utils/branch-authorization.js';
 import { captureBranchRemovalRealtimeVisibility as captureBranchRemovalVisibility } from './utils/branch-removal-realtime.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
+import { redactGatewayChannelForTransport } from './utils/gateway-channel-redaction.js';
 import { injectCreatedBy } from './utils/inject-created-by.js';
 import {
   redactMCPServerSecrets,
@@ -494,7 +503,6 @@ export const TENANT_OWNED_SERVICE_PATHS = [
   'session-mcp-servers',
   'user-mcp-oauth-tokens',
   'board-comments',
-  'gateway-channels',
   'gateway',
   'thread-session-map',
   'gateway-outbound-messages',
@@ -550,6 +558,10 @@ export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'mcp-servers/oauth-auth-headers',
   'mcp-servers/oauth-refresh',
   'mcp-servers/test-oauth',
+  // Gateway channel authority writes may probe a provider. The service opens
+  // short tenant DB units around metadata phases and never holds one across
+  // that provider call.
+  'gateway-channels',
 ] as const;
 
 /** Identity-only Claude endpoints that must clear the tenant freeze before side effects. */
@@ -839,6 +851,27 @@ export const redactMCPServerSecretFields = async (context: HookContext) => {
 
   return context;
 };
+
+/** Redact gateway channel results for both REST callers and realtime dispatch. */
+export function redactGatewayChannelResultsForTransport(context: HookContext): HookContext {
+  const redact = (channel: Record<string, unknown>) =>
+    Object.assign(channel, redactGatewayChannelForTransport(channel as unknown as GatewayChannel));
+  const result = context.result as
+    | Record<string, unknown>[]
+    | { data?: Record<string, unknown>[] }
+    | Record<string, unknown>
+    | undefined;
+  if (Array.isArray(result)) {
+    for (const item of result) redact(item);
+  } else if (Array.isArray(result?.data)) {
+    for (const item of result.data) redact(item);
+  } else if (result) {
+    redact(result);
+  }
+  // Feathers realtime and the Redis relay prefer dispatch over result.
+  context.dispatch = context.result;
+  return context;
+}
 
 export type RealtimeAuthorizationInvalidationMode = 'none' | 'cache' | 'evict';
 
@@ -2424,7 +2457,25 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
   safeService('gateway-channels')?.hooks({
     before: {
-      all: [requireAuth],
+      all: [
+        requireAuth,
+        async (context: HookContext) => {
+          if (!['create', 'patch', 'remove'].includes(context.method)) return context;
+          const tenantId = context.params.tenant?.tenant_id;
+          if (!tenantId) return context;
+          try {
+            await runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+              assertTenantWritable(scoped, tenantId).then(() => undefined)
+            );
+          } catch (error) {
+            if (error instanceof TenantWriteGateActiveError) {
+              throw new Unavailable(error.message);
+            }
+            throw error;
+          }
+          return context;
+        },
+      ],
       create: [
         requireMinimumRole(ROLES.ADMIN, 'create gateway channels'),
         enforcePublicWriteFields('Gateway channel', GATEWAY_CHANNEL_WRITE_FIELDS),
@@ -2483,8 +2534,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           if (incomingVars === undefined) {
             try {
               const { GatewayChannelRepository } = await import('@agor/core/db');
-              const channelRepo = new GatewayChannelRepository(db);
-              const existing = await channelRepo.findById(String(context.id));
+              const existing = await runWithTenantDatabaseScope(
+                db,
+                requireCurrentTenantId('Missing active tenant context for gateway channel read'),
+                async (scoped) => new GatewayChannelRepository(scoped).findById(String(context.id))
+              );
               // For patches that omit agentic_config entirely (e.g. enabled toggle),
               // copy existing agentic_config so migration still occurs on save.
               if (!hadAgenticConfigInPatch && existing?.agentic_config) {
@@ -2512,8 +2566,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
 
           try {
             const { GatewayChannelRepository } = await import('@agor/core/db');
-            const channelRepo = new GatewayChannelRepository(db);
-            const existing = await channelRepo.findById(String(context.id));
+            const existing = await runWithTenantDatabaseScope(
+              db,
+              requireCurrentTenantId('Missing active tenant context for gateway channel read'),
+              async (scoped) => new GatewayChannelRepository(scoped).findById(String(context.id))
+            );
             const existingVars = existing?.agentic_config?.envVars ?? [];
             const existingByKey = new Map(existingVars.map((v) => [v.key, v.value]));
 
@@ -2538,41 +2595,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [requireMinimumRole(ROLES.ADMIN, 'delete gateway channels')],
     },
     after: {
-      all: [
-        // Redact sensitive config fields in API responses
-        async (context: HookContext) => {
-          const redact = (channel: Record<string, unknown>) => {
-            if (channel?.config && typeof channel.config === 'object') {
-              const config = { ...(channel.config as Record<string, unknown>) };
-              for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
-                if (config[field]) {
-                  config[field] = GATEWAY_REDACTED_SENTINEL;
-                }
-              }
-              channel.config = config;
-            }
-            // Redact env var values in agentic_config (keep keys and forceOverride visible)
-            if (channel?.agentic_config && typeof channel.agentic_config === 'object') {
-              const ac = channel.agentic_config as Record<string, unknown>;
-              if (Array.isArray(ac.envVars)) {
-                ac.envVars = (
-                  ac.envVars as { key: string; value: string; forceOverride: boolean }[]
-                ).map((v) => ({
-                  key: v.key,
-                  value: GATEWAY_REDACTED_SENTINEL,
-                  forceOverride: v.forceOverride,
-                }));
-              }
-            }
-          };
-          if (Array.isArray(context.result?.data)) {
-            for (const item of context.result.data) redact(item);
-          } else if (context.result) {
-            redact(context.result as Record<string, unknown>);
-          }
-          return context;
-        },
-      ],
+      all: [redactGatewayChannelResultsForTransport],
       create: [refreshGatewayChannelState],
       patch: [refreshGatewayChannelState],
       remove: [stopGatewayChannelListener, refreshGatewayChannelState],

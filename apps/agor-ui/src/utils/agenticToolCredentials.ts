@@ -2,6 +2,7 @@ import type {
   AgenticAuthMethod,
   AgenticToolConfigField,
   AgenticToolName,
+  ClaudeCredentialSource,
   UpdateUserInput,
 } from '@agor-live/client';
 

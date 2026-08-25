@@ -42,6 +42,9 @@ export type MessageFindPageOptions = {
   skip?: number;
 };
 
+/** Optional hook executed after a Message insert and before its transaction commits. */
+export type MessageCreateTransactionHook = (db: Database, message: Message) => Promise<void>;
+
 export class MessageParentIntegrityError extends Error {
   constructor(
     readonly reason: 'session_tenant_mismatch' | 'task_session_mismatch',
@@ -67,7 +70,10 @@ function omittedMessageData(reason: JsonSanitizationError['category']): MessageI
 }
 
 export class MessagesRepository {
-  constructor(private db: Database) {}
+  constructor(
+    private db: Database,
+    private readonly onCreateInTransaction?: MessageCreateTransactionHook
+  ) {}
 
   /** Retry a whole locked metadata mutation so SQLite re-reads after contention. */
   private async runMetadataMutation<T>(mutation: () => Promise<T>, attempt = 0): Promise<T> {
@@ -265,7 +271,9 @@ export class MessagesRepository {
             await this.assertTaskBelongsToSession(tx, message.task_id, message.session_id);
           }
           const inserted = await insert(tx, messages).values(row).returning().one();
-          return this.rowToMessage(inserted);
+          const created = this.rowToMessage(inserted);
+          if (this.onCreateInTransaction) await this.onCreateInTransaction(tx, created);
+          return created;
         },
         { sqliteImmediate: true }
       )

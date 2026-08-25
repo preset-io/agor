@@ -67,7 +67,33 @@ async function seedChannel(
       target_branch_id: branch.branch_id,
       channel_key: generateId(),
       enabled: true,
-      config: channelType === 'slack' ? { bot_token: 'xoxb-test', app_token: 'xapp-test' } : {},
+      ...(channelType === 'discord' ? { provider_installation_id: '111111111111111111' } : {}),
+      config:
+        channelType === 'slack'
+          ? { bot_token: 'xoxb-test', app_token: 'xapp-test' }
+          : channelType === 'discord'
+            ? {
+                bot_token: 'discord-test',
+                application_id: '111111111111111111',
+                guild_id: '222222222222222222',
+                allowed_channel_ids: ['333333333333333333'],
+                allowed_user_ids: ['444444444444444444'],
+                allowed_role_ids: [],
+                message_content_enabled: true,
+                thread_mode: 'public_thread_per_summon',
+                align_discord_users: false,
+                catch_up: {
+                  max_pages: 5,
+                  max_messages: 200,
+                  max_prompt_bytes: 32768,
+                  request_timeout_ms: 30000,
+                  rate_limit_max_retries: 2,
+                  rate_limit_max_total_delay_ms: 10000,
+                },
+                files: false,
+                agent_tools: [],
+              }
+            : {},
     });
     return { channel, user, branch };
   });
@@ -278,7 +304,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
     const tenantB = `gateway-b-${generateId()}` as TenantID;
     const a = await seedChannel(db, tenantA);
     await seedChannel(db, tenantB);
-    const unsupported = await seedChannel(db, tenantA, { channelType: 'discord' });
+    const discord = await seedChannel(db, tenantA, { channelType: 'discord' });
 
     const refs = await runWithSystemDatabaseScope(
       db,
@@ -288,14 +314,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
       { capability: 'gateway_listener_discovery' }
     );
     expect(refs).toContainEqual({ channel_id: a.channel.id, tenant_id: tenantA });
-    expect(refs.some((ref) => ref.channel_id === unsupported.channel.id)).toBe(false);
+    expect(refs).toContainEqual({ channel_id: discord.channel.id, tenant_id: tenantA });
 
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
       const candidates = await new GatewayChannelRepository(scoped).findEnabledListenerCandidates(
         100
       );
       expect(candidates.some((channel) => channel.id === a.channel.id)).toBe(true);
-      expect(candidates.some((channel) => channel.id === unsupported.channel.id)).toBe(false);
+      expect(candidates.some((channel) => channel.id === discord.channel.id)).toBe(true);
 
       await new GatewayChannelRepository(scoped).claimListener({
         channelId: a.channel.id,
@@ -334,6 +360,52 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('gateway listener HA (Postg
         )
       ).toBeNull();
     });
+  });
+
+  it('uses the global unique index for concurrent Discord application admission', async () => {
+    const tenantId = `gateway-admission-${generateId()}` as TenantID;
+    const { user, branch } = await seedChannel(db, tenantId, { channelType: 'slack' });
+    const config = {
+      bot_token: 'discord-test',
+      application_id: '777777777777777777',
+      guild_id: '888888888888888888',
+      allowed_channel_ids: ['999999999999999999'],
+      allowed_user_ids: ['444444444444444444'],
+      allowed_role_ids: [],
+      message_content_enabled: true,
+      thread_mode: 'public_thread_per_summon',
+      align_discord_users: false,
+      catch_up: {
+        max_pages: 5,
+        max_messages: 200,
+        max_prompt_bytes: 32768,
+        request_timeout_ms: 30000,
+        rate_limit_max_retries: 2,
+        rate_limit_max_total_delay_ms: 10000,
+      },
+      files: false,
+      agent_tools: [],
+    };
+    const results = await Promise.allSettled(
+      [0, 1].map((index) =>
+        runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new GatewayChannelRepository(scoped).create({
+            id: generateId() as GatewayChannelID,
+            name: `Concurrent Discord ${index}`,
+            channel_type: 'discord',
+            created_by: user.user_id,
+            agor_user_id: user.user_id,
+            target_branch_id: branch.branch_id,
+            channel_key: generateId(),
+            enabled: true,
+            provider_installation_id: config.application_id,
+            config,
+          })
+        )
+      )
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
   });
 
   it('revokes ownership on disable or credential/config rotation', async () => {
