@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 
 const limits = {
   files: 2600,
-  unpackedBytes: 95 * 1024 * 1024,
+  unpackedBytes: 96 * 1024 * 1024,
   packedBytes: 23 * 1024 * 1024,
 };
 

@@ -125,7 +125,7 @@ export class MCPCatalogCandidateRepository {
       const authType = jsonExtract(this.db, mcpServers.data, 'auth.type');
       const headerJson = jsonExtract(this.db, mcpServers.data, 'headers');
       const hasHeaders = isPostgresDatabase(this.db)
-        ? sql<boolean>`coalesce(jsonb_object_length(coalesce(${mcpServers.data}->'headers', '{}'::jsonb)), 0) > 0`
+        ? sql<boolean>`coalesce(${mcpServers.data}->'headers', '{}'::jsonb) <> '{}'::jsonb`
         : sql<boolean>`exists(select 1 from json_each(coalesce(${headerJson}, '{}')) limit 1)`;
       const hasRowSecret = sql<boolean>`case
         when ${authType} = 'bearer' then ${jsonExtract(this.db, mcpServers.data, 'auth.token')} is not null

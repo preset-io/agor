@@ -760,8 +760,8 @@ export class MCPServerRepository
       .replace(/"/g, '\\"')}"`;
     const nextData = isPostgresDatabase(this.db)
       ? enabled
-        ? sql`jsonb_set(${mcpServers.data}, '{tool_permissions}'::text[], coalesce(${mcpServers.data}->'tool_permissions', '{}'::jsonb) - ${toolName}, true)`
-        : sql`jsonb_set(${mcpServers.data}, '{tool_permissions}'::text[], coalesce(${mcpServers.data}->'tool_permissions', '{}'::jsonb) || jsonb_build_object(${toolName}, 'deny'), true)`
+        ? sql`jsonb_set(${mcpServers.data}, '{tool_permissions}'::text[], coalesce(${mcpServers.data}->'tool_permissions', '{}'::jsonb) - ${toolName}::text, true)`
+        : sql`jsonb_set(${mcpServers.data}, '{tool_permissions}'::text[], coalesce(${mcpServers.data}->'tool_permissions', '{}'::jsonb) || jsonb_build_object(${toolName}::text, 'deny'), true)`
       : enabled
         ? sql`json_remove(${mcpServers.data}, ${sqlitePath})`
         : sql`json_set(${mcpServers.data}, ${sqlitePath}, ${'deny'})`;
