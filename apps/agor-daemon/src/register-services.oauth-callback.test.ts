@@ -240,11 +240,14 @@ describe('register-services OAuth callback URL regression', () => {
     );
 
     const persistIndex = successBody.indexOf('persistOAuthTokenForPendingFlow');
+    const hintIndex = successBody.indexOf("code: 'runtime_authority_hint'");
     const notifyIndex = successBody.indexOf('emitOAuthCompletion(pendingFlow, true)');
     const resolveIndex = successBody.indexOf('pendingFlow.tokenResolve?.(tokenResponse)');
     const renderIndex = successBody.indexOf('sendOAuthResultPage(res, true');
 
     expect(persistIndex).toBeGreaterThanOrEqual(0);
+    expect(hintIndex).toBeGreaterThan(persistIndex);
+    expect(successBody).toContain("'oauth_browser_authority_changed'");
     expect(notifyIndex).toBeGreaterThan(persistIndex);
     expect(resolveIndex).toBeGreaterThan(notifyIndex);
     expect(renderIndex).toBeGreaterThan(resolveIndex);

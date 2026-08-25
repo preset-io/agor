@@ -282,6 +282,22 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'mcp-servers/oauth-auth-headers': { audience: 'none', why: 'Returns bearer headers.' },
   'mcp-servers/oauth-refresh': { audience: 'none', why: 'Returns refreshed tokens.' },
+  'tasks/:id/mcp-reprojection': {
+    audience: 'none',
+    why: 'Executor-only RPC returns opaque task-scoped gateway capabilities to its caller.',
+  },
+  'tasks/:id/mcp-reprojection-validate': {
+    audience: 'none',
+    why: 'Executor-only durable fence returns no projection and belongs only to its caller.',
+  },
+  'tasks/:id/mcp-reconnect': {
+    audience: 'none',
+    why: 'RPC result belongs to the caller; Task events carry the scoped state change.',
+  },
+  'tasks/:id/mcp-refresh-result': {
+    audience: 'none',
+    why: 'Executor acknowledgement is projected through the scoped Task event.',
+  },
   'mcp-servers/test-oauth': { audience: 'none', why: 'Probe result belongs to the caller.' },
   'mcp-servers/test-jwt': { audience: 'none', why: 'Probe result belongs to the caller.' },
   'mcp-servers/discover': {

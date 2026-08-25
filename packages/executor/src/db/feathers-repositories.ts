@@ -10,6 +10,9 @@ import type { AgorClient } from '@agor/core/api';
 import type {
   Branch,
   BranchID,
+  MCPRuntimeRefreshRequest,
+  MCPRuntimeRefreshResultRequest,
+  MCPRuntimeReprojection,
   MCPServer,
   MCPServerFilters,
   MCPServerID,
@@ -271,6 +274,25 @@ export class FeathersSessionMCPServersRepository {
       added_at: number;
       enabled: boolean;
     }>;
+  }
+
+  /** Executor-only live reprojection. The response contains gateway URLs and opaque capabilities. */
+  async reproject(
+    taskId: TaskID,
+    request: MCPRuntimeRefreshRequest
+  ): Promise<MCPRuntimeReprojection> {
+    return (await this.client
+      .service(`/tasks/${taskId}/mcp-reprojection`)
+      .create(request)) as MCPRuntimeReprojection;
+  }
+
+  /** Durable pre-apply fence; this never remints or returns capabilities. */
+  async validateReprojection(taskId: TaskID, request: MCPRuntimeRefreshRequest): Promise<void> {
+    await this.client.service(`/tasks/${taskId}/mcp-reprojection-validate`).create(request);
+  }
+
+  async reportRefresh(taskId: TaskID, result: MCPRuntimeRefreshResultRequest): Promise<void> {
+    await this.client.service(`/tasks/${taskId}/mcp-refresh-result`).create(result);
   }
 }
 

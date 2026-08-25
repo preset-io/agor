@@ -19,9 +19,11 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
+import { mcpRuntimeProviderCapability } from '@agor/core/mcp';
 import { refreshAndPersistToken } from '@agor/core/tools/mcp/oauth-refresh';
 import {
   capabilityPolicyPresetCapabilities,
+  type MCPRuntimeRecovery,
   type MCPServer,
   type MCPServerID,
   TaskStatus,
@@ -30,6 +32,7 @@ import {
 } from '@agor/core/types';
 import type { OutboundDnsLookup } from '@agor/core/utils/safe-outbound-fetch';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { degradeMcpRuntimeRecoveryForDirectMode } from '../utils/mcp-runtime-hints.js';
 import { issueMCPEgressCapability } from './capability.js';
 import {
   coordinateMCPEgressRolloutChange,
@@ -37,11 +40,14 @@ import {
   coordinateSessionMCPRevocation,
 } from './coordination.js';
 import {
+  classifyMCPRuntimeProjection,
   MCPEgressGateway,
   MCPEgressGatewayError,
+  mcpAuthorityFingerprint,
   mcpEgressEligibility,
   mcpEgressMaterialHash,
   mcpOAuthGrantIdentity,
+  mcpToolPolicyHash,
   projectMCPServerForExecutor,
 } from './gateway.js';
 import { createMCPEgressHttpHandler } from './http-handler.js';
@@ -97,6 +103,7 @@ interface HarnessOptions {
     mcp_egress_assert_current?: () => Promise<void>;
   }) => Promise<{ headers: Record<string, { authorization?: string; error?: string }> }>;
   capabilityServerTransform?: (server: MCPServer) => MCPServer;
+  initialMcpRecovery?: boolean;
 }
 
 async function harness(options: HarnessOptions) {
@@ -166,8 +173,25 @@ async function harness(options: HarnessOptions) {
     created_by: user.user_id as UserID,
     sdk_home_scope: options.separatePrincipal ? 'branch' : 'execution_home',
   });
+  const taskId = generateId();
+  const initialMcpRecovery = options.initialMcpRecovery
+    ? ({
+        generation: 1,
+        code: 'stale_capability',
+        status: 'refresh_requested',
+        task_id: taskId,
+        session_id: session.session_id,
+        provider: mcpRuntimeProviderCapability('codex'),
+        action: 'reconnect_mcp',
+        message: 'Reconnect MCP.',
+        observed_at: new Date().toISOString(),
+        request_id: 'mediated-before-rollback',
+        refresh_deadline_at: new Date(Date.now() + 30_000).toISOString(),
+        provider_dispatch: 'not_started',
+      } satisfies MCPRuntimeRecovery)
+    : undefined;
   const task = await new TaskRepository(rawDb).create({
-    task_id: randomUUID(),
+    task_id: taskId,
     session_id: session.session_id,
     created_by: principal.user_id,
     full_prompt: 'exercise authoritative MCP egress',
@@ -175,6 +199,7 @@ async function harness(options: HarnessOptions) {
     message_range: { start_index: 0, end_index: 0, start_timestamp: new Date().toISOString() },
     git_state: { ref_at_start: 'main', sha_at_start: 'test' },
     tool_use_count: 0,
+    metadata: initialMcpRecovery ? { mcp_recovery: initialMcpRecovery } : undefined,
   });
   const server = await new MCPServerRepository(rawDb).create({
     name: `gateway-${randomUUID()}`,
@@ -252,6 +277,12 @@ async function harness(options: HarnessOptions) {
     resolveDns: options.resolveDns,
     authoritySnapshotCheckpoint: options.authoritySnapshotCheckpoint,
   });
+  const materialHash = mcpEgressMaterialHash(
+    options.capabilityServerTransform?.(server) ?? server,
+    {},
+    jwtSecret
+  );
+  const toolPolicyHash = mcpToolPolicyHash(server.tool_permissions, jwtSecret);
   const capability = issueMCPEgressCapability(
     {
       tid: 'default',
@@ -261,13 +292,23 @@ async function harness(options: HarnessOptions) {
       credential_user_id: principal.user_id,
       mcp_server_id: server.mcp_server_id,
       config_version: server.config_version ?? 1,
-      material_hash: mcpEgressMaterialHash(
-        options.capabilityServerTransform?.(server) ?? server,
-        {},
+      material_hash: materialHash,
+      tool_policy_hash: toolPolicyHash,
+      authority_fingerprint: mcpAuthorityFingerprint(
+        {
+          serverId: server.mcp_server_id,
+          rolloutMode,
+          configVersion: server.config_version ?? 1,
+          materialHash,
+          toolPolicyHash,
+          grantIdentity,
+        },
         jwtSecret
       ),
       grant_identity: grantIdentity,
       rollout_mode: rolloutMode,
+      recovery_generation: initialMcpRecovery?.generation,
+      recovery_request_id: initialMcpRecovery?.request_id,
       jti: randomUUID(),
     },
     jwtSecret
@@ -337,6 +378,432 @@ async function harness(options: HarnessOptions) {
 const initialize = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' });
 
 describe('authoritative MCP gateway real transport', () => {
+  it('returns the fixed JSON-RPC failure when request headers are malformed', async () => {
+    const forward = vi.fn();
+    const recordRejectedRequest = vi.fn();
+    let status = 0;
+    let payload: unknown;
+    await createMCPEgressHttpHandler({ forward, recordRejectedRequest } as never)(
+      {
+        params: { serverId: 'server-safe' },
+        method: 'POST',
+        headers: { 'malformed header name': 'value' },
+        body: { jsonrpc: '2.0', id: 7, method: 'initialize' },
+      } as never,
+      {
+        headersSent: false,
+        status(code: number) {
+          status = code;
+          return this;
+        },
+        json(value: unknown) {
+          payload = value;
+          return this;
+        },
+      } as never
+    );
+
+    expect(forward).not.toHaveBeenCalled();
+    expect(recordRejectedRequest).not.toHaveBeenCalled();
+    expect(status).toBe(503);
+    expect(payload).toMatchObject({
+      jsonrpc: '2.0',
+      id: 7,
+      error: {
+        data: {
+          code: 'egress_unavailable',
+          provider_dispatch: 'ambiguous',
+          automatic_retry_allowed: false,
+        },
+      },
+    });
+  });
+
+  for (const mode of ['off', 'observe'] as const) {
+    it(`converges cleanup-first and rejection-first rollback races in ${mode} mode`, async () => {
+      const finalStates = [];
+      for (const ordering of ['cleanup-first', 'rejection-first'] as const) {
+        const h = await harness({
+          server: {
+            transport: 'http',
+            url: 'https://provider.example/mcp',
+            auth: { type: 'none' },
+          },
+          initialMcpRecovery: true,
+        });
+        await setMCPEgressGatewayMode(h.rawDb, mode, h.user.user_id);
+        const cleanup = () =>
+          degradeMcpRuntimeRecoveryForDirectMode(
+            h.rawDb as unknown as TenantScopeAwareDatabase,
+            h.task.task_id,
+            mcpRuntimeProviderCapability('codex')
+          );
+        const reject = () =>
+          h.gateway.recordRejectedRequest(
+            new Headers({ 'x-agor-mcp-capability': h.capability }),
+            h.server.mcp_server_id,
+            new MCPEgressGatewayError(
+              409,
+              'rollout_changed',
+              'MCP gateway rollout changed',
+              'not_started'
+            )
+          );
+
+        if (ordering === 'cleanup-first') {
+          await cleanup();
+          await reject();
+        } else {
+          await reject();
+          await cleanup();
+        }
+        const recovery = (await new TaskRepository(h.rawDb).findById(h.task.task_id))?.metadata
+          ?.mcp_recovery;
+        finalStates.push({
+          generation: recovery?.generation,
+          code: recovery?.code,
+          status: recovery?.status,
+          action: recovery?.action,
+          provider: recovery?.provider,
+          mcp_server_id: recovery?.mcp_server_id,
+          message: recovery?.message,
+          request_id: recovery?.request_id,
+          refresh_deadline_at: recovery?.refresh_deadline_at,
+          provider_dispatch: recovery?.provider_dispatch,
+        });
+      }
+
+      expect(finalStates[0]).toEqual(finalStates[1]);
+      expect(finalStates[0]).toMatchObject({
+        generation: 2,
+        code: 'rollout_changed',
+        status: 'action_required',
+        action: 'retry_next_turn',
+      });
+      expect(finalStates[0].request_id).toBeUndefined();
+      expect(finalStates[0].refresh_deadline_at).toBeUndefined();
+    }, 30_000);
+  }
+
+  it('does not recreate recovery from a late rejection after the generation was cleared', async () => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: 'https://provider.example/mcp',
+        auth: { type: 'none' },
+      },
+      initialMcpRecovery: true,
+    });
+    const repo = new TaskRepository(h.rawDb);
+    const authorityFingerprint = h.gateway.verify(h.capability).authority_fingerprint!;
+    await repo.update(h.task.task_id, {
+      metadata: {
+        ...(await repo.findById(h.task.task_id))!.metadata,
+        mcp_reprojection_claim: {
+          request_id: 'mediated-before-rollback',
+          recovery_generation: 1,
+          fingerprint: 'settled-projection',
+          claimed_at: new Date().toISOString(),
+          authority_fingerprints: [authorityFingerprint],
+        },
+      },
+    });
+    const cleared = await repo.clearMCPRecovery(
+      h.task.task_id,
+      (current) => current.generation === 1 && current.request_id === 'mediated-before-rollback'
+    );
+    expect(cleared.metadata?.mcp_recovery).toBeUndefined();
+    expect(cleared.metadata?.mcp_recovery_generation).toBe(1);
+    expect(cleared.metadata?.mcp_recovery_settled_request_id).toBe('mediated-before-rollback');
+
+    await h.gateway.recordRejectedRequest(
+      new Headers({ 'x-agor-mcp-capability': h.capability }),
+      h.server.mcp_server_id,
+      new MCPEgressGatewayError(
+        409,
+        'stale_capability',
+        'Old capability rejected after replacement',
+        'not_started',
+        authorityFingerprint
+      )
+    );
+
+    const finalTask = await repo.findById(h.task.task_id);
+    expect(finalTask?.metadata?.mcp_recovery).toBeUndefined();
+    expect(finalTask?.metadata?.mcp_recovery_generation).toBe(1);
+  });
+
+  it('reconstructs recovery when settled capabilities become newly stale after a missed hint', async () => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: 'https://provider.example/mcp',
+        auth: { type: 'none' },
+      },
+      initialMcpRecovery: true,
+    });
+    const repo = new TaskRepository(h.rawDb);
+    const settledFingerprint = h.gateway.verify(h.capability).authority_fingerprint!;
+    await repo.update(h.task.task_id, {
+      metadata: {
+        ...(await repo.findById(h.task.task_id))!.metadata,
+        mcp_reprojection_claim: {
+          request_id: 'mediated-before-rollback',
+          recovery_generation: 1,
+          fingerprint: 'settled-projection',
+          claimed_at: new Date().toISOString(),
+          authority_fingerprints: [settledFingerprint],
+        },
+      },
+    });
+    await repo.clearMCPRecovery(h.task.task_id, () => true);
+
+    // The authoritative mutation commits but its availability-only hint is
+    // deliberately omitted. Admission of the installed N/R capability must
+    // recreate recovery rather than mistaking it for a late N/R straggler.
+    await new MCPServerRepository(h.rawDb).update(h.server.mcp_server_id, {
+      description: 'new authority after settled refresh',
+      expected_config_version: h.server.config_version,
+    });
+    await expect(h.routeRequest('POST', initialize)).resolves.toMatchObject({
+      status: 409,
+      payload: { error: { data: { code: 'stale_capability' } } },
+    });
+    await vi.waitFor(async () => {
+      expect((await repo.findById(h.task.task_id))?.metadata?.mcp_recovery).toMatchObject({
+        generation: 2,
+        code: 'stale_capability',
+      });
+    });
+  });
+
+  it('never rebinds an ack retry from installed authority A to missed-hint authority B', async () => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: 'https://provider.example/mcp',
+        auth: { type: 'none' },
+      },
+      initialMcpRecovery: true,
+    });
+    const tasks = new TaskRepository(h.rawDb);
+    await tasks.update(h.task.task_id, { executor_connected_at: new Date().toISOString() });
+    const claimInput = {
+      sessionId: h.session.session_id,
+      principalUserId: h.task.created_by,
+      requestId: 'mediated-before-rollback',
+      expectedGeneration: 1,
+      fingerprint: JSON.stringify({ reason: 'authority_changed', expected_generation: 1 }),
+    };
+    const authorityA = h.gateway.verify(h.capability).authority_fingerprint!;
+    await expect(tasks.claimMCPReprojection(h.task.task_id, claimInput)).resolves.toMatchObject({
+      outcome: 'claimed',
+    });
+    await expect(
+      tasks.bindMCPReprojectionAuthority(h.task.task_id, {
+        ...claimInput,
+        authorityFingerprints: [authorityA],
+      })
+    ).resolves.toMatchObject({ outcome: 'bound' });
+    // The provider installed A, but the success acknowledgement did not reach
+    // the daemon, so no settlement/tombstone exists yet.
+
+    const authorityBServer = await new MCPServerRepository(h.rawDb).update(h.server.mcp_server_id, {
+      description: 'authority B committed while its availability hint was missed',
+      expected_config_version: h.server.config_version,
+    });
+    const authorityB = mcpAuthorityFingerprint(
+      {
+        serverId: authorityBServer.mcp_server_id,
+        rolloutMode: 'enforced',
+        configVersion: authorityBServer.config_version ?? 1,
+        materialHash: mcpEgressMaterialHash(authorityBServer, {}, h.jwtSecret),
+        toolPolicyHash: mcpToolPolicyHash(authorityBServer.tool_permissions, h.jwtSecret),
+      },
+      h.jwtSecret
+    );
+
+    await expect(tasks.claimMCPReprojection(h.task.task_id, claimInput)).resolves.toMatchObject({
+      outcome: 'duplicate',
+    });
+    await expect(
+      tasks.bindMCPReprojectionAuthority(h.task.task_id, {
+        ...claimInput,
+        authorityFingerprints: [authorityB],
+      })
+    ).resolves.toMatchObject({ outcome: 'stale' });
+    const afterRetry = await tasks.findById(h.task.task_id);
+    expect(afterRetry?.metadata?.mcp_reprojection_claim?.authority_fingerprints).toEqual([
+      authorityA,
+    ]);
+    expect(afterRetry?.metadata?.mcp_recovery_settled_request_id).toBeUndefined();
+
+    // A delayed/retried acknowledgement can attest only the projection that
+    // was actually installed. It settles A, never the re-derived B authority.
+    // Settlement and rejection deliberately share one clock millisecond. The
+    // durable observed-authority identity, not timestamp ordering, must decide
+    // whether the rejection is a late A straggler or newly stale against B.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-26T12:00:00.123Z'));
+    try {
+      const settledA = await tasks.settleMCPReprojection(h.task.task_id, {
+        sessionId: h.session.session_id,
+        principalUserId: h.task.created_by,
+        requestId: 'mediated-before-rollback',
+        expectedGeneration: 1,
+        ok: true,
+      });
+      expect(settledA).toMatchObject({
+        outcome: 'settled',
+        task: {
+          metadata: {
+            mcp_recovery_settled_request_id: 'mediated-before-rollback',
+            mcp_recovery_settled_at: '2026-08-26T12:00:00.123Z',
+            mcp_recovery_settled_authority_fingerprints: [authorityA],
+          },
+        },
+      });
+      expect(settledA.task.metadata?.mcp_recovery_settled_projection_fingerprint).toBeDefined();
+
+      await h.gateway.recordRejectedRequest(
+        new Headers({ 'x-agor-mcp-capability': h.capability }),
+        h.server.mcp_server_id,
+        new MCPEgressGatewayError(
+          409,
+          'stale_capability',
+          'Installed authority A is now stale against B',
+          'not_started',
+          authorityB
+        )
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+    const recovered = await tasks.findById(h.task.task_id);
+    expect(recovered?.metadata?.mcp_recovery).toMatchObject({
+      generation: 2,
+      code: 'stale_capability',
+      status: 'action_required',
+      provider_dispatch: 'not_started',
+      observed_at: '2026-08-26T12:00:00.123Z',
+    });
+    expect(recovered?.metadata?.mcp_recovery_settled_authority_fingerprints).toEqual([authorityA]);
+  });
+
+  it('creates durable recovery from the first steady-state stale rejection when fanout was missed', async () => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: 'https://provider.example/mcp',
+        auth: { type: 'none' },
+      },
+    });
+
+    await h.gateway.recordRejectedRequest(
+      new Headers({ 'x-agor-mcp-capability': h.capability }),
+      h.server.mcp_server_id,
+      new MCPEgressGatewayError(
+        409,
+        'stale_capability',
+        'Current capability became stale without a delivered hint',
+        'not_started'
+      )
+    );
+
+    let recovery: MCPRuntimeRecovery | undefined;
+    await vi.waitFor(async () => {
+      recovery = (await new TaskRepository(h.rawDb).findById(h.task.task_id))?.metadata
+        ?.mcp_recovery;
+      expect(recovery).toBeDefined();
+    });
+    expect(recovery).toMatchObject({
+      generation: 1,
+      code: 'stale_capability',
+      status: 'action_required',
+      action: 'retry_next_turn',
+      provider_dispatch: 'not_started',
+    });
+  });
+
+  it('suppresses a late steady-state rejection only when its observed authority was settled', async () => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: 'https://provider.example/mcp',
+        auth: { type: 'none' },
+      },
+      initialMcpRecovery: true,
+    });
+    const repo = new TaskRepository(h.rawDb);
+    const authorityFingerprint = h.gateway.verify(h.capability).authority_fingerprint!;
+    await repo.update(h.task.task_id, {
+      metadata: {
+        ...(await repo.findById(h.task.task_id))!.metadata,
+        mcp_reprojection_claim: {
+          request_id: 'mediated-before-rollback',
+          recovery_generation: 1,
+          fingerprint: 'test-projection',
+          claimed_at: new Date().toISOString(),
+          authority_fingerprints: [authorityFingerprint],
+        },
+      },
+    });
+    await repo.clearMCPRecovery(h.task.task_id, () => true);
+
+    const baseClaims = h.gateway.verify(h.capability) as Parameters<
+      typeof issueMCPEgressCapability
+    >[0];
+    const steadyStateCapability = issueMCPEgressCapability(
+      {
+        ...baseClaims,
+        recovery_generation: undefined,
+        recovery_request_id: undefined,
+        jti: randomUUID(),
+      },
+      h.jwtSecret
+    );
+    await h.gateway.recordRejectedRequest(
+      new Headers({ 'x-agor-mcp-capability': steadyStateCapability }),
+      h.server.mcp_server_id,
+      new MCPEgressGatewayError(
+        409,
+        'stale_capability',
+        'Late request observed the authority that was just installed',
+        'not_started',
+        authorityFingerprint
+      )
+    );
+
+    expect((await repo.findById(h.task.task_id))?.metadata?.mcp_recovery).toBeUndefined();
+  });
+
+  it.each([
+    ['transport_not_mediated'],
+    ['approval_not_mediated'],
+    ['template_configuration'],
+  ] as const)('backstops permanent eligibility failure %s with a truthful action', async (code) => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: 'https://provider.example/mcp',
+        auth: { type: 'none' },
+      },
+    });
+    await h.gateway.recordRejectedRequest(
+      new Headers({ 'x-agor-mcp-capability': h.capability }),
+      h.server.mcp_server_id,
+      new MCPEgressGatewayError(501, code, 'Excluded', 'not_started')
+    );
+    const recovery = (await new TaskRepository(h.rawDb).findById(h.task.task_id))?.metadata
+      ?.mcp_recovery;
+    expect(recovery).toMatchObject({ code, action: 'review_configuration' });
+    expect(recovery?.message).not.toContain('next turn');
+    expect(recovery?.server_states?.[0]).toMatchObject({
+      code,
+      action: 'review_configuration',
+    });
+  });
+
   it('projects only bounded HTTP servers and excludes stdio and ask authority up front', () => {
     expect(
       mcpEgressEligibility({ transport: 'stdio', command: 'never-spawn' } as MCPServer)
@@ -348,6 +815,34 @@ describe('authoritative MCP gateway real transport', () => {
         tool_permissions: { destructive: 'ask' },
       } as MCPServer)
     ).toEqual({ eligible: false, reason: 'approval_not_mediated' });
+
+    const ready = {
+      mcp_server_id: 'ready-id',
+      name: 'Ready HTTP',
+      transport: 'http',
+      url: 'http://daemon/mcp-egress/ready-id',
+      headers: { 'X-Agor-Mcp-Capability': 'opaque' },
+    } as MCPServer;
+    const local = {
+      mcp_server_id: 'local-id',
+      name: 'Local tools',
+      transport: 'stdio',
+      command: 'never-spawn',
+    } as MCPServer;
+    expect(
+      classifyMCPRuntimeProjection(
+        [ready],
+        [ready, local],
+        mcpRuntimeProviderCapability('claude-code')
+      )
+    ).toEqual([
+      expect.objectContaining({ name: 'Ready HTTP', code: 'ready', action: 'none' }),
+      expect.objectContaining({
+        name: 'Local tools',
+        code: 'transport_not_mediated',
+        action: 'review_configuration',
+      }),
+    ]);
     for (const template of [
       '{{@root.user.env.SECRET}}',
       '{{this.user.env.SECRET}}',
@@ -690,6 +1185,7 @@ describe('authoritative MCP gateway real transport', () => {
           db: h.rawDb,
           gateway: h.gateway,
           tenantId: 'default',
+          sessionId: h.session.session_id,
           serverIds: [h.server.mcp_server_id],
           mutate: () =>
             new SessionMCPServerRepository(h.rawDb).removeServer(
@@ -945,6 +1441,37 @@ describe('authoritative MCP gateway real transport', () => {
     });
     expect(providerRequests).toBe(1);
     await expect(h.request('POST', initialize)).rejects.toMatchObject({ code: 'stale_capability' });
+  });
+
+  it('distinguishes a missed tool-permission hint and retains the next-turn visibility limitation', async () => {
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: 'https://provider.example/mcp',
+        auth: { type: 'none' },
+        tool_permissions: { read: 'allow' },
+      },
+    });
+    await new MCPServerRepository(h.rawDb).update(h.server.mcp_server_id, {
+      tool_permissions: { read: 'deny' },
+      expected_config_version: h.server.config_version,
+    });
+
+    await expect(h.routeRequest('POST', initialize)).resolves.toMatchObject({
+      status: 409,
+      payload: { error: { data: { code: 'tool_permission_changed' } } },
+    });
+    let recovery: MCPRuntimeRecovery | undefined;
+    await vi.waitFor(async () => {
+      recovery = (await new TaskRepository(h.rawDb).findById(h.task.task_id))?.metadata
+        ?.mcp_recovery;
+      expect(recovery).toBeDefined();
+    });
+    expect(recovery).toMatchObject({
+      code: 'tool_permission_changed',
+      status: 'action_required',
+      provider_dispatch: 'not_started',
+    });
   });
 
   it('truthfully allows an already-admitted cross-daemon request to complete after a commit', async () => {

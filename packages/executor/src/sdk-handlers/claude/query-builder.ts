@@ -11,6 +11,12 @@ import { shortId } from '@agor/core/db';
 import { validateDirectory } from '@agor/core/lib/validation';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
+import type {
+  MCPRuntimeRefreshRequest,
+  MCPRuntimeReprojection,
+  MCPServer,
+  ToolPermission,
+} from '@agor/core/types';
 import { isGatewaySession } from '@agor/core/types';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
@@ -97,6 +103,9 @@ export interface QuerySetupDeps {
  */
 export interface InterruptibleQuery {
   interrupt(): Promise<void>;
+  setMcpServers(
+    servers: Record<string, ClaudeSdk.McpServerConfig>
+  ): Promise<ClaudeSdk.McpSetServersResult>;
   getContextUsage(): Promise<import('@agor/core/sdk').SDKControlGetContextUsageResponse>;
   /**
    * Signal that post-result control requests (like getContextUsage) are done.
@@ -106,6 +115,31 @@ export interface InterruptibleQuery {
   releaseInput(): void;
   // biome-ignore lint/suspicious/noExplicitAny: SDK returns complex union of message types
   [Symbol.asyncIterator](): AsyncIterator<any>;
+}
+
+function replaceMcpPermissionIndex(
+  target: { byServer: Map<string, ReadonlyMap<string, ToolPermission>> },
+  servers: MCPServer[]
+): void {
+  target.byServer.clear();
+  for (const [name, tools] of buildMcpToolPermissionIndex(servers).byServer) {
+    target.byServer.set(name, tools);
+  }
+}
+
+function projectedClaudeMcpConfig(servers: MCPServer[], alwaysLoad: boolean): MCPServersConfig {
+  const config: MCPServersConfig = {};
+  for (const server of servers) {
+    if (server.name === AGOR_MCP_SERVER_NAME || server.transport !== 'http' || !server.url)
+      continue;
+    config[server.name] = {
+      type: 'http',
+      url: server.url,
+      headers: server.headers,
+      ...(alwaysLoad ? { alwaysLoad: true } : {}),
+    };
+  }
+  return config;
 }
 
 export async function setupQuery(
@@ -122,6 +156,7 @@ export async function setupQuery(
   query: InterruptibleQuery;
   resolvedModel: string;
   getStderrMetadata: () => { hasStderr: boolean; byteLength: number };
+  refreshMcp?: (request: MCPRuntimeRefreshRequest) => Promise<MCPRuntimeReprojection>;
 }> {
   const { taskId, permissionMode, resume = true, abortController } = options;
 
@@ -436,7 +471,9 @@ export async function setupQuery(
   );
 
   // Fetch and configure MCP servers for this session
-  let mcpToolPermissions = EMPTY_MCP_TOOL_PERMISSION_INDEX;
+  const mcpToolPermissions: {
+    byServer: Map<string, ReadonlyMap<string, ToolPermission>>;
+  } = { byServer: new Map(EMPTY_MCP_TOOL_PERMISSION_INDEX.byServer) };
   if (deps.sessionMCPRepo && deps.mcpServerRepo) {
     try {
       // Use shared MCP scoping utility
@@ -464,7 +501,8 @@ export async function setupQuery(
         return false;
       });
 
-      mcpToolPermissions = buildMcpToolPermissionIndex(
+      replaceMcpPermissionIndex(
+        mcpToolPermissions,
         attachableServers.map(({ server }) => server)
       );
 
@@ -661,9 +699,150 @@ export async function setupQuery(
     releaseInputResolve?.();
   };
 
+  let refreshApplyTail = Promise.resolve();
+  let mcpRefreshTransportUncertain = false;
+  let appliedRefreshAwaitingSettlement:
+    | { identity: string; projection: MCPRuntimeReprojection }
+    | undefined;
+  const MCP_SET_SERVERS_TIMEOUT_MS = 15_000;
+  const serializeRefreshApply = <T>(apply: () => Promise<T>): Promise<T> => {
+    const result = refreshApplyTail.then(apply, apply);
+    refreshApplyTail = result.then(
+      () => undefined,
+      () => undefined
+    );
+    return result;
+  };
+
+  const refreshMcp =
+    taskId && deps.sessionMCPRepo
+      ? async (request: MCPRuntimeRefreshRequest): Promise<MCPRuntimeReprojection> => {
+          // Projection/claim failures are daemon authority failures. They must
+          // never be mislabeled as provider transport failures because the SDK
+          // has not been contacted yet.
+          const projected = await deps.sessionMCPRepo!.reproject(taskId, request);
+          if (
+            projected.request_id !== request.request_id ||
+            projected.recovery_generation !== request.expected_generation
+          ) {
+            throw new Error('MCP reprojection identity did not match the requested authority');
+          }
+          return serializeRefreshApply(async () => {
+            if (mcpRefreshTransportUncertain) {
+              await deps
+                .sessionMCPRepo!.reportRefresh(taskId, {
+                  request_id: request.request_id,
+                  expected_generation: request.expected_generation,
+                  ok: false,
+                  failure: 'transport_outcome_uncertain',
+                })
+                .catch(() => {
+                  console.warn(
+                    `[executor.mcp] event=refresh_uncertain_report_failed task_id=${shortId(taskId)}`
+                  );
+                });
+              throw new Error(
+                'Claude MCP transport outcome is uncertain after a timeout; no later live refresh will be applied in this turn.'
+              );
+            }
+            // The durable claim, not a process-local response cache, fences an
+            // older projection immediately before provider transport apply.
+            await deps.sessionMCPRepo!.validateReprojection(taskId, request);
+            const refreshIdentity = `${request.expected_generation}:${request.request_id}`;
+            if (appliedRefreshAwaitingSettlement?.identity === refreshIdentity) {
+              await deps
+                .sessionMCPRepo!.reportRefresh(taskId, {
+                  request_id: request.request_id,
+                  expected_generation: request.expected_generation,
+                  ok: true,
+                })
+                .catch(() => {
+                  console.warn(
+                    `[executor.mcp] event=refresh_ack_failed task_id=${shortId(taskId)}`
+                  );
+                });
+              return appliedRefreshAwaitingSettlement.projection;
+            }
+            const dynamic = projectedClaudeMcpConfig(projected.servers, shouldBlockOnMcpStartup);
+            if (deps.mcpEnabled !== false && session.mcp_token) {
+              const daemonUrl = await getDaemonUrl();
+              dynamic[AGOR_MCP_SERVER_NAME] = {
+                type: 'http',
+                url: `${daemonUrl}/mcp`,
+                headers: { Authorization: `Bearer ${session.mcp_token}` },
+                ...(shouldBlockOnMcpStartup ? { alwaysLoad: true } : {}),
+              };
+            }
+
+            let result: ClaudeSdk.McpSetServersResult;
+            try {
+              const providerApply = queryObj.setMcpServers(
+                dynamic as unknown as Record<string, ClaudeSdk.McpServerConfig>
+              );
+              result = await Promise.race([
+                providerApply,
+                new Promise<never>((_, reject) => {
+                  const timer = setTimeout(() => {
+                    mcpRefreshTransportUncertain = true;
+                    reject(new Error('Claude MCP transport refresh timed out'));
+                  }, MCP_SET_SERVERS_TIMEOUT_MS);
+                  void providerApply.finally(() => clearTimeout(timer)).catch(() => undefined);
+                }),
+              ]);
+            } catch (error) {
+              await deps
+                .sessionMCPRepo!.reportRefresh(taskId, {
+                  request_id: request.request_id,
+                  expected_generation: request.expected_generation,
+                  ok: false,
+                  ...(mcpRefreshTransportUncertain
+                    ? { failure: 'transport_outcome_uncertain' as const }
+                    : {}),
+                })
+                .catch(() => undefined);
+              throw error;
+            }
+
+            const failedNames = new Set(Object.keys(result.errors));
+            replaceMcpPermissionIndex(
+              mcpToolPermissions,
+              projected.servers.filter((server) => !failedNames.has(server.name))
+            );
+            if (failedNames.size > 0) {
+              await deps
+                .sessionMCPRepo!.reportRefresh(taskId, {
+                  request_id: request.request_id,
+                  expected_generation: request.expected_generation,
+                  ok: false,
+                })
+                .catch(() => undefined);
+              throw new Error(
+                'Claude partially applied the refreshed MCP transport set. Gateway authority remains enforced; reconnect MCP before continuing.'
+              );
+            }
+
+            appliedRefreshAwaitingSettlement = { identity: refreshIdentity, projection: projected };
+            await deps
+              .sessionMCPRepo!.reportRefresh(taskId, {
+                request_id: request.request_id,
+                expected_generation: request.expected_generation,
+                ok: true,
+              })
+              .catch(() => {
+                // Transport replacement already succeeded. An availability-only
+                // acknowledgement failure must not be relabeled as an SDK apply
+                // failure or trigger a false provider-refresh result.
+                console.warn(`[executor.mcp] event=refresh_ack_failed task_id=${shortId(taskId)}`);
+              });
+            return projected;
+          });
+        }
+      : undefined;
+
   return {
     query: queryObj,
     resolvedModel: model,
     getStderrMetadata,
+    refreshMcp,
   };
 }

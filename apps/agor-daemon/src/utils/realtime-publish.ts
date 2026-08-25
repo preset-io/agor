@@ -30,6 +30,7 @@ import {
   type HookContext,
   hasMinimumRole,
   ROLES,
+  type Task,
   type TenantID,
   type User,
   type UserID,
@@ -45,6 +46,7 @@ import {
   isKnowledgeRealtimeSuppressedEvent,
   resolveKnowledgeRealtimeUserIds,
 } from './knowledge-realtime-publish.js';
+import { redactMcpRecoveryTopology } from './mcp-recovery-redaction.js';
 import {
   type RealtimeAccessBranchRepository,
   RealtimeAccessCache,
@@ -971,6 +973,7 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
 
     const isExecutorControlEvent =
       (context.path === 'tasks' && context.event === 'termination_requested') ||
+      (context.path === 'tasks' && context.event === 'mcp_refresh_requested') ||
       (context.path === 'messages' && context.event === 'permission_resolved');
     if (isExecutorControlEvent) {
       const taskId = extractTaskId(data);
@@ -1112,10 +1115,39 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       return filterToUserIdsOrSuperadmins(tenantScoped, visibility.userIds, allowSuperadmin);
     };
 
-    const delivery =
+    let delivery =
       db && tenantId
         ? await runWithTenantDatabaseScope(db, tenantId, resolveDelivery)
         : await resolveDelivery();
+    const taskData = data as Task | undefined;
+    if (
+      context.path === 'tasks' &&
+      taskData?.metadata?.mcp_recovery &&
+      typeof taskData.session_id === 'string'
+    ) {
+      const combined = combinePublishChannels(delivery);
+      const authorizedConnections = new Set(combined.connections);
+      const ownerId = await accessCache.getSessionOwnerId(taskData.session_id).catch(() => null);
+      const full = tenantScoped
+        .filter((connection: unknown) => {
+          if (!authorizedConnections.has(connection)) return false;
+          if (isServiceConnection(connection) || isAdminConnection(connection, allowSuperadmin)) {
+            return true;
+          }
+          return ownerId !== null && userFromConnection(connection)?.user_id === ownerId;
+        })
+        .send(taskData);
+      const redacted = tenantScoped
+        .filter((connection: unknown) => {
+          if (!authorizedConnections.has(connection)) return false;
+          if (isServiceConnection(connection) || isAdminConnection(connection, allowSuperadmin)) {
+            return false;
+          }
+          return ownerId === null || userFromConnection(connection)?.user_id !== ownerId;
+        })
+        .send(redactMcpRecoveryTopology(taskData));
+      delivery = [full, redacted];
+    }
     if (context.path === 'branches' && context.event === 'removed') {
       const removedBranchId = extractBranchId(data, context);
       if (removedBranchId) accessCache.invalidateBranch(removedBranchId);
@@ -1145,7 +1177,15 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       // Feathers after-hooks may redact a service result by setting dispatch.
       // The local transport prefers that value; Redis must do the same or a
       // gateway/config service could fan out the unredacted event argument.
-      const dispatchedData = context.dispatch !== undefined ? context.dispatch : data;
+      // Task recovery is projected per recipient above (and again by the
+      // receiving daemon). Do not collapse its relay payload to the caller's
+      // redacted dispatch or session owners on other daemons lose details.
+      const dispatchedData =
+        context.path === 'tasks' && (data as Task | undefined)?.metadata?.mcp_recovery
+          ? data
+          : context.dispatch !== undefined
+            ? context.dispatch
+            : data;
       const relayData = safeRelayData(dispatchedData);
       if (relayData !== undefined) {
         const removedBranchId = extractBranchId(relayData, context) as BranchID | undefined;

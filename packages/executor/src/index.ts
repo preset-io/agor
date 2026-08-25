@@ -27,6 +27,7 @@ import type {
 import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
+import { requestMCPRuntimeRefresh } from './mcp-runtime-refresh.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { formatExecutorFailure } from './safe-executor-error.js';
@@ -83,6 +84,9 @@ export class AgorExecutor {
   private terminationReport: Promise<void> | null = null;
   private terminationObservedAtMs: number | null = null;
   private providerCleanupSlowTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Exact durable refresh currently in flight plus bounded automatic backoff. */
+  private mcpRefreshIdentity: string | null = null;
+  private mcpRefreshFailure: { identity: string; attempts: number; retryAt: number } | undefined;
 
   constructor(private config: ExecutorConfig) {
     this.abortController = new AbortController();
@@ -115,7 +119,10 @@ export class AgorExecutor {
       // Connect to daemon via Feathers/WebSocket
       executorDebug('[executor] Connecting to daemon via Feathers...');
       this.client = await createExecutorClient(this.config.daemonUrl, this.config.sessionToken, {
-        onReconnected: () => this.refreshTerminationState('reconnect'),
+        onReconnected: () => {
+          void this.refreshTerminationState('reconnect');
+          void this.refreshDurableMcpRecovery();
+        },
       });
       executorDebug('[executor] Connected to daemon');
 
@@ -179,10 +186,34 @@ export class AgorExecutor {
     if (!this.client) return;
 
     this.client.service('tasks').on('patched', (data: unknown) => {
-      this.handleTaskLifecycleUpdate(data as Task, 'task_patch');
+      const task = data as Task;
+      this.handleTaskLifecycleUpdate(task, 'task_patch');
+      this.requestDurableMcpRecovery(task);
     });
     this.client.service('tasks').on('termination_requested', (data: unknown) => {
       this.handleTaskLifecycleUpdate(data as Task, 'task_stop_event');
+    });
+    this.client.service('tasks').on('mcp_refresh_requested', (data: unknown) => {
+      const event = data as {
+        task_id?: string;
+        session_id?: string;
+        request_id?: string;
+        generation?: number;
+        reason?: 'authority_changed' | 'user_reconnect';
+      };
+      if (
+        event.task_id !== this.config.taskId ||
+        event.session_id !== this.config.sessionId ||
+        typeof event.request_id !== 'string' ||
+        typeof event.generation !== 'number'
+      ) {
+        return;
+      }
+      this.requestExactMcpRefresh({
+        requestId: event.request_id,
+        reason: event.reason ?? 'authority_changed',
+        expectedGeneration: event.generation,
+      });
     });
 
     // Listen for permission_resolved events
@@ -215,6 +246,72 @@ export class AgorExecutor {
     });
 
     executorDebug('[executor] Event listeners registered');
+  }
+
+  /** Attempt one exact durable refresh identity despite duplicate socket events. */
+  private requestExactMcpRefresh(input: {
+    requestId: string;
+    reason: 'authority_changed' | 'user_reconnect';
+    expectedGeneration: number;
+  }): void {
+    const identity = `${input.expectedGeneration}:${input.requestId}`;
+    if (this.mcpRefreshIdentity === identity) return;
+    const failure = this.mcpRefreshFailure;
+    if (
+      input.reason !== 'user_reconnect' &&
+      failure?.identity === identity &&
+      (failure.attempts >= 3 || failure.retryAt > Date.now())
+    ) {
+      return;
+    }
+    this.mcpRefreshIdentity = identity;
+    void requestMCPRuntimeRefresh(this.config.taskId as TaskID, input).then(
+      () => {
+        if (this.mcpRefreshIdentity === identity) this.mcpRefreshIdentity = null;
+        if (this.mcpRefreshFailure?.identity === identity) this.mcpRefreshFailure = undefined;
+      },
+      () => {
+        if (this.mcpRefreshIdentity === identity) this.mcpRefreshIdentity = null;
+        const attempts =
+          this.mcpRefreshFailure?.identity === identity ? this.mcpRefreshFailure.attempts + 1 : 1;
+        this.mcpRefreshFailure = {
+          identity,
+          attempts,
+          retryAt: Date.now() + Math.min(5_000, 500 * 2 ** (attempts - 1)),
+        };
+        console.warn(`[executor.mcp] event=refresh_failed task_id=${shortId(this.config.taskId)}`);
+      }
+    );
+  }
+
+  /** Re-derive a missed availability hint from the authoritative Task row. */
+  private requestDurableMcpRecovery(task: Task): void {
+    const recovery = task.metadata?.mcp_recovery;
+    if (
+      task.task_id !== this.config.taskId ||
+      task.session_id !== this.config.sessionId ||
+      recovery?.status !== 'refresh_requested' ||
+      !recovery.provider.transport_reload ||
+      typeof recovery.request_id !== 'string' ||
+      !recovery.refresh_deadline_at ||
+      new Date(recovery.refresh_deadline_at).getTime() <= Date.now()
+    ) {
+      return;
+    }
+    this.requestExactMcpRefresh({
+      requestId: recovery.request_id,
+      reason: 'authority_changed',
+      expectedGeneration: recovery.generation,
+    });
+  }
+
+  private async refreshDurableMcpRecovery(): Promise<void> {
+    if (!this.client) return;
+    const task = (await this.client
+      .service('tasks')
+      .get(this.config.taskId)
+      .catch(() => null)) as Task | null;
+    if (task) this.requestDurableMcpRecovery(task);
   }
 
   private handleTaskLifecycleUpdate(

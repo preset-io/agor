@@ -1,8 +1,20 @@
-import type { BranchID, SessionID, TaskID } from '@agor/core/types';
+import type {
+  BranchID,
+  MCPRuntimeRefreshRequest,
+  MCPRuntimeReprojection,
+  SessionID,
+  TaskID,
+} from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mcpAuthMocks = vi.hoisted(() => ({ resolveMCPAuthHeaders: vi.fn() }));
-const claudeSdkMocks = vi.hoisted(() => ({ query: vi.fn() }));
+const { claudeQuery, claudeSdkMocks, mcpAuthMocks } = vi.hoisted(() => {
+  const claudeQuery = vi.fn();
+  return {
+    claudeQuery,
+    claudeSdkMocks: { query: claudeQuery },
+    mcpAuthMocks: { resolveMCPAuthHeaders: vi.fn() },
+  };
+});
 
 // Mock minimal dependencies
 vi.mock('@agor/core/lib/validation', () => ({
@@ -47,7 +59,6 @@ vi.mock('../base/permission-hooks.js', () => ({
 
 import { getMcpServersForSession } from '@agor/core/mcp';
 import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
-import * as Claude from '@anthropic-ai/claude-agent-sdk';
 import { CLAUDE_CODE_DISALLOWED_TOOLS } from './constants.js';
 import { formatListForLog, type QuerySetupDeps, setupQuery } from './query-builder.js';
 
@@ -58,12 +69,535 @@ describe('MCP logging helpers', () => {
   });
 });
 
+describe('setupQuery - live MCP reprojection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const readyProjection = (): MCPRuntimeReprojection =>
+    ({
+      task_id: 'test-task',
+      session_id: 'test-session',
+      request_id: 'refresh-1',
+      recovery_generation: 3,
+      provider: {
+        mode: 'in_place' as const,
+        transport_reload: true,
+        retries_unstarted_call: false,
+      },
+      servers: [
+        {
+          mcp_server_id: 'server-1',
+          name: 'fresh',
+          transport: 'http' as const,
+          url: 'http://daemon/mcp-egress/server-1',
+          headers: { 'X-Agor-Mcp-Capability': 'opaque-capability' },
+          scope: 'global' as const,
+          source: 'user' as const,
+          enabled: true,
+        },
+      ],
+      states: [],
+    }) as MCPRuntimeReprojection;
+
+  const refreshDeps = (
+    reproject: ReturnType<typeof vi.fn>,
+    reportRefresh: ReturnType<typeof vi.fn>,
+    validateReprojection = vi.fn().mockResolvedValue(undefined),
+    sessionOverrides: Record<string, unknown> = {}
+  ) =>
+    ({
+      sessionsRepo: {
+        findById: vi.fn().mockResolvedValue({
+          session_id: 'test-session',
+          branch_id: 'test-branch',
+          sdk_session_id: 'sdk-session-retained',
+          created_at: new Date().toISOString(),
+          last_updated: new Date().toISOString(),
+          ...sessionOverrides,
+        }),
+        update: vi.fn(),
+      } as any,
+      branchesRepo: {
+        findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }),
+      } as any,
+      sessionMCPRepo: { reproject, validateReprojection, reportRefresh } as any,
+      permissionLocks: new Map(),
+    }) satisfies QuerySetupDeps;
+
+  it('rebuilds only MCP transport and retains the resumed conversation handle', async () => {
+    const setMcpServers = vi.fn().mockResolvedValue({ added: ['fresh'], removed: [], errors: {} });
+    claudeQuery.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+      setMcpServers,
+    } as any);
+    const reportRefresh = vi.fn().mockResolvedValue(undefined);
+    const reproject = vi.fn().mockResolvedValue({
+      task_id: 'test-task',
+      session_id: 'test-session',
+      request_id: 'refresh-1',
+      recovery_generation: 3,
+      provider: {
+        mode: 'in_place',
+        transport_reload: true,
+        retries_unstarted_call: false,
+      },
+      servers: [
+        {
+          mcp_server_id: 'server-1',
+          name: 'fresh',
+          transport: 'http',
+          url: 'http://daemon/mcp-egress/server-1',
+          headers: { 'X-Agor-Mcp-Capability': 'opaque-capability' },
+          scope: 'global',
+          source: 'user',
+          enabled: true,
+        },
+      ],
+      states: [],
+    });
+    const deps: QuerySetupDeps = {
+      sessionsRepo: {
+        findById: vi.fn().mockResolvedValue({
+          session_id: 'test-session',
+          branch_id: 'test-branch',
+          sdk_session_id: 'sdk-session-retained',
+          created_at: new Date().toISOString(),
+          last_updated: new Date().toISOString(),
+        }),
+        update: vi.fn(),
+      } as any,
+      branchesRepo: {
+        findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }),
+      } as any,
+      sessionMCPRepo: {
+        reproject,
+        validateReprojection: vi.fn().mockResolvedValue(undefined),
+        reportRefresh,
+      } as any,
+      permissionLocks: new Map(),
+    };
+
+    const setup = await setupQuery('test-session' as SessionID, 'test prompt', deps, {
+      taskId: 'test-task' as TaskID,
+    });
+    await setup.refreshMcp?.({
+      request_id: 'refresh-1',
+      reason: 'user_reconnect',
+      expected_generation: 3,
+    });
+
+    expect(claudeQuery.mock.calls[0][0].options.resume).toBe('sdk-session-retained');
+    expect(setMcpServers).toHaveBeenCalledWith({
+      fresh: {
+        type: 'http',
+        url: 'http://daemon/mcp-egress/server-1',
+        headers: { 'X-Agor-Mcp-Capability': 'opaque-capability' },
+      },
+    });
+    expect(reportRefresh).toHaveBeenCalledWith('test-task', {
+      request_id: 'refresh-1',
+      expected_generation: 3,
+      ok: true,
+    });
+    expect(deps.sessionsRepo.update).not.toHaveBeenCalled();
+  });
+
+  it('does not relabel an acknowledgement failure as a provider apply failure', async () => {
+    const setMcpServers = vi.fn().mockResolvedValue({ added: ['fresh'], removed: [], errors: {} });
+    claudeQuery.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+      setMcpServers,
+    } as any);
+    const reproject = vi.fn().mockResolvedValue(readyProjection());
+    const reportRefresh = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('SECRET_ACK_FAILURE'))
+      .mockResolvedValueOnce(undefined);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const setup = await setupQuery(
+      'test-session' as SessionID,
+      'test prompt',
+      refreshDeps(reproject, reportRefresh),
+      { taskId: 'test-task' as TaskID }
+    );
+
+    await expect(
+      setup.refreshMcp!({
+        request_id: 'refresh-1',
+        reason: 'authority_changed',
+        expected_generation: 3,
+      })
+    ).resolves.toMatchObject({ request_id: 'refresh-1' });
+    await expect(
+      setup.refreshMcp!({
+        request_id: 'refresh-1',
+        reason: 'user_reconnect',
+        expected_generation: 3,
+      })
+    ).resolves.toMatchObject({ request_id: 'refresh-1' });
+    expect(setMcpServers).toHaveBeenCalledTimes(1);
+    expect(reportRefresh).toHaveBeenCalledTimes(2);
+    expect(reportRefresh).toHaveBeenCalledWith('test-task', {
+      request_id: 'refresh-1',
+      expected_generation: 3,
+      ok: true,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET_ACK_FAILURE');
+  });
+
+  it('does not let an installed-A cache acknowledge a rejected authority-B duplicate', async () => {
+    const setMcpServers = vi.fn().mockResolvedValue({ added: ['fresh'], removed: [], errors: {} });
+    claudeQuery.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+      setMcpServers,
+    } as any);
+    const projectionA = readyProjection();
+    const reproject = vi
+      .fn()
+      .mockResolvedValueOnce(projectionA)
+      .mockRejectedValueOnce(new Error('durable projection A cannot be rebound to authority B'));
+    const reportRefresh = vi.fn().mockRejectedValueOnce(new Error('ack transport unavailable'));
+    const setup = await setupQuery(
+      'test-session' as SessionID,
+      'test prompt',
+      refreshDeps(reproject, reportRefresh),
+      { taskId: 'test-task' as TaskID }
+    );
+    const request = {
+      request_id: 'refresh-1',
+      reason: 'authority_changed' as const,
+      expected_generation: 3,
+    };
+
+    await expect(setup.refreshMcp!(request)).resolves.toBe(projectionA);
+    await expect(setup.refreshMcp!({ ...request, reason: 'user_reconnect' })).rejects.toThrow(
+      'cannot be rebound to authority B'
+    );
+    expect(setMcpServers).toHaveBeenCalledTimes(1);
+    expect(reportRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves blocking alwaysLoad semantics for gateway-session reprojection', async () => {
+    const setMcpServers = vi.fn().mockResolvedValue({ added: ['fresh'], removed: [], errors: {} });
+    claudeQuery.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+      setMcpServers,
+    } as any);
+    const setup = await setupQuery(
+      'test-session' as SessionID,
+      'test prompt',
+      refreshDeps(
+        vi.fn().mockResolvedValue(readyProjection()),
+        vi.fn().mockResolvedValue(undefined),
+        vi.fn().mockResolvedValue(undefined),
+        { custom_context: { gateway_source: 'slack' } }
+      ),
+      { taskId: 'test-task' as TaskID }
+    );
+    await setup.refreshMcp!({
+      request_id: 'refresh-1',
+      reason: 'authority_changed',
+      expected_generation: 3,
+    });
+    expect(setMcpServers).toHaveBeenCalledWith({
+      fresh: expect.objectContaining({ alwaysLoad: true }),
+    });
+  });
+
+  it('reports partial setMcpServers application as a truthful provider failure', async () => {
+    const setMcpServers = vi.fn().mockResolvedValue({
+      added: ['other'],
+      removed: [],
+      errors: { fresh: 'connection failed' },
+    });
+    claudeQuery.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+      setMcpServers,
+    } as any);
+    const reproject = vi.fn().mockResolvedValue(readyProjection());
+    const reportRefresh = vi.fn().mockResolvedValue(undefined);
+    const setup = await setupQuery(
+      'test-session' as SessionID,
+      'test prompt',
+      refreshDeps(reproject, reportRefresh),
+      { taskId: 'test-task' as TaskID }
+    );
+
+    await expect(
+      setup.refreshMcp!({
+        request_id: 'refresh-1',
+        reason: 'authority_changed',
+        expected_generation: 3,
+      })
+    ).rejects.toThrow('partially applied');
+    expect(reportRefresh).toHaveBeenCalledTimes(1);
+    expect(reportRefresh).toHaveBeenCalledWith('test-task', {
+      request_id: 'refresh-1',
+      expected_generation: 3,
+      ok: false,
+    });
+  });
+
+  it('applies a mixed projection ready subset while retaining excluded state for acknowledgement', async () => {
+    const setMcpServers = vi
+      .fn()
+      .mockResolvedValue({ added: ['ready-http'], removed: [], errors: {} });
+    claudeQuery.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+      setMcpServers,
+    } as any);
+    const projected = readyProjection();
+    projected.servers[0]!.name = 'ready-http';
+    projected.states = [
+      {
+        mcp_server_id: 'server-1',
+        name: 'ready-http',
+        code: 'ready',
+        action: 'none',
+        message: 'Ready through the daemon MCP gateway.',
+      },
+      {
+        mcp_server_id: 'server-stdio',
+        name: 'Local tools',
+        code: 'transport_not_mediated',
+        action: 'review_configuration',
+        message: 'This server configuration cannot be mediated by the live MCP gateway.',
+      },
+    ];
+    const reproject = vi.fn().mockResolvedValue(projected);
+    const reportRefresh = vi.fn().mockResolvedValue(undefined);
+    const setup = await setupQuery(
+      'test-session' as SessionID,
+      'test prompt',
+      refreshDeps(reproject, reportRefresh),
+      { taskId: 'test-task' as TaskID }
+    );
+
+    await expect(
+      setup.refreshMcp!({
+        request_id: 'refresh-1',
+        reason: 'authority_changed',
+        expected_generation: 3,
+      })
+    ).resolves.toMatchObject({
+      states: [
+        { name: 'ready-http', code: 'ready' },
+        { name: 'Local tools', code: 'transport_not_mediated' },
+      ],
+    });
+    expect(setMcpServers).toHaveBeenCalledWith({
+      'ready-http': expect.objectContaining({ url: 'http://daemon/mcp-egress/server-1' }),
+    });
+    expect(reportRefresh).toHaveBeenCalledWith('test-task', {
+      request_id: 'refresh-1',
+      expected_generation: 3,
+      ok: true,
+    });
+  });
+
+  it('does not report provider failure when durable pre-apply validation rejects', async () => {
+    const setMcpServers = vi.fn();
+    claudeQuery.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+      setMcpServers,
+    } as any);
+    const reproject = vi.fn().mockResolvedValue(readyProjection());
+    const validateReprojection = vi.fn().mockRejectedValue(new Error('stale durable generation'));
+    const reportRefresh = vi.fn();
+    const setup = await setupQuery(
+      'test-session' as SessionID,
+      'test prompt',
+      refreshDeps(reproject, reportRefresh, validateReprojection),
+      { taskId: 'test-task' as TaskID }
+    );
+
+    await expect(
+      setup.refreshMcp!({
+        request_id: 'refresh-1',
+        reason: 'authority_changed',
+        expected_generation: 3,
+      })
+    ).rejects.toThrow('stale durable generation');
+    expect(setMcpServers).not.toHaveBeenCalled();
+    expect(reportRefresh).not.toHaveBeenCalled();
+  });
+
+  it('times out an uncertain SDK apply and fences every later live apply in the turn', async () => {
+    vi.useFakeTimers();
+    const setMcpServers = vi.fn(() => new Promise<never>(() => undefined));
+    claudeQuery.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+      setMcpServers,
+    } as any);
+    const reportRefresh = vi.fn().mockResolvedValue(undefined);
+    const reproject = vi.fn(async (_taskId: TaskID, request: MCPRuntimeRefreshRequest) => ({
+      ...readyProjection(),
+      request_id: request.request_id,
+      recovery_generation: request.expected_generation,
+    }));
+    const setup = await setupQuery(
+      'test-session' as SessionID,
+      'test prompt',
+      refreshDeps(reproject, reportRefresh),
+      { taskId: 'test-task' as TaskID }
+    );
+    const first = setup.refreshMcp!({
+      request_id: 'refresh-1',
+      reason: 'authority_changed',
+      expected_generation: 3,
+    });
+    const firstRejection = expect(first).rejects.toThrow('timed out');
+    await vi.advanceTimersByTimeAsync(15_001);
+    await firstRejection;
+    await expect(
+      setup.refreshMcp!({
+        request_id: 'refresh-2',
+        reason: 'user_reconnect',
+        expected_generation: 4,
+      })
+    ).rejects.toThrow('outcome is uncertain');
+    expect(setMcpServers).toHaveBeenCalledTimes(1);
+    expect(reportRefresh.mock.calls).toEqual([
+      [
+        'test-task',
+        {
+          request_id: 'refresh-1',
+          expected_generation: 3,
+          ok: false,
+          failure: 'transport_outcome_uncertain',
+        },
+      ],
+      [
+        'test-task',
+        {
+          request_id: 'refresh-2',
+          expected_generation: 4,
+          ok: false,
+          failure: 'transport_outcome_uncertain',
+        },
+      ],
+    ]);
+    vi.useRealTimers();
+  });
+
+  it('never applies an older projection after a newer refresh succeeds', async () => {
+    const setMcpServers = vi.fn().mockResolvedValue({ added: [], removed: [], errors: {} });
+    claudeQuery.mockReturnValue({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+      interrupt: () => Promise.resolve(),
+      setMcpServers,
+    } as any);
+    let resolveOld!: (value: MCPRuntimeReprojection) => void;
+    const oldProjection = new Promise<MCPRuntimeReprojection>((resolve) => {
+      resolveOld = resolve;
+    });
+    const projection = (requestId: string, generation: number, name: string) =>
+      ({
+        task_id: 'test-task',
+        session_id: 'test-session',
+        request_id: requestId,
+        recovery_generation: generation,
+        provider: {
+          mode: 'in_place',
+          transport_reload: true,
+          retries_unstarted_call: false,
+        },
+        servers: [
+          {
+            mcp_server_id: `server-${generation}`,
+            name,
+            transport: 'http',
+            url: `http://daemon/mcp-egress/server-${generation}`,
+            headers: { 'X-Agor-Mcp-Capability': `opaque-${generation}` },
+            scope: 'global',
+            source: 'user',
+            enabled: true,
+          },
+        ],
+        states: [],
+      }) as MCPRuntimeReprojection;
+    const reproject = vi.fn(async (_taskId: TaskID, request: MCPRuntimeRefreshRequest) => {
+      if (request.request_id === 'old') {
+        return oldProjection;
+      }
+      return projection('new', 2, 'newest');
+    });
+    const validateReprojection = vi.fn(
+      async (_taskId: TaskID, request: MCPRuntimeRefreshRequest) => {
+        if (request.request_id === 'old') throw new Error('stale durable generation');
+      }
+    );
+    const reportRefresh = vi.fn().mockResolvedValue(undefined);
+    const setup = await setupQuery(
+      'test-session' as SessionID,
+      'test prompt',
+      {
+        sessionsRepo: {
+          findById: vi.fn().mockResolvedValue({
+            session_id: 'test-session',
+            branch_id: 'test-branch',
+            sdk_session_id: 'sdk-session-retained',
+            created_at: new Date().toISOString(),
+            last_updated: new Date().toISOString(),
+          }),
+          update: vi.fn(),
+        } as any,
+        branchesRepo: {
+          findById: vi.fn().mockResolvedValue({ path: '/test/project/path' }),
+        } as any,
+        sessionMCPRepo: { reproject, validateReprojection, reportRefresh } as any,
+        permissionLocks: new Map(),
+      },
+      { taskId: 'test-task' as TaskID }
+    );
+
+    const old = setup.refreshMcp!({
+      request_id: 'old',
+      reason: 'authority_changed',
+      expected_generation: 1,
+    });
+    await vi.waitFor(() => expect(reproject).toHaveBeenCalledTimes(1));
+    await expect(
+      setup.refreshMcp!({
+        request_id: 'new',
+        reason: 'authority_changed',
+        expected_generation: 2,
+      })
+    ).resolves.toMatchObject({ request_id: 'new', recovery_generation: 2 });
+
+    resolveOld(projection('old', 1, 'stale'));
+    await expect(old).rejects.toThrow('stale durable generation');
+    expect(setMcpServers).toHaveBeenCalledTimes(1);
+    expect(setMcpServers).toHaveBeenCalledWith({
+      newest: {
+        type: 'http',
+        url: 'http://daemon/mcp-egress/server-2',
+        headers: { 'X-Agor-Mcp-Capability': 'opaque-2' },
+      },
+    });
+    expect(reportRefresh).toHaveBeenCalledWith('test-task', {
+      request_id: 'new',
+      expected_generation: 2,
+      ok: true,
+    });
+  });
+});
+
 describe('setupQuery - Local Settings Support', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getMcpServersForSession).mockResolvedValue([]);
     vi.mocked(resolveMCPAuthHeaders).mockResolvedValue(undefined);
-    vi.mocked(Claude.query).mockReturnValue({
+    claudeQuery.mockReturnValue({
       [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
       interrupt: () => Promise.resolve(),
     } as any);
@@ -89,7 +623,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
 
     // This is the core test for your feature:
     // It ensures 'local' is passed alongside 'user' and 'project'
@@ -126,7 +660,7 @@ describe('setupQuery - Local Settings Support', () => {
 
       expect(logSpy.mock.calls).toEqual([['🤖 Prompting Claude for session test-session...']]);
 
-      const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+      const callArgs = claudeQuery.mock.calls[0][0];
       expect(callArgs.options).not.toHaveProperty('debug');
       expect(callArgs.options.resume).toBe('sdk-session-secret');
       const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
@@ -140,7 +674,7 @@ describe('setupQuery - Local Settings Support', () => {
   it('retains only UTF-8 byte metadata from provider stderr', async () => {
     const deps = createMockDeps();
     const setup = await setupQuery('test-session' as SessionID, 'test prompt', deps);
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     const captureStderr = callArgs.options.stderr as (data: unknown) => void;
     const sentinel = 'SENTINEL_CLAUDE_STDERR_SECRET_🔐';
 
@@ -175,7 +709,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     expect(callArgs.options.disallowedTools).toEqual([...CLAUDE_CODE_DISALLOWED_TOOLS]);
   });
 
@@ -201,7 +735,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor).toMatchObject({ alwaysLoad: true });
     expect(mcpServers.remote).toMatchObject({ alwaysLoad: true });
@@ -228,7 +762,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor.alwaysLoad).toBeUndefined();
     expect(mcpServers.remote.alwaysLoad).toBeUndefined();
@@ -257,7 +791,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor.alwaysLoad).toBeUndefined();
     expect(mcpServers.oauthRemote).toMatchObject({
@@ -288,7 +822,7 @@ describe('setupQuery - Local Settings Support', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       await setupQuery('test-session' as SessionID, 'test prompt', deps);
-      const calls = vi.mocked(Claude.query).mock.calls;
+      const calls = claudeQuery.mock.calls;
       expect(JSON.stringify(warn.mock.calls)).not.toContain(sentinel);
       expect(JSON.stringify(calls)).not.toContain(sentinel);
       const mcpServers = calls[0][0].options.mcpServers as Record<string, Record<string, unknown>>;
@@ -323,7 +857,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor).toMatchObject({ alwaysLoad: true });
     expect(mcpServers.oauthRemote).toMatchObject({
@@ -364,7 +898,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     const mcpServers = callArgs.options.mcpServers as Record<string, Record<string, unknown>>;
     expect(mcpServers.agor).toMatchObject({ alwaysLoad: true });
     expect(mcpServers.bearerRemote.alwaysLoad).toBeUndefined();
@@ -386,7 +920,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     expect(callArgs.options.model).toBe('claude-sonnet-4-6[1m]');
     // The advisor goes through the SDK's extraArgs → `--advisor opus`.
     expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'opus' });
@@ -411,7 +945,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     expect(callArgs.options.extraArgs).toMatchObject({ advisor: 'claude-opus-4-7[1m]' });
     expect(callArgs.options.settings).toBeUndefined();
     expect(callArgs.options.betas).toBeUndefined();
@@ -434,7 +968,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     expect(
       (callArgs.options.extraArgs as Record<string, unknown> | undefined)?.advisor
     ).toBeUndefined();
@@ -456,7 +990,7 @@ describe('setupQuery - Local Settings Support', () => {
 
     await setupQuery('test-session' as SessionID, 'test prompt', deps);
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     expect(
       (callArgs.options.extraArgs as Record<string, unknown> | undefined)?.advisor
     ).toBeUndefined();
@@ -467,7 +1001,7 @@ describe('setupQuery - Local Settings Support', () => {
 describe('setupQuery - canUseTool registration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(Claude.query).mockReturnValue({
+    claudeQuery.mockReturnValue({
       [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
       interrupt: () => Promise.resolve(),
     } as any);
@@ -507,7 +1041,7 @@ describe('setupQuery - canUseTool registration', () => {
       permissionMode: 'bypassPermissions',
     });
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     expect(callArgs.options.canUseTool).toBeUndefined();
     expect(callArgs.options.permissionMode).toBe('bypassPermissions');
   });
@@ -520,7 +1054,7 @@ describe('setupQuery - canUseTool registration', () => {
       permissionMode: 'default',
     });
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     expect(callArgs.options.canUseTool).toBeTypeOf('function');
   });
 
@@ -532,7 +1066,7 @@ describe('setupQuery - canUseTool registration', () => {
       // no taskId
     });
 
-    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const callArgs = claudeQuery.mock.calls[0][0];
     expect(callArgs.options.canUseTool).toBeUndefined();
   });
 });
@@ -548,7 +1082,7 @@ describe('setupQuery - ask under bypassPermissions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(Claude.query).mockReturnValue({
+    claudeQuery.mockReturnValue({
       [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
       interrupt: () => Promise.resolve(),
     } as any);
@@ -598,7 +1132,7 @@ describe('setupQuery - ask under bypassPermissions', () => {
       permissionMode: 'bypassPermissions',
     });
 
-    const options = vi.mocked(Claude.query).mock.calls[0][0].options;
+    const options = claudeQuery.mock.calls[0][0].options;
     // `disallowedTools` is mode-independent, so this holds even though bypass
     // skips canUseTool and could skip hooks.
     expect(options.disallowedTools).toContain(`mcp__${GATED_SERVER}__write_file`);
@@ -612,7 +1146,7 @@ describe('setupQuery - ask under bypassPermissions', () => {
       permissionMode: 'default',
     });
 
-    const options = vi.mocked(Claude.query).mock.calls[0][0].options;
+    const options = claudeQuery.mock.calls[0][0].options;
     expect(options.disallowedTools).not.toContain(`mcp__${GATED_SERVER}__write_file`);
     // Positive control: the server really was processed, so the absence above
     // is the promptable path and not a fixture that produced no servers.
@@ -629,7 +1163,7 @@ describe('setupQuery - ask under bypassPermissions', () => {
 describe('setupQuery - tool names the CLI has to rewrite', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(Claude.query).mockReturnValue({
+    claudeQuery.mockReturnValue({
       [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
       interrupt: () => Promise.resolve(),
     } as any);
@@ -677,7 +1211,7 @@ describe('setupQuery - tool names the CLI has to rewrite', () => {
       permissionMode: 'default',
     });
 
-    const disallowed = vi.mocked(Claude.query).mock.calls[0][0].options.disallowedTools as string[];
+    const disallowed = claudeQuery.mock.calls[0][0].options.disallowedTools as string[];
 
     // What the CLI actually offers the model, and therefore the only form that
     // can bind: both halves rewritten.

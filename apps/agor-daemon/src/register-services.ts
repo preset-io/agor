@@ -289,6 +289,7 @@ import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
 } from './utils/mcp-header-secrets.js';
+import { scheduleMcpRuntimeHint } from './utils/mcp-runtime-hints.js';
 import {
   isMcpGrantOwnerEntitled,
   isSessionMcpServerLinkVisibleToCaller,
@@ -344,6 +345,42 @@ export interface RegisteredServices {
   terminalsService: TerminalsService | null;
   configService: ReturnType<typeof createConfigService>;
   boardCommentsService: unknown;
+}
+
+type OAuthPostCommitTailCode =
+  | 'completion_hint'
+  | 'runtime_authority_hint'
+  | 'completion_notification'
+  | 'completion_waiter'
+  | 'disconnect_hint'
+  | 'disconnect_notification'
+  | 'failure_notification';
+
+export async function preserveCommittedOAuthResult<T>(
+  result: T,
+  tails: ReadonlyArray<{ code: OAuthPostCommitTailCode; run: () => unknown | Promise<unknown> }>
+): Promise<T> {
+  for (const tail of tails) {
+    const dispatch = () => {
+      try {
+        void Promise.resolve(tail.run()).catch(() => {
+          console.warn(`[MCP Runtime] event=oauth_post_commit_tail_failed code=${tail.code}`);
+        });
+      } catch {
+        console.warn(`[MCP Runtime] event=oauth_post_commit_tail_failed code=${tail.code}`);
+      }
+    };
+    try {
+      // When the service still owns an outer tenant transaction, defer native
+      // notifications and hints until commit so clients cannot refetch the old
+      // grant. Identity-only routes have no active transaction and dispatch
+      // immediately after their already-committed authoritative mutation.
+      if (!enqueueAfterTenantDatabaseCommit(dispatch)) dispatch();
+    } catch {
+      console.warn(`[MCP Runtime] event=oauth_post_commit_tail_failed code=${tail.code}`);
+    }
+  }
+  return result;
 }
 
 /**
@@ -3041,7 +3078,10 @@ export async function registerMCPServices(
     }
   };
 
-  const emitOAuthCompletion = (pendingFlow: PendingOAuthFlow, success: boolean) => {
+  const emitOAuthCompletion = async (
+    pendingFlow: PendingOAuthFlow,
+    success: boolean
+  ): Promise<void> => {
     if (!app.io) return;
     const event = {
       attempt_id: pendingFlow.attemptId,
@@ -3054,11 +3094,11 @@ export async function registerMCPServices(
         event.oauth_mode === 'per_user' && pendingFlow.userId
           ? tenantUserChannelName(pendingFlow.tenantId, pendingFlow.userId)
           : tenantChannelName(pendingFlow.tenantId);
-      emitHaNativeSocketEvent(app.io.to(room), 'oauth:completed', event);
+      await Promise.resolve(emitHaNativeSocketEvent(app.io.to(room), 'oauth:completed', event));
     } else if (pendingFlow.socketId) {
       // Standalone defensive fallback: exact originating socket only. Never
       // globally broadcast OAuth attempt metadata or authorization URLs.
-      app.io.local.to(pendingFlow.socketId).emit('oauth:completed', event);
+      await Promise.resolve(app.io.local.to(pendingFlow.socketId).emit('oauth:completed', event));
     }
   };
 
@@ -3200,12 +3240,52 @@ export async function registerMCPServices(
 
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Callback');
         if (!pendingFlow.durableRecord) markLocalOAuthAttempt(pendingFlow, 'succeeded');
-        emitOAuthCompletion(pendingFlow, true);
-
-        // Notify any awaitToken() callers (discover / test-oauth) that the
-        // token has been exchanged + persisted so their HTTP request can
-        // complete with a real result instead of timing out.
-        pendingFlow.tokenResolve?.(tokenResponse);
+        await preserveCommittedOAuthResult(undefined, [
+          {
+            code: 'runtime_authority_hint',
+            run: () => {
+              if (!pendingFlow.tenantId || !pendingFlow.mcpServerId) return;
+              const hintParams = {
+                tenant: {
+                  tenant_id: pendingFlow.tenantId as import('@agor/core/types').TenantID,
+                  source: 'explicit' as const,
+                },
+              } as AuthenticatedParams;
+              scheduleMcpRuntimeHint(
+                db,
+                pendingFlow.tenantId,
+                'oauth_browser_authority_changed',
+                () =>
+                  (
+                    app as unknown as {
+                      signalMcpServerAuthorityChange?: (
+                        serverId: string,
+                        params: AuthenticatedParams,
+                        affectedCredentialUserId?: string
+                      ) => Promise<void>;
+                    }
+                  ).signalMcpServerAuthorityChange?.(
+                    pendingFlow.mcpServerId!,
+                    hintParams,
+                    (pendingFlow.oauthMode ?? 'per_user') === 'per_user'
+                      ? pendingFlow.userId
+                      : undefined
+                  ) ?? Promise.resolve()
+              );
+            },
+          },
+          {
+            code: 'completion_notification',
+            run: () => emitOAuthCompletion(pendingFlow, true),
+          },
+          {
+            code: 'completion_waiter',
+            // Notify any awaitToken() callers (discover / test-oauth) that the
+            // token has been exchanged + persisted. This is post-commit
+            // availability only and cannot rewrite the callback result.
+            run: () => pendingFlow.tokenResolve?.(tokenResponse),
+          },
+        ]);
 
         console.log('[OAuth Callback] Flow completed successfully');
         sendOAuthResultPage(res, true, 'OAuth authentication was successful.');
@@ -3226,7 +3306,12 @@ export async function registerMCPServices(
         } else {
           markLocalOAuthAttempt(pendingFlow, classification.status, classification.failureCode);
         }
-        emitOAuthCompletion(pendingFlow, false);
+        await preserveCommittedOAuthResult(undefined, [
+          {
+            code: 'failure_notification',
+            run: () => emitOAuthCompletion(pendingFlow, false),
+          },
+        ]);
         pendingFlow.tokenReject?.(
           new Error(
             ambiguous
@@ -3441,16 +3526,53 @@ export async function registerMCPServices(
   });
   app.use(
     '/mcp-marketplace/remove-unattached',
-    new MCPMarketplaceRemoveServerService(db, (userIds, params) =>
-      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
-    ),
+    new MCPMarketplaceRemoveServerService(db, (userIds, params, serverId) => {
+      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds);
+      scheduleMcpRuntimeHint(
+        db,
+        params.tenant?.tenant_id,
+        'marketplace_server_removed',
+        () =>
+          (
+            app as unknown as {
+              signalMcpServerAuthorityChange?: (
+                serverId: string,
+                params: AuthenticatedParams
+              ) => Promise<void>;
+            }
+          ).signalMcpServerAuthorityChange?.(serverId, params) ?? Promise.resolve()
+      );
+    }),
     { methods: ['create'] }
   );
   app.use(
     '/mcp-marketplace/tool-permission',
-    new MCPMarketplaceToolPermissionService(db, (userIds, params) =>
-      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
-    ),
+    new MCPMarketplaceToolPermissionService(db, (userIds, params, serverId) => {
+      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds);
+      scheduleMcpRuntimeHint(
+        db,
+        params.tenant?.tenant_id,
+        'tool_permission_changed',
+        () =>
+          (
+            app as unknown as {
+              signalMcpServerAuthorityChange?: (
+                serverId: string,
+                params: AuthenticatedParams,
+                affectedCredentialUserId?: string,
+                exactTasks?: import('@agor/core/types').Task[],
+                code?: 'stale_capability' | 'tool_permission_changed'
+              ) => Promise<void>;
+            }
+          ).signalMcpServerAuthorityChange?.(
+            serverId,
+            params,
+            undefined,
+            undefined,
+            'tool_permission_changed'
+          ) ?? Promise.resolve()
+      );
+    }),
     { methods: ['create'] }
   );
   // Action replies are private acknowledgements. These services mutate through
@@ -4457,9 +4579,58 @@ export async function registerMCPServices(
           issuer,
         });
         await persistOAuthTokenForPendingFlow(tokenResponse, pendingFlow, 'OAuth Complete');
-        if (!pendingFlow.durableRecord) markLocalOAuthAttempt(pendingFlow, 'succeeded');
-        emitOAuthCompletion(pendingFlow, true);
-        return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
+        const completedFlow = pendingFlow;
+        const completedServerId = completedFlow.mcpServerId;
+        const completedTenantId = completedFlow.tenantId ?? tenantIdFromParams(params);
+        if (!completedFlow.durableRecord) markLocalOAuthAttempt(completedFlow, 'succeeded');
+        return preserveCommittedOAuthResult(
+          { success: true, message: 'OAuth authentication successful!', tokenObtained: true },
+          [
+            {
+              code: 'completion_hint',
+              run: () => {
+                if (!completedServerId || !completedTenantId) return;
+                scheduleMcpRuntimeHint(
+                  db,
+                  completedTenantId,
+                  'oauth_authority_changed',
+                  async () => {
+                    const affectedCredentialUserId = await runWithTenantDatabaseScope(
+                      db,
+                      completedTenantId,
+                      async (tenantDb) => {
+                        const completedServer = await new MCPServerRepository(tenantDb).findById(
+                          completedServerId
+                        );
+                        return completedServer?.auth?.type === 'oauth' &&
+                          (completedServer.auth.oauth_mode ?? 'per_user') !== 'shared'
+                          ? completedFlow.userId
+                          : undefined;
+                      }
+                    );
+                    await ((
+                      app as unknown as {
+                        signalMcpServerAuthorityChange?: (
+                          serverId: string,
+                          params: AuthenticatedParams,
+                          affectedCredentialUserId?: string
+                        ) => Promise<void>;
+                      }
+                    ).signalMcpServerAuthorityChange?.(
+                      completedServerId,
+                      params ?? {},
+                      affectedCredentialUserId
+                    ) ?? Promise.resolve());
+                  }
+                );
+              },
+            },
+            {
+              code: 'completion_notification',
+              run: () => emitOAuthCompletion(completedFlow, true),
+            },
+          ]
+        );
       } catch (error) {
         if (pendingFlow) {
           const classification = classifyMCPOAuthCompletionFailure(error);
@@ -4477,7 +4648,12 @@ export async function registerMCPServices(
           } else {
             markLocalOAuthAttempt(pendingFlow, completionStatus, failureCode);
           }
-          emitOAuthCompletion(pendingFlow, false);
+          await preserveCommittedOAuthResult(undefined, [
+            {
+              code: 'failure_notification',
+              run: () => emitOAuthCompletion(pendingFlow!, false),
+            },
+          ]);
           pendingFlow.tokenReject?.(
             new Error(
               ambiguous
@@ -4527,13 +4703,44 @@ export async function registerMCPServices(
       // Tenant-qualified hint only; every receiving tab refetches durable
       // status before changing its auth UI.
       if (result.success && params?.user?.user_id && tenantId) {
+        const disconnectedUserId = params.user.user_id;
         const room =
           result.oauthMode === 'shared'
             ? tenantChannelName(tenantId)
-            : tenantUserChannelName(tenantId, params.user.user_id);
-        emitHaNativeSocketEvent(app.io.to(room), 'oauth:disconnected', {
-          mcp_server_id: data.mcp_server_id as MCPServerID,
-        });
+            : tenantUserChannelName(tenantId, disconnectedUserId);
+        return preserveCommittedOAuthResult(result, [
+          {
+            code: 'disconnect_notification',
+            run: () =>
+              emitHaNativeSocketEvent(app.io.to(room), 'oauth:disconnected', {
+                mcp_server_id: data.mcp_server_id as MCPServerID,
+              }),
+          },
+          {
+            code: 'disconnect_hint',
+            run: () => {
+              scheduleMcpRuntimeHint(
+                db,
+                tenantId,
+                'oauth_disconnected',
+                () =>
+                  (
+                    app as unknown as {
+                      signalMcpServerAuthorityChange?: (
+                        serverId: string,
+                        params: AuthenticatedParams,
+                        affectedCredentialUserId?: string
+                      ) => Promise<void>;
+                    }
+                  ).signalMcpServerAuthorityChange?.(
+                    data.mcp_server_id,
+                    params,
+                    result.oauthMode === 'shared' ? undefined : disconnectedUserId
+                  ) ?? Promise.resolve()
+              );
+            },
+          },
+        ]);
       }
 
       return result;

@@ -9,6 +9,7 @@ import { projectClaudeResultResponse, projectContextUsageSnapshot } from '@agor/
 import { shortId } from '@agor/core/db';
 import { isMCPAbortError, sanitizeMCPExternalError } from '@agor/core/mcp';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
+import type { Task } from '@agor/core/types';
 import type {
   BranchRepository,
   MCPOAuthAuthHeadersRepository,
@@ -18,6 +19,10 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import {
+  registerMCPRuntimeRefreshHandler,
+  requestMCPRuntimeRefresh,
+} from '../../mcp-runtime-refresh.js';
 import type { PermissionService } from '../../permissions/permission-service.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { SessionID, TaskID } from '../../types.js';
@@ -192,7 +197,11 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     }
 
-    const { query: result, getStderrMetadata } = await setupQuery(
+    const {
+      query: result,
+      getStderrMetadata,
+      refreshMcp,
+    } = await setupQuery(
       sessionId,
       prompt,
       {
@@ -238,6 +247,27 @@ If you continue to see authentication errors, please contact your Agor administr
         onActivity?.('progress', 'background_task.complete');
       }
     };
+    const unregisterMcpRefresh =
+      taskId && refreshMcp ? registerMCPRuntimeRefreshHandler(taskId, refreshMcp) : undefined;
+    if (taskId && refreshMcp && this.tasksService) {
+      const durableTask = (await this.tasksService.get(taskId).catch(() => null)) as Task | null;
+      const recovery = durableTask?.metadata?.mcp_recovery;
+      if (
+        recovery?.status === 'refresh_requested' &&
+        recovery.provider.transport_reload &&
+        recovery.request_id &&
+        recovery.refresh_deadline_at &&
+        new Date(recovery.refresh_deadline_at).getTime() > Date.now()
+      ) {
+        void requestMCPRuntimeRefresh(taskId, {
+          requestId: recovery.request_id,
+          reason: 'authority_changed',
+          expectedGeneration: recovery.generation,
+        }).catch(() => {
+          console.warn(`[executor.mcp] event=durable_refresh_failed task_id=${shortId(taskId)}`);
+        });
+      }
+    }
 
     // With AbortController passed to SDK, cancellation is handled natively.
     // When abortController.abort() is called, SDK throws AbortError which we catch below.
@@ -400,6 +430,8 @@ If you continue to see authentication errors, please contact your Agor administr
         hasStderr: stderr.hasStderr,
       });
       throw new Error(safe.message);
+    } finally {
+      unregisterMcpRefresh?.();
     }
   }
 

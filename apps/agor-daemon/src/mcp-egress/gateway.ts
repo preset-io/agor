@@ -6,6 +6,7 @@ import {
   getMCPEgressGatewayMode,
   isEncrypted,
   MCPServerRepository,
+  runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   SessionMCPServerRepository,
   SessionRepository,
@@ -21,6 +22,7 @@ import {
   buildMCPTemplateContextFromEnv,
   extractMCPTemplateDependencies,
   isMCPServerUsableBy,
+  mcpRuntimeProviderCapability,
   resolveMcpServerTemplates,
 } from '@agor/core/mcp';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
@@ -29,7 +31,11 @@ import { OAuthRefreshAuthorityCancelledError } from '@agor/core/tools/mcp/oauth-
 import type {
   AuthenticatedParams,
   GatewayEnvVar,
+  MCPRuntimeProviderCapability,
+  MCPRuntimeRecovery,
+  MCPRuntimeServerState,
   MCPServer,
+  MCPServerID,
   Session,
   SessionID,
   UserID,
@@ -42,6 +48,8 @@ import {
 } from '@agor/core/utils/safe-outbound-fetch';
 import { getDaemonMetrics } from '../metrics/index.js';
 import { resolveSessionPromptAccess } from '../utils/branch-authorization.js';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { DIRECT_MODE_MCP_RECOVERY_MESSAGE } from '../utils/mcp-runtime-hints.js';
 import { type MCPEgressCapabilityClaims, verifyMCPEgressCapability } from './capability.js';
 
 const ACTIVE_TASK_STATES = new Set<import('@agor/core/types').TaskStatus>([
@@ -80,6 +88,42 @@ export function mcpEgressEligibility(server: MCPServer): MCPEgressEligibility {
   return { eligible: true };
 }
 
+/** Secret-free mixed readiness classification shared by the reprojection route and tests. */
+export function classifyMCPRuntimeProjection(
+  projected: MCPServer[],
+  visible: MCPServer[],
+  _provider: MCPRuntimeProviderCapability
+): MCPRuntimeServerState[] {
+  const readyIds = new Set(projected.map((server) => server.mcp_server_id));
+  return visible.map((server) => {
+    if (readyIds.has(server.mcp_server_id)) {
+      return {
+        mcp_server_id: server.mcp_server_id,
+        name: server.name,
+        code: 'ready',
+        action: 'none',
+        message: 'Ready through the daemon MCP gateway.',
+      };
+    }
+    const eligibility = mcpEgressEligibility(server);
+    const code = eligibility.eligible ? 'oauth_reauth_required' : eligibility.reason;
+    return {
+      mcp_server_id: server.mcp_server_id,
+      name: server.name,
+      code,
+      action: code === 'oauth_reauth_required' ? 'reauthenticate' : 'review_configuration',
+      message:
+        code === 'oauth_reauth_required'
+          ? 'OAuth authority was replaced or disconnected; sign in again.'
+          : code === 'approval_not_mediated'
+            ? 'This server requires interactive approval, which mediated egress does not support in the current turn.'
+            : code === 'template_configuration'
+              ? 'This server template cannot be mediated; review its static user.env references or detach it.'
+              : 'This server transport cannot be mediated; replace it with bounded Streamable HTTP or detach it.',
+    };
+  });
+}
+
 /** The only MCP server shape an executor may receive in a mediated mode. */
 export function projectMCPServerForExecutor(
   server: MCPServer,
@@ -107,7 +151,10 @@ export class MCPEgressGatewayError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
-    message: string
+    message: string,
+    readonly dispatch: 'not_started' | 'ambiguous' = 'not_started',
+    /** Keyed current-authority hash captured before this no-send rejection. */
+    readonly authorityFingerprint?: string
   ) {
     super(message);
     this.name = 'MCPEgressGatewayError';
@@ -141,8 +188,20 @@ function abortReasonError(reason: MCPEgressServerAbortReason | 'rollout_changed'
   }
 }
 
-function closedAbortReason(reason: unknown): MCPEgressGatewayError {
-  return reason instanceof MCPEgressGatewayError ? reason : abortReasonError('shutdown');
+function closedAbortReason(
+  reason: unknown,
+  installedAuthorityFingerprint?: string
+): MCPEgressGatewayError {
+  const error = reason instanceof MCPEgressGatewayError ? reason : abortReasonError('shutdown');
+  return installedAuthorityFingerprint && !error.authorityFingerprint
+    ? new MCPEgressGatewayError(
+        error.status,
+        error.code,
+        error.message,
+        error.dispatch,
+        installedAuthorityFingerprint
+      )
+    : error;
 }
 
 interface GatewayOptions {
@@ -165,6 +224,7 @@ interface CurrentAuthority {
 interface InFlight {
   tenantId: string;
   taskId: string;
+  sessionId: string;
   serverId: string;
   controller: AbortController;
   startedAt: number;
@@ -404,6 +464,37 @@ export function mcpEgressMaterialHash(
     .digest('base64url');
 }
 
+export function mcpToolPolicyHash(
+  permissions: MCPServer['tool_permissions'],
+  secret: string
+): string {
+  return createHmac('sha256', secret)
+    .update(
+      JSON.stringify(
+        Object.entries(permissions ?? {}).sort(([left], [right]) => left.localeCompare(right))
+      )
+    )
+    .digest('base64url');
+}
+
+/** Keyed, secret-free identity of one server's complete projected authority. */
+export function mcpAuthorityFingerprint(
+  input: {
+    serverId: string;
+    rolloutMode: string;
+    configVersion: number;
+    materialHash: string;
+    toolPolicyHash: string;
+    grantIdentity?: string;
+  },
+  secret: string
+): string {
+  return createHmac('sha256', secret)
+    .update('agor:mcp-authority-fingerprint:v1\0')
+    .update(JSON.stringify(input))
+    .digest('base64url');
+}
+
 export function mcpOAuthGrantIdentity(
   row: {
     grant_generation?: number;
@@ -476,6 +567,191 @@ export class MCPEgressGateway {
     }
   }
 
+  /** Persist a bounded, secret-free recovery projection after gateway rejection. */
+  async recordRejectedRequest(
+    headers: Headers,
+    serverId: string,
+    error: MCPEgressGatewayError
+  ): Promise<void> {
+    // Capture the rejection before any database wait. A later refresh/action
+    // must never be regressed by this best-effort projection.
+    const rejectedAt = new Date();
+    const recoverable = new Set([
+      'stale_capability',
+      'grant_changed',
+      'needs_reauth',
+      'credential_material_changed',
+      'server_detached',
+      'principal_revoked',
+      'branch_revoked',
+      'rollout_changed',
+      'transport_not_mediated',
+      'approval_not_mediated',
+      'template_configuration',
+      'tool_permission_changed',
+    ]);
+    if (!recoverable.has(error.code)) return;
+    let claims: MCPEgressCapabilityClaims;
+    try {
+      claims = this.verify(capabilityToken(headers));
+    } catch {
+      return;
+    }
+    if (claims.mcp_server_id !== serverId) return;
+    await runWithTenantDatabaseScope(this.options.db, claims.tid, async (tenantDb) => {
+      const repo = new TaskRepository(tenantDb);
+      const session = await new SessionRepository(tenantDb).findById(claims.session_id);
+      const updated = await repo.recordMCPRecovery(claims.task_id, async (current, task, txDb) => {
+        if (
+          task.session_id !== claims.session_id ||
+          !ACTIVE_TASK_STATES.has(task.status) ||
+          task.created_by !== claims.principal_user_id
+        ) {
+          return null;
+        }
+        if (!session) return null;
+        const issuedGeneration = claims.recovery_generation ?? 0;
+        const rejectionObservedSettledAuthority =
+          error.authorityFingerprint !== undefined &&
+          task.metadata?.mcp_recovery_settled_authority_fingerprints?.includes(
+            error.authorityFingerprint
+          );
+        if (!current && rejectionObservedSettledAuthority) {
+          // A successful refresh already installed this exact authority. A
+          // late rejection that observed it must not recreate UI recovery;
+          // request and wall-clock identity alone cannot prove that because a
+          // newly stale rejection may share the settlement's millisecond.
+          return null;
+        }
+        const rolloutMode = await getMCPEgressGatewayMode(txDb);
+        if (rolloutMode === 'off' || rolloutMode === 'observe') {
+          if (
+            current?.code === 'rollout_changed' &&
+            current.status === 'action_required' &&
+            current.action === 'retry_next_turn'
+          ) {
+            return null;
+          }
+          return {
+            ...(current ?? {}),
+            generation: (current?.generation ?? 0) + 1,
+            code: 'rollout_changed',
+            status: 'action_required',
+            task_id: task.task_id,
+            session_id: task.session_id,
+            mcp_server_id: undefined,
+            mcp_server_name: undefined,
+            server_states: undefined,
+            provider: mcpRuntimeProviderCapability(session.agentic_tool),
+            action: 'retry_next_turn',
+            message: DIRECT_MODE_MCP_RECOVERY_MESSAGE,
+            observed_at: rejectedAt.toISOString(),
+            request_id: undefined,
+            refresh_deadline_at: undefined,
+            provider_dispatch: error.dispatch,
+          };
+        }
+        if (current) {
+          if (current.generation > issuedGeneration) return null;
+          if (
+            current.generation === issuedGeneration &&
+            current.request_id &&
+            current.request_id !== claims.recovery_request_id
+          ) {
+            return null;
+          }
+        }
+        const provider = mcpRuntimeProviderCapability(session.agentic_tool);
+        const rejectedServer = await new MCPServerRepository(txDb).findById(serverId);
+        const code: MCPRuntimeRecovery['code'] =
+          error.code === 'needs_reauth'
+            ? 'oauth_reauth_required'
+            : (error.code as MCPRuntimeRecovery['code']);
+        const permanentExclusion =
+          code === 'transport_not_mediated' ||
+          code === 'approval_not_mediated' ||
+          code === 'template_configuration';
+        const action: MCPRuntimeRecovery['action'] =
+          code === 'oauth_reauth_required'
+            ? 'reauthenticate'
+            : code === 'principal_revoked' || code === 'branch_revoked'
+              ? 'contact_admin'
+              : permanentExclusion
+                ? 'review_configuration'
+                : provider.transport_reload
+                  ? 'reconnect_mcp'
+                  : 'retry_next_turn';
+        if (
+          current?.code === code &&
+          current.mcp_server_id === (serverId as MCPServerID) &&
+          current.status === 'action_required' &&
+          (current.provider_dispatch === 'ambiguous' ||
+            current.provider_dispatch === error.dispatch)
+        ) {
+          return null;
+        }
+        return {
+          generation: (current?.generation ?? 0) + 1,
+          code,
+          status: 'action_required',
+          task_id: task.task_id,
+          session_id: task.session_id,
+          mcp_server_id: serverId as import('@agor/core/types').MCPServerID,
+          ...(rejectedServer?.name ? { mcp_server_name: rejectedServer.name } : {}),
+          server_states: permanentExclusion
+            ? [
+                {
+                  mcp_server_id: serverId as MCPServerID,
+                  name: rejectedServer?.name ?? 'MCP server',
+                  code,
+                  action: 'review_configuration',
+                  message:
+                    code === 'approval_not_mediated'
+                      ? 'Interactive ask approval is not mediated; change the tool policy or detach this server.'
+                      : code === 'template_configuration'
+                        ? 'The gateway cannot mediate this template configuration; review or detach this server.'
+                        : 'This transport is not mediated; replace it with bounded Streamable HTTP or detach this server.',
+                },
+              ]
+            : current?.server_states,
+          provider,
+          action,
+          message:
+            error.dispatch === 'ambiguous'
+              ? 'The provider request may have started. Agor will never replay it automatically; reconnecting only updates MCP transport for subsequent calls.'
+              : action === 'reauthenticate'
+                ? 'MCP authorization changed. Sign in again, then reconnect this task.'
+                : action === 'contact_admin' || action === 'review_configuration'
+                  ? permanentExclusion
+                    ? code === 'approval_not_mediated'
+                      ? 'This server requires interactive approval, which mediated egress does not support. Change its tool policy or detach it.'
+                      : code === 'template_configuration'
+                        ? 'This server uses a template form the gateway cannot mediate. Review its configuration or detach it.'
+                        : 'This server transport cannot be mediated during this turn. Replace it with bounded Streamable HTTP or detach it.'
+                    : 'Your authority for this active MCP task changed. Contact an administrator.'
+                  : provider.transport_reload
+                    ? 'MCP authority changed before provider dispatch. Reconnect MCP to continue this conversation.'
+                    : 'MCP authority changed. This provider can apply it only on the next turn; the conversation handle is preserved.',
+          observed_at: rejectedAt.toISOString(),
+          provider_dispatch: error.dispatch,
+        };
+      });
+      if (!ACTIVE_TASK_STATES.has(updated.status) || !updated.metadata?.mcp_recovery) return;
+      emitServiceEvent(this.options.app, {
+        path: 'tasks',
+        event: 'patched',
+        data: updated,
+        id: updated.task_id,
+        params: {
+          tenant: {
+            tenant_id: claims.tid as import('@agor/core/types').TenantID,
+            source: 'explicit',
+          },
+        },
+      });
+    });
+  }
+
   /** Reproducible admission benchmark/probe; it resolves no provider credential and sends nothing. */
   async checkAdmission(token: string, serverId: string): Promise<void> {
     const claims = this.verify(token);
@@ -526,6 +802,22 @@ export class MCPEgressGateway {
     return aborted;
   }
 
+  /** Availability accelerator restricted to the detached Session/server pair. */
+  abortSessionServer(tenantId: string, sessionId: string, serverId: string): number {
+    let aborted = 0;
+    for (const request of [...this.inFlight.values(), ...this.reservations.values()]) {
+      if (
+        request.tenantId === tenantId &&
+        request.sessionId === sessionId &&
+        request.serverId === serverId
+      ) {
+        request.controller.abort(abortReasonError('server_detached'));
+        aborted += 1;
+      }
+    }
+    return aborted;
+  }
+
   abortTenant(tenantId: string): number {
     let aborted = 0;
     for (const request of [...this.inFlight.values(), ...this.reservations.values()]) {
@@ -555,7 +847,7 @@ export class MCPEgressGateway {
     } catch (error) {
       if (error instanceof MCPEgressGatewayError) throw error;
     }
-    throw closedAbortReason(abortReason);
+    throw closedAbortReason(abortReason, claims.authority_fingerprint);
   }
 
   private async assertCurrentOrAbort(
@@ -564,7 +856,7 @@ export class MCPEgressGateway {
   ): Promise<void> {
     // Revalidate first so a committed mutation wins over its local hint.
     await this.currentAuthority(claims);
-    if (signal.aborted) throw closedAbortReason(signal.reason);
+    if (signal.aborted) throw closedAbortReason(signal.reason, claims.authority_fingerprint);
   }
 
   private assertCapacity(claims: MCPEgressCapabilityClaims): void {
@@ -604,6 +896,9 @@ export class MCPEgressGateway {
           new UsersRepository(tenantDb).findById(claims.principal_user_id),
           new UsersRepository(tenantDb).findById(claims.credential_user_id),
         ]);
+        if (!server) {
+          throw new MCPEgressGatewayError(403, 'server_detached', 'MCP server was removed');
+        }
         if (
           !task ||
           task.session_id !== claims.session_id ||
@@ -611,7 +906,6 @@ export class MCPEgressGateway {
           task.created_by !== claims.credential_user_id ||
           !ACTIVE_TASK_STATES.has(task.status) ||
           !session ||
-          !server ||
           !server.enabled ||
           !principal ||
           !credentialUser ||
@@ -628,17 +922,10 @@ export class MCPEgressGateway {
             501,
             eligibility.reason,
             eligibility.reason === 'approval_not_mediated'
-              ? 'This server requires one-shot approval and is excluded from mediation'
+              ? 'This server requires interactive approval and is excluded from mediated egress'
               : eligibility.reason === 'template_configuration'
                 ? 'This server uses a template form the gateway cannot mediate; use static user.env.KEY references with supported balanced helpers'
                 : 'This phase mediates only bounded Streamable HTTP; stdio and legacy SSE fail closed'
-          );
-        }
-        if ((server.config_version ?? 1) !== claims.config_version) {
-          throw new MCPEgressGatewayError(
-            409,
-            'stale_capability',
-            'MCP server configuration changed; reconnect this task'
           );
         }
         if (server.scope !== 'global') {
@@ -664,6 +951,7 @@ export class MCPEgressGateway {
             throw new MCPEgressGatewayError(403, 'branch_revoked', 'Branch permission changed');
           }
         }
+        let currentGrantIdentity: string | undefined;
         if (server.auth?.type === 'oauth') {
           const tokenUserId =
             (server.auth.oauth_mode ?? 'per_user') === 'shared'
@@ -673,22 +961,69 @@ export class MCPEgressGateway {
             tokenUserId,
             server.mcp_server_id
           );
-          if (!claims.grant_identity || mcpOAuthGrantIdentity(grant) !== claims.grant_identity) {
+          currentGrantIdentity = mcpOAuthGrantIdentity(grant);
+        }
+        const env = await resolveMCPEgressEnvironment(tenantDb, claims.credential_user_id, session);
+        const currentMaterialHash = mcpEgressMaterialHash(server, env, this.options.jwtSecret);
+        const currentToolPolicyHash = mcpToolPolicyHash(
+          server.tool_permissions,
+          this.options.jwtSecret
+        );
+        const currentAuthorityFingerprint = mcpAuthorityFingerprint(
+          {
+            serverId: server.mcp_server_id,
+            rolloutMode: mode,
+            configVersion: server.config_version ?? 1,
+            materialHash: currentMaterialHash,
+            toolPolicyHash: currentToolPolicyHash,
+            grantIdentity: currentGrantIdentity,
+          },
+          this.options.jwtSecret
+        );
+        if ((server.config_version ?? 1) !== claims.config_version) {
+          if (!claims.tool_policy_hash || claims.tool_policy_hash !== currentToolPolicyHash) {
+            throw new MCPEgressGatewayError(
+              409,
+              'tool_permission_changed',
+              'MCP tool permissions changed; refresh transport and apply tool visibility next turn',
+              'not_started',
+              currentAuthorityFingerprint
+            );
+          }
+          throw new MCPEgressGatewayError(
+            409,
+            'stale_capability',
+            'MCP server configuration changed; reconnect this task',
+            'not_started',
+            currentAuthorityFingerprint
+          );
+        }
+        if (server.auth?.type === 'oauth') {
+          if (!claims.grant_identity || currentGrantIdentity !== claims.grant_identity) {
             throw new MCPEgressGatewayError(
               401,
               'grant_changed',
-              'MCP OAuth grant was replaced or revoked; reconnect this task'
+              'MCP OAuth grant was replaced or revoked; reconnect this task',
+              'not_started',
+              currentAuthorityFingerprint
             );
           }
         } else if (claims.grant_identity) {
-          throw new MCPEgressGatewayError(409, 'grant_changed', 'MCP grant identity changed');
+          throw new MCPEgressGatewayError(
+            409,
+            'grant_changed',
+            'MCP grant identity changed',
+            'not_started',
+            currentAuthorityFingerprint
+          );
         }
-        const env = await resolveMCPEgressEnvironment(tenantDb, claims.credential_user_id, session);
-        if (mcpEgressMaterialHash(server, env, this.options.jwtSecret) !== claims.material_hash) {
+        if (currentMaterialHash !== claims.material_hash) {
           throw new MCPEgressGatewayError(
             409,
             'credential_material_changed',
-            'MCP credential material changed; reconnect this task'
+            'MCP credential material changed; reconnect this task',
+            'not_started',
+            currentAuthorityFingerprint
           );
         }
         const resolved = resolveMcpServerTemplates(server, buildMCPTemplateContextFromEnv(env));
@@ -845,6 +1180,7 @@ export class MCPEgressGateway {
     this.reservations.set(reservationId, {
       tenantId: claims.tid,
       taskId: claims.task_id,
+      sessionId: claims.session_id,
       serverId: input.serverId,
       controller,
       startedAt: Date.now(),
@@ -856,17 +1192,11 @@ export class MCPEgressGateway {
       // value below: policy, credential configuration, destination, custom
       // headers, template material, and reflection candidates.
       admitted = await this.currentAuthority(claims);
-      for (const toolName of requestedToolNames(input.body)) {
+      const toolNames = requestedToolNames(input.body);
+      for (const toolName of toolNames) {
         const permission = admitted.server.tool_permissions?.[toolName];
         if (permission === 'deny') {
           throw new MCPEgressGatewayError(403, 'tool_denied', 'MCP tool is disabled');
-        }
-        if (permission === 'ask') {
-          throw new MCPEgressGatewayError(
-            403,
-            'approval_not_mediated',
-            'This server requires one-shot tool approval and must be reconfigured before mediation'
-          );
         }
       }
       const assertCurrent = async () => {
@@ -889,6 +1219,7 @@ export class MCPEgressGateway {
     const tracked: InFlight = {
       tenantId: claims.tid,
       taskId: claims.task_id,
+      sessionId: claims.session_id,
       serverId: input.serverId,
       controller,
       startedAt: Date.now(),
@@ -939,6 +1270,9 @@ export class MCPEgressGateway {
       // the closed local abort vocabulary may cross the route boundary.
       if (error instanceof OutboundPreDispatchAuthorityError) {
         return this.rejectPreDispatch(claims, error.authorityCause);
+      }
+      if (error instanceof MCPEgressGatewayError) {
+        throw new MCPEgressGatewayError(error.status, error.code, error.message, 'ambiguous');
       }
       throw error;
     } finally {
