@@ -480,7 +480,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const pinOptions = normalizedList.map((m) => ({ value: m.id, label: m.displayName }));
 
   return (
-    <div ref={pickerRef}>
+    <div
+      ref={pickerRef}
+      onBlur={(event) => {
+        const nextFocus = event.relatedTarget;
+        if (nextFocus && pickerRef.current?.contains(nextFocus as Node)) return;
+        if (pinned) commitPinned();
+      }}
+    >
       <Space orientation="vertical" style={{ width: '100%' }} size={8}>
         {!pinned ? (
           <Select
@@ -500,13 +507,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             value={pinnedModel}
             onChange={selectPinned}
             onSelect={commitPinned}
-            onBlur={(event) => {
-              const nextFocus = event.relatedTarget;
-              if (nextFocus && pickerRef.current?.contains(nextFocus as Node)) {
-                return;
-              }
-              commitPinned();
-            }}
             options={pinOptions}
             filterOption={(input, option) =>
               `${option?.value ?? ''} ${option?.label ?? ''}`

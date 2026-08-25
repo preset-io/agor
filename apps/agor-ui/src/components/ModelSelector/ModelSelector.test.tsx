@@ -102,27 +102,30 @@ describe('ModelSelector (Claude)', () => {
         model: 'claude-sonnet-4-6-20260101',
       });
       return (
-        <Popover
-          open={open}
-          onOpenChange={setOpen}
-          trigger="click"
-          content={
-            <ModelSelector
-              agentic_tool="claude-code"
-              showAdvisor={false}
-              value={value}
-              onChange={setValue}
-              onCommit={(selection) => {
-                onCommit(selection);
-                setOpen(false);
-              }}
-            />
-          }
-        >
-          <Button aria-label="Model picker" aria-expanded={open}>
-            Model
-          </Button>
-        </Popover>
+        <>
+          <Popover
+            open={open}
+            onOpenChange={setOpen}
+            trigger="click"
+            content={
+              <ModelSelector
+                agentic_tool="claude-code"
+                showAdvisor={false}
+                value={value}
+                onChange={setValue}
+                onCommit={(selection) => {
+                  onCommit(selection);
+                  setOpen(false);
+                }}
+              />
+            }
+          >
+            <Button aria-label="Model picker" aria-expanded={open}>
+              Model
+            </Button>
+          </Popover>
+          <Button aria-label="After picker">After picker</Button>
+        </>
       );
     }
 
@@ -134,7 +137,6 @@ describe('ModelSelector (Claude)', () => {
     const recommendedMode = screen.getByRole('button', { name: 'Use a recommended model' });
     act(() => exactInput.focus());
     fireEvent.keyDown(exactInput, { key: 'Tab' });
-    fireEvent.blur(exactInput, { relatedTarget: recommendedMode });
     act(() => recommendedMode.focus());
 
     expect(recommendedMode).toHaveFocus();
@@ -152,6 +154,31 @@ describe('ModelSelector (Claude)', () => {
     fireEvent.mouseDown(screen.getByRole('combobox'));
     fireEvent.click(screen.getByText('Claude Fable 5 · 1M'));
     expect(onCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'claude-fable-5' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+    // Re-enter exact mode, then Tab through the mode toggle without activating
+    // it. Leaving the whole picker commits once and closes the popover.
+    onCommit.mockClear();
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('button', { name: 'Pin a specific version…' }));
+    const nextExactInput = screen.getByRole('combobox');
+    const nextRecommendedMode = screen.getByRole('button', {
+      name: 'Use a recommended model',
+    });
+    const afterPicker = screen.getByRole('button', { name: 'After picker' });
+
+    act(() => nextExactInput.focus());
+    fireEvent.keyDown(nextExactInput, { key: 'Tab' });
+    act(() => nextRecommendedMode.focus());
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(onCommit).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(nextRecommendedMode, { key: 'Tab' });
+    act(() => afterPicker.focus());
+
+    expect(afterPicker).toHaveFocus();
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(onCommit).toHaveBeenCalledWith({ mode: 'exact', model: 'claude-fable-5' });
     expect(trigger).toHaveAttribute('aria-expanded', 'false');
   });
 
