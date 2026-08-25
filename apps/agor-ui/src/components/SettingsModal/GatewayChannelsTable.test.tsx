@@ -188,7 +188,30 @@ function getButton(text: RegExp): HTMLButtonElement {
 function clickButton(text: RegExp) {
   fireEvent.click(getButton(text));
 }
-/** Drain microtasks so a Form.validateFields()-gated step transition settles. */
+
+const ASYNC = { timeout: 10_000 };
+
+/** Wait for an async validation-gated wizard transition without rescanning the form DOM. */
+async function waitForStep(title: string) {
+  await waitFor(() => {
+    const currentTitle = document.querySelector(
+      '.ant-steps-item-process .ant-steps-item-title'
+    )?.textContent;
+    expect(currentTitle).toBe(title);
+  }, ASYNC);
+}
+
+/** Wait until switching channel type has committed the destination wizard structure. */
+async function waitForAvailableStep(title: string) {
+  await waitFor(() => {
+    const titles = Array.from(document.querySelectorAll('.ant-steps-item-title')).map(
+      (stepTitle) => stepTitle.textContent
+    );
+    expect(titles).toContain(title);
+  }, ASYNC);
+}
+
+/** Yield one event-loop turn for non-form fire-and-forget work. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /**
@@ -233,14 +256,14 @@ async function advanceToOptions() {
 async function advanceToCreateAppStep() {
   await advanceToOptions();
   clickButton(/^Continue$/);
-  await flush();
+  await waitForStep('Create app');
 }
 
 /** Advance all the way to the final "Tokens & test" step (step 3). */
 async function advanceToTokensStep() {
   await advanceToCreateAppStep();
   clickButton(/^Continue$/);
-  await flush();
+  await waitForStep('Tokens & test');
 }
 
 describe('GatewayChannelsTable Slack create wizard', () => {
@@ -286,10 +309,10 @@ describe('GatewayChannelsTable Slack create wizard', () => {
 
     // Slack aligns users by default, so no run-as user is required to advance.
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Create app');
     expect(getButton(/Copy manifest/)).toBeInTheDocument();
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Tokens & test');
     expect(getButton(/Create channel/)).toBeInTheDocument();
     expect(queryButton(/^Continue$/)).toBeUndefined();
     expect(screen.getByPlaceholderText('xoxb-...')).toBeInTheDocument();
@@ -395,9 +418,9 @@ describe('GatewayChannelsTable Slack create wizard', () => {
 
     // Slack aligns users by default — no run-as user needed. Walk to Tokens step.
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Create app');
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Tokens & test');
     fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
     fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
     clickButton(/Test connection/);
@@ -853,6 +876,7 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
 
     // Switch the channel type to GitHub via the (real) antd Select.
     selectChannelType('GitHub');
+    await waitForAvailableStep('Credentials');
 
     // Step 0 (Channel): GitHub picks identity later, so only name + branch here.
     fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
@@ -860,12 +884,12 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
     });
     fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Create app');
 
     // Step 1 (Create app): no required fields — Continue straight through.
     expect(screen.getByText(/Create GitHub App on GitHub/)).toBeInTheDocument();
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Credentials');
 
     // Step 2 (Credentials): App ID + private key, then Continue.
     fireEvent.change(screen.getByPlaceholderText('123456'), { target: { value: '111' } });
@@ -883,8 +907,6 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
     fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
 
     clickButton(/Create channel/);
-    await flush();
-
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
       channel_type: 'github',
@@ -907,6 +929,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
 
     // Switch the channel type to Microsoft Teams via the (real) antd Select.
     selectChannelType('Microsoft Teams');
+    await waitForAvailableStep('Setup');
 
     // Step 0 for Teams includes the generic "Post messages as" identity.
     fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
@@ -915,7 +938,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Setup');
 
     // Setup step (final): Azure Bot credentials.
     fireEvent.change(document.querySelector('#teams_app_id') as HTMLInputElement, {
@@ -929,8 +952,6 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     });
 
     clickButton(/Create channel/);
-    await flush();
-
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
       channel_type: 'teams',
@@ -951,12 +972,13 @@ describe('GatewayChannelsTable Discord create wizard', () => {
     clickButton(/Add Channel/);
 
     selectChannelType('Discord');
+    await waitForAvailableStep('Access');
     fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
       target: { value: 'My Discord' },
     });
     fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Create app');
 
     expect(screen.getByText('Discord setup')).toBeInTheDocument();
     expect(screen.getByLabelText('Application ID')).toBeInTheDocument();
@@ -971,7 +993,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
     });
     fireEvent.click(screen.getByLabelText(/Message Content/));
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Access');
 
     expect(screen.getByLabelText('Allowed public text channel IDs')).toBeInTheDocument();
     expect(screen.getByLabelText('Application ID')).not.toBeVisible();
@@ -991,7 +1013,7 @@ describe('GatewayChannelsTable Discord create wizard', () => {
     fireEvent.keyUp(allowedUserInput, { key: 'Enter', code: 'Enter' });
     fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Token & test');
 
     expect(screen.getByLabelText(/Discord bot token/)).toBeInTheDocument();
     expect(screen.getByText('Test Discord connection')).toBeInTheDocument();
@@ -1023,12 +1045,13 @@ describe('GatewayChannelsTable Discord create wizard', () => {
     renderTable(client);
     clickButton(/Add Channel/);
     selectChannelType('Discord');
+    await waitForAvailableStep('Access');
     fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
       target: { value: 'My Discord' },
     });
     fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Create app');
 
     fireEvent.change(screen.getByLabelText('Application ID'), {
       target: { value: '123456789012345678' },
@@ -1038,13 +1061,12 @@ describe('GatewayChannelsTable Discord create wizard', () => {
     });
     fireEvent.click(screen.getByLabelText(/Message Content/));
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Access');
 
     const addTag = (label: string, value: string) => {
       const field = screen.getByLabelText(label);
       const input = field.querySelector('input') ?? field;
       fireEvent.focus(input);
-      fireEvent.mouseDown(input);
       fireEvent.change(input, { target: { value } });
       fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 });
       fireEvent.keyUp(input, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 });
@@ -1054,24 +1076,32 @@ describe('GatewayChannelsTable Discord create wizard', () => {
     addTag('Allowed role IDs', '523456789012345678');
     fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Token & test');
 
     const token = 'discord-token-for-wizard';
-    expect(screen.getByLabelText(/Discord bot token/)).toBeDisabled();
+    const tokenInput = document.querySelector<HTMLInputElement>('#discord_bot_token');
+    if (!tokenInput) throw new Error('No Discord bot token input');
+    expect(tokenInput).toBeDisabled();
     clickButton(/Create secure draft/);
-    await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
+    await waitFor(() => {
+      expect(channelCreate).toHaveBeenCalledTimes(1);
+      expect(tokenInput).toBeEnabled();
+    });
     expect(channelCreate.mock.calls[0][0].enabled).toBe(false);
     expect(channelCreate.mock.calls[0][0].config.bot_token).toBeUndefined();
-    fireEvent.change(screen.getByLabelText(/Discord bot token/), { target: { value: token } });
+    fireEvent.change(tokenInput, { target: { value: token } });
     clickButton(/Test Discord connection/);
     await waitFor(() => expect(screen.getByText(/public threads ok/)).toBeInTheDocument());
     expect(screen.getByText(/view ok, send ok, history ok, public threads ok/)).toBeInTheDocument();
 
     clickButton(/^Back$/);
-    await flush();
+    await waitForStep('Access');
     clickButton(/^Continue$/);
-    await flush();
-    expect(screen.getByLabelText(/Discord bot token/)).toHaveValue(token);
+    await waitForStep('Token & test');
+    const tokenInputAfterNavigation =
+      document.querySelector<HTMLInputElement>('#discord_bot_token');
+    if (!tokenInputAfterNavigation) throw new Error('No Discord bot token input after navigation');
+    expect(tokenInputAfterNavigation).toHaveValue(token);
 
     clickButton(/Verify and enable/);
     await waitFor(() => expect(channelPatch).toHaveBeenCalledTimes(3));
