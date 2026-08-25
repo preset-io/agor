@@ -82,4 +82,24 @@ describe('capability policy proposal contract', () => {
       expect.arrayContaining(['kind_capability_mismatch', 'board_has_filesystem_access'])
     );
   });
+
+  it('requires terminal to stay inside own-session and filesystem boundaries', () => {
+    expect(normalizeCapabilityPolicyCapabilities('branch_access', ['terminal.open'])).toEqual([
+      'branch.view',
+      'sessions.create',
+      'sessions.prompt_own',
+      'terminal.open',
+    ]);
+
+    const issues = validateCapabilityPolicyDraft(
+      branchPolicy({
+        others: {
+          preset: 'custom',
+          capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own', 'terminal.open'],
+          fs_access: 'none',
+        },
+      })
+    );
+    expect(issues.map((issue) => issue.code)).toContain('terminal_requires_filesystem_access');
+  });
 });

@@ -1,6 +1,6 @@
 import type { CapabilityPolicyPrincipalDescriptor } from '@agor/core/types';
 import { LockOutlined } from '@ant-design/icons';
-import { Alert, Card, Flex, Typography, theme } from 'antd';
+import { Flex, Typography, theme } from 'antd';
 import { Tag } from '@/components/Tag';
 import { PrincipalIdentity } from './PrincipalIdentity';
 
@@ -16,30 +16,21 @@ export const ImmutablePrimaryOwner: React.FC<ImmutablePrimaryOwnerProps> = ({
   const { token } = theme.useToken();
 
   return (
-    <Card
-      size="small"
+    <Flex
+      vertical
+      gap={token.paddingXS}
       aria-label={`Immutable primary owner for this ${resourceLabel}`}
-      styles={{ body: { padding: token.paddingSM } }}
     >
-      <Flex vertical gap={10}>
-        <Flex justify="space-between" align="center" gap={12} wrap>
-          <PrincipalIdentity descriptor={owner} />
-          <Tag icon={<LockOutlined />} color="blue">
-            Primary owner
-          </Tag>
-        </Flex>
-        <Alert
-          type="info"
-          showIcon
-          title="Ownership is fixed"
-          description={
-            <Typography.Text>
-              The primary owner cannot be changed in this version. Managers can edit shared access,
-              but they never become owners or inherit conversation credentials.
-            </Typography.Text>
-          }
-        />
+      <Flex justify="space-between" align="center" gap={token.paddingSM} wrap>
+        <PrincipalIdentity descriptor={owner} compact />
+        <Tag icon={<LockOutlined />} color="blue">
+          Primary owner · read only
+        </Tag>
       </Flex>
-    </Card>
+      <Typography.Text type="secondary">
+        <strong>Ownership is fixed.</strong> Managers never become owners or inherit conversation
+        credentials.
+      </Typography.Text>
+    </Flex>
   );
 };

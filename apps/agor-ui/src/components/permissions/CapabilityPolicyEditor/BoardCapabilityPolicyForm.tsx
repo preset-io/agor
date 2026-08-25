@@ -4,7 +4,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { BranchesOutlined, LayoutOutlined } from '@ant-design/icons';
-import { Alert, Flex, Tabs, Typography, theme } from 'antd';
+import { Alert, Divider, Flex, Tabs, Typography, theme } from 'antd';
 import { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
 import { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
 import { BOARD_ACCESS_EDITOR_CONTEXT, BRANCH_ACCESS_EDITOR_CONTEXT } from './policyEditorModel';
@@ -39,25 +39,26 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
   const owner = findUserDescriptor(principals, value.primary_owner_user_id);
 
   return (
-    <Flex vertical gap={token.paddingLG}>
+    <Flex vertical gap={token.paddingMD}>
       <div>
-        <Typography.Title level={3} style={{ marginBottom: token.paddingXXS }}>
+        <Typography.Title level={4} style={{ marginBottom: token.paddingXXS }}>
           Board permissions
         </Typography.Title>
         <Typography.Text type="secondary">
-          Two separate policies control the board surface and the live defaults its branches may
-          inherit.
+          Board access and the live defaults inherited by branches are separate policies.
         </Typography.Text>
       </div>
       <ImmutablePrimaryOwner owner={owner} resourceLabel="board" />
+      <Divider style={{ marginBlock: 0 }} />
       <Tabs
         defaultActiveKey="board-access"
+        size="small"
         items={[
           {
             key: 'board-access',
             label: (
               <span>
-                <LayoutOutlined /> 1. Board access
+                <LayoutOutlined /> Board access
               </span>
             ),
             children: (
@@ -77,16 +78,16 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
             key: 'branch-template',
             label: (
               <span>
-                <BranchesOutlined /> 2. Live branch defaults
+                <BranchesOutlined /> Branch defaults
               </span>
             ),
             children: (
-              <Flex vertical gap={token.paddingLG}>
+              <Flex vertical gap={token.paddingMD}>
                 <Alert
                   type="info"
                   showIcon
-                  title="A live template, not board access"
-                  description="Branches bound to Inherit use the current template. Each branch keeps its own immutable primary owner; changing this template neither transfers ownership nor grants board members access to every branch."
+                  title="Live defaults, not board access"
+                  description="Inherited branches follow this template. Each branch keeps its own fixed primary owner, and board members do not automatically gain branch access."
                 />
                 <CapabilityPolicyEditor
                   title="Defaults inherited by this board’s branches"

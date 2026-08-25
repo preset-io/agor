@@ -115,7 +115,9 @@ export interface CapabilityPolicyValidationIssue {
     | 'duplicate_principal'
     | 'private_has_entries'
     | 'private_has_fallback'
-    | 'board_has_filesystem_access';
+    | 'board_has_filesystem_access'
+    | 'filesystem_requires_view'
+    | 'terminal_requires_filesystem_access';
   message: string;
   entry_id?: UUID;
 }
@@ -138,7 +140,9 @@ const CAPABILITY_DEPENDENCIES: Readonly<
   'sessions.manage_others': ['branch.view'],
   'branch.manage': ['branch.view'],
   'environment.control': ['branch.view', 'branch.manage'],
-  'terminal.open': ['branch.view'],
+  // Terminal remains a low-level evaluator capability, but the product form
+  // derives it from Work in own sessions + non-none filesystem access.
+  'terminal.open': ['branch.view', 'sessions.create', 'sessions.prompt_own'],
   'branch.policy.manage': ['branch.view', 'branch.manage'],
 };
 
@@ -257,6 +261,24 @@ export function validateCapabilityPolicyDraft(
         code: 'board_has_filesystem_access',
         entry_id: value.entry_id,
         message: 'Board access policies cannot grant filesystem access.',
+      });
+    }
+    if (
+      policy.policy_kind === 'branch_access' &&
+      value.fs_access !== 'none' &&
+      !selected.has('branch.view')
+    ) {
+      issues.push({
+        code: 'filesystem_requires_view',
+        entry_id: value.entry_id,
+        message: 'Read or write file access also requires View branch.',
+      });
+    }
+    if (selected.has('terminal.open') && value.fs_access === 'none') {
+      issues.push({
+        code: 'terminal_requires_filesystem_access',
+        entry_id: value.entry_id,
+        message: 'Terminal requires Read or Write filesystem access.',
       });
     }
   }

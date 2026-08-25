@@ -3,6 +3,8 @@ import {
   applyCapabilityPreset,
   BRANCH_ACCESS_EDITOR_CONTEXT,
   toggleCapability,
+  toggleCapabilityControlGroup,
+  updateFilesystemAccess,
 } from './policyEditorModel';
 
 const grant = {
@@ -49,5 +51,41 @@ describe('capability policy editor model', () => {
       false
     );
     expect(withoutView.capabilities).toEqual([]);
+  });
+
+  it('bundles session creation and prompting as Work in own sessions', () => {
+    const work = BRANCH_ACCESS_EDITOR_CONTEXT.controlGroups.find((group) => group.id === 'work');
+    if (!work) throw new Error('Missing Work in own sessions control group');
+
+    const withFiles = updateFilesystemAccess(grant, BRANCH_ACCESS_EDITOR_CONTEXT, 'read');
+    const collaborator = toggleCapabilityControlGroup(
+      withFiles,
+      BRANCH_ACCESS_EDITOR_CONTEXT,
+      work,
+      true
+    );
+
+    expect(collaborator.capabilities).toEqual([
+      'branch.view',
+      'sessions.create',
+      'sessions.prompt_own',
+      'terminal.open',
+    ]);
+    expect(collaborator.preset).toBe('collaborator');
+  });
+
+  it('derives terminal from own-session work plus files, never files alone', () => {
+    const collaborator = applyCapabilityPreset(grant, BRANCH_ACCESS_EDITOR_CONTEXT, 'collaborator');
+    const withoutFiles = updateFilesystemAccess(collaborator, BRANCH_ACCESS_EDITOR_CONTEXT, 'none');
+    const manager = applyCapabilityPreset(grant, BRANCH_ACCESS_EDITOR_CONTEXT, 'manager');
+
+    expect(withoutFiles.capabilities).not.toContain('terminal.open');
+    expect(withoutFiles.capabilities).toEqual([
+      'branch.view',
+      'sessions.create',
+      'sessions.prompt_own',
+    ]);
+    expect(manager.fs_access).toBe('write');
+    expect(manager.capabilities).not.toContain('terminal.open');
   });
 });

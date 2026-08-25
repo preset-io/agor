@@ -3,13 +3,13 @@ import type {
   CapabilityPolicyPrincipalDescriptor,
   UserID,
 } from '@agor/core/types';
-import { CheckCircleOutlined, EyeOutlined, StopOutlined } from '@ant-design/icons';
-import { Alert, Card, Divider, Empty, Flex, Select, Typography, theme } from 'antd';
+import { CheckCircleOutlined, StopOutlined } from '@ant-design/icons';
+import { Alert, Divider, Empty, Flex, Select, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { Tag } from '@/components/Tag';
 import { PrincipalIdentity } from './PrincipalIdentity';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
-import { fsAccessLabel } from './policyEditorModel';
+import { fsAccessLabel, selectedCapabilityControlGroupLabels } from './policyEditorModel';
 import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 import { resolvePrototypeEffectiveAccess } from './prototypeEffectiveAccess';
 
@@ -47,121 +47,115 @@ export const EffectiveAccessPreview: React.FC<EffectiveAccessPreviewProps> = ({
         : null,
     [policy, primaryOwnerUserId, subject, principals]
   );
-  const labelByCapability = useMemo(
-    () => new Map(context.capabilities.map((capability) => [capability.value, capability.label])),
-    [context.capabilities]
+  const effectiveGroupLabels = useMemo(
+    () =>
+      effective
+        ? selectedCapabilityControlGroupLabels(context, effective.capabilities)
+        : ([] as string[]),
+    [context, effective]
   );
   const canPromptOrExecute = effective?.capabilities.some((capability) =>
     ['sessions.create', 'sessions.prompt_own', 'terminal.open'].includes(capability)
   );
+  const terminalAvailable = effective?.capabilities.includes('terminal.open');
 
   return (
-    <Card
-      size="small"
-      title={
-        <Flex align="center" gap={token.paddingXS} wrap>
-          <EyeOutlined aria-hidden />
-          <span>Effective-access preview</span>
-          <Tag color="purple">Read only</Tag>
-        </Flex>
-      }
+    <Flex
+      vertical
+      gap={token.paddingSM}
       aria-label="Effective-access preview for sample principals"
     >
-      <Flex vertical gap={token.paddingSM}>
-        <Typography.Text type="secondary">
-          Explore proposed outcomes using local fixture identities. This preview does not authorize
-          any product request.
-        </Typography.Text>
-        {subject ? (
-          <>
-            <Select<UserID>
-              showSearch
-              aria-label="Preview effective access for"
-              value={subject.user.principal.user_id}
-              onChange={setSubjectId}
-              optionFilterProp="searchText"
-              style={{ width: '100%' }}
-              options={subjects.map((candidate) => ({
-                value: candidate.user.principal.user_id,
-                label: candidate.user.display_name,
-                searchText: `${candidate.user.display_name} ${candidate.user.secondary_label ?? ''}`,
-                descriptor: candidate.user,
-              }))}
-              optionRender={(option) => (
-                <PrincipalIdentity descriptor={option.data.descriptor} compact />
-              )}
-              notFoundContent={
-                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No people" />
-              }
-            />
+      <Typography.Text type="secondary">
+        Local sample only. This explanation never authorizes a request.
+      </Typography.Text>
+      {subject ? (
+        <>
+          <Select<UserID>
+            showSearch
+            aria-label="Preview effective access for"
+            value={subject.user.principal.user_id}
+            onChange={setSubjectId}
+            optionFilterProp="searchText"
+            style={{ width: '100%' }}
+            options={subjects.map((candidate) => ({
+              value: candidate.user.principal.user_id,
+              label: candidate.user.display_name,
+              searchText: `${candidate.user.display_name} ${candidate.user.secondary_label ?? ''}`,
+              descriptor: candidate.user,
+            }))}
+            optionRender={(option) => (
+              <PrincipalIdentity descriptor={option.data.descriptor} compact />
+            )}
+            notFoundContent={<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No people" />}
+          />
 
-            <div aria-live="polite">
-              <PrincipalIdentity descriptor={subject.user} compact />
-              <Divider style={{ marginBlock: token.paddingSM }} />
-              {effective?.deniedReason ? (
-                <Alert
-                  type="warning"
-                  showIcon
-                  icon={<StopOutlined />}
-                  title="No effective access"
-                  description={effective.deniedReason}
-                />
-              ) : (
-                <Flex vertical gap={token.paddingSM}>
-                  <Flex vertical gap={token.paddingXXS}>
-                    <Typography.Text strong>Matched source</Typography.Text>
-                    <Flex gap={token.paddingXXS} wrap>
-                      {effective?.sources.map((source) => (
-                        <Tag key={source.key} color={source.kind === 'others' ? 'gold' : 'blue'}>
-                          {source.label}
-                        </Tag>
-                      ))}
-                    </Flex>
-                    <Typography.Text type="secondary">
-                      {effective?.usedOthers
-                        ? 'No active direct or group entry matched, so the Others fallback applies.'
-                        : effective?.sources.length === 1
-                          ? 'One explicit source matched.'
-                          : 'Overlapping direct and group entries combine by capability union; filesystem access uses the strongest matching level.'}
-                    </Typography.Text>
+          <div aria-live="polite">
+            <PrincipalIdentity descriptor={subject.user} compact />
+            <Divider style={{ marginBlock: token.paddingSM }} />
+            {effective?.deniedReason ? (
+              <Alert
+                type="warning"
+                showIcon
+                icon={<StopOutlined />}
+                title="No effective access"
+                description={effective.deniedReason}
+              />
+            ) : (
+              <Flex vertical gap={token.paddingSM}>
+                <Flex vertical gap={token.paddingXXS}>
+                  <Typography.Text strong>Matched source</Typography.Text>
+                  <Flex gap={token.paddingXXS} wrap>
+                    {effective?.sources.map((source) => (
+                      <Tag key={source.key} color={source.kind === 'others' ? 'gold' : 'blue'}>
+                        {source.label}
+                      </Tag>
+                    ))}
                   </Flex>
-
-                  <Flex vertical gap={token.paddingXXS}>
-                    <Typography.Text strong>Effective capabilities</Typography.Text>
-                    <Flex gap={token.paddingXXS} wrap>
-                      {effective?.capabilities.length ? (
-                        effective.capabilities.map((capability) => (
-                          <Tag icon={<CheckCircleOutlined />} color="green" key={capability}>
-                            {labelByCapability.get(capability) ?? capability}
-                          </Tag>
-                        ))
-                      ) : (
-                        <Tag>No capabilities</Tag>
-                      )}
-                      {context.supportsFilesystem && (
-                        <Tag color={effective?.fsAccess === 'write' ? 'volcano' : 'cyan'}>
-                          {fsAccessLabel[effective?.fsAccess ?? 'none']}
-                        </Tag>
-                      )}
-                    </Flex>
-                  </Flex>
-
-                  {context.kind === 'branch_access' && !canPromptOrExecute && (
-                    <Alert
-                      type="info"
-                      showIcon
-                      title="No prompt / execute authority"
-                      description="View, management, and filesystem capabilities do not silently grant execution or another person’s credential context."
-                    />
-                  )}
+                  <Typography.Text type="secondary">
+                    {effective?.usedOthers
+                      ? 'No active person or group entry matched, so Others applies.'
+                      : effective?.sources.length === 1
+                        ? 'One explicit source matched.'
+                        : 'Overlapping person and group entries combine; the strongest file access wins.'}
+                  </Typography.Text>
                 </Flex>
-              )}
-            </div>
-          </>
-        ) : (
-          <Empty description="No sample principals are available" />
-        )}
-      </Flex>
-    </Card>
+
+                <Flex vertical gap={token.paddingXXS}>
+                  <Typography.Text strong>Effective access</Typography.Text>
+                  <Flex gap={token.paddingXXS} wrap>
+                    {effectiveGroupLabels.length ? (
+                      effectiveGroupLabels.map((label) => (
+                        <Tag icon={<CheckCircleOutlined />} color="green" key={label}>
+                          {label}
+                        </Tag>
+                      ))
+                    ) : (
+                      <Tag>No capabilities</Tag>
+                    )}
+                    {context.supportsFilesystem && (
+                      <Tag color={effective?.fsAccess === 'write' ? 'volcano' : 'cyan'}>
+                        {fsAccessLabel[effective?.fsAccess ?? 'none']}
+                      </Tag>
+                    )}
+                    {terminalAvailable && <Tag color="purple">Terminal available</Tag>}
+                  </Flex>
+                </Flex>
+
+                {context.kind === 'branch_access' && !canPromptOrExecute && (
+                  <Alert
+                    type="info"
+                    showIcon
+                    title="No prompt or execute authority"
+                    description="View, management, and file access do not grant a session, terminal, credentials, or another person’s home."
+                  />
+                )}
+              </Flex>
+            )}
+          </div>
+        </>
+      ) : (
+        <Empty description="No sample principals are available" />
+      )}
+    </Flex>
   );
 };

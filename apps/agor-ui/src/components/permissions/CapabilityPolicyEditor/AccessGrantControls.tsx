@@ -5,7 +5,7 @@ import type {
   CapabilityPolicyPresetId,
 } from '@agor/core/types';
 import { LockOutlined } from '@ant-design/icons';
-import { Alert, Collapse, Flex, Segmented, Select, Typography, theme } from 'antd';
+import { Collapse, Flex, Segmented, Select, Typography, theme } from 'antd';
 import { Tag } from '@/components/Tag';
 import { CapabilitySelection } from './CapabilitySelection';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
@@ -13,6 +13,7 @@ import {
   applyCapabilityPreset,
   fsAccessDescription,
   fsAccessLabel,
+  isCapabilityControlGroupSelected,
   updateFilesystemAccess,
 } from './policyEditorModel';
 
@@ -44,12 +45,15 @@ export function AccessGrantControls<T extends GrantValue>({
   const canPromptOrExecute = value.capabilities.some((capability) =>
     ['sessions.create', 'sessions.prompt_own', 'terminal.open'].includes(capability)
   );
+  const selectedControlCount = context.controlGroups.filter((group) =>
+    isCapabilityControlGroupSelected(value, group)
+  ).length;
 
   return (
     <Flex vertical gap={token.paddingSM}>
       <Flex gap={token.paddingSM} align="flex-start" wrap>
         <Flex vertical gap={token.paddingXXS} style={{ flex: '1 1 220px', minWidth: 0 }}>
-          <Typography.Text strong>Access preset</Typography.Text>
+          <Typography.Text strong>Access level</Typography.Text>
           <Select<CapabilityPolicyPresetId>
             aria-label={`${label} access preset`}
             value={value.preset}
@@ -75,9 +79,9 @@ export function AccessGrantControls<T extends GrantValue>({
 
         {context.supportsFilesystem && (
           <Flex vertical gap={token.paddingXXS} style={{ flex: '1 1 280px', minWidth: 0 }}>
-            <Typography.Text strong>Filesystem access</Typography.Text>
+            <Typography.Text strong>File access</Typography.Text>
             <Segmented<CapabilityPolicyFsAccess>
-              aria-label={`${label} filesystem access`}
+              aria-label={`${label} file access`}
               block
               value={value.fs_access}
               disabled={disabled}
@@ -92,13 +96,10 @@ export function AccessGrantControls<T extends GrantValue>({
       </Flex>
 
       {context.kind === 'branch_access' && isManager && !canPromptOrExecute && (
-        <Alert
-          type="info"
-          showIcon
-          icon={<LockOutlined />}
-          title="Management does not allow prompt / execute"
-          description="Managers can contain sessions and operate the branch, but cannot use another person’s session, credentials, terminal, or execution home."
-        />
+        <Typography.Text type="secondary">
+          <LockOutlined aria-hidden /> Manager can contain and configure, but cannot prompt,
+          execute, or open a terminal.
+        </Typography.Text>
       )}
 
       <Collapse
@@ -108,8 +109,8 @@ export function AccessGrantControls<T extends GrantValue>({
             key: 'capabilities',
             label: (
               <Flex align="center" gap={token.paddingXS} wrap>
-                <Typography.Text strong>Advanced capabilities</Typography.Text>
-                <Tag>{value.capabilities.length} selected</Tag>
+                <Typography.Text strong>Customize access</Typography.Text>
+                <Tag>{selectedControlCount} on</Tag>
               </Flex>
             ),
             children: (
@@ -118,7 +119,7 @@ export function AccessGrantControls<T extends GrantValue>({
                 context={context}
                 onChange={onChange}
                 disabled={disabled}
-                label={`${label} advanced capabilities`}
+                label={`${label} custom access`}
               />
             ),
           },

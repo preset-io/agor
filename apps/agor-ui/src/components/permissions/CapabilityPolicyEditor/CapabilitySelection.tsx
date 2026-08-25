@@ -1,13 +1,11 @@
-import type {
-  CapabilityPolicyCapability,
-  CapabilityPolicyEntryDraft,
-  CapabilityPolicyOthersDraft,
-} from '@agor/core/types';
+import type { CapabilityPolicyEntryDraft, CapabilityPolicyOthersDraft } from '@agor/core/types';
 import { Checkbox, Flex, Typography, theme } from 'antd';
 import { useId } from 'react';
-import { Tag } from '@/components/Tag';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
-import { toggleCapability } from './policyEditorModel';
+import {
+  isCapabilityControlGroupSelected,
+  toggleCapabilityControlGroup,
+} from './policyEditorModel';
 
 interface CapabilitySelectionProps<
   T extends CapabilityPolicyEntryDraft | CapabilityPolicyOthersDraft,
@@ -19,21 +17,11 @@ interface CapabilitySelectionProps<
   label: string;
 }
 
-const familyColor = {
-  View: 'default',
-  'Prompt / execute': 'purple',
-  Manage: 'blue',
-} as const;
-
 export function CapabilitySelection<
   T extends CapabilityPolicyEntryDraft | CapabilityPolicyOthersDraft,
 >({ value, context, onChange, disabled, label }: CapabilitySelectionProps<T>) {
   const { token } = theme.useToken();
   const descriptionPrefix = useId();
-
-  const handleToggle = (capability: CapabilityPolicyCapability, checked: boolean) => {
-    onChange(toggleCapability(value, context, capability, checked));
-  };
 
   return (
     <fieldset
@@ -43,37 +31,40 @@ export function CapabilitySelection<
     >
       <Flex vertical gap={token.paddingXS}>
         <Typography.Text type="secondary">
-          Required capabilities turn on automatically. Removing a prerequisite also removes its
-          dependents.
+          These simple controls map to the exact checks the authorization layer will enforce.
         </Typography.Text>
-        {context.capabilities.map((capability) => (
+        {context.controlGroups.map((group) => (
           <Flex
-            key={capability.value}
+            key={group.id}
             align="flex-start"
             gap={token.paddingXS}
             style={{ paddingBlock: token.paddingXXS }}
           >
             <Checkbox
-              checked={value.capabilities.includes(capability.value)}
-              onChange={(event) => handleToggle(capability.value, event.target.checked)}
-              aria-describedby={`${descriptionPrefix}-${capability.value}-description`}
+              checked={isCapabilityControlGroupSelected(value, group)}
+              onChange={(event) =>
+                onChange(toggleCapabilityControlGroup(value, context, group, event.target.checked))
+              }
+              aria-describedby={`${descriptionPrefix}-${group.id}-description`}
             >
-              <Typography.Text strong>{capability.label}</Typography.Text>
+              <Typography.Text strong>{group.label}</Typography.Text>
             </Checkbox>
-            <Flex vertical gap={2} style={{ minWidth: 0, flex: 1 }}>
-              <Tag color={familyColor[capability.family]} style={{ alignSelf: 'flex-start' }}>
-                {capability.family}
-              </Tag>
-              <Typography.Text
-                id={`${descriptionPrefix}-${capability.value}-description`}
-                type="secondary"
-                style={{ fontSize: token.fontSizeSM }}
-              >
-                {capability.summary}
-              </Typography.Text>
-            </Flex>
+            <Typography.Text
+              id={`${descriptionPrefix}-${group.id}-description`}
+              type="secondary"
+              style={{ minWidth: 0, flex: 1, fontSize: token.fontSizeSM }}
+            >
+              {group.summary}
+            </Typography.Text>
           </Flex>
         ))}
+
+        {context.kind === 'branch_access' && (
+          <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+            Terminal is available automatically only when <strong>Work in own sessions</strong> is
+            enabled and file access is Read or Write. File access alone never grants execution.
+          </Typography.Text>
+        )}
       </Flex>
     </fieldset>
   );

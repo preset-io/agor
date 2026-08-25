@@ -21,6 +21,18 @@ export interface CapabilityOption {
   family: 'View' | 'Prompt / execute' | 'Manage';
 }
 
+/**
+ * Product-facing capability bundle. The proposed authorization contract stays
+ * granular, but the form should not make people reason about every low-level
+ * check independently.
+ */
+export interface CapabilityControlGroup {
+  id: 'view' | 'work' | 'edit' | 'manage';
+  label: string;
+  summary: string;
+  capabilities: readonly CapabilityPolicyCapability[];
+}
+
 export interface CapabilityPresetDefinition {
   id: Exclude<CapabilityPolicyPresetId, 'custom'>;
   label: string;
@@ -36,6 +48,7 @@ export interface CapabilityPolicyEditorContext {
   privateDescription: string;
   supportsFilesystem: boolean;
   capabilities: readonly CapabilityOption[];
+  controlGroups: readonly CapabilityControlGroup[];
   presets: readonly CapabilityPresetDefinition[];
 }
 
@@ -114,6 +127,53 @@ const BRANCH_CAPABILITY_OPTIONS: readonly CapabilityOption[] = [
     label: 'Manage branch access',
     summary: 'Edit shared entries. The immutable primary owner cannot be changed.',
     family: 'Manage',
+  },
+];
+
+const BOARD_CONTROL_GROUPS: readonly CapabilityControlGroup[] = [
+  {
+    id: 'view',
+    label: 'View board',
+    summary: 'See the canvas and only branch cards they may access.',
+    capabilities: ['board.view'],
+  },
+  {
+    id: 'edit',
+    label: 'Edit board',
+    summary: 'Change the canvas, zones, and attached branch references.',
+    capabilities: ['board.edit', 'board.attach_branch'],
+  },
+  {
+    id: 'manage',
+    label: 'Manage board',
+    summary: 'Edit board settings and shared access. Never becomes an owner.',
+    capabilities: ['board.edit', 'board.attach_branch', 'board.policy.manage'],
+  },
+];
+
+const BRANCH_CONTROL_GROUPS: readonly CapabilityControlGroup[] = [
+  {
+    id: 'view',
+    label: 'View branch',
+    summary: 'See branch details, conversations, tasks, messages, and reports.',
+    capabilities: ['branch.view'],
+  },
+  {
+    id: 'work',
+    label: 'Work in own sessions',
+    summary: 'Create and prompt sessions that run only as this person.',
+    capabilities: ['sessions.create', 'sessions.prompt_own'],
+  },
+  {
+    id: 'manage',
+    label: 'Manage branch',
+    summary: 'Manage settings, access, environment, and session lifecycle without executing.',
+    capabilities: [
+      'sessions.manage_others',
+      'branch.manage',
+      'environment.control',
+      'branch.policy.manage',
+    ],
   },
 ];
 
@@ -199,6 +259,7 @@ export const BOARD_ACCESS_EDITOR_CONTEXT: CapabilityPolicyEditorContext = {
   privateDescription: 'Only the immutable primary owner can access this board.',
   supportsFilesystem: false,
   capabilities: BOARD_CAPABILITY_OPTIONS,
+  controlGroups: BOARD_CONTROL_GROUPS,
   presets: BOARD_PRESETS,
 };
 
@@ -209,6 +270,7 @@ export const BRANCH_ACCESS_EDITOR_CONTEXT: CapabilityPolicyEditorContext = {
   privateDescription: 'Only the immutable primary owner can access this branch.',
   supportsFilesystem: true,
   capabilities: BRANCH_CAPABILITY_OPTIONS,
+  controlGroups: BRANCH_CONTROL_GROUPS,
   presets: BRANCH_PRESETS,
 };
 
@@ -243,12 +305,64 @@ export function applyCapabilityPreset<
 >(value: T, context: CapabilityPolicyEditorContext, presetId: CapabilityPolicyPresetId): T {
   const preset = getCapabilityPreset(context, presetId);
   if (!preset) return { ...value, preset: 'custom' };
+  const fsAccess = context.supportsFilesystem ? preset.fsAccess : 'none';
+  const capabilities = synchronizeProductCapabilities(context, preset.capabilities, fsAccess);
   return {
     ...value,
     preset: preset.id,
-    capabilities: [...preset.capabilities],
-    fs_access: context.supportsFilesystem ? preset.fsAccess : 'none',
+    capabilities,
+    fs_access: fsAccess,
   };
+}
+
+/**
+ * Apply the prototype's product-level implications to the low-level contract.
+ *
+ * Terminal is intentionally not its own form switch. It is available only
+ * when a person may work in their own sessions *and* has a filesystem
+ * projection. Filesystem access alone (for example a non-executing Manager)
+ * never grants a shell.
+ */
+export function synchronizeProductCapabilities(
+  context: CapabilityPolicyEditorContext,
+  capabilities: readonly CapabilityPolicyCapability[],
+  fsAccess: CapabilityPolicyFsAccess
+): CapabilityPolicyCapability[] {
+  let normalized = normalizeCapabilityPolicyCapabilities(context.kind, capabilities);
+
+  if (context.kind === 'board_access') {
+    // The UI presents board editing as one product capability even though the
+    // future evaluator may check edit and attach independently.
+    if (normalized.includes('board.edit') || normalized.includes('board.attach_branch')) {
+      normalized = normalizeCapabilityPolicyCapabilities(context.kind, [
+        ...normalized,
+        'board.edit',
+        'board.attach_branch',
+      ]);
+    }
+    return normalized;
+  }
+
+  if (fsAccess !== 'none' && !normalized.includes('branch.view')) {
+    normalized = normalizeCapabilityPolicyCapabilities(context.kind, [
+      ...normalized,
+      'branch.view',
+    ]);
+  }
+
+  const canWorkInOwnSessions =
+    normalized.includes('sessions.create') && normalized.includes('sessions.prompt_own');
+  const shouldOpenTerminal = canWorkInOwnSessions && fsAccess !== 'none';
+  if (shouldOpenTerminal && !normalized.includes('terminal.open')) {
+    normalized = normalizeCapabilityPolicyCapabilities(context.kind, [
+      ...normalized,
+      'terminal.open',
+    ]);
+  } else if (!shouldOpenTerminal && normalized.includes('terminal.open')) {
+    normalized = removeCapabilityPolicyCapability(context.kind, normalized, 'terminal.open');
+  }
+
+  return normalized;
 }
 
 export function toggleCapability<
@@ -259,9 +373,10 @@ export function toggleCapability<
   capability: CapabilityPolicyCapability,
   checked: boolean
 ): T {
-  const capabilities = checked
+  const nextCapabilities = checked
     ? normalizeCapabilityPolicyCapabilities(context.kind, [...value.capabilities, capability])
     : removeCapabilityPolicyCapability(context.kind, value.capabilities, capability);
+  const capabilities = synchronizeProductCapabilities(context, nextCapabilities, value.fs_access);
   return {
     ...value,
     capabilities,
@@ -269,15 +384,63 @@ export function toggleCapability<
   };
 }
 
+export function isCapabilityControlGroupSelected(
+  value: CapabilityPolicyEntryDraft | CapabilityPolicyOthersDraft,
+  group: CapabilityControlGroup
+): boolean {
+  return group.capabilities.every((capability) => value.capabilities.includes(capability));
+}
+
+export function toggleCapabilityControlGroup<
+  T extends CapabilityPolicyEntryDraft | CapabilityPolicyOthersDraft,
+>(
+  value: T,
+  context: CapabilityPolicyEditorContext,
+  group: CapabilityControlGroup,
+  checked: boolean
+): T {
+  let capabilities = [...value.capabilities];
+  if (checked) {
+    capabilities = normalizeCapabilityPolicyCapabilities(context.kind, [
+      ...capabilities,
+      ...group.capabilities,
+    ]);
+  } else {
+    for (const capability of group.capabilities) {
+      capabilities = removeCapabilityPolicyCapability(context.kind, capabilities, capability);
+    }
+  }
+
+  const fsAccess = group.id === 'view' && !checked ? 'none' : value.fs_access;
+  capabilities = synchronizeProductCapabilities(context, capabilities, fsAccess);
+  return {
+    ...value,
+    capabilities,
+    fs_access: fsAccess,
+    preset: matchingCapabilityPreset(context, capabilities, fsAccess),
+  };
+}
+
 export function updateFilesystemAccess<
   T extends CapabilityPolicyEntryDraft | CapabilityPolicyOthersDraft,
 >(value: T, context: CapabilityPolicyEditorContext, fsAccess: CapabilityPolicyFsAccess): T {
   const normalizedFs = context.supportsFilesystem ? fsAccess : 'none';
+  const capabilities = synchronizeProductCapabilities(context, value.capabilities, normalizedFs);
   return {
     ...value,
     fs_access: normalizedFs,
-    preset: matchingCapabilityPreset(context, value.capabilities, normalizedFs),
+    capabilities,
+    preset: matchingCapabilityPreset(context, capabilities, normalizedFs),
   };
+}
+
+export function selectedCapabilityControlGroupLabels(
+  context: CapabilityPolicyEditorContext,
+  capabilities: readonly CapabilityPolicyCapability[]
+): string[] {
+  return context.controlGroups
+    .filter((group) => group.capabilities.every((capability) => capabilities.includes(capability)))
+    .map((group) => group.label);
 }
 
 export function makePrivatePolicy(policy: CapabilityPolicyDraft): CapabilityPolicyDraft {
@@ -305,9 +468,9 @@ export const fsAccessLabel: Readonly<Record<CapabilityPolicyFsAccess, string>> =
 };
 
 export const fsAccessDescription: Readonly<Record<CapabilityPolicyFsAccess, string>> = {
-  none: 'No filesystem projection.',
-  read: 'Read-only filesystem projection.',
-  write: 'Read and write filesystem projection.',
+  none: 'Cannot access branch files.',
+  read: 'Can read branch files.',
+  write: 'Can read and change branch files.',
 };
 
 export const allCapabilitiesForKind = (

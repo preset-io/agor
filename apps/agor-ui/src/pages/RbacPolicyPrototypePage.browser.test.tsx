@@ -16,7 +16,7 @@ const renderPrototype = () =>
 describe('RBAC policy prototype responsive layout (real browser)', () => {
   it('renders the board form without horizontal page overflow', async () => {
     renderPrototype();
-    await screen.findByRole('heading', { name: 'Capability policy prototype' });
+    await screen.findByRole('heading', { name: 'Permissions prototype' });
 
     const root = screen.getByTestId('rbac-policy-prototype');
     expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
@@ -33,8 +33,8 @@ describe('RBAC policy prototype responsive layout (real browser)', () => {
     const root = screen.getByTestId('rbac-policy-prototype');
     expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
 
-    fireEvent.click(screen.getByRole('radio', { name: /Override for this branch/i }));
-    await waitFor(() => expect(screen.getByText('Explicit branch override')).toBeVisible());
+    fireEvent.click(screen.getByRole('radio', { name: 'This branch' }));
+    await waitFor(() => expect(screen.getByText('Branch access')).toBeVisible());
     expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
   });
 
@@ -48,6 +48,6 @@ describe('RBAC policy prototype responsive layout (real browser)', () => {
     await act(async () => apply.focus());
     expect(apply).toHaveFocus();
     await act(async () => userEvent.keyboard('{Enter}'));
-    expect(await screen.findByText('Local prototype state applied')).toBeVisible();
+    expect(await screen.findByText('Applied to this local fixture only')).toBeVisible();
   });
 });

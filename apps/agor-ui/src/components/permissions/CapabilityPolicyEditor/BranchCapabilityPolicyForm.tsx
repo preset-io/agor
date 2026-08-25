@@ -6,7 +6,7 @@ import type {
 } from '@agor/core/types';
 import { CAPABILITY_POLICY_SCHEMA_VERSION } from '@agor/core/types';
 import { ApartmentOutlined, EditOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Descriptions, Flex, Radio, Typography, theme } from 'antd';
+import { Alert, Button, Descriptions, Divider, Flex, Segmented, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
 import { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
@@ -67,76 +67,72 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
   };
 
   return (
-    <Flex vertical gap={token.paddingLG}>
+    <Flex vertical gap={token.paddingMD}>
       <div>
-        <Typography.Title level={3} style={{ marginBottom: token.paddingXXS }}>
+        <Typography.Title level={4} style={{ marginBottom: token.paddingXXS }}>
           Branch permissions
         </Typography.Title>
         <Typography.Text type="secondary">
-          Keep this branch aligned to its board’s live defaults or replace them with one complete
-          branch policy.
+          Follow the board’s live defaults or use one complete policy for this branch.
         </Typography.Text>
       </div>
       <ImmutablePrimaryOwner owner={owner} resourceLabel="branch" />
+      <Divider style={{ marginBlock: 0 }} />
 
-      <Card title="Policy binding">
-        <Flex vertical gap={token.paddingSM}>
-          <Radio.Group
-            aria-label="Branch policy binding"
-            value={value.binding_mode}
-            onChange={(event) => setBinding(event.target.value)}
-            options={[
-              {
-                value: 'inherit',
-                label: 'Inherit board defaults — follows future template changes',
-              },
-              {
-                value: 'override',
-                label: 'Override for this branch — complete independent policy',
-              },
-            ]}
-          />
-          {confirmInherit && (
-            <Alert
-              type="warning"
-              showIcon
-              title="Discard this branch override?"
-              description="The explicit branch policy will be removed and access will immediately follow the board’s live template in this local prototype."
-              action={
-                <Flex gap={token.paddingXS} wrap>
-                  <Button size="small" onClick={() => setConfirmInherit(false)}>
-                    Keep override
-                  </Button>
-                  <Button
-                    size="small"
-                    danger
-                    type="primary"
-                    onClick={() => {
-                      onChange({ ...value, binding_mode: 'inherit', override_policy: undefined });
-                      setConfirmInherit(false);
-                    }}
-                  >
-                    Discard & inherit
-                  </Button>
-                </Flex>
-              }
-            />
-          )}
-        </Flex>
-      </Card>
+      <Flex vertical gap={token.paddingXXS}>
+        <Typography.Text strong>Use permissions from</Typography.Text>
+        <Segmented<'inherit' | 'override'>
+          aria-label="Branch policy binding"
+          block
+          value={value.binding_mode}
+          onChange={setBinding}
+          options={[
+            { value: 'inherit', label: 'Board defaults' },
+            { value: 'override', label: 'This branch' },
+          ]}
+        />
+        <Typography.Text type="secondary">
+          {value.binding_mode === 'inherit'
+            ? 'Inherited access follows future changes to the board template.'
+            : 'This complete override replaces the board template.'}
+        </Typography.Text>
+      </Flex>
+      {confirmInherit && (
+        <Alert
+          type="warning"
+          showIcon
+          title="Discard this branch override?"
+          description="The explicit policy will be removed and this branch will immediately follow the board template in this local prototype."
+          action={
+            <Flex gap={token.paddingXS} wrap>
+              <Button size="small" onClick={() => setConfirmInherit(false)}>
+                Keep override
+              </Button>
+              <Button
+                size="small"
+                danger
+                type="primary"
+                onClick={() => {
+                  onChange({ ...value, binding_mode: 'inherit', override_policy: undefined });
+                  setConfirmInherit(false);
+                }}
+              >
+                Discard & inherit
+              </Button>
+            </Flex>
+          }
+        />
+      )}
 
       {value.binding_mode === 'inherit' ? (
-        <>
-          <Card
-            title={
-              <Flex align="center" gap={token.paddingXS}>
-                <ApartmentOutlined aria-hidden />
-                Inherited summary
-              </Flex>
-            }
-          >
+        <Flex vertical gap={token.paddingMD}>
+          <Flex vertical gap={token.paddingXS}>
+            <Typography.Text strong>
+              <ApartmentOutlined aria-hidden /> Inherited summary
+            </Typography.Text>
             <Descriptions
               size="small"
+              bordered
               column={{ xs: 1, sm: 2 }}
               items={[
                 { key: 'source', label: 'Source', children: 'Board live branch defaults' },
@@ -152,7 +148,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
                 },
                 {
                   key: 'others',
-                  label: 'Others fallback',
+                  label: 'Others',
                   children:
                     inheritedPolicy.others.preset === 'none'
                       ? 'No access'
@@ -160,10 +156,10 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
                 },
               ]}
             />
-          </Card>
+          </Flex>
           <CapabilityPolicyEditor
             title="Inherited board template"
-            description="Read-only here. It updates when a board manager changes the live branch defaults."
+            description="Read-only here. It updates when a board manager changes the branch defaults."
             value={inheritedPolicy}
             onChange={() => undefined}
             readOnly
@@ -172,19 +168,19 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
             principals={principals}
             subjects={subjects}
           />
-        </>
+        </Flex>
       ) : (
-        <>
+        <Flex vertical gap={token.paddingMD}>
           <Alert
             type="warning"
             showIcon
             icon={<EditOutlined />}
             title="This branch no longer follows board defaults"
-            description="All access comes from the explicit policy below. Board access remains a separate check."
+            description="The complete policy below replaces the template. Board access remains separate."
           />
           <CapabilityPolicyEditor
-            title="Explicit branch override"
-            description="A complete branch policy. This replaces—not layers on top of—the board template."
+            title="Branch access"
+            description="Named entries, Others, capabilities, and file access for this branch."
             value={effectivePolicy}
             onChange={(overridePolicy) => onChange({ ...value, override_policy: overridePolicy })}
             context={BRANCH_ACCESS_EDITOR_CONTEXT}
@@ -192,7 +188,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
             principals={principals}
             subjects={subjects}
           />
-        </>
+        </Flex>
       )}
     </Flex>
   );

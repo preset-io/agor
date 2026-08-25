@@ -28,7 +28,7 @@ describe('shared capability policy forms', () => {
       />
     );
 
-    expect(screen.getByText('Ownership is fixed')).toBeInTheDocument();
+    expect(screen.getByText(/Ownership is fixed/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /transfer owner/i })).not.toBeInTheDocument();
     expect(screen.getByText('Others — unmatched active workspace members')).toBeInTheDocument();
     expect(screen.getByText('Fallback, not an additional grant')).toBeInTheDocument();
@@ -52,10 +52,10 @@ describe('shared capability policy forms', () => {
 
     expect(screen.getByText('Inherited summary')).toBeInTheDocument();
     expect(screen.getByText('Inherited policy is read only here')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('radio', { name: /Override for this branch/i }));
+    fireEvent.click(screen.getByRole('radio', { name: 'This branch' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Explicit branch override')).toBeInTheDocument();
+      expect(screen.getByText('Branch access')).toBeInTheDocument();
       expect(screen.getByText('This branch no longer follows board defaults')).toBeInTheDocument();
     });
     expect(screen.getByLabelText('Search people and groups')).toBeEnabled();
@@ -79,5 +79,29 @@ describe('shared capability policy forms', () => {
     fireEvent.click(screen.getByRole('radio', { name: /Private/i }));
     expect(await screen.findByText('Make this owner-only?')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Make private' })).toBeInTheDocument();
+  });
+
+  it('shows three product-level controls instead of low-level session and terminal switches', () => {
+    const value = cloneBranchPrototypeFixture('overridden-branch');
+    renderWithTheme(
+      <BranchCapabilityPolicyForm
+        value={value}
+        onChange={() => undefined}
+        principals={PROTOTYPE_PRINCIPALS}
+        subjects={PROTOTYPE_SUBJECTS}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit access for Kasia D.' }));
+    fireEvent.click(screen.getByRole('button', { name: /Customize access/i }));
+
+    expect(screen.getByRole('checkbox', { name: /View branch/i })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /Work in own sessions/i })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /Manage branch/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('checkbox', { name: /Create own sessions/i })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /Open own terminal/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/Terminal is available automatically only when/)).toBeInTheDocument();
   });
 });

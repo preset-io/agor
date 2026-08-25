@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Divider,
   Flex,
   Grid,
   Layout,
@@ -63,118 +64,109 @@ export const RbacPolicyPrototypePage: React.FC = () => {
     else loadBranchFixture(branchFixtureId);
   };
 
+  const fixtureDescription =
+    mode === 'board'
+      ? BOARD_PROTOTYPE_FIXTURES[boardFixtureId].description
+      : BRANCH_PROTOTYPE_FIXTURES[branchFixtureId].description;
+
   return (
     <Layout data-testid="rbac-policy-prototype" style={{ minHeight: '100dvh' }}>
       <Layout.Content>
-        <main
+        <div
           style={{
             width: '100%',
-            maxWidth: 1040,
+            maxWidth: 900,
             marginInline: 'auto',
-            padding: compact ? token.paddingSM : token.paddingXL,
+            padding: compact ? token.paddingXS : token.paddingXL,
           }}
         >
-          <Flex vertical gap={token.paddingLG}>
-            <Flex justify="space-between" align="flex-start" gap={token.paddingSM} wrap>
-              <div style={{ minWidth: 0 }}>
-                <Flex align="center" gap={token.paddingXS} wrap>
-                  <Typography.Title level={2} style={{ margin: 0 }}>
-                    Capability policy prototype
-                  </Typography.Title>
-                  <Tag color="magenta" icon={<ExperimentOutlined />}>
-                    Development only
-                  </Tag>
+          <Card
+            title={
+              <Flex align="center" gap={token.paddingXS} wrap>
+                <Typography.Title level={4} style={{ margin: 0 }}>
+                  Permissions prototype
+                </Typography.Title>
+                <Tag color="magenta" icon={<ExperimentOutlined />}>
+                  Development only
+                </Tag>
+              </Flex>
+            }
+            styles={{ body: { padding: 0 } }}
+          >
+            <Flex vertical gap={token.paddingSM} style={{ padding: token.paddingMD }}>
+              <Alert
+                type="warning"
+                showIcon
+                title="Local design fixture — nothing is saved or enforced"
+              />
+              <Flex gap={token.paddingSM} align="flex-end" wrap>
+                <Flex vertical gap={token.paddingXXS} style={{ flex: '1 1 220px', minWidth: 0 }}>
+                  <Typography.Text strong>Permissions for</Typography.Text>
+                  <Segmented<PrototypeMode>
+                    aria-label="Permission form context"
+                    block
+                    value={mode}
+                    options={[
+                      { label: 'Board', value: 'board' },
+                      { label: 'Branch', value: 'branch' },
+                    ]}
+                    onChange={(nextMode) => {
+                      setMode(nextMode);
+                      setLocalApplyNotice(false);
+                      setFormKey((key) => key + 1);
+                    }}
+                  />
                 </Flex>
-                <Typography.Paragraph type="secondary" style={{ margin: 0, marginTop: 4 }}>
-                  Shared editor primitives for the proposed Board and Branch permission model.
-                </Typography.Paragraph>
-              </div>
+                <Flex vertical gap={token.paddingXXS} style={{ flex: '2 1 320px', minWidth: 0 }}>
+                  <Typography.Text strong>Example</Typography.Text>
+                  {mode === 'board' ? (
+                    <Select<BoardPrototypeFixtureId>
+                      aria-label="Board prototype fixture"
+                      value={boardFixtureId}
+                      onChange={loadBoardFixture}
+                      options={Object.entries(BOARD_PROTOTYPE_FIXTURES).map(([id, fixture]) => ({
+                        value: id as BoardPrototypeFixtureId,
+                        label: fixture.label,
+                        title: fixture.description,
+                      }))}
+                    />
+                  ) : (
+                    <Select<BranchPrototypeFixtureId>
+                      aria-label="Branch prototype fixture"
+                      value={branchFixtureId}
+                      onChange={loadBranchFixture}
+                      options={Object.entries(BRANCH_PROTOTYPE_FIXTURES).map(([id, fixture]) => ({
+                        value: id as BranchPrototypeFixtureId,
+                        label: fixture.label,
+                        title: fixture.description,
+                      }))}
+                    />
+                  )}
+                </Flex>
+              </Flex>
+              <Typography.Text type="secondary">{fixtureDescription}</Typography.Text>
+              {localApplyNotice && (
+                <Alert
+                  type="success"
+                  showIcon
+                  closable
+                  onClose={() => setLocalApplyNotice(false)}
+                  title="Applied to this local fixture only"
+                />
+              )}
             </Flex>
 
-            <Alert
-              type="warning"
-              showIcon
-              title="Interactive design fixture — no persistence or authorization changes"
-              description="All people, groups, policies, and effective-access results are static local examples. Apply only updates an on-page notice; refreshing restores the fixture. This route is excluded from production builds."
-            />
+            <Divider style={{ margin: 0 }} />
 
-            <Card>
-              <Flex vertical gap={token.paddingSM}>
-                <Flex gap={token.paddingSM} align="flex-end" wrap>
-                  <Flex vertical gap={token.paddingXXS} style={{ flex: '1 1 280px' }}>
-                    <Typography.Text strong>Form context</Typography.Text>
-                    <Segmented<PrototypeMode>
-                      aria-label="Permission form context"
-                      block
-                      value={mode}
-                      options={[
-                        { label: 'Board', value: 'board' },
-                        { label: 'Branch', value: 'branch' },
-                      ]}
-                      onChange={(nextMode) => {
-                        setMode(nextMode);
-                        setLocalApplyNotice(false);
-                      }}
-                    />
-                  </Flex>
-                  <Flex vertical gap={token.paddingXXS} style={{ flex: '2 1 340px' }}>
-                    <Typography.Text strong>Review fixture</Typography.Text>
-                    {mode === 'board' ? (
-                      <Select<BoardPrototypeFixtureId>
-                        aria-label="Board prototype fixture"
-                        value={boardFixtureId}
-                        onChange={loadBoardFixture}
-                        options={Object.entries(BOARD_PROTOTYPE_FIXTURES).map(([id, fixture]) => ({
-                          value: id as BoardPrototypeFixtureId,
-                          label: fixture.label,
-                          title: fixture.description,
-                        }))}
-                      />
-                    ) : (
-                      <Select<BranchPrototypeFixtureId>
-                        aria-label="Branch prototype fixture"
-                        value={branchFixtureId}
-                        onChange={loadBranchFixture}
-                        options={Object.entries(BRANCH_PROTOTYPE_FIXTURES).map(([id, fixture]) => ({
-                          value: id as BranchPrototypeFixtureId,
-                          label: fixture.label,
-                          title: fixture.description,
-                        }))}
-                      />
-                    )}
-                  </Flex>
-                </Flex>
-                <Typography.Text type="secondary">
-                  {mode === 'board'
-                    ? BOARD_PROTOTYPE_FIXTURES[boardFixtureId].description
-                    : BRANCH_PROTOTYPE_FIXTURES[branchFixtureId].description}
-                </Typography.Text>
-                <Flex gap={token.paddingXS} justify="flex-end" wrap>
-                  <Button icon={<ReloadOutlined />} onClick={reset}>
-                    Reset fixture
-                  </Button>
-                  <Button
-                    type="primary"
-                    icon={<SaveOutlined />}
-                    onClick={() => setLocalApplyNotice(true)}
-                  >
-                    Apply locally (prototype only)
-                  </Button>
-                </Flex>
-                {localApplyNotice && (
-                  <Alert
-                    type="success"
-                    showIcon
-                    closable
-                    onClose={() => setLocalApplyNotice(false)}
-                    title="Local prototype state applied"
-                    description="Nothing was sent to the daemon, database, realtime layer, or authorization system."
-                  />
-                )}
-              </Flex>
-            </Card>
-
-            <section key={`${mode}:${formKey}`} aria-label={`${mode} capability policy form`}>
+            <section
+              key={`${mode}:${formKey}`}
+              aria-label={`${mode} capability policy form`}
+              style={{
+                padding: compact ? token.paddingSM : token.paddingMD,
+                maxHeight: compact ? undefined : 'min(68dvh, 720px)',
+                overflowY: compact ? undefined : 'auto',
+              }}
+            >
               {mode === 'board' ? (
                 <BoardCapabilityPolicyForm
                   value={boardDraft}
@@ -193,19 +185,26 @@ export const RbacPolicyPrototypePage: React.FC = () => {
               )}
             </section>
 
-            <Card title="Review prompts for Max and Kasia" size="small">
-              <ul style={{ margin: 0, paddingInlineStart: token.paddingLG }}>
-                <li>Are Board access and live Branch defaults separated clearly enough?</li>
-                <li>Are Manager versus Prompt / execute boundaries understandable at a glance?</li>
-                <li>Should Others remain a fallback for unmatched active workspace members?</li>
-                <li>Do Inherit and Override communicate live updates and replacement semantics?</li>
-                <li>
-                  Which capability names, presets, warnings, or advanced controls need simpler copy?
-                </li>
-              </ul>
-            </Card>
-          </Flex>
-        </main>
+            <Divider style={{ margin: 0 }} />
+            <Flex
+              gap={token.paddingXS}
+              justify="flex-end"
+              wrap
+              style={{ padding: token.paddingMD }}
+            >
+              <Button icon={<ReloadOutlined />} onClick={reset}>
+                Reset
+              </Button>
+              <Button
+                type="primary"
+                icon={<SaveOutlined />}
+                onClick={() => setLocalApplyNotice(true)}
+              >
+                Apply locally · prototype only
+              </Button>
+            </Flex>
+          </Card>
+        </div>
       </Layout.Content>
     </Layout>
   );

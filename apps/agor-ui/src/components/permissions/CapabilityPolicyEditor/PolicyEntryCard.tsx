@@ -3,7 +3,7 @@ import type {
   CapabilityPolicyPrincipalDescriptor,
 } from '@agor/core/types';
 import { DeleteOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Flex, Popconfirm, theme } from 'antd';
+import { Alert, Button, Flex, Popconfirm, theme } from 'antd';
 import { AccessGrantControls } from './AccessGrantControls';
 import { PrincipalIdentity } from './PrincipalIdentity';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
@@ -29,58 +29,52 @@ export const PolicyEntryCard: React.FC<PolicyEntryCardProps> = ({
   const label = descriptor?.display_name ?? 'Unavailable principal';
 
   return (
-    <Card
-      size="small"
-      aria-label={`Access entry for ${label}`}
-      styles={{ body: { padding: token.paddingSM } }}
-    >
-      <Flex vertical gap={token.paddingSM}>
-        <Flex align="center" justify="space-between" gap={token.paddingSM} wrap>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <PrincipalIdentity descriptor={descriptor} />
-          </div>
-          {!disabled && (
-            <Popconfirm
-              title={`Remove ${label}?`}
-              description="This named entry will no longer contribute access."
-              okText="Remove entry"
-              okButtonProps={{ danger: true }}
-              onConfirm={onRemove}
+    <Flex vertical gap={token.paddingSM} aria-label={`Access entry for ${label}`}>
+      <Flex align="center" justify="space-between" gap={token.paddingSM} wrap>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <PrincipalIdentity descriptor={descriptor} />
+        </div>
+        {!disabled && (
+          <Popconfirm
+            title={`Remove ${label}?`}
+            description="This named entry will no longer contribute access."
+            okText="Remove entry"
+            okButtonProps={{ danger: true }}
+            onConfirm={onRemove}
+          >
+            <Button
+              danger
+              type="text"
+              icon={<DeleteOutlined />}
+              aria-label={`Remove access entry for ${label}`}
             >
-              <Button
-                danger
-                type="text"
-                icon={<DeleteOutlined />}
-                aria-label={`Remove access entry for ${label}`}
-              >
-                Remove
-              </Button>
-            </Popconfirm>
-          )}
-        </Flex>
-
-        {descriptor?.status !== 'active' && (
-          <Alert
-            type="warning"
-            showIcon
-            icon={<WarningOutlined />}
-            title={
-              descriptor?.status === 'inactive'
-                ? 'Inactive principal receives no effective access'
-                : 'Deleted or unavailable principal receives no effective access'
-            }
-            description="Keep this visible for audit context or remove the stale entry. It never activates the Others fallback for this identity."
-          />
+              Remove
+            </Button>
+          </Popconfirm>
         )}
-
-        <AccessGrantControls
-          value={value}
-          context={context}
-          onChange={onChange}
-          disabled={disabled}
-          label={label}
-        />
       </Flex>
-    </Card>
+
+      {descriptor?.status !== 'active' && (
+        <Alert
+          type="warning"
+          showIcon
+          icon={<WarningOutlined />}
+          title={
+            descriptor?.status === 'inactive'
+              ? 'Inactive principal receives no effective access'
+              : 'Deleted or unavailable principal receives no effective access'
+          }
+          description="Keep this visible for audit context or remove the stale entry. It never activates the Others fallback for this identity."
+        />
+      )}
+
+      <AccessGrantControls
+        value={value}
+        context={context}
+        onChange={onChange}
+        disabled={disabled}
+        label={label}
+      />
+    </Flex>
   );
 };
