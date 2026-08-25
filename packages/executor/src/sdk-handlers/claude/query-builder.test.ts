@@ -10,6 +10,9 @@ vi.mock('@agor/core/db', () => ({
   shortId: vi.fn((id: string) => id),
 }));
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }));
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(() => import('@anthropic-ai/claude-agent-sdk')),
+}));
 vi.mock('@agor/core/templates/session-context', () => ({
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
 }));

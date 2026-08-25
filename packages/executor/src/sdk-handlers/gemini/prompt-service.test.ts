@@ -9,6 +9,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@google/gemini-cli-core', () => ({
   ApprovalMode: { DEFAULT: 'default', AUTO_EDIT: 'autoEdit', YOLO: 'yolo' },
 }));
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(() => import('@google/gemini-cli-core')),
+}));
 
 import { GeminiPromptService } from './prompt-service.js';
 

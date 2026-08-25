@@ -332,7 +332,7 @@ but do not erase the retained tombstone, and the retained PostgreSQL sequences
 resume above their prior HA generations. A fresh HA database starts without a
 tombstone. This avoids any unsafe dependency on daemon/database wall-clock
 alignment. It does not make mixed standalone/HA or old/new cohorts safe;
-migration `0094` remains an offline, protocol-incompatible cutover.
+migration `0095` remains an offline, protocol-incompatible cutover.
 
 This also fixes the known strict-impersonation gap where subscription auth had
 no daemon-driven on-disk path at all (only env injection).

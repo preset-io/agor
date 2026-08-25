@@ -7,6 +7,7 @@
 
 import { MESSAGE_PAGINATION, PAGINATION } from '@agor/core/config';
 import {
+  type MessageCreateTransactionHook,
   MessageIdentifierIntegrityError,
   MessageParentIntegrityError,
   MessagesRepository,
@@ -218,8 +219,8 @@ export class MessagesService extends DrizzleService<
 > {
   private messagesRepo: MessagesRepository;
 
-  constructor(db: TenantScopeAwareDatabase) {
-    const messagesRepo = new MessagesRepository(db);
+  constructor(db: TenantScopeAwareDatabase, onCreateInTransaction?: MessageCreateTransactionHook) {
+    const messagesRepo = new MessagesRepository(db, onCreateInTransaction);
     super(messagesRepo, {
       id: 'message_id',
       resourceType: 'Message',
@@ -377,6 +378,9 @@ export class MessagesService extends DrizzleService<
 /**
  * Service factory function
  */
-export function createMessagesService(db: TenantScopeAwareDatabase): MessagesService {
-  return new MessagesService(db);
+export function createMessagesService(
+  db: TenantScopeAwareDatabase,
+  onCreateInTransaction?: MessageCreateTransactionHook
+): MessagesService {
+  return new MessagesService(db, onCreateInTransaction);
 }

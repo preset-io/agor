@@ -5,7 +5,10 @@ import { join, resolve } from 'node:path';
 
 const limits = {
   files: 2600,
-  unpackedBytes: 95 * 1024 * 1024,
+  // Discord's durable delivery worker and connector support legitimately move
+  // the current release just beyond 95 MiB; keep a tight whole-MiB ceiling so
+  // the source-image/HA build remains an effective package-growth tripwire.
+  unpackedBytes: 96 * 1024 * 1024,
   packedBytes: 23 * 1024 * 1024,
 };
 

@@ -656,8 +656,15 @@
     {
       "idx": 94,
       "version": "7",
-      "when": 1787616000000,
-      "tag": "0094_claude_oauth_attempts",
+      "when": 1787662889950,
+      "tag": "0094_discord_gateway_hybrid",
+      "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1787662889951,
+      "tag": "0095_claude_oauth_attempts",
       "breakpoints": true
     }
   ]

@@ -21,6 +21,22 @@ const readJournals = () =>
   );
 
 describe('Postgres migrations', () => {
+  it('starts the Discord hybrid migration with its transaction-local lock timeout', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0094_discord_gateway_hybrid.sql', import.meta.url),
+      'utf8'
+    );
+    const statements = migration
+      .split('--> statement-breakpoint')
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+    expect(statements[0]).toBe("SET LOCAL lock_timeout = '3s';");
+    expect(
+      statements.filter((statement) => /^ALTER TABLE /i.test(statement)).length
+    ).toBeGreaterThan(0);
+    expect(migration.match(/SET LOCAL lock_timeout = '3s'/g)).toHaveLength(1);
+  });
+
   it('requires the Knowledge claim protocol migration to be an offline existing-db cutover', () => {
     expect(
       pendingOfflineCutoverMigrations('postgresql', {
@@ -112,19 +128,19 @@ describe('Postgres migrations', () => {
     expect(
       pendingOfflineCutoverMigrations('postgresql', {
         applied: ['0093_scheduler_poison_recovery'],
-        pending: ['0094_claude_oauth_attempts'],
+        pending: ['0095_claude_oauth_attempts'],
       })
-    ).toEqual(['0094_claude_oauth_attempts']);
+    ).toEqual(['0095_claude_oauth_attempts']);
     expect(
       pendingOfflineCutoverMigrations('sqlite', {
         applied: ['0096_scheduler_poison_recovery'],
-        pending: ['0097_claude_oauth_attempts'],
+        pending: ['0098_claude_oauth_attempts'],
       })
     ).toEqual([]);
     expect(
       pendingOfflineCutoverMigrations('postgresql', {
         applied: [],
-        pending: ['0000_cuddly_captain_america', '0094_claude_oauth_attempts'],
+        pending: ['0000_cuddly_captain_america', '0095_claude_oauth_attempts'],
       })
     ).toEqual([]);
   });

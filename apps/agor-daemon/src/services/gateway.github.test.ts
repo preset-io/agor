@@ -186,6 +186,7 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
         } as ThreadSessionMap;
       }
     }),
+    completeSeedInitialPrompt: vi.fn(async () => mapping),
     create: vi.fn(async (data: Partial<ThreadSessionMap>) => {
       mapping = githubMapping({
         ...data,

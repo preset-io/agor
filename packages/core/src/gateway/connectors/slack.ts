@@ -39,11 +39,18 @@ import type {
   GatewayConnector,
   GatewayInboundCallback,
   GatewayListenerOptions,
+  GatewayProviderHistoryRequest,
+  GatewayProviderHistoryResult,
   InboundFile,
   OutboundPayload,
 } from '../connector';
 import { GatewayListenerError } from '../listener-error';
+import { sanitizeGatewayProviderError } from '../provider-error';
 import { createSlackSdkLogger } from './slack-sdk-logger';
+
+function slackProviderFailure(prefix: string, error: unknown): Error {
+  return new Error(`${prefix}: ${sanitizeGatewayProviderError(error)}`);
+}
 
 // Block Kit table block limits (Slack docs, native block introduced Aug 2025).
 const TABLE_MAX_ROWS = 100;
@@ -169,6 +176,32 @@ export interface SlackThreadHistoryResult {
   has_more?: boolean;
 }
 
+interface SlackOutboundTarget {
+  kind: 'channel_id' | 'channel_name' | 'email';
+  channel?: string;
+  name?: string;
+  email?: string;
+}
+
+function parseSlackOutboundTarget(target: string): SlackOutboundTarget {
+  const trimmed = target.trim();
+  const channelMatch = /^channel:([^:\s]+)$/.exec(trimmed);
+  if (channelMatch) return { kind: 'channel_id', channel: channelMatch[1] };
+
+  const channelNameMatch = /^channel_name:([^\s]+)$/.exec(trimmed);
+  if (channelNameMatch)
+    return { kind: 'channel_name', name: channelNameMatch[1].replace(/^#/, '') };
+
+  if (/^#[^\s]+$/.test(trimmed)) return { kind: 'channel_name', name: trimmed.slice(1) };
+
+  const emailMatch = /^(?:email:|user_email:)?([^@\s]+@[^@\s]+\.[^@\s]+)$/.exec(trimmed);
+  if (emailMatch) return { kind: 'email', email: emailMatch[1] };
+
+  throw new Error(
+    'Invalid Slack outbound target. Expected channel:C123, #channel-name, channel_name:channel-name, or user@example.com'
+  );
+}
+
 export interface SlackChannelHistoryRequest {
   channelId: string;
   oldestTs?: string;
@@ -233,6 +266,15 @@ function slackTsToIso(ts: string): string {
   const seconds = Number(ts.split('.')[0]);
   if (!Number.isFinite(seconds)) return new Date().toISOString();
   return new Date(seconds * 1000).toISOString();
+}
+
+function compareSlackHistoryCursor(a: string, b: string): number {
+  const left = Number(a);
+  const right = Number(b);
+  if (Number.isFinite(left) && Number.isFinite(right)) {
+    return left === right ? 0 : left < right ? -1 : 1;
+  }
+  return a.localeCompare(b);
 }
 
 interface Segment {
@@ -1048,7 +1090,9 @@ export class SlackConnector implements GatewayConnector {
 
       return { email, displayName };
     } catch (error) {
-      console.warn(`[slack] Failed to look up profile for user ${slackUserId}:`, error);
+      console.warn(
+        `[slack] Failed to look up profile for user ${slackUserId}: ${sanitizeGatewayProviderError(error)}`
+      );
       // Short TTL for errors so transient failures (rate limits, network) recover quickly
       this.userProfileCache.set(slackUserId, {
         email: null,
@@ -1075,7 +1119,7 @@ export class SlackConnector implements GatewayConnector {
         if (extractSlackErrorCode(error) === 'users_not_found') {
           return null;
         }
-        throw error;
+        throw slackProviderFailure('Slack API failure', error);
       });
     if (!result?.ok || !result.user?.id) {
       return null;
@@ -1148,7 +1192,9 @@ export class SlackConnector implements GatewayConnector {
 
       return name;
     } catch (error) {
-      console.warn(`[slack] Failed to look up channel name for ${channelId}:`, error);
+      console.warn(
+        `[slack] Failed to look up channel name for ${channelId}: ${sanitizeGatewayProviderError(error)}`
+      );
       this.channelNameCache.set(channelId, {
         name: null,
         expiresAt: now + SlackConnector.USER_CACHE_ERROR_TTL_MS,
@@ -1204,7 +1250,9 @@ export class SlackConnector implements GatewayConnector {
         team: event.team,
       };
     } catch (error) {
-      console.warn('[slack] Failed to fetch latest thread reply for message_replied event:', error);
+      console.warn(
+        `[slack] Failed to fetch latest thread reply for message_replied event: ${sanitizeGatewayProviderError(error)}`
+      );
       return null;
     }
   }
@@ -1297,7 +1345,9 @@ export class SlackConnector implements GatewayConnector {
         return resolvedType;
       }
     } catch (error) {
-      console.warn(`[slack] conversations.info failed for ${channelId}:`, error);
+      console.warn(
+        `[slack] conversations.info failed for ${channelId}: ${sanitizeGatewayProviderError(error)}`
+      );
       // Cache the error briefly so we don't hammer the API
       // Fall through to prefix inference
     }
@@ -1380,7 +1430,7 @@ export class SlackConnector implements GatewayConnector {
         console.warn(`[slack] Block payload rejected (${code}); retrying as text-only`);
         result = await send(false);
       } else {
-        throw err;
+        throw slackProviderFailure('Slack API failure', err);
       }
     }
 
@@ -1390,12 +1440,14 @@ export class SlackConnector implements GatewayConnector {
         console.warn(`[slack] Block payload rejected (${code}); retrying as text-only`);
         const retry = await send(false);
         if (!retry.ok || !retry.ts) {
-          throw new Error(`Slack API error: ${retry.error ?? 'unknown error'}`);
+          throw slackProviderFailure('Slack API error', retry.error ?? 'unknown error');
         }
         return retry.ts;
       }
-      console.error(`[slack] Message send failed: ${result.error}`);
-      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+      console.error(
+        `[slack] Message send failed: ${sanitizeGatewayProviderError(result.error ?? 'unknown error')}`
+      );
+      throw slackProviderFailure('Slack API error', result.error ?? 'unknown error');
     }
 
     return result.ts;
@@ -1432,7 +1484,7 @@ export class SlackConnector implements GatewayConnector {
         console.warn(`[slack] Block payload rejected (${code}); retrying direct send as text-only`);
         result = await send(false);
       } else {
-        throw err;
+        throw slackProviderFailure('Slack API failure', err);
       }
     }
 
@@ -1441,11 +1493,11 @@ export class SlackConnector implements GatewayConnector {
       if (blocks && code && BLOCK_PAYLOAD_ERRORS.has(code)) {
         const retry = await send(false);
         if (!retry.ok || !retry.ts) {
-          throw new Error(`Slack API error: ${retry.error ?? 'unknown error'}`);
+          throw slackProviderFailure('Slack API error', retry.error ?? 'unknown error');
         }
         result = retry;
       } else {
-        throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+        throw slackProviderFailure('Slack API error', result.error ?? 'unknown error');
       }
     }
 
@@ -1469,6 +1521,72 @@ export class SlackConnector implements GatewayConnector {
     };
   }
 
+  /**
+   * Provider-neutral direct-send adapter. Target resolution and Slack write
+   * allowlisting live here; GatewayService retains authorization, audit, and
+   * outbound seed orchestration.
+   */
+  async sendDirectMessage(req: {
+    target: string;
+    text: string;
+    blocks?: unknown[];
+    threadId?: string;
+    metadata?: Record<string, unknown>;
+  }): Promise<{
+    messageId: string;
+    platformChannelId: string;
+    platformThreadId: string;
+    permalink?: string | null;
+    metadata: Record<string, unknown>;
+  }> {
+    const parsedTarget = parseSlackOutboundTarget(req.target);
+    let resolvedChannel: string;
+    const resolvedTargetMetadata: Record<string, unknown> = {
+      target: req.target,
+      target_kind: parsedTarget.kind,
+    };
+    if (parsedTarget.kind === 'channel_id') {
+      resolvedChannel = parsedTarget.channel as string;
+    } else if (parsedTarget.kind === 'channel_name') {
+      const resolved = await this.resolveChannelByName(parsedTarget.name as string);
+      resolvedChannel = resolved.channel;
+      resolvedTargetMetadata.resolved_channel_id = resolved.channel;
+      resolvedTargetMetadata.resolved_channel_name = resolved.name;
+    } else {
+      const resolved = await this.openDmByEmail(parsedTarget.email as string);
+      resolvedChannel = resolved.channel;
+      resolvedTargetMetadata.resolved_channel_id = resolved.channel;
+      resolvedTargetMetadata.resolved_user_id = resolved.user_id;
+    }
+    if (
+      !isSlackWriteTargetAllowed(this.config as unknown as Record<string, unknown>, resolvedChannel)
+    ) {
+      throw new Error(
+        `Gateway outbound denied: target ${req.target} resolves to Slack conversation ${resolvedChannel}, which is not in this gateway channel's allowed_channel_ids whitelist.`
+      );
+    }
+    const threadTs = req.threadId
+      ? req.threadId.includes('-')
+        ? parseThreadId(req.threadId).thread_ts
+        : req.threadId
+      : undefined;
+    const sent = await this.sendSlackMessage({
+      channel: resolvedChannel,
+      text: req.text,
+      blocks: req.blocks,
+      ...(threadTs ? { thread_ts: threadTs } : {}),
+      metadata: { ...(req.metadata ?? {}), ...resolvedTargetMetadata },
+    });
+    const platformThreadId = `${sent.channel}-${sent.thread_ts || sent.ts}`;
+    return {
+      messageId: sent.ts,
+      platformChannelId: sent.channel,
+      platformThreadId,
+      permalink: sent.permalink,
+      metadata: resolvedTargetMetadata,
+    };
+  }
+
   /** Add an emoji reaction to a Slack message. */
   async addReaction(req: { channel: string; timestamp: string; name: string }): Promise<void> {
     const result = await this.web.reactions.add({
@@ -1477,7 +1595,7 @@ export class SlackConnector implements GatewayConnector {
       name: req.name,
     });
     if (!result.ok) {
-      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+      throw slackProviderFailure('Slack API error', result.error ?? 'unknown error');
     }
   }
 
@@ -1489,7 +1607,7 @@ export class SlackConnector implements GatewayConnector {
       name: req.name,
     });
     if (!result.ok) {
-      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+      throw slackProviderFailure('Slack API error', result.error ?? 'unknown error');
     }
   }
 
@@ -1523,7 +1641,7 @@ export class SlackConnector implements GatewayConnector {
       ...(req.comment ? { initial_comment: req.comment } : {}),
     });
     if (!result.ok) {
-      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+      throw slackProviderFailure('Slack API error', result.error ?? 'unknown error');
     }
     const uploaded = result.files?.[0];
     if (!uploaded?.id) {
@@ -1549,7 +1667,7 @@ export class SlackConnector implements GatewayConnector {
   async getFileInfo(fileId: string): Promise<SlackFileInfo> {
     const result = await this.web.files.info({ file: fileId });
     if (!result.ok) {
-      throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+      throw slackProviderFailure('Slack API error', result.error ?? 'unknown error');
     }
     const [file] = extractSlackInboundFiles([result.file]);
     if (!file) {
@@ -1576,7 +1694,7 @@ export class SlackConnector implements GatewayConnector {
       });
 
       if (!result.ok) {
-        throw new Error(`Slack API error: ${result.error ?? 'unknown error'}`);
+        throw slackProviderFailure('Slack API error', result.error ?? 'unknown error');
       }
 
       const channels = (result.channels ?? []) as Array<{
@@ -1643,10 +1761,15 @@ export class SlackConnector implements GatewayConnector {
       const rawLimit = req.includeBotMessages
         ? requestedLimit
         : Math.min(Math.max(requestedLimit * 4, requestedLimit), 200);
-      const result = await fetchPage({ limit: rawLimit, ...(cursor ? { cursor } : {}) });
+      let result: Awaited<ReturnType<typeof fetchPage>>;
+      try {
+        result = await fetchPage({ limit: rawLimit, ...(cursor ? { cursor } : {}) });
+      } catch (error) {
+        throw slackProviderFailure(errorLabel, error);
+      }
 
       if (!result.ok) {
-        throw new Error(`${errorLabel}: ${result.error ?? 'unknown error'}`);
+        throw slackProviderFailure(errorLabel, result.error ?? 'unknown error');
       }
 
       const rawMessages = (result.messages ?? []) as Array<Record<string, unknown>>;
@@ -1734,6 +1857,47 @@ export class SlackConnector implements GatewayConnector {
   }
 
   /**
+   * Optional provider-neutral adapter for the gateway catch-up seam. Keep the
+   * established Slack method above untouched: MCP history tools and the legacy
+   * Slack prompt policy continue to use its exact result shape and limits.
+   */
+  async fetchProviderHistory(
+    req: GatewayProviderHistoryRequest
+  ): Promise<GatewayProviderHistoryResult> {
+    const history = await this.fetchThreadHistory({
+      threadId: req.threadId,
+      ...(req.afterProviderCursor ? { oldestTs: req.afterProviderCursor } : {}),
+      latestTs: req.throughProviderCursor,
+      inclusive: true,
+      limit: 200,
+      // Preserve the established Slack mention catch-up policy: bot messages
+      // are not added to the provider-neutral adapter either.
+      includeBotMessages: false,
+      triggerTs: req.triggerProviderCursor,
+    });
+    const messages = req.afterProviderCursor
+      ? history.messages.filter(
+          (message) => compareSlackHistoryCursor(message.ts, req.afterProviderCursor!) > 0
+        )
+      : history.messages;
+    return {
+      threadId: history.threadId,
+      complete: history.has_more !== true,
+      messages: messages.map((message) => ({
+        providerMessageId: message.ts,
+        timestamp: message.iso_time,
+        actorLabel: message.actor_label,
+        text: message.text,
+        isBot: message.is_bot,
+        isSystem: false,
+        isRich: (message.files?.length ?? 0) > 0,
+        isTrigger: message.is_trigger,
+        isMention: message.is_mention,
+      })),
+    };
+  }
+
+  /**
    * Fetch recent messages from a whole Slack conversation (not just one
    * thread). Enforces the channel's `allowed_channel_ids` whitelist when one
    * is configured. Slack returns newest-first pages, so `limit` selects the
@@ -1790,7 +1954,7 @@ export class SlackConnector implements GatewayConnector {
       ...(req.recipientTeamId ? { recipient_team_id: req.recipientTeamId } : {}),
     });
     if (!result.ok || !result.ts) {
-      throw new Error(`Slack stream start error: ${result.error ?? 'unknown error'}`);
+      throw slackProviderFailure('Slack stream start error', result.error ?? 'unknown error');
     }
     return result.ts;
   }
@@ -1806,7 +1970,7 @@ export class SlackConnector implements GatewayConnector {
       markdown_text: req.text,
     });
     if (!result.ok) {
-      throw new Error(`Slack stream append error: ${result.error ?? 'unknown error'}`);
+      throw slackProviderFailure('Slack stream append error', result.error ?? 'unknown error');
     }
   }
 
@@ -1821,7 +1985,7 @@ export class SlackConnector implements GatewayConnector {
       ...(req.text ? { markdown_text: req.text } : {}),
     });
     if (!result.ok) {
-      throw new Error(`Slack stream stop error: ${result.error ?? 'unknown error'}`);
+      throw slackProviderFailure('Slack stream stop error', result.error ?? 'unknown error');
     }
   }
 
@@ -1832,7 +1996,7 @@ export class SlackConnector implements GatewayConnector {
       ts: req.messageId,
     });
     if (!result.ok) {
-      throw new Error(`Slack delete error: ${result.error ?? 'unknown error'}`);
+      throw slackProviderFailure('Slack delete error', result.error ?? 'unknown error');
     }
   }
 
@@ -1865,7 +2029,7 @@ export class SlackConnector implements GatewayConnector {
       ? await web.assistant.threads.setStatus(args)
       : await web.apiCall?.('assistant.threads.setStatus', args);
     if (!result?.ok) {
-      throw new Error(`Slack assistant status error: ${result?.error ?? 'unknown error'}`);
+      throw slackProviderFailure('Slack assistant status error', result?.error ?? 'unknown error');
     }
   }
 

@@ -1,14 +1,15 @@
 /**
  * Claude Auth Logout Service
  *
- * Removes the current user's Claude subscription login from THIS server: deletes
+ * Removes the current user's Claude subscription login from this Agor deployment: deletes
  * `~/.claude/.credentials.json` from the home of the Unix identity that runs
  * Claude for this user, clears any stored `CLAUDE_CODE_OAUTH_TOKEN`, and clears
  * `agentic_auth_methods['claude-code']` so executors stop resolving native auth
  * and the UI re-probes to a disconnected state (the `patched` event drives that).
  *
  * DELETE-ONLY BY DESIGN: an Agor-scoped action mirroring the Codex logout and the
- * API-key "Clear" precedent — it signs Claude out on THIS server only and does
+ * API-key "Clear" precedent — it signs Claude out from the configured execution
+ * credential home only and does
  * NOT revoke the OAuth tokens. Authoritative revocation lives in the Claude
  * account's settings or `/logout` on a machine where the user is signed in.
  *

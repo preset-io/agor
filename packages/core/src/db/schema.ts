@@ -55,6 +55,7 @@ export const codexDeviceAuthAttempts = schema.codexDeviceAuthAttempts;
 export const boardComments = schema.boardComments;
 export const gatewayChannels = schema.gatewayChannels;
 export const threadSessionMap = schema.threadSessionMap;
+export const discordMessageDeliveries = schema.discordMessageDeliveries;
 export const gatewayOutboundMessages = schema.gatewayOutboundMessages;
 export const gatewayInboundEvents = schema.gatewayInboundEvents;
 export const uploads = schema.uploads;

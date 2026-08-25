@@ -2064,7 +2064,9 @@ export const gatewayChannels = sqliteTable(
     target_branch_id: text('target_branch_id', { length: 36 })
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
-    agor_user_id: text('agor_user_id', { length: 36 }).notNull(),
+    agor_user_id: text('agor_user_id', { length: 36 }),
+    provider_installation_id: text('provider_installation_id'),
+    provider_config_generation: integer('provider_config_generation').notNull().default(1),
     channel_key: text('channel_key').notNull().unique(),
     enabled: t.bool('enabled').notNull().default(true),
     last_message_at: t.timestamp('last_message_at'),
@@ -2097,6 +2099,11 @@ export const gatewayChannels = sqliteTable(
       table.agentic_tool_preset_id
     ),
     enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
+    discordInstallationUnique: uniqueIndex('gateway_channels_discord_installation_unique')
+      .on(table.channel_type, table.provider_installation_id)
+      .where(
+        sql`${table.channel_type} = 'discord' AND ${table.enabled} = 1 AND ${table.provider_installation_id} IS NOT NULL`
+      ),
     listenerLeaseIdx: index('gateway_channels_listener_lease_idx').on(
       table.enabled,
       table.listener_lease_expires_at,
@@ -2176,6 +2183,9 @@ export const threadSessionMap = sqliteTable(
 
     // JSON blob for extra metadata
     metadata: t.json<Record<string, unknown>>('metadata'),
+
+    // Durable Discord catch-up cursor. Provider history itself is never stored.
+    discord_last_admitted_message_id: text('discord_last_admitted_message_id'),
   },
   (table) => ({
     uniqueChannelThread: uniqueIndex('uniq_thread_map_channel_thread').on(
@@ -2185,6 +2195,61 @@ export const threadSessionMap = sqliteTable(
     sessionIdx: index('idx_thread_map_session_id').on(table.session_id),
     threadIdx: index('idx_thread_map_thread_id').on(table.thread_id),
     channelStatusIdx: index('idx_thread_map_channel_status').on(table.channel_id, table.status),
+  })
+);
+
+/** Standalone SQLite mirror of the narrow Discord final-delivery intent. */
+export const discordMessageDeliveries = sqliteTable(
+  'discord_message_deliveries',
+  {
+    delivery_id: text('delivery_id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    message_id: text('message_id', { length: 36 })
+      .notNull()
+      .references(() => messages.message_id, { onDelete: 'cascade' }),
+    gateway_channel_id: text('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    thread_session_map_id: text('thread_session_map_id', { length: 36 })
+      .notNull()
+      .references(() => threadSessionMap.id, { onDelete: 'cascade' }),
+    provider_installation_id: text('provider_installation_id').notNull(),
+    provider_config_generation: integer('provider_config_generation').notNull(),
+    status: text('status', {
+      enum: ['pending', 'processing', 'completed', 'canceled', 'dead_letter'],
+    })
+      .notNull()
+      .default('pending'),
+    attempt_count: integer('attempt_count').notNull().default(0),
+    next_attempt_at: t.timestamp('next_attempt_at').notNull(),
+    claim_token: text('claim_token'),
+    claim_expires_at: t.timestamp('claim_expires_at'),
+    claim_generation: integer('claim_generation').notNull().default(0),
+    ambiguous_chunk_index: integer('ambiguous_chunk_index'),
+    effect_started_at: t.timestamp('effect_started_at'),
+    effect_recovery_grace_until: t.timestamp('effect_recovery_grace_until'),
+    chunk_receipts: t
+      .json<import('../types/gateway').DiscordMessageDeliveryChunkReceipt[]>('chunk_receipts')
+      .notNull(),
+    reply_aliases: t.json<string[]>('reply_aliases').notNull(),
+    last_error_code: text('last_error_code'),
+    completed_at: t.timestamp('completed_at'),
+    canceled_at: t.timestamp('canceled_at'),
+    dead_lettered_at: t.timestamp('dead_lettered_at'),
+  },
+  (table) => ({
+    messageUnique: uniqueIndex('discord_message_deliveries_message_unique').on(table.message_id),
+    dueIdx: index('discord_message_deliveries_due_idx').on(
+      table.status,
+      table.next_attempt_at,
+      table.delivery_id
+    ),
+    claimIdx: index('discord_message_deliveries_claim_idx').on(
+      table.status,
+      table.claim_expires_at,
+      table.delivery_id
+    ),
   })
 );
 
@@ -2776,6 +2841,8 @@ export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
 export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
 export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
+export type DiscordMessageDeliveryRow = typeof discordMessageDeliveries.$inferSelect;
+export type DiscordMessageDeliveryInsert = typeof discordMessageDeliveries.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;

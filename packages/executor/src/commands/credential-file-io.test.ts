@@ -14,11 +14,16 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       const handle = await actual.open(path, flags, mode);
       const kind = (await handle.stat()).isDirectory() ? 'dir' : 'file';
       return {
+        // The production writer walks directories through /proc/self/fd so
+        // the mock must preserve the capability-bearing descriptor. Omitting
+        // it silently redirects the walk through /proc/self/fd/undefined.
+        fd: handle.fd,
         writeFile: (content: string, encoding: BufferEncoding) => {
           trace.push(`write:${kind}`);
           return handle.writeFile(content, encoding);
         },
         chmod: (m: number) => handle.chmod(m),
+        readFile: (encoding: BufferEncoding) => handle.readFile(encoding),
         sync: () => {
           trace.push(`sync:${kind}`);
           return handle.sync();

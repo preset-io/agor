@@ -109,7 +109,7 @@ describe('migration status introspection', () => {
   it('reports Claude OAuth authority as a rollback-incompatible protocol cutover', () => {
     const migration = introspectMigrationStatus('postgresql', {
       applied: ['0093_scheduler_poison_recovery'],
-      pending: ['0094_claude_oauth_attempts'],
+      pending: ['0095_claude_oauth_attempts'],
       dbAheadOfBinary: false,
     }).pendingMigrations[0];
 
@@ -141,7 +141,7 @@ describe('migration status introspection', () => {
         '0082_github_install_state',
         '0083_transcript_hydration_keysets',
         '0091_codex_device_auth_attempts',
-        '0094_claude_oauth_attempts',
+        '0095_claude_oauth_attempts',
       ],
     });
 
@@ -175,7 +175,7 @@ describe('migration status introspection', () => {
       '0082_github_install_state',
       '0083_transcript_hydration_keysets',
       '0091_codex_device_auth_attempts',
-      '0094_claude_oauth_attempts',
+      '0095_claude_oauth_attempts',
       'unregistered',
     ]) {
       expect(getMigrationImpact(name).summary.length).toBeLessThanOrEqual(

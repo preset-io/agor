@@ -24,6 +24,7 @@ import {
   and,
   BoardRepository,
   BranchRepository,
+  DiscordMessageDeliveryRepository,
   eq,
   GatewayChannelRepository,
   generateId,
@@ -368,7 +369,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     events: [...TASKS_SERVICE_CUSTOM_EVENTS],
   });
   app.use('/leaderboard', createLeaderboardService(db));
-  const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
+  const deliveryRepository = new DiscordMessageDeliveryRepository(db);
+  const messagesService = createMessagesService(db, (tx, message) =>
+    deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+  ) as unknown as MessagesServiceImpl;
   const messageOpenApiProperties = {
     message_id: { type: 'string', format: 'uuid' },
     session_id: { type: 'string', format: 'uuid' },
@@ -788,7 +792,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Removes the caller's Claude subscription login — deletes their
   // ~/.claude/.credentials.json as the right Unix identity and clears the stored
   // token + claude auth method (emitting `patched` so the UI re-probes to
-  // disconnected). Server-local only; does not revoke the OAuth grant.
+  // disconnected). Deployment credential-home only; does not revoke the OAuth grant.
   app.use('/claude-auth/logout', createClaudeAuthLogoutService(app, db, claudeOAuthStore));
   app.service('/claude-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
