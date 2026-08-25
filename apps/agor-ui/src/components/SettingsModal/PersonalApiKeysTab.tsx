@@ -1,6 +1,6 @@
 import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
-import { Alert, Button, Input, Modal, Popconfirm, Space, Table, Typography, theme } from 'antd';
+import { Alert, Button, Input, Popconfirm, Space, Table, Typography, theme } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   type AuthorityOperation,

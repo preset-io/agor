@@ -142,7 +142,8 @@ describe('completeForcedPasswordChange', () => {
 describe('completeLocalPasswordChange', () => {
   it('patches all settings and reauthenticates with the post-change email', async () => {
     const patch = vi.fn().mockResolvedValue({});
-    const login = vi.fn().mockResolvedValue(true);
+    const reauthenticate = vi.fn().mockResolvedValue(signedInReceipt());
+    const cycle = authorityCycle();
     const updates = {
       email: 'new@example.test',
       password: 'new-password-1234',
@@ -155,17 +156,18 @@ describe('completeLocalPasswordChange', () => {
       emailAfterChange: updates.email,
       newPassword: updates.password,
       updates,
-      login,
-      logout: vi.fn(),
+      authorityCycle: cycle,
+      reauthenticate,
+      logout: vi.fn().mockResolvedValue(true),
     });
 
     expect(patch).toHaveBeenCalledWith('user-1', updates);
-    expect(login).toHaveBeenCalledWith('new@example.test', 'new-password-1234');
+    expect(reauthenticate).toHaveBeenCalledWith('new@example.test', 'new-password-1234', cycle);
   });
 
-  it('logs out when reauthentication rejects after the credential write', async () => {
-    const loginError = new Error('authentication transport failed');
-    const logout = vi.fn().mockResolvedValue(undefined);
+  it('logs out only when guarded reauthentication fails after the credential write', async () => {
+    const cycle = authorityCycle();
+    const logout = vi.fn().mockResolvedValue(true);
 
     await expect(
       completeLocalPasswordChange({
@@ -174,10 +176,34 @@ describe('completeLocalPasswordChange', () => {
         emailAfterChange: 'person@example.test',
         newPassword: 'new-password-1234',
         updates: { password: 'new-password-1234' },
-        login: vi.fn().mockRejectedValue(loginError),
+        authorityCycle: cycle,
+        reauthenticate: vi.fn().mockResolvedValue({ status: 'failed' }),
         logout,
       })
-    ).rejects.toBe(loginError);
-    expect(logout).toHaveBeenCalledTimes(1);
+    ).resolves.toEqual({ status: 'signed-out' });
+    expect(logout).toHaveBeenCalledWith(cycle);
+  });
+
+  it('does not reauthenticate or log out a replacement authority after a delayed patch', async () => {
+    const pendingPatch = deferred<Record<string, never>>();
+    let current = true;
+    const reauthenticate = vi.fn();
+    const logout = vi.fn();
+    const result = completeLocalPasswordChange({
+      client: makeClient(vi.fn(() => pendingPatch.promise)),
+      userId: 'user-1',
+      emailAfterChange: 'person@example.test',
+      newPassword: 'new-password-1234',
+      updates: { password: 'new-password-1234' },
+      authorityCycle: authorityCycle(() => current),
+      reauthenticate,
+      logout,
+    });
+
+    current = false;
+    pendingPatch.resolve({});
+    await expect(result).resolves.toBeNull();
+    expect(reauthenticate).not.toHaveBeenCalled();
+    expect(logout).not.toHaveBeenCalled();
   });
 });

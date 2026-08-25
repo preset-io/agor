@@ -10,14 +10,19 @@
 
 import type { User } from '@agor-live/client';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { Grid } from 'antd';
 import { MemoryRouter } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type SettingsSection, useSettingsRoute } from '../../hooks/useSettingsRoute';
 import { SettingsModal } from './SettingsModal';
 
 vi.mock('./BoardsTable', () => ({
   BoardsTable: () => <input aria-label="settings-private-draft" defaultValue="" />,
 }));
+
+beforeEach(() => {
+  vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true });
+});
 
 function makeUser(role: string): User {
   return { user_id: `user-${role}`, email: `${role}@agor.live`, name: role, role } as User;
@@ -134,12 +139,12 @@ describe('SettingsModal deep-linked sections', () => {
    * message (GroupsTable renders "Only admins can manage groups."), so checking
    * for an absent table would pass whether or not the section is guarded.
    */
-  const contentPane = () => document.querySelector('.ant-layout-content');
+  const contentPane = () => document.querySelector('.ant-layout-content')?.firstElementChild;
 
   it('renders nothing for a viewer deep-linked to users', () => {
     renderDeepLink('viewer', 'users');
 
-    expect(contentPane()).toBeEmptyDOMElement();
+    expect(contentPane()).toBeNull();
   });
 
   it('renders nothing for a member deep-linked to an admin-only section', () => {
@@ -147,7 +152,7 @@ describe('SettingsModal deep-linked sections', () => {
     // users entry was gated; one predicate now covers all four.
     for (const section of ['groups', 'gateway', 'agentic-tools']) {
       const { unmount } = renderDeepLink('member', section);
-      expect(contentPane(), `${section} should not render for a member`).toBeEmptyDOMElement();
+      expect(contentPane(), `${section} should not render for a member`).toBeNull();
       unmount();
     }
   });
@@ -155,10 +160,10 @@ describe('SettingsModal deep-linked sections', () => {
   it('still renders the sections each role may open', () => {
     // The positive control: without it, a guard that hid everything would pass.
     const { unmount } = renderDeepLink('member', 'users');
-    expect(contentPane()).not.toBeEmptyDOMElement();
+    expect(contentPane()).not.toBeNull();
     unmount();
 
     renderDeepLink('admin', 'groups');
-    expect(contentPane()).not.toBeEmptyDOMElement();
+    expect(contentPane()).not.toBeNull();
   });
 });

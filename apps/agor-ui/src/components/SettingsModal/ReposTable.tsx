@@ -1,7 +1,7 @@
 import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Input, Modal, Space, Typography } from 'antd';
+import { Button, Card, Empty, Form, Input, Space, Typography } from 'antd';
 import { useLayoutEffect, useMemo, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { mapToArray } from '@/utils/mapHelpers';

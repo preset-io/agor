@@ -174,6 +174,7 @@ export function useAuth(): UseAuthReturn {
    * Re-authenticate using stored token (with automatic refresh)
    * Retries up to 3 times to handle daemon restarts gracefully
    */
+  // biome-ignore lint/correctness/useExhaustiveDependencies: auth-generation helpers are stable for the hook lifetime; reAuthenticate must remain stable for retry/effect callers
   const reAuthenticate = useCallback(async (retryCount = 0, pendingLaunchCode?: string) => {
     const MAX_RETRIES = 5;
     localLoginAttemptRef.current = null;
@@ -497,7 +498,7 @@ export function useAuth(): UseAuthReturn {
     }, delay);
 
     return () => clearTimeout(timer);
-  }, [state.authenticated, state.accessToken]);
+  }, [state.authenticated, state.accessToken, noteUnauthenticated]);
 
   // When the single-flight refresh helper completes from a non-React path
   // (e.g. the socket-client 401-retry hook, or a concurrent refresh in
@@ -508,6 +509,7 @@ export function useAuth(): UseAuthReturn {
       const detail = (event as CustomEvent<RefreshResult>).detail;
       if (!detail) return;
       localLoginAttemptRef.current = null;
+      noteAuthenticatedUser(detail.user);
       const nextState: AuthState = {
         ...authStateRef.current,
         accessToken: detail.accessToken,
@@ -525,7 +527,7 @@ export function useAuth(): UseAuthReturn {
 
     window.addEventListener(TOKENS_REFRESHED_EVENT, handleRefreshed);
     return () => window.removeEventListener(TOKENS_REFRESHED_EVENT, handleRefreshed);
-  }, []);
+  }, [noteAuthenticatedUser]);
 
   // When the single-flight refresh helper determines the refresh token is
   // permanently dead (e.g. the server returned 401 / NotAuthenticated from
@@ -550,7 +552,7 @@ export function useAuth(): UseAuthReturn {
     window.addEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, handleUnrecoverable);
     return () =>
       window.removeEventListener(TOKENS_REFRESH_UNRECOVERABLE_EVENT, handleUnrecoverable);
-  }, []);
+  }, [noteUnauthenticated]);
 
   /**
    * Login with email and password
@@ -825,17 +827,16 @@ export function useAuth(): UseAuthReturn {
     // matching identity/authGeneration render yet.
     if (!shouldApply() || getStoredAccessToken() !== accessToken) return false;
 
-    setState((previous) => {
-      if (!shouldApply() || getStoredAccessToken() !== accessToken) return previous;
-      noteAuthenticatedUser(result.user);
-      return {
-        user: result.user,
-        accessToken,
-        authenticated: true,
-        loading: false,
-        error: null,
-      };
-    });
+    noteAuthenticatedUser(result.user);
+    const nextState: AuthState = {
+      user: result.user,
+      accessToken,
+      authenticated: true,
+      loading: false,
+      error: null,
+    };
+    authStateRef.current = nextState;
+    setState(nextState);
     return true;
   };
 

@@ -263,7 +263,6 @@ describe('useAuth launch-code fallback', () => {
     expect(result.current.authenticationGeneration).toBeGreaterThan(invalidatedGeneration);
   });
 
-
   it.each(['success', 'failure'] as const)(
     'does not let a delayed A local-login %s overwrite B tokens or auth state',
     async (outcome) => {

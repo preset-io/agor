@@ -1,18 +1,6 @@
 import type { AgenticToolPreset, AgorClient, TenantAgenticToolName } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
-import {
-  Button,
-  Empty,
-  Form,
-  Input,
-  List,
-  Modal,
-  Popconfirm,
-  Space,
-  Switch,
-  Tag,
-  Typography,
-} from 'antd';
+import { Button, Empty, Form, Input, List, Popconfirm, Space, Switch, Tag, Typography } from 'antd';
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
   type AuthorityOperation,

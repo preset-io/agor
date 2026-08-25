@@ -3024,7 +3024,14 @@ export async function registerMCPServices(
       const socketId = socketIdFromParams(params);
       const tenantId = tenantIdFromParams(params);
       const authorityFingerprint = authorityFingerprintFromParams(params);
-      if (!userId || !role || !socketId || !authorityFingerprint) {
+      // Newer-main deliberately removes raw bearer material from the immutable
+      // Socket.IO connection projection. The physical socket id plus its
+      // server-owned user/role/tenant projection is therefore the authority
+      // binding for handshake-authenticated sockets. Keep the optional token
+      // fingerprint for legacy/synthetic callers that still expose one, but
+      // never require the bearer to be retained merely to reserve a browser
+      // event.
+      if (!userId || !role || !socketId) {
         throw new BadRequest('OAuth browser reservations require an authenticated live socket');
       }
       const currentAuthority = liveSocketAuthority(socketId);

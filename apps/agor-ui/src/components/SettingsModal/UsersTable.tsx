@@ -64,7 +64,6 @@ interface UsersTableProps {
     shouldApply?: () => boolean
   ) => void | Promise<void>;
   onDelete?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
-
 }
 
 export const UsersTable: React.FC<UsersTableProps> = ({

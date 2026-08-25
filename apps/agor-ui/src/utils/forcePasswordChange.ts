@@ -15,8 +15,13 @@ interface CompleteLocalPasswordChangeOptions {
   emailAfterChange: string;
   newPassword: string;
   updates: UpdateUserInput & { password: string };
-  login: (email: string, password: string) => Promise<boolean>;
-  logout: () => Promise<void>;
+  authorityCycle: CapturedAuthAuthorityCycle;
+  reauthenticate: (
+    email: string,
+    password: string,
+    authorityCycle: CapturedAuthAuthorityCycle
+  ) => Promise<AuthorityCycleLoginResult>;
+  logout: (authorityCycle: CapturedAuthAuthorityCycle) => Promise<boolean>;
 }
 
 interface CompleteForcedPasswordChangeOptions {
@@ -38,6 +43,8 @@ interface CompleteForcedPasswordChangeOptions {
  * Apply a current user's local-password patch and immediately replace the
  * browser credentials that the server revoked. `updates` may include an email
  * change, but the caller must provide the post-patch email used for login.
+ * The same captured-authority rules as the forced-password flow prevent a
+ * delayed login or logout continuation from replacing a newer principal.
  */
 export async function completeLocalPasswordChange({
   client,
@@ -45,18 +52,22 @@ export async function completeLocalPasswordChange({
   emailAfterChange,
   newPassword,
   updates,
-  login,
+  authorityCycle,
+  reauthenticate,
   logout,
-}: CompleteLocalPasswordChangeOptions): Promise<boolean> {
+}: CompleteLocalPasswordChangeOptions): Promise<ForcedPasswordCompletion | null> {
+  if (!authorityCycle.isCurrent()) return null;
   await client.service('users').patch(userId, updates as Partial<User>);
+  if (!authorityCycle.isCurrent()) return null;
 
-  let signedIn = false;
-  try {
-    signedIn = await login(emailAfterChange, newPassword);
-    return signedIn;
-  } finally {
-    if (!signedIn) await logout();
+  const result = await reauthenticate(emailAfterChange, newPassword, authorityCycle);
+  if (result.status === 'obsolete') return null;
+  if (result.status === 'signed-in') {
+    return { status: 'signed-in', authority: result.authority };
   }
+  if (!authorityCycle.isCurrent()) return null;
+  if (!(await logout(authorityCycle))) return null;
+  return { status: 'signed-out' };
 }
 
 /**

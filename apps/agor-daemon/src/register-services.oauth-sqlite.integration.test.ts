@@ -9,6 +9,7 @@ import {
 } from '@agor/core/db';
 import {
   type Application,
+  AuthenticationService,
   feathers,
   feathersExpress,
   socketio,
@@ -26,7 +27,12 @@ import type {
 import type { OutboundDnsLookup } from '@agor/core/utils/safe-outbound-fetch';
 import { type Socket as ClientSocket, io as createSocketClient } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { issueRuntimeToken } from './auth/runtime-tokens.js';
+import { RuntimeJWTStrategy } from './auth/runtime-jwt-strategy.js';
+import {
+  issueRuntimeToken,
+  RUNTIME_JWT_AUDIENCE,
+  RUNTIME_JWT_ISSUER,
+} from './auth/runtime-tokens.js';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
 import { createSocketIOConfig } from './setup/socketio.js';
@@ -701,6 +707,26 @@ async function createRealSocketHarness(
       return user;
     },
   } as never);
+  const multiTenancy = {
+    mode: 'static',
+    static_tenant_id: 'default',
+  } as const;
+  app.set('authentication', {
+    secret: REAL_SOCKET_JWT_SECRET,
+    entity: 'user',
+    entityId: 'user_id',
+    service: 'users',
+    authStrategies: ['jwt'],
+    jwtOptions: {
+      header: { typ: 'access' },
+      audience: RUNTIME_JWT_AUDIENCE,
+      issuer: RUNTIME_JWT_ISSUER,
+      algorithm: 'HS256',
+    },
+  });
+  const authentication = new AuthenticationService(app);
+  authentication.register('jwt', new RuntimeJWTStrategy({ multiTenancy }));
+  app.use('authentication', authentication);
   app.use('/socket-authority-inspect', {
     async find(params?: AuthenticatedParams) {
       const descriptor = params?.connection
@@ -716,49 +742,11 @@ async function createRealSocketHarness(
       };
     },
   } as never);
-  app.use('/socket-authority-replace', {
-    async create(_data: unknown, params?: AuthenticatedParams) {
-      if (params?.provider !== 'socketio' || !params.connection) {
-        throw new Error('Expected a genuine Socket.IO replacement request');
-      }
-      const replacementToken = issueRuntimeToken(
-        { sub: userB.user_id, type: 'access' },
-        REAL_SOCKET_JWT_SECRET,
-        '5m'
-      );
-      params.connection.user = userB;
-      params.connection.authentication = {
-        strategy: 'jwt',
-        accessToken: replacementToken,
-      };
-      // This is the same server lifecycle event emitted after a successful
-      // Feathers authentication replacement, exercised through a second real
-      // service call on the surviving physical socket.
-      app.emit(
-        'login',
-        { user: userB, accessToken: replacementToken },
-        {
-          connection: params.connection,
-          params: {
-            ...params,
-            user: userB,
-            authentication: params.connection.authentication,
-            tenant: { tenant_id: 'default', source: 'static' },
-          },
-        }
-      );
-      return { replaced: true };
-    },
-  } as never);
-
   const socketConfig = createSocketIOConfig(app, {
     corsOrigin: '*',
     credentialsAllowed: false,
     jwtSecret: REAL_SOCKET_JWT_SECRET,
-    multiTenancy: {
-      mode: 'static',
-      static_tenant_id: 'default',
-    } as never,
+    multiTenancy,
   });
   app.configure(socketio(socketConfig.serverOptions, socketConfig.callback));
   await registerMCPServices({
@@ -806,8 +794,27 @@ async function createRealSocketHarness(
   client.configure(socketioClient(clientSocket));
   await waitForClientSocket(clientSocket);
 
+  const replacementSockets: ClientSocket[] = [];
   const replaceAuthorityWithB = async (): Promise<void> => {
-    await client.service('socket-authority-replace').create({});
+    // Newer-main makes socket authority immutable for the physical handshake:
+    // an A -> B transition retires A's registry entry and establishes B on a
+    // new socket. Remove A from the authoritative live map without tearing
+    // down its test transport yet, so the already-running RPC can deliver its
+    // expected authority rejection acknowledgement to the client.
+    app.io.sockets.sockets.delete(clientSocket.id!);
+
+    const replacementToken = issueRuntimeToken(
+      { sub: userB.user_id, type: 'access' },
+      REAL_SOCKET_JWT_SECRET,
+      '5m'
+    );
+    const replacement = createSocketClient(`http://127.0.0.1:${address.port}`, {
+      auth: { token: replacementToken },
+      transports: ['websocket'],
+      reconnection: false,
+    });
+    replacementSockets.push(replacement);
+    await waitForClientSocket(replacement);
   };
 
   let closed = false;
@@ -825,6 +832,7 @@ async function createRealSocketHarness(
       if (closed) return;
       closed = true;
       clientSocket.close();
+      for (const replacement of replacementSockets) replacement.close();
       await new Promise<void>((resolve, reject) =>
         httpServer.close((error) => (error ? reject(error) : resolve()))
       );

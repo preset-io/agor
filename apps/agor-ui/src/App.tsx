@@ -1395,6 +1395,7 @@ function AppContent() {
     options: { silent?: boolean; shouldApply?: () => boolean } = {}
   ) => {
     if (!client || (options.shouldApply && !options.shouldApply())) return;
+    const authorityOperation = appAuthorityGuard.begin();
     try {
       const newPassword =
         typeof updates.password === 'string' && updates.password.length > 0
@@ -1403,15 +1404,20 @@ function AppContent() {
       const changesCurrentPassword = userId === currentUser?.user_id && !!newPassword;
       let signedIn = true;
       if (changesCurrentPassword && currentUser && newPassword) {
-        signedIn = await completeLocalPasswordChange({
+        const authorityCycle = captureAuthorityCycle(authorityOperation);
+        if (!authorityCycle) return;
+        const completion = await completeLocalPasswordChange({
           client,
           userId,
           emailAfterChange: updates.email ?? currentUser.email,
           newPassword,
           updates: updates as UpdateUserInput & { password: string },
-          login,
-          logout,
+          authorityCycle,
+          reauthenticate: loginForAuthorityCycle,
+          logout: logoutForAuthorityCycle,
         });
+        if (!completion) return;
+        signedIn = completion.status === 'signed-in' && completion.authority.isCurrent();
       } else {
         // Cast UpdateUserInput to Partial<User> - backend handles encryption/conversion
         await client.service('users').patch(userId, updates as Partial<User>);
@@ -1449,7 +1455,6 @@ function AppContent() {
       isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration) &&
       (childShouldApply ? childShouldApply() : true);
     if (!shouldApply()) return;
-
 
     const preferences = { ...(currentUser.preferences ?? {}) } as NonNullable<User['preferences']>;
     delete preferences.onboarding;
@@ -2193,7 +2198,7 @@ function AppContent() {
           onDeleteBoard={handleDeleteBoard}
           onArchiveBoard={handleArchiveBoard}
           onUnarchiveBoard={handleUnarchiveBoard}
-          onCreateRepo={handleCreateRepo}
+          onCreateRepo={(data, shouldApply) => handleCreateRepo(data, { shouldApply })}
           onCreateLocalRepo={handleCreateLocalRepo}
           onUpdateRepo={handleUpdateRepo}
           onDeleteRepo={handleDeleteRepo}
@@ -2204,7 +2209,9 @@ function AppContent() {
           onStartEnvironment={handleStartEnvironment}
           onStopEnvironment={handleStopEnvironment}
           onCreateUser={handleCreateUser}
-          onUpdateUser={handleUpdateUser}
+          onUpdateUser={(userId, updates, shouldApply) =>
+            handleUpdateUser(userId, updates, { shouldApply })
+          }
           onDeleteUser={handleDeleteUser}
           onCreateMCPServer={handleCreateMCPServer}
           onDeleteMCPServer={handleDeleteMCPServer}
