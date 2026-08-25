@@ -3503,6 +3503,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           refType?: 'branch' | 'tag';
           pullLatest?: boolean;
           sourceBranch?: string;
+          /** Remote that owns sourceBranch when it differs from the destination repo. */
+          sourceRemoteUrl?: string;
           issue_url?: string;
           pull_request_url?: string;
           boardId: string;

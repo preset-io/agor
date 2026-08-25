@@ -22,6 +22,8 @@ export interface SeedOnboardingTeammateInput {
    * rather than blocking completion.
    */
   sourceBranch?: string;
+  /** Remote that owns sourceBranch when a built-in template is not on the destination remote. */
+  sourceRemoteUrl?: string;
   /**
    * Agent chosen in the LLM step. `null`/`undefined` means the user skipped that
    * step and has no credentials, so no bootstrap session is started.
@@ -186,6 +188,7 @@ export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput)
             emoji: input.teammateEmoji,
             repoId: input.frameworkRepo.repo_id,
             sourceBranch: input.sourceBranch,
+            sourceRemoteUrl: input.sourceRemoteUrl,
             boardId: input.boardId,
             createdViaOnboarding: true,
           },

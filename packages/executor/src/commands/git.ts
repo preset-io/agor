@@ -18,6 +18,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { getReposDir } from '@agor/core/config';
 import { parseAgorYml, writeAgorYml } from '@agor/core/config/node';
 import { shortId } from '@agor/core/db';
+import { TEAMMATE_FRAMEWORK_REPO_URL } from '@agor/core/types';
 import { diagnoseGit } from '@agor/git';
 import { appendGitConfigParameterPairs } from '../git/config-parameters.js';
 import {
@@ -33,6 +34,7 @@ import {
   ensureGitRemoteUrl,
   getDefaultBranch,
   getRemoteUrl,
+  isRemoteRefVisibleForClone,
   isValidGitRepo,
   redactGitUrlCredentials,
   removeGitWorktree,
@@ -862,6 +864,14 @@ export async function handleGitBranchAdd(
     const storageMode = branchRecord.storage_mode ?? 'worktree';
     const cloneDepth = branchRecord.clone_depth;
     const remoteUrl = repo.remote_url ? stripGitUrlCredentials(repo.remote_url) : undefined;
+    const baseRemoteUrl = branchRecord.base_remote_url
+      ? stripGitUrlCredentials(branchRecord.base_remote_url)
+      : undefined;
+    if (baseRemoteUrl && baseRemoteUrl !== TEAMMATE_FRAMEWORK_REPO_URL) {
+      throw new Error(
+        'Refusing untrusted base_remote_url: only the canonical Agor teammate template repository is allowed.'
+      );
+    }
     const referencePath = payload.params.useReference ? repo.local_path : undefined;
 
     if (!repoPath && storageMode === 'worktree') {
@@ -890,17 +900,38 @@ export async function handleGitBranchAdd(
       // helper fork off the cloned tip. When checking out an existing
       // branch, just clone the ref directly. The helper owns both flows so
       // the executor handler doesn't have to orchestrate post-clone git ops.
-      const cloneRef = shouldCreateBranch ? sourceBranch || branch : branch;
+      let cloneRef = branch;
+      let cloneRemoteUrl = remoteUrl;
+      let newBranchName: string | undefined;
+
+      if (shouldCreateBranch) {
+        const restoreFromDestination = restoreMode
+          ? await isRemoteRefVisibleForClone({
+              remoteUrl,
+              ref: branch,
+              refType: 'branch',
+              env,
+            })
+          : false;
+
+        if (!restoreFromDestination) {
+          cloneRef = sourceBranch || branch;
+          cloneRemoteUrl = baseRemoteUrl || remoteUrl;
+          newBranchName = branch !== cloneRef ? branch : undefined;
+        }
+      }
       console.log(
-        `[git.branch.add] Using createBranchAsClone (remote=${redactGitUrlCredentials(remoteUrl)}, ` +
-          `ref=${cloneRef}${shouldCreateBranch && branch !== cloneRef ? `, newBranch=${branch}` : ''}, ` +
+        `[git.branch.add] Using createBranchAsClone (sourceRemote=${redactGitUrlCredentials(cloneRemoteUrl)}, ` +
+          `origin=${redactGitUrlCredentials(remoteUrl)}, ` +
+          `ref=${cloneRef}${newBranchName ? `, newBranch=${newBranchName}` : ''}, ` +
           `depth=${cloneDepth ?? 'full'}, referenceHint=${referencePath ?? 'none'})`
       );
       await createBranchAsClone({
-        remoteUrl,
+        remoteUrl: cloneRemoteUrl,
+        ...(cloneRemoteUrl !== remoteUrl ? { originRemoteUrl: remoteUrl } : {}),
         targetPath: branchPath,
         ref: cloneRef,
-        ...(shouldCreateBranch && branch !== cloneRef ? { newBranchName: branch } : {}),
+        ...(newBranchName ? { newBranchName } : {}),
         depth: cloneDepth,
         // Pass the daemon's hint through unconditionally. The helper does
         // the existsSync check on the executor's filesystem and falls back
@@ -915,7 +946,15 @@ export async function handleGitBranchAdd(
       console.log(
         `[git.branch.add] Using restoreBranchFilesystem (branch: ${branch}, base: ${sourceBranch})`
       );
-      const result = await restoreBranchFilesystem(repoPath, branchPath, branch, sourceBranch, env);
+      const result = await restoreBranchFilesystem(
+        repoPath,
+        branchPath,
+        branch,
+        sourceBranch,
+        env,
+        baseRemoteUrl,
+        refType || 'branch'
+      );
       if (!result.success) {
         throw new Error(`restoreBranchFilesystem failed: ${result.error}`);
       }
@@ -929,7 +968,8 @@ export async function handleGitBranchAdd(
         true, // pullLatest
         sourceBranch,
         env,
-        refType
+        refType,
+        baseRemoteUrl
       );
     }
 

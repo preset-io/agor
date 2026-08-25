@@ -486,6 +486,8 @@ export interface ReposService extends AgorService<Repo> {
       createBranch?: boolean;
       pullLatest?: boolean;
       sourceBranch?: string;
+      /** Remote that owns sourceBranch when it differs from this destination repo. */
+      sourceRemoteUrl?: string;
       issue_url?: string;
       pull_request_url?: string;
       boardId: string;

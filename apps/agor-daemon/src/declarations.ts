@@ -226,6 +226,7 @@ export interface ReposServiceImpl extends Service<Repo, Partial<Repo>, FeathersP
       createBranch?: boolean;
       pullLatest?: boolean;
       sourceBranch?: string;
+      sourceRemoteUrl?: string;
       issue_url?: string;
       pull_request_url?: string;
       boardId: string;

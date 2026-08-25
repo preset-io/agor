@@ -1,3 +1,4 @@
+import { TEAMMATE_FRAMEWORK_REPO_URL } from '@agor-live/client';
 import {
   AimOutlined,
   BuildOutlined,
@@ -51,7 +52,11 @@ export interface TeammateTemplate {
   emoji: string;
   /** Branch in the framework repo the teammate is cut from. */
   sourceBranch: string;
+  /** Remote that owns sourceBranch when it differs from the teammate's destination repo. */
+  sourceRemoteUrl?: string;
 }
+
+const BUILT_IN_TEMPLATE_SOURCE = { sourceRemoteUrl: TEAMMATE_FRAMEWORK_REPO_URL } as const;
 
 /**
  * The three category buckets, in display order. Single source of truth for the
@@ -88,6 +93,7 @@ export const TEAMMATE_TEMPLATES = [
     category: 'grow',
     emoji: '🔭',
     sourceBranch: 'template/competitive-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
   },
   {
     id: 'product-manager',
@@ -98,6 +104,7 @@ export const TEAMMATE_TEMPLATES = [
     category: 'build',
     emoji: '🧭',
     sourceBranch: 'template/product-manager',
+    ...BUILT_IN_TEMPLATE_SOURCE,
   },
   {
     id: 'chief-of-staff',
@@ -108,6 +115,7 @@ export const TEAMMATE_TEMPLATES = [
     category: 'operate',
     emoji: '🗂️',
     sourceBranch: 'template/chief-of-staff',
+    ...BUILT_IN_TEMPLATE_SOURCE,
   },
   {
     id: 'financial-analyst',
@@ -118,6 +126,7 @@ export const TEAMMATE_TEMPLATES = [
     category: 'operate',
     emoji: '🧮',
     sourceBranch: 'template/financial-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
   },
   {
     id: 'deal-desk',
@@ -127,6 +136,7 @@ export const TEAMMATE_TEMPLATES = [
     category: 'grow',
     emoji: '📐',
     sourceBranch: 'template/deal-desk-revops-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
   },
   {
     id: 'sales-outbound',
@@ -137,6 +147,7 @@ export const TEAMMATE_TEMPLATES = [
     category: 'grow',
     emoji: '🎯',
     sourceBranch: 'template/sales-outbound-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
   },
   {
     id: 'legal-analyst',
@@ -147,6 +158,7 @@ export const TEAMMATE_TEMPLATES = [
     category: 'operate',
     emoji: '⚖️',
     sourceBranch: 'template/legal-analyst',
+    ...BUILT_IN_TEMPLATE_SOURCE,
   },
   {
     id: 'builder',
@@ -156,6 +168,7 @@ export const TEAMMATE_TEMPLATES = [
     category: 'build',
     emoji: '🛠️',
     sourceBranch: 'template/builder',
+    ...BUILT_IN_TEMPLATE_SOURCE,
   },
 ] as const satisfies readonly TeammateTemplate[];
 
@@ -202,6 +215,16 @@ export function resolveTemplateSourceBranch(id?: string | null): string | undefi
     throw new Error(`Unknown teammate template id: ${id}`);
   }
   return template.sourceBranch;
+}
+
+/** Remote that owns the selected template ref; blank/no selection uses the destination repo. */
+export function resolveTemplateSourceRemoteUrl(id?: string | null): string | undefined {
+  if (!id || id === BLANK_TEMPLATE_ID) return undefined;
+  const template = getTeammateTemplate(id);
+  if (!template) {
+    throw new Error(`Unknown teammate template id: ${id}`);
+  }
+  return 'sourceRemoteUrl' in template ? template.sourceRemoteUrl : undefined;
 }
 
 /**

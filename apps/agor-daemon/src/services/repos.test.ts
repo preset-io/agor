@@ -253,7 +253,7 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
     expect(result).toEqual(failedBranch);
   });
 
-  it('does not attach a delegated user to daemon-owned Git lifecycle work', async () => {
+  it('persists a sanitized cross-repo base without attaching delegated Git work', async () => {
     executorMocks.spawnExecutorFireAndForget.mockClear();
 
     const repo = {
@@ -299,7 +299,8 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
         name: branch.name,
         ref: branch.name,
         createBranch: true,
-        sourceBranch: 'main',
+        sourceBranch: 'template/deal-desk-revops-analyst',
+        sourceRemoteUrl: 'https://token:secret@github.com/preset-io/agor-teammate.git',
         boardId: '550e8400-e29b-41d4-a716-446655440003',
         position: { x: 10, y: 20 },
         storage_mode: 'worktree',
@@ -309,10 +310,53 @@ describe('ReposService.createBranch Git lifecycle execution', () => {
       } as never
     );
 
+    expect(branches.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        base_ref: 'template/deal-desk-revops-analyst',
+        base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
+      }),
+      expect.anything()
+    );
     expect(executorMocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
       expect.objectContaining({ command: 'git.branch.add' }),
       expect.not.objectContaining({ delegatedHomeKey: expect.anything() })
     );
+  });
+
+  it('rejects a client-selected template remote before persisting a branch', async () => {
+    executorMocks.spawnExecutorFireAndForget.mockClear();
+    const branches = { create: vi.fn(), find: vi.fn(async () => []) };
+    const app = {
+      get: () => ({}),
+      service: vi.fn((name: string) => {
+        if (name === 'branches') return branches;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    } as unknown as Application;
+    const service = new ReposService({} as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue({
+      repo_id: '550e8400-e29b-41d4-a716-446655440001',
+      slug: 'preset-io/agor-teammate-private',
+      local_path: '/managed/repos/agor-teammate-private',
+      default_branch: 'main',
+    } as never);
+
+    await expect(
+      service.createBranch(
+        '550e8400-e29b-41d4-a716-446655440001',
+        {
+          name: 'forged-template-source',
+          ref: 'forged-template-source',
+          createBranch: true,
+          sourceBranch: 'template/deal-desk-revops-analyst',
+          sourceRemoteUrl: 'https://attacker.example/template.git',
+          boardId: '550e8400-e29b-41d4-a716-446655440003',
+        },
+        { user: { user_id: '550e8400-e29b-41d4-a716-446655440004' } } as never
+      )
+    ).rejects.toThrow(/canonical Agor teammate template repository/);
+    expect(branches.create).not.toHaveBeenCalled();
+    expect(executorMocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 });
 
