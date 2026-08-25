@@ -2,9 +2,47 @@ import { mkdir, mkdtemp, readdir, readFile, rename, symlink, writeFile } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { mutateCredentialFile, readCredentialFile } from './credential-file';
+import {
+  compareAndSwapCredentialFile,
+  mutateCredentialFile,
+  readCredentialFile,
+} from './credential-file';
 
 describe('credential file directory capability', () => {
+  it('atomically adopts a winner instead of overwriting changed credential bytes', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agor-credential-cas-'));
+    const target = join(home, '.credentials.json');
+    await writeFile(target, 'observed');
+
+    await mutateCredentialFile({ target, content: 'winner', generation: 2 });
+    await expect(
+      compareAndSwapCredentialFile({
+        target,
+        expectedContent: 'observed',
+        content: 'loser',
+        generation: 1,
+      })
+    ).resolves.toEqual({ outcome: 'changed', content: 'winner' });
+    await expect(readFile(target, 'utf8')).resolves.toBe('winner');
+  });
+
+  it('does not recreate a credential removed after the caller observed it', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'agor-credential-cas-delete-'));
+    const target = join(home, '.credentials.json');
+    await writeFile(target, 'observed');
+    await mutateCredentialFile({ target, generation: 2 });
+
+    await expect(
+      compareAndSwapCredentialFile({
+        target,
+        expectedContent: 'observed',
+        content: 'stale-refresh',
+        generation: 1,
+      })
+    ).resolves.toEqual({ outcome: 'changed' });
+    await expect(readFile(target, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it.runIf(process.platform === 'linux')(
     'does not let a retry steal the lock from a still-live writer',
     async () => {

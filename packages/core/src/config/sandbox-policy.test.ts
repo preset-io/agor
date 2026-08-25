@@ -160,6 +160,21 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     agenticToolsPath: '/home/agor/.agor/agentic-tools',
   };
 
+  it('masks only the canonical Claude grant while preserving Claude state and Codex auth', () => {
+    const args = resolveBwrapArgs({ home_mode: 'per_user' }, PER_USER_CTX);
+    expect(
+      hasTriple(
+        args,
+        '--ro-bind-try',
+        '/dev/null',
+        `${PER_USER_CTX.homeDir}/.claude/.credentials.json`
+      )
+    ).toBe(true);
+    expect(args).not.toContain(`${PER_USER_CTX.homeDir}/.codex/auth.json`);
+    expect(args).not.toContain(`${PER_USER_CTX.homeDir}/.claude/settings.json`);
+    expect(args).not.toContain(`${PER_USER_CTX.homeDir}/.claude/projects`);
+  });
+
   it('overlays the owner store at the passwd home and sets HOME', () => {
     const args = resolveBwrapArgs({ home_mode: 'per_user' }, PER_USER_CTX);
     expect(hasTriple(args, '--bind', STORE, '/home/agor')).toBe(true);
@@ -234,6 +249,26 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     expect(hasPair(args, '--tmpfs', tenantsBase)).toBe(true);
   });
 
+  it('hides a physical filesystem_home outside all deployment data roots', () => {
+    const ownerHomeStore = '/srv/customer-homes/alice';
+    const args = resolveBwrapArgs({ home_mode: 'per_user' }, { ...PER_USER_CTX, ownerHomeStore });
+    const physicalCredential = `${ownerHomeStore}/.claude/.credentials.json`;
+    const physicalMask = args.findIndex(
+      (arg, index) =>
+        arg === '--ro-bind-try' &&
+        args[index + 1] === '/dev/null' &&
+        args[index + 2] === physicalCredential
+    );
+    const overlay = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' &&
+        args[index + 1] === ownerHomeStore &&
+        args[index + 2] === PER_USER_CTX.homeDir
+    );
+    expect(physicalMask).toBeGreaterThanOrEqual(0);
+    expect(physicalMask).toBeGreaterThan(overlay);
+  });
+
   it('emits only the outermost mask for nested data roots', () => {
     const dataHome = '/var/lib/agor';
     const tenantsBase = `${dataHome}/tenants`;
@@ -292,6 +327,11 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     expect(hasTriple(args, '--ro-bind', '/dev/null', `${canonicalHomeDir}/.agor/config.yaml`)).toBe(
       true
     );
+    for (const home of ['/home/agor', canonicalHomeDir]) {
+      expect(
+        hasTriple(args, '--ro-bind-try', '/dev/null', `${home}/.claude/.credentials.json`)
+      ).toBe(true);
+    }
     expect(hasPair(args, '--chdir', canonicalBranch)).toBe(true);
   });
 

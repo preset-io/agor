@@ -326,7 +326,11 @@ authentication option. Operators must explicitly enable
 provider authorization/client contract; see [Operator configuration](./config-yaml).
 Absent that clearance flag, Agor continues to support Anthropic API keys and
 manually pasted `claude setup-token` credentials without exposing the OAuth
-endpoint or tab.
+endpoint or tab. Managed sign-in additionally requires local sandbox execution
+with persistent per-user homes and `sandbox.home_mode: per_user`; other
+topologies fail closed. In that profile the daemon, not Claude Code, owns token
+refresh and the sandbox masks only `.claude/.credentials.json`, leaving Claude
+settings and fork/resume state at their canonical paths.
 
 <a id="claude-max-pro" />
 

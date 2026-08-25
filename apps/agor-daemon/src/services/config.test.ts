@@ -117,6 +117,52 @@ describe('ConfigService.resolveApiKey', () => {
     });
   });
 
+  it.each([
+    [
+      'pasted subscription token',
+      {
+        apiKey: null,
+        connection: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-pasted' },
+        source: 'user',
+        useNativeAuth: false,
+      },
+    ],
+    [
+      'API key',
+      {
+        apiKey: 'sk-ant-api03-key',
+        connection: { ANTHROPIC_API_KEY: 'sk-ant-api03-key' },
+        source: 'user',
+        useNativeAuth: false,
+      },
+    ],
+  ])('leaves the Claude %s path unchanged', async (_case, resolved) => {
+    configMocks.resolveApiKey.mockResolvedValue(resolved);
+    const managed = { resolve: vi.fn() };
+    const service = new ConfigService({} as never, {}, managed as never);
+    service.app = {
+      service(name: string) {
+        expect(name).toBe('tasks');
+        return { get: vi.fn(async () => ({ created_by: 'creator-1' as UserID })) };
+      },
+    } as never;
+
+    await expect(
+      service.resolveApiKey(
+        {
+          taskId: 'task-1' as TaskID,
+          keyName: 'ANTHROPIC_API_KEY',
+          tool: 'claude-code',
+        },
+        {
+          provider: 'socketio',
+          user: { user_id: 'executor-service', _isServiceAccount: true },
+        } as never
+      )
+    ).resolves.toMatchObject(resolved);
+    expect(managed.resolve).not.toHaveBeenCalled();
+  });
+
   it('allows task-scoped executor runtime tokens for the matching session tool', async () => {
     const service = new ConfigService({} as never);
     service.app = {
@@ -384,7 +430,15 @@ describe('ConfigService.resolveApiKey', () => {
             unix_user_mode: 'sandbox',
             executor_storage: { user_home: 'persistent-per-user' },
           },
-        } as never
+        } as never,
+        tool === 'claude-code'
+          ? ({
+              resolve: vi.fn(async () => ({
+                connection: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-managed' },
+                useNativeAuth: false,
+              })),
+            } as never)
+          : undefined
       );
       service.app = {
         service(name: string) {
@@ -419,7 +473,12 @@ describe('ConfigService.resolveApiKey', () => {
             },
           },
         } as never)
-      ).resolves.toMatchObject({ useNativeAuth: true });
+      ).resolves.toMatchObject({
+        useNativeAuth: tool === 'codex',
+        ...(tool === 'claude-code'
+          ? { connection: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-managed' } }
+          : {}),
+      });
     }
   );
 
@@ -484,7 +543,7 @@ describe('ConfigService.resolveApiKey', () => {
           },
         } as never
       )
-    ).rejects.toBeInstanceOf(Forbidden);
+    ).rejects.toBeInstanceOf(BadRequest);
   });
 
   it('keeps Claude native subscription auth fail-closed in HA', async () => {

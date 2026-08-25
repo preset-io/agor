@@ -1,7 +1,7 @@
 import { UsersRepository } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, Params, User, UserID, UserRole } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { markTrustedUserMutation } from './user-mutation-trust';
 import { createUsersService, UsersService } from './users';
@@ -328,6 +328,35 @@ describe('UsersService role authority', () => {
 });
 
 describe('UsersService Claude credential-source authority', () => {
+  dbTest('serializes source and route changes with managed runtime refresh', async ({ db }) => {
+    const runCredentialMutation = vi.fn(async <T>(work: (generation: number) => Promise<T>) =>
+      work(11)
+    );
+    const service = new UsersService(db, undefined, undefined, {
+      runCredentialMutation,
+    });
+    const user = await createUser(service, 'admin', 'claude-coordinated-source');
+    const params = externalParams(user);
+
+    await service.patch(
+      user.user_id as UserID,
+      {
+        agentic_tools: {
+          'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-coordinated' },
+        },
+      },
+      params
+    );
+    await service.patch(
+      user.user_id as UserID,
+      { filesystem_home: '/tmp/claude-coordinated-home' },
+      params
+    );
+    await service.patch(user.user_id as UserID, { name: 'not-credential-related' }, params);
+
+    expect(runCredentialMutation).toHaveBeenCalledTimes(2);
+  });
+
   dbTest(
     'linearizes managed-file → pasted-token → clear without reactivating the file',
     async ({ db }) => {

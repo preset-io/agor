@@ -305,6 +305,62 @@ export async function mutateCredentialFile(
   }
 }
 
+export type CredentialFileCompareAndSwapResult =
+  | { outcome: 'written' }
+  | { outcome: 'changed'; content?: string };
+
+/**
+ * Replace a credential only when the bytes observed before provider I/O are
+ * still authoritative.
+ *
+ * The provider request must happen before this function is called: this holds
+ * the per-home kernel lock only for the local compare/generation/write unit.
+ * A login, logout, route change, or refresh winner that changed the file while
+ * the request was in flight wins; the caller receives the current bytes and
+ * must adopt or reject them rather than replaying its stale result.
+ */
+export async function compareAndSwapCredentialFile(options: {
+  target: string;
+  expectedContent: string;
+  content: string;
+  generation: number;
+}): Promise<CredentialFileCompareAndSwapResult> {
+  if (!Number.isSafeInteger(options.generation) || options.generation <= 0) {
+    throw new Error('Credential mutation generation is invalid');
+  }
+  const directory = await openCredentialDirectory(options.target, true);
+  const targetName = basename(resolve(options.target));
+  const target = join(directory.path, targetName);
+  try {
+    const lock = await acquireLock(directory);
+    try {
+      let current: string | undefined;
+      try {
+        current = await readNoFollow(target);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+      if (current !== options.expectedContent) {
+        return current === undefined
+          ? { outcome: 'changed' }
+          : { outcome: 'changed', content: current };
+      }
+
+      const generationPath = join(directory.path, '.agor-auth-generation');
+      if (options.generation < (await currentGeneration(generationPath))) {
+        return { outcome: 'changed', content: current };
+      }
+      await atomicWrite(directory, '.agor-auth-generation', `${options.generation}\n`, 0o600);
+      await atomicWrite(directory, targetName, options.content, 0o600);
+      return { outcome: 'written' };
+    } finally {
+      await lock.release();
+    }
+  } finally {
+    await directory.handle.close();
+  }
+}
+
 export type VerifiedCodexAuthWrite =
   | { outcome: 'stale' }
   | {

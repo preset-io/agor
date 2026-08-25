@@ -23,7 +23,7 @@ let toolEnabled = true;
 let exactUserHome = true;
 vi.mock('@agor/core/config', () => ({
   isTenantAgenticToolEnabled: vi.fn(async () => toolEnabled),
-  hasExactUserExecutorCredentialHome: vi.fn(() => exactUserHome),
+  hasContainedClaudeRuntimeCredentials: vi.fn(() => exactUserHome),
   isClaudeSubscriptionOAuthEnabled: vi.fn(
     (config: { agentic_tools?: { claude_subscription_oauth?: boolean } }) =>
       config.agentic_tools?.claude_subscription_oauth === true
@@ -57,6 +57,7 @@ import {
   generatePkce,
   InMemoryClaudeOAuthCoordinator,
   parsePastedCode,
+  refreshClaudeTokens,
   TokenExchangeError,
 } from './claude-oauth.js';
 
@@ -249,6 +250,67 @@ describe('exchangeCodeForTokens contract validation', () => {
       await expect(exchangeCodeForTokens('c', 'v', 's')).rejects.toThrow(/invalid expiry/);
     }
   });
+});
+
+describe('refreshClaudeTokens contract validation', () => {
+  const current = { scopes: ['user:inference'], subscriptionType: 'pro' };
+
+  it('posts the pinned client refresh contract and accepts a rotated token', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({
+          access_token: 'sk-ant-oat01-next',
+          refresh_token: 'sk-ant-ort01-next',
+          expires_in: 28_800,
+          scope: 'user:inference',
+        })
+      )
+    );
+    await expect(refreshClaudeTokens('sk-ant-ort01-old', current)).resolves.toMatchObject({
+      accessToken: 'sk-ant-oat01-next',
+      refreshToken: 'sk-ant-ort01-next',
+    });
+    const request = vi.mocked(fetch).mock.calls[0]?.[1];
+    expect(JSON.parse(String(request?.body))).toEqual({
+      grant_type: 'refresh_token',
+      refresh_token: 'sk-ant-ort01-old',
+      client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
+      scope: 'user:inference',
+    });
+    expect(request).toMatchObject({ redirect: 'error' });
+  });
+
+  it('preserves the current refresh token when the provider omits rotation', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ access_token: 'sk-ant-oat01-next', expires_in: 28_800 }))
+    );
+    await expect(refreshClaudeTokens('sk-ant-ort01-old', current)).resolves.toMatchObject({
+      refreshToken: 'sk-ant-ort01-old',
+      scopes: current.scopes,
+      subscriptionType: 'pro',
+    });
+  });
+
+  it.each([
+    [400, 'rejected'],
+    [503, 'ambiguous'],
+  ] as const)(
+    'classifies HTTP %s as %s without exposing the provider body',
+    async (status, disposition) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => jsonResponse({ error: 'secret-provider-body' }, false, status))
+      );
+      const error = await refreshClaudeTokens('sk-ant-ort01-secret', current).catch(
+        (value) => value
+      );
+      expect(error).toMatchObject({ disposition });
+      expect(String(error)).not.toContain('secret-provider-body');
+      expect(String(error)).not.toContain('sk-ant-ort01-secret');
+    }
+  );
 });
 
 describe('createClaudeOAuthService — flow + security', () => {
@@ -559,7 +621,7 @@ describe('createClaudeOAuthService — flow + security', () => {
   it('fails closed in hosted mode without an exact user execution home', async () => {
     exactUserHome = false;
     const { svc } = makeService(undefined, { multi_tenancy: { mode: 'required_from_auth' } });
-    await expect(svc.create({}, asUserA)).rejects.toThrow(/exact per-user/);
+    await expect(svc.create({}, asUserA)).rejects.toThrow(/contained per-user/);
     expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
   });
 

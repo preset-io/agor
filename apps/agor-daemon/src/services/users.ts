@@ -103,6 +103,22 @@ import {
   type TrustedUserMutationPurpose,
 } from './user-mutation-trust.js';
 
+interface ClaudeCredentialMutationCoordinatorLike {
+  runCredentialMutation<T>(work: (generation: number) => Promise<T>): Promise<T>;
+}
+
+const CLAUDE_CREDENTIAL_MUTATION_HELD = Symbol('claude-credential-mutation-held');
+
+function affectsClaudeCredentialAuthority(data: UpdateUserData): boolean {
+  return (
+    Object.hasOwn(data, 'unix_username') ||
+    Object.hasOwn(data, 'filesystem_home') ||
+    Object.hasOwn(data.agentic_auth_methods ?? {}, 'claude-code') ||
+    Object.hasOwn(data.agentic_credential_sources ?? {}, 'claude-code') ||
+    Object.hasOwn(data.agentic_tools ?? {}, 'claude-code')
+  );
+}
+
 function optionalNonNegativeInteger(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   const numeric = typeof value === 'number' ? value : Number(value);
@@ -427,7 +443,8 @@ export class UsersService {
   constructor(
     protected db: TenantScopeAwareDatabase,
     protected app?: Application,
-    config?: AgorConfig
+    config?: AgorConfig,
+    private readonly claudeCredentialMutations?: ClaudeCredentialMutationCoordinatorLike
   ) {
     const effectiveConfig = config ?? (app?.get('config') as AgorConfig | undefined) ?? {};
     this.identityAuthority = resolveIdentityAuthority(effectiveConfig);
@@ -834,6 +851,22 @@ export class UsersService {
    * Update user
    */
   async patch(id: UserID, data: UpdateUserData, params?: Params): Promise<User> {
+    const coordinated = params as
+      | (Params & { [CLAUDE_CREDENTIAL_MUTATION_HELD]?: boolean })
+      | undefined;
+    if (
+      this.claudeCredentialMutations &&
+      !coordinated?.[CLAUDE_CREDENTIAL_MUTATION_HELD] &&
+      getTrustedUserMutationPurpose(params) !== 'claude-auth' &&
+      affectsClaudeCredentialAuthority(data)
+    ) {
+      return this.claudeCredentialMutations.runCredentialMutation(() =>
+        this.patch(id, data, {
+          ...(params ?? {}),
+          [CLAUDE_CREDENTIAL_MUTATION_HELD]: true,
+        } as Params)
+      );
+    }
     if (typeof id !== 'string' || !id) {
       throw new BadRequest('Bulk user mutations are not supported');
     }
@@ -1273,6 +1306,17 @@ export class UsersService {
    * Delete user
    */
   async remove(id: UserID, params?: Params): Promise<User> {
+    const coordinated = params as
+      | (Params & { [CLAUDE_CREDENTIAL_MUTATION_HELD]?: boolean })
+      | undefined;
+    if (this.claudeCredentialMutations && !coordinated?.[CLAUDE_CREDENTIAL_MUTATION_HELD]) {
+      return this.claudeCredentialMutations.runCredentialMutation(() =>
+        this.remove(id, {
+          ...(params ?? {}),
+          [CLAUDE_CREDENTIAL_MUTATION_HELD]: true,
+        } as Params)
+      );
+    }
     if (typeof id !== 'string' || !id) {
       throw new BadRequest('Bulk user mutations are not supported');
     }
@@ -1857,7 +1901,8 @@ class UsersServiceWithAuth extends UsersService {
  */
 export function createUsersService(
   db: TenantScopeAwareDatabase,
-  app?: Application
+  app?: Application,
+  claudeCredentialMutations?: ClaudeCredentialMutationCoordinatorLike
 ): UsersServiceWithAuth {
-  return new UsersServiceWithAuth(db, app);
+  return new UsersServiceWithAuth(db, app, undefined, claudeCredentialMutations);
 }

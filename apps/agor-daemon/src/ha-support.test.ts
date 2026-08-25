@@ -166,7 +166,14 @@ describe('constrained HA support profile', () => {
     expect(hasClaudeSubscriptionOAuthCapability({}, standalone)).toBe(false);
     expect(
       hasClaudeSubscriptionOAuthCapability(
-        { agentic_tools: { claude_subscription_oauth: true } },
+        {
+          agentic_tools: { claude_subscription_oauth: true },
+          execution: {
+            unix_user_mode: 'sandbox',
+            executor_storage: { user_home: 'persistent-per-user' },
+            sandbox: { enabled: true, home_mode: 'per_user' },
+          },
+        },
         standalone
       )
     ).toBe(true);

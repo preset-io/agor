@@ -1,5 +1,6 @@
 import {
   type AgorConfig,
+  hasContainedClaudeRuntimeCredentials,
   isClaudeSubscriptionOAuthEnabled,
   type ResolvedDeploymentConfig,
 } from '@agor/core/config';
@@ -60,7 +61,9 @@ export function hasClaudeSubscriptionOAuthCapability(
   deployment: ResolvedDeploymentConfig
 ): boolean {
   return (
-    isClaudeSubscriptionOAuthEnabled(config) && !isHaFeatureUnavailable(deployment, 'claudeOAuth')
+    isClaudeSubscriptionOAuthEnabled(config) &&
+    hasContainedClaudeRuntimeCredentials(config) &&
+    !isHaFeatureUnavailable(deployment, 'claudeOAuth')
   );
 }
 

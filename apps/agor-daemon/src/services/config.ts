@@ -34,6 +34,13 @@ import {
   sameExecutionCredentialHome,
 } from './credential-home-identity.js';
 
+interface ClaudeRuntimeCredentialResolverLike {
+  resolve(
+    tenantId: string,
+    userId: UserID
+  ): Promise<{ connection: { CLAUDE_CODE_OAUTH_TOKEN: string }; useNativeAuth: false }>;
+}
+
 const RESOLVABLE_API_KEY_NAMES: Record<ApiKeyName, true> = {
   ANTHROPIC_API_KEY: true,
   ANTHROPIC_AUTH_TOKEN: true,
@@ -58,7 +65,8 @@ export class ConfigService {
 
   constructor(
     db: TenantScopeAwareDatabase,
-    private readonly config: DeepReadonly<AgorConfig>
+    private readonly config: DeepReadonly<AgorConfig> = {},
+    private readonly claudeRuntimeCredentials?: ClaudeRuntimeCredentialResolverLike
   ) {
     this.db = db;
   }
@@ -177,18 +185,30 @@ export class ConfigService {
       }
     }
 
-    const result = await runWithTenantDatabaseScope(
+    let result = await runWithTenantDatabaseScope(
       this.db,
       internalParams.tenant?.tenant_id,
       (tenantDb) => resolveApiKey(keyName, { userId, db: tenantDb, tool })
     );
+    if (result.useNativeAuth && tool === 'claude-code') {
+      const tenantId = internalParams.tenant?.tenant_id;
+      if (!tenantId || !userId || !this.claudeRuntimeCredentials) {
+        throw new BadRequest(
+          'Managed Claude subscription login is unavailable for this task. Use an API key or pasted subscription token.'
+        );
+      }
+      const managed = await this.claudeRuntimeCredentials.resolve(tenantId, userId);
+      result = {
+        ...result,
+        apiKey: undefined,
+        connection: managed.connection,
+        useNativeAuth: false,
+      };
+    }
     if (result.useNativeAuth) {
       if (
         this.config.multi_tenancy?.mode === 'required_from_auth' &&
-        !(
-          hasExactUserExecutorCredentialHome(this.config) &&
-          (tool === 'codex' || (tool === 'claude-code' && this.config.deployment?.mode !== 'ha'))
-        )
+        !(hasExactUserExecutorCredentialHome(this.config) && tool === 'codex')
       ) {
         throw new BadRequest(
           'Shared machine subscription authentication is unavailable in hosted multitenant mode'
@@ -279,7 +299,8 @@ export class ConfigService {
  */
 export function createConfigService(
   db: TenantScopeAwareDatabase,
-  config: DeepReadonly<AgorConfig>
+  config: DeepReadonly<AgorConfig>,
+  claudeRuntimeCredentials?: ClaudeRuntimeCredentialResolverLike
 ): ConfigService {
-  return new ConfigService(db, config);
+  return new ConfigService(db, config, claudeRuntimeCredentials);
 }

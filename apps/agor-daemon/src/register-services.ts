@@ -133,6 +133,7 @@ import {
   createClaudeOAuthService,
   InMemoryClaudeOAuthCoordinator,
 } from './services/claude-oauth.js';
+import { ClaudeRuntimeCredentialResolver } from './services/claude-runtime-credential.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
@@ -691,7 +692,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Config, context, file, files, terminals
   // ============================================================================
 
-  const configService = createConfigService(db, config);
+  // One authority owns OAuth completion, logout, user source/route changes,
+  // and task-time refresh. Provider refresh I/O happens outside this queue;
+  // only the final source/route re-read and generation CAS run inside it.
+  const claudeOAuthCoordinator = new InMemoryClaudeOAuthCoordinator();
+  const claudeRuntimeCredentials = new ClaudeRuntimeCredentialResolver(
+    db,
+    config,
+    claudeOAuthCoordinator
+  );
+  const configService = createConfigService(db, config, claudeRuntimeCredentials);
   configService.app = app;
   app.use(
     '/agentic-tool-settings',
@@ -753,7 +763,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // writes ~/.claude/.credentials.json 0600 as the right Unix identity; find
   // reports status. Tokens stay daemon-side end to end.
   // See context/explorations/claude-code-oauth-signin.md.
-  const claudeOAuthCoordinator = new InMemoryClaudeOAuthCoordinator();
   app.use('/claude-auth/oauth', createClaudeOAuthService(app, db, claudeOAuthCoordinator));
   app
     .service('/claude-auth/oauth')
@@ -912,7 +921,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Users service
   // ============================================================================
 
-  const usersService = createUsersService(db, app);
+  const usersService = createUsersService(db, app, claudeOAuthCoordinator);
   // UsersService implements find/get/create/patch/remove (no `update`), plus
   // custom RPCs like `getGitEnvironment` and avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
