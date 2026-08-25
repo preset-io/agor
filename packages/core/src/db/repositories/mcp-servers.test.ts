@@ -227,6 +227,20 @@ describe('MCPServerRepository.findAll', () => {
     expect(stdioServers).toHaveLength(1);
     expect(stdioServers[0].name).toBe('stdio-1');
   });
+
+  dbTest('bounds and paginates status-style server scans', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    for (const name of ['page-1', 'page-2', 'page-3']) {
+      await repo.create(createMCPServerData({ name }));
+    }
+
+    const first = await repo.findAll({ limit: 1, offset: 0 });
+    const second = await repo.findAll({ limit: 1, offset: 1 });
+
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(first[0]!.mcp_server_id).not.toBe(second[0]!.mcp_server_id);
+  });
 });
 
 // ============================================================================

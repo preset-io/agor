@@ -1,227 +1,202 @@
-# Authoritative MCP egress gateway
+# Authoritative MCP egress gateway — implemented phase
 
-Status: issue-ready design; not implemented by the #2500 auth-mutation slice.
+Status: structural implementation for #2500, stacked on #2553. #2501 is not in
+scope.
 
-## Why lifecycle invalidation is insufficient
+## Security objective
 
-Today an executor gives a provider SDK an MCP configuration containing an
-endpoint or process command and, for some transports, credential material. Once
-that SDK owns the client, a daemon-side generation check cannot close the gap
-between “checked” and “sent.” Stopping a Task after a configuration write is an
-availability optimization, not a revocation boundary:
+Reusable MCP provider credentials never cross the daemon/executor boundary in a
+mediated rollout mode. Executors receive only an opaque authenticated-encrypted capability
+bound to:
 
-- PostgreSQL does not expose an uncommitted “mutation pending” row to another
-  transaction.
-- A remote executor acknowledgement proves only that it sent an acknowledgement,
-  not that a third-party SDK or subprocess stopped.
-- an HTTP request or provider side effect already accepted before revocation
-  cannot be recalled;
-- credential-bearing environment and stdio process startup happen outside the
-  daemon's request checks; and
-- crash recovery cannot safely infer that an unobserved provider is quiescent.
+- tenant, live Task, Session, prompting principal, and credential owner;
+- one MCP server and its existing monotonic `config_version`;
+- an HMAC of every saved credential-bearing configuration field plus referenced
+  session/user environment material;
+- OAuth grant generation/binding identity when applicable; and
+- the tenant rollout mode and a unique capability id.
 
-The strong invariant therefore requires one owner for both credential use and
-MCP egress. No executor or provider SDK may receive a reusable raw credential or
-open a provider transport directly.
+There is intentionally no wall-clock expiry. Long tasks do not break after one
+hour; every use reloads the Task and all current authority. Terminal/revoked
+Tasks make the capability unusable. The capability contains neither endpoint,
+headers, environment, access/refresh token, bearer token, JWT client secret, nor
+minted provider token.
 
-## Target invariant and linearization point
+The daemon owns template/environment resolution, OAuth refresh lookup, JWT
+minting, final header injection, pinned destination validation, redirect policy,
+and the outbound socket.
 
-For each `(tenant, credential principal, MCP server)` authority:
+## Chosen linearization contract
 
-1. Every tool request obtains a gateway read lease before credentials are
-   resolved and retains it until the response, cancellation, or bounded timeout.
-2. An authority mutation obtains the corresponding write lease. New read leases
-   stop immediately. The mutation becomes authoritative only after admitted
-   reads have completed or the gateway has closed their owned transports.
-3. The write transaction increments a durable authority epoch, changes config or
-   grants, records an outbox event, and commits. A request may dispatch only when
-   its read lease and observed epoch are still current at the gateway's final
-   send boundary.
-4. Raw bearer, JWT, OAuth, header, and environment secrets remain inside the
-   gateway/credential store. Executors carry an opaque, short-lived capability
-   naming the tenant, Task, Session, prompter principal, server, and authority
-   epoch.
+This phase does not implement a durable drain/lease state machine. That design
+cannot honestly prove provider observation or transport teardown merely from a
+JavaScript enqueue or `request.end()` acknowledgement, and crash recovery would
+turn routine restarts into unsafe mass quarantine.
 
-“No old request after revocation” means no provider request is _admitted or
-dispatched after the write lease linearization point_. A provider side effect
-completed by a request admitted before that point is historical and cannot be
-undone. The mutation API must either wait for those admitted operations or fail
-closed with a bounded, actionable `egress_drain_failed` result; it must not claim
-to revoke already-completed provider effects.
+Instead, every physical HTTP hop has one explicit admission point: after pinned
+DNS resolution and immediately before socket construction, the gateway reloads
+and checks the durable authority/version/grant. The contract is:
 
-## Components
+> No hop is admitted after a relevant mutation commits. A hop admitted before
+> the commit may complete and may already have been observed by the provider.
 
-### Gateway-facing MCP transport
+All constituent authority reads use one SQLite immediate transaction or
+PostgreSQL repeatable-read snapshot. Runtime OAuth access/refresh values are
+excluded from canonical durable material; grant generation/binding remains explicit.
 
-Expose an Agor-controlled MCP endpoint per effective server (or one endpoint
-with a server capability). Claude, Codex, Gemini, Cursor, OpenCode, and delegated
-executors connect only to that endpoint. The gateway validates the opaque Task
-capability, resolves the current effective server through the canonical branch,
-Session, Task, role/policy, attachment, and principal owners, and forwards
-JSON-RPC under a read lease.
+Mutations use their existing transactions. MCP configuration updates already
+advance `config_version` atomically. Attachment removal commits its relationship
+change. OAuth disconnect/invalid-grant paths delete or replace the durable grant
+identity. Task/user/role/branch changes remain in their canonical authorities.
+The gateway does not duplicate these state machines.
 
-The Task capability is not a credential cache. It is audience-bound to the
-gateway, short lived, non-transferable across tenant/Task/server, and checked
-against durable Task activity and authority epoch on every call.
+An in-process `AbortController` map cancels matching local calls after observed
+writes and rollout changes. It is an availability accelerator only. A second
+daemon does not need its hint for correctness. PostgreSQL supplies HA visibility;
+SQLite uses the same repository checks. Redis may later accelerate cancellation
+but must never decide admission. Local hints carry only closed structured gateway
+codes; the durable authority reason supersedes a hint when revalidation succeeds,
+and unknown shutdowns collapse to generic egress unavailability.
 
-### HTTP, SSE, and long-lived transports
+## Transport boundary
 
-- The gateway owns DNS pinning, connection establishment, request bodies, and
-  response streaming.
-- Authorization is injected only after the final authority check. Redirects are
-  either refused or followed by the gateway under the existing safe-outbound
-  policy, with a new lease/epoch check at every hop. Authorization is never
-  forwarded to a different origin.
-- SSE, WebSocket, and streamable-HTTP connections are registered under the read
-  lease. A write lease closes them and waits for gateway-observed closure; an
-  executor acknowledgement is not part of the proof.
-- Each JSON-RPC tool invocation has its own admission record even when it shares
-  a pooled connection, so revocation can stop new calls without treating a TCP
-  socket as authority.
+Supported:
 
-### OAuth, JWT, and refresh
+- bounded Streamable HTTP `POST` and `DELETE`;
+- fully buffered JSON responses;
+- fully buffered JSON-only SSE responses that terminate within 30 seconds and
+  16 MiB.
 
-- OAuth access/refresh tokens and registered client secrets stay in the daemon's
-  credential store. Refresh runs inside the gateway immediately before a call
-  that needs it and rechecks the grant binding before returning an internal
-  header value to the sender component.
-- Routine access-token rotation retains the grant identity/authorization epoch
-  and does not acquire an authority write lease. Reauthentication, disconnect,
-  grant revocation, OAuth mode changes, client/binding changes, and subject
-  changes do.
-- JWT client-credential exchanges are performed inside the gateway. The minted
-  bearer is request-local or bounded to the current read lease and is never
-  returned to a remote executor.
-- OAuth start, callback, polling, disconnect, and runtime failures use the same
-  closed recovery categories already exposed by the daemon; provider details
-  remain in redacted secure telemetry.
+GET/server-stream channels, unsupported methods, and all redirects are refused.
 
-### stdio
+Refused before credential resolution/spawn:
 
-Stdio cannot be made strong by proxying only HTTP. The gateway (or a co-located
-trusted egress worker) must own the subprocess, its credential-bearing
-environment, stdin/stdout JSON-RPC, and process group. Executors talk to the
-gateway, never spawn the configured command. Acquiring a write lease stops
-admission, closes pipes, terminates the gateway-owned process group, verifies
-process absence, and only then commits the mutation. Delegated platforms need a
-reviewed worker with the same contract; until then strong revocation is
-unsupported for delegated stdio and must fail closed rather than silently fall
-back to direct execution.
+- all stdio in compatibility and enforced modes;
+- legacy SSE endpoint handoff;
+- WebSocket;
+- unbounded or unstructured streaming; and
+- a server with any `ask` tool rule, until the canonical permission service can
+  mint a one-shot tenant/task/session/server/tool receipt.
 
-### PostgreSQL, SQLite, and multiple daemons
+`deny` tool rules are checked again against decoded `tools/call` input. Remote or
+delegated executors fail closed; no mediated path silently projects raw config.
+Connection pooling is disabled so a previous socket cannot bypass per-hop DNS
+and admission checks.
 
-Database state is authority; Redis is only a wake-up hint.
+Capacity reservations bound concurrent calls to 32/process, 16/tenant, 4/task,
+and 8/server before credential work. Exhaustion fails with a retryable bounded
+429, limiting buffered response memory and sockets.
 
-- PostgreSQL uses short transactions, not an HTTP-long outer transaction. A
-  per-authority row contains the epoch and mutation state. A write operation
-  claims it with a row/advisory lock, sets durable `draining`, and coordinates
-  with gateway-owned active leases before committing the new epoch.
-- Active distributed leases need a bounded TTL plus gateway heartbeat and an
-  ownership token. Expiry is not proof of third-party teardown, so an expired
-  gateway owner leaves the authority quarantined until that owner is fenced by
-  infrastructure or an operator-approved recovery verifies it cannot send.
-- SQLite uses `BEGIN IMMEDIATE` and the same state machine without pretending it
-  supplies cross-host coordination.
-- Outbox delivery accelerates connection closure and UI refresh. Every gateway
-  admission reads the durable epoch, so missed Redis events and daemon restarts
-  converge lazily.
+## Credential authority
 
-## Durable mutation state machine
+Bearer/custom/environment material is resolved only in the daemon. JWT client
+credentials go through `fetchJWTToken` with the same async durable assertion
+immediately before the token-provider dispatch; process token caching is disabled
+for gateway calls. OAuth authentication uses the canonical daemon OAuth service,
+and refresh-token exchanges carry the same task/session/tenant/server assertion
+through DNS resolution to the instant before the credential-bearing token request.
+A rejected assertion or caller authority cancellation before socket construction
+is typed as a known no-send outcome. PostgreSQL releases only the exact claimed
+grant back to idle; SQLite removes only the matching in-process flight. Neither
+path deletes or quarantines the prior per-user/shared grant. Real failures after
+socket construction remain ambiguous.
+A capability records grant generation and binding fingerprint. Final admission
+reloads that identity, so disconnect, invalid-grant deletion, replacement, or
+binding change stops the send. Routine access-token refresh keeps the same grant
+identity and therefore does not unnecessarily revoke a task.
 
-Use an idempotent operation keyed by `(tenant, authority, requested mutation
-fingerprint)`:
+Gateway templates use a strict subset of the shared Handlebars renderer: absolute
+`user.env.KEY` values and the registered static helpers, including nested/default
+fallback expressions. Relative/context-changing paths, `@root`, `this`, `./`,
+blocks, partials, unknown/dynamic helpers, and `lookup` are ineligible. When an
+ineligible form might name user environment material, projection omits only that
+server and executor defense-in-depth scrubs every user-defined environment key.
 
-1. `requested`: mutation payload is validated and durably staged under the
-   deployment's documented storage controls, but is not authoritative.
-2. `draining`: new gateway reads are refused; current owned reads are cancelled
-   or allowed to finish within policy.
-3. `ready_to_commit`: all registered gateway transports are observably closed.
-4. `committed`: config/grant change and epoch increment committed atomically;
-   an outbox row announces the new epoch.
-5. `failed` or `quarantined`: mutation did not become authoritative. Access stays
-   disabled only when absence of an old gateway owner cannot be proven. The API
-   returns an operational recovery code and an admin can retry the same operation.
+## Provider and reflection trust
 
-Startup reconciliation resumes idempotent operations from durable state. It
-never waits forever for an acknowledgement from a process that may not exist.
-Quarantine has an explicit owner, reason, timestamp, and operator recovery path.
+The configured MCP provider and configured token provider are credential
+recipients. A malicious provider can reversibly encode or exfiltrate what it
+receives; this system does not claim otherwise.
 
-## Migration and compatibility
+Accidental reflection is closed at a structured boundary. Secret candidates come
+from final auth/custom headers, auth configuration, resolved server environment,
+all referenced environment values (including templates used in URL path/query),
+and decoded URL path/query material. The baseline is eight characters and four
+distinct characters; untemplated literal URL parts use a stricter 16/eight
+floor to avoid treating common path names as credentials. JSON and each JSON SSE
+`data` frame are parsed and decoded before inspection. Only allowlisted, scanned
+response headers and the validated bounded body reach the executor. Non-JSON,
+oversized, or non-terminating responses fail closed, so no indefinite unscanned
+tail exists.
 
-1. **Observe:** inventory every direct MCP configuration/credential handoff and
-   emit secret-free telemetry for transports and SDKs in use.
-2. **HTTP opt-in:** introduce the gateway behind a per-tenant feature flag. Keep
-   direct mode behavior unchanged and label it as non-strong; do not mix direct
-   and gateway clients for one authority.
-3. **SDK adapters:** configure every provider SDK with the gateway endpoint and
-   opaque capability. Preserve `sdk_session_id` and conversation resume handles;
-   a transport refresh must not erase conversation state.
-4. **Remote executors:** require gateway reachability and capability audience
-   validation. Never export raw config as a compatibility fallback.
-5. **stdio worker:** move process ownership and env injection into the trusted
-   egress worker before enabling strong mode for stdio.
-6. **Enforce:** once a tenant has no observed direct clients, make direct
-   credential/config endpoints unavailable to executor tokens and enable the
-   write-lease mutation contract.
+This is not a DLP guarantee against arbitrary reversible encodings.
 
-Archives and existing MCP rows require no data-shape migration before rollout.
-Today MCP auth/header/env secrets are stored in MCP JSON and OAuth grants in the
-token tables according to the deployment's storage security; API, realtime,
-and UI projections redact them, but the JSON is not application-encrypted by
-this design. The gateway migration changes who may resolve and exercise those
-values. Older executors remain supported only in explicitly non-strong mode
-during rollout.
+## Rollout and product contract
 
-The existing owner/admin raw session-config route remains a compatibility path
-for local executors. It must not be widened to collaborators or delegated
-executors: a repeated Task check immediately before returning a raw secret does
-not mediate the later provider send. Collaborator/delegated execution becomes
-supported only when its SDK receives a gateway capability rather than raw MCP
-configuration.
+Per-tenant modes:
 
-## Latency and availability budgets
+- `off`: raw legacy projection;
+- `observe`: raw projection plus secret-free observations;
+- `compatibility`: only eligible servers are capability-projected; unsupported
+  servers are omitted;
+- `enforced`: identical mediated transport set and all legacy raw-secret paths
+  fail closed.
 
-These are rollout gates, not aspirations to measure after enforcement:
+Enforcement requires explicit confirmation that executors created before the
+rollout were terminated. Emergency downgrade remains possible at any time, with
+an explicit acknowledgement that reusable credentials will again reach
+executors and a security audit log of tenant, actor, previous mode, and new mode.
+There is no quarantine UI or recovery state.
 
-- capability validation and lease admission add at most 5 ms p95 and 25 ms p99
-  within one region, excluding provider latency;
-- gateway forwarding adds at most 20 ms p95 to ordinary HTTP JSON-RPC calls and
-  must not buffer streaming responses beyond protocol framing;
-- routine access-token refresh may consume the provider's latency but must add
-  no authority write/drain cycle;
-- mutation drain defaults to 10 seconds and has a 30-second hard ceiling, after
-  which it returns `egress_drain_failed` or leaves the authority explicitly
-  quarantined rather than waiting indefinitely;
-- the gateway targets 99.99% monthly admission availability. Loss of the
-  authoritative database/lease owner fails closed for new MCP calls; control
-  plane and non-MCP conversation work remain available;
-- capability/epoch lookups require bounded caches with a maximum 1-second TTL,
-  invalidated eagerly by outbox hints but always checked at the final gateway
-  send boundary for write-draining authorities.
+Operators always receive a compact status control, including `off` with zero
+calls. To avoid a noisy unusable operator banner, non-admins see nothing for the
+default `off`/zero-call/zero-exclusion state and receive useful diagnostics once
+there is mediated or actionable state. Lists are semantic,
+buttons have accessible names, and status/error changes use polite/assertive live
+regions. It never labels stdio, WebSocket, endpoint-handoff SSE, or unbounded
+streaming as mediated.
 
-## Acceptance tests for the gateway phase
+## Query shape and budgets
 
-- Held HTTP body send, redirect, pooled connection, SSE, and WebSocket tests
-  prove no send occurs after write-lease admission.
-- OAuth/JWT refresh tests hold credential resolution across revocation and prove
-  no old or newly minted bearer leaves the gateway.
-- Stdio tests hold a JSON-RPC request and credential-bearing environment while
-  mutation terminates and verifies the process group.
-- Collaborator, role/policy, branch grant/group/visibility, attachment,
-  Marketplace permission/removal, OAuth disconnect/reauth, and deletion tests
-  exercise the canonical effective-authority resolver.
-- PostgreSQL tests use two real connections/daemons and cover transaction
-  visibility, lock loss, crash between each state, outbox replay, and restart.
-- Remote-executor tests kill the gateway owner and prove quarantine rather than
-  accepting an unverifiable acknowledgement.
-- Provider-side-effect tests document the admitted-before-linearization case and
-  prove mutations either wait for it or return the bounded drain failure.
+A normal call loads one consistent authority/material snapshot and forwards
+only the server, destination, headers, and material from that snapshot. It
+performs one current-version/identity check immediately before
+each physical dispatch. Redirects pay the latter once per hop. There are no
+lease renewals, durable mutation polling, outbox reconciliation, quarantine
+counts, or long credential-decryption transactions.
 
-## Explicitly deferred from the current #2500 slice
+Target budgets remain <=5 ms p95 / <=25 ms p99 admission and <=20 ms p95 forwarding
+overhead. This phase does not claim measured HA or 99.99% availability evidence. MCP alone fails closed if durable
+authority is unavailable; unrelated Tasks and conversation handles remain live.
+The repository includes a reproducible SQLite benchmark harness. PostgreSQL/HA
+measurements are conditional on the managed environment and
+`AGOR_TEST_POSTGRES_URL`.
 
-The current delivery does not add runtime generations, authority watermarks,
-remote quiescence acknowledgements, or strict hot reload. It provides safe
-configuration mutation and actionable recovery. Existing Tasks may retain the
-MCP clients with which their turn started; subsequent Task dispatch resolves the
-saved configuration again. Strong active revocation and authoritative live
-reload belong to this gateway phase.
+Reference quiet-host SQLite run (2026-08-25, 200 warmed no-send admission checks): p50
+3.450 ms, p95 4.236 ms, p99 5.088 ms. The harness is gated by
+`AGOR_RUN_MCP_EGRESS_BENCHMARK=1`; these figures do not substitute for HA/PG
+measurement. The harness reports rather than enforcing host-sensitive latency
+thresholds and is not a release gate.
+
+## Tests required at review
+
+- opaque capability content, long-task lifetime, stale config, terminal Task,
+  revoked principal/role, ACL and attachment removal, and cross-tenant scope;
+- real two-connection SQLite and PostgreSQL provider-observation races for
+  mutation-before-admission and admission-before-mutation;
+- redirect refusal, bounded body/time/capacity, JSON/SSE decoded reflection, short
+  low-entropy false positives, and safe response headers/logs;
+- OAuth grant deletion/replacement and routine refresh, JWT mint mutation, and
+  bearer/custom/env credential non-export;
+- stdio refusal before spawn/write, ask/deny exclusion, malicious executor
+  headers, and remote raw-secret fallback refusal;
+- rollout guards, emergency downgrade acknowledgement/audit, health/status types,
+  tenant isolation, source-mode tests, lint, boundaries, and UI keyboard/a11y.
+
+## Migration and rollback
+
+No schema migration is needed. This phase reuses tenant app variables,
+`mcp_servers.config_version`, canonical OAuth grants, Tasks, users, branch access,
+and session attachments. Rollout begins at `off`. Binary rollback to a version
+without the gateway is equivalent to an explicit raw-secret downgrade regardless
+of the saved tenant mode and must be handled as a security rollback.

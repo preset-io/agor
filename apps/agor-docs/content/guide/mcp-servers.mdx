@@ -21,7 +21,7 @@ Editing authentication is patch-safe: leaving a saved secret blank preserves it,
 
 Connecting an entry again opens a new session but reuses the same owner-specific install. Supplying a new bearer token verifies and atomically rotates that stored install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token.
 
-> **Active-turn limitation:** Configuration changes are resolved for subsequent Task dispatches, but Agor does not yet mediate every request made by an MCP client that an already-running provider SDK owns. Editing, detaching, or removing a server is therefore not a synchronous revocation boundary for an active turn. Stop the active Task and revoke the token or OAuth grant at the provider when access must end immediately. Strong active revocation requires the planned daemon-mediated MCP egress gateway.
+> **Revocation depends on gateway mode:** In `off` and `observe`, an active SDK may own a direct provider connection, so an edit is not a synchronous revocation boundary. In `compatibility` and `enforced`, eligible bounded Streamable HTTP servers use task-scoped daemon capabilities; all stdio, legacy SSE endpoint handoff, WebSocket, unbounded streaming, and servers requiring `ask` approval are omitted or fail closed. No new request hop is admitted after a relevant mutation commits, but a request admitted before that commit may complete. See [MCP egress operations](/guide/mcp-egress-gateway).
 
 ## Catalog curation for operators
 

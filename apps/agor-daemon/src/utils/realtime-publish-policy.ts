@@ -302,6 +302,10 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every affected owner/admin device.',
   },
   'mcp-member-policy': { audience: 'none', why: 'Policy read for the caller.' },
+  'mcp-egress/status': {
+    audience: 'none',
+    why: 'Tenant-scoped rollout and health status; Settings refetches explicitly.',
+  },
 
   // ---------------------------------------------------------------------------
   // Silent: CRUD services with no realtime consumer. Denying costs nothing

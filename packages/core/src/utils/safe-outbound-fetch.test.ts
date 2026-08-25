@@ -2,6 +2,7 @@ import http from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   assertSafeOAuthUrl,
+  OutboundPreDispatchAuthorityError,
   safeOutboundFetch,
   UnsafeOutboundUrlError,
 } from './safe-outbound-fetch';
@@ -216,7 +217,11 @@ describe('safe OAuth outbound URL policy', () => {
     current = false;
     releaseFirstHop();
 
-    await expect(request).rejects.toThrow('request authority replaced');
+    const error = await request.catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(OutboundPreDispatchAuthorityError);
+    expect((error as OutboundPreDispatchAuthorityError).authorityCause).toMatchObject({
+      message: 'request authority replaced',
+    });
     expect(targetReached).toBe(false);
   });
 

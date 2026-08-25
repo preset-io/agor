@@ -32,7 +32,9 @@ export interface JWTTokenFetchOptions {
   /** PostgreSQL/hosted callers disable process-local bearer caching. */
   cache?: boolean;
   /** Optional live request authority for secret-bearing provider work. */
-  assertCurrent?: () => void;
+  assertCurrent?: () => void | Promise<void>;
+  /** Optional narrower fence invoked by safeOutboundFetch only at physical dispatch. */
+  assertBeforeDispatch?: () => void | Promise<void>;
   /** Injectable DNS boundary for deterministic authority-race tests. */
   resolveDns?: OutboundDnsLookup;
 }
@@ -68,7 +70,7 @@ export async function fetchJWTToken(
   config: JWTConfig,
   options: JWTTokenFetchOptions = {}
 ): Promise<string> {
-  options.assertCurrent?.();
+  await options.assertCurrent?.();
   const { api_url, api_token, api_secret } = config;
   const shouldCache = options.cache !== false;
   const cacheKey = getCacheKey(config, options.cacheNamespace ?? '<standalone>');
@@ -76,7 +78,7 @@ export async function fetchJWTToken(
   // Check cache first
   const cached = shouldCache ? tokenCache.get(cacheKey) : undefined;
   if (cached && cached.expiresAt > Date.now()) {
-    options.assertCurrent?.();
+    await options.assertCurrent?.();
     return cached.token;
   }
 
@@ -96,13 +98,13 @@ export async function fetchJWTToken(
         name: api_token,
         secret: api_secret,
       }),
-      assertCurrent: options.assertCurrent,
+      assertCurrent: options.assertBeforeDispatch ?? options.assertCurrent,
       resolveDns: options.resolveDns,
     });
   } catch (error) {
     // Network/TLS libraries may reflect the endpoint or request values. Keep
     // their exception entirely behind the closed MCP error boundary.
-    options.assertCurrent?.();
+    await options.assertCurrent?.();
     throw asMCPExternalError(error, { stage: 'jwt' });
   }
 
@@ -116,10 +118,10 @@ export async function fetchJWTToken(
   try {
     data = (await response.json()) as typeof data;
   } catch {
-    options.assertCurrent?.();
+    await options.assertCurrent?.();
     throw asMCPExternalError(undefined, { stage: 'jwt', category: 'invalid_response' });
   }
-  options.assertCurrent?.();
+  await options.assertCurrent?.();
 
   // Handle different response formats
   const token = data.access_token || data.payload?.access_token;

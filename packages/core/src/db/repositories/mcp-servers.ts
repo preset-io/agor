@@ -14,7 +14,7 @@ import type {
   UpdateMCPServerInput,
   UserID,
 } from '@agor/core/types';
-import { and, eq, isNull, like, or, sql } from 'drizzle-orm';
+import { and, asc, eq, isNull, like, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import {
   assertValidMCPAuthPatch,
@@ -579,6 +579,16 @@ export class MCPServerRepository
 
       if (conditions.length > 0) {
         query = query.where(and(...conditions));
+      }
+
+      if (filters?.limit !== undefined || filters?.offset !== undefined) {
+        query = query.orderBy(asc(mcpServers.mcp_server_id));
+      }
+      if (filters?.limit !== undefined) {
+        query = query.limit(Math.max(1, Math.min(1000, Math.trunc(filters.limit))));
+      }
+      if (filters?.offset !== undefined) {
+        query = query.offset(Math.max(0, Math.trunc(filters.offset)));
       }
 
       const rows = await query.all();

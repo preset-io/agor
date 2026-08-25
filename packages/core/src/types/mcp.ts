@@ -554,6 +554,9 @@ export interface MCPServerFilters {
   ownerless?: boolean;
   /** Exact materialized catalog identity; never a substring search. */
   catalogEntryName?: string;
+  /** Bounded diagnostic/list reads; callers should request one extra row for truncation. */
+  limit?: number;
+  offset?: number;
 }
 
 /**
@@ -646,6 +649,41 @@ export type MCPServersConfig = Record<
     env?: Record<string, string>;
   }
 >;
+
+// ============================================================================
+// Authoritative MCP egress gateway
+// ============================================================================
+
+/** Tenant rollout for the daemon-owned, HTTP-only MCP proxy. */
+export const MCP_EGRESS_GATEWAY_MODES = ['off', 'observe', 'compatibility', 'enforced'] as const;
+export type MCPEgressGatewayMode = (typeof MCP_EGRESS_GATEWAY_MODES)[number];
+
+export interface MCPEgressGatewayStatus {
+  mode: MCPEgressGatewayMode;
+  supported_transports: Array<'streamable-http-buffered'>;
+  unsupported_transports: string[];
+  /** Total local work consuming gateway capacity, including credential/admission reservations. */
+  in_flight_requests: number;
+  /** Requests whose provider transport has started. */
+  provider_in_flight_requests: number;
+  /** Requests still resolving credentials or awaiting final provider admission. */
+  reserved_requests: number;
+  oldest_request_ms: number;
+  excluded_servers: Array<{
+    mcp_server_id: MCPServerID;
+    name: string;
+    reason:
+      | 'transport_not_mediated'
+      | 'approval_not_mediated'
+      | 'template_configuration'
+      | 'oauth_reauth_required';
+    recovery: string;
+  }>;
+  excluded_servers_truncated: boolean;
+  admission_available: boolean | null;
+  operator: boolean;
+  guarantee: string;
+}
 
 // ============================================================================
 // MCP Session Tokens (daemon ↔ MCP server channel)

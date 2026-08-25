@@ -49,6 +49,7 @@
  * It will automatically filter to only user-defined variables.
  */
 
+import Handlebars from 'handlebars';
 import { AGOR_USER_ENV_KEYS_VAR } from '../config/env-resolver';
 import { renderTemplate } from '../templates/handlebars-helpers';
 import type { MCPAuth, MCPServer } from '../types';
@@ -83,6 +84,121 @@ export interface MCPTemplateResolutionResult {
   isValid: boolean;
   /** Human-readable error message if not valid */
   errorMessage?: string;
+}
+
+export interface MCPTemplateDependencies {
+  keys: Set<string>;
+  valid: boolean;
+  mightReferenceUserEnv: boolean;
+}
+
+const MCP_TEMPLATE_HELPERS = new Set([
+  'add',
+  'sub',
+  'mul',
+  'div',
+  'mod',
+  'uppercase',
+  'lowercase',
+  'replace',
+  'eq',
+  'neq',
+  'gt',
+  'lt',
+  'gte',
+  'lte',
+  'default',
+  'json',
+  'isDefined',
+]);
+
+/** Parse with the same Handlebars grammar as rendering and conservatively bind user.env paths. */
+export function extractMCPTemplateDependencies(server: MCPServer): MCPTemplateDependencies {
+  const keys = new Set<string>();
+  let valid = true;
+  let mightReferenceUserEnv = false;
+  const seen = new WeakSet<object>();
+  const values = [
+    server.url,
+    ...Object.values(server.env ?? {}),
+    ...Object.values(server.headers ?? {}),
+    ...Object.values(server.auth ?? {}),
+  ];
+  const walk = (node: unknown, parent?: Record<string, unknown>, parentKey?: string): void => {
+    if (!node || typeof node !== 'object') return;
+    if (seen.has(node)) return;
+    seen.add(node);
+    const record = node as Record<string, unknown>;
+    if (
+      record.type === 'BlockStatement' ||
+      record.type === 'PartialStatement' ||
+      record.type === 'PartialBlockStatement' ||
+      record.type === 'Decorator' ||
+      record.type === 'DecoratorBlock'
+    ) {
+      // Relative scope changes (`with`, `each`, custom blocks) make paths
+      // context-dependent. Gateway mediation intentionally refuses them.
+      valid = false;
+    }
+    if (record.type === 'PathExpression' && typeof record.original === 'string') {
+      const original = record.original;
+      const exact = /^user\.env\.([A-Za-z_][A-Za-z0-9_]*)$/.exec(original);
+      const isCallee =
+        parentKey === 'path' &&
+        (parent?.type === 'MustacheStatement' || parent?.type === 'SubExpression') &&
+        ((Array.isArray(parent.params) && parent.params.length > 0) ||
+          (parent.hash &&
+            typeof parent.hash === 'object' &&
+            Array.isArray((parent.hash as Record<string, unknown>).pairs) &&
+            ((parent.hash as Record<string, unknown>).pairs as unknown[]).length > 0));
+      if (exact && record.data !== true && record.depth === 0 && !isCallee) {
+        keys.add(exact[1]!);
+        mightReferenceUserEnv = true;
+      } else if (isCallee && MCP_TEMPLATE_HELPERS.has(original)) {
+        // Static helper names are safe: their arguments are walked below and
+        // therefore bind every user.env dependency used by nested/fallback
+        // expressions.
+      } else if (
+        original === 'lookup' ||
+        original.includes('user.env') ||
+        original.includes('user/env') ||
+        original.startsWith('@root') ||
+        original.startsWith('this.') ||
+        original.startsWith('./') ||
+        (typeof record.depth === 'number' && record.depth > 0)
+      ) {
+        valid = false;
+        mightReferenceUserEnv = true;
+      } else {
+        // The gateway grammar contains only literals, the registered static
+        // helpers above, and absolute user.env.KEY values. Unknown/dynamic
+        // paths may render today but are deliberately not mediable.
+        valid = false;
+      }
+    }
+    for (const [key, value] of Object.entries(record)) {
+      if (Array.isArray(value))
+        value.forEach((item) => {
+          walk(item, record, key);
+        });
+      else walk(value, record, key);
+    }
+  };
+  for (const value of values) {
+    if (typeof value !== 'string' || !hasTemplateMarker(value)) continue;
+    if (/user[./]env|@root|\blookup\b|{{[#/]?(?:with|each)\b/.test(value)) {
+      mightReferenceUserEnv = true;
+    }
+    if (/{{[^}]*?(?:@root|\bthis\.|\.\/|\blookup\b)|{{[#/]?(?:with|each)\b/.test(value)) {
+      valid = false;
+    }
+    try {
+      walk(Handlebars.parse(value));
+    } catch {
+      valid = false;
+    }
+  }
+  return { keys, valid, mightReferenceUserEnv };
 }
 
 /**

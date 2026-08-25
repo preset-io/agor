@@ -52,7 +52,10 @@ export function txAsDb(tx: unknown): Database {
 export async function runDatabaseTransaction<T>(
   db: Database,
   work: (tx: Database) => Promise<T>,
-  options: { sqliteImmediate?: boolean } = {}
+  options: {
+    sqliteImmediate?: boolean;
+    postgresIsolationLevel?: 'read committed' | 'repeatable read' | 'serializable';
+  } = {}
 ): Promise<T> {
   // Literal-memory SQLite decorates both the libsql client and Drizzle's
   // transaction callback at database creation, so this helper and direct
@@ -62,13 +65,19 @@ export async function runDatabaseTransaction<T>(
     db as unknown as {
       transaction(
         callback: (tx: unknown) => Promise<T>,
-        config?: { behavior: 'immediate' }
+        config?:
+          | { behavior: 'immediate' }
+          | { isolationLevel: 'read committed' | 'repeatable read' | 'serializable' }
       ): Promise<T>;
     }
   ).transaction.bind(db);
   return transaction(
     (tx) => work(txAsDb(tx)),
-    isSQLiteDatabase(db) && options.sqliteImmediate ? { behavior: 'immediate' } : undefined
+    isSQLiteDatabase(db) && options.sqliteImmediate
+      ? { behavior: 'immediate' }
+      : options.postgresIsolationLevel
+        ? { isolationLevel: options.postgresIsolationLevel }
+        : undefined
   );
 }
 

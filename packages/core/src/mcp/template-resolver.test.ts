@@ -4,6 +4,7 @@ import type { MCPServer, MCPServerID } from '../types';
 import { isValidMCPHttpUrlTemplate } from './template-patterns';
 import {
   buildMCPTemplateContextFromEnv,
+  extractMCPTemplateDependencies,
   isUserEnvPlaceholder,
   resolveMcpServerEnv,
   resolveMcpServerTemplates,
@@ -51,6 +52,36 @@ describe('isValidMCPHttpUrlTemplate', () => {
     expect(isValidMCPHttpUrlTemplate('{{ lookup user.env "MCP_URL" }}')).toBe(false);
     expect(isValidMCPHttpUrlTemplate('file://{{ user.env.PATH }}')).toBe(false);
     expect(isValidMCPHttpUrlTemplate('https://{{ user.env.BROKEN }')).toBe(false);
+  });
+});
+
+describe('extractMCPTemplateDependencies', () => {
+  it('binds every absolute dependency in supported default/helper/nested expressions', () => {
+    const result = extractMCPTemplateDependencies(
+      createTestServer({
+        transport: 'http',
+        url: 'https://example.test/{{uppercase (default user.env.PRIMARY user.env.FALLBACK)}}',
+        headers: { 'X-Tenant': '{{replace user.env.TENANT "-" "_"}}' },
+      })
+    );
+    expect(result.valid).toBe(true);
+    expect([...result.keys].sort()).toEqual(['FALLBACK', 'PRIMARY', 'TENANT']);
+  });
+
+  it.each([
+    '{{@root.user.env.SECRET}}',
+    '{{this.user.env.SECRET}}',
+    '{{./user.env.SECRET}}',
+    '{{lookup user.env "SECRET"}}',
+    '{{lookup (lookup user "env") user.env.KEY}}',
+    '{{#with user}}{{env.SECRET}}{{/with}}',
+    '{{unknownHelper user.env.SECRET}}',
+  ])('rejects indeterminate gateway grammar: %s', (template) => {
+    expect(
+      extractMCPTemplateDependencies(
+        createTestServer({ transport: 'http', url: `https://example.test/${template}` })
+      )
+    ).toMatchObject({ valid: false, mightReferenceUserEnv: true });
   });
 });
 

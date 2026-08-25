@@ -29,6 +29,7 @@ import {
   BoardRepository,
   type BranchRepository,
   CardRepository,
+  getMCPEgressGatewayMode,
   isPostgresDatabaseHandle,
   requireCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -115,6 +116,7 @@ import {
 } from './hooks/classify-missing-credential.js';
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { validateMessageCreate } from './hooks/validate-message-create.js';
+import { coordinateMCPServerMutationAfterWrite } from './mcp-egress/coordination.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
 import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
@@ -1068,6 +1070,33 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     realtimeRelay,
     deployment,
   } = ctx;
+  const redactMCPServerSecretFieldsForGatewayMode = async (context: HookContext) => {
+    if (
+      context.params.provider &&
+      context.params.tenant?.tenant_id &&
+      ['compatibility', 'enforced'].includes(await getMCPEgressGatewayMode(db))
+    ) {
+      if (context.event) context.dispatch = redactMCPServerPayload(context.result);
+      context.result = redactMCPServerPayload(context.result);
+      return context;
+    }
+    return redactMCPServerSecretFields(context);
+  };
+  const abortMcpInFlightAfterWrite = async (context: HookContext) => {
+    const gateway = (
+      app as unknown as {
+        mcpEgressGateway?: {
+          abortServer(
+            tenantId: string,
+            serverId: string,
+            reason?: 'server_detached' | 'stale_capability'
+          ): number;
+        };
+      }
+    ).mcpEgressGateway;
+    coordinateMCPServerMutationAfterWrite(context, gateway);
+    return context;
+  };
 
   // Used by classifyMissingCredentialFailure to look up the acting user for
   // a failed task (no service-layer equivalent already in ctx).
@@ -2466,21 +2495,21 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [authorizeMcpServerWriteHook],
     },
     after: {
-      find: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
+      find: [injectPerUserOAuthTokens, redactMCPServerSecretFieldsForGatewayMode],
       get: [
         denyMcpServerGetOfAnotherUsersPrivate,
         injectPerUserOAuthTokens,
-        redactMCPServerSecretFields,
+        redactMCPServerSecretFieldsForGatewayMode,
       ],
-      create: [redactMCPServerSecretFields],
-      patch: [redactMCPServerSecretFields],
-      update: [redactMCPServerSecretFields],
+      create: [redactMCPServerSecretFieldsForGatewayMode],
+      patch: [abortMcpInFlightAfterWrite, redactMCPServerSecretFieldsForGatewayMode],
+      update: [abortMcpInFlightAfterWrite, redactMCPServerSecretFieldsForGatewayMode],
       // `remove` returns the deleted row: the adapter loads it in full before
       // deleting so it can return it, and that same object becomes the
       // `removed` payload broadcast to every authenticated connection in the
       // tenant. Without this it is the one method that hands out raw `env`,
       // `headers`, and `auth` — a delete is not an exemption from redaction.
-      remove: [redactMCPServerSecretFields],
+      remove: [abortMcpInFlightAfterWrite, redactMCPServerSecretFieldsForGatewayMode],
     },
   });
 

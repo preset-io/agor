@@ -65,6 +65,7 @@ import {
 } from '../MCPServer/memberPolicy';
 import { useOAuthBrowserEventAttempt } from '../MCPServer/useOAuthBrowserEventAttempt';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
+import { MCPEgressGatewayStatus } from './MCPEgressGatewayStatus';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -974,7 +975,20 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
       // is a pane away rather than a band above them.
       defaultActiveKey="servers"
       items={[
-        { key: 'servers', label: 'Servers', children: serversPane },
+        {
+          key: 'servers',
+          label: 'Servers',
+          children: (
+            <>
+              <MCPEgressGatewayStatus
+                key={durableAuthorityKey ?? '__mcp-egress-status__'}
+                client={client}
+                connectionReady={connectionReady}
+              />
+              {serversPane}
+            </>
+          ),
+        },
         {
           key: 'policy',
           // Ungated on purpose: this is the answer to "why is New MCP Server

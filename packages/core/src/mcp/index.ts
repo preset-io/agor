@@ -52,9 +52,11 @@ export {
 export {
   buildMCPTemplateContextFromEnv,
   containsTemplate,
+  extractMCPTemplateDependencies,
   hasTemplateMarker,
   isUserEnvPlaceholder,
   type MCPTemplateContext,
+  type MCPTemplateDependencies,
   type MCPTemplateResolutionResult,
   resolveMcpServerEnv,
   resolveMcpServersTemplates,

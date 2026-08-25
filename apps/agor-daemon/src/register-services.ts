@@ -32,6 +32,7 @@ import {
   GatewayChannelRepository,
   generateId,
   getCurrentTenantId,
+  getMCPEgressGatewayMode,
   inArray,
   isPostgresDatabaseHandle,
   MCPCatalogCandidateRepository,
@@ -122,6 +123,7 @@ import {
   inOpenCodeNativeStateMutationSlot,
   type OpenCodeNativeStateMutationFence,
 } from './integrations/opencode/native-state-coordinator.js';
+import { scrubMCPSecretsFromExecutorEnv } from './mcp-egress/executor-env.js';
 import { getDaemonMetrics } from './metrics/index.js';
 import {
   runInOAuthTenantScope,
@@ -1263,6 +1265,25 @@ function createExecuteHandler(
         throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
       }
     }
+
+    // MCP-only secret material is resolved by the daemon proxy. Remove both
+    // referenced keys and high-signal literal-value collisions from the
+    // executor environment; short/low-entropy values such as DEBUG=1 are not
+    // classified as credentials.
+    await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+      const mode = await getMCPEgressGatewayMode(tenantDb);
+      if (mode !== 'compatibility' && mode !== 'enforced') return;
+      const attached = await new SessionMCPServerRepository(tenantDb).listServers(
+        sessionId as SessionID,
+        true
+      );
+      const global = await new MCPServerRepository(tenantDb).findAll({
+        scope: 'global',
+        enabled: true,
+        usableByUserId: session.created_by,
+      });
+      scrubMCPSecretsFromExecutorEnv(executorEnv, [...attached, ...global]);
+    });
 
     executorEnv.DAEMON_URL = daemonUrl;
 
@@ -4455,6 +4476,21 @@ export async function registerMCPServices(
       }
       const tenantId = tenantIdFromParams(params);
       if (!tenantId) throw new NotAuthenticated('oauth-auth-headers requires tenant identity');
+      const mcpEgressAssertCurrent = (
+        params as
+          | (AuthenticatedParams & {
+              mcp_egress_assert_current?: () => void | Promise<void>;
+            })
+          | undefined
+      )?.mcp_egress_assert_current;
+      const egressMode = await runInOAuthTenantScope(db, tenantId, () =>
+        getMCPEgressGatewayMode(db)
+      );
+      if (params?.provider && (egressMode === 'compatibility' || egressMode === 'enforced')) {
+        throw new Forbidden(
+          'MCP OAuth headers are daemon-only while authoritative egress mediation is enabled'
+        );
+      }
       if (trustedSessionExecutor) {
         if (!executorSessionId) {
           throw new Forbidden('oauth-auth-headers requires executor session scope');
@@ -4490,9 +4526,12 @@ export async function registerMCPServices(
           }
         }
       }
-      const { needsRefresh, refreshAndPersistToken, InvalidGrantError } = await import(
-        '@agor/core/tools/mcp/oauth-refresh'
-      );
+      const {
+        needsRefresh,
+        refreshAndPersistToken,
+        InvalidGrantError,
+        OAuthRefreshAuthorityCancelledError,
+      } = await import('@agor/core/tools/mcp/oauth-refresh');
 
       /**
        * The grant owner's current standing, for the refresh paths below.
@@ -4614,9 +4653,11 @@ export async function registerMCPServices(
                     refreshGeneration: row.refresh_generation,
                   },
                   validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+                  assertCurrent: mcpEgressAssertCurrent,
                 });
                 headers[serverId] = { authorization: `Bearer ${observed}` };
-              } catch {
+              } catch (refreshErr) {
+                if (refreshErr instanceof OAuthRefreshAuthorityCancelledError) throw refreshErr;
                 headers[serverId] = { error: 'needs_reauth' };
               }
               return;
@@ -4636,8 +4677,10 @@ export async function registerMCPServices(
                     refreshGeneration: row.refresh_generation,
                   },
                   validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+                  assertCurrent: mcpEgressAssertCurrent,
                 });
               } catch (refreshErr) {
+                if (refreshErr instanceof OAuthRefreshAuthorityCancelledError) throw refreshErr;
                 if (refreshErr instanceof InvalidGrantError) {
                   headers[serverId] = { error: 'needs_reauth' };
                   return;
@@ -4659,6 +4702,7 @@ export async function registerMCPServices(
 
             headers[serverId] = { authorization: `Bearer ${accessToken}` };
           } catch (err) {
+            if (err instanceof OAuthRefreshAuthorityCancelledError) throw err;
             externalFailure('OAuth AuthHeaders', 'oauth', err);
             headers[serverId] = { error: 'unknown_error' };
           }

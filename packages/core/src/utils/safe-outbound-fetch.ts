@@ -56,6 +56,20 @@ export class UnsafeOutboundUrlError extends Error {
   }
 }
 
+/**
+ * The caller-owned authority/cancellation fence rejected before a socket was
+ * constructed. This is deliberately distinct from a transport failure after
+ * dispatch: no request bytes could have reached the destination.
+ */
+export class OutboundPreDispatchAuthorityError extends Error {
+  readonly code = 'outbound_pre_dispatch_authority_rejected';
+
+  constructor(readonly authorityCause: unknown) {
+    super('Outbound request authority changed before dispatch');
+    this.name = 'OutboundPreDispatchAuthorityError';
+  }
+}
+
 export interface SafeOutboundFetchOptions extends Omit<RequestInit, 'redirect' | 'signal'> {
   redirect?: 'error' | 'follow';
   timeoutMs?: number;
@@ -65,9 +79,12 @@ export interface SafeOutboundFetchOptions extends Omit<RequestInit, 'redirect' |
   allowLocalhostHttp?: boolean;
   /**
    * Optional caller-owned authority fence for credential-bearing requests.
-   * Checked around every physical dispatch, response/error, and redirect hop.
+   * Checked once immediately before every physical dispatch. Redirects are
+   * separate dispatches and therefore receive a separate check.
    */
-  assertCurrent?: () => void;
+  assertCurrent?: () => void | Promise<void>;
+  /** Abort an already-admitted provider request as an availability accelerator. */
+  signal?: AbortSignal;
   /** Injectable DNS boundary for deterministic authority-race tests. */
   resolveDns?: OutboundDnsLookup;
 }
@@ -224,14 +241,26 @@ async function requestOnce(
   options: SafeOutboundFetchOptions,
   signal: AbortSignal
 ): Promise<Response> {
-  throwIfAborted(signal);
-  assertSafeParsedUrl(url, options.allowLocalhostHttp === true);
-  const pinned = await resolvePinnedAddress(
-    url,
-    options.allowLocalhostHttp === true,
-    signal,
-    options.resolveDns ?? lookup
-  );
+  let pinned: { address: string; family: 4 | 6 };
+  try {
+    throwIfAborted(signal);
+    assertSafeParsedUrl(url, options.allowLocalhostHttp === true);
+    pinned = await resolvePinnedAddress(
+      url,
+      options.allowLocalhostHttp === true,
+      signal,
+      options.resolveDns ?? lookup
+    );
+  } catch (error) {
+    // A caller cancellation while validating DNS is known to precede socket
+    // construction. Preserve that fact instead of classifying it as an
+    // ambiguous transport failure. The deadline signal is intentionally not
+    // included: only the explicit caller-owned authority signal qualifies.
+    if (options.signal?.aborted) {
+      throw new OutboundPreDispatchAuthorityError(options.signal.reason ?? error);
+    }
+    throw error;
+  }
   const body = requestBody(options.body);
   const headers = new Headers(options.headers);
   if (body != null && !headers.has('content-length')) {
@@ -244,7 +273,11 @@ async function requestOnce(
   // DNS validation may itself have awaited. Re-ask immediately before opening
   // the socket so a caller cannot lose authority during lookup and still send
   // the captured headers/body.
-  options.assertCurrent?.();
+  try {
+    await options.assertCurrent?.();
+  } catch (error) {
+    throw new OutboundPreDispatchAuthorityError(error);
+  }
   return new Promise<Response>((resolve, reject) => {
     let settled = false;
     let responseStream: http.IncomingMessage | undefined;
@@ -331,26 +364,20 @@ export async function safeOutboundFetch(
   }
   const deadline = new AbortController();
   const timer = setTimeout(() => deadline.abort(outboundTimeoutError()), timeoutMs);
+  const signal = options.signal
+    ? AbortSignal.any([deadline.signal, options.signal])
+    : deadline.signal;
   try {
     let url = new URL(input);
     const callerHeadersPresent = hasCallerHeaders(options.headers);
     const redirectMode = options.redirect ?? 'error';
     const maxRedirects = options.maxRedirects ?? 3;
     for (let hop = 0; ; hop += 1) {
-      // This assertion is intentionally per hop rather than only around the
-      // aggregate fetch. Redirect handling is an internal request loop, and
-      // each destination is a distinct external side effect.
-      options.assertCurrent?.();
-      let response: Response;
-      try {
-        response = await requestOnce(url, options, deadline.signal);
-      } catch (error) {
-        // Authority/expiry wins over a simultaneous network error and prevents
-        // callers from treating it as a retryable provider failure.
-        options.assertCurrent?.();
-        throw error;
-      }
-      options.assertCurrent?.();
+      // requestOnce performs the single authority check immediately after DNS
+      // validation and before it constructs the socket. Do not add checks on
+      // response/error paths: they do not fence another outbound side effect
+      // and would multiply admission queries for every call.
+      const response = await requestOnce(url, options, signal);
       if (![301, 302, 303, 307, 308].includes(response.status)) return response;
       if (redirectMode !== 'follow' || hop >= maxRedirects) {
         throw new UnsafeOutboundUrlError('Outbound OAuth redirect is not allowed');

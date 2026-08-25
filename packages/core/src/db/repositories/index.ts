@@ -29,6 +29,7 @@ export * from './knowledge-attribution';
 export * from './knowledge-embedding-work';
 export * from './knowledge-semantic-settings';
 export * from './mcp-catalog-candidates';
+export * from './mcp-egress-settings';
 export * from './mcp-marketplace';
 export * from './mcp-member-policy';
 export * from './mcp-oauth-pending-flows';
