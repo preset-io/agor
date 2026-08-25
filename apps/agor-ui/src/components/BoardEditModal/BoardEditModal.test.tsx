@@ -13,10 +13,17 @@ vi.mock('../JSONEditor', () => ({
   validateJSON: () => Promise.resolve(),
 }));
 vi.mock('../forms/BoardFormFields', () => ({
-  BoardFormFields: () => (
-    <Form.Item name="name" label="Name" rules={[{ required: true }]}>
-      <Input />
-    </Form.Item>
+  BoardFormFields: ({
+    capabilityPolicyPrototype,
+  }: {
+    capabilityPolicyPrototype?: React.ReactNode;
+  }) => (
+    <>
+      <Form.Item name="name" label="Name" rules={[{ required: true }]}>
+        <Input />
+      </Form.Item>
+      {capabilityPolicyPrototype && <div data-testid="board-modal-policy-prototype" />}
+    </>
   ),
   extractBoardFormValues: (form: { getFieldValue: (name: string) => unknown }) => ({
     name: form.getFieldValue('name'),
@@ -67,6 +74,7 @@ describe('BoardEditModal', () => {
     );
 
     expect(await screen.findByDisplayValue('Fresh name')).toBeInTheDocument();
+    expect(screen.getByTestId('board-modal-policy-prototype')).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith(listedBoard.board_id);
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));

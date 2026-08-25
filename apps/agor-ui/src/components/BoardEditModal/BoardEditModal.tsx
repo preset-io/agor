@@ -9,10 +9,13 @@ import type {
   UUID,
 } from '@agor-live/client';
 import { Alert, Form, Modal, Skeleton } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
+import { useAgorStore } from '../../store/agorStore';
+import { selectUserById } from '../../store/selectors';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { JSONEditor, validateJSON } from '../JSONEditor';
+import { BoardCapabilityPolicyModalPrototype } from '../permissions/CapabilityPolicyEditor';
 
 export interface BoardEditModalProps {
   board: Board | null;
@@ -24,15 +27,23 @@ export interface BoardEditModalProps {
 
 /** The single board-settings editor used by Settings and the navbar shortcut. */
 export function BoardEditModal({ board, client, open, onClose, onUpdate }: BoardEditModalProps) {
+  const userById = useAgorStore(selectUserById);
   const [form] = Form.useForm();
   const { showError } = useThemedMessage();
   const [loading, setLoading] = useState(false);
   const [rbacEnabled, setRbacEnabled] = useState(false);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
+  const [boardOwners, setBoardOwners] = useState<User[]>([]);
+  const [boardGroupGrants, setBoardGroupGrants] = useState<BoardGroupGrantWithGroup[]>([]);
   const [loadedBoard, setLoadedBoard] = useState<Board | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const prototypeUsers = useMemo(() => {
+    const knownUsers = new Map(userById);
+    for (const user of allUsers) knownUsers.set(user.user_id, user);
+    return [...knownUsers.values()];
+  }, [userById, allUsers]);
 
   useEffect(() => {
     if (!open || !board) return;
@@ -40,6 +51,8 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
     setLoading(true);
     setLoadError(null);
     setLoadedBoard(null);
+    setBoardOwners([]);
+    setBoardGroupGrants([]);
 
     // Re-read the board as the modal opens. The selector uses a lean board list,
     // while this form must always start from the full, latest representation.
@@ -60,8 +73,12 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
             setRbacEnabled(true);
             setAllUsers(users as User[]);
             setAllGroups(groups as Group[]);
-            ownerIds = (owners as User[]).map((user) => user.user_id);
-            grants = (groupGrants as BoardGroupGrantWithGroup[]).map((grant) => ({
+            const loadedOwners = owners as User[];
+            const loadedGroupGrants = groupGrants as BoardGroupGrantWithGroup[];
+            setBoardOwners(loadedOwners);
+            setBoardGroupGrants(loadedGroupGrants);
+            ownerIds = loadedOwners.map((user) => user.user_id);
+            grants = loadedGroupGrants.map((grant) => ({
               group_id: grant.group_id,
               can: grant.can,
               fs_access: grant.fs_access,
@@ -72,6 +89,8 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
             setRbacEnabled(false);
             setAllUsers([]);
             setAllGroups([]);
+            setBoardOwners([]);
+            setBoardGroupGrants([]);
           }
         }
         if (cancelled) return;
@@ -202,6 +221,18 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
             rbacEnabled={rbacEnabled}
             allUsers={allUsers}
             allGroups={allGroups}
+            capabilityPolicyPrototype={
+              import.meta.env.DEV ? (
+                <BoardCapabilityPolicyModalPrototype
+                  board={loadedBoard}
+                  client={client}
+                  owners={boardOwners}
+                  groupGrants={boardGroupGrants}
+                  users={prototypeUsers}
+                  groups={allGroups}
+                />
+              ) : undefined
+            }
             extra={
               <Form.Item
                 label="Custom Context (JSON)"

@@ -15,7 +15,7 @@ const subject = (userId: string) => {
 };
 
 describe('prototype effective-access explanation', () => {
-  it('unions overlapping direct and group entries without Manager adding execution', () => {
+  it('uses a direct user entry as a complete override of matching groups', () => {
     const result = resolvePrototypeEffectiveAccess({
       policy: SHARED_BOARD_FIXTURE.branch_template,
       primaryOwnerUserId: PROTOTYPE_USERS.leo,
@@ -23,13 +23,37 @@ describe('prototype effective-access explanation', () => {
       principals: PROTOTYPE_PRINCIPALS,
     });
 
-    expect(result.sources.map((source) => source.label)).toEqual(
-      expect.arrayContaining(['Kasia D.', 'Product Design', 'Release Engineers'])
-    );
+    expect(result.sources.map((source) => source.label)).toEqual(['Kasia D.']);
     expect(result.fsAccess).toBe('write');
     expect(result.capabilities).toEqual(
-      expect.arrayContaining(['sessions.prompt_own', 'branch.policy.manage'])
+      expect.arrayContaining(['branch.policy.manage', 'sessions.manage_others'])
     );
+    expect(result.capabilities).not.toEqual(
+      expect.arrayContaining(['sessions.create', 'sessions.prompt_own', 'terminal.open'])
+    );
+  });
+
+  it('unions every matching group when no direct user entry exists', () => {
+    const policy = structuredClone(SHARED_BOARD_FIXTURE.branch_template);
+    policy.entries = policy.entries.filter(
+      (entry) =>
+        entry.principal.principal_type !== 'user' ||
+        entry.principal.user_id !== PROTOTYPE_USERS.kasia
+    );
+    const result = resolvePrototypeEffectiveAccess({
+      policy,
+      primaryOwnerUserId: PROTOTYPE_USERS.leo,
+      subject: subject(PROTOTYPE_USERS.kasia),
+      principals: PROTOTYPE_PRINCIPALS,
+    });
+
+    expect(result.sources.map((source) => source.label)).toEqual(
+      expect.arrayContaining(['Product Design', 'Release Engineers'])
+    );
+    expect(result.capabilities).toEqual(
+      expect.arrayContaining(['sessions.prompt_own', 'terminal.open'])
+    );
+    expect(result.fsAccess).toBe('read');
   });
 
   it('uses Others only for an unmatched active same-tenant fixture member', () => {

@@ -29,6 +29,7 @@ interface PersonalSessionSharingSectionProps {
   onChange: (value: BranchSessionSharingDraft) => void;
   currentUserId: UserID;
   principals: CapabilityPolicyPrincipalDescriptor[];
+  workspaceEnabled?: boolean;
 }
 
 const principalDescriptor = (principals: CapabilityPolicyPrincipalDescriptor[], userId: UserID) =>
@@ -49,6 +50,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
   onChange,
   currentUserId,
   principals,
+  workspaceEnabled = true,
 }) => {
   const { token } = theme.useToken();
   const descriptorByKey = new Map(
@@ -108,8 +110,17 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
       <Flex vertical gap={token.paddingMD}>
         <Typography.Text type="secondary">
           This is a personal exception, separate from branch roles and board defaults. Each session
-          owner controls only who may prompt sessions owned by them.
+          owner controls only who may prompt, resume, fork, or spawn from sessions owned by them.
         </Typography.Text>
+
+        {!workspaceEnabled && (
+          <Alert
+            type="warning"
+            showIcon
+            title="Personal session sharing is disabled for this workspace"
+            description="Workspace administrators can control this feature in Workspace Preferences. No personal sharing rule is effective while it is disabled."
+          />
+        )}
 
         {issues.length > 0 && (
           <Alert
@@ -130,7 +141,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
 
         <Flex justify="space-between" align="center" gap={token.paddingMD} wrap>
           <Flex vertical gap={token.paddingXXS} style={{ flex: 1, minWidth: 240 }}>
-            <Typography.Text strong>Allow others to prompt my sessions</Typography.Text>
+            <Typography.Text strong>Allow others to use my sessions</Typography.Text>
             <Typography.Text type="secondary">
               {currentUser?.display_name ?? 'The signed-in user'} is the only person who can change
               this rule. Turning it off removes its entries.
@@ -138,7 +149,8 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
           </Flex>
           <Switch
             checked={currentRule.enabled}
-            aria-label={`Allow others to prompt sessions owned by ${currentUser?.display_name ?? 'me'}`}
+            disabled={!workspaceEnabled}
+            aria-label={`Allow others to use sessions owned by ${currentUser?.display_name ?? 'me'}`}
             onChange={(enabled) =>
               updateCurrentRule({
                 ...currentRule,
@@ -156,11 +168,11 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
               showIcon
               icon={<WarningOutlined />}
               title="Sharing a session means sharing your agent-tool home"
-              description="Anyone listed may continue any session you own in this branch. Their prompts run with your agent-tool home and credential context. Agent tools store session state as files in that home, so a delegate may be able to read or modify low-level data from your other sessions. This does not grant a terminal or replace ordinary branch access."
+              description="Anyone listed may prompt, resume, fork, or spawn from any session you own in this branch. Delegated descendants remain owned by you and run with your agent-tool home and credential context. Agent tools store session state as files in that home, so a delegate may be able to read or modify low-level data from your other sessions. This does not grant a terminal, allow unrelated session creation, or replace ordinary branch access."
             />
 
             <Flex vertical gap={token.paddingXXS}>
-              <Typography.Text strong>Who may prompt my sessions</Typography.Text>
+              <Typography.Text strong>Who may use my sessions</Typography.Text>
               <PrincipalEntryPicker
                 principals={availablePrincipals}
                 ariaLabel="Add one person or group to my session sharing"
@@ -207,7 +219,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
                       </div>
                       <Popconfirm
                         title={`Stop sharing with ${label}?`}
-                        description="They will no longer be allowed to prompt sessions you own."
+                        description="They will no longer be allowed to prompt, resume, fork, or spawn from sessions you own."
                         okText="Remove sharing"
                         okButtonProps={{ danger: true }}
                         onConfirm={() =>

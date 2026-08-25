@@ -7,7 +7,7 @@
  */
 
 import type { AgorClient, Branch, TeammateConfig, User } from '@agor-live/client';
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
@@ -62,6 +62,46 @@ function renderBranchModal({
 }
 
 describe('BranchModal — permissions tab visibility', () => {
+  it('mounts the local-only target editor in the real Permissions tab', async () => {
+    const owner = makeUser({ user_id: 'user-1', role: 'admin', name: 'Alice' });
+    const { client, calls } = makeStubClient({ owners: [owner], users: [owner] });
+
+    renderWithApp(
+      <BranchModal
+        open
+        onClose={() => {}}
+        branch={makeBranch({ created_by: owner.user_id })}
+        repo={makeRepo()}
+        sessions={[]}
+        client={client}
+        currentUser={owner}
+        defaultTab="permissions"
+      />
+    );
+
+    expect(await screen.findByText('New permissions · development preview')).toBeInTheDocument();
+    expect(
+      screen.queryByText('Current persisted permissions · legacy model')
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply locally · prototype only' }));
+    expect(await screen.findByText('Applied to this local preview only')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    expect(calls.some((call) => ['create', 'patch', 'remove'].includes(call.method))).toBe(false);
+  });
+
+  it('keeps the development preview reachable for an admin when legacy RBAC is disabled', async () => {
+    const admin = makeUser({ user_id: 'user-1', role: 'admin', name: 'Admin' });
+
+    renderBranchModal({
+      currentUser: admin,
+      client: makeStubClient({ rbac404: true, users: [admin] }).client,
+    });
+
+    const permissionsTab = await screen.findByRole('tab', { name: /permissions/i });
+    fireEvent.click(permissionsTab);
+    expect(await screen.findByText('New permissions · development preview')).toBeInTheDocument();
+  });
+
   it('supplies other schedule owners from the global store when RBAC is disabled', async () => {
     const caller = makeUser({ user_id: 'caller', role: 'member' });
     const owner = makeUser({ user_id: 'owner', role: 'member' });

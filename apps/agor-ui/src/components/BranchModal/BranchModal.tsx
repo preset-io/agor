@@ -91,6 +91,11 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     currentUser,
     open,
   });
+  const prototypePermissionUsers = useMemo(() => {
+    const knownUsers = new Map(userById);
+    for (const user of form.allUsers) knownUsers.set(user.user_id, user);
+    return [...knownUsers.values()];
+  }, [userById, form.allUsers]);
   const branchBoard = boardById.get(form.general.boardId || branch?.board_id || '');
 
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
@@ -246,7 +251,10 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     // Permissions tab — shown for RBAC-capable admins/owners. Keep it visible
     // while owner data is loading so confirmed owners do not see the tab
     // disappear just because async permissions metadata has not arrived yet.
-    ...(form.canViewPermissions
+    // Development admins also get the local-only target form when the legacy
+    // RBAC endpoints are disabled; production keeps the existing gate.
+    ...(form.canViewPermissions ||
+    (import.meta.env.DEV && (currentUser?.role === 'admin' || currentUser?.role === 'superadmin'))
       ? [
           {
             key: 'permissions',
@@ -265,6 +273,10 @@ export const BranchModal: React.FC<BranchModalProps> = ({
                 state={form.permissions}
                 setField={form.setPermissions}
                 ownersLoadError={form.ownersLoadError}
+                branch={branch}
+                sessions={sessions}
+                owners={form.owners}
+                prototypeUsers={prototypePermissionUsers}
               />
             ),
           },

@@ -113,6 +113,18 @@ export interface BranchSessionSharingDraft {
   owner_rules: BranchSessionSharingOwnerRuleDraft[];
 }
 
+/**
+ * Tenant-level product gate for personal session sharing.
+ *
+ * This deliberately lives outside a board or branch policy: a workspace
+ * administrator can revoke the feature everywhere, while every personal rule
+ * remains authored by its session owner. The prototype consumes this as a
+ * read model only; it does not imply that persistence or enforcement exists.
+ */
+export interface CapabilityPolicyWorkspacePreferencesDraft {
+  personal_session_sharing_enabled: boolean;
+}
+
 export interface BranchSessionSharingValidationIssue {
   code: 'duplicate_owner_rule' | 'disabled_rule_has_grantees' | 'duplicate_grantee' | 'self_grant';
   message: string;

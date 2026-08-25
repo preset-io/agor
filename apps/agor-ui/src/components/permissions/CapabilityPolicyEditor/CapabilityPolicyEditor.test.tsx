@@ -130,7 +130,7 @@ describe('shared capability policy forms', () => {
     ).toBeInTheDocument();
 
     fireEvent.click(
-      screen.getByRole('switch', { name: 'Allow others to prompt sessions owned by Kasia D.' })
+      screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
     );
     expect(
       screen.getByText('Sharing a session means sharing your agent-tool home')

@@ -114,9 +114,11 @@ export const EffectiveAccessPreview: React.FC<EffectiveAccessPreviewProps> = ({
                   <Typography.Text type="secondary">
                     {effective?.usedOthers
                       ? 'No active person or group entry matched, so Others applies.'
-                      : effective?.sources.length === 1
-                        ? 'One explicit source matched.'
-                        : 'Overlapping person and group entries combine; the strongest file access wins.'}
+                      : effective?.sources[0]?.kind === 'user'
+                        ? 'The direct person entry overrides every group membership and Others.'
+                        : effective?.sources.length === 1
+                          ? 'One explicit group entry matched.'
+                          : 'Every matching group combines; the strongest file access wins.'}
                   </Typography.Text>
                 </Flex>
 

@@ -54,7 +54,7 @@ function descriptorLabel(descriptor: CapabilityPolicyPrincipalDescriptor | undef
 
 /**
  * UI-only explanation helper for static fixtures. It mirrors the proposed
- * fallback/union model so designers can inspect the form, but is not an
+ * direct-user override, multi-group union, and fallback model so designers can inspect the form, but is not an
  * authorization evaluator and must never gate product behavior.
  */
 export function resolvePrototypeEffectiveAccess(options: {
@@ -104,16 +104,21 @@ export function resolvePrototypeEffectiveAccess(options: {
   const descriptorByKey = new Map(
     principals.map((principal) => [capabilityPolicyPrincipalKey(principal.principal), principal])
   );
-  const groupKeys = new Set(subject.groupIds.map((groupId) => `group:${groupId}`));
-  const matchingEntries = policy.entries.filter((entry) => {
+  const directEntry = policy.entries.find((entry) => {
     const key = capabilityPolicyPrincipalKey(entry.principal);
     const descriptor = descriptorByKey.get(key);
     if (descriptor?.status !== 'active') return false;
-    if (entry.principal.principal_type === 'user') {
-      return entry.principal.user_id === subjectId;
-    }
-    return groupKeys.has(key);
+    return entry.principal.principal_type === 'user' && entry.principal.user_id === subjectId;
   });
+  const groupKeys = new Set(subject.groupIds.map((groupId) => `group:${groupId}`));
+  const matchingEntries = directEntry
+    ? [directEntry]
+    : policy.entries.filter((entry) => {
+        if (entry.principal.principal_type !== 'group') return false;
+        const key = capabilityPolicyPrincipalKey(entry.principal);
+        const descriptor = descriptorByKey.get(key);
+        return descriptor?.status === 'active' && groupKeys.has(key);
+      });
 
   const capabilities = new Set<CapabilityPolicyCapability>();
   let fsAccess: CapabilityPolicyFsAccess = 'none';

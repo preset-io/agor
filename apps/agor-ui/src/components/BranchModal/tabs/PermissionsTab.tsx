@@ -8,9 +8,18 @@
  * @see context/guides/rbac-and-unix-isolation.md
  */
 
-import type { AgorClient, Board, BoardGroupGrantWithGroup, Group, User } from '@agor-live/client';
+import type {
+  AgorClient,
+  Board,
+  BoardGroupGrantWithGroup,
+  Branch,
+  Group,
+  Session,
+  User,
+} from '@agor-live/client';
 import { Alert, Descriptions, Form, Radio, Typography } from 'antd';
 import { useEffect, useState } from 'react';
+import { BranchCapabilityPolicyModalPrototype } from '../../permissions/CapabilityPolicyEditor';
 import {
   RbacPermissionFields,
   type RbacPermissionValue,
@@ -30,6 +39,10 @@ interface PermissionsTabProps {
   state: PermissionsFormState;
   setField: <K extends keyof PermissionsFormState>(key: K, value: PermissionsFormState[K]) => void;
   ownersLoadError?: Error | null;
+  branch?: Branch | null;
+  sessions?: Session[];
+  owners?: User[];
+  prototypeUsers?: User[];
 }
 
 export const PermissionsTab: React.FC<PermissionsTabProps> = ({
@@ -45,6 +58,10 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   state,
   setField,
   ownersLoadError,
+  branch,
+  sessions = [],
+  owners = [],
+  prototypeUsers = allUsers,
 }) => {
   const [boardOwners, setBoardOwners] = useState<User[]>([]);
   const [boardGroupGrants, setBoardGroupGrants] = useState<BoardGroupGrantWithGroup[]>([]);
@@ -78,7 +95,12 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   };
 
   useEffect(() => {
-    if (!client || !board?.board_id || permissionSource !== 'board') {
+    const prototypeNeedsBoardDefaults = import.meta.env.DEV && Boolean(branch);
+    if (
+      !client ||
+      !board?.board_id ||
+      (permissionSource !== 'board' && !prototypeNeedsBoardDefaults)
+    ) {
       setBoardOwners([]);
       setBoardGroupGrants([]);
       setBoardDefaultsError(null);
@@ -110,7 +132,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [client, board?.board_id, permissionSource]);
+  }, [client, board?.board_id, permissionSource, branch]);
 
   const boardOwnerNames = boardOwners.map((owner) => owner.name || owner.email || owner.user_id);
   const boardGroupLabels = boardGroupGrants.map((grant) => {
@@ -120,8 +142,8 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
     return `${groupName}: ${grant.can}${fs}`;
   });
 
-  return (
-    <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
+  const legacyPermissions = (
+    <>
       <Form layout="horizontal" colon={false}>
         <Form.Item
           label="Permission Mode"
@@ -223,6 +245,32 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
           />
         )}
       </Form>
+    </>
+  );
+
+  const prototype =
+    import.meta.env.DEV && branch ? (
+      <BranchCapabilityPolicyModalPrototype
+        branch={branch}
+        board={board}
+        client={client}
+        currentUser={currentUser}
+        owners={
+          owners.length > 0
+            ? owners
+            : allUsers.filter((user) => state.selectedOwnerIds.includes(user.user_id))
+        }
+        groupGrants={state.groupGrants}
+        boardGroupGrants={boardGroupGrants}
+        users={prototypeUsers}
+        groups={allGroups}
+        sessions={sessions}
+      />
+    ) : null;
+
+  return (
+    <div style={{ width: '100%', maxHeight: '70vh', overflowY: 'auto' }}>
+      {prototype ?? legacyPermissions}
     </div>
   );
 };

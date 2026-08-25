@@ -20,6 +20,7 @@ interface BranchCapabilityPolicyFormProps {
   principals: CapabilityPolicyPrincipalDescriptor[];
   subjects: PrototypeAccessSubject[];
   currentUserId: UserID;
+  personalSessionSharingWorkspaceEnabled?: boolean;
 }
 
 function findUserDescriptor(
@@ -46,6 +47,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
   principals,
   subjects,
   currentUserId,
+  personalSessionSharingWorkspaceEnabled = true,
 }) => {
   const { token } = theme.useToken();
   const [confirmInherit, setConfirmInherit] = useState(false);
@@ -200,6 +202,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
         onChange={(sessionSharing) => onChange({ ...value, session_sharing: sessionSharing })}
         currentUserId={currentUserId}
         principals={principals}
+        workspaceEnabled={personalSessionSharingWorkspaceEnabled}
       />
     </Flex>
   );

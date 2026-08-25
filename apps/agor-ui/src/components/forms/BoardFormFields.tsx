@@ -82,6 +82,8 @@ export interface BoardFormFieldsProps {
   rbacEnabled?: boolean;
   allUsers?: User[];
   allGroups?: Group[];
+  /** Development-only target editor mounted by BoardEditModal. Never persisted by this form. */
+  capabilityPolicyPrototype?: React.ReactNode;
 }
 
 /**
@@ -99,6 +101,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   rbacEnabled = false,
   allUsers = [],
   allGroups = [],
+  capabilityPolicyPrototype,
 }) => {
   const generalFields = (
     <>
@@ -156,7 +159,7 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
     }
   };
 
-  const permissionsFields = (
+  const legacyPermissionsFields = (
     <Form layout="horizontal" colon={false} component={false}>
       <Alert
         type="info"
@@ -187,6 +190,8 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
       )}
     </Form>
   );
+
+  const permissionsFields = capabilityPolicyPrototype ?? legacyPermissionsFields;
 
   const cssFields = <BoardBackgroundEditor form={form} resetSignal={backgroundResetSignal} />;
 
