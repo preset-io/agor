@@ -42,6 +42,11 @@ export default defineConfig({
           viewport: { width: 320, height: 568 },
         },
         {
+          name: 'tablet',
+          browser: 'chromium',
+          viewport: { width: 768, height: 900 },
+        },
+        {
           name: 'short-landscape',
           browser: 'chromium',
           viewport: { width: 844, height: 390 },

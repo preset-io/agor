@@ -82,6 +82,7 @@ import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
   MARKETPLACE_ROUTE_PATHS,
+  RBAC_POLICY_PROTOTYPE_ROUTE_PATH,
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
@@ -234,6 +235,13 @@ const MarketingVideoPage = lazy(() =>
     default: module.MarketingVideoPage,
   }))
 );
+const RbacPolicyPrototypePage = import.meta.env.DEV
+  ? lazy(() =>
+      import('./pages/RbacPolicyPrototypePage').then((module) => ({
+        default: module.RbacPolicyPrototypePage,
+      }))
+    )
+  : null;
 
 const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
@@ -2355,6 +2363,8 @@ function AppWrapper() {
   const location = useLocation();
   const isMarketingScreenshotRoute = location.pathname === '/demo/marketing-screenshots';
   const isMarketingVideoRoute = location.pathname === '/demo/marketing-video';
+  const isRbacPolicyPrototypeRoute =
+    import.meta.env.DEV && location.pathname === RBAC_POLICY_PROTOTYPE_ROUTE_PATH;
 
   return (
     <ConfigProvider theme={getCurrentThemeConfig()}>
@@ -2372,6 +2382,10 @@ function AppWrapper() {
             ) : isMarketingVideoRoute ? (
               <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
                 <MarketingVideoPage />
+              </Suspense>
+            ) : isRbacPolicyPrototypeRoute && RbacPolicyPrototypePage ? (
+              <Suspense fallback={<InitialLoadingScreen message="Loading RBAC prototype…" />}>
+                <RbacPolicyPrototypePage />
               </Suspense>
             ) : (
               <AppContent />
