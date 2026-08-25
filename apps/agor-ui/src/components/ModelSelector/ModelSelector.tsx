@@ -11,20 +11,8 @@ import {
   GEMINI_MODELS,
   type GeminiModel,
 } from '@agor-live/client';
-import { InfoCircleOutlined, SearchOutlined } from '@ant-design/icons';
-import {
-  AutoComplete,
-  Button,
-  Flex,
-  Input,
-  Radio,
-  Select,
-  Space,
-  Tag,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { AutoComplete, Button, Flex, Select, Space, Tag, Tooltip, Typography, theme } from 'antd';
 import { useEffect, useState } from 'react';
 import { AdvisorModelSelect } from './AdvisorModelSelect';
 import {
@@ -61,15 +49,6 @@ export interface ModelSelectorProps {
   catalogEnabled?: boolean;
   /** Render as a single compact dropdown suitable for popovers/toolbars. */
   compact?: boolean;
-  /**
-   * `select` (default) shows a searchable dropdown trigger. `list` renders the
-   * models directly as a values-first radio list with a search box on top and
-   * the pin affordance as a below-list expander — for popover surfaces where one
-   * click should reveal the options with no nested dropdown.
-   */
-  variant?: 'select' | 'list';
-  /** Fired after the user picks a model from the values-first list (close-on-select). */
-  onSelect?: () => void;
   getPopupContainer?: (triggerNode: HTMLElement) => HTMLElement;
   /**
    * Render the Claude Code advisor model select inline. Surfaces that relocate
@@ -159,13 +138,10 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   branchId,
   catalogEnabled = true,
   compact = false,
-  variant = 'select',
-  onSelect,
   getPopupContainer,
   showAdvisor = true,
 }) => {
   const { token } = theme.useToken();
-  const [modelSearch, setModelSearch] = useState('');
 
   // Determine which model list to use based on agentic_tool (with backwards compat for agent prop)
   const effectiveTool = agentic_tool || agent || 'claude-code';
@@ -415,94 +391,6 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     );
   };
 
-  const pinOptions = normalizedList.map((m) => ({ value: m.id, label: m.displayName }));
-
-  // Values-first list: render the models directly with a search box on top so a
-  // popover shows the options on the first click. The pin affordance lives below
-  // the list as an expander, not a second always-visible field.
-  if (variant === 'list') {
-    const query = modelSearch.trim().toLowerCase();
-    const filtered = query
-      ? aliasOptions.filter((o) => o.searchText.includes(query))
-      : aliasOptions;
-    return (
-      <Space orientation="vertical" style={{ width: '100%' }} size={token.marginXS}>
-        <Input
-          allowClear
-          size="small"
-          prefix={<SearchOutlined />}
-          placeholder="Search models…"
-          value={modelSearch}
-          onChange={(e) => setModelSearch(e.target.value)}
-        />
-        <div style={{ maxHeight: token.controlHeight * 8, overflowY: 'auto', width: '100%' }}>
-          {filtered.length > 0 ? (
-            <Radio.Group
-              value={pinned ? undefined : currentModel}
-              onChange={(e) => {
-                selectAlias(e.target.value);
-                onSelect?.();
-              }}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: token.marginXXS,
-                width: '100%',
-              }}
-            >
-              {filtered.map((o) => (
-                <Radio key={o.value} value={o.value} style={{ alignItems: 'flex-start' }}>
-                  {renderAliasOption(o.value)}
-                </Radio>
-              ))}
-            </Radio.Group>
-          ) : (
-            <Typography.Text type="secondary">No matching models</Typography.Text>
-          )}
-        </div>
-
-        {!pinned ? (
-          <Button
-            type="link"
-            size="small"
-            onClick={enablePin}
-            style={{ height: 'auto', padding: 0, fontSize: token.fontSizeSM }}
-          >
-            Pin a specific version…
-          </Button>
-        ) : (
-          <div>
-            <AutoComplete
-              value={currentModel}
-              onChange={selectPinned}
-              options={pinOptions}
-              filterOption={(input, option) =>
-                `${option?.value ?? ''} ${option?.label ?? ''}`
-                  .toLowerCase()
-                  .includes(input.toLowerCase())
-              }
-              placeholder={PIN_PLACEHOLDERS[effectiveTool] ?? 'e.g., claude-opus-4-8-20251115'}
-              style={{ width: '100%' }}
-            />
-            <Button
-              type="link"
-              size="small"
-              onClick={disablePin}
-              style={{
-                height: 'auto',
-                padding: 0,
-                fontSize: token.fontSizeSM,
-                marginTop: token.marginXXS,
-              }}
-            >
-              Use a recommended model
-            </Button>
-          </div>
-        )}
-      </Space>
-    );
-  }
-
   // Compact: single dropdown for toolbars/popovers. Rich rows, displayName label.
   if (compact) {
     const compactOptions = aliasOptions.map((o) => ({
@@ -551,6 +439,8 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       </Space>
     );
   }
+
+  const pinOptions = normalizedList.map((m) => ({ value: m.id, label: m.displayName }));
 
   return (
     <Space orientation="vertical" style={{ width: '100%' }} size={8}>

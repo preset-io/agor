@@ -1,4 +1,4 @@
-import type { AgorClient, User } from '@agor-live/client';
+import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
 import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -16,6 +16,7 @@ vi.mock('../../store/agorStore', () => ({
       agenticToolSettingsByName: new Map([
         ['claude-code', { inline_configuration_allowed: storeSettings.inlineAllowed }],
         ['codex', { inline_configuration_allowed: storeSettings.inlineAllowed }],
+        ['opencode', { inline_configuration_allowed: storeSettings.inlineAllowed }],
       ]),
     }),
 }));
@@ -104,12 +105,14 @@ function Harness({
   initialSource,
   tool = 'claude-code',
   collapsibleChips,
+  validateModelSelection,
 }: {
   user: User;
   client?: AgorClient | null;
   initialSource?: string;
-  tool?: 'claude-code' | 'codex' | 'gemini';
+  tool?: AgenticToolName;
   collapsibleChips?: boolean;
+  validateModelSelection?: boolean;
 }) {
   const [form] = Form.useForm();
   return (
@@ -121,6 +124,7 @@ function Harness({
         currentUser={user}
         enableSaveAsDefault
         collapsibleChips={collapsibleChips}
+        validateModelSelection={validateModelSelection}
       />
       <Form.Item shouldUpdate noStyle>
         {() => {
@@ -181,19 +185,6 @@ describe('AgenticConfigChipRow', () => {
     expect(responsiveContainer?.style.width).toBe('440px');
     expect(responsiveContainer?.style.maxWidth).toContain('100vw');
     expect(responsiveContainer?.style.minWidth).toBe('');
-  });
-
-  it('opens a bare value dropdown with no title header or card chrome', async () => {
-    render(<Harness user={userWithDefault} initialSource={USER_DEFAULT_AGENTIC_CONFIGURATION} />);
-    const permissionChip = screen.getByTestId('permission-chip');
-
-    fireEvent.click(permissionChip);
-    // The values (mocked control) are shown directly…
-    expect(await screen.findByTestId('perm-change')).toBeInTheDocument();
-    expect(permissionChip).toHaveAttribute('aria-expanded', 'true');
-    // …with no titled popover heading or card framing.
-    expect(document.querySelector('.ant-popover-title')).toBeNull();
-    expect(screen.queryByText('Permission mode')).not.toBeInTheDocument();
   });
 
   it('preserves the selected preset and offers retry when preset loading fails', async () => {
@@ -271,6 +262,7 @@ describe('AgenticConfigChipRow', () => {
     fireEvent.click(await screen.findByTestId('advisor-select'));
 
     await waitFor(() => expect(chip).toHaveTextContent('Advisor: advisor-model'));
+    expect(chip).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('surfaces an advisor inherited from "My default" and clears it as a custom override', async () => {
@@ -342,27 +334,51 @@ describe('AgenticConfigChipRow', () => {
   });
 
   it('collapses the chip row behind a one-line summary when collapsibleChips is set', async () => {
-    render(<Harness user={userWithDefault} collapsibleChips />);
+    render(
+      <div style={{ width: 240 }}>
+        <Harness user={userWithDefault} collapsibleChips />
+      </div>
+    );
 
     // The Configuration select stays visible even while chips are collapsed.
     await waitFor(() =>
       expect(
-        screen.getByText(/My default · Claude Opus 4.8 — 200k · Accept edits/)
+        screen.getByText(/My default · Claude Opus 4.8 · 200k · Accept edits/)
       ).toBeInTheDocument()
     );
 
     // The collapsed summary keeps every resolved value on one middot-joined line.
     const summary = screen.getByText(
-      'Opus 4.8 — 200k · Accept edits · Effort: High · No MCP servers · Advisor: Off'
+      'Opus 4.8 · 200k · Accept edits · Effort: High · No MCP servers · Advisor: Off'
     );
     const header = summary.closest('[role="button"]');
     expect(header).toHaveAttribute('aria-expanded', 'false');
+    expect(summary.closest('.ant-collapse-title')?.getAttribute('style')).toContain('min-width: 0');
 
     // Expanding is keyboard operable and reveals the editable chips.
     if (!header) throw new Error('missing disclosure header');
-    fireEvent.click(header);
+    fireEvent.keyDown(header, { key: 'Enter' });
     await waitFor(() => expect(header).toHaveAttribute('aria-expanded', 'true'));
     expect(screen.getByTestId('model-chip')).toHaveTextContent('Opus 4.8');
+  });
+
+  it('keeps corrective model controls disclosed while required OpenCode config is invalid', async () => {
+    render(
+      <Harness
+        user={{ user_id: 'opencode-user' } as User}
+        tool="opencode"
+        initialSource="__inline__"
+        collapsibleChips
+        validateModelSelection
+      />
+    );
+
+    const modelChip = await screen.findByRole('button', {
+      name: 'Model: Select provider/model',
+    });
+    const header = screen.getByText(/^Select provider\/model ·/).closest('[role="button"]');
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    expect(modelChip).toBeVisible();
   });
 });
 

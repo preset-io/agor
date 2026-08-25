@@ -110,61 +110,6 @@ describe('ModelSelector (Claude)', () => {
   });
 });
 
-describe('ModelSelector (list variant)', () => {
-  it('shows the models directly with a search box, no nested combobox', () => {
-    render(
-      <ModelSelector
-        agentic_tool="claude-code"
-        showAdvisor={false}
-        variant="list"
-        value={{ mode: 'alias', model: 'claude-sonnet-5' }}
-      />
-    );
-    // Values are visible immediately as a radio list; the only field is search.
-    expect(screen.getByPlaceholderText('Search models…')).toBeInTheDocument();
-    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
-    expect(screen.getAllByRole('radio').length).toBeGreaterThan(1);
-    // Pin stays an unobtrusive expander below the list.
-    expect(screen.getByText('Pin a specific version…')).toBeInTheDocument();
-  });
-
-  it('filters the list from the search box', () => {
-    render(
-      <ModelSelector
-        agentic_tool="claude-code"
-        showAdvisor={false}
-        variant="list"
-        value={{ mode: 'alias', model: 'claude-sonnet-5' }}
-      />
-    );
-    const before = screen.getAllByRole('radio').length;
-    fireEvent.change(screen.getByPlaceholderText('Search models…'), { target: { value: 'opus' } });
-    const after = screen.getAllByRole('radio').length;
-    expect(after).toBeLessThan(before);
-    expect(screen.getAllByText(/Claude Opus/).length).toBeGreaterThan(0);
-  });
-
-  it('applies the picked model and fires onSelect (close-on-select)', () => {
-    const onChange = vi.fn();
-    const onSelect = vi.fn();
-    render(
-      <ModelSelector
-        agentic_tool="claude-code"
-        showAdvisor={false}
-        variant="list"
-        value={{ mode: 'alias', model: 'claude-sonnet-5' }}
-        onChange={onChange}
-        onSelect={onSelect}
-      />
-    );
-    fireEvent.click(screen.getByText('Claude Opus 4.7 — 200k'));
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: 'alias', model: expect.any(String) })
-    );
-    expect(onSelect).toHaveBeenCalled();
-  });
-});
-
 describe('ModelSelector (Codex)', () => {
   it('marks older aliases whose availability depends on the provider account', () => {
     render(<ModelSelector agentic_tool="codex" value={{ mode: 'alias', model: 'gpt-5.6-sol' }} />);

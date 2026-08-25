@@ -14,7 +14,7 @@ import {
   UnlockOutlined,
 } from '@ant-design/icons';
 import type { GlobalToken } from 'antd';
-import { Flex, Radio, Select, Space, Tooltip, Typography, theme } from 'antd';
+import { Flex, Select, Space, Tooltip, Typography, theme } from 'antd';
 
 interface ModeOption {
   mode: PermissionMode;
@@ -30,12 +30,6 @@ export interface PermissionModeSelectorProps {
   agentic_tool?: AgenticToolName;
   /** If true, renders as a compact Select dropdown instead of Radio buttons */
   compact?: boolean;
-  /**
-   * `select` (default) shows a single dropdown trigger. `list` renders the
-   * modes directly as a values-first radio list — no nested dropdown — for
-   * popover surfaces where one click should reveal the options immediately.
-   */
-  variant?: 'select' | 'list';
   /**
    * When in Select (compact) mode, render only the icon in the trigger.
    * Defaults to `false` — trigger shows icon + label so users in roomy
@@ -297,7 +291,6 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
   onChange,
   agentic_tool = 'claude-code',
   compact = false,
-  variant = 'select',
   iconOnly = false,
   plain = false,
   fullWidth = false,
@@ -377,38 +370,6 @@ export const PermissionModeSelector: React.FC<PermissionModeSelectorProps> = ({
           )}
         />
       </Space>
-    );
-  }
-
-  // Values-first list: render the modes directly so a popover shows them on the
-  // first click, with the same icon + label + description as the dropdown.
-  if (variant === 'list') {
-    return (
-      <Radio.Group
-        value={effectiveValue}
-        onChange={(e) => onChange?.(e.target.value as PermissionMode)}
-        style={{ display: 'flex', flexDirection: 'column', gap: token.marginXS, width: '100%' }}
-      >
-        {modes.map(({ mode, label, description, icon, tone }) => {
-          const color = getModeColor(tone, token);
-          return (
-            <Radio key={mode} value={mode} style={{ alignItems: 'flex-start' }}>
-              <Space size={token.marginXXS} align="start">
-                <span style={{ color }}>{icon}</span>
-                <div style={{ lineHeight: 1.3 }}>
-                  <div style={{ color: tone === 'warning' ? color : undefined }}>{label}</div>
-                  <Typography.Text
-                    type="secondary"
-                    style={{ fontSize: token.fontSizeSM, whiteSpace: 'normal' }}
-                  >
-                    {description}
-                  </Typography.Text>
-                </div>
-              </Space>
-            </Radio>
-          );
-        })}
-      </Radio.Group>
     );
   }
 

@@ -25,9 +25,9 @@ import {
   Button,
   Checkbox,
   Collapse,
-  Dropdown,
   Flex,
   Form,
+  Popover,
   Select,
   Typography,
   theme,
@@ -175,12 +175,13 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
 
   const resolved = configForSource(source);
   const resolvedModelConfig = resolved.modelConfig as ModelConfig | undefined;
-  const configError =
-    getSourceError(source) ??
-    (validateModelSelection
-      ? getAgenticToolModelSelectionError(tool, resolvedModelConfig)
-      : undefined);
+  const modelSelectionError = validateModelSelection
+    ? getAgenticToolModelSelectionError(tool, resolvedModelConfig)
+    : undefined;
+  const configError = getSourceError(source) ?? modelSelectionError;
   const configResolvable = !configError;
+  const [chipsExpanded, setChipsExpanded] = useState(false);
+  const disclosureExpanded = Boolean(modelSelectionError) || chipsExpanded;
 
   useEffect(() => {
     onConfigValidityChange?.(configResolvable, configError);
@@ -321,14 +322,15 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           renderContent={(close) => (
             <ModelSelector
               value={resolved.modelConfig as ModelConfig | undefined}
-              onChange={onModelChange}
+              onChange={(next) => {
+                onModelChange(next);
+                close();
+              }}
               agentic_tool={tool}
               client={client}
               branchId={branchId}
               catalogEnabled={catalogEnabled}
               showAdvisor={false}
-              variant="list"
-              onSelect={close}
             />
           )}
         />
@@ -351,7 +353,6 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
               close();
             }}
             agentic_tool={tool}
-            variant="list"
             fullWidth
           />
         )}
@@ -376,7 +377,6 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
                 onEffortChange(effort);
                 close();
               }}
-              variant="list"
               fullWidth
             />
           )}
@@ -396,7 +396,6 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
             mcpServers={mapToArray(mcpServerById)}
             value={formMcp}
             onChange={onMcpChange}
-            variant="list"
             placeholder="No MCP servers attached"
             style={{ width: '100%' }}
           />
@@ -413,12 +412,14 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           managedNote={managedNote}
           width={340}
           testid="advisor-chip"
-          renderContent={() => (
+          renderContent={(close) => (
             <AdvisorModelSelect
               value={advisorModel}
-              onChange={onAdvisorChange}
+              onChange={(next) => {
+                onAdvisorChange(next);
+                close();
+              }}
               client={client}
-              variant="list"
             />
           )}
         />
@@ -462,6 +463,11 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
         <Collapse
           ghost
           destroyOnHidden={false}
+          activeKey={disclosureExpanded ? ['chips'] : []}
+          onChange={(activeKeys) => {
+            const keys = Array.isArray(activeKeys) ? activeKeys : [activeKeys];
+            setChipsExpanded(keys.includes('chips'));
+          }}
           expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
           // Flush the caret to the column's left edge, center it against the
           // single-line summary, and tighten the header's block padding so the
@@ -472,6 +478,7 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
               paddingInlineStart: 0,
               paddingBlock: token.paddingXXS,
             },
+            title: { minWidth: 0 },
           }}
           items={[
             {
@@ -517,10 +524,7 @@ interface EditableChipProps {
   renderContent: (close: () => void) => React.ReactNode;
 }
 
-/**
- * A Tag chip that opens a BARE dropdown of values on click (no title/card
- * chrome), or a minimal managed-by-preset note when not editable.
- */
+/** A Tag chip that opens a popover editor on click (or shows a managed note). */
 const EditableChip: React.FC<EditableChipProps> = ({
   icon,
   label,
@@ -551,32 +555,35 @@ const EditableChip: React.FC<EditableChipProps> = ({
     </Button>
   );
 
-  // A plain elevated surface — the dropdown reads like a native select menu
-  // rather than a titled popover card.
-  const surface = (content: React.ReactNode) => (
-    <div
-      style={{
-        width,
-        maxWidth: `calc(100vw - ${token.marginLG * 2}px)`,
-        padding: token.paddingXS,
-        background: token.colorBgElevated,
-        borderRadius: token.borderRadiusLG,
-        boxShadow: token.boxShadowSecondary,
-      }}
-    >
-      {content}
-    </div>
-  );
+  if (!editable) {
+    return (
+      <Popover
+        open={open}
+        onOpenChange={setOpen}
+        trigger="click"
+        placement="bottomLeft"
+        title={title}
+        content={managedNote}
+      >
+        {chip}
+      </Popover>
+    );
+  }
 
   return (
-    <Dropdown
+    <Popover
       open={open}
       onOpenChange={setOpen}
-      trigger={['click']}
+      trigger="click"
       placement="bottomLeft"
-      popupRender={() => surface(editable ? renderContent(() => setOpen(false)) : managedNote)}
+      title={title}
+      content={
+        <div style={{ width, maxWidth: `calc(100vw - ${token.marginLG * 2}px)` }}>
+          {renderContent(() => setOpen(false))}
+        </div>
+      }
     >
       {chip}
-    </Dropdown>
+    </Popover>
   );
 };

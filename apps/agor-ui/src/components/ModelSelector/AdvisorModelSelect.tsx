@@ -1,10 +1,7 @@
 import { type AgorClient, AVAILABLE_CLAUDE_MODEL_ALIASES } from '@agor-live/client';
-import { Radio, Select, Typography, theme } from 'antd';
+import { Select, Typography } from 'antd';
 import { useEffect, useState } from 'react';
 import { type NormalizedModelOption, normalizeModelOption } from './modelDefaults';
-
-/** Sentinel radio value for "Off" (no advisor override) in list mode. */
-const ADVISOR_OFF_VALUE = '__off__';
 
 interface DynamicModelsResponse {
   models: Array<{ id: string; displayName: string; description?: string }>;
@@ -19,12 +16,6 @@ export interface AdvisorModelSelectProps {
   options?: Array<{ id: string; displayName?: string; label?: string; description?: string }>;
   size?: 'small' | 'middle' | 'large';
   style?: React.CSSProperties;
-  /**
-   * `select` (default) shows a searchable dropdown. `list` renders the models
-   * directly as a values-first radio list (with an explicit "Off") for popover
-   * surfaces where one click should reveal the options with no nested dropdown.
-   */
-  variant?: 'select' | 'list';
 }
 
 /**
@@ -39,9 +30,7 @@ export const AdvisorModelSelect: React.FC<AdvisorModelSelectProps> = ({
   options,
   size,
   style,
-  variant = 'select',
 }) => {
-  const { token } = theme.useToken();
   const [fetched, setFetched] = useState<NormalizedModelOption[] | null>(null);
 
   useEffect(() => {
@@ -66,44 +55,6 @@ export const AdvisorModelSelect: React.FC<AdvisorModelSelectProps> = ({
   const list: NormalizedModelOption[] = options
     ? options.map(normalizeModelOption)
     : (fetched ?? AVAILABLE_CLAUDE_MODEL_ALIASES.map(normalizeModelOption));
-
-  // Values-first list: render "Off" plus each model directly so a popover shows
-  // them on the first click, with no nested searchable dropdown.
-  if (variant === 'list') {
-    return (
-      <Radio.Group
-        value={value ?? ADVISOR_OFF_VALUE}
-        onChange={(e) =>
-          onChange?.(e.target.value === ADVISOR_OFF_VALUE ? undefined : e.target.value)
-        }
-        style={{ display: 'flex', flexDirection: 'column', gap: token.marginXS, width: '100%' }}
-      >
-        <Radio value={ADVISOR_OFF_VALUE} style={{ alignItems: 'flex-start' }}>
-          <div style={{ lineHeight: 1.3 }}>
-            <div>Off</div>
-            <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-              Uses your Claude settings
-            </Typography.Text>
-          </div>
-        </Radio>
-        {list.map((model) => (
-          <Radio key={model.id} value={model.id} style={{ alignItems: 'flex-start' }}>
-            <div style={{ lineHeight: 1.3 }}>
-              <div>{model.displayName}</div>
-              {model.description && (
-                <Typography.Text
-                  type="secondary"
-                  style={{ fontSize: token.fontSizeSM, whiteSpace: 'normal' }}
-                >
-                  {model.description}
-                </Typography.Text>
-              )}
-            </div>
-          </Radio>
-        ))}
-      </Radio.Group>
-    );
-  }
 
   return (
     <Select

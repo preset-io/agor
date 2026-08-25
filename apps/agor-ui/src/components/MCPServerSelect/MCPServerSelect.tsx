@@ -1,21 +1,15 @@
 import { type MCPServer, shortId } from '@agor-live/client';
-import { Checkbox, Select, type SelectProps, Typography, theme } from 'antd';
+import { Select, type SelectProps } from 'antd';
 import { useAgorStore } from '../../store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '../../store/selectors';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 
-export interface MCPServerSelectProps extends Omit<SelectProps, 'options' | 'variant'> {
+export interface MCPServerSelectProps extends Omit<SelectProps, 'options'> {
   mcpServers: MCPServer[];
   value?: string[];
   onChange?: (value: string[]) => void;
   placeholder?: string;
   filterByScope?: 'global' | 'repo' | 'session';
-  /**
-   * `select` (default) shows a searchable multi-select. `list` renders the
-   * servers directly as a values-first checkbox list for popover surfaces where
-   * one click should reveal the options with no nested dropdown.
-   */
-  variant?: 'select' | 'list';
 }
 
 /**
@@ -68,7 +62,10 @@ export function buildMcpServerOptions(
       options.push({
         label: `Unavailable MCP server (${shortId(id)})`,
         value: id,
-        disabled: true,
+        // This option exists only while selected. Keep it enabled so AntD
+        // renders the tag's remove affordance; once detached it disappears
+        // and cannot be selected again.
+        disabled: false,
       });
     }
   }
@@ -92,10 +89,8 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
   onChange,
   placeholder = 'Select MCP servers...',
   filterByScope,
-  variant = 'select',
   ...selectProps
 }) => {
-  const { token } = theme.useToken();
   // Read here rather than as a prop: every caller of this picker would
   // otherwise have to thread the same set through, and one that forgot would
   // quietly go back to showing an unfinished install as a working one.
@@ -107,27 +102,6 @@ export const MCPServerSelect: React.FC<MCPServerSelectProps> = ({
     : mcpServers;
 
   const options = buildMcpServerOptions(filteredServers, value, userAuthenticatedMcpServerIds);
-
-  // Values-first list: render the servers directly as checkboxes so a popover
-  // shows them on the first click, with no nested multi-select dropdown.
-  if (variant === 'list') {
-    if (options.length === 0) {
-      return <Typography.Text type="secondary">No MCP servers available</Typography.Text>;
-    }
-    return (
-      <Checkbox.Group
-        value={value}
-        onChange={(vals) => onChange?.(vals as string[])}
-        style={{ display: 'flex', flexDirection: 'column', gap: token.marginXS, width: '100%' }}
-      >
-        {options.map((opt) => (
-          <Checkbox key={opt.value} value={opt.value} disabled={opt.disabled}>
-            {opt.label}
-          </Checkbox>
-        ))}
-      </Checkbox.Group>
-    );
-  }
 
   return (
     <Select
