@@ -21,6 +21,13 @@ export const PrincipalIdentity: React.FC<PrincipalIdentityProps> = ({ descriptor
   const isGroup = descriptor?.principal.principal_type === 'group';
   const label = descriptor?.display_name ?? 'Unavailable principal';
   const status = descriptor?.status ?? 'deleted';
+  const secondaryLabel = descriptor?.secondary_label
+    ? isGroup
+      ? `Group · ${descriptor.secondary_label}`
+      : descriptor.secondary_label
+    : isGroup
+      ? 'Workspace group'
+      : undefined;
 
   return (
     <Flex align="center" gap={compact ? 8 : 12} style={{ minWidth: 0 }}>
@@ -48,9 +55,9 @@ export const PrincipalIdentity: React.FC<PrincipalIdentityProps> = ({ descriptor
             </Tag>
           )}
         </Flex>
-        {descriptor?.secondary_label && (
-          <Typography.Text type="secondary" ellipsis={{ tooltip: descriptor.secondary_label }}>
-            {descriptor.secondary_label}
+        {secondaryLabel && (
+          <Typography.Text type="secondary" ellipsis={{ tooltip: secondaryLabel }}>
+            {secondaryLabel}
           </Typography.Text>
         )}
       </Flex>

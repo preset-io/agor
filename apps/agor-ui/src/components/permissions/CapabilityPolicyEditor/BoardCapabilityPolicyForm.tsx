@@ -87,7 +87,7 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
                   type="info"
                   showIcon
                   title="Live defaults, not board access"
-                  description="Inherited branches follow this template. Each branch keeps its own fixed primary owner, and board members do not automatically gain branch access."
+                  description="Inherited branches follow this template. Each branch keeps its own fixed primary owner, and board members do not automatically gain branch access. Personal session-sharing exceptions are never inherited."
                 />
                 <CapabilityPolicyEditor
                   title="Defaults inherited by this board’s branches"

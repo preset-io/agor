@@ -21,8 +21,26 @@ describe('RBAC policy prototype responsive layout (real browser)', () => {
     const root = screen.getByTestId('rbac-policy-prototype');
     expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
     expect(screen.getByText('Who can see and manage this board')).toBeVisible();
-    expect(screen.getByLabelText('Search people and groups')).toBeVisible();
+    expect(
+      screen.getByLabelText('Add one person or group to Who can see and manage this board')
+    ).toBeVisible();
     expect(screen.getByRole('button', { name: /Apply locally/i })).toBeVisible();
+  });
+
+  it('adds one existing group as one independently editable entry', async () => {
+    renderPrototype();
+    const picker = screen.getByLabelText(
+      'Add one person or group to Who can see and manage this board'
+    );
+
+    await act(async () => userEvent.click(picker));
+    const securityOption = await screen.findByText('Security', { exact: true });
+    await act(async () => userEvent.click(securityOption));
+
+    expect(screen.getByRole('button', { name: 'Edit access for Security' })).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: 'Add selected access entry' })
+    ).not.toBeInTheDocument();
   });
 
   it('renders and operates the inherited branch form without horizontal page overflow', async () => {

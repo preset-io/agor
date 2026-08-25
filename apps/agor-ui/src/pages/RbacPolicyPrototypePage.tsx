@@ -181,6 +181,7 @@ export const RbacPolicyPrototypePage: React.FC = () => {
                   onChange={setBranchDraft}
                   principals={PROTOTYPE_PRINCIPALS}
                   subjects={PROTOTYPE_SUBJECTS}
+                  currentUserId={PROTOTYPE_USERS.kasia}
                 />
               )}
             </section>

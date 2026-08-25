@@ -3,10 +3,9 @@ import type {
   CapabilityPolicyEntryDraft,
   CapabilityPolicyPrincipalDescriptor,
   UserID,
-  UUID,
 } from '@agor/core/types';
 import { capabilityPolicyPrincipalKey, validateCapabilityPolicyDraft } from '@agor/core/types';
-import { EyeOutlined, GlobalOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
+import { EyeOutlined, GlobalOutlined } from '@ant-design/icons';
 import {
   Alert,
   Button,
@@ -16,7 +15,6 @@ import {
   Flex,
   Grid,
   Segmented,
-  Select,
   Typography,
   theme,
 } from 'antd';
@@ -25,9 +23,11 @@ import { Tag } from '@/components/Tag';
 import { EffectiveAccessPreview } from './EffectiveAccessPreview';
 import { OthersFallbackCard } from './OthersFallbackCard';
 import { PolicyEntryCard } from './PolicyEntryCard';
+import { PrincipalEntryPicker } from './PrincipalEntryPicker';
 import { PrincipalIdentity } from './PrincipalIdentity';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
 import { fsAccessLabel, makePrivatePolicy, makeSharedClosedPolicy } from './policyEditorModel';
+import { makePrototypeDraftId } from './prototypeDraftId';
 import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
 interface CapabilityPolicyEditorProps {
@@ -44,10 +44,6 @@ interface CapabilityPolicyEditorProps {
 
 const OTHERS_ENTRY_KEY = 'others';
 
-function makeEntryId(): UUID {
-  return crypto.randomUUID() as UUID;
-}
-
 export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
   title,
   description,
@@ -61,7 +57,6 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
 }) => {
   const { token } = theme.useToken();
   const screens = Grid.useBreakpoint();
-  const [principalToAdd, setPrincipalToAdd] = useState<string>();
   const [confirmPrivate, setConfirmPrivate] = useState(false);
   const [selectedEntryKey, setSelectedEntryKey] = useState<string>(OTHERS_ENTRY_KEY);
   const issues = validateCapabilityPolicyDraft(value);
@@ -120,12 +115,11 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
     onChange(mode === 'private' ? makePrivatePolicy(value) : makeSharedClosedPolicy(value));
   };
 
-  const addPrincipal = () => {
-    if (!principalToAdd) return;
-    const descriptor = descriptorByKey.get(principalToAdd);
-    if (descriptor?.status !== 'active' || usedKeys.has(principalToAdd)) return;
+  const addPrincipal = (descriptor: CapabilityPolicyPrincipalDescriptor) => {
+    const principalKey = capabilityPolicyPrincipalKey(descriptor.principal);
+    if (descriptor.status !== 'active' || usedKeys.has(principalKey)) return;
     const entry: CapabilityPolicyEntryDraft = {
-      entry_id: makeEntryId(),
+      entry_id: makePrototypeDraftId(),
       principal: descriptor.principal,
       preset: 'none',
       capabilities: [],
@@ -133,7 +127,6 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
     };
     onChange({ ...value, entries: [...value.entries, entry] });
     setSelectedEntryKey(entry.entry_id);
-    setPrincipalToAdd(undefined);
   };
 
   const updateEntry = (index: number, entry: CapabilityPolicyEntryDraft) => {
@@ -230,8 +223,8 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
 
       {context.kind === 'branch_access' && (
         <Typography.Text type="secondary">
-          Manage never includes prompt or execute. Terminal requires both{' '}
-          <strong>Work in own sessions</strong> and Read or Write file access.
+          Each role has one fixed meaning. File access is selected separately; only Collaborator
+          with Read or Write file access receives a terminal.
         </Typography.Text>
       )}
 
@@ -240,45 +233,22 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
           <Card
             size="small"
             title="Access entries"
-            extra={<Tag>{value.entries.length} named</Tag>}
+            extra={<Tag>{value.entries.length} entries</Tag>}
             style={{ flex: screens.md ? '0 0 280px' : undefined, minWidth: 0 }}
             styles={{ body: { padding: token.paddingSM } }}
           >
             <Flex vertical gap={token.paddingSM}>
               {!readOnly && (
-                <Flex gap={token.paddingXXS} align="center">
-                  <Select
-                    showSearch
-                    allowClear
-                    aria-label="Search people and groups"
-                    placeholder="Add person or group"
-                    prefix={<SearchOutlined />}
-                    value={principalToAdd}
-                    onChange={setPrincipalToAdd}
-                    optionFilterProp="searchText"
-                    style={{ flex: 1, minWidth: 0 }}
-                    options={availablePrincipals.map((principal) => ({
-                      value: capabilityPolicyPrincipalKey(principal.principal),
-                      label: principal.display_name,
-                      searchText: `${principal.display_name} ${principal.secondary_label ?? ''} ${principal.principal.principal_type}`,
-                      descriptor: principal,
-                    }))}
-                    optionRender={(option) => (
-                      <PrincipalIdentity descriptor={option.data.descriptor} compact />
-                    )}
-                    notFoundContent={
-                      <Empty
-                        image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        description="No active people or groups"
-                      />
-                    }
+                <Flex vertical gap={token.paddingXXS}>
+                  <PrincipalEntryPicker
+                    principals={availablePrincipals}
+                    onAdd={addPrincipal}
+                    ariaLabel={`Add one person or group to ${title}`}
                   />
-                  <Button
-                    icon={<PlusOutlined />}
-                    disabled={!principalToAdd}
-                    onClick={addPrincipal}
-                    aria-label="Add selected access entry"
-                  />
+                  <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                    One entry represents one existing person or workspace group. Group membership is
+                    managed separately.
+                  </Typography.Text>
                 </Flex>
               )}
 

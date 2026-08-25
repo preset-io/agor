@@ -5,15 +5,13 @@ import type {
   CapabilityPolicyPresetId,
 } from '@agor/core/types';
 import { LockOutlined } from '@ant-design/icons';
-import { Collapse, Flex, Segmented, Select, Typography, theme } from 'antd';
-import { Tag } from '@/components/Tag';
-import { CapabilitySelection } from './CapabilitySelection';
+import { Alert, Flex, Segmented, Select, Typography, theme } from 'antd';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
 import {
   applyCapabilityPreset,
   fsAccessDescription,
   fsAccessLabel,
-  isCapabilityControlGroupSelected,
+  getCapabilityPreset,
   updateFilesystemAccess,
 } from './policyEditorModel';
 
@@ -42,20 +40,17 @@ export function AccessGrantControls<T extends GrantValue>({
 }: AccessGrantControlsProps<T>) {
   const { token } = theme.useToken();
   const isManager = value.preset === 'manager';
-  const canPromptOrExecute = value.capabilities.some((capability) =>
-    ['sessions.create', 'sessions.prompt_own', 'terminal.open'].includes(capability)
-  );
-  const selectedControlCount = context.controlGroups.filter((group) =>
-    isCapabilityControlGroupSelected(value, group)
-  ).length;
+  const isCollaborator = value.preset === 'collaborator';
+  const role = getCapabilityPreset(context, value.preset);
+  const hasTerminal = isCollaborator && value.fs_access !== 'none';
 
   return (
     <Flex vertical gap={token.paddingSM}>
       <Flex gap={token.paddingSM} align="flex-start" wrap>
         <Flex vertical gap={token.paddingXXS} style={{ flex: '1 1 220px', minWidth: 0 }}>
-          <Typography.Text strong>Access level</Typography.Text>
+          <Typography.Text strong>Role</Typography.Text>
           <Select<CapabilityPolicyPresetId>
-            aria-label={`${label} access preset`}
+            aria-label={`${label} role`}
             value={value.preset}
             disabled={disabled}
             style={{ width: '100%' }}
@@ -65,16 +60,30 @@ export function AccessGrantControls<T extends GrantValue>({
                 value: preset.id,
                 label: preset.label,
                 title: preset.summary,
+                summary: preset.summary,
               })),
               ...(value.preset === 'custom'
-                ? [{ value: 'custom' as const, label: 'Custom', title: 'Custom capabilities' }]
+                ? [
+                    {
+                      value: 'custom' as const,
+                      label: 'Custom — needs mapping',
+                      title: 'This imported combination must be mapped to one role.',
+                      summary: 'This imported combination must be mapped to one role.',
+                      disabled: true,
+                    },
+                  ]
                 : []),
             ]}
+            optionRender={(option) => (
+              <Flex vertical gap={2} style={{ paddingBlock: token.paddingXXS }}>
+                <Typography.Text strong>{option.label}</Typography.Text>
+                <Typography.Text type="secondary" style={{ whiteSpace: 'normal' }}>
+                  {option.data.summary}
+                </Typography.Text>
+              </Flex>
+            )}
           />
-          <Typography.Text type="secondary">
-            {context.presets.find((preset) => preset.id === value.preset)?.summary ??
-              'A custom set of capabilities.'}
-          </Typography.Text>
+          <Typography.Text type="secondary">{role?.summary}</Typography.Text>
         </Flex>
 
         {context.supportsFilesystem && (
@@ -84,7 +93,7 @@ export function AccessGrantControls<T extends GrantValue>({
               aria-label={`${label} file access`}
               block
               value={value.fs_access}
-              disabled={disabled}
+              disabled={disabled || value.preset === 'none'}
               options={fsOptions}
               onChange={(fsAccess) => onChange(updateFilesystemAccess(value, context, fsAccess))}
             />
@@ -95,36 +104,29 @@ export function AccessGrantControls<T extends GrantValue>({
         )}
       </Flex>
 
-      {context.kind === 'branch_access' && isManager && !canPromptOrExecute && (
-        <Typography.Text type="secondary">
-          <LockOutlined aria-hidden /> Manager can contain and configure, but cannot prompt,
-          execute, or open a terminal.
-        </Typography.Text>
+      {value.preset === 'custom' && (
+        <Alert
+          type="warning"
+          showIcon
+          title="Choose a supported role"
+          description="The simplified form does not create custom capability combinations. Select one role to replace this imported value."
+        />
       )}
 
-      <Collapse
-        size="small"
-        items={[
-          {
-            key: 'capabilities',
-            label: (
-              <Flex align="center" gap={token.paddingXS} wrap>
-                <Typography.Text strong>Customize access</Typography.Text>
-                <Tag>{selectedControlCount} on</Tag>
-              </Flex>
-            ),
-            children: (
-              <CapabilitySelection
-                value={value}
-                context={context}
-                onChange={onChange}
-                disabled={disabled}
-                label={`${label} custom access`}
-              />
-            ),
-          },
-        ]}
-      />
+      {context.kind === 'branch_access' && isManager && (
+        <Typography.Text type="secondary">
+          <LockOutlined aria-hidden /> Manager alone can contain and configure, but cannot prompt,
+          execute, or open a terminal. A session owner can grant a separate personal exception
+          below.
+        </Typography.Text>
+      )}
+      {context.kind === 'branch_access' && isCollaborator && (
+        <Typography.Text type="secondary">
+          {hasTerminal
+            ? 'Terminal is available as this person because Collaborator is paired with file access.'
+            : 'They can work in their own sessions without branch files. Terminal stays unavailable until file access is Read or Write.'}
+        </Typography.Text>
+      )}
     </Flex>
   );
 }

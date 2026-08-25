@@ -24,12 +24,14 @@ export const PROTOTYPE_USERS = {
   omar: userId('5'),
   deleted: userId('6'),
   nina: userId('7'),
+  seb: userId('8'),
 } as const;
 
 export const PROTOTYPE_GROUPS = {
   design: groupId('1'),
   release: groupId('2'),
   security: groupId('3'),
+  gtm: groupId('4'),
 } as const;
 
 export const PROTOTYPE_PRINCIPALS: CapabilityPolicyPrincipalDescriptor[] = [
@@ -76,6 +78,12 @@ export const PROTOTYPE_PRINCIPALS: CapabilityPolicyPrincipalDescriptor[] = [
     status: 'active',
   },
   {
+    principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.seb },
+    display_name: 'Seb V.',
+    secondary_label: 'seb@preset.io',
+    status: 'active',
+  },
+  {
     principal: { principal_type: 'group', group_id: PROTOTYPE_GROUPS.design },
     display_name: 'Product Design',
     secondary_label: '12 active members',
@@ -91,6 +99,12 @@ export const PROTOTYPE_PRINCIPALS: CapabilityPolicyPrincipalDescriptor[] = [
     principal: { principal_type: 'group', group_id: PROTOTYPE_GROUPS.security },
     display_name: 'Security',
     secondary_label: '5 active members',
+    status: 'active',
+  },
+  {
+    principal: { principal_type: 'group', group_id: PROTOTYPE_GROUPS.gtm },
+    display_name: 'GTM',
+    secondary_label: '9 active members',
     status: 'active',
   },
 ];
@@ -120,11 +134,15 @@ export const PROTOTYPE_SUBJECTS: PrototypeAccessSubject[] = [
     user: descriptorForUser(PROTOTYPE_USERS.mia),
     groupIds: [PROTOTYPE_GROUPS.design],
   },
-  { user: descriptorForUser(PROTOTYPE_USERS.omar), groupIds: [] },
+  { user: descriptorForUser(PROTOTYPE_USERS.omar), groupIds: [PROTOTYPE_GROUPS.gtm] },
   { user: descriptorForUser(PROTOTYPE_USERS.deleted), groupIds: [] },
   {
     user: descriptorForUser(PROTOTYPE_USERS.nina),
     groupIds: [PROTOTYPE_GROUPS.security],
+  },
+  {
+    user: descriptorForUser(PROTOTYPE_USERS.seb),
+    groupIds: [],
   },
 ];
 
@@ -224,7 +242,13 @@ export const SHARED_BOARD_FIXTURE: BoardCapabilityPoliciesDraft = {
         entry_id: entryId('8'),
         principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.mia },
         preset: 'manager',
-        capabilities: ['branch.view', 'branch.manage', 'environment.control'],
+        capabilities: [
+          'branch.view',
+          'sessions.manage_others',
+          'branch.manage',
+          'environment.control',
+          'branch.policy.manage',
+        ],
         fs_access: 'write',
       },
       {
@@ -235,15 +259,36 @@ export const SHARED_BOARD_FIXTURE: BoardCapabilityPoliciesDraft = {
         fs_access: 'read',
       },
     ],
-    others: { preset: 'discover', capabilities: ['branch.view'], fs_access: 'none' },
+    others: { preset: 'viewer', capabilities: ['branch.view'], fs_access: 'none' },
   },
 };
+
+const sessionSharingFixture = () => ({
+  owner_rules: [
+    {
+      session_owner_user_id: PROTOTYPE_USERS.kasia,
+      enabled: false,
+      grantees: [],
+    },
+    {
+      session_owner_user_id: PROTOTYPE_USERS.seb,
+      enabled: true,
+      grantees: [
+        {
+          grant_id: entryId('50'),
+          principal: { principal_type: 'group' as const, group_id: PROTOTYPE_GROUPS.gtm },
+        },
+      ],
+    },
+  ],
+});
 
 export const INHERITED_BRANCH_FIXTURE: BranchCapabilityPolicyDraft = {
   primary_owner_user_id: PROTOTYPE_USERS.leo,
   binding_mode: 'inherit',
   inherited_from_board_id: '40000000-0000-0000-0000-000000000001' as BoardID,
   inherited_policy: structuredClone(SHARED_BOARD_FIXTURE.branch_template),
+  session_sharing: sessionSharingFixture(),
 };
 
 export const OVERRIDDEN_BRANCH_FIXTURE: BranchCapabilityPolicyDraft = {
@@ -251,6 +296,7 @@ export const OVERRIDDEN_BRANCH_FIXTURE: BranchCapabilityPolicyDraft = {
   binding_mode: 'override',
   inherited_from_board_id: '40000000-0000-0000-0000-000000000001' as BoardID,
   inherited_policy: structuredClone(SHARED_BOARD_FIXTURE.branch_template),
+  session_sharing: sessionSharingFixture(),
   override_policy: {
     schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
     policy_kind: 'branch_access',
@@ -320,12 +366,14 @@ export const BRANCH_PROTOTYPE_FIXTURES: Record<
 > = {
   'inherited-branch': {
     label: 'Inherited branch',
-    description: 'Uses the board’s live branch defaults until Override is selected.',
+    description:
+      'Uses board defaults while personal session-sharing rules remain branch-local and owner-authored.',
     value: INHERITED_BRANCH_FIXTURE,
   },
   'overridden-branch': {
     label: 'Overridden branch',
-    description: 'Complete local policy with overlapping Manager and Collaborator entries.',
+    description:
+      'Complete local role/file policy plus an example of Seb sharing his sessions with GTM.',
     value: OVERRIDDEN_BRANCH_FIXTURE,
   },
 };

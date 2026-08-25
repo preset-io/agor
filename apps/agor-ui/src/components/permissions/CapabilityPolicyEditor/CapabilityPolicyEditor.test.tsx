@@ -32,7 +32,12 @@ describe('shared capability policy forms', () => {
     expect(screen.queryByRole('button', { name: /transfer owner/i })).not.toBeInTheDocument();
     expect(screen.getByText('Others — unmatched active workspace members')).toBeInTheDocument();
     expect(screen.getByText('Fallback, not an additional grant')).toBeInTheDocument();
-    expect(screen.getByLabelText('Search people and groups')).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Add one person or group to Who can see and manage this board')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/One entry represents one existing person or workspace group/)
+    ).toBeInTheDocument();
   });
 
   it('switches an inherited branch to an editable complete override', async () => {
@@ -45,6 +50,7 @@ describe('shared capability policy forms', () => {
           onChange={setValue}
           principals={PROTOTYPE_PRINCIPALS}
           subjects={PROTOTYPE_SUBJECTS}
+          currentUserId={PROTOTYPE_USERS.kasia}
         />
       );
     };
@@ -58,7 +64,7 @@ describe('shared capability policy forms', () => {
       expect(screen.getByText('Branch access')).toBeInTheDocument();
       expect(screen.getByText('This branch no longer follows board defaults')).toBeInTheDocument();
     });
-    expect(screen.getByLabelText('Search people and groups')).toBeEnabled();
+    expect(screen.getByLabelText('Add one person or group to Branch access')).toBeEnabled();
   });
 
   it('warns before making a shared policy private', async () => {
@@ -81,7 +87,7 @@ describe('shared capability policy forms', () => {
     expect(screen.getByRole('button', { name: 'Make private' })).toBeInTheDocument();
   });
 
-  it('shows three product-level controls instead of low-level session and terminal switches', () => {
+  it('uses one role dropdown plus file access with no capability checkboxes', () => {
     const value = cloneBranchPrototypeFixture('overridden-branch');
     renderWithTheme(
       <BranchCapabilityPolicyForm
@@ -89,19 +95,48 @@ describe('shared capability policy forms', () => {
         onChange={() => undefined}
         principals={PROTOTYPE_PRINCIPALS}
         subjects={PROTOTYPE_SUBJECTS}
+        currentUserId={PROTOTYPE_USERS.kasia}
       />
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit access for Kasia D.' }));
-    fireEvent.click(screen.getByRole('button', { name: /Customize access/i }));
 
-    expect(screen.getByRole('checkbox', { name: /View branch/i })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /Work in own sessions/i })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: /Manage branch/i })).toBeInTheDocument();
+    expect(screen.getByLabelText('Kasia D. role')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: 'Kasia D. file access' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Customize access/)).not.toBeInTheDocument();
+  });
+
+  it('keeps personal session sharing owner-authored and foreign rules read only', () => {
+    const initial = cloneBranchPrototypeFixture('overridden-branch');
+    const Harness = () => {
+      const [value, setValue] = useState(initial);
+      return (
+        <BranchCapabilityPolicyForm
+          value={value}
+          onChange={setValue}
+          principals={PROTOTYPE_PRINCIPALS}
+          subjects={PROTOTYPE_SUBJECTS}
+          currentUserId={PROTOTYPE_USERS.kasia}
+        />
+      );
+    };
+    renderWithTheme(<Harness />);
+
+    expect(screen.getByText('Seb V. shares with')).toBeInTheDocument();
+    expect(screen.getByText('GTM')).toBeInTheDocument();
     expect(
-      screen.queryByRole('checkbox', { name: /Create own sessions/i })
-    ).not.toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: /Open own terminal/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/Terminal is available automatically only when/)).toBeInTheDocument();
+      screen.getByText(/You cannot change them, even if your branch role is Manager/)
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('switch', { name: 'Allow others to prompt sessions owned by Kasia D.' })
+    );
+    expect(
+      screen.getByText('Sharing a session means sharing your agent-tool home')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Add one person or group to my session sharing')
+    ).toBeInTheDocument();
   });
 });

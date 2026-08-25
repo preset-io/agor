@@ -10,6 +10,7 @@ import { Alert, Button, Descriptions, Divider, Flex, Segmented, Typography, them
 import { useState } from 'react';
 import { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
 import { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
+import { PersonalSessionSharingSection } from './PersonalSessionSharingSection';
 import { BRANCH_ACCESS_EDITOR_CONTEXT } from './policyEditorModel';
 import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
@@ -18,6 +19,7 @@ interface BranchCapabilityPolicyFormProps {
   onChange: (value: BranchCapabilityPolicyDraft) => void;
   principals: CapabilityPolicyPrincipalDescriptor[];
   subjects: PrototypeAccessSubject[];
+  currentUserId: UserID;
 }
 
 function findUserDescriptor(
@@ -43,6 +45,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
   onChange,
   principals,
   subjects,
+  currentUserId,
 }) => {
   const { token } = theme.useToken();
   const [confirmInherit, setConfirmInherit] = useState(false);
@@ -190,6 +193,14 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
           />
         </Flex>
       )}
+
+      <Divider style={{ marginBlock: 0 }} />
+      <PersonalSessionSharingSection
+        value={value.session_sharing}
+        onChange={(sessionSharing) => onChange({ ...value, session_sharing: sessionSharing })}
+        currentUserId={currentUserId}
+        principals={principals}
+      />
     </Flex>
   );
 };
