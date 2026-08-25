@@ -22,6 +22,7 @@ import {
 } from '@agor/core/config';
 import {
   ArtifactRepository,
+  assertTenantWritable,
   BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
@@ -35,6 +36,7 @@ import {
   shortId,
   TaskRepository,
   type TenantScopeAwareDatabase,
+  TenantWriteGateActiveError,
   UserMCPOAuthTokenRepository,
   type UsersRepository,
 } from '@agor/core/db';
@@ -45,7 +47,13 @@ import {
   validateRepoEnvironmentLifecyclePolicy,
 } from '@agor/core/environment/webhook';
 import type { Application, FeathersService } from '@agor/core/feathers';
-import { BadRequest, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import {
+  BadRequest,
+  Forbidden,
+  NotAuthenticated,
+  NotFound,
+  Unavailable,
+} from '@agor/core/feathers';
 import {
   boardCommentQueryValidator,
   boardObjectQueryValidator,
