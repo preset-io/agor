@@ -80,7 +80,11 @@ const CONNECT_REQUEST = {
  * puts it there. That second claim is asserted separately at the bottom of
  * this file, against the production registration itself.
  */
-async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
+async function buildDaemon(
+  policy: MCPMemberPolicy,
+  role: UserRole = 'member',
+  catalogEntry: MCPCatalogEntry = CURATED
+) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   const db = rawDb as unknown as TenantScopeAwareDatabase;
   await runMigrations(rawDb);
@@ -98,7 +102,7 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
   } as never);
   app.use('mcp-catalog', {
     async get() {
-      return CURATED;
+      return catalogEntry;
     },
   } as never);
   app.use('sessions', {
@@ -135,11 +139,14 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
       paramsFor(caller, callerRole)
     );
   const connect = () => connectAs(user, role);
-  const installedServers = () => new MCPServerRepository(rawDb).findAll({});
+  const serverRepository = new MCPServerRepository(rawDb);
+  const installedServers = () => serverRepository.findAll({});
+  const seedServer = (server: Parameters<MCPServerRepository['create']>[0]) =>
+    serverRepository.create(server);
   const addUser = (email: string, addedRole: UserRole) =>
     users.create({ email, name: email, role: addedRole }) as Promise<User>;
 
-  return { user, connect, connectAs, addUser, installedServers };
+  return { user, connect, connectAs, addUser, installedServers, seedServer };
 }
 
 describe('marketplace install, as it lands in the database', () => {
@@ -240,6 +247,52 @@ describe('marketplace install, as it lands in the database', () => {
     const servers = await installedServers();
     expect(servers).toHaveLength(1);
     expect(servers[0]?.owner_user_id).toBe(user.user_id);
+  });
+
+  it('authoritatively replaces stale same-type OAuth fields on a reused catalog install', async () => {
+    const oauthEntry = { ...CURATED, auth_type: 'oauth' } as MCPCatalogEntry;
+    const { user, connect, installedServers, seedServer } = await buildDaemon(
+      'allow_crud',
+      'member',
+      oauthEntry
+    );
+    await seedServer({
+      name: 'deepwiki',
+      display_name: 'DeepWiki',
+      transport: 'http',
+      url: CURATED.remote_url,
+      auth: {
+        type: 'oauth',
+        oauth_mode: 'per_user',
+        oauth_authorization_url: 'https://stale.example/authorize',
+        oauth_token_url: 'https://stale.example/token',
+        oauth_client_secret: 'stale-client-secret',
+        oauth_scope: 'stale:read stale:write',
+        // This is the one catalog reconciliation override the operator chose
+        // explicitly and is allowed to retain.
+        oauth_compatibility_mode: 'legacy',
+      },
+      scope: 'session',
+      source: 'catalog',
+      catalog_entry_name: DEEPWIKI,
+      owner_user_id: user.user_id as UserID,
+      enabled: true,
+    });
+    probeRemoteAuthType.mockResolvedValueOnce('oauth');
+
+    const result = (await connect()) as {
+      reused_existing_server: boolean;
+      mcp_server: MCPServer;
+    };
+
+    expect(result.reused_existing_server).toBe(true);
+    const [stored] = await installedServers();
+    expect(stored?.auth).toEqual({
+      type: 'oauth',
+      oauth_mode: 'per_user',
+      oauth_compatibility_mode: 'legacy',
+    });
+    expect(JSON.stringify(stored)).not.toContain('stale-client-secret');
   });
 });
 

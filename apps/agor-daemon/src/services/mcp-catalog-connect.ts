@@ -848,6 +848,10 @@ export function createMCPCatalogConnectService(
     const reconciledAuth = reconcile
       ? preserveExplicitOAuthCompatibility(server, prescribed)
       : prescribed;
+    // Both arms carry a complete catalog-authored auth object, not a public
+    // partial edit. Make that authority explicit so same-mode fields omitted
+    // by today's prescription cannot survive from an older install. The only
+    // retained field is the validated compatibility override selected above.
     const updates = reconcile
       ? {
           enabled: true,
@@ -856,8 +860,9 @@ export function createMCPCatalogConnectService(
           url: createInput.url,
           headers: {},
           auth: reconciledAuth,
+          replace_auth: true,
         }
-      : { auth: prescribed };
+      : { auth: prescribed, replace_auth: true };
     if (!generation) {
       await service('mcp-servers').patch(server.mcp_server_id, updates, {
         ...params,

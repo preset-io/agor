@@ -1145,6 +1145,7 @@ describe('mcp-catalog/connect — endpoints that sign the user in', () => {
 
       expect(result.reuse_kind).toBe('catalog_install');
       expect((patched.at(-1)!.data.auth as MCPAuth).oauth_compatibility_mode).toBe(mode);
+      expect(patched.at(-1)!.data.replace_auth).toBe(true);
       expect(result.mcp_server.auth?.oauth_compatibility_mode).toBe(mode);
       expect(result.effective_oauth_policy).toEqual({
         effective_mode: mode,
@@ -1208,6 +1209,7 @@ describe('mcp-catalog/connect — endpoints that sign the user in', () => {
         type: 'oauth',
         oauth_mode: 'per_user',
       });
+      expect(patched.at(-1)!.data.replace_auth).toBe(true);
     }
   );
 
@@ -2091,7 +2093,10 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     const result = await createMCPCatalogConnectService(app).create(keyRequest, params);
 
     expect(patched).toEqual([
-      { id: 'server-existing', data: { auth: { type: 'bearer', token: NEW_KEY } } },
+      {
+        id: 'server-existing',
+        data: { auth: { type: 'bearer', token: NEW_KEY }, replace_auth: true },
+      },
     ]);
     expect(generationClaims).toEqual([{ ownerUserId: ALICE, catalogEntryName: LINEAR, value: 1 }]);
     expect(generationFinalizations).toEqual([
@@ -2125,7 +2130,10 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     ]);
     expect(patched.at(-1)).toEqual({
       id: 'server-1',
-      data: { auth: { type: 'bearer', token: 'fake-new-key-2222' } },
+      data: {
+        auth: { type: 'bearer', token: 'fake-new-key-2222' },
+        replace_auth: true,
+      },
     });
   });
 
@@ -2217,7 +2225,10 @@ describe('mcp-catalog/connect — reusing a key-bearing install', () => {
     // fence. The important boundary is that Alice's new row, not Bob's
     // existing credential row, is the target.
     expect(patched).toEqual([
-      { id: 'server-1', data: { auth: { type: 'bearer', token: NEW_KEY } } },
+      {
+        id: 'server-1',
+        data: { auth: { type: 'bearer', token: NEW_KEY }, replace_auth: true },
+      },
     ]);
     expect(generationFinalizations).toEqual([
       { id: 'server-1', ownerUserId: ALICE, catalogEntryName: LINEAR, value: 1 },
