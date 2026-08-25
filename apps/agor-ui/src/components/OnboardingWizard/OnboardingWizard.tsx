@@ -39,6 +39,7 @@ import {
   BLANK_TEMPLATE_ID,
   getTeammateTemplate,
   resolveTemplateSourceBranch,
+  resolveTemplateSourceRemoteUrl,
   type TeammateGalleryCardId,
 } from '../../utils/teammateTemplates';
 import { type CodexAuthFallback, CodexDeviceSignIn, CodexImportAuthJson } from '../CodexAuth';
@@ -344,6 +345,8 @@ export interface OnboardingCompletionResult {
   teammateEmoji?: string;
   /** Framework source branch from the chosen template; undefined = repo default. */
   sourceBranch?: string;
+  /** Remote that owns sourceBranch; the teammate's destination repo remains unchanged. */
+  sourceRemoteUrl?: string;
   /** Chosen gallery template id (persona); null/undefined = blank starter. */
   templateId?: string | null;
   /** Agent selected in the LLM step, used for the teammate's bootstrap session. */
@@ -987,6 +990,7 @@ export function OnboardingWizard({
             // Framework source branch from the chosen gallery template; undefined
             // (blank / no pick) falls back to the repo default branch.
             sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
+            sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
             templateId: selectedTemplateId,
             agent: selectedAgent,
             suggestedIntegrations,

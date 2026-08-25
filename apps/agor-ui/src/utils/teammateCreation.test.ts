@@ -96,4 +96,48 @@ describe('createTeammateBranch', () => {
     });
     expect(onUpdateBranch).not.toHaveBeenCalled();
   });
+
+  it('qualifies a template ref with its source remote while keeping the private repo as destination', async () => {
+    const repo = makeRepo({
+      slug: 'preset-io/agor-teammate-private',
+      remote_url: 'https://github.com/preset-io/agor-teammate-private.git',
+    });
+    const branch = makeBranch({ board_id: 'board-1' });
+    const onCreateBranch = vi.fn().mockResolvedValue(branch);
+    const boardsService = {
+      ensureTeammateWelcomeNote: vi.fn().mockResolvedValue({}),
+      setPrimaryTeammate: vi.fn().mockResolvedValue({}),
+    };
+    const client = {
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        throw new Error(`Unexpected service: ${name}`);
+      }),
+    };
+
+    await createTeammateBranch(
+      {
+        displayName: 'Deal Desk',
+        repoId: repo.repo_id,
+        boardId: 'board-1',
+        sourceBranch: 'template/deal-desk-revops-analyst',
+        sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
+        createdViaOnboarding: true,
+      },
+      {
+        client: client as never,
+        repoById: new Map([[repo.repo_id, repo]]),
+        onCreateBranch,
+        onUpdateBranch: vi.fn(),
+      }
+    );
+
+    expect(onCreateBranch).toHaveBeenCalledWith(
+      repo.repo_id,
+      expect.objectContaining({
+        sourceBranch: 'template/deal-desk-revops-analyst',
+        sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
+      })
+    );
+  });
 });

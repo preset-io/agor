@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   deleteRepoDirectory: vi.fn(),
   cloneRepo: vi.fn(),
   createBranchAsClone: vi.fn(),
+  isRemoteRefVisibleForClone: vi.fn(),
   getReposDir: vi.fn(() => '/safe/repos'),
   addConfig: vi.fn(),
   gitRaw: vi.fn(),
@@ -49,6 +50,7 @@ vi.mock('../git/index.js', async () => {
     createGit: vi.fn(() => ({ git: { addConfig: mocks.addConfig, raw: mocks.gitRaw } })),
     cloneRepo: mocks.cloneRepo,
     createBranchAsClone: mocks.createBranchAsClone,
+    isRemoteRefVisibleForClone: mocks.isRemoteRefVisibleForClone,
     deleteBranchDirectory: mocks.deleteBranchDirectory,
     deleteRepoDirectory: mocks.deleteRepoDirectory,
     isValidGitRepo: mocks.isValidGitRepo,
@@ -194,6 +196,7 @@ beforeEach(() => {
     defaultBranch: 'main',
   });
   mocks.createBranchAsClone.mockResolvedValue({ path: '/trusted/branch', ref: 'main' });
+  mocks.isRemoteRefVisibleForClone.mockResolvedValue(false);
   mocks.isValidGitRepo.mockResolvedValue(true);
   mocks.getDefaultBranch.mockResolvedValue('main');
   mocks.getRemoteUrl.mockResolvedValue('https://user:secret@example.com/org/repo.git');
@@ -261,6 +264,7 @@ describe('managed executor git/fs commands', () => {
         name: 'feature',
         ref: 'trusted-ref',
         base_ref: 'trusted-base',
+        base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
         new_branch: true,
         ref_type: 'branch',
         storage_mode: 'clone',
@@ -286,7 +290,8 @@ describe('managed executor git/fs commands', () => {
     expect(result.success).toBe(true);
     expect(mocks.createBranchAsClone).toHaveBeenCalledWith(
       expect.objectContaining({
-        remoteUrl: 'https://example.com/trusted/repo.git',
+        remoteUrl: 'https://github.com/preset-io/agor-teammate.git',
+        originRemoteUrl: 'https://example.com/trusted/repo.git',
         ref: 'trusted-base',
         newBranchName: 'trusted-ref',
         depth: 42,
@@ -296,6 +301,171 @@ describe('managed executor git/fs commands', () => {
     expect(patchedBranches).toContainEqual({ filesystem_status: 'ready' });
     expect(renderedBranches).toEqual([branchId]);
     expect(patchedBranches.some((patch) => 'start_command' in patch)).toBe(false);
+  });
+
+  it('restores a clone from the destination branch when it has already been pushed', async () => {
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://github.com/preset-io/agor-teammate-private.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'private-ponc',
+        ref: 'private-ponc',
+        base_ref: 'template/deal-desk-revops-analyst',
+        base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
+        new_branch: true,
+        ref_type: 'branch',
+        storage_mode: 'clone',
+      },
+    });
+    mocks.isRemoteRefVisibleForClone.mockResolvedValueOnce(true);
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: { branchId, repoId, restoreMode: true },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.isRemoteRefVisibleForClone).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteUrl: 'https://github.com/preset-io/agor-teammate-private.git',
+        ref: 'private-ponc',
+        refType: 'branch',
+      })
+    );
+    expect(mocks.createBranchAsClone).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteUrl: 'https://github.com/preset-io/agor-teammate-private.git',
+        ref: 'private-ponc',
+      })
+    );
+    expect(mocks.createBranchAsClone.mock.calls[0]?.[0]).not.toHaveProperty('originRemoteUrl');
+    expect(mocks.createBranchAsClone.mock.calls[0]?.[0]).not.toHaveProperty('newBranchName');
+  });
+
+  it('falls back to the qualified template only when the destination branch is absent', async () => {
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://github.com/preset-io/agor-teammate-private.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'private-ponc',
+        ref: 'private-ponc',
+        base_ref: 'template/deal-desk-revops-analyst',
+        base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
+        new_branch: true,
+        ref_type: 'branch',
+        storage_mode: 'clone',
+      },
+    });
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: { branchId, repoId, restoreMode: true },
+      },
+      {}
+    );
+
+    expect(result.success).toBe(true);
+    expect(mocks.createBranchAsClone).toHaveBeenCalledWith(
+      expect.objectContaining({
+        remoteUrl: 'https://github.com/preset-io/agor-teammate.git',
+        originRemoteUrl: 'https://github.com/preset-io/agor-teammate-private.git',
+        ref: 'template/deal-desk-revops-analyst',
+        newBranchName: 'private-ponc',
+      })
+    );
+  });
+
+  it('does not replace a destination branch when the restore preflight fails', async () => {
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://github.com/preset-io/agor-teammate-private.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'private-ponc',
+        ref: 'private-ponc',
+        base_ref: 'template/deal-desk-revops-analyst',
+        base_remote_url: 'https://github.com/preset-io/agor-teammate.git',
+        new_branch: true,
+        ref_type: 'branch',
+        storage_mode: 'clone',
+      },
+    });
+    mocks.isRemoteRefVisibleForClone.mockRejectedValueOnce(new Error('destination unavailable'));
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: { branchId, repoId, restoreMode: true },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { message: expect.stringContaining('destination unavailable') },
+    });
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
+  });
+
+  it('rejects a forged persisted template remote before filesystem materialization', async () => {
+    createClient({
+      repo: {
+        repo_id: repoId,
+        local_path: '/trusted/repo',
+        remote_url: 'https://github.com/preset-io/agor-teammate-private.git',
+      },
+      branch: {
+        branch_id: branchId,
+        repo_id: repoId,
+        path: '/trusted/branch',
+        name: 'private-ponc',
+        ref: 'private-ponc',
+        base_ref: 'template/deal-desk-revops-analyst',
+        base_remote_url: 'https://attacker.example/template.git',
+        new_branch: true,
+        ref_type: 'branch',
+        storage_mode: 'clone',
+      },
+    });
+
+    const result = await handleGitBranchAdd(
+      {
+        command: 'git.branch.add',
+        sessionToken: 'tenant-token',
+        params: { branchId, repoId },
+      },
+      {}
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: { message: expect.stringContaining('Refusing untrusted base_remote_url') },
+    });
+    expect(mocks.createBranchAsClone).not.toHaveBeenCalled();
   });
 
   it('denies missing tenant-scoped repo before filesystem materialization', async () => {

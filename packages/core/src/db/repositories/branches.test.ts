@@ -49,6 +49,7 @@ function createBranchData(overrides?: {
   board_id?: UUID;
   created_by?: UUID;
   base_ref?: string;
+  base_remote_url?: string;
   base_sha?: string;
   last_commit_sha?: string;
   tracking_branch?: string;
@@ -83,6 +84,7 @@ function createBranchData(overrides?: {
     board_id: overrides?.board_id,
     created_by: overrides?.created_by ?? (generateId() as UUID),
     base_ref: overrides?.base_ref,
+    base_remote_url: overrides?.base_remote_url,
     base_sha: overrides?.base_sha,
     last_commit_sha: overrides?.last_commit_sha,
     tracking_branch: overrides?.tracking_branch,
@@ -188,6 +190,7 @@ describe('BranchRepository.create', () => {
       repo_id: repo.repo_id,
       board_id: boardId,
       base_ref: 'main',
+      base_remote_url: 'https://github.com/example/template-source.git',
       base_sha: 'abc123',
       last_commit_sha: 'def456',
       tracking_branch: 'origin/feature',
@@ -211,6 +214,7 @@ describe('BranchRepository.create', () => {
     expect(created.created_by).toBe(data.created_by);
     expect(created.board_id).toBe(boardId);
     expect(created.base_ref).toBe('main');
+    expect(created.base_remote_url).toBe('https://github.com/example/template-source.git');
     expect(created.base_sha).toBe('abc123');
     expect(created.last_commit_sha).toBe('def456');
     expect(created.tracking_branch).toBe('origin/feature');

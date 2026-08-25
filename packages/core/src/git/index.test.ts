@@ -30,6 +30,7 @@ import {
   listGitWorktrees,
   pruneGitWorktrees,
   removeGitWorktree,
+  restoreBranchFilesystem,
 } from './index';
 
 /**
@@ -76,6 +77,43 @@ async function createBareRepo(dirPath: string): Promise<void> {
   await fs.mkdir(dirPath, { recursive: true });
   const git = simpleGit(dirPath);
   await git.init(['--bare', '--initial-branch=main']);
+}
+
+const DEAL_DESK_TEMPLATE_BRANCH = 'template/deal-desk-revops-analyst';
+const DEAL_DESK_TEMPLATE_TAG = 'deal-desk-v1';
+
+/**
+ * Reproduce the onboarding topology: the destination private remote has only
+ * main while the public template remote owns the selected template branch.
+ */
+async function createSeparatedTemplateRemotes(tempDir: string): Promise<{
+  destinationRemote: string;
+  sourceRemote: string;
+}> {
+  const destinationRemote = path.join(tempDir, 'agor-teammate-private.git');
+  const sourceRemote = path.join(tempDir, 'agor-teammate.git');
+  await createBareRepo(destinationRemote);
+  await createBareRepo(sourceRemote);
+
+  const destinationSeed = path.join(tempDir, 'destination-seed');
+  await createTestRepo(destinationSeed);
+  await simpleGit(destinationSeed).addRemote('origin', destinationRemote);
+  await simpleGit(destinationSeed).push('origin', 'main');
+
+  const sourceSeed = path.join(tempDir, 'template-seed');
+  await createTestRepo(sourceSeed);
+  const sourceGit = simpleGit(sourceSeed);
+  await sourceGit.addRemote('origin', sourceRemote);
+  await sourceGit.push('origin', 'main');
+  await sourceGit.checkoutLocalBranch(DEAL_DESK_TEMPLATE_BRANCH);
+  await fs.writeFile(path.join(sourceSeed, 'ONBOARDING.md'), '# Deal Desk', 'utf-8');
+  await sourceGit.add('ONBOARDING.md');
+  await sourceGit.commit('Add deal desk teammate template');
+  await sourceGit.push('origin', DEAL_DESK_TEMPLATE_BRANCH);
+  await sourceGit.addTag(DEAL_DESK_TEMPLATE_TAG);
+  await sourceGit.push('origin', `refs/tags/${DEAL_DESK_TEMPLATE_TAG}`);
+
+  return { destinationRemote, sourceRemote };
 }
 
 /**
@@ -560,6 +598,99 @@ describe('createBranch', () => {
       .then(() => true)
       .catch(() => false);
     expect(featureFileExists).toBe(true);
+  });
+
+  it('creates a worktree from a template ref missing on the destination remote', async () => {
+    const { destinationRemote, sourceRemote } = await createSeparatedTemplateRemotes(tempDir);
+    await simpleGit().clone(destinationRemote, repoDir);
+
+    // This is the production regression: the preferred private destination
+    // intentionally does not publish public template/* refs.
+    expect(
+      (
+        await simpleGit().listRemote(['--heads', destinationRemote, DEAL_DESK_TEMPLATE_BRANCH])
+      ).trim()
+    ).toBe('');
+
+    await createBranch(
+      repoDir,
+      branchDir,
+      'private-ponc',
+      true,
+      true,
+      DEAL_DESK_TEMPLATE_BRANCH,
+      undefined,
+      'branch',
+      sourceRemote
+    );
+
+    expect(await getCurrentBranch(branchDir)).toBe('private-ponc');
+    expect(await fs.readFile(path.join(branchDir, 'ONBOARDING.md'), 'utf-8')).toBe('# Deal Desk');
+    expect(await getRemoteUrl(repoDir)).toBe(destinationRemote);
+    expect(
+      (
+        await simpleGit(repoDir).raw(['for-each-ref', '--format=%(refname)', 'refs/agor/base'])
+      ).trim()
+    ).toBe('');
+  });
+
+  it('does not leave a temporary source ref when the target path already exists', async () => {
+    const { destinationRemote, sourceRemote } = await createSeparatedTemplateRemotes(tempDir);
+    await simpleGit().clone(destinationRemote, repoDir);
+    await fs.mkdir(branchDir);
+
+    await expect(
+      createBranch(
+        repoDir,
+        branchDir,
+        'private-existing',
+        true,
+        true,
+        DEAL_DESK_TEMPLATE_BRANCH,
+        undefined,
+        'branch',
+        sourceRemote
+      )
+    ).rejects.toThrow(/already exists/);
+
+    expect(
+      (
+        await simpleGit(repoDir).raw(['for-each-ref', '--format=%(refname)', 'refs/agor/base'])
+      ).trim()
+    ).toBe('');
+  });
+
+  it('restores from a cross-repo tag when the destination branch is definitively absent', async () => {
+    const { destinationRemote, sourceRemote } = await createSeparatedTemplateRemotes(tempDir);
+    await simpleGit().clone(destinationRemote, repoDir);
+
+    const result = await restoreBranchFilesystem(
+      repoDir,
+      branchDir,
+      'private-from-tag',
+      DEAL_DESK_TEMPLATE_TAG,
+      undefined,
+      sourceRemote,
+      'tag'
+    );
+
+    expect(result).toEqual({ success: true, strategy: 'create' });
+    expect(await getCurrentBranch(branchDir)).toBe('private-from-tag');
+    expect(await fs.readFile(path.join(branchDir, 'ONBOARDING.md'), 'utf-8')).toBe('# Deal Desk');
+  });
+
+  it('does not treat a destination lookup failure as an absent branch during restore', async () => {
+    await createTestRepo(repoDir);
+    await simpleGit(repoDir).addRemote('origin', path.join(tempDir, 'missing-origin.git'));
+
+    const result = await restoreBranchFilesystem(repoDir, branchDir, 'private-work', 'main');
+
+    expect(result).toMatchObject({
+      success: false,
+      strategy: 'checkout',
+      error: expect.stringContaining("Cannot determine whether branch 'private-work' exists"),
+    });
+    await expect(fs.access(branchDir)).rejects.toThrow();
   });
 
   it('should handle pullLatest parameter', async () => {
@@ -1491,6 +1622,53 @@ describe('createBranchAsClone', () => {
     const cloned = simpleGit(targetPath);
     const remoteBranches = await cloned.branch(['-r']);
     expect(remoteBranches.all).not.toContain('origin/my-new-feature');
+  });
+
+  it('clones a template ref from its source while keeping the private destination as origin', async () => {
+    const { destinationRemote, sourceRemote } = await createSeparatedTemplateRemotes(tempDir);
+    const targetPath = path.join(tempDir, 'private-ponc');
+
+    expect(
+      (
+        await simpleGit().listRemote(['--heads', destinationRemote, DEAL_DESK_TEMPLATE_BRANCH])
+      ).trim()
+    ).toBe('');
+
+    const result = await createBranchAsClone({
+      remoteUrl: sourceRemote,
+      originRemoteUrl: destinationRemote,
+      targetPath,
+      ref: DEAL_DESK_TEMPLATE_BRANCH,
+      newBranchName: 'private-ponc',
+    });
+
+    expect(result).toEqual({ path: targetPath, ref: 'private-ponc' });
+    expect(await fs.readFile(path.join(targetPath, 'ONBOARDING.md'), 'utf-8')).toBe('# Deal Desk');
+    expect(await getRemoteUrl(targetPath)).toBe(destinationRemote);
+    const cloned = simpleGit(targetPath);
+    expect(await cloned.getConfig('remote.origin.fetch')).toMatchObject({
+      value: '+refs/heads/*:refs/remotes/origin/*',
+    });
+    expect((await cloned.branch()).all).not.toContain(DEAL_DESK_TEMPLATE_BRANCH);
+    expect((await cloned.branch(['-r'])).all).not.toContain(`origin/${DEAL_DESK_TEMPLATE_BRANCH}`);
+  });
+
+  it('clones a template tag from its source without trying to delete it as a local branch', async () => {
+    const { destinationRemote, sourceRemote } = await createSeparatedTemplateRemotes(tempDir);
+    const targetPath = path.join(tempDir, 'private-tag-template');
+
+    const result = await createBranchAsClone({
+      remoteUrl: sourceRemote,
+      originRemoteUrl: destinationRemote,
+      targetPath,
+      ref: DEAL_DESK_TEMPLATE_TAG,
+      newBranchName: 'private-from-tag',
+    });
+
+    expect(result).toEqual({ path: targetPath, ref: 'private-from-tag' });
+    expect(await getCurrentBranch(targetPath)).toBe('private-from-tag');
+    expect(await fs.readFile(path.join(targetPath, 'ONBOARDING.md'), 'utf-8')).toBe('# Deal Desk');
+    expect(await getRemoteUrl(targetPath)).toBe(destinationRemote);
   });
 
   it('rejects newBranchName that fails ref validation', async () => {

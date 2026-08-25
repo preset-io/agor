@@ -751,6 +751,7 @@ describe('OnboardingWizard', () => {
           teammateName: 'Rusty',
           teammateEmoji: '⚖️',
           sourceBranch: 'template/legal-analyst',
+          sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
           templateId: 'legal-analyst',
         })
       )
@@ -844,6 +845,7 @@ describe('OnboardingWizard', () => {
         teammateName: 'Rusty',
         teammateEmoji: '🤖',
         sourceBranch: undefined,
+        sourceRemoteUrl: undefined,
         templateId: null,
         agent: 'claude-code',
         // Goals were skipped → the default MCP suggestion set flows through, and
@@ -951,6 +953,7 @@ describe('OnboardingWizard', () => {
         teammateName: undefined,
         teammateEmoji: '🤖',
         sourceBranch: undefined,
+        sourceRemoteUrl: undefined,
         templateId: null,
         agent: null,
         suggestedIntegrations: mergeGoalIntegrationRecs([]),
@@ -1031,6 +1034,7 @@ describe('OnboardingWizard', () => {
         teammateName: 'Rusty',
         templateId: 'legal-analyst',
         sourceBranch: 'template/legal-analyst',
+        sourceRemoteUrl: 'https://github.com/preset-io/agor-teammate.git',
       })
     );
   });
@@ -1084,6 +1088,7 @@ describe('OnboardingWizard', () => {
         boardId: 'board-resume',
         templateId: 'blank',
         sourceBranch: undefined,
+        sourceRemoteUrl: undefined,
       })
     );
   });

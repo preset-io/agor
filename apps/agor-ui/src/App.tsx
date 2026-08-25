@@ -894,6 +894,7 @@ function AppContent() {
       teammateName: result.teammateName,
       teammateEmoji: result.teammateEmoji,
       sourceBranch: result.sourceBranch,
+      sourceRemoteUrl: result.sourceRemoteUrl,
       agent: result.agent,
       suggestedIntegrations: result.suggestedIntegrations,
       // Goals drive the first-session prompt; [] (skipped) yields the generic
@@ -1599,6 +1600,7 @@ function AppContent() {
       refType?: 'branch' | 'tag';
       createBranch: boolean;
       sourceBranch: string;
+      sourceRemoteUrl?: string;
       pullLatest: boolean;
       issue_url?: string;
       pull_request_url?: string;
@@ -1621,6 +1623,7 @@ function AppContent() {
         createBranch: data.createBranch,
         pullLatest: data.pullLatest, // Fetch latest from remote before creating
         sourceBranch: data.sourceBranch, // Base new branch on specified source branch
+        sourceRemoteUrl: data.sourceRemoteUrl, // Qualify a cross-repository base ref
         issue_url: data.issue_url,
         pull_request_url: data.pull_request_url,
         boardId: data.boardId, // Optional: add to board
