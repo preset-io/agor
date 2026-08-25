@@ -49,7 +49,7 @@ describe('capability policy proposal contract', () => {
           {
             entry_id: entryId,
             principal: { principal_type: 'group', group_id: groupId },
-            preset: 'reviewer',
+            preset: 'viewer',
             capabilities: ['branch.view'],
             fs_access: 'read',
           },

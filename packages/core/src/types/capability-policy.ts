@@ -44,7 +44,6 @@ export type CapabilityPolicyPresetId =
   | 'viewer'
   | 'editor'
   | 'discover'
-  | 'reviewer'
   | 'collaborator'
   | 'manager'
   | 'custom';

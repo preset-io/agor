@@ -224,9 +224,9 @@ const BRANCH_PRESETS: readonly CapabilityPresetDefinition[] = [
     fsAccess: 'none',
   },
   {
-    id: 'reviewer',
-    label: 'Reviewer',
-    summary: 'Can read the branch, conversations, and files.',
+    id: 'viewer',
+    label: 'Viewer',
+    summary: 'Can view the branch, conversations, and files.',
     capabilities: ['branch.view'],
     fsAccess: 'read',
   },

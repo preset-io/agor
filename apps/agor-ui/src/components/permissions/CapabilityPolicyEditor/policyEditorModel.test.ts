@@ -14,6 +14,20 @@ const grant = {
 };
 
 describe('capability policy editor model', () => {
+  it('calls read-only branch access Viewer without implying prompt access', () => {
+    const viewerDefinition = BRANCH_ACCESS_EDITOR_CONTEXT.presets.find(
+      (preset) => preset.id === 'viewer'
+    );
+    const viewer = applyCapabilityPreset(grant, BRANCH_ACCESS_EDITOR_CONTEXT, 'viewer');
+
+    expect(viewerDefinition?.label).toBe('Viewer');
+    expect(viewer).toEqual({
+      preset: 'viewer',
+      capabilities: ['branch.view'],
+      fs_access: 'read',
+    });
+  });
+
   it('keeps Manager independent from prompt and execution capabilities', () => {
     const manager = applyCapabilityPreset(grant, BRANCH_ACCESS_EDITOR_CONTEXT, 'manager');
 

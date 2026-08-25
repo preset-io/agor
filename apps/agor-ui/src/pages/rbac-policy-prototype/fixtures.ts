@@ -196,7 +196,7 @@ export const SHARED_BOARD_FIXTURE: BoardCapabilityPoliciesDraft = {
       {
         entry_id: entryId('5'),
         principal: { principal_type: 'group', group_id: PROTOTYPE_GROUPS.design },
-        preset: 'reviewer',
+        preset: 'viewer',
         capabilities: ['branch.view'],
         fs_access: 'read',
       },
@@ -230,7 +230,7 @@ export const SHARED_BOARD_FIXTURE: BoardCapabilityPoliciesDraft = {
       {
         entry_id: entryId('9'),
         principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.deleted },
-        preset: 'reviewer',
+        preset: 'viewer',
         capabilities: ['branch.view'],
         fs_access: 'read',
       },
@@ -279,14 +279,14 @@ export const OVERRIDDEN_BRANCH_FIXTURE: BranchCapabilityPolicyDraft = {
       {
         entry_id: entryId('12'),
         principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.mia },
-        preset: 'reviewer',
+        preset: 'viewer',
         capabilities: ['branch.view'],
         fs_access: 'read',
       },
       {
         entry_id: entryId('13'),
         principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.deleted },
-        preset: 'reviewer',
+        preset: 'viewer',
         capabilities: ['branch.view'],
         fs_access: 'read',
       },
