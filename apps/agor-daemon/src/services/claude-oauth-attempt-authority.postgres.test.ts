@@ -16,7 +16,10 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mutateCredentialFile } from '@agor/core/codex/credential-file';
+import {
+  compareAndSwapCredentialFile,
+  mutateCredentialFile,
+} from '@agor/core/codex/credential-file';
 import {
   ClaudeOAuthAttemptRepository,
   CodexDeviceAuthAttemptRepository,
@@ -337,7 +340,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           seeded.userId,
           attemptId,
           claim.attempt.exchangeClaimId!,
-          async (material) => {
+          async (material, credentialGeneration) => {
             await writeClaudeAuthViaExecutor(
               '{"winner":"oauth"}\n',
               {
@@ -345,7 +348,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
                 userId: seeded.userId,
                 claudeConfigDir: material.claudeConfigDir!,
               },
-              material.attemptGeneration
+              credentialGeneration
             );
             fileWritten();
             await allowFinalize;
@@ -381,6 +384,225 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           10
         );
         expect(tombstone).toBeGreaterThan(claim.attempt.attemptGeneration);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('lets a pending login finish with a newer generation than an interim runtime refresh', async () => {
+      const seeded = await seed('refresh-then-login');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-refresh-login-'));
+      const claudeConfigDir = join(root, '.claude');
+      const target = join(claudeConfigDir, '.credentials.json');
+      try {
+        await mutateCredentialFile({ target, content: 'old-grant' });
+        const attemptId = await start(
+          authorityA,
+          seeded,
+          'refresh-then-login',
+          null,
+          claudeConfigDir
+        );
+        const claim = await authorityA.claimForExchange(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          stateFor('refresh-then-login')
+        );
+        expect(claim.outcome).toBe('claimed');
+        if (claim.outcome !== 'claimed') return;
+
+        let refreshGeneration = 0;
+        await authorityB.runCredentialRefresh(
+          seeded.tenantId,
+          seeded.userId,
+          async (generation) => {
+            refreshGeneration = generation;
+            await expect(
+              compareAndSwapCredentialFile({
+                target,
+                expectedContent: 'old-grant',
+                content: 'refreshed-old-grant',
+                generation,
+              })
+            ).resolves.toEqual({ outcome: 'written' });
+          }
+        );
+
+        let loginGeneration = 0;
+        await expect(
+          authorityA.finalize(
+            seeded.tenantId,
+            seeded.userId,
+            attemptId,
+            claim.attempt.exchangeClaimId!,
+            async (_material, credentialGeneration) => {
+              loginGeneration = credentialGeneration;
+              await mutateCredentialFile({
+                target,
+                content: 'new-login-grant',
+                generation: credentialGeneration,
+              });
+              return { value: true };
+            }
+          )
+        ).resolves.toEqual({ outcome: 'committed', value: true });
+        expect(loginGeneration).toBeGreaterThan(refreshGeneration);
+        await expect(readFile(target, 'utf8')).resolves.toBe('new-login-grant');
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('serializes runtime refresh before logout so the later tombstone wins', async () => {
+      const seeded = await seed('refresh-then-logout');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-refresh-logout-'));
+      const claudeConfigDir = join(root, '.claude');
+      const target = join(claudeConfigDir, '.credentials.json');
+      try {
+        await mutateCredentialFile({ target, content: 'old-grant' });
+        let releaseRefresh!: () => void;
+        const holdRefresh = new Promise<void>((resolve) => {
+          releaseRefresh = resolve;
+        });
+        let refreshHasAuthority!: () => void;
+        const refreshStarted = new Promise<void>((resolve) => {
+          refreshHasAuthority = resolve;
+        });
+        const refresh = authorityA.runCredentialRefresh(
+          seeded.tenantId,
+          seeded.userId,
+          async (generation) => {
+            refreshHasAuthority();
+            await mutateCredentialFile({ target, content: 'refreshed-grant', generation });
+            await holdRefresh;
+          }
+        );
+        await refreshStarted;
+
+        let logoutSettled = false;
+        const logout = authorityB
+          .runCredentialMutation(seeded.tenantId, seeded.userId, 'signed_out', (generation) =>
+            deleteClaudeAuthViaExecutor(
+              { delegatedHomeKey: null, userId: seeded.userId, claudeConfigDir },
+              generation
+            )
+          )
+          .finally(() => {
+            logoutSettled = true;
+          });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(logoutSettled).toBe(false);
+        releaseRefresh();
+        await refresh;
+        await logout;
+        await expect(stat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('serializes runtime refresh before a route change so old-home cleanup wins', async () => {
+      const seeded = await seed('refresh-then-route-change');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-refresh-route-'));
+      const oldClaudeConfigDir = join(root, 'old-home', '.claude');
+      const target = join(oldClaudeConfigDir, '.credentials.json');
+      try {
+        await mutateCredentialFile({ target, content: 'old-grant' });
+        let releaseRefresh!: () => void;
+        const holdRefresh = new Promise<void>((resolve) => {
+          releaseRefresh = resolve;
+        });
+        let refreshHasAuthority!: () => void;
+        const refreshStarted = new Promise<void>((resolve) => {
+          refreshHasAuthority = resolve;
+        });
+        let refreshGeneration = 0;
+        const refresh = authorityA.runCredentialRefresh(
+          seeded.tenantId,
+          seeded.userId,
+          async (generation) => {
+            refreshGeneration = generation;
+            await expect(
+              compareAndSwapCredentialFile({
+                target,
+                expectedContent: 'old-grant',
+                content: 'refreshed-old-grant',
+                generation,
+              })
+            ).resolves.toEqual({ outcome: 'written' });
+            refreshHasAuthority();
+            await holdRefresh;
+          }
+        );
+        await refreshStarted;
+
+        let routeSettled = false;
+        let routeGeneration = 0;
+        const routeChange = authorityB
+          .runCredentialMutation(
+            seeded.tenantId,
+            seeded.userId,
+            'credentials_changed',
+            async (generation) => {
+              routeGeneration = generation;
+              await deleteClaudeAuthViaExecutor(
+                {
+                  delegatedHomeKey: null,
+                  userId: seeded.userId,
+                  claudeConfigDir: oldClaudeConfigDir,
+                },
+                generation
+              );
+            }
+          )
+          .finally(() => {
+            routeSettled = true;
+          });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(routeSettled).toBe(false);
+
+        releaseRefresh();
+        await refresh;
+        await routeChange;
+        expect(routeGeneration).toBeGreaterThan(refreshGeneration);
+        await expect(stat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(
+          readFile(join(oldClaudeConfigDir, '.agor-auth-generation'), 'utf8')
+        ).resolves.toBe(`${routeGeneration}\n`);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('makes simultaneous cross-replica refreshes adopt the byte-CAS winner', async () => {
+      const seeded = await seed('refresh-loser-adoption');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-refresh-adopt-'));
+      const target = join(root, '.claude', '.credentials.json');
+      try {
+        await mutateCredentialFile({ target, content: 'old-grant' });
+        const refresh = (authority: ClaudeOAuthAttemptAuthority, content: string) =>
+          authority.runCredentialRefresh(seeded.tenantId, seeded.userId, (generation) =>
+            compareAndSwapCredentialFile({
+              target,
+              expectedContent: 'old-grant',
+              content,
+              generation,
+            })
+          );
+
+        const outcomes = await Promise.all([
+          refresh(authorityA, 'replica-a-grant'),
+          refresh(authorityB, 'replica-b-grant'),
+        ]);
+        const written = outcomes.filter((outcome) => outcome.outcome === 'written');
+        const adopted = outcomes.filter((outcome) => outcome.outcome === 'changed');
+        expect(written).toHaveLength(1);
+        expect(adopted).toHaveLength(1);
+
+        const winner = await readFile(target, 'utf8');
+        expect(['replica-a-grant', 'replica-b-grant']).toContain(winner);
+        expect(adopted[0]).toEqual({ outcome: 'changed', content: winner });
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -751,7 +973,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           seeded.userId,
           attemptId,
           claim.attempt.exchangeClaimId!,
-          async (material) => {
+          async (material, credentialGeneration) => {
             await writeClaudeAuthViaExecutor(
               '{"winner":"oauth-before-route-change"}\n',
               {
@@ -759,7 +981,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
                 userId: seeded.userId,
                 claudeConfigDir: material.claudeConfigDir!,
               },
-              material.attemptGeneration
+              credentialGeneration
             );
             credentialWritten();
             await holdFinalize;
@@ -1020,7 +1242,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           seeded.userId,
           attemptId,
           claim.attempt.exchangeClaimId!,
-          async (material) => {
+          async (material, credentialGeneration) => {
             await writeClaudeAuthViaExecutor(
               '{"former":"credential"}\n',
               {
@@ -1028,7 +1250,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
                 userId: seeded.userId,
                 claudeConfigDir: material.claudeConfigDir!,
               },
-              material.attemptGeneration
+              credentialGeneration
             );
             credentialWritten();
             await holdFinalize;

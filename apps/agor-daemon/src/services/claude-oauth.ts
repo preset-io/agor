@@ -38,7 +38,7 @@
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
-  hasExactUserExecutorCredentialHome,
+  hasContainedClaudeRuntimeCredentials,
   isClaudeSubscriptionOAuthEnabled,
   isTenantAgenticToolEnabled,
 } from '@agor/core/config';
@@ -156,7 +156,7 @@ export function buildAuthorizeUrl(challenge: string, state: string): string {
   return url.toString();
 }
 
-interface ExchangedTokens {
+export interface ExchangedTokens {
   accessToken: string;
   refreshToken: string;
   expiresInSec: number;
@@ -307,16 +307,113 @@ export async function exchangeCodeForTokens(
 }
 
 /**
- * The `.credentials.json` document the Claude SDK/CLI reads on Linux. `expiresAt`
- * is a Unix epoch in milliseconds; carrying the refresh token is what lets the
- * CLI auto-renew the ~8h access token for long-running sessions.
+ * Refresh a managed Claude grant without exposing the long-lived refresh token
+ * to the provider runtime. The POST deliberately has the same rejected versus
+ * ambiguous taxonomy as the one-shot code exchange:
+ *
+ * - any 4xx (including `invalid_grant`) is a definitive rejection;
+ * - network failures, 5xx, and malformed success bodies are ambiguous because
+ *   the provider may already have rotated the refresh token.
+ *
+ * Callers must never clear the canonical file or persisted source for either
+ * disposition. An ambiguous refresh is never replayed within the launch.
  */
-export function buildClaudeCredentialsJson(tokens: ExchangedTokens): string {
+export async function refreshClaudeTokens(
+  refreshToken: string,
+  current: Pick<ExchangedTokens, 'scopes' | 'subscriptionType'>
+): Promise<ExchangedTokens> {
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(CLAUDE_TOKEN_URL, {
+      method: 'POST',
+      redirect: 'error',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: CLAUDE_CLIENT_ID,
+        scope: (current.scopes.length > 0 ? current.scopes : CLAUDE_SCOPES).join(' '),
+      }),
+    });
+  } catch {
+    throw new TokenExchangeError(
+      'ambiguous',
+      'Could not reach Claude to refresh this login. Try again later.'
+    );
+  }
+  if (!res.ok) {
+    throw new TokenExchangeError(
+      res.status >= 500 ? 'ambiguous' : 'rejected',
+      res.status >= 500
+        ? 'Claude had a server error refreshing this login. Try again later.'
+        : 'Claude rejected this login refresh. Sign in again.'
+    );
+  }
+
+  let body: Record<string, unknown>;
+  try {
+    body = (await res.json()) as Record<string, unknown>;
+  } catch {
+    throw new TokenExchangeError(
+      'ambiguous',
+      'Claude returned an unreadable login refresh response. Try again later.'
+    );
+  }
+  const { access_token, refresh_token, expires_in, scope } = body;
+  if (typeof access_token !== 'string' || !access_token.trim()) {
+    throw new TokenExchangeError(
+      'ambiguous',
+      'Claude login refresh returned no access token. Try again later.'
+    );
+  }
+  if (
+    typeof expires_in !== 'number' ||
+    !Number.isFinite(expires_in) ||
+    expires_in <= 0 ||
+    expires_in > MAX_EXPIRES_IN_SEC
+  ) {
+    throw new TokenExchangeError(
+      'ambiguous',
+      'Claude login refresh returned an invalid expiry. Try again later.'
+    );
+  }
+  if (refresh_token !== undefined && (typeof refresh_token !== 'string' || !refresh_token.trim())) {
+    throw new TokenExchangeError(
+      'ambiguous',
+      'Claude login refresh returned an invalid refresh token. Try again later.'
+    );
+  }
+  return {
+    accessToken: access_token,
+    // Claude currently rotates this value, but OAuth permits a refresh response
+    // to omit it. In that case the previous refresh token remains authoritative.
+    refreshToken: typeof refresh_token === 'string' ? refresh_token : refreshToken,
+    expiresInSec: expires_in,
+    scopes:
+      typeof scope === 'string' && scope
+        ? scope.split(' ')
+        : current.scopes.length > 0
+          ? current.scopes
+          : CLAUDE_SCOPES,
+    subscriptionType:
+      typeof body.subscription_type === 'string'
+        ? body.subscription_type
+        : current.subscriptionType,
+  };
+}
+
+/**
+ * The canonical `.credentials.json` document stored for a managed Claude login.
+ * `expiresAt` is a Unix epoch in milliseconds. Only the daemon reads and
+ * refreshes this document; contained task runtimes receive its short-lived
+ * access token through the sensitive executor environment channel.
+ */
+export function buildClaudeCredentialsJson(tokens: ExchangedTokens, nowMs = Date.now()): string {
   const credentials = {
     claudeAiOauth: {
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
-      expiresAt: Date.now() + tokens.expiresInSec * 1000,
+      expiresAt: nowMs + tokens.expiresInSec * 1000,
       scopes: tokens.scopes,
       subscriptionType: tokens.subscriptionType ?? null,
       rateLimitTier: null,
@@ -433,6 +530,10 @@ export function createClaudeOAuthService(
         );
       }
 
+      // Flip to managed `subscription` AND drop any previously pasted token.
+      // Task resolution will now read/refresh the canonical file daemon-side
+      // and inject only its short-lived access token; `null` deletes just the
+      // old pasted field and leaves other Claude settings intact.
       const usersService = app.service('users') as UsersServiceLike;
       // Select the explicit `managed_file` source and drop any previously
       // pasted CLAUDE_CODE_OAUTH_TOKEN. The source is the authority that makes
@@ -566,12 +667,9 @@ export function createClaudeOAuthService(
         throw new BadRequest('Claude is disabled for this workspace.');
       }
       const config = app.get('config');
-      if (
-        config.multi_tenancy?.mode === 'required_from_auth' &&
-        !hasExactUserExecutorCredentialHome(config)
-      ) {
+      if (!hasContainedClaudeRuntimeCredentials(config)) {
         throw new BadRequest(
-          'Claude subscription sign-in requires an exact per-user execution home in hosted mode.'
+          'Claude subscription sign-in requires a contained per-user sandbox. Use an API key or pasted subscription token in this execution mode.'
         );
       }
 

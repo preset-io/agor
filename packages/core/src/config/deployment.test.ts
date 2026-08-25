@@ -253,6 +253,7 @@ describe('resolveDeploymentConfig', () => {
 
     expect(resolveDeploymentConfig(external, secrets)).toMatchObject({
       topology: { execution: 'external', sharedFilesystem: false },
+      capabilities: { claudeAuth: false, claudeOAuth: false },
       executorStorage: {
         userHome: 'persistent-per-user',
         branchWorkspace: 'persistent-per-branch',
@@ -298,7 +299,7 @@ describe('resolveDeploymentConfig', () => {
     expect(deployment.capabilities.claudeOAuth).toBe(false);
   });
 
-  it('admits HA device auth only with a concrete exact-user credential route', () => {
+  it('admits Codex device auth but keeps Claude gated without concrete runtime containment', () => {
     const deployment = resolveDeploymentConfig(
       {
         ...haConfig,
@@ -318,6 +319,30 @@ describe('resolveDeploymentConfig', () => {
     expect(deployment.mode).toBe('ha');
     if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
     expect(deployment.capabilities.codexDeviceAuth).toBe(true);
+    expect(deployment.capabilities.claudeAuth).toBe(false);
+    expect(deployment.capabilities.claudeOAuth).toBe(false);
+  });
+
+  it('admits Claude HA only with exact-user routing, cross-replica locking, and containment', () => {
+    const deployment = resolveDeploymentConfig(
+      {
+        ...haConfig,
+        execution: {
+          ...haConfig.execution,
+          unix_user_mode: 'sandbox',
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            user_home_locking: 'cross-replica-flock',
+            branch_workspace: 'shared',
+            base_repository: 'shared',
+          },
+          sandbox: { enabled: true, home_mode: 'per_user' },
+        },
+      },
+      secrets
+    );
+    expect(deployment.mode).toBe('ha');
+    if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
     expect(deployment.capabilities.claudeAuth).toBe(true);
     expect(deployment.capabilities.claudeOAuth).toBe(true);
   });

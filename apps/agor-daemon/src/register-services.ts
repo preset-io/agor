@@ -139,6 +139,7 @@ import {
   DurableClaudeOAuthAttemptStore,
   InMemoryClaudeOAuthAttemptStore,
 } from './services/claude-oauth-attempt-store.js';
+import { ClaudeRuntimeCredentialResolver } from './services/claude-runtime-credential.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
@@ -697,7 +698,21 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Config, context, file, files, terminals
   // ============================================================================
 
-  const configService = createConfigService(db, config);
+  // One authority owns OAuth completion, logout, user source/route changes,
+  // and task-time refresh. Provider refresh I/O happens outside this boundary;
+  // only the final source/route re-read and generation CAS run inside it. HA
+  // uses the same durable tenant/user authority as paste-back finalization.
+  const claudeOAuthAuthority =
+    ctx.deployment.mode === 'ha' ? new ClaudeOAuthAttemptAuthority(db) : undefined;
+  const claudeOAuthStore = claudeOAuthAuthority
+    ? new DurableClaudeOAuthAttemptStore(claudeOAuthAuthority)
+    : new InMemoryClaudeOAuthAttemptStore();
+  const claudeRuntimeCredentials = new ClaudeRuntimeCredentialResolver(
+    db,
+    config,
+    claudeOAuthStore
+  );
+  const configService = createConfigService(db, config, claudeRuntimeCredentials);
   configService.app = app;
   app.use(
     '/agentic-tool-settings',
@@ -728,12 +743,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // route queue used by standalone Codex finalization and users route changes.
   // In HA, each provider uses its durable authority over the same advisory
   // tenant/user lock instead.
-  const claudeOAuthAuthority =
-    ctx.deployment.mode === 'ha' ? new ClaudeOAuthAttemptAuthority(db) : undefined;
-  const claudeOAuthStore = claudeOAuthAuthority
-    ? new DurableClaudeOAuthAttemptStore(claudeOAuthAuthority)
-    : new InMemoryClaudeOAuthAttemptStore();
-
   // Imports a pasted Codex CLI auth.json for the authenticated user — writes
   // it 0600 into the resolved Codex credential home and flips the caller's auth
   // method to subscription. Token material never leaves the daemon.

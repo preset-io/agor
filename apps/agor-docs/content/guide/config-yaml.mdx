@@ -53,6 +53,14 @@ disconnect/cleanup remain available.
 ```yaml
 agentic_tools:
   claude_subscription_oauth: true
+
+execution:
+  unix_user_mode: sandbox
+  executor_storage:
+    user_home: persistent-per-user
+  sandbox:
+    enabled: true
+    home_mode: per_user
 ```
 
 Set this to `true` only after the deployment operator has confirmed an
@@ -60,11 +68,23 @@ authorized provider/client contract for this flow, then restart every daemon
 replica with the same immutable config. Agor does not make that policy decision:
 the flag records the operator's clearance. When disabled, `/claude-auth/oauth`
 fails with `CLAUDE_SUBSCRIPTION_OAUTH_DISABLED` and the UI omits the OAuth tab.
-Topology gates still apply after authorization; the constrained HA profile in
-this release exposes Claude OAuth only when its resolved deployment capability
-also proves durable attempts, an exact per-user credential home, and
-cross-replica home locking. Other HA topologies remain fail-closed even when
-the flag is true.
+Topology gates still apply after authorization. This release requires the exact
+local per-user sandbox profile shown above and does not expose Claude OAuth in
+delegated, simple, shared-home, or disabled-sandbox execution. HA additionally
+requires durable attempts and cross-replica home locking; only the contained
+exact-user sandbox topology satisfies all three predicates. The daemon keeps
+the refreshable grant in the canonical per-user
+`~/.claude/.credentials.json`, refreshes it before task launch, and sends the
+runtime only the current access token. The sandbox masks that one canonical
+file from Claude while preserving the rest of `~/.claude` for settings and
+fork/resume state; Codex native auth is not masked by this change.
+
+For rollout, deploy/restart this version and confirm the per-user sandbox
+settings on every instance before enabling the default-off flag. For rollback,
+disable the flag and restart first; existing API keys and pasted subscription
+tokens remain available, and disabling the flag does not delete managed files.
+Rolling back to a runtime that reads the canonical file directly reintroduces
+the runtime-writer race, so drain managed-file Claude tasks before doing so.
 
 After editing this list, run `agor install --sync`. It installs the exact matching package version, removes
 unconfigured tools and packages from older Agor versions, and leaves `config.yaml` untouched. The

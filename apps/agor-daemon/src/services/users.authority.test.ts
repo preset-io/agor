@@ -1,7 +1,7 @@
-import { UsersRepository } from '@agor/core/db';
+import { runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, Params, User, UserID, UserRole } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { markTrustedUserMutation } from './user-mutation-trust';
 import { createUsersService, UsersService } from './users';
@@ -328,6 +328,48 @@ describe('UsersService role authority', () => {
 });
 
 describe('UsersService Claude credential-source authority', () => {
+  dbTest('serializes source and route changes with managed runtime refresh', async ({ db }) => {
+    const lock = vi.fn(async () => undefined);
+    const complete = vi.fn(async () => undefined);
+    const cleanupRouteBeforePatch = vi.fn(async () => undefined);
+    const service = new UsersService(db, undefined, undefined, {
+      applies: (data) =>
+        Object.hasOwn(data, 'filesystem_home') ||
+        Object.hasOwn(data.agentic_tools ?? {}, 'claude-code'),
+      changesSource: (data) => Object.hasOwn(data.agentic_tools ?? {}, 'claude-code'),
+      changesRoute: (data) => Object.hasOwn(data, 'filesystem_home'),
+      coordinatesRemoval: () => true,
+      lock,
+      complete,
+      cleanupRouteBeforePatch,
+      cleanupRouteBeforeRemove: vi.fn(async () => undefined),
+    });
+    const user = await createUser(service, 'admin', 'claude-coordinated-source');
+    const params = externalParams(user);
+
+    await runWithTenantContext('default', async () => {
+      await service.patch(
+        user.user_id as UserID,
+        {
+          agentic_tools: {
+            'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-coordinated' },
+          },
+        },
+        params
+      );
+      await service.patch(
+        user.user_id as UserID,
+        { filesystem_home: '/tmp/claude-coordinated-home' },
+        params
+      );
+      await service.patch(user.user_id as UserID, { name: 'not-credential-related' }, params);
+    });
+
+    expect(lock).toHaveBeenCalledTimes(2);
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(cleanupRouteBeforePatch).toHaveBeenCalledTimes(1);
+  });
+
   dbTest(
     'linearizes managed-file → pasted-token → clear without reactivating the file',
     async ({ db }) => {

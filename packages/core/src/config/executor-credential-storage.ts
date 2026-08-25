@@ -38,6 +38,27 @@ export function hasExactUserExecutorCredentialHome(config: Pick<AgorConfig, 'exe
 }
 
 /**
+ * Whether a Claude runtime is confined away from the daemon-owned canonical
+ * OAuth grant.  The containment is a concrete bubblewrap mask, not merely a
+ * storage declaration: only the local per-user sandbox policy emits it.
+ *
+ * Keep this separate from {@link hasExactUserExecutorCredentialHome}. Exact
+ * routing says where a credential belongs; this predicate says the untrusted
+ * provider runtime cannot read or rewrite that credential. Delegated and
+ * shared/simple execution remain fail-closed until their substrate contracts
+ * provide an equivalent enforceable mask.
+ */
+export function hasContainedClaudeRuntimeCredentials(
+  config: Pick<AgorConfig, 'execution'>
+): boolean {
+  return (
+    hasExactUserExecutorCredentialHome(config) &&
+    config.execution?.sandbox?.enabled === true &&
+    config.execution.sandbox.home_mode === 'per_user'
+  );
+}
+
+/**
  * Whether the operator asserts that one user home's kernel flock is visible to
  * every HA replica/client that can mutate that home. A merely shared path is
  * insufficient: NFS `local_lock` and similar mounts can expose identical bytes

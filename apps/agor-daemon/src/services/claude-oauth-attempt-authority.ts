@@ -213,7 +213,10 @@ export class ClaudeOAuthAttemptAuthority {
     userId: UserID,
     attemptId: ClaudeOAuthAttemptID,
     claimId: string,
-    work: (material: ClaudeOAuthSealedMaterial) => Promise<{
+    work: (
+      material: ClaudeOAuthSealedMaterial,
+      credentialGeneration: number
+    ) => Promise<{
       value: T;
       subscriptionType?: string;
     }>
@@ -228,7 +231,11 @@ export class ClaudeOAuthAttemptAuthority {
         }
         const material = this.openClaim(live).material;
         if (!(await repository.markPersisting(live))) return { outcome: 'stale' as const };
-        const completed = await work(material);
+        // Attempt generation orders replacement starts; the final credential
+        // write gets a fresh generation so an interim task refresh cannot
+        // permanently fence a still-current login that later completes.
+        const credentialGeneration = await repository.allocateAttemptGeneration(tenantId, userId);
+        const completed = await work(material, credentialGeneration);
         if (
           !(await repository.finish(tenantId, attemptId, claimId, 'succeeded', {
             subscriptionType: completed.subscriptionType ?? null,
@@ -281,6 +288,24 @@ export class ClaudeOAuthAttemptAuthority {
     });
     if (!outcome.ok) throw outcome.error;
     return outcome.value;
+  }
+
+  /**
+   * Serialize a daemon-owned runtime refresh with every other credential
+   * writer, but do not supersede a paste-back attempt that is still pending.
+   * The refresh byte-CAS yields to a completed login/logout/route mutation;
+   * a pending login later allocates a newer final-write generation and wins.
+   */
+  async runCredentialRefresh<T>(
+    tenantId: string,
+    userId: UserID,
+    work: (generation: number) => Promise<T>
+  ): Promise<T> {
+    return runWithTenantDatabaseScope(this.db, tenantId, async (scoped) => {
+      const repository = new ClaudeOAuthAttemptRepository(scoped);
+      const generation = await repository.allocateAttemptGeneration(tenantId, userId);
+      return work(generation);
+    });
   }
 
   /** Lock ordering seam used by UsersService: credential lock, then role lock. */

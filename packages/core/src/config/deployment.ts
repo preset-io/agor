@@ -1,4 +1,5 @@
 import {
+  hasContainedClaudeRuntimeCredentials,
   hasCrossReplicaExecutorCredentialLock,
   hasExactUserExecutorCredentialHome,
   hasTenantSafeExecutorCredentialHome,
@@ -384,6 +385,7 @@ export function resolveDeploymentConfig(
   const tenantSafeCredentialHome = hasTenantSafeExecutorCredentialHome(config);
   const exactUserCredentialHome = hasExactUserExecutorCredentialHome(config);
   const crossReplicaCredentialLock = hasCrossReplicaExecutorCredentialLock(config);
+  const containedClaudeRuntimeCredentials = hasContainedClaudeRuntimeCredentials(config);
   if (!tenantSafeCredentialHome) {
     throw new Error(
       'Config error: HA auth-resolved execution requires execution.executor_storage.user_home: persistent-per-user'
@@ -486,8 +488,13 @@ export function resolveDeploymentConfig(
       // deployment's intentional shared Unix identity would let users replace
       // each other's login. Admit only a concrete tenant/user-keyed route.
       codexDeviceAuth: exactUserCredentialHome && crossReplicaCredentialLock,
-      claudeOAuth: exactUserCredentialHome && crossReplicaCredentialLock,
-      claudeAuth: exactUserCredentialHome && crossReplicaCredentialLock,
+      // Claude additionally requires concrete runtime containment: exact
+      // routing and a shared lock protect daemon writers, while the bubblewrap
+      // mask proves the provider runtime cannot mutate the canonical grant.
+      claudeOAuth:
+        exactUserCredentialHome && crossReplicaCredentialLock && containedClaudeRuntimeCredentials,
+      claudeAuth:
+        exactUserCredentialHome && crossReplicaCredentialLock && containedClaudeRuntimeCredentials,
       processAffineAuth: false,
       gatewayListeners: true,
       gatewayOutboundExactlyOnce: false,

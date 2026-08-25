@@ -108,7 +108,7 @@ file offsets cited, and cross-checked against Anthropic's official docs
 ### RESOLVED: env-var vs `.credentials.json` precedence (was the open contradiction)
 
 **Definitive answer: the env var `CLAUDE_CODE_OAUTH_TOKEN` out-ranks the
-`.credentials.json` (`/login`) credential.** Two independent sources agree:
+`.credentials.json` (`/login`) credential.** Three independent sources agree:
 
 - Anthropic's documented precedence: env `CLAUDE_CODE_OAUTH_TOKEN` is rank 5,
   the subscription `/login` credential is rank 7
@@ -119,6 +119,12 @@ file offsets cited, and cross-checked against Anthropic's official docs
   env-over-file. (The exact tie-break is a compiled branch that could not be
   disassembled from strings alone, but both the docs and the enum ordering point
   the same way, so this is treated as settled.)
+- `packages/executor/scripts/claude-auth-precedence-smoke.mjs` executes the
+  exact CLI bundled by the pinned SDK against a loopback Messages endpoint. It
+  observes the env token in the first authenticated request despite a
+  deliberately wrong canonical file, proves that file's bytes and mtime are
+  unchanged, and repeats successfully with the file masked by `/dev/null` and
+  with it absent.
 
 The 2026-07-15/16 field observation (a stale `.credentials.json` + a fresh
 pasted env token still 401'd) is therefore **not** "the file wins". It is more
@@ -205,26 +211,22 @@ override routes remain gated.
 
 ---
 
-## Why write `.credentials.json` (not just inject the env var)
+## Why keep `.credentials.json` as a daemon-owned store
 
 Agor already supports pasting a `CLAUDE_CODE_OAUTH_TOKEN` (`check-auth.ts`),
 which the executor injects as an env var (`spawn-executor.ts`). Writing the
-real `.credentials.json` is still worth doing:
+real `.credentials.json` is still the canonical store:
 
-1. **Refresh.** `.credentials.json` carries the `refreshToken`, so the CLI/SDK
-   auto-renews the ~8h access token. A long-running unattended Agor session
-   (agent view, schedules) outlives an 8h access token; the file path survives,
-   an injected static access token would not. (`setup-token` mints a ~1-year
-   token, but that is a different, coarser artifact than a subscription login.)
+1. **Refresh.** `.credentials.json` carries the `refreshToken`. The daemon
+   refreshes near expiry before a task launch and injects only the resulting
+   short-lived access token. The provider runtime never receives the refresh
+   token and cannot rotate or clear the canonical store.
 2. **Identical to a real `/login`.** The daemon-written file is byte-compatible
    with what interactive `/login` produces, so downstream behavior is the same.
-3. **Avoids env↔file conflicts under isolated execution.** A sandbox/delegated
-   session uses the user's routed execution home, which may already hold a stale
-   `~/.claude/.credentials.json` from a prior interactive login. Injecting an
-   env token _and_ leaving a conflicting on-disk file is the kind of split-brain
-   that produces confusing 401s. Writing (and owning) the file gives one
-   coherent, refreshable credential source — provided we don't also inject a
-   competing env token, which we don't (see below).
+3. **Avoids two writers.** A local per-user sandbox masks only the canonical
+   credential file from Claude Code while leaving the rest of `~/.claude`
+   unchanged. The daemon is therefore the sole refresh writer, and the runtime
+   has exactly one usable source: `CLAUDE_CODE_OAUTH_TOKEN`.
 
 ---
 
@@ -238,28 +240,30 @@ above), the two must not coexist for one user.
 **The authority lives in the credential resolver, not in `spawn-executor.ts`.**
 `agentic_credential_sources['claude-code']` explicitly selects `api_key`,
 `subscription_token`, `managed_file`, or the durable opt-out `none`.
-`managed_file` alone produces native auth:
+`managed_file` first selects the daemon-owned resolution path:
 
 ```ts
 if (tool === 'claude-code' && claudeSource === 'managed_file') {
-  return { connection: {}, useNativeAuth: true };
+  return daemonResolveAndRefreshAccessToken();
 }
 ```
 
 Why this is correct and non-breaking:
 
-- **OAuth-flow user** (`managed_file`): matches the
-  guard → `useNativeAuth`, empty connection → `spawn-executor.ts:693` forwards no
-  `CLAUDE_CODE_OAUTH_TOKEN` → the SDK reads the refreshing file. `spawn-executor`
-  is **untouched** — it only ever forwards a value the resolver decided to set.
+- **OAuth-flow user** (`managed_file`): the daemon reads the canonical file. A
+  fresh token takes a lock-free/network-free fast path. A near-expiry token is
+  refreshed with provider I/O outside database/file locks, then source and
+  route are re-read under credential authority and the new canonical bytes are
+  generation-CASed. The existing sensitive executor-env channel forwards only
+  `CLAUDE_CODE_OAUTH_TOKEN`; `useNativeAuth` is false.
 - **Pasted-token user** (`subscription_token`): fails the
   guard → falls through to the existing env-injection path, byte-for-byte
   unchanged. No regression.
-- The claude executor tool already accepts a `useNativeAuth` flag with "no
-  special handling needed" (`packages/executor/src/sdk-handlers/claude/claude-tool.ts`),
-  so native auth just means "read the file". In hosted `required_from_auth`
-  multitenancy, start is admitted only when the deployment supplies an exact
-  per-user executor credential home; otherwise it fails closed before exchange.
+- The local per-user sandbox masks `.claude/.credentials.json` at all supported
+  home aliases, but does not redirect `CLAUDE_CONFIG_DIR`; settings and
+  path-keyed fork/resume transcripts keep working. Shared/simple, delegated,
+  disabled-sandbox, and uncontained HA topologies fail closed before provider
+  exchange.
 
 **One-source invariant:** a user who _both_ pasted a token earlier _and_ runs the
 OAuth flow would otherwise have `stored.CLAUDE_CODE_OAUTH_TOKEN` present, so the
@@ -337,6 +341,13 @@ migration `0095` remains an offline, protocol-incompatible cutover.
 This also fixes the known strict-impersonation gap where subscription auth had
 no daemon-driven on-disk path at all (only env injection).
 
+Task-time refresh uses the same authority. Concurrent launches for a tenant/user
+single-flight in process. After provider I/O, source/route revalidation plus the
+generation/file CAS makes login, logout, route change, or another refresh win;
+the loser adopts usable winner bytes rather than overwriting them. Provider 4xx
+(`invalid_grant`) is rejected, while network/5xx/malformed success is ambiguous;
+neither class clears the canonical file or persisted source.
+
 ---
 
 ## Credential-source transition
@@ -360,8 +371,10 @@ file and persists `none`.
 - The target unix identity is **always derived from the authenticated user**,
   never from request data — callers act only on their own credentials.
 - The browser carries only the short-lived authorization **code** and `state`
-  back to the daemon; **token material** flows Anthropic → daemon → target user's
-  filesystem only. Tokens are **never** returned to the UI, logged, echoed, or
+  back to the daemon. The refresh token flows Anthropic → daemon → target user's
+  filesystem only. The current short-lived access token additionally travels
+  over the task-scoped sensitive `config/resolve-api-key` channel into the
+  executor environment. Neither is returned to the UI, logged, echoed, or
   placed in any agent/LLM context. Failures log an error **class**, never token
   bytes.
 - Status responses (`ClaudeOAuthStatus`) carry only non-secret metadata: the
@@ -371,21 +384,27 @@ file and persists `none`.
   credential; it is exchanged immediately and never persisted.
 - `state` is verified against the attempt before exchange (CSRF / mix-up
   defense); the PKCE `verifier` never leaves the daemon.
-- Writes happen only in the execution home the daemon derives for the
-  authenticated user. Standalone supports its existing executor route. The HA
-  capability is narrower: a daemon-contained, canonical sandbox home; delegated
-  execution remains gated until it has an equivalent reviewed writer protocol.
+- Writes happen in the execution home the daemon routes to (content over the
+  hardened executor command), so 0600 ownership holds. New managed sign-ins and
+  managed task resolution are admitted only for the contained local per-user
+  sandbox profile. HA additionally requires durable attempt ownership and a
+  proven cross-replica home lock. Delegated execution remains fail-closed until
+  its substrate provides an equivalent reviewed containment and writer protocol.
 - Multi-tenancy: `.credentials.json` is a tenant-owned, per-user derived
   resource. Identity resolution goes through `resolveCodexCredentialRoute`, which
-  fails closed for hosted multi-tenant modes without an **exact** per-user
-  executor home. Sandbox coverage proves distinct tenants/users route to their
-  owner home rather than the daemon's shared `~/.claude`.
+  fails closed without an **exact** per-user executor home plus the concrete
+  bubblewrap credential mask. Sandbox coverage proves distinct tenants/users
+  route to their owner home rather than the daemon's shared `~/.claude`, and
+  covers canonical-home aliases.
 - Frozen tenants are rejected with 503 before executor/provider I/O. The
   credential control-plane services are non-realtime and denied from the Redis
   Feathers relay.
 - Claude OAuth/logout and native subscription resolution are enabled in
   constrained HA only when `claudeOAuth`/`claudeAuth` capability checks prove
-  the exact-user sandbox route and cross-replica lock. PostgreSQL attempt rows
+  the exact-user sandbox route, cross-replica lock, and concrete bubblewrap
+  mask that prevents the provider runtime from reaching the canonical file.
+  The default-off policy flag remains an independent endpoint/UI gate even
+  when those topology capabilities are true. PostgreSQL attempt rows
   are tenant-owned under forced RLS; only the narrow maintenance capability may
   age due attempts across tenants. Redis never carries attempt or credential
   material.
@@ -430,6 +449,10 @@ silently mutate account metadata in a background read.
 2. **`subscriptionType` response field** (cosmetic; see UNVERIFIED).
 3. **Provider authorization / acceptable use** (see below). The product
    boundary is implemented; the policy decision remains external.
+4. **Codex runtime containment.** Codex native auth has the same general risk:
+   its provider runtime can currently mutate the canonical refreshable file.
+   This Claude mask deliberately does not cover `.codex/auth.json`; daemon-owned
+   Codex refresh/token injection requires a separate design and rollout.
 
 ---
 
@@ -460,7 +483,7 @@ provider flow.
   increase volume.
 - In **hosted multi-tenant** mode, storing another user's subscription tokens
   requires the strict per-user isolation guarantees (the
-  `hasExactUserExecutorCredentialHome` gate). Do not enable this path in modes
+  `hasContainedClaudeRuntimeCredentials` gate). Do not enable this path in modes
   that can't guarantee per-user credential homes.
 - Recommendation: obtain the provider/client clearance before enabling the
   flag, and keep API-key and pasted-token paths as first-class alternatives.

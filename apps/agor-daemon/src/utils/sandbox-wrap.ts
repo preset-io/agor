@@ -180,7 +180,27 @@ export function buildSandboxWrap(params: {
     agorDbPath: runtimePaths.agorDbPath,
   };
 
-  const bwrapArgs = dropMasksForMissingTargets(resolveBwrapArgs(sandbox, ctx));
+  // These destinations are created inside the writable per-user overlay even
+  // when they do not exist in the daemon's host home. They must survive the
+  // generic missing-host-target filter or an absent host-side file would
+  // silently remove the Claude credential containment boundary.
+  const materializedFileMasks = new Set<string>();
+  if (perUser) {
+    const ownerClaudeCredentials = join(ownerHomeStore as string, '.claude', '.credentials.json');
+    materializedFileMasks.add(join(home, '.claude', '.credentials.json'));
+    materializedFileMasks.add(ownerClaudeCredentials);
+    if (
+      sandbox.preserve_canonical_home_alias === true &&
+      ctx.canonicalHomeDir &&
+      ctx.canonicalHomeDir !== home
+    ) {
+      materializedFileMasks.add(join(ctx.canonicalHomeDir, '.claude', '.credentials.json'));
+    }
+  }
+  const bwrapArgs = dropMasksForMissingTargets(
+    resolveBwrapArgs(sandbox, ctx),
+    materializedFileMasks
+  );
   return {
     cmd: 'bwrap',
     args: [...bwrapArgs, '--', cmd, ...args],
@@ -195,7 +215,10 @@ export function buildSandboxWrap(params: {
  * abort. Drop such entries — a path that doesn't exist has nothing to hide.
  * (Real targets like /tmp and the worktrees root exist and are kept.)
  */
-function dropMasksForMissingTargets(args: string[]): string[] {
+function dropMasksForMissingTargets(
+  args: string[],
+  materializedFileMasks: ReadonlySet<string> = new Set()
+): string[] {
   const out: string[] = [];
   for (let i = 0; i < args.length; ) {
     const a = args[i];
@@ -205,7 +228,9 @@ function dropMasksForMissingTargets(args: string[]): string[] {
       i += 2;
     } else if ((a === '--ro-bind' || a === '--ro-bind-try') && args[i + 1] === '/dev/null') {
       const dest = args[i + 2];
-      if (dest && existsSync(dest)) out.push(a, '/dev/null', dest);
+      if (dest && (existsSync(dest) || materializedFileMasks.has(dest))) {
+        out.push(a, '/dev/null', dest);
+      }
       i += 3;
     } else {
       out.push(a);

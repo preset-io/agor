@@ -1,6 +1,8 @@
 import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const sdkMocks = vi.hoisted(() => ({ query: vi.fn() }));
+
 // Mock minimal dependencies
 vi.mock('@agor/core/lib/validation', () => ({
   validateDirectory: vi.fn().mockResolvedValue(undefined),
@@ -9,9 +11,9 @@ vi.mock('@agor/core/db', () => ({
   // shortId is used in log lines inside query-builder; passthrough mock.
   shortId: vi.fn((id: string) => id),
 }));
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }));
+vi.mock('@anthropic-ai/claude-agent-sdk', () => sdkMocks);
 vi.mock('@agor/core/agentic-integrations', () => ({
-  loadManagedAgenticToolSdk: vi.fn(() => import('@anthropic-ai/claude-agent-sdk')),
+  loadManagedAgenticToolSdk: vi.fn(async () => sdkMocks),
 }));
 vi.mock('@agor/core/templates/session-context', () => ({
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
@@ -128,6 +130,35 @@ describe('setupQuery - Local Settings Support', () => {
     } finally {
       logSpy.mockRestore();
     }
+  });
+
+  it('keeps canonical Claude state for fork/resume while credentials use executor env', async () => {
+    const deps = createMockDeps();
+    const now = new Date().toISOString();
+    vi.mocked(deps.sessionsRepo.findById)
+      .mockResolvedValueOnce({
+        session_id: 'fork-session' as SessionID,
+        branch_id: 'test-branch' as BranchID,
+        created_at: now,
+        last_updated: now,
+        genealogy: { forked_from_session_id: 'parent-session' as SessionID },
+      } as any)
+      .mockResolvedValueOnce({
+        session_id: 'parent-session' as SessionID,
+        branch_id: 'test-branch' as BranchID,
+        sdk_session_id: 'parent-sdk-session',
+      } as any);
+
+    await setupQuery('fork-session' as SessionID, 'continue from parent', deps);
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    expect(callArgs.options).toMatchObject({
+      resume: 'parent-sdk-session',
+      forkSession: true,
+      settingSources: expect.arrayContaining(['user', 'project', 'local']),
+    });
+    // Runtime containment masks only .credentials.json. It must not redirect
+    // CLAUDE_CONFIG_DIR, which would strand path-keyed transcripts/settings.
+    expect(callArgs.options).not.toHaveProperty('env.CLAUDE_CONFIG_DIR');
   });
 
   // Pin the literal disallow list so a stray edit to the constant

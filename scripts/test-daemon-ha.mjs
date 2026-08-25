@@ -431,6 +431,11 @@ try {
   assert.equal(healthA.deployment.instanceId, 'daemon-a');
   assert.equal(healthB.deployment.instanceId, 'daemon-b');
   assert.notEqual(healthA.deployment.bootId, healthB.deployment.bootId);
+  assert.deepEqual(
+    healthA.deployment.capabilities,
+    healthB.deployment.capabilities,
+    'HA replicas reported different resolved capability matrices'
+  );
   for (const health of [healthA, healthB]) {
     assert.equal(health.deployment.supportProfile, 'constrained-active-active');
     assert.equal(health.deployment.capabilities.taskExecution, true);

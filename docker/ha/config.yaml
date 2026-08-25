@@ -50,6 +50,11 @@ execution:
   # it advertises. Sandbox mode forces branch RBAC, per-user home overlays, and
   # fail-closed bubblewrap isolation; it does not impersonate host accounts.
   unix_user_mode: sandbox
+  sandbox:
+    # These explicit values are also the concrete Claude runtime credential
+    # containment predicate: bubblewrap masks the canonical refreshable file.
+    enabled: true
+    home_mode: per_user
   # PTY transport is replica-local and ephemeral. Sticky Socket.IO keeps the
   # create/control connection on its owner; owner loss is a visible disconnect
   # and reconnect creates a new attachment (possibly reattaching local Zellij).

@@ -218,6 +218,11 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
       const homesParent = dirname(homeDir);
       if (homesParent && homesParent !== '/' && homesParent !== '.') hiddenRoots.add(homesParent);
     }
+    if (!isAbsolute(ctx.ownerHomeStore as string) || ctx.ownerHomeStore === '/') {
+      throw new Error(
+        `Invalid sandbox owner home ${ctx.ownerHomeStore}: expected an absolute path below /`
+      );
+    }
     // The home overlay only hides data stored below the passwd home. A hosted
     // deployment may keep AGOR_DATA_HOME on a persistent volume elsewhere; the
     // read-only root bind would otherwise leave sibling branches and daemon
@@ -313,6 +318,29 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
       for (const destination of homeAliasPaths(file, ctx, preserveCanonicalHomeAlias)) {
         args.push('--ro-bind', '/dev/null', destination);
       }
+    }
+
+    // Claude's refreshable subscription grant is daemon-owned. Managed-file
+    // tasks receive only a short-lived CLAUDE_CODE_OAUTH_TOKEN through the
+    // existing sensitive executor credential channel; the provider runtime
+    // must never read, refresh, clear, or overwrite the canonical grant. Keep
+    // the rest of ~/.claude mounted normally so settings and resume/fork
+    // transcripts retain their existing paths. Do NOT mask .codex/auth.json:
+    // Codex still intentionally consumes native auth and needs a separate
+    // daemon-token containment project.
+    const claudeCredentials = join(ctx.homeDir, '.claude', '.credentials.json');
+    const credentialAliases = new Set([
+      ...homeAliasPaths(claudeCredentials, ctx, preserveCanonicalHomeAlias),
+      // A custom filesystem_home can live outside every deployment data root,
+      // where the initial read-only root bind leaves the same file reachable
+      // at its physical source path. Mask that alias only AFTER binding the
+      // store onto HOME, so the already-established home overlay remains intact.
+      join(ctx.ownerHomeStore as string, '.claude', '.credentials.json'),
+    ]);
+    for (const destination of credentialAliases) {
+      // `-try` also covers a user who has not signed in yet. Once the daemon
+      // creates the canonical file, subsequent task sandboxes mask it.
+      args.push('--ro-bind-try', '/dev/null', destination);
     }
 
     args.push('--setenv', 'HOME', ctx.homeDir);

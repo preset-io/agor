@@ -111,6 +111,11 @@ export interface ClaudeOAuthAttemptStore {
     reason: 'signed_out' | 'credentials_changed',
     work: (generation?: number) => Promise<T>
   ): Promise<T>;
+  /** Serialize a daemon-owned runtime refresh without invalidating a newer login attempt. */
+  runCredentialRefresh<T>(
+    ctx: ClaudeOAuthAttemptContext,
+    work: (generation?: number) => Promise<T>
+  ): Promise<T>;
   /** Acquire the same authority for a users-service route/source mutation. */
   lockExternalUserMutation(tenantId: string, userId: UserID): Promise<(() => Promise<void>) | void>;
   /** Invalidate and generation-fence while the external caller retains that authority. */
@@ -427,6 +432,16 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
     });
   }
 
+  runCredentialRefresh<T>(
+    _ctx: ClaudeOAuthAttemptContext,
+    work: (generation?: number) => Promise<T>
+  ): Promise<T> {
+    // Standalone refresh shares the same process-global file queue as OAuth,
+    // logout, and route changes. It intentionally does not advance the durable
+    // HA tombstone retained across an offline deployment-mode transition.
+    return this.credentialMutations.run(STANDALONE_CLAUDE_CREDENTIAL_HOME, () => work(undefined));
+  }
+
   lockExternalUserMutation(_tenantId: string, _userId: UserID): Promise<() => Promise<void>> {
     return this.credentialMutations.acquire(STANDALONE_CLAUDE_CREDENTIAL_HOME);
   }
@@ -560,7 +575,7 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
       ctx.userId,
       claim.attemptId as ClaudeOAuthAttemptID,
       claim.claimId,
-      async (material) => work(material.attemptGeneration)
+      async (_material, credentialGeneration) => work(credentialGeneration)
     );
   }
 
@@ -594,6 +609,13 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
     work: (generation: number) => Promise<T>
   ): Promise<T> {
     return this.authority.runCredentialMutation(ctx.tenantId, ctx.userId, reason, work);
+  }
+
+  runCredentialRefresh<T>(
+    ctx: ClaudeOAuthAttemptContext,
+    work: (generation: number) => Promise<T>
+  ): Promise<T> {
+    return this.authority.runCredentialRefresh(ctx.tenantId, ctx.userId, work);
   }
 
   lockExternalUserMutation(tenantId: string, userId: UserID): Promise<void> {
