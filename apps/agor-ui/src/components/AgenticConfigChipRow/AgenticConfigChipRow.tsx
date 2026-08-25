@@ -183,6 +183,13 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
   const [chipsExpanded, setChipsExpanded] = useState(false);
   const disclosureExpanded = Boolean(modelSelectionError) || chipsExpanded;
 
+  // Invalid required model configuration forces the corrective controls open.
+  // Latch that open state so an automatic suggestion or user correction does
+  // not make the controls disappear as soon as the error clears.
+  useEffect(() => {
+    if (modelSelectionError) setChipsExpanded(true);
+  }, [modelSelectionError]);
+
   useEffect(() => {
     onConfigValidityChange?.(configResolvable, configError);
   }, [configError, configResolvable, onConfigValidityChange]);
@@ -322,10 +329,8 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           renderContent={(close) => (
             <ModelSelector
               value={resolved.modelConfig as ModelConfig | undefined}
-              onChange={(next) => {
-                onModelChange(next);
-                close();
-              }}
+              onChange={onModelChange}
+              onCommit={close}
               agentic_tool={tool}
               client={client}
               branchId={branchId}
@@ -478,13 +483,19 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
               paddingInlineStart: 0,
               paddingBlock: token.paddingXXS,
             },
-            title: { minWidth: 0 },
+            title: { flex: 1, minWidth: 0 },
           }}
           items={[
             {
               key: 'chips',
+              collapsible: modelSelectionError ? 'disabled' : 'header',
               label: (
                 <Typography.Text
+                  aria-label={`Session configuration: ${chipSummary}${
+                    modelSelectionError
+                      ? '. Complete the required model selection before collapsing.'
+                      : ''
+                  }`}
                   type="secondary"
                   ellipsis={{ tooltip: chipSummary }}
                   style={{ display: 'block', fontSize: token.fontSizeSM, minWidth: 0 }}

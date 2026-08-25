@@ -26,14 +26,45 @@ vi.mock('../ModelSelector', async () => {
   const actual = await vi.importActual<typeof import('../ModelSelector')>('../ModelSelector');
   return {
     ...actual,
-    ModelSelector: ({ onChange }: { onChange: (v: unknown) => void }) => (
-      <button
-        type="button"
-        data-testid="model-change"
-        onClick={() => onChange({ mode: 'alias', model: 'claude-haiku-4-5' })}
-      >
-        change model
-      </button>
+    ModelSelector: ({
+      onChange,
+      onCommit,
+      agentic_tool,
+    }: {
+      onChange: (v: unknown) => void;
+      onCommit?: () => void;
+      agentic_tool?: AgenticToolName;
+    }) => (
+      <>
+        <button
+          type="button"
+          data-testid="model-change"
+          onClick={() => {
+            onChange({ mode: 'alias', model: 'claude-haiku-4-5' });
+            onCommit?.();
+          }}
+        >
+          change model
+        </button>
+        <button
+          type="button"
+          data-testid="model-type"
+          onClick={() => onChange({ mode: 'exact', model: 'claude-sonnet-4-6-20260101' })}
+        >
+          type exact model
+        </button>
+        {agentic_tool === 'opencode' && (
+          <button
+            type="button"
+            data-testid="model-suggest"
+            onClick={() =>
+              onChange({ mode: 'exact', provider: 'openai', model: 'suggested-model' })
+            }
+          >
+            suggest model
+          </button>
+        )}
+      </>
     ),
     AdvisorModelSelect: ({ onChange }: { onChange: (value: string | undefined) => void }) => (
       <>
@@ -254,6 +285,20 @@ describe('AgenticConfigChipRow', () => {
     expect(state.perm).toBe('acceptEdits');
   });
 
+  it('keeps the model popover open for exact-model edits and closes only on commit', async () => {
+    render(<Harness user={userWithDefault} initialSource={USER_DEFAULT_AGENTIC_CONFIGURATION} />);
+
+    const modelChip = await screen.findByRole('button', { name: 'Model: Opus 4.8 · 200k' });
+    fireEvent.click(modelChip);
+    fireEvent.click(await screen.findByTestId('model-type'));
+
+    await waitFor(() => expect(modelChip).toHaveAttribute('aria-expanded', 'true'));
+    expect(screen.getByTestId('model-type')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('model-change'));
+    await waitFor(() => expect(modelChip).toHaveAttribute('aria-expanded', 'false'));
+  });
+
   it('owns the advisor control from the empty inline state', async () => {
     render(<Harness user={{ user_id: 'u2' } as User} initialSource="__inline__" />);
 
@@ -353,7 +398,7 @@ describe('AgenticConfigChipRow', () => {
     );
     const header = summary.closest('[role="button"]');
     expect(header).toHaveAttribute('aria-expanded', 'false');
-    expect(summary.closest('.ant-collapse-title')?.getAttribute('style')).toContain('min-width: 0');
+    expect(summary.closest('.ant-collapse-title')).toHaveStyle({ flex: '1', minWidth: '0' });
 
     // Expanding is keyboard operable and reveals the editable chips.
     if (!header) throw new Error('missing disclosure header');
@@ -376,9 +421,31 @@ describe('AgenticConfigChipRow', () => {
     const modelChip = await screen.findByRole('button', {
       name: 'Model: Select provider/model',
     });
-    const header = screen.getByText(/^Select provider\/model ·/).closest('[role="button"]');
+    const header = screen.getByRole('button', { name: /session configuration:/i });
     expect(header).toHaveAttribute('aria-expanded', 'true');
+    expect(header).toHaveAttribute('aria-disabled', 'true');
+    expect(header).toHaveAccessibleName(/complete the required model selection before collapsing/i);
     expect(modelChip).toBeVisible();
+
+    fireEvent.click(modelChip);
+    fireEvent.click(await screen.findByTestId('model-suggest'));
+
+    // A catalog suggestion updates the value but is not a user commit: neither
+    // the picker nor the disclosure should disappear.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /session configuration:/i })).toHaveAttribute(
+        'aria-disabled',
+        'false'
+      )
+    );
+    const unlockedHeader = screen.getByRole('button', { name: /session configuration:/i });
+    expect(modelChip).toHaveAttribute('aria-expanded', 'true');
+    expect(unlockedHeader).toHaveAttribute('aria-expanded', 'true');
+
+    // Once unlocked, the disclosure remains open until the user closes it and
+    // retains standard keyboard operation.
+    fireEvent.keyDown(unlockedHeader, { key: 'Enter' });
+    await waitFor(() => expect(unlockedHeader).toHaveAttribute('aria-expanded', 'false'));
   });
 });
 

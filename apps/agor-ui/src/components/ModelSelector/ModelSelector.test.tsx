@@ -53,14 +53,16 @@ describe('ModelSelector (Claude)', () => {
     expect(screen.getByText('Use a recommended model')).toBeInTheDocument();
   });
 
-  it('switches to exact mode only after a specific version is entered', () => {
+  it('updates exact model text without committing until selection or blur', () => {
     const onChange = vi.fn();
+    const onCommit = vi.fn();
     render(
       <ModelSelector
         agentic_tool="claude-code"
         showAdvisor={false}
         value={{ mode: 'alias', model: 'claude-sonnet-5' }}
         onChange={onChange}
+        onCommit={onCommit}
       />
     );
     const pinButton = screen.getByRole('button', { name: 'Pin a specific version…' });
@@ -69,13 +71,39 @@ describe('ModelSelector (Claude)', () => {
     fireEvent.click(pinButton);
     expect(onChange).not.toHaveBeenCalled();
 
-    fireEvent.change(screen.getByRole('combobox'), {
-      target: { value: 'claude-sonnet-4-6-20260101' },
-    });
+    const exactInput = screen.getByRole('combobox');
+    for (const model of ['c', 'cl', 'claude-sonnet-4-6-20260101']) {
+      fireEvent.change(exactInput, { target: { value: model } });
+    }
+    expect(exactInput).toHaveValue('claude-sonnet-4-6-20260101');
     expect(onChange).toHaveBeenCalledWith({
       mode: 'exact',
       model: 'claude-sonnet-4-6-20260101',
     });
+    expect(onCommit).not.toHaveBeenCalled();
+
+    fireEvent.blur(exactInput);
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(onCommit).toHaveBeenCalledWith({
+      mode: 'exact',
+      model: 'claude-sonnet-4-6-20260101',
+    });
+  });
+
+  it('commits an alias when the user selects it', () => {
+    const onCommit = vi.fn();
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'alias', model: 'claude-sonnet-5' }}
+        onCommit={onCommit}
+      />
+    );
+
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(screen.getByText('Claude Fable 5 · 1M'));
+    expect(onCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'claude-fable-5' });
   });
 
   it('wraps option descriptions instead of truncating them', () => {

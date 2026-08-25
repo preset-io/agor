@@ -36,6 +36,8 @@ export interface ModelConfig {
 export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
+  /** Fired after an explicit user selection or completed exact-model edit. */
+  onCommit?: (config: ModelConfig) => void;
   agent?: AgenticToolName; // Kept as 'agent' for backwards compat in prop name
   agentic_tool?: AgenticToolName;
   /**
@@ -132,6 +134,7 @@ const PIN_PLACEHOLDERS: Record<string, string> = {
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   value,
   onChange,
+  onCommit,
   agent,
   agentic_tool,
   client,
@@ -274,9 +277,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // Pin mode reflects the stored config: an exact ID is an explicitly-pinned
   // version, anything else is a discovered alias selection.
   const [pinned, setPinned] = useState(value?.mode === 'exact');
+  const [pinnedModel, setPinnedModel] = useState(value?.model ?? '');
   useEffect(() => {
     setPinned(value?.mode === 'exact');
   }, [value?.mode]);
+  useEffect(() => {
+    setPinnedModel(value?.model ?? '');
+  }, [value?.model]);
 
   if (ToolModelSelector) {
     return (
@@ -302,6 +309,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             provider: selection.provider,
           });
         }}
+        onCommit={(selection) => {
+          onCommit?.({
+            mode: 'exact',
+            model: selection.model,
+            provider: selection.provider,
+          });
+        }}
       />
     );
   }
@@ -316,9 +330,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const currentModel = value?.model || fallbackModel;
 
   const selectAlias = (model: string) => {
-    onChange?.({ ...value, mode: 'alias', model });
+    const selection: ModelConfig = { ...value, mode: 'alias', model };
+    onChange?.(selection);
+    onCommit?.(selection);
   };
   const selectPinned = (model: string) => {
+    // Keep the text input responsive even when a controlled parent needs a
+    // render to persist each draft character.
+    setPinnedModel(model);
     onChange?.({ ...value, mode: 'exact', model });
   };
   const handleAdvisorModelChange = (advisorModel: string | undefined) => {
@@ -331,6 +350,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   const enablePin = () => {
+    setPinnedModel(currentModel);
     setPinned(true);
   };
   const disablePin = () => {
@@ -457,8 +477,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
         />
       ) : (
         <AutoComplete
-          value={currentModel}
+          value={pinnedModel}
           onChange={selectPinned}
+          onSelect={(model) => onCommit?.({ ...value, mode: 'exact', model })}
+          onBlur={() => {
+            const model = pinnedModel.trim();
+            if (model) onCommit?.({ ...value, mode: 'exact', model });
+          }}
           options={pinOptions}
           filterOption={(input, option) =>
             `${option?.value ?? ''} ${option?.label ?? ''}`
