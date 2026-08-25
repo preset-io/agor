@@ -44,9 +44,6 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
         <Typography.Title level={4} style={{ marginBottom: token.paddingXXS }}>
           Board permissions
         </Typography.Title>
-        <Typography.Text type="secondary">
-          Board access and the live defaults inherited by branches are separate policies.
-        </Typography.Text>
       </div>
       <ImmutablePrimaryOwner owner={owner} resourceLabel="board" />
       <Divider style={{ marginBlock: 0 }} />
@@ -64,7 +61,7 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
             children: (
               <CapabilityPolicyEditor
                 title="Who can see and manage this board"
-                description="Controls the board canvas, layout, zones, and permission settings. It does not grant access to a branch just because its card appears here."
+                description="Board access does not grant branch access."
                 value={value.board_access}
                 onChange={(boardAccess) => onChange({ ...value, board_access: boardAccess })}
                 context={BOARD_ACCESS_EDITOR_CONTEXT}
@@ -86,12 +83,10 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
                 <Alert
                   type="info"
                   showIcon
-                  title="Live defaults, not board access"
-                  description="Inherited branches follow this template. Each branch keeps its own fixed primary owner, and board members do not automatically gain branch access. Personal session-sharing exceptions are never inherited."
+                  description="Inherited branches use these defaults. Board access and personal session sharing remain separate."
                 />
                 <CapabilityPolicyEditor
                   title="Defaults inherited by this board’s branches"
-                  description="Controls branch, session, environment, and filesystem capabilities for branches that remain bound to Inherit. Overridden branches keep their explicit policy."
                   value={value.branch_template}
                   onChange={(branchTemplate) =>
                     onChange({ ...value, branch_template: branchTemplate })

@@ -9,7 +9,7 @@ import type {
   User,
   UserID,
 } from '@agor-live/client';
-import { ExperimentOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
+import { ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import { Alert, Button, Divider, Flex, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { BoardCapabilityPolicyForm } from './BoardCapabilityPolicyForm';
@@ -97,19 +97,11 @@ const PrototypeFrame: React.FC<PrototypeFrameProps> = ({
   const { token } = theme.useToken();
   return (
     <Flex vertical gap={token.paddingMD} data-testid="modal-capability-policy-prototype">
-      <Alert
-        type="warning"
-        showIcon
-        icon={<ExperimentOutlined />}
-        title="New permissions · development preview"
-        description="This draft is local to your browser. Apply locally does not call an API, change the database, alter the modal Save action, or authorize anything. Production authorization remains unchanged until the one-time cutover."
-      />
       {!membershipPreviewAvailable && (
         <Alert
           type="info"
           showIcon
-          title="Group membership preview is partial"
-          description="Your account cannot inspect the workspace membership directory. User/group selection still works, but sample effective access can explain only direct entries and Others."
+          description="Group membership preview is unavailable. Effective access can show direct entries and Others only."
         />
       )}
       {applied && (
@@ -118,22 +110,22 @@ const PrototypeFrame: React.FC<PrototypeFrameProps> = ({
           showIcon
           closable
           onClose={() => undefined}
-          title="Applied to this local preview only"
+          description="Preview updated."
         />
       )}
       {children}
       <Divider style={{ marginBlock: 0 }} />
       <Flex justify="flex-end" gap={token.paddingXS} wrap>
         <Button icon={<ReloadOutlined />} onClick={onReset} aria-label="Reset permissions preview">
-          Reset preview
+          Reset
         </Button>
         <Button
           type="primary"
           icon={<SaveOutlined />}
           onClick={onApply}
-          aria-label="Apply locally · prototype only"
+          aria-label="Apply permissions preview"
         >
-          Apply locally · prototype only
+          Apply preview
         </Button>
       </Flex>
     </Flex>

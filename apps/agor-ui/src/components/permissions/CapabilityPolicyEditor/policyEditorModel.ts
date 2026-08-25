@@ -100,19 +100,19 @@ const BOARD_PRESETS: readonly CapabilityPresetDefinition[] = [
   {
     id: 'viewer',
     label: 'Viewer',
-    summary: 'Can see the board and authorized branch cards, but cannot edit or manage it.',
+    summary: 'Can view the board.',
     capabilities: ['board.view'],
   },
   {
     id: 'editor',
     label: 'Editor',
-    summary: 'Can edit the board and attach branches, but cannot change its permissions.',
+    summary: 'Can edit the board, but not its permissions.',
     capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
   },
   {
     id: 'manager',
     label: 'Manager',
-    summary: 'Can edit the board and manage its permissions. Never becomes an owner.',
+    summary: 'Can edit the board and manage its permissions.',
     capabilities: BOARD_POLICY_CAPABILITIES,
   },
 ];
@@ -127,22 +127,19 @@ const BRANCH_PRESETS: readonly CapabilityPresetDefinition[] = [
   {
     id: 'viewer',
     label: 'Viewer',
-    summary:
-      'Can view branch details and conversations. Cannot create or prompt sessions, manage the branch, or open a terminal.',
+    summary: 'Can view the branch and its sessions.',
     capabilities: ['branch.view'],
   },
   {
     id: 'collaborator',
     label: 'Collaborator',
-    summary:
-      'Can view the branch and create or prompt only sessions they own. Cannot prompt anyone else’s sessions without that owner’s separate approval.',
+    summary: 'Can create and prompt their own sessions.',
     capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own'],
   },
   {
     id: 'manager',
     label: 'Manager',
-    summary:
-      'Can manage branch settings, access, environment, and session lifecycle. The Manager role alone cannot prompt or execute.',
+    summary: 'Can manage the branch and session lifecycle, but cannot prompt or execute.',
     capabilities: [
       'branch.view',
       'sessions.manage_others',
@@ -156,8 +153,8 @@ const BRANCH_PRESETS: readonly CapabilityPresetDefinition[] = [
 export const BOARD_ACCESS_EDITOR_CONTEXT: CapabilityPolicyEditorContext = {
   kind: 'board_access',
   resourceLabel: 'board',
-  sharedDescription: 'Named people, groups, and an explicit fallback can access this board.',
-  privateDescription: 'Only the immutable primary owner can access this board.',
+  sharedDescription: 'Grant access to people, groups, or Others.',
+  privateDescription: 'Only the primary owner can access this board.',
   supportsFilesystem: false,
   controlGroups: BOARD_CONTROL_GROUPS,
   presets: BOARD_PRESETS,
@@ -166,8 +163,8 @@ export const BOARD_ACCESS_EDITOR_CONTEXT: CapabilityPolicyEditorContext = {
 export const BRANCH_ACCESS_EDITOR_CONTEXT: CapabilityPolicyEditorContext = {
   kind: 'branch_access',
   resourceLabel: 'branch',
-  sharedDescription: 'Named people, groups, and an explicit fallback can access this branch.',
-  privateDescription: 'Only the immutable primary owner can access this branch.',
+  sharedDescription: 'Grant access to people, groups, or Others.',
+  privateDescription: 'Only the primary owner can access this branch.',
   supportsFilesystem: true,
   controlGroups: BRANCH_CONTROL_GROUPS,
   presets: BRANCH_PRESETS,
@@ -310,15 +307,9 @@ export function makeSharedClosedPolicy(policy: CapabilityPolicyDraft): Capabilit
 }
 
 export const fsAccessLabel: Readonly<Record<CapabilityPolicyFsAccess, string>> = {
-  none: 'No files',
-  read: 'Read files',
-  write: 'Read & write files',
-};
-
-export const fsAccessDescription: Readonly<Record<CapabilityPolicyFsAccess, string>> = {
-  none: 'Cannot access branch files.',
-  read: 'Can read branch files.',
-  write: 'Can read and change branch files.',
+  none: 'None',
+  read: 'Read',
+  write: 'Read/write',
 };
 
 export const allCapabilitiesForKind = (

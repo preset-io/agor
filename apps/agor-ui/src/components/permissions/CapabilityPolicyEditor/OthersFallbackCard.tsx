@@ -30,8 +30,7 @@ export const OthersFallbackCard: React.FC<OthersFallbackCardProps> = ({
       <Alert
         type="info"
         showIcon
-        title="Fallback, not an additional grant"
-        description="Applies only when an active same-workspace member has no active person or group match. Never anonymous, inactive, deleted, or cross-tenant."
+        description="Used only when no person or group entry matches. Active workspace members only."
       />
       <AccessGrantControls
         value={value}

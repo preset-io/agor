@@ -65,9 +65,6 @@ export const EffectiveAccessPreview: React.FC<EffectiveAccessPreviewProps> = ({
       gap={token.paddingSM}
       aria-label="Effective-access preview for sample principals"
     >
-      <Typography.Text type="secondary">
-        Local sample only. This explanation never authorizes a request.
-      </Typography.Text>
       {subject ? (
         <>
           <Select<UserID>
@@ -97,7 +94,6 @@ export const EffectiveAccessPreview: React.FC<EffectiveAccessPreviewProps> = ({
                 type="warning"
                 showIcon
                 icon={<StopOutlined />}
-                title="No effective access"
                 description={effective.deniedReason}
               />
             ) : (
@@ -113,12 +109,12 @@ export const EffectiveAccessPreview: React.FC<EffectiveAccessPreviewProps> = ({
                   </Flex>
                   <Typography.Text type="secondary">
                     {effective?.usedOthers
-                      ? 'No active person or group entry matched, so Others applies.'
+                      ? 'No person or group entry matched.'
                       : effective?.sources[0]?.kind === 'user'
-                        ? 'The direct person entry overrides every group membership and Others.'
+                        ? 'Direct entry overrides groups and Others.'
                         : effective?.sources.length === 1
-                          ? 'One explicit group entry matched.'
-                          : 'Every matching group combines; the strongest file access wins.'}
+                          ? 'One group matched.'
+                          : 'Matching groups combine; strongest file access applies.'}
                   </Typography.Text>
                 </Flex>
 
@@ -147,8 +143,7 @@ export const EffectiveAccessPreview: React.FC<EffectiveAccessPreviewProps> = ({
                   <Alert
                     type="info"
                     showIcon
-                    title="No prompt or execute authority"
-                    description="View, management, and file access do not grant a session, terminal, credentials, or another person’s home."
+                    description="Management and file access do not grant prompting, terminal access, or another person’s home."
                   />
                 )}
               </Flex>

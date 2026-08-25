@@ -5,7 +5,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { CAPABILITY_POLICY_SCHEMA_VERSION } from '@agor/core/types';
-import { ApartmentOutlined, EditOutlined } from '@ant-design/icons';
+import { ApartmentOutlined } from '@ant-design/icons';
 import { Alert, Button, Descriptions, Divider, Flex, Segmented, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
@@ -77,9 +77,6 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
         <Typography.Title level={4} style={{ marginBottom: token.paddingXXS }}>
           Branch permissions
         </Typography.Title>
-        <Typography.Text type="secondary">
-          Follow the board’s live defaults or use one complete policy for this branch.
-        </Typography.Text>
       </div>
       <ImmutablePrimaryOwner owner={owner} resourceLabel="branch" />
       <Divider style={{ marginBlock: 0 }} />
@@ -98,16 +95,15 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
         />
         <Typography.Text type="secondary">
           {value.binding_mode === 'inherit'
-            ? 'Inherited access follows future changes to the board template.'
-            : 'This complete override replaces the board template.'}
+            ? 'Updates with the board defaults.'
+            : 'Replaces the board defaults.'}
         </Typography.Text>
       </Flex>
       {confirmInherit && (
         <Alert
           type="warning"
           showIcon
-          title="Discard this branch override?"
-          description="The explicit policy will be removed and this branch will immediately follow the board template in this local prototype."
+          description="Discard this override and follow the board defaults?"
           action={
             <Flex gap={token.paddingXS} wrap>
               <Button size="small" onClick={() => setConfirmInherit(false)}>
@@ -164,7 +160,6 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
           </Flex>
           <CapabilityPolicyEditor
             title="Inherited board template"
-            description="Read-only here. It updates when a board manager changes the branch defaults."
             value={inheritedPolicy}
             onChange={() => undefined}
             readOnly
@@ -179,13 +174,10 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
           <Alert
             type="warning"
             showIcon
-            icon={<EditOutlined />}
-            title="This branch no longer follows board defaults"
-            description="The complete policy below replaces the template. Board access remains separate."
+            description="This policy replaces the board defaults. Board access remains separate."
           />
           <CapabilityPolicyEditor
             title="Branch access"
-            description="Named entries, Others, capabilities, and file access for this branch."
             value={effectivePolicy}
             onChange={(overridePolicy) => onChange({ ...value, override_policy: overridePolicy })}
             context={BRANCH_ACCESS_EDITOR_CONTEXT}

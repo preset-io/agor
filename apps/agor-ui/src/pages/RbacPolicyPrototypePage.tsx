@@ -97,7 +97,7 @@ export const RbacPolicyPrototypePage: React.FC = () => {
               <Alert
                 type="warning"
                 showIcon
-                title="Local design fixture — nothing is saved or enforced"
+                description="Local fixture; nothing is saved or enforced."
               />
               <Flex gap={token.paddingSM} align="flex-end" wrap>
                 <Flex vertical gap={token.paddingXXS} style={{ flex: '1 1 220px', minWidth: 0 }}>
@@ -151,7 +151,7 @@ export const RbacPolicyPrototypePage: React.FC = () => {
                   showIcon
                   closable
                   onClose={() => setLocalApplyNotice(false)}
-                  title="Applied to this local fixture only"
+                  description="Fixture updated."
                 />
               )}
             </Flex>
@@ -201,7 +201,7 @@ export const RbacPolicyPrototypePage: React.FC = () => {
                 icon={<SaveOutlined />}
                 onClick={() => setLocalApplyNotice(true)}
               >
-                Apply locally · prototype only
+                Apply preview
               </Button>
             </Flex>
           </Card>

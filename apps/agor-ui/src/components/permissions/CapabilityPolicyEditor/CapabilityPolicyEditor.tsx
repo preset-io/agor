@@ -6,18 +6,7 @@ import type {
 } from '@agor/core/types';
 import { capabilityPolicyPrincipalKey, validateCapabilityPolicyDraft } from '@agor/core/types';
 import { EyeOutlined, GlobalOutlined } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Card,
-  Collapse,
-  Empty,
-  Flex,
-  Grid,
-  Segmented,
-  Typography,
-  theme,
-} from 'antd';
+import { Alert, Button, Card, Collapse, Flex, Grid, Segmented, Typography, theme } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { Tag } from '@/components/Tag';
 import { EffectiveAccessPreview } from './EffectiveAccessPreview';
@@ -32,7 +21,7 @@ import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
 interface CapabilityPolicyEditorProps {
   title: string;
-  description: React.ReactNode;
+  description?: React.ReactNode;
   value: CapabilityPolicyDraft;
   onChange: (value: CapabilityPolicyDraft) => void;
   context: CapabilityPolicyEditorContext;
@@ -144,7 +133,7 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
         <Typography.Title level={5} style={{ margin: 0 }}>
           {title}
         </Typography.Title>
-        <Typography.Text type="secondary">{description}</Typography.Text>
+        {description && <Typography.Text type="secondary">{description}</Typography.Text>}
       </Flex>
 
       <Flex vertical gap={token.paddingXXS}>
@@ -167,21 +156,13 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
         </Typography.Text>
       </Flex>
 
-      {readOnly && (
-        <Alert
-          type="info"
-          showIcon
-          title="Inherited policy is read only here"
-          description="Switch this branch to Override before editing."
-        />
-      )}
+      {readOnly && <Alert type="info" showIcon description="Switch to This branch to edit." />}
 
       {confirmPrivate && (
         <Alert
           type="warning"
           showIcon
-          title="Make this owner-only?"
-          description="All named entries and Others will be removed from this local draft. Ownership does not change."
+          description="Make this owner-only? Named entries and Others will be removed."
           action={
             <Flex gap={token.paddingXS} wrap>
               <Button size="small" onClick={() => setConfirmPrivate(false)}>
@@ -208,7 +189,6 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
         <Alert
           type="error"
           showIcon
-          title="Resolve invalid policy combinations"
           description={
             <ul style={{ margin: 0, paddingInlineStart: token.paddingLG }}>
               {issues.map((issue) => (
@@ -223,8 +203,8 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
 
       {context.kind === 'branch_access' && (
         <Typography.Text type="secondary">
-          Each role has one fixed meaning. File access is selected separately; only Collaborator
-          with Read or Write file access receives a terminal.
+          Roles have fixed permissions. File access is separate; a terminal requires Collaborator
+          and file access.
         </Typography.Text>
       )}
 
@@ -246,16 +226,13 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
                     ariaLabel={`Add one person or group to ${title}`}
                   />
                   <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                    One entry represents one existing person or workspace group. Group membership is
-                    managed separately.
+                    One person or group per entry. Groups are managed separately.
                   </Typography.Text>
                 </Flex>
               )}
 
               {value.entries.length === 0 && (
-                <Typography.Text type="secondary">
-                  No named entries. Add one or configure Others.
-                </Typography.Text>
+                <Typography.Text type="secondary">No named entries.</Typography.Text>
               )}
 
               {value.entries.map((entry) => {
@@ -299,7 +276,7 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
                     <Typography.Text strong>Others</Typography.Text>
                     <Tag color="gold">Fallback</Tag>
                   </Flex>
-                  <Typography.Text type="secondary">Unmatched active members only</Typography.Text>
+                  <Typography.Text type="secondary">Unmatched active members</Typography.Text>
                 </Flex>
               </Button>
             </Flex>
@@ -340,14 +317,7 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
             )}
           </Card>
         </Flex>
-      ) : (
-        <Card size="small">
-          <Empty
-            image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description="Private: only the immutable primary owner has access."
-          />
-        </Card>
-      )}
+      ) : null}
 
       <Collapse
         size="small"
@@ -357,7 +327,7 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
             label: (
               <Flex align="center" gap={token.paddingXS} wrap>
                 <EyeOutlined aria-hidden />
-                <Typography.Text strong>Preview effective access</Typography.Text>
+                <Typography.Text strong>Effective access</Typography.Text>
                 <Tag color="purple">Read only</Tag>
               </Flex>
             ),

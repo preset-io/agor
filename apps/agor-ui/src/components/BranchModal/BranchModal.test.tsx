@@ -62,7 +62,7 @@ function renderBranchModal({
 }
 
 describe('BranchModal — permissions tab visibility', () => {
-  it('mounts the local-only target editor in the real Permissions tab', async () => {
+  it('mounts the target editor without a development-preview banner', async () => {
     const owner = makeUser({ user_id: 'user-1', role: 'admin', name: 'Alice' });
     const { client, calls } = makeStubClient({ owners: [owner], users: [owner] });
 
@@ -79,17 +79,18 @@ describe('BranchModal — permissions tab visibility', () => {
       />
     );
 
-    expect(await screen.findByText('New permissions · development preview')).toBeInTheDocument();
+    expect(await screen.findByText('Branch permissions')).toBeInTheDocument();
+    expect(screen.queryByText('New permissions · development preview')).not.toBeInTheDocument();
     expect(
       screen.queryByText('Current persisted permissions · legacy model')
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Apply locally · prototype only' }));
-    expect(await screen.findByText('Applied to this local preview only')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply permissions preview' }));
+    expect(await screen.findByText('Preview updated.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
     expect(calls.some((call) => ['create', 'patch', 'remove'].includes(call.method))).toBe(false);
   });
 
-  it('keeps the development preview reachable for an admin when legacy RBAC is disabled', async () => {
+  it('keeps the target editor reachable for an admin when legacy RBAC is disabled', async () => {
     const admin = makeUser({ user_id: 'user-1', role: 'admin', name: 'Admin' });
 
     renderBranchModal({
@@ -99,7 +100,7 @@ describe('BranchModal — permissions tab visibility', () => {
 
     const permissionsTab = await screen.findByRole('tab', { name: /permissions/i });
     fireEvent.click(permissionsTab);
-    expect(await screen.findByText('New permissions · development preview')).toBeInTheDocument();
+    expect(await screen.findByText('Branch permissions')).toBeInTheDocument();
   });
 
   it('supplies other schedule owners from the global store when RBAC is disabled', async () => {

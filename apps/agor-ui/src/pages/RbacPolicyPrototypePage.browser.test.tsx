@@ -24,7 +24,7 @@ describe('RBAC policy prototype responsive layout (real browser)', () => {
     expect(
       screen.getByLabelText('Add one person or group to Who can see and manage this board')
     ).toBeVisible();
-    expect(screen.getByRole('button', { name: /Apply locally/i })).toBeVisible();
+    expect(screen.getByRole('button', { name: /Apply preview/ })).toBeVisible();
   });
 
   it('adds one existing group as one independently editable entry', async () => {
@@ -59,13 +59,13 @@ describe('RBAC policy prototype responsive layout (real browser)', () => {
   it('supports keyboard focus and activation on prototype controls', async () => {
     renderPrototype();
     const context = screen.getByRole('radio', { name: 'Board' });
-    const apply = screen.getByRole('button', { name: /Apply locally/i });
+    const apply = screen.getByRole('button', { name: /Apply preview/ });
 
     await act(async () => context.focus());
     expect(context).toHaveFocus();
     await act(async () => apply.focus());
     expect(apply).toHaveFocus();
     await act(async () => userEvent.keyboard('{Enter}'));
-    expect(await screen.findByText('Applied to this local fixture only')).toBeVisible();
+    expect(await screen.findByText('Fixture updated.')).toBeVisible();
   });
 });

@@ -108,17 +108,11 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
       }
     >
       <Flex vertical gap={token.paddingMD}>
-        <Typography.Text type="secondary">
-          This is a personal exception, separate from branch roles and board defaults. Each session
-          owner controls only who may prompt, resume, fork, or spawn from sessions owned by them.
-        </Typography.Text>
-
         {!workspaceEnabled && (
           <Alert
             type="warning"
             showIcon
-            title="Personal session sharing is disabled for this workspace"
-            description="Workspace administrators can control this feature in Workspace Preferences. No personal sharing rule is effective while it is disabled."
+            description="Disabled in Workspace Preferences. Existing rules have no effect."
           />
         )}
 
@@ -126,7 +120,6 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
           <Alert
             type="error"
             showIcon
-            title="Resolve invalid personal sharing rules"
             description={
               <ul style={{ margin: 0, paddingInlineStart: token.paddingLG }}>
                 {issues.map((issue, index) => (
@@ -143,8 +136,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
           <Flex vertical gap={token.paddingXXS} style={{ flex: 1, minWidth: 240 }}>
             <Typography.Text strong>Allow others to use my sessions</Typography.Text>
             <Typography.Text type="secondary">
-              {currentUser?.display_name ?? 'The signed-in user'} is the only person who can change
-              this rule. Turning it off removes its entries.
+              Only {currentUser?.display_name ?? 'you'} can change this rule.
             </Typography.Text>
           </Flex>
           <Switch
@@ -167,8 +159,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
               type="error"
               showIcon
               icon={<WarningOutlined />}
-              title="Sharing a session means sharing your agent-tool home"
-              description="Anyone listed may prompt, resume, fork, or spawn from any session you own in this branch. Delegated descendants remain owned by you and run with your agent-tool home and credential context. Agent tools store session state as files in that home, so a delegate may be able to read or modify low-level data from your other sessions. This does not grant a terminal, allow unrelated session creation, or replace ordinary branch access."
+              description="Listed people can run prompts as you, using your agent-tool home and credentials. Because session data is stored there, they may access files from your other sessions. This does not grant terminal access."
             />
 
             <Flex vertical gap={token.paddingXXS}>
@@ -185,8 +176,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
                 }
               />
               <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                One entry is one existing person or workspace group. This exception is effective
-                only while they also retain ordinary access to this branch.
+                They must also have branch access.
               </Typography.Text>
             </Flex>
 
@@ -219,7 +209,6 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
                       </div>
                       <Popconfirm
                         title={`Stop sharing with ${label}?`}
-                        description="They will no longer be allowed to prompt, resume, fork, or spawn from sessions you own."
                         okText="Remove sharing"
                         okButtonProps={{ danger: true }}
                         onConfirm={() =>
@@ -248,8 +237,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
               <Alert
                 type="warning"
                 showIcon
-                title="Group membership changes this high-risk access"
-                description="Adding someone to a listed workspace group would let them use this exception without another branch edit."
+                description="Group membership changes this access without another branch edit."
               />
             )}
           </Flex>
@@ -262,14 +250,8 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
             <Typography.Text strong>Other people’s sharing</Typography.Text>
             <Tag>Read only</Tag>
           </Flex>
-          <Typography.Text type="secondary">
-            These rules were authored by each session owner. You cannot change them, even if your
-            branch role is Manager.
-          </Typography.Text>
           {otherRules.length === 0 ? (
-            <Typography.Text type="secondary">
-              Nobody else currently shares their sessions in this branch.
-            </Typography.Text>
+            <Typography.Text type="secondary">No other session sharing.</Typography.Text>
           ) : (
             <Flex vertical gap={token.paddingXS}>
               {otherRules.map((rule) => {
@@ -279,7 +261,6 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
                     key={rule.session_owner_user_id}
                     size="small"
                     title={`${owner?.display_name ?? 'Unavailable owner'} shares with`}
-                    extra={<Tag>Only they can change</Tag>}
                   >
                     <Flex vertical gap={token.paddingXS}>
                       {rule.grantees.map((grant) => (

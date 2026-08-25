@@ -84,7 +84,7 @@ export function resolvePrototypeEffectiveAccess(options: {
     return {
       capabilities: [...allCapabilitiesForKind(policy.policy_kind)],
       fsAccess: policy.policy_kind === 'branch_access' ? 'write' : 'none',
-      sources: [{ key: `owner:${subjectId}`, label: 'Immutable primary owner', kind: 'owner' }],
+      sources: [{ key: `owner:${subjectId}`, label: 'Primary owner', kind: 'owner' }],
       isOwner: true,
       usedOthers: false,
     };
@@ -97,7 +97,7 @@ export function resolvePrototypeEffectiveAccess(options: {
       sources: [],
       isOwner: false,
       usedOthers: false,
-      deniedReason: 'This resource is private to its immutable primary owner.',
+      deniedReason: 'This resource is private.',
     };
   }
 

@@ -9,7 +9,6 @@ import { Alert, Flex, Segmented, Select, Typography, theme } from 'antd';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
 import {
   applyCapabilityPreset,
-  fsAccessDescription,
   fsAccessLabel,
   getCapabilityPreset,
   updateFilesystemAccess,
@@ -97,9 +96,6 @@ export function AccessGrantControls<T extends GrantValue>({
               options={fsOptions}
               onChange={(fsAccess) => onChange(updateFilesystemAccess(value, context, fsAccess))}
             />
-            <Typography.Text type="secondary">
-              {fsAccessDescription[value.fs_access]}
-            </Typography.Text>
           </Flex>
         )}
       </Flex>
@@ -108,23 +104,19 @@ export function AccessGrantControls<T extends GrantValue>({
         <Alert
           type="warning"
           showIcon
-          title="Choose a supported role"
-          description="The simplified form does not create custom capability combinations. Select one role to replace this imported value."
+          description="Choose a supported role for this imported permission."
         />
       )}
 
       {context.kind === 'branch_access' && isManager && (
         <Typography.Text type="secondary">
-          <LockOutlined aria-hidden /> Manager alone can contain and configure, but cannot prompt,
-          execute, or open a terminal. A session owner can grant a separate personal exception
-          below.
+          <LockOutlined aria-hidden /> Manager cannot prompt, execute, or open a terminal. Session
+          sharing is separate.
         </Typography.Text>
       )}
       {context.kind === 'branch_access' && isCollaborator && (
         <Typography.Text type="secondary">
-          {hasTerminal
-            ? 'Terminal is available as this person because Collaborator is paired with file access.'
-            : 'They can work in their own sessions without branch files. Terminal stays unavailable until file access is Read or Write.'}
+          {hasTerminal ? 'Terminal available.' : 'Terminal requires file access.'}
         </Typography.Text>
       )}
     </Flex>

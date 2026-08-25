@@ -37,7 +37,6 @@ export const PolicyEntryCard: React.FC<PolicyEntryCardProps> = ({
         {!disabled && (
           <Popconfirm
             title={`Remove ${label}?`}
-            description="This named entry will no longer contribute access."
             okText="Remove entry"
             okButtonProps={{ danger: true }}
             onConfirm={onRemove}
@@ -59,12 +58,11 @@ export const PolicyEntryCard: React.FC<PolicyEntryCardProps> = ({
           type="warning"
           showIcon
           icon={<WarningOutlined />}
-          title={
+          description={
             descriptor?.status === 'inactive'
-              ? 'Inactive principal receives no effective access'
-              : 'Deleted or unavailable principal receives no effective access'
+              ? 'Inactive entry: no effective access.'
+              : 'Deleted or unavailable entry: no effective access.'
           }
-          description="Keep this visible for audit context or remove the stale entry. It never activates the Others fallback for this identity."
         />
       )}
 
