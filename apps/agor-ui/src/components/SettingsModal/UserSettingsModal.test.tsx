@@ -1109,11 +1109,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
   it('shows and saves the primary coding agent from Preferences', async () => {
     const user = makeUser({ primary_agentic_tool: 'codex' });
     const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
 
     renderWithApp(
       <UserSettingsModal
         open
-        onClose={vi.fn()}
+        onClose={onClose}
         user={user}
         currentUser={user}
         client={null as AgorClient | null}
@@ -1134,9 +1135,13 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledWith(
         user.user_id,
-        expect.objectContaining({ primary_agentic_tool: 'gemini' })
+        expect.objectContaining({ primary_agentic_tool: 'gemini' }),
+        expect.any(Function)
       );
     }, ASYNC);
+    const [, , shouldApply] = onUpdate.mock.calls[0] as unknown as [string, unknown, () => boolean];
+    expect(shouldApply()).toBe(true);
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('opens a provider search hit on its own sub-tab (Session defaults, not Authentication)', async () => {
