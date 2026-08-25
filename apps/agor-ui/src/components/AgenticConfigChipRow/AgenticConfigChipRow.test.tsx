@@ -427,6 +427,10 @@ describe('AgenticConfigChipRow', () => {
     expect(header).toHaveAccessibleName(/complete the required model selection before collapsing/i);
     expect(modelChip).toBeVisible();
 
+    // Activating the locked header must not clear the forced-open latch.
+    fireEvent.click(header);
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+
     fireEvent.click(modelChip);
     fireEvent.click(await screen.findByTestId('model-suggest'));
 

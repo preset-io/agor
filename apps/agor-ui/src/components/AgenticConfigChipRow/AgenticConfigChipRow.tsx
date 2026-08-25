@@ -470,6 +470,10 @@ export const AgenticConfigChipRow: React.FC<AgenticConfigChipRowProps> = ({
           destroyOnHidden={false}
           activeKey={disclosureExpanded ? ['chips'] : []}
           onChange={(activeKeys) => {
+            // AntD may still report a requested key change for a disabled
+            // header. Keep the forced-open latch intact until the required
+            // model selection is valid.
+            if (modelSelectionError) return;
             const keys = Array.isArray(activeKeys) ? activeKeys : [activeKeys];
             setChipsExpanded(keys.includes('chips'));
           }}

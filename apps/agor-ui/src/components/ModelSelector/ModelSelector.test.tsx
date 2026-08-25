@@ -1,4 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { Button, Popover } from 'antd';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { ModelSelector } from './ModelSelector';
 
@@ -88,6 +90,90 @@ describe('ModelSelector (Claude)', () => {
       mode: 'exact',
       model: 'claude-sonnet-4-6-20260101',
     });
+  });
+
+  it('keeps a real picker open while Tab moves from exact input to recommended mode', () => {
+    const onCommit = vi.fn();
+
+    function PickerHarness() {
+      const [open, setOpen] = useState(false);
+      const [value, setValue] = useState({
+        mode: 'exact' as const,
+        model: 'claude-sonnet-4-6-20260101',
+      });
+      return (
+        <Popover
+          open={open}
+          onOpenChange={setOpen}
+          trigger="click"
+          content={
+            <ModelSelector
+              agentic_tool="claude-code"
+              showAdvisor={false}
+              value={value}
+              onChange={setValue}
+              onCommit={(selection) => {
+                onCommit(selection);
+                setOpen(false);
+              }}
+            />
+          }
+        >
+          <Button aria-label="Model picker" aria-expanded={open}>
+            Model
+          </Button>
+        </Popover>
+      );
+    }
+
+    render(<PickerHarness />);
+    const trigger = screen.getByRole('button', { name: 'Model picker' });
+    fireEvent.click(trigger);
+
+    const exactInput = screen.getByRole('combobox');
+    const recommendedMode = screen.getByRole('button', { name: 'Use a recommended model' });
+    act(() => exactInput.focus());
+    fireEvent.keyDown(exactInput, { key: 'Tab' });
+    fireEvent.blur(exactInput, { relatedTarget: recommendedMode });
+    act(() => recommendedMode.focus());
+
+    expect(recommendedMode).toHaveFocus();
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(onCommit).not.toHaveBeenCalled();
+
+    // Enter activates the focused button in the browser; click represents the
+    // resulting activation without replacing the real selector implementation.
+    fireEvent.keyDown(recommendedMode, { key: 'Enter' });
+    fireEvent.click(recommendedMode);
+
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(onCommit).not.toHaveBeenCalled();
+
+    fireEvent.mouseDown(screen.getByRole('combobox'));
+    fireEvent.click(screen.getByText('Claude Fable 5 · 1M'));
+    expect(onCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'claude-fable-5' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('normalizes exact-model whitespace when focus leaves the picker', () => {
+    const onChange = vi.fn();
+    const onCommit = vi.fn();
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'exact', model: 'claude-sonnet-5' }}
+        onChange={onChange}
+        onCommit={onCommit}
+      />
+    );
+
+    const exactInput = screen.getByRole('combobox');
+    fireEvent.change(exactInput, { target: { value: '  claude-fable-5  ' } });
+    fireEvent.blur(exactInput);
+
+    expect(onChange).toHaveBeenLastCalledWith({ mode: 'exact', model: 'claude-fable-5' });
+    expect(onCommit).toHaveBeenCalledWith({ mode: 'exact', model: 'claude-fable-5' });
   });
 
   it('commits an alias when the user selects it', () => {
