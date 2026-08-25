@@ -26,7 +26,11 @@ import {
   branchOwners,
 } from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
-import { visibleBoardReferenceAccessExists, visibleBranchAccessCondition } from './branch-access';
+import {
+  visibleBoardReferenceAccessExists,
+  visibleBranchAccessCondition,
+  visibleBranchReferenceAccessExists,
+} from './branch-access';
 
 export interface BoardObjectFindFilters {
   board_id?: BoardID;
@@ -254,6 +258,32 @@ export class BoardObjectRepository {
     } catch (error) {
       throw new RepositoryError(
         `Failed to find visible board object by object_id: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Authorize a prospective branch-bound object before it exists.
+   *
+   * This deliberately uses the same correlated branch predicate as
+   * `findVisibleByObjectId`; board visibility is not a substitute for access
+   * to the branch being placed on that board.
+   */
+  async canViewBranchReference(userId: UUID, branchId: BranchID): Promise<boolean> {
+    try {
+      // Select from the referenced branch so a missing reference naturally
+      // returns no authorization row, without first creating an object.
+      const row = await select(this.db, {
+        allowed: visibleBranchReferenceAccessExists(this.db, userId, sql`${branchId}`),
+      })
+        .from(branches)
+        .where(eq(branches.branch_id, branchId))
+        .one();
+      return row?.allowed === true || row?.allowed === 1;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to authorize board object branch reference: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

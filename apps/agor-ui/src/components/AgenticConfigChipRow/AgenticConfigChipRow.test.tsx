@@ -153,10 +153,10 @@ describe('AgenticConfigChipRow', () => {
     // Source Select shows the resolved "My default" summary.
     await waitFor(() =>
       expect(
-        screen.getByText(/My default · Claude Opus 4.8 — 200k · Accept edits/)
+        screen.getByText(/My default · Claude Opus 4.8 · 200k · Accept edits/)
       ).toBeInTheDocument()
     );
-    // Chips render real values — never "default".
+    // Chips render real values · never "default".
     expect(screen.getByTestId('model-chip')).toHaveTextContent('Opus 4.8');
     expect(screen.getByTestId('permission-chip')).toHaveTextContent('Accept edits');
     expect(screen.getByTestId('effort-chip')).toHaveTextContent('Effort: High');
@@ -165,7 +165,7 @@ describe('AgenticConfigChipRow', () => {
 
   it('uses semantic, focusable buttons for popover chips', async () => {
     render(<Harness user={userWithDefault} initialSource={USER_DEFAULT_AGENTIC_CONFIGURATION} />);
-    const modelChip = await screen.findByRole('button', { name: 'Model: Opus 4.8 — 200k' });
+    const modelChip = await screen.findByRole('button', { name: 'Model: Opus 4.8 · 200k' });
 
     modelChip.focus();
     expect(modelChip).toHaveFocus();
@@ -226,7 +226,7 @@ describe('AgenticConfigChipRow', () => {
   it('flips the Select to Custom (seeded from resolved values) when a chip is edited', async () => {
     render(<Harness user={userWithDefault} />);
     await waitFor(() =>
-      expect(screen.getByText(/My default · Claude Opus 4.8 — 200k/)).toBeInTheDocument()
+      expect(screen.getByText(/My default · Claude Opus 4.8 · 200k/)).toBeInTheDocument()
     );
 
     // Open the model chip popover and change the model.

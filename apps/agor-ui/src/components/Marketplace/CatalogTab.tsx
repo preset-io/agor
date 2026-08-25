@@ -87,11 +87,12 @@ const CatalogGrid = memo<{
 
 export interface CatalogTabProps {
   client: AgorClient | null;
+  currentUserId?: string;
   /** The socket has connected and authenticated, so reads will be answered. */
   connected: boolean;
 }
 
-export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => {
+export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected, currentUserId }) => {
   const { token } = theme.useToken();
   const navigate = useNavigate();
   // Same set the session panel reads, so "is this install finished?" is one
@@ -211,7 +212,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
           result.starter_prompt &&
           !mcpServerNeedsAuth(result.mcp_server, userAuthenticatedMcpServerIds)
         ) {
-          savePromptDraft(result.session.session_id, result.starter_prompt);
+          savePromptDraft(currentUserId, result.session.session_id, result.starter_prompt);
         }
         setSelected(null);
         navigate(sessionPath(result.session.session_id));
@@ -229,7 +230,7 @@ export const CatalogTab: React.FC<CatalogTabProps> = ({ client, connected }) => 
         setConnecting(false);
       }
     },
-    [client, navigate, selected, userAuthenticatedMcpServerIds]
+    [client, currentUserId, navigate, selected, userAuthenticatedMcpServerIds]
   );
 
   return (

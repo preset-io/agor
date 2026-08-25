@@ -1,4 +1,4 @@
-import { runWithTenantDatabaseScope } from '@agor/core/db';
+import { runWithTenantDatabaseScope, shortId } from '@agor/core/db';
 import { type Session, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { completionCallbackTaskId } from '../utils/durable-task-id.js';
@@ -121,6 +121,7 @@ function makeService(
       content: [{ type: 'text', text: 'Final child result' }],
     },
   ]);
+  const revokeTaskTokens = vi.fn(async () => 1);
 
   const service = Object.create(TasksService.prototype) as TasksService & {
     repository: typeof repository;
@@ -129,12 +130,14 @@ function makeService(
     emit: ReturnType<typeof vi.fn>;
     app: { service: ReturnType<typeof vi.fn> };
     completionCallbackDispatches: Map<string, Promise<unknown>>;
+    executorCredentialRevoker: { revokeTaskTokens: typeof revokeTaskTokens };
   };
   service.repository = repository;
   service.taskRepo = { ...repository, createPending };
   service.id = 'task_id';
   service.emit = vi.fn();
   service.completionCallbackDispatches = new Map();
+  service.executorCredentialRevoker = { revokeTaskTokens };
   service.app = {
     service: vi.fn((name: string) => {
       if (name === 'sessions') {
@@ -157,12 +160,41 @@ function makeService(
     sessionsPatch,
     triggerQueueProcessing,
     messagesFind,
+    revokeTaskTokens,
     getStoredTask: (id = taskId) => tasksById.get(id),
     childSession,
   };
 }
 
 describe('TasksService completion callbacks', () => {
+  it('retires the exact executor Task lease on ordinary and coordinator terminality', async () => {
+    const { service, revokeTaskTokens } = makeService();
+
+    await service.patch(taskId, { status: TaskStatus.COMPLETED });
+    expect(revokeTaskTokens).toHaveBeenCalledWith(taskId);
+
+    const settledTask = makeTask({ status: TaskStatus.STOPPED });
+    service.taskRepo.settleTermination = vi.fn().mockResolvedValue({
+      outcome: 'terminal',
+      task: settledTask,
+    });
+    await service.settleTermination({ taskId, outcome: 'verified_absent' } as never);
+    expect(revokeTaskTokens).toHaveBeenLastCalledWith(taskId);
+    expect(revokeTaskTokens).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries credential retirement for an idempotent terminal-state write', async () => {
+    const { service, revokeTaskTokens } = makeService();
+
+    await service.patch(taskId, { status: TaskStatus.COMPLETED });
+    revokeTaskTokens.mockClear();
+
+    await service.patch(taskId, { status: TaskStatus.FAILED });
+
+    expect(revokeTaskTokens).toHaveBeenCalledOnce();
+    expect(revokeTaskTokens).toHaveBeenCalledWith(taskId);
+  });
+
   it('defers callback dispatch until after the tenant transaction commits', async () => {
     const events: string[] = [];
     const { service, createPending } = makeService();
@@ -345,6 +377,28 @@ describe('TasksService completion callbacks', () => {
     expect(callbackPrompt).toContain(originalPrompt);
     expect(callbackPrompt).toContain('**Result:**');
     expect(callbackPrompt).toContain('Final child result');
+  });
+
+  it('exposes childSessionTitle to custom callback templates', async () => {
+    const { service, createPending } = makeService({
+      childSession: { title: 'Investigate flaky test' },
+      parentSession: {
+        callback_config: {
+          template: 'Child "{{childSessionTitle}}" ({{childSessionId}}) is done.',
+        },
+      },
+    });
+
+    await service.patch(taskId, {
+      status: TaskStatus.COMPLETED,
+      completed_at: '2026-01-01T00:00:05.000Z',
+    });
+
+    await vi.waitFor(() => expect(createPending).toHaveBeenCalledTimes(1));
+    const callbackPrompt = createPending.mock.calls[0][0].full_prompt as string;
+    expect(callbackPrompt).toBe(
+      `Child "Investigate flaky test" (${shortId(childSessionId as Session['session_id'])}) is done.`
+    );
   });
 
   it('uses the same single templated patch completion path for sessions.create callbacks without spawn genealogy', async () => {

@@ -45,6 +45,7 @@ export * from './first-run-bootstrap';
 // Migrations
 export * from './migrate';
 export * from './oauth-secret-envelope';
+export * from './password-credentials';
 // Pending-migrations presentation (shared by CLI and daemon)
 export * from './pending-migrations';
 // Repositories

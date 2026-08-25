@@ -19,6 +19,7 @@
  */
 
 import {
+  BoardRepository,
   createTenantScopedDatabaseProxy,
   getCurrentTenantDatabaseScope,
   runWithTenantContext,
@@ -27,7 +28,10 @@ import { type Branch, type HookContext, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  AUTHENTICATED_RBAC_SERVICE_PATHS,
   CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES,
+  classifyPrimaryTeammateAuthorizationInvalidation,
+  classifyRealtimeAuthorizationInvalidation,
   createTenantScopedBeforeHookChain,
   enrichSessionFindResultWithRemoteRelationships,
   getTrustedSessionTenantId,
@@ -62,6 +66,210 @@ const makeSession = (sessionId: string): import('@agor/core/types').Session =>
     ready_for_prompt: false,
     archived: false,
   }) as import('@agor/core/types').Session;
+
+describe('classifyRealtimeAuthorizationInvalidation', () => {
+  const classify = (path: string, method: HookContext['method'], data: unknown = {}) =>
+    classifyRealtimeAuthorizationInvalidation({ path, method, data } as Pick<
+      HookContext,
+      'path' | 'method' | 'data'
+    >);
+
+  it.each([
+    ['branches', { board_id: 'board-1' }],
+    ['boards', { access_mode: 'private' }],
+    ['users', { role: 'member' }],
+    ['board-objects', { board_id: 'board-1', branch_id: 'branch-1' }],
+    ['groups', { name: 'new group' }],
+  ])('does not evict sockets while creating additive %s state', (path, data) => {
+    expect(classify(path, 'create', data)).toBe('none');
+  });
+
+  it.each(['branches/:id/owners', 'boards/:id/owners', 'group-memberships'])(
+    'distributes cache-only invalidation for additive grants through %s',
+    (path) => {
+      expect(classify(path, 'create')).toBe('cache');
+    }
+  );
+
+  it.each([
+    ['branches', 'patch', { others_can: 'none' }],
+    ['branches', 'patch', { others_fs_access: 'none' }],
+    ['branches', 'patch', { board_id: 'board-2' }],
+    ['branches', 'remove', {}],
+    ['boards', 'patch', { access_mode: 'private' }],
+    ['boards', 'patch', { default_others_fs_access: 'read' }],
+    ['boards', 'remove', {}],
+    ['users', 'patch', { role: 'suspended' }],
+    ['users', 'patch', { must_change_password: true }],
+    ['users', 'update', { must_change_password: false }],
+    ['users', 'remove', {}],
+    ['branches/:id/owners', 'remove', {}],
+    ['branches/:id/group-grants', 'create', { group_id: 'group-1', can: 'none' }],
+    ['boards/:id/group-grants', 'create', { group_id: 'group-1', can: 'none' }],
+    ['group-memberships', 'remove', {}],
+    ['groups', 'patch', { archived: true }],
+  ] as const)('evicts stale sockets for revoking %s.%s', (path, method, data) => {
+    expect(classify(path, method, data)).toBe('evict');
+  });
+
+  it('ignores branch metadata patches that cannot change authorization', () => {
+    expect(classify('branches', 'patch', { name: 'Renamed' })).toBe('none');
+  });
+});
+
+describe('classifyPrimaryTeammateAuthorizationInvalidation', () => {
+  const board = {
+    board_id: 'board-1',
+    primary_teammate_id: 'branch-1',
+  } as const;
+
+  it('uses cache-only invalidation when the prior primary remains attached', () => {
+    expect(
+      classifyPrimaryTeammateAuthorizationInvalidation(board, {
+        branch_id: 'branch-1',
+        board_id: 'board-1',
+      })
+    ).toBe('cache');
+  });
+
+  it('fully evicts when a detached primary could be the only visibility anchor', () => {
+    expect(
+      classifyPrimaryTeammateAuthorizationInvalidation(board, {
+        branch_id: 'branch-1',
+        board_id: 'board-2',
+      })
+    ).toBe('evict');
+  });
+
+  it('fails closed when the existing primary cannot be resolved', () => {
+    expect(classifyPrimaryTeammateAuthorizationInvalidation(board, null)).toBe('evict');
+  });
+
+  it('does not evict for an initial assignment with no previous primary', () => {
+    expect(
+      classifyPrimaryTeammateAuthorizationInvalidation(
+        { board_id: 'board-1', primary_teammate_id: null },
+        null
+      )
+    ).toBe('cache');
+  });
+});
+
+describe('registered primary-teammate invalidation lifecycle', () => {
+  type PrimaryMethod = 'setPrimaryTeammate' | 'clearPrimaryTeammate';
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = {
+    before?: Partial<Record<PrimaryMethod, RegisteredHook[]>>;
+    after?: Partial<Record<PrimaryMethod, RegisteredHook[]>>;
+  };
+
+  const runInstalledPrimaryHooks = async (options: {
+    method: PrimaryMethod;
+    previousBoardId: string | null;
+  }) => {
+    const registrations: RegisteredHooks[] = [];
+    const emit = vi.fn();
+    const service = {
+      hooks(hooks: RegisteredHooks) {
+        registrations.push(hooks);
+      },
+      emit: vi.fn(),
+    };
+    const app = {
+      service(path: string) {
+        if (path.replace(/^\//, '') === 'boards') return service;
+        return { hooks() {}, emit: vi.fn() };
+      },
+      use() {},
+      publish() {},
+      emit,
+    };
+    const board = {
+      board_id: 'board-1',
+      primary_teammate_id: 'branch-old',
+    } as const;
+    const findBoard = vi
+      .spyOn(BoardRepository.prototype, 'findBySlugOrId')
+      .mockResolvedValue(board as never);
+    const branchRepository = {
+      findById: vi.fn(async () => ({
+        branch_id: 'branch-old',
+        board_id: options.previousBoardId,
+      })),
+    };
+
+    try {
+      registerHooks({
+        db: {} as RegisterHooksContext['db'],
+        app: app as RegisterHooksContext['app'],
+        config: {
+          database: { dialect: 'sqlite' },
+          multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+          execution: { branch_rbac: false },
+        } as RegisterHooksContext['config'],
+        jwtSecret: 'registration-test-secret',
+        requireAuth: async (context) => context,
+        superadminOpts: { allowSuperadmin: true },
+        sessionsService: {} as RegisterHooksContext['sessionsService'],
+        messagesService: {} as RegisterHooksContext['messagesService'],
+        boardsService: undefined,
+        branchRepository: branchRepository as unknown as RegisterHooksContext['branchRepository'],
+        usersRepository: {} as RegisterHooksContext['usersRepository'],
+        sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+        deployment: { mode: 'standalone' },
+      });
+
+      const firstArgument =
+        options.method === 'setPrimaryTeammate'
+          ? { boardId: 'board-1', branchId: 'branch-new' }
+          : 'board-1';
+      const context = {
+        path: 'boards',
+        method: options.method,
+        params: {
+          tenant: { tenant_id: 'registration-test', source: 'static' },
+          provider: 'socketio',
+          user: { user_id: 'member-1', role: 'member' },
+        },
+        result: board,
+        arguments: [firstArgument],
+      } as unknown as HookContext;
+
+      for (const registration of registrations) {
+        for (const hook of registration.before?.[options.method] ?? []) await hook(context);
+      }
+      expect(findBoard).toHaveBeenCalledWith('board-1');
+      expect(branchRepository.findById).toHaveBeenCalledWith('branch-old');
+      expect(Object.getOwnPropertySymbols(context.params)).toHaveLength(1);
+
+      for (const registration of registrations) {
+        for (const hook of registration.after?.[options.method] ?? []) await hook(context);
+      }
+      await vi.waitFor(() =>
+        expect(emit).toHaveBeenCalledWith('realtime:authorization-invalidated', {
+          tenantId: 'registration-test',
+          disconnectSockets: options.previousBoardId !== 'board-1',
+        })
+      );
+    } finally {
+      findBoard.mockRestore();
+    }
+  };
+
+  it.each(['setPrimaryTeammate', 'clearPrimaryTeammate'] as const)(
+    'keeps onboarding-safe cache invalidation across the installed %s hook chain',
+    async (method) => {
+      await runInstalledPrimaryHooks({ method, previousBoardId: 'board-1' });
+    }
+  );
+
+  it.each(['setPrimaryTeammate', 'clearPrimaryTeammate'] as const)(
+    'fully evicts a detached visibility anchor across the installed %s hook chain',
+    async (method) => {
+      await runInstalledPrimaryHooks({ method, previousBoardId: 'board-old' });
+    }
+  );
+});
 
 describe('protectFilesystemHomeWrite', () => {
   const config = { paths: { data_home: '/srv/agor-data' } };
@@ -170,6 +378,7 @@ describe('protectServerManagedTaskWrites', () => {
         ...(options.executorTaskId
           ? {
               authentication: {
+                strategy: 'jwt',
                 payload: { ...executorPayload, task_id: options.executorTaskId },
               },
             }
@@ -392,8 +601,271 @@ describe('tenant-owned service registration', () => {
 
   it('wraps Knowledge policy and indexing admin services in tenant database scope', () => {
     expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
-      expect.arrayContaining(['kb/settings', 'kb/indexing/status', 'kb/indexing/reindex'])
+      expect.arrayContaining([
+        'kb/graph',
+        'kb/settings',
+        'kb/indexing/status',
+        'kb/indexing/reindex',
+      ])
     );
+  });
+});
+
+describe('registered RBAC authentication boundary', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = { before?: { all?: RegisteredHook[] } };
+
+  const captureRbacHooks = () => {
+    const registrations = new Map<string, RegisteredHooks[]>();
+    const requireAuth = vi.fn(async (context: HookContext) => {
+      context.params.user = {
+        user_id: '00000000-0000-7000-8000-000000000001',
+        role: 'admin',
+      } as HookContext['params']['user'];
+      return context;
+    });
+    const app = {
+      service(path: string) {
+        const normalized = path.replace(/^\//, '');
+        return {
+          hooks(hooks: RegisteredHooks) {
+            registrations.set(normalized, [...(registrations.get(normalized) ?? []), hooks]);
+          },
+          emit: vi.fn(),
+        };
+      },
+      use() {},
+      publish() {},
+      emit: vi.fn(),
+    };
+
+    registerHooks({
+      db: {} as RegisterHooksContext['db'],
+      app: app as unknown as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'rbac-auth-test' },
+        execution: { branch_rbac: true },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'rbac-auth-test-secret',
+      requireAuth,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+
+    return { registrations, requireAuth };
+  };
+
+  it('keeps every authenticated RBAC service inside tenant database scope', () => {
+    expect(TENANT_OWNED_SERVICE_PATHS).toEqual(
+      expect.arrayContaining([...AUTHENTICATED_RBAC_SERVICE_PATHS])
+    );
+  });
+
+  it.each(AUTHENTICATED_RBAC_SERVICE_PATHS)(
+    'normalizes REST authentication before %s authorization',
+    async (path) => {
+      const { registrations, requireAuth } = captureRbacHooks();
+      const allHooks = (registrations.get(path) ?? []).flatMap(
+        (registration) => registration.before?.all ?? []
+      );
+      const authenticationHook = allHooks.find((hook) => hook === requireAuth);
+      expect(authenticationHook).toBe(requireAuth);
+      expect(allHooks[0]).toBe(requireAuth);
+
+      const context = {
+        path,
+        method: 'find',
+        params: {
+          provider: 'rest',
+          authentication: { strategy: 'jwt', accessToken: 'signed-token' },
+        },
+      } as unknown as HookContext;
+      await authenticationHook?.(context);
+
+      expect(requireAuth).toHaveBeenCalledOnce();
+      expect(context.params.user).toMatchObject({ role: 'admin' });
+    }
+  );
+});
+
+describe('registered tenant write-gate classification', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredAroundHook = (context: HookContext, next: () => Promise<void>) => Promise<void>;
+  type RegisteredHooks = {
+    around?: { all?: RegisteredAroundHook[] };
+    before?: { all?: RegisteredHook[] };
+  };
+
+  const runInstalledTenantGate = async (method: string) => {
+    const registrations: RegisteredHooks[] = [];
+    const tx = {
+      execute: vi
+        .fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValue([
+          {
+            value_text: JSON.stringify({
+              generation: 'held-generation',
+              acquiredAt: '2026-08-21T00:00:00.000Z',
+            }),
+          },
+        ]),
+    };
+    const db = {
+      transaction: vi.fn(async (callback: (scoped: unknown) => Promise<unknown>) => callback(tx)),
+    };
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: RegisteredHooks) {
+            if (path.replace(/^\//, '') === 'users') registrations.push(hooks);
+          },
+          emit: vi.fn(),
+        };
+      },
+      use() {},
+      publish() {},
+      emit: vi.fn(),
+    };
+
+    registerHooks({
+      db: db as RegisterHooksContext['db'],
+      app: app as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'postgresql' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+        execution: { branch_rbac: false },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+
+    const tenantHooks = registrations.find((hooks) => hooks.around?.all?.length);
+    expect(tenantHooks).toBeDefined();
+    const context = {
+      path: 'users',
+      method,
+      params: { provider: 'socketio' },
+    } as unknown as HookContext;
+    const operation = vi.fn(async () => undefined);
+    await tenantHooks?.around?.all?.[0](context, async () => {
+      for (const hook of tenantHooks.before?.all ?? []) await hook(context);
+      await operation();
+    });
+    return { context, operation, tx };
+  };
+
+  it('rejects a custom mutator while the tenant write gate is held', async () => {
+    await expect(runInstalledTenantGate('setPrimaryTeammate')).rejects.toThrow(/write-gated/);
+  });
+
+  it('allows a custom read without consulting the held tenant write gate', async () => {
+    const { context, operation, tx } = await runInstalledTenantGate('getPrimaryTeammate');
+    expect(operation).toHaveBeenCalledOnce();
+    expect(context.params.tenant).toEqual({
+      tenant_id: 'registration-test',
+      source: 'static',
+    });
+    expect(tx.execute).toHaveBeenCalledOnce();
+  });
+});
+
+describe('registered external board-comment mutation boundary', () => {
+  type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
+  type RegisteredHooks = {
+    before?: Partial<Record<'patch' | 'update', RegisteredHook[]>>;
+  };
+
+  const captureBoardCommentHooks = (): RegisteredHooks[] => {
+    const registrations: RegisteredHooks[] = [];
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: RegisteredHooks) {
+            if (path.replace(/^\//, '') === 'board-comments') registrations.push(hooks);
+          },
+        };
+      },
+      use() {},
+      publish() {},
+    };
+
+    registerHooks({
+      db: {} as RegisterHooksContext['db'],
+      app: app as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'sqlite' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'registration-test' },
+        execution: { branch_rbac: false },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'registration-test-secret',
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {} as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+      deployment: { mode: 'standalone' },
+    });
+    return registrations;
+  };
+
+  const runMethodHooks = async (method: 'patch' | 'update', data: unknown) => {
+    const context = {
+      path: 'board-comments',
+      method,
+      id: 'comment-1',
+      data,
+      params: {
+        provider: 'socketio',
+        user: { user_id: 'member-1', role: 'member' },
+      },
+    } as HookContext;
+    for (const registration of captureBoardCommentHooks()) {
+      for (const hook of registration.before?.[method] ?? []) await hook(context);
+    }
+    return context;
+  };
+
+  it('rejects reaction and derived-state forgery through the actual patch hooks', async () => {
+    await expect(
+      runMethodHooks('patch', {
+        content: 'edited',
+        reactions: [{ user_id: 'another-user', emoji: '👍' }],
+        edited: false,
+      })
+    ).rejects.toThrow(/Unsupported board comment patch fields/);
+  });
+
+  it('rejects external complete replacement through the actual update hooks', async () => {
+    await expect(
+      runMethodHooks('update', {
+        content: 'replacement',
+        reactions: [{ user_id: 'another-user', emoji: '👍' }],
+      })
+    ).rejects.toThrow(/do not support external update/);
+  });
+
+  it('preserves the canonical content/resolved patch contract', async () => {
+    const context = await runMethodHooks('patch', { content: 'edited', resolved: true });
+    expect(context.data).toEqual({ content: 'edited', resolved: true });
   });
 });
 

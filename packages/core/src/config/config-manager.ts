@@ -14,6 +14,7 @@ import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agenti
 import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
 import type { AgenticToolName } from '../types';
 import { normalizeHttpBaseUrl } from '../utils/url';
+import { ensureAgorHome, ensureAgorHomeSync, getAgorHome, getConfigPath } from './agor-home';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import { validateRedisKeyPrefix, validateRedisUrl } from './deployment';
@@ -28,6 +29,7 @@ import {
   resolveEffectiveExternalLaunchConfig,
 } from './external-launch';
 import { assertValidMultiTenancyConfig } from './multitenancy';
+import { AgorPasswordPolicyProfile } from './password-policy';
 import { isPlainConfigRecord } from './plain-record';
 import {
   type AgorConfig,
@@ -230,31 +232,8 @@ function parseAndValidateConfig(content: string): AgorConfig {
   return finalConfig;
 }
 
-/**
- * Get Agor home directory (~/.agor)
- */
-export function getAgorHome(): string {
-  return path.join(os.homedir(), '.agor');
-}
-
-/**
- * Get config file path (~/.agor/config.yaml)
- */
-export function getConfigPath(): string {
-  return path.join(getAgorHome(), 'config.yaml');
-}
-
-/**
- * Ensure ~/.agor directory exists
- */
-async function ensureAgorHome(): Promise<void> {
-  const agorHome = getAgorHome();
-  try {
-    await fs.access(agorHome);
-  } catch {
-    await fs.mkdir(agorHome, { recursive: true });
-  }
-}
+/** Shared state-home paths and creation policy. */
+export { ensureAgorHome, ensureAgorHomeSync, getAgorHome, getConfigPath };
 
 /**
  * Validate config and throw helpful errors for deprecated/invalid settings
@@ -689,7 +668,13 @@ function validateConfig(config: AgorConfig): void {
     'return_host_param',
   ]);
   assertValidRawExternalLaunchConfig(config.external_launch);
-  only(config.identity, 'identity', ['user_lifecycle', 'role_authority', 'local_auth', 'external']);
+  only(config.identity, 'identity', [
+    'user_lifecycle',
+    'role_authority',
+    'local_auth',
+    'password_policy',
+    'external',
+  ]);
   only(config.identity?.external, 'identity.external', ['provider', 'provisioning']);
   if (
     config.identity?.user_lifecycle !== undefined &&
@@ -708,6 +693,12 @@ function validateConfig(config: AgorConfig): void {
     !Object.values(AgorLocalAuthMode).includes(config.identity.local_auth)
   ) {
     throw new Error('Config error: identity.local_auth must be enabled or disabled');
+  }
+  if (
+    config.identity?.password_policy !== undefined &&
+    config.identity.password_policy !== AgorPasswordPolicyProfile.SECURE
+  ) {
+    throw new Error("Config error: identity.password_policy must be 'secure'");
   }
   if (
     config.identity?.external?.provider !== undefined &&
@@ -831,6 +822,7 @@ function validateConfig(config: AgorConfig): void {
     'default_mode',
     'allowed_modes',
     'allow_shallow_clones',
+    'borrow_base_objects',
   ]);
   only(config.execution?.sandbox, 'execution.sandbox', [
     'enabled',
@@ -859,6 +851,7 @@ function validateConfig(config: AgorConfig): void {
   }
   only(config.execution?.executor_storage, 'execution.executor_storage', [
     'user_home',
+    'user_home_locking',
     'branch_workspace',
     'base_repository',
   ]);
@@ -870,6 +863,16 @@ function validateConfig(config: AgorConfig): void {
   ) {
     throw new Error(
       'Config error: execution.executor_storage.user_home must be replica-local, shared, or persistent-per-user'
+    );
+  }
+  if (
+    config.execution?.executor_storage?.user_home_locking !== undefined &&
+    !['local-only', 'cross-replica-flock'].includes(
+      config.execution.executor_storage.user_home_locking
+    )
+  ) {
+    throw new Error(
+      'Config error: execution.executor_storage.user_home_locking must be local-only or cross-replica-flock'
     );
   }
   if (
@@ -899,6 +902,12 @@ function validateConfig(config: AgorConfig): void {
     throw new Error(
       'Config error: execution.branch_storage.allow_shallow_clones must be a boolean'
     );
+  }
+  if (
+    config.execution?.branch_storage?.borrow_base_objects !== undefined &&
+    typeof config.execution.branch_storage.borrow_base_objects !== 'boolean'
+  ) {
+    throw new Error('Config error: execution.branch_storage.borrow_base_objects must be a boolean');
   }
   only(config.security, 'security', ['csp', 'cors', 'git_config_parameters']);
   only(config.security?.csp, 'security.csp', [
@@ -1164,8 +1173,12 @@ export async function migrateConfigDeploymentId(
   const tempPath = `${filePath}.rewrite-${process.pid}-${randomUUID()}`;
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(tempPath, 'wx', stat.mode & 0o7777);
+    handle = await fs.open(tempPath, 'wx', 0o600);
     await handle.writeFile(yaml.dump(parsed, { indent: 2, lineWidth: 120, noRefs: true }), 'utf-8');
+    // open(2)'s requested mode is filtered by the process umask. Apply the
+    // original operator-selected bits through the already-open inode before
+    // publishing the replacement.
+    await handle.chmod(stat.mode & 0o7777);
     await handle.sync();
     await handle.close();
     handle = undefined;
@@ -1227,7 +1240,9 @@ async function syncContainingDirectory(filePath: string): Promise<void> {
  */
 export async function createInitialConfig(config: AgorConfig = getDefaultConfig()): Promise<void> {
   validateConfig(config);
-  await ensureAgorHome();
+  // Create a missing state home privately, but preserve any pre-created
+  // operator-managed directory, bind mount, group/ACL policy, or symlink.
+  await ensureAgorHome(getAgorHome());
   const configPath = getConfigPath();
   const content = [
     '# Agor operator configuration',
@@ -1249,6 +1264,9 @@ export async function createInitialConfig(config: AgorConfig = getDefaultConfig(
   try {
     handle = await fs.open(tempPath, 'wx', 0o600);
     await handle.writeFile(content, 'utf-8');
+    // Guarantee the documented mode even when the process has an unusually
+    // restrictive umask. The descriptor pins the inode we are publishing.
+    await handle.chmod(0o600);
     await handle.sync();
     await handle.close();
     handle = undefined;
@@ -1293,8 +1311,11 @@ async function rewriteConfigFile(
   const content = yaml.dump(config, { indent: 2, lineWidth: 120, noRefs: true });
   let handle: fs.FileHandle | undefined;
   try {
-    handle = await fs.open(tempPath, 'wx', stat.mode & 0o7777);
+    handle = await fs.open(tempPath, 'wx', 0o600);
     await handle.writeFile(content, 'utf-8');
+    // Preserve the existing operator-selected mode exactly; open(2) alone
+    // cannot do so because the ambient umask filters its mode argument.
+    await handle.chmod(stat.mode & 0o7777);
     await handle.sync();
     await handle.close();
     handle = undefined;
@@ -1339,6 +1360,9 @@ export function getDefaultConfig(): AgorConfig {
     ui: {
       port: 5173,
       host: 'localhost',
+    },
+    identity: {
+      password_policy: AgorPasswordPolicyProfile.SECURE,
     },
     execution: {
       session_token_expiration_ms: 86400000, // 24 hours
@@ -1458,6 +1482,7 @@ export function resolveEffectiveConfig(
       ...(env.INSTANCE_LABEL ? { instanceLabel: env.INSTANCE_LABEL } : {}),
     },
     ui: { ...defaults.ui, ...config.ui },
+    identity: { ...defaults.identity, ...config.identity },
     ...(externalLaunch ? { external_launch: externalLaunch } : {}),
     execution: {
       ...defaults.execution,
@@ -1670,6 +1695,7 @@ export async function getConfigValue(key: string): Promise<string | boolean | nu
     ...activeConfig,
     daemon: { ...defaults.daemon, ...activeDaemon },
     ui: { ...defaults.ui, ...config.ui },
+    identity: { ...defaults.identity, ...config.identity },
     execution: { ...defaults.execution, ...activeExecution },
     paths: { ...defaults.paths, ...config.paths },
     analytics: { ...defaults.analytics, ...config.analytics },
@@ -1984,14 +2010,19 @@ export function isBranchRbacEnabled(): boolean {
  * forgot to add `clone` to `allowed_modes`) — load-time normalisation
  * keeps service code from needing to defensively re-validate.
  */
-export function resolveBranchStorageConfig(): ResolvedBranchStorageConfig {
+export function resolveBranchStorageConfig(config?: AgorConfig): ResolvedBranchStorageConfig {
   let raw: import('./types').AgorBranchStorageSettings | undefined;
-  try {
-    raw = loadConfigSync().execution?.branch_storage;
-  } catch {
-    // Config unloadable (no file, parse error, etc.) — fall through to
-    // the safe legacy default.
-    raw = undefined;
+  if (config) {
+    raw = config.execution?.branch_storage;
+  } else {
+    try {
+      raw = loadConfigSync().execution?.branch_storage;
+    } catch {
+      // Preserve the standalone helper's safe legacy fallback when no
+      // effective config is supplied. Daemon boundaries pass app config
+      // explicitly so their policy never depends on an ambient config file.
+      raw = undefined;
+    }
   }
   const allowed: BranchStorageMode[] =
     raw?.allowed_modes && raw.allowed_modes.length > 0
@@ -2014,8 +2045,11 @@ export function resolveBranchStorageConfig(): ResolvedBranchStorageConfig {
  * Centralised so the same wording appears across the daemon service, the
  * REST route, and the MCP tool.
  */
-export function ensureBranchStorageModeAllowed(mode: import('./types').BranchStorageMode): void {
-  const { allowedModes } = resolveBranchStorageConfig();
+export function ensureBranchStorageModeAllowed(
+  mode: import('./types').BranchStorageMode,
+  config?: AgorConfig
+): void {
+  const { allowedModes } = resolveBranchStorageConfig(config);
   if (!allowedModes.includes(mode)) {
     throw new Error(
       `storage_mode='${mode}' is not enabled on this Agor instance. ` +
@@ -2026,9 +2060,12 @@ export function ensureBranchStorageModeAllowed(mode: import('./types').BranchSto
 }
 
 /** Reject shallow branch clones when the operator requires complete history. */
-export function ensureBranchCloneDepthAllowed(cloneDepth: number | undefined): void {
+export function ensureBranchCloneDepthAllowed(
+  cloneDepth: number | undefined,
+  config?: AgorConfig
+): void {
   if (cloneDepth === undefined) return;
-  if (!resolveBranchStorageConfig().allowShallowClones) {
+  if (!resolveBranchStorageConfig(config).allowShallowClones) {
     throw new Error(
       'clone_depth is unavailable on this Agor instance because execution.branch_storage.allow_shallow_clones is false. Omit clone_depth to create a full clone.'
     );

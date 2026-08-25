@@ -38,7 +38,8 @@ git config --global --add safe.directory /app 2>/dev/null || true
 
 # Fix home directory permissions (volumes may have wrong UID/GID from previous builds)
 echo "🔧 Fixing home directory permissions..."
-mkdir -p /home/agor/.agor /home/agor/.cache
+mkdir -p -m 0700 /home/agor/.agor
+mkdir -p /home/agor/.cache
 sudo -n chown -R agor:agor /home/agor 2>/dev/null || true
 
 echo "✅ Home directory permissions fixed"

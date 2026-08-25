@@ -95,6 +95,7 @@ describe('getDefaultConfig', () => {
     expect(defaults.daemon?.host).toBe('localhost');
     expect(defaults.ui?.port).toBe(5173);
     expect(defaults.ui?.host).toBe('localhost');
+    expect(defaults.identity?.password_policy).toBe('secure');
     expect(defaults.analytics?.enabled).toBe(false);
     expect(defaults.metrics?.statsd).toEqual({
       enabled: false,
@@ -107,6 +108,14 @@ describe('getDefaultConfig', () => {
 });
 
 describe('resolveEffectiveConfig', () => {
+  it('keeps the fail-safe password profile out of environment-variable override space', () => {
+    const resolved = resolveEffectiveConfig(
+      { identity: { password_policy: 'secure' } },
+      { AGOR_PASSWORD_POLICY: 'development' }
+    );
+    expect(resolved.identity?.password_policy).toBe('secure');
+  });
+
   it('materializes defaults and supported environment overrides without mutating input', () => {
     const input: AgorConfig = { daemon: { host: 'yaml-host', port: 1234 } };
     const resolved = resolveEffectiveConfig(input, {
@@ -497,6 +506,33 @@ describe('loadConfig', () => {
     );
     __resetConfigCacheForTests();
     await expect(loadConfig()).rejects.toThrow(/preserve_canonical_home_alias must be a boolean/);
+  });
+
+  it('accepts branch_storage.borrow_base_objects and rejects a non-boolean value', async () => {
+    // The escape hatch for deployments whose executors cannot see the
+    // daemon's repos/ mount; must survive the strict unknown-key sweep.
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      'execution:\n  branch_storage:\n    borrow_base_objects: false\n',
+      'utf-8'
+    );
+
+    await expect(loadConfig()).resolves.toMatchObject({
+      execution: { branch_storage: { borrow_base_objects: false } },
+    });
+
+    await fs.writeFile(
+      configPath,
+      'execution:\n  branch_storage:\n    borrow_base_objects: "false"\n',
+      'utf-8'
+    );
+    __resetConfigCacheForTests();
+    await expect(loadConfig()).rejects.toThrow(
+      /execution\.branch_storage\.borrow_base_objects must be a boolean/
+    );
   });
 
   describe('AGOR_UNKNOWN_CONFIG_KEYS forward-compatibility policy', () => {
@@ -966,6 +1002,24 @@ describe('loadConfig', () => {
         external: { provider: 'external_launch', provisioning: 'jit' },
       },
     });
+  });
+
+  it('accepts only the named secure password profile and fails closed on weak profiles', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(configPath, yaml.dump({ identity: { password_policy: 'secure' } }), 'utf-8');
+    await expect(loadConfig()).resolves.toMatchObject({
+      identity: { password_policy: 'secure' },
+    });
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ identity: { password_policy: 'development' } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/identity\.password_policy must be 'secure'/);
   });
 
   it('rejects unknown identity keys and unsupported authority values', async () => {
@@ -1578,11 +1632,16 @@ describe('initConfig', () => {
     expect(await fs.readdir(path.dirname(getConfigPath()))).toEqual([]);
   });
 
-  it('preserves existing permission bits during an explicit atomic rewrite', async () => {
+  it('preserves existing permission bits during an explicit atomic rewrite under any umask', async () => {
     await createInitialConfig({ daemon: { port: 3001 } });
     const configPath = getConfigPath();
     await fs.chmod(configPath, 0o640);
-    await rewriteConfigForTests({ daemon: { port: 3002 } });
+    const previousUmask = process.platform === 'win32' ? undefined : process.umask(0o077);
+    try {
+      await rewriteConfigForTests({ daemon: { port: 3002 } });
+    } finally {
+      if (previousUmask !== undefined) process.umask(previousUmask);
+    }
     expect((await fs.stat(configPath)).mode & 0o777).toBe(0o640);
     expect((await loadConfig()).daemon?.port).toBe(3002);
   });
@@ -2138,6 +2197,29 @@ describe('resolveBranchStorageConfig + ensureBranchStorageModeAllowed', () => {
     const resolved = resolveBranchStorageConfig();
     expect(resolved.defaultMode).toBe('clone');
     expect(resolved.allowedModes).toEqual(['worktree', 'clone']);
+  });
+
+  it('can resolve the daemon-owned effective config without consulting ambient files', () => {
+    const effectiveConfig: AgorConfig = {
+      execution: {
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['clone'],
+          allow_shallow_clones: false,
+        },
+      },
+    };
+
+    expect(resolveBranchStorageConfig(effectiveConfig)).toEqual({
+      defaultMode: 'clone',
+      allowedModes: ['clone'],
+      allowShallowClones: false,
+    });
+    expect(() => ensureBranchStorageModeAllowed('clone', effectiveConfig)).not.toThrow();
+    expect(() => ensureBranchStorageModeAllowed('worktree', effectiveConfig)).toThrow(
+      /not enabled/
+    );
+    expect(() => ensureBranchCloneDepthAllowed(1, effectiveConfig)).toThrow(/full clone/);
   });
 
   it('falls back default_mode into allowed_modes when operator misconfigures them', async () => {

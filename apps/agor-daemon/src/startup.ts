@@ -44,7 +44,7 @@ import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
 import {
-  generateScopedServiceToken,
+  generateDaemonServiceToken,
   getDaemonUrl,
   requestExecutor,
 } from './utils/spawn-executor.js';
@@ -706,7 +706,7 @@ export async function startup(ctx: StartupContext): Promise<void> {
         const result = await requestExecutor(
           {
             command: 'git.managed-credentials.reconcile',
-            sessionToken: generateScopedServiceToken(
+            sessionToken: generateDaemonServiceToken(
               app as unknown as { settings: { authentication?: { secret?: string } } }
             ),
             daemonUrl: getDaemonUrl(),

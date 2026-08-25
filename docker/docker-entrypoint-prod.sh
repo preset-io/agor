@@ -5,7 +5,7 @@ echo "🚀 Starting Agor production environment..."
 
 # Create the state root if it is not a read-only mount. Never recursively chown
 # it: config.yaml may be an operator-owned read-only ConfigMap/secret mount.
-mkdir -p /home/agor/.agor
+mkdir -p -m 0700 /home/agor/.agor
 sudo -n chown agor:agor /home/agor/.agor 2>/dev/null || true
 
 # Initialize database and create config only when absent

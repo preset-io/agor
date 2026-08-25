@@ -115,6 +115,20 @@ export interface BoardComment {
 }
 
 /**
+ * Domain-owned attachment policy shared by persistence authorization and
+ * realtime publication. Adding another attachment kind must update this one
+ * descriptor rather than two independent field lists.
+ */
+export const BOARD_COMMENT_ATTACHMENT_POLICY = [
+  { field: 'branch_id', resource: 'branch' },
+  { field: 'session_id', resource: 'session' },
+  { field: 'task_id', resource: 'task' },
+  { field: 'message_id', resource: 'message' },
+] as const;
+
+export type BoardCommentAttachment = (typeof BOARD_COMMENT_ATTACHMENT_POLICY)[number];
+
+/**
  * Comment attachment type determination
  *
  * Hierarchy (most specific → least specific):
@@ -176,19 +190,36 @@ export function getCommentAttachmentType(comment: BoardComment): CommentAttachme
 /**
  * Create input for new comment (omits auto-generated fields)
  */
-export type BoardCommentCreate = Omit<
+export type BoardCommentCreate = Pick<
   BoardComment,
-  'comment_id' | 'created_at' | 'updated_at' | 'content_preview'
-> & {
-  content: string; // Will auto-generate content_preview
-};
+  | 'board_id'
+  | 'content'
+  | 'branch_id'
+  | 'session_id'
+  | 'task_id'
+  | 'message_id'
+  | 'position'
+  | 'mentions'
+>;
 
 /**
- * Patch input for updating comment (partial)
+ * Public patch input. `edited`, previews, reactions, attachments, identity,
+ * and timestamps are server-owned. Reactions and replies use their dedicated
+ * operations.
  */
-export type BoardCommentPatch = Partial<Pick<BoardComment, 'content' | 'resolved'>> & {
-  edited?: boolean; // Auto-set to true when content is updated
-};
+export type BoardCommentPatch = Partial<Pick<BoardComment, 'content' | 'resolved'>>;
+
+/** Dedicated spatial mutation DTO; generic patch deliberately excludes it. */
+export interface BoardCommentReposition {
+  position: NonNullable<BoardComment['position']>;
+  /** Required audience-anchor precondition; the route never changes it. */
+  branch_id: BranchID | null;
+}
+
+/** Convert a stored comment zone-parent suffix to its board-object key. */
+export function boardCommentZoneParentObjectKey(parentId: string): `zone-${string}` {
+  return `zone-${parentId}`;
+}
 
 // ============================================================================
 // Helper Functions (Phase 2: Threading + Reactions)

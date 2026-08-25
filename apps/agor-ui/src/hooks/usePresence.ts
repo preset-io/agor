@@ -66,7 +66,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
   >(new Map());
 
   const [presenceMap, setPresenceMap] = useState<
-    Map<string, { boardId: BoardID; x?: number; y?: number; timestamp: number }>
+    Map<string, { boardId?: BoardID; x?: number; y?: number; timestamp: number }>
   >(new Map());
 
   useEffect(() => {

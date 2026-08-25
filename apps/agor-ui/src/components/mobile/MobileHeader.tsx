@@ -60,6 +60,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
         {showMenu && (
           <Button
             type="text"
+            aria-label="Open navigation"
             icon={<UnorderedListOutlined style={{ fontSize: token.fontSizeLG }} />}
             onClick={onMenuClick}
           />

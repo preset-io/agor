@@ -22,7 +22,10 @@ import {
   MessageRole,
   PROVIDER_CREDENTIAL_FIELDS,
 } from '@agor/core/types';
-import { hasExecutorRuntimeScope } from '../auth/executor-runtime-scope.js';
+import {
+  authenticatedTaskExecutorRuntimeScope,
+  matchesTaskExecutorRuntimeScope,
+} from '../auth/executor-runtime-scope.js';
 
 /** Fallback for consumers that render `content` raw (mobile, gateway, CLI).
  * The web UI renders its own copy from MissingCredentialPanel instead. */
@@ -175,7 +178,8 @@ export function classifyMissingCredentialFailure(
   return async (context: HookContext): Promise<HookContext> => {
     const data = context.data as Partial<Message> | undefined;
     if (!data?.task_id || !data.session_id) return context;
-    if (!hasExecutorRuntimeScope(context)) return context;
+    const executorScope = authenticatedTaskExecutorRuntimeScope(context.params);
+    if (!executorScope) return context;
 
     const isMissingCredentialFailure = data.metadata?.is_missing_credential_failure === true;
     const isZeroTurnResult = data.metadata?.is_zero_turn_result === true;
@@ -183,6 +187,9 @@ export function classifyMissingCredentialFailure(
 
     if (!isMissingCredentialFailure && !isZeroTurnResult && !isProviderFailureResult) {
       return context;
+    }
+    if (!matchesTaskExecutorRuntimeScope(executorScope, data)) {
+      throw new Forbidden('Provider failure classification requires this task executor');
     }
 
     try {

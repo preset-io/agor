@@ -9,15 +9,15 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  BOUND_SECRET_ENVELOPE_VERSION,
   generateId,
-  MCP_OAUTH_SECRET_ENVELOPE_VERSION,
   type MCPOAuthPendingFlowClaimResult,
   type MCPOAuthPendingFlowRecord,
   MCPOAuthPendingFlowRepository,
-  openMCPOAuthSecret,
+  openBoundSecret,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
-  sealMCPOAuthSecret,
+  sealBoundSecret,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { OAuthFlowContext } from '@agor/core/tools/mcp/oauth-mcp-transport';
@@ -154,7 +154,7 @@ export class MCPOAuthPendingFlowAuthority {
           input.context.authorizationResponseIssuerParameterSupported,
         allowLocalhostHttp: input.context.allowLocalhostHttp,
       };
-      const sealedMaterial = sealMCPOAuthSecret(
+      const sealedMaterial = sealBoundSecret(
         JSON.stringify(material),
         this.masterSecret!,
         'pending-exchange',
@@ -178,7 +178,7 @@ export class MCPOAuthPendingFlowAuthority {
         grantGeneration,
         configFingerprintVersion: material.configFingerprintVersion,
         configFingerprint: input.configFingerprint,
-        envelopeVersion: MCP_OAUTH_SECRET_ENVELOPE_VERSION,
+        envelopeVersion: BOUND_SECRET_ENVELOPE_VERSION,
         sealedMaterial,
         ttlMs: FLOW_TTL_MS,
       });
@@ -236,7 +236,7 @@ export class MCPOAuthPendingFlowAuthority {
     let parsed: unknown;
     try {
       parsed = JSON.parse(
-        openMCPOAuthSecret(
+        openBoundSecret(
           record.sealedMaterial,
           this.masterSecret!,
           'pending-exchange',
@@ -266,7 +266,7 @@ export class MCPOAuthPendingFlowAuthority {
       material.grantGeneration !== record.grantGeneration ||
       material.configFingerprintVersion !== record.configFingerprintVersion ||
       material.configFingerprint !== record.configFingerprint ||
-      record.envelopeVersion !== MCP_OAUTH_SECRET_ENVELOPE_VERSION ||
+      record.envelopeVersion !== BOUND_SECRET_ENVELOPE_VERSION ||
       !record.isCurrent
     ) {
       throw new Error('MCP OAuth pending-flow material binding is invalid');

@@ -1,6 +1,14 @@
 # `Failed to load conversation: jwt expired` after disconnect/reconnect
 
-**Status:** **implemented in this PR** (commits on `analyze-jwt-expired-on-reconnect`). The doc below was the analysis that motivated the fix; §9 records what shipped.
+**Status:** Historical analysis. The conversation/data rehydration work in §9
+still applies, but the live Socket.IO authentication flow described below was
+superseded by the immutable handshake-authority design in
+[`websocket-tenant-isolation-audit.md`](websocket-tenant-isolation-audit.md).
+Sockets now present the latest access token on every namespace handshake;
+automatic transport reconnect remains enabled, while routine token rotation
+updates the next-handshake credential without replacing authority or
+disconnecting a healthy socket. Sections 1–7 preserve the earlier failure
+analysis and must not be treated as the current transport contract.
 
 After the laptop sleeps, the network drops, or the tab is backgrounded long
 enough for the access token to expire, the conversation panel sometimes
@@ -32,7 +40,7 @@ recovery paths catch it, and lays out solutions.
    retries — and that net mostly works.
 4. The banner sticks when the safety net itself fails:
    - The around-hook catches `isDefiniteAuthFailure` only
-     (`authErrors.ts:43-51`). A *transient* refresh failure (5xx, network
+     (`authErrors.ts:43-51`). A _transient_ refresh failure (5xx, network
      timeout, dropped socket mid-refresh) re-throws the original 401
      (`useAgorClient.ts:169-174`) — `resync()` records that as `error`.
    - When the refresh token itself is dead (>30d, multi-tab rotation race,
@@ -41,13 +49,13 @@ recovery paths catch it, and lays out solutions.
      fast-fails forever. Every subsequent resync attempt sees the same 401
      and re-paints the banner.
    - Even after a successful auto-recovery in some other code path,
-     `ReactiveSessionState.error` is only ever cleared by a *successful*
+     `ReactiveSessionState.error` is only ever cleared by a _successful_
      `resync()` — and `resync()` only fires on socket `connect`, which has
      already happened. So the banner is sticky until the next physical
      disconnect/reconnect cycle.
 
 The recommended fix is **C + D**: trigger a re-hydrate (`resync` + a token
-refresh attempt) on socket reconnect *and* whenever the panel is mounted
+refresh attempt) on socket reconnect _and_ whenever the panel is mounted
 with an existing error, plus a manual "Reload" affordance on the banner as a
 deterministic escape hatch. Details in §6.
 
@@ -120,12 +128,12 @@ Tokens live in `localStorage` under `agor-access-token` and
 
 There are **four** distinct refresh paths, layered for resilience:
 
-| # | Trigger | File | Notes |
-|---|---|---|---|
-| 1 | Proactive timer | `apps/agor-ui/src/hooks/useAuth.ts:241-286` | Decodes JWT `exp` claim, schedules a refresh `60s` before expiry |
-| 2 | Tab regains focus | `apps/agor-ui/src/hooks/useAuth.ts:169-214` | Calls `reAuthenticate()` if unauthenticated; refreshes if `exp` within 60s |
-| 3 | Socket reconnect | `apps/agor-ui/src/hooks/useAgorClient.ts:216-303` | Tries `authenticate({jwt})` first, falls back to `refreshAndReauthenticate` |
-| 4 | Per-call 401 retry | `apps/agor-ui/src/hooks/useAgorClient.ts:145-207` | `client.hooks({ around: { all: [...] } })` — catches `isDefiniteAuthFailure`, refreshes, retries the original call once via `_refreshRetried` guard |
+| #   | Trigger            | File                                              | Notes                                                                                                                                               |
+| --- | ------------------ | ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Proactive timer    | `apps/agor-ui/src/hooks/useAuth.ts:241-286`       | Decodes JWT `exp` claim, schedules a refresh `60s` before expiry                                                                                    |
+| 2   | Tab regains focus  | `apps/agor-ui/src/hooks/useAuth.ts:169-214`       | Calls `reAuthenticate()` if unauthenticated; refreshes if `exp` within 60s                                                                          |
+| 3   | Socket reconnect   | `apps/agor-ui/src/hooks/useAgorClient.ts:216-303` | Tries `authenticate({jwt})` first, falls back to `refreshAndReauthenticate`                                                                         |
+| 4   | Per-call 401 retry | `apps/agor-ui/src/hooks/useAgorClient.ts:145-207` | `client.hooks({ around: { all: [...] } })` — catches `isDefiniteAuthFailure`, refreshes, retries the original call once via `_refreshRetried` guard |
 
 Refresh is single-flight via `refreshTokensSingleFlight`
 (`singleFlightRefresh.ts:100-154`) so concurrent 401s collapse into one POST.
@@ -143,7 +151,7 @@ On a definite-auth failure of `/authentication/refresh` itself, the helper
 - Path #4 catches `NotAuthenticated` only. **Transient** failures of the
   refresh call itself — 5xx, network drop, refresh response dropped because
   the socket renegotiated mid-flight — fall into the `catch` at
-  `useAgorClient.ts:169-174`, which re-throws the *original* 401:
+  `useAgorClient.ts:169-174`, which re-throws the _original_ 401:
 
   ```ts
   try {
@@ -157,7 +165,7 @@ On a definite-auth failure of `/authentication/refresh` itself, the helper
   ```
 
   That's by design — the comment is clear about it — but the upstream
-  *consumer* in this case is `resync()`, which has nowhere to escalate to.
+  _consumer_ in this case is `resync()`, which has nowhere to escalate to.
   It just writes "jwt expired" into state and waits.
 
 ---
@@ -184,7 +192,7 @@ listener returns synchronously at its first `await`. So the sequence is:
 2. `useAgorClient` listener runs synchronously, hits `await client.authenticate(...)`, suspends.
 3. `reactive-session` listener runs synchronously, calls `this.resync()` — three service calls launched.
 4. Those service calls hit the daemon while the connection's auth state may
-   still be the *previous* (now-stale) session, or unset. They 401.
+   still be the _previous_ (now-stale) session, or unset. They 401.
 5. The around-hook catches them, single-flights into the same refresh as
    step 2, retries each call once.
 
@@ -201,7 +209,7 @@ The banner appears whenever step 5 fails for any reason:
   - Multi-tab rotation race. Both tabs wake up, both POST to
     `/authentication/refresh` with the same refresh token. The server
     rotates and issues a new one; the loser holds a stale token. Single-
-    flight is *per-tab*, not cross-tab, so it doesn't help here. The
+    flight is _per-tab_, not cross-tab, so it doesn't help here. The
     loser's refresh latches `unrecoverable`, every retry fast-fails
     with `RefreshUnrecoverableError`, the around-hook re-throws the
     original 401, the banner sticks.
@@ -233,20 +241,20 @@ disconnect — which, on a stable network, never happens. Even if Path #1
 (proactive timer) refreshes the JWT successfully a minute later, the
 conversation panel doesn't notice.
 
-The visibility-change recovery in `useAuth.ts:169-214` *does* refresh
+The visibility-change recovery in `useAuth.ts:169-214` _does_ refresh
 tokens when the tab regains focus, but it doesn't poke the reactive
 session — there's no signal between `useAuth` and `ReactiveSessionHandle`
 to retry hydration.
 
 ### 3.4 Page-load vs reconnect bootstrap
 
-| | Page load | Reconnect |
-|---|---|---|
-| Tokens read | `localStorage` → `useAuth` initialization | Already in `accessTokenRef` |
-| Auth | `client.authenticate({ jwt })` from `useAgorClient` initial connect | Same, in connect handler |
-| Reactive session | New handle created → `bootstrap()` runs once | Existing handle → `resync()` runs |
-| Error path | `bootstrap()` failure surfaces same way | `resync()` failure surfaces same way |
-| State scope | Many independent fetches via reactive sessions per panel | Same |
+|                  | Page load                                                           | Reconnect                            |
+| ---------------- | ------------------------------------------------------------------- | ------------------------------------ |
+| Tokens read      | `localStorage` → `useAuth` initialization                           | Already in `accessTokenRef`          |
+| Auth             | `client.authenticate({ jwt })` from `useAgorClient` initial connect | Same, in connect handler             |
+| Reactive session | New handle created → `bootstrap()` runs once                        | Existing handle → `resync()` runs    |
+| Error path       | `bootstrap()` failure surfaces same way                             | `resync()` failure surfaces same way |
+| State scope      | Many independent fetches via reactive sessions per panel            | Same                                 |
 
 There is no global "rehydrate everything" function. State is scattered
 across `ReactiveSessionHandle` instances (one per open conversation),
@@ -300,12 +308,14 @@ const handleReload = async () => {
 ```
 
 **Pros**
+
 - Tiny diff. Bounded blast radius.
 - Deterministic: the user clicks, something happens, the user sees the
   result. No "did the auto-recovery fire?" mystery.
 - Doesn't introduce new failure modes.
 
 **Cons**
+
 - Manual. The user is told "reload" instead of "this just works."
 - Ignores that the reactive session model already has a perfectly good
   `resync()` mechanism — this just adds a button.
@@ -323,12 +333,14 @@ this. To close the gaps:
    `packages/core/src/api/index.ts:722` (currently socket-only).
 
 **Pros**
+
 - The infrastructure is already there. Just a couple of targeted edits.
 - Standard pattern. Easy to test.
 
 **Cons**
+
 - Doesn't address the race in §3.1 (the around-hook is the safety net
-  that catches that race; we already have it; the bug happens when *that*
+  that catches that race; we already have it; the bug happens when _that_
   net itself fails).
 - Doesn't address the post-reconnect-failure stickiness (§3.3). Once
   `state.error` is set, no future 401 will fire because `resync()` won't
@@ -375,6 +387,7 @@ useEffect(() => {
 `resync()` would need to be exposed as a public method on the handle.
 
 **Pros**
+
 - Heals automatically without any user action in the common case
   (transient daemon hiccup, brief network drop, tab background).
 - Reuses the existing reactive-session bootstrap mechanism — no new
@@ -386,6 +399,7 @@ useEffect(() => {
   cross-user leakage.
 
 **Cons**
+
 - More moving parts than A. Three new edges to test
   (reconnect / visibility / refreshed).
 - If `resync()` itself is buggy (e.g. one of the calls always 401s),
@@ -402,12 +416,14 @@ still surfaces an error, render a banner with a Reload button (A) instead
 of an inert Alert.
 
 **Pros**
+
 - Belt-and-suspenders. Auto-recovery handles the common case; the button
   handles the long tail.
 - Bounded scope: even if all the auto-recovery layers fail, the user can
   always click reload.
 
 **Cons**
+
 - Doesn't fix the stickiness — the auto-recovery doesn't get a second
   chance on its own; the user is the second chance.
 
@@ -483,7 +499,7 @@ These were noticed during investigation but are out of scope:
 ## 9. What shipped in this PR
 
 The recommendation in §6 was implemented along with a parallel fix for the
-*global* byId state (the `useAgorData` hub), which had the same kind of
+_global_ byId state (the `useAgorData` hub), which had the same kind of
 "events fired while disconnected are gone" problem at app scope.
 
 ### Conversation panel (the original symptom)
@@ -513,6 +529,7 @@ The recommendation in §6 was implemented along with a parallel fix for the
     succeeded — clear any stale error that a prior `resync()` had latched)
 
   No local inflight ref needed — single-flight lives in the handle.
+
 - `apps/agor-ui/src/components/ConversationView/ConversationView.tsx` —
   the static error `<Alert>` now exposes a "Reload" action button that
   calls `reactiveSession.resync()`. Hidden when `state.terminal` so the
@@ -552,14 +569,14 @@ are not replayable.
 - `Promise.all` in `fetchData()` and `resync()` is fail-fast. If one
   service genuinely fails (auth-retry exhausted, daemon partial failure)
   the whole rehydrate is aborted and existing maps are preserved. This
-  matches today's *page-load* failure mode, so we're not regressing —
+  matches today's _page-load_ failure mode, so we're not regressing —
   but a partial failure on reconnect is more likely than at page load.
   `Promise.allSettled` + per-Map error handling is a worthwhile follow-up
   if it becomes painful in practice.
 - Cross-tab refresh-token rotation race in `singleFlightRefresh.ts`
   (per-tab single-flight, not cross-tab) is unchanged. Use a
   `BroadcastChannel('agor-auth')` if multi-tab users start hitting it.
-- The transient-error retry inside `resync()` was *not* added — doing so
+- The transient-error retry inside `resync()` was _not_ added — doing so
   would have required moving `isTransientConnectionError` from
   `apps/agor-ui` into `packages/client`, a cross-layer dependency we'd
   rather not introduce. The visibility / tokens-refreshed listeners
@@ -571,22 +588,22 @@ are not replayable.
 
 ## 8. File reference index
 
-| What | File | Lines |
-|---|---|---|
-| Banner render | `apps/agor-ui/src/components/ConversationView/ConversationView.tsx` | 318-322 |
-| Hook → handle wire-up | `apps/agor-ui/src/hooks/useSharedReactiveSession.ts` | 21-60 |
-| `bootstrap()` | `packages/client/src/reactive-session.ts` | 305-353 |
-| `resync()` | `packages/client/src/reactive-session.ts` | 810-870 |
-| `connect` listener (resync trigger) | `packages/client/src/reactive-session.ts` | 360-371 |
-| `connect` listener (re-auth) | `apps/agor-ui/src/hooks/useAgorClient.ts` | 216-303 |
-| 401 around-hook | `apps/agor-ui/src/hooks/useAgorClient.ts` | 145-207 |
-| `isDefiniteAuthFailure` | `apps/agor-ui/src/utils/authErrors.ts` | 43-51 |
-| `isTransientConnectionError` | `apps/agor-ui/src/utils/authErrors.ts` | 59-85 |
-| Single-flight refresh + unrecoverable latch | `apps/agor-ui/src/utils/singleFlightRefresh.ts` | 52-154 |
-| `refreshAndReauthenticate` | `apps/agor-ui/src/utils/singleFlightRefresh.ts` | 165-175 |
-| `TOKENS_REFRESHED_EVENT` | `apps/agor-ui/src/utils/singleFlightRefresh.ts` | 43, 121-125 |
-| Proactive refresh timer | `apps/agor-ui/src/hooks/useAuth.ts` | 241-286 |
-| Visibility-change recovery | `apps/agor-ui/src/hooks/useAuth.ts` | 169-214 |
-| Token storage (localStorage keys) | `apps/agor-ui/src/utils/tokenRefresh.ts` | 10-11 |
-| Server JWT TTLs | `apps/agor-daemon/src/register-routes.ts` | 247-254 |
-| Feathers client setup | `packages/core/src/api/index.ts` | 699-810 |
+| What                                        | File                                                                | Lines       |
+| ------------------------------------------- | ------------------------------------------------------------------- | ----------- |
+| Banner render                               | `apps/agor-ui/src/components/ConversationView/ConversationView.tsx` | 318-322     |
+| Hook → handle wire-up                       | `apps/agor-ui/src/hooks/useSharedReactiveSession.ts`                | 21-60       |
+| `bootstrap()`                               | `packages/client/src/reactive-session.ts`                           | 305-353     |
+| `resync()`                                  | `packages/client/src/reactive-session.ts`                           | 810-870     |
+| `connect` listener (resync trigger)         | `packages/client/src/reactive-session.ts`                           | 360-371     |
+| `connect` listener (re-auth)                | `apps/agor-ui/src/hooks/useAgorClient.ts`                           | 216-303     |
+| 401 around-hook                             | `apps/agor-ui/src/hooks/useAgorClient.ts`                           | 145-207     |
+| `isDefiniteAuthFailure`                     | `apps/agor-ui/src/utils/authErrors.ts`                              | 43-51       |
+| `isTransientConnectionError`                | `apps/agor-ui/src/utils/authErrors.ts`                              | 59-85       |
+| Single-flight refresh + unrecoverable latch | `apps/agor-ui/src/utils/singleFlightRefresh.ts`                     | 52-154      |
+| `refreshAndReauthenticate`                  | `apps/agor-ui/src/utils/singleFlightRefresh.ts`                     | 165-175     |
+| `TOKENS_REFRESHED_EVENT`                    | `apps/agor-ui/src/utils/singleFlightRefresh.ts`                     | 43, 121-125 |
+| Proactive refresh timer                     | `apps/agor-ui/src/hooks/useAuth.ts`                                 | 241-286     |
+| Visibility-change recovery                  | `apps/agor-ui/src/hooks/useAuth.ts`                                 | 169-214     |
+| Token storage (localStorage keys)           | `apps/agor-ui/src/utils/tokenRefresh.ts`                            | 10-11       |
+| Server JWT TTLs                             | `apps/agor-daemon/src/register-routes.ts`                           | 247-254     |
+| Feathers client setup                       | `packages/core/src/api/index.ts`                                    | 699-810     |

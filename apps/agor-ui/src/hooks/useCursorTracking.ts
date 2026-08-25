@@ -73,7 +73,7 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
                 y: latest.y,
                 timestamp: Date.now(),
               };
-              client.io.emit('cursor-move', event);
+              client.io.volatile.emit('cursor-move', event);
               lastEmitRef.current = Date.now();
             }
           }, PRESENCE_CONFIG.CURSOR_EMIT_THROTTLE_MS - timeSinceLastEmit);
@@ -89,7 +89,7 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
         timestamp: now,
       };
 
-      client.io.emit('cursor-move', event);
+      client.io.volatile.emit('cursor-move', event);
       lastEmitRef.current = now;
     },
     [client, boardId, enabled]
@@ -112,7 +112,7 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
     // Emit cursor-leave when component unmounts or board changes
     const handleCursorLeave = () => {
       if (client?.io && boardId) {
-        client.io.emit('cursor-leave', { boardId });
+        client.io.volatile.emit('cursor-leave', { boardId });
       }
     };
 

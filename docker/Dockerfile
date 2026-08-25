@@ -31,8 +31,10 @@ RUN apt-get update && apt-get install -y \
   openssh-client \
   ripgrep \
   bubblewrap \
+  util-linux \
   && rm -rf /var/lib/apt/lists/*
-# bubblewrap: filesystem-only executor sandbox. See context/explorations/executor-sandboxing.md.
+# bubblewrap: filesystem-only executor sandbox. util-linux supplies the kernel
+# flock holder used by HA Codex credential mutations.
 
 # Install Zellij (terminal multiplexer)
 # Pinned to v0.43.1 for reproducibility
@@ -75,7 +77,7 @@ RUN set -eux; \
     echo "agor ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agor; \
     chmod 0440 /etc/sudoers.d/agor; \
     # Create .agor directory for database and config (will be mounted as volume)
-    mkdir -p /home/agor/.agor; \
+    mkdir -p -m 0700 /home/agor/.agor; \
     chown -R agor:agor /home/agor
 
 # Copy Zellij config for the daemon user.

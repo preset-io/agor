@@ -166,7 +166,7 @@ export async function executeOpenCodeTask(params: {
           await client.service('sessions').patch(sessionId, { sdk_session_id: openCodeSessionId });
         },
       },
-      createStreamingCallbacks(client, 'opencode', sessionId, params.onPulse)
+      createStreamingCallbacks(client, 'opencode', sessionId, taskId, params.onPulse)
     );
 
     if (params.abortController.signal.aborted) return;

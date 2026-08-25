@@ -8,38 +8,38 @@ environment:
         AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
         AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
         AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
-        AGOR_ADMIN_PASSWORD=admin
-        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true AGOR_HA_NODE_ENV=development
+        AGOR_EXTERNAL_LAUNCH_SHARED_SECRET=agor-ha-dev-launch-secret-000000000000000000000000
+        AGOR_HA_NODE_ENV=development
         docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} up -d --build
       stop: >-
         env AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
         AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
         AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
         AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
-        AGOR_ADMIN_PASSWORD=admin
-        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true AGOR_HA_NODE_ENV=development
+        AGOR_EXTERNAL_LAUNCH_SHARED_SECRET=agor-ha-dev-launch-secret-000000000000000000000000
+        AGOR_HA_NODE_ENV=development
         docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} down
       nuke: >-
         env AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
         AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
         AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
         AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
-        AGOR_ADMIN_PASSWORD=admin
-        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true AGOR_HA_NODE_ENV=development
+        AGOR_EXTERNAL_LAUNCH_SHARED_SECRET=agor-ha-dev-launch-secret-000000000000000000000000
+        AGOR_HA_NODE_ENV=development
         docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} down -v --remove-orphans
       logs: >-
         env AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
         AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
         AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
         AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
-        AGOR_ADMIN_PASSWORD=admin
-        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true AGOR_HA_NODE_ENV=development
+        AGOR_EXTERNAL_LAUNCH_SHARED_SECRET=agor-ha-dev-launch-secret-000000000000000000000000
+        AGOR_HA_NODE_ENV=development
         docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} logs --tail=150
       description: >-
-        HA smoke test: PostgreSQL, ephemeral Redis, two daemons, and nginx affinity. Static tenant,
-        shared storage, RBAC off, and development-only credentials.
+        Hosted control-plane smoke: PostgreSQL/RLS, ephemeral Redis, two daemons, nginx affinity,
+        auth-resolved tenants, RBAC, per-user sandbox homes, and a development identity picker.
       health: http://localhost:{{add 3000 branch.unique_id}}/readyz
-      app: http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
+      app: http://{{host.ip_address}}:{{add 3000 branch.unique_id}}/dev-auth/
     docs:
       start: >-
         INSTANCE_LABEL={{branch.name}} PORT={{add 7000 branch.unique_id}} NEXT_PUBLIC_SITE_URL=http://{{host.ip_address}}:{{add

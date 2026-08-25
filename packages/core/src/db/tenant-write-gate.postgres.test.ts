@@ -254,6 +254,12 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant write gate (Postgre
       tenantScopedDb,
       new SessionRepository(tenantScopedDb)
     );
+    let primarySetIfUnsetCalls = 0;
+    const primarySetIfUnset = bindRepositoryToTenantUnitOfWork(tenantScopedDb, {
+      async setPrimaryTeammateIfUnset() {
+        primarySetIfUnsetCalls++;
+      },
+    });
 
     const { generation } = await acquireTenantWriteGate(db, tenant, { reason: 'freeze' });
 
@@ -271,7 +277,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant write gate (Postgre
           created_by: 'write-gate-test-user',
         })
       ).rejects.toBeInstanceOf(TenantWriteGateActiveError);
+      await expect(primarySetIfUnset.setPrimaryTeammateIfUnset()).rejects.toBeInstanceOf(
+        TenantWriteGateActiveError
+      );
     });
+    expect(primarySetIfUnsetCalls).toBe(0);
 
     // Nothing was written while gated.
     expect(await countTenantSessions(db, tenant)).toBe(1);

@@ -714,11 +714,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
 
     const manifest = await readManifest(archive);
     expect(manifest.database.identity.nonPortableTenantTables).toEqual([
+      'codex_device_auth_attempts',
       'executor_session_token_authorities',
       'github_install_states',
       'mcp_oauth_pending_flows',
       'user_mcp_oauth_tokens',
     ]);
+    expect(manifest.database.identity.tenantTables).not.toContain('codex_device_auth_attempts');
     expect(manifest.database.identity.tenantTables).not.toContain(
       'executor_session_token_authorities'
     );
@@ -726,6 +728,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     expect(manifest.database.identity.tenantTables).not.toContain('user_mcp_oauth_tokens');
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'executor_session_token_authorities'
+    );
+    expect(manifest.database.tables.map((table) => table.name)).not.toContain(
+      'codex_device_auth_attempts'
     );
     expect(manifest.database.tables.map((table) => table.name)).not.toContain(
       'mcp_oauth_pending_flows'

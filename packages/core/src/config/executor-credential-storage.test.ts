@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { hasTenantSafeExecutorCredentialHome } from './executor-credential-storage';
+import {
+  hasCrossReplicaExecutorCredentialLock,
+  hasExactUserExecutorCredentialHome,
+  hasTenantSafeExecutorCredentialHome,
+} from './executor-credential-storage';
 
 describe('hasTenantSafeExecutorCredentialHome', () => {
   it('allows an intentional shared identity only for static tenancy', () => {
@@ -24,5 +28,72 @@ describe('hasTenantSafeExecutorCredentialHome', () => {
         execution: { executor_storage: { user_home: 'persistent-per-user' } },
       })
     ).toBe(true);
+  });
+});
+
+describe('hasCrossReplicaExecutorCredentialLock', () => {
+  it('requires the explicit cross-client flock assertion', () => {
+    expect(
+      hasCrossReplicaExecutorCredentialLock({
+        execution: { executor_storage: { user_home: 'persistent-per-user' } },
+      })
+    ).toBe(false);
+    expect(
+      hasCrossReplicaExecutorCredentialLock({
+        execution: {
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            user_home_locking: 'local-only',
+          },
+        },
+      })
+    ).toBe(false);
+    expect(
+      hasCrossReplicaExecutorCredentialLock({
+        execution: {
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            user_home_locking: 'cross-replica-flock',
+          },
+        },
+      })
+    ).toBe(true);
+  });
+});
+
+describe('hasExactUserExecutorCredentialHome', () => {
+  it('rejects consistent but shared or unrouted local homes', () => {
+    expect(
+      hasExactUserExecutorCredentialHome({
+        execution: { unix_user_mode: 'simple', executor_storage: { user_home: 'shared' } },
+      })
+    ).toBe(false);
+    expect(
+      hasExactUserExecutorCredentialHome({
+        execution: {
+          unix_user_mode: 'simple',
+          executor_storage: { user_home: 'persistent-per-user' },
+        },
+      })
+    ).toBe(false);
+  });
+
+  it('accepts only the locally containable sandbox per-user route', () => {
+    expect(
+      hasExactUserExecutorCredentialHome({
+        execution: {
+          unix_user_mode: 'sandbox',
+          executor_storage: { user_home: 'persistent-per-user' },
+        },
+      })
+    ).toBe(true);
+    expect(
+      hasExactUserExecutorCredentialHome({
+        execution: {
+          unix_user_mode: 'delegated',
+          executor_storage: { user_home: 'persistent-per-user' },
+        },
+      })
+    ).toBe(false);
   });
 });

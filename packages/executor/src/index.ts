@@ -31,8 +31,8 @@ import type { ResolvedConfigSlice } from './payload-types.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 import { formatExecutorFailure } from './safe-executor-error.js';
 import { getSdkActivityVersion, markSdkHealthAbort, SdkWatchdog } from './sdk-watchdog.js';
-import { type AgorClient, createFeathersClient } from './services/feathers-client.js';
-import { tryMarkTaskTerminal } from './terminal-task.js';
+import { type AgorClient, createExecutorClient } from './services/feathers-client.js';
+import { isTaskFailurePersisted, tryMarkTaskTerminal } from './terminal-task.js';
 import { reportExecutorQuiescence } from './termination-report.js';
 import { isDaemonOwnedAbort, markCoordinatorTerminationAbort } from './termination-state.js';
 
@@ -114,8 +114,8 @@ export class AgorExecutor {
     try {
       // Connect to daemon via Feathers/WebSocket
       executorDebug('[executor] Connecting to daemon via Feathers...');
-      this.client = await createFeathersClient(this.config.daemonUrl, this.config.sessionToken, {
-        onReauthenticated: () => this.refreshTerminationState('reconnect'),
+      this.client = await createExecutorClient(this.config.daemonUrl, this.config.sessionToken, {
+        onReconnected: () => this.refreshTerminationState('reconnect'),
       });
       executorDebug('[executor] Connected to daemon');
 
@@ -144,6 +144,14 @@ export class AgorExecutor {
       );
       process.exit(0);
     } catch (error) {
+      if (isTaskFailurePersisted(error)) {
+        console.log(
+          `[executor.lifecycle] event=exit_requested task_id=${shortId(this.config.taskId)} ` +
+            'code=1 reason=task_failure_persisted'
+        );
+        process.exit(1);
+        return;
+      }
       const terminationRecovered = await this.recoverTerminationAfterExecutionError();
       if (terminationRecovered) {
         console.log(

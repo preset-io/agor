@@ -467,7 +467,7 @@ export async function executeCursorTask(params: {
     const apiKey = await resolveCursorApiKey(client, taskId);
     const session = await client.service('sessions').get(sessionId);
     const repos = createFeathersBackedRepositories(client);
-    const callbacks = createStreamingCallbacks(client, 'cursor', sessionId);
+    const callbacks = createStreamingCallbacks(client, 'cursor', sessionId, taskId);
 
     if (!session.branch_id) {
       throw new Error('Cursor sessions require a branch_id so the local runtime has a cwd.');
@@ -704,8 +704,6 @@ async function handleCursorEvent(args: {
       if (!args.isAssistantStreamStarted()) {
         args.ensureAssistantMessageIndex();
         await args.callbacks.onStreamStart(args.assistantMessageId, {
-          session_id: args.sessionId,
-          task_id: args.taskId,
           role: MessageRole.ASSISTANT,
           timestamp: new Date().toISOString(),
         });

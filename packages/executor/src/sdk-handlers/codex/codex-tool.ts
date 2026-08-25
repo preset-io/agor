@@ -345,8 +345,6 @@ export class CodexTool implements ITool {
             if (streamingCallbacks) {
               try {
                 await streamingCallbacks.onStreamStart(newMessageId, {
-                  session_id: sessionId,
-                  task_id: taskId,
                   role: MessageRole.ASSISTANT,
                   timestamp: new Date().toISOString(),
                 });
@@ -508,8 +506,6 @@ export class CodexTool implements ITool {
                 if (!currentMessageId) {
                   // No partial path — send full start/chunk/end sequence
                   await streamingCallbacks.onStreamStart(assistantMessageId, {
-                    session_id: sessionId,
-                    task_id: taskId,
                     role: MessageRole.ASSISTANT,
                     timestamp: new Date().toISOString(),
                   });

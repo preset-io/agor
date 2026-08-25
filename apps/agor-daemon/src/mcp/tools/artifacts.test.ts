@@ -1,14 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import { describe, expect, it, vi } from 'vitest';
+import { DrizzleService, type Repository } from '../../adapters/drizzle.js';
 
 let insideTenantDatabaseScope = false;
 
 vi.mock('@agor/core/db', () => ({
   BranchRepository: class BranchRepository {},
-}));
-
-vi.mock('@agor/core/utils/errors', () => ({
-  NotFoundError: class NotFoundError extends Error {},
 }));
 
 vi.mock('../../utils/branch-authorization.js', () => ({
@@ -193,6 +190,45 @@ describe('artifact MCP list projection', () => {
       ...ctx.baseServiceParams,
     });
     expect(find.mock.calls[0]?.[0]?.query.$select).not.toContain('files');
+  });
+});
+
+describe('artifact MCP not-found results', () => {
+  it('projects a real DrizzleService miss as the documented tool result', async () => {
+    type ArtifactRow = { artifact_id: string; name: string };
+    const repository: Repository<ArtifactRow> = {
+      create: vi.fn(),
+      findById: vi.fn(async () => null),
+      findAll: vi.fn(async () => []),
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+    const service = Object.assign(
+      new DrizzleService<ArtifactRow>(repository, {
+        id: 'artifact_id',
+        resourceType: 'Artifact',
+      }),
+      { isVisibleTo: vi.fn() }
+    );
+    const ctx = {
+      app: { service: vi.fn(() => service) },
+      userId: 'user-1',
+      baseServiceParams: {
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      },
+    } as unknown as Parameters<typeof registerArtifactTools>[1];
+
+    const result = await captureHandler('agor_artifacts_get', ctx)({ artifactId: 'artifact-1' });
+
+    expect(result).toEqual({
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ error: 'Artifact artifact-1 not found' }, null, 2),
+        },
+      ],
+    });
+    expect(service.isVisibleTo).not.toHaveBeenCalled();
   });
 });
 

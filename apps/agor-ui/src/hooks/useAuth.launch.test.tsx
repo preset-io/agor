@@ -55,6 +55,7 @@ describe('useAuth launch-code fallback', () => {
 
       await waitFor(() => expect(result.current.authenticated).toBe(true));
 
+      expect(result.current.authenticationGeneration).toBeGreaterThan(0);
       expect(listener).toHaveBeenCalledTimes(1);
       expect((listener.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
         accessToken: 'launch-access',
@@ -150,6 +151,91 @@ describe('useAuth launch-code fallback', () => {
     } finally {
       window.removeEventListener(TOKENS_REFRESHED_EVENT, listener);
     }
+  });
+
+  it('advances auth generation for explicit login/logout but not same-user token refresh', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    const user = { user_id: 'u1', email: 'person@example.test' };
+    authenticate.mockResolvedValue({
+      accessToken: 'new-access',
+      refreshToken: 'new-refresh',
+      user,
+    });
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const initialGeneration = result.current.authenticationGeneration;
+
+    await act(async () => {
+      await result.current.login('person@example.test', 'password-123');
+    });
+    const loggedInGeneration = result.current.authenticationGeneration;
+    expect(loggedInGeneration).toBeGreaterThan(initialGeneration);
+    expect(result.current.isAuthenticationGenerationCurrent(loggedInGeneration)).toBe(true);
+    expect(result.current.isAuthenticationOwnerCurrent('u1', loggedInGeneration)).toBe(true);
+    expect(result.current.isAuthenticationOwnerCurrent('u2', loggedInGeneration)).toBe(false);
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOKENS_REFRESHED_EVENT, {
+          detail: { accessToken: 'refreshed-access', refreshToken: 'new-refresh', user },
+        })
+      );
+    });
+    expect(result.current.authenticationGeneration).toBe(loggedInGeneration);
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(TOKENS_REFRESHED_EVENT, {
+          detail: {
+            accessToken: 'replacement-access',
+            refreshToken: 'replacement-refresh',
+            user: { user_id: 'u2', email: 'other@example.test' },
+          },
+        })
+      );
+    });
+    const replacedGeneration = result.current.authenticationGeneration;
+    expect(replacedGeneration).toBeGreaterThan(loggedInGeneration);
+    expect(result.current.isAuthenticationOwnerCurrent('u1', replacedGeneration)).toBe(false);
+    expect(result.current.isAuthenticationOwnerCurrent('u2', replacedGeneration)).toBe(true);
+
+    await act(async () => {
+      await result.current.logout();
+    });
+    expect(result.current.authenticationGeneration).toBeGreaterThan(replacedGeneration);
+    expect(result.current.isAuthenticationGenerationCurrent(loggedInGeneration)).toBe(false);
+    expect(result.current.isAuthenticationOwnerCurrent('u1', loggedInGeneration)).toBe(false);
+  });
+
+  it('advances generation when the final login authority is committed', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    let resolveLogin: ((result: unknown) => void) | undefined;
+    authenticate.mockReturnValue(
+      new Promise((resolve) => {
+        resolveLogin = resolve;
+      })
+    );
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let loginPromise: Promise<boolean> | undefined;
+    act(() => {
+      loginPromise = result.current.login('person@example.test', 'password-123');
+    });
+    await waitFor(() => expect(result.current.loading).toBe(true));
+    const invalidatedGeneration = result.current.authenticationGeneration;
+
+    await act(async () => {
+      resolveLogin?.({
+        accessToken: 'committed-access',
+        refreshToken: 'committed-refresh',
+        user: { user_id: 'u1', email: 'person@example.test' },
+      });
+      await loginPromise;
+    });
+
+    expect(result.current.authenticated).toBe(true);
+    expect(result.current.authenticationGeneration).toBeGreaterThan(invalidatedGeneration);
   });
 
   it('preserves stored tokens when stored-session auth gets a non-auth transport response', async () => {

@@ -23,7 +23,7 @@ const readJournals = () =>
 describe('Postgres migrations', () => {
   it('starts the Discord hybrid migration with its transaction-local lock timeout', async () => {
     const migration = await readFile(
-      new URL('../../drizzle/postgres/0091_discord_gateway_hybrid.sql', import.meta.url),
+      new URL('../../drizzle/postgres/0094_discord_gateway_hybrid.sql', import.meta.url),
       'utf8'
     );
     const statements = migration
@@ -99,6 +99,27 @@ describe('Postgres migrations', () => {
       pendingOfflineCutoverMigrations('postgresql', {
         applied: [],
         pending: ['0000_pretty_mac_gargan', '0083_transcript_hydration_keysets'],
+      })
+    ).toEqual([]);
+  });
+
+  it('enforces credential-generation token claims as an offline existing-db cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0091_codex_device_auth_attempts'],
+        pending: ['0092_add_user_credential_generation'],
+      })
+    ).toEqual(['0092_add_user_credential_generation']);
+    expect(
+      pendingOfflineCutoverMigrations('sqlite', {
+        applied: ['0094_codex_device_auth_attempts'],
+        pending: ['0095_add_user_credential_generation'],
+      })
+    ).toEqual([]);
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: [],
+        pending: ['0000_cuddly_captain_america', '0092_add_user_credential_generation'],
       })
     ).toEqual([]);
   });

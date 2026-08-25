@@ -85,12 +85,52 @@ const memberUser = { user_id: ALICE, role: 'member' } as unknown as User;
 // transient state under test.
 const NO_COMMANDS: string[] = [];
 const FAILURE_TEST_COMMANDS = ['echo should-not-run'];
+const READY_TEST_COMMANDS = ['echo one', 'echo two'];
 
 describe('TerminalModal reconnect + readiness', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     terminalMock.lines.length = 0;
     terminalMock.clearCalls = 0;
+  });
+
+  it('waits for cold terminal readiness before sending initial commands', async () => {
+    const socket = makeFakeSocket();
+    const create = vi.fn().mockResolvedValue({
+      userId: ALICE,
+      terminalId: TERMINAL,
+      channel: CHANNEL,
+      sessionName: 'agor-x',
+      isNew: true,
+      ready: false,
+    });
+    render(
+      <TerminalModal
+        open
+        onClose={() => {}}
+        client={makeClient(socket, create)}
+        user={memberUser}
+        branchId={BRANCH}
+        initialCommands={READY_TEST_COMMANDS}
+      />
+    );
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(socket.emitted.filter(({ event }) => event === 'terminal:input')).toEqual([]);
+
+    await act(async () => {
+      socket.trigger('terminal:ready', { userId: ALICE, terminalId: TERMINAL });
+    });
+    expect(
+      socket.emitted.filter(({ event }) => event === 'terminal:input').map(({ data }) => data)
+    ).toEqual([
+      { userId: ALICE, terminalId: TERMINAL, input: 'echo one\r' },
+      { userId: ALICE, terminalId: TERMINAL, input: 'echo two\r' },
+    ]);
+
+    await act(async () => {
+      socket.trigger('terminal:ready', { userId: ALICE, terminalId: TERMINAL });
+    });
+    expect(socket.emitted.filter(({ event }) => event === 'terminal:input')).toHaveLength(2);
   });
   afterEach(() => {
     vi.restoreAllMocks();

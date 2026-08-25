@@ -42,7 +42,42 @@ import {
  * go through the daemon UsersService, which enforces actor/target role
  * authority before calling the database.
  */
-export class UsersRepository implements BaseRepository<InternalUser, Partial<InternalUser>> {
+const USER_DATA_UPDATE_FIELDS = [
+  'avatar_url',
+  'avatar',
+  'avatar_source',
+  'avatar_source_id',
+  'avatar_synced_at',
+  'preferences',
+  'agentic_auth_methods',
+  'default_agentic_config',
+  'primary_agentic_tool',
+  'primary_teammate_id',
+  'default_agentic_selection',
+  'default_mcp_server_ids',
+] as const satisfies ReadonlyArray<keyof User>;
+
+type UsersRepositoryMutableField =
+  | 'email'
+  | 'name'
+  | 'emoji'
+  | 'role'
+  | 'unix_username'
+  | 'filesystem_home'
+  | 'onboarding_completed'
+  | 'must_change_password'
+  | (typeof USER_DATA_UPDATE_FIELDS)[number];
+
+/** Explicit credential-free input accepted when creating a persistence projection. */
+export type UsersRepositoryCreate = Pick<User, 'email'> &
+  Partial<Pick<User, 'user_id' | 'created_at' | 'updated_at' | UsersRepositoryMutableField>>;
+
+/** Fields the generic persistence boundary can actually mutate. */
+export type UsersRepositoryUpdate = Partial<Pick<User, UsersRepositoryMutableField>>;
+
+export class UsersRepository
+  implements BaseRepository<InternalUser, UsersRepositoryCreate, UsersRepositoryUpdate>
+{
   constructor(private db: Database) {}
 
   /**
@@ -70,6 +105,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       filesystem_home: row.filesystem_home ?? undefined,
       onboarding_completed: row.onboarding_completed,
       must_change_password: row.must_change_password,
+      credential_generation: row.credential_generation,
       tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
       avatar_url: row.data.avatar_url ?? row.data.avatar,
       avatar: row.data.avatar,
@@ -96,6 +132,8 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
         return out;
       })(),
       default_agentic_config: row.data.default_agentic_config as User['default_agentic_config'],
+      primary_agentic_tool: row.data.primary_agentic_tool,
+      primary_teammate_id: row.data.primary_teammate_id,
       default_agentic_selection: row.data.default_agentic_selection,
       default_mcp_server_ids: row.data.default_mcp_server_ids ?? [
         ...new Set(legacyDefaultMcpServerIds),
@@ -109,7 +147,6 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
    */
   private userToInsert(
     user: Partial<InternalUser> & {
-      password?: string;
       agentic_tools_raw?: StoredAgenticTools;
       env_vars_raw?: SchemaUserInsert['data']['env_vars'];
     }
@@ -126,7 +163,10 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       created_at: user.created_at ? new Date(user.created_at) : now,
       updated_at: user.updated_at ? new Date(user.updated_at) : now,
       email: user.email,
-      password: user.password ?? '', // Password required, but handled by services layer
+      // Repository-created projections/background fixtures intentionally have
+      // no usable local credential. Password assignment must go through
+      // createUser or the daemon UsersService.
+      password: '',
       name: user.name ?? null,
       emoji: user.emoji ?? null,
       role: user.role ?? 'member',
@@ -134,6 +174,7 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       filesystem_home: user.filesystem_home ?? null,
       onboarding_completed: user.onboarding_completed ?? false,
       must_change_password: user.must_change_password ?? false,
+      credential_generation: user.credential_generation ?? 0,
       tokens_valid_after: user.tokens_valid_after ? new Date(user.tokens_valid_after) : null,
       data: {
         avatar_url: user.avatar_url,
@@ -155,6 +196,8 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
         // from the existing row so a generic field update doesn't wipe them.
         env_vars: user.env_vars_raw,
         default_agentic_config: user.default_agentic_config,
+        primary_agentic_tool: user.primary_agentic_tool,
+        primary_teammate_id: user.primary_teammate_id,
         default_agentic_selection: user.default_agentic_selection,
         default_mcp_server_ids: user.default_mcp_server_ids,
       },
@@ -178,7 +221,18 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
   /**
    * Create a new user
    */
-  async create(data: Partial<InternalUser>): Promise<InternalUser> {
+  async create(data: UsersRepositoryCreate): Promise<InternalUser> {
+    if (
+      Object.hasOwn(data as object, 'password') ||
+      Object.hasOwn(data as object, 'password_hash') ||
+      Object.hasOwn(data as object, 'passwordHash') ||
+      Object.hasOwn(data as object, 'credential_generation') ||
+      Object.hasOwn(data as object, 'tokens_valid_after')
+    ) {
+      throw new RepositoryError(
+        'UsersRepository does not accept password credential fields; use an authoritative password-write service'
+      );
+    }
     if (data.unix_username !== undefined && !isValidExecutionHomeKey(data.unix_username)) {
       throw new RepositoryError('Invalid execution home key format');
     }
@@ -293,7 +347,18 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
   /**
    * Update user by ID
    */
-  async update(id: string, updates: Partial<InternalUser>): Promise<InternalUser> {
+  async update(id: string, updates: UsersRepositoryUpdate): Promise<InternalUser> {
+    if (
+      Object.hasOwn(updates as object, 'password') ||
+      Object.hasOwn(updates as object, 'password_hash') ||
+      Object.hasOwn(updates as object, 'passwordHash') ||
+      Object.hasOwn(updates as object, 'credential_generation') ||
+      Object.hasOwn(updates as object, 'tokens_valid_after')
+    ) {
+      throw new RepositoryError(
+        'UsersRepository cannot update password credential fields; use an authoritative password-write service'
+      );
+    }
     const fullId = await this.resolveId(id);
 
     // Get current user
@@ -315,27 +380,52 @@ export class UsersRepository implements BaseRepository<InternalUser, Partial<Int
       }
     }
 
-    // Merge updates. Preserve the encrypted agentic_tools and env_vars blobs
-    // from the raw row so a generic field update (name, preferences, etc.)
-    // doesn't nuke stored credentials — the boolean projection on `current`
-    // can't round-trip back to encrypted bytes.
     const rawRow = await this.getRawRow(fullId);
-    const merged = { ...current, ...updates } as Partial<InternalUser> & {
-      agentic_tools_raw?: StoredAgenticTools;
-      env_vars_raw?: SchemaUserInsert['data']['env_vars'];
-    };
-    if (rawRow?.data.agentic_tools) {
-      merged.agentic_tools_raw = rawRow.data.agentic_tools as StoredAgenticTools;
+    if (!rawRow) {
+      throw new EntityNotFoundError('User', id);
     }
-    if (rawRow?.data.env_vars) {
-      merged.env_vars_raw = rawRow.data.env_vars;
+    const insertData = this.userToInsert({ ...current, ...updates });
+
+    // This explicit allowlist is also a concurrency boundary. Generic profile
+    // updates write only fields the caller actually supplied. They must never
+    // round-trip password authority or unrelated profile fields from the stale
+    // snapshot above. JSON updates merge into the latest raw blob so opaque
+    // keys (external identities and forward-compatible data) also survive.
+    const mutableUserData: Partial<SchemaUserInsert> = {};
+    if (Object.hasOwn(updates, 'email')) mutableUserData.email = insertData.email;
+    if (Object.hasOwn(updates, 'name')) mutableUserData.name = insertData.name;
+    if (Object.hasOwn(updates, 'emoji')) mutableUserData.emoji = insertData.emoji;
+    if (Object.hasOwn(updates, 'role')) mutableUserData.role = insertData.role;
+    if (Object.hasOwn(updates, 'unix_username')) {
+      mutableUserData.unix_username = insertData.unix_username;
     }
-    const insertData = this.userToInsert(merged);
+    if (Object.hasOwn(updates, 'filesystem_home')) {
+      mutableUserData.filesystem_home = insertData.filesystem_home;
+    }
+    if (Object.hasOwn(updates, 'onboarding_completed')) {
+      mutableUserData.onboarding_completed = insertData.onboarding_completed;
+    }
+    if (Object.hasOwn(updates, 'must_change_password')) {
+      mutableUserData.must_change_password = insertData.must_change_password;
+    }
+
+    let dataChanged = false;
+    const nextData = { ...rawRow.data } as Record<string, unknown>;
+    for (const field of USER_DATA_UPDATE_FIELDS) {
+      if (!Object.hasOwn(updates, field)) continue;
+      dataChanged = true;
+      const value = updates[field];
+      if (value === undefined) delete nextData[field];
+      else nextData[field] = value;
+    }
+    if (dataChanged) {
+      mutableUserData.data = nextData as SchemaUserInsert['data'];
+    }
 
     // Update database
     await update(this.db, users)
       .set({
-        ...insertData,
+        ...mutableUserData,
         updated_at: new Date(),
       })
       .where(eq(users.user_id, fullId))

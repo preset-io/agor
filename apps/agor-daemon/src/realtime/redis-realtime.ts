@@ -15,6 +15,15 @@ export function redisAdapterKey(keyPrefix: string): string {
 
 type RelayHandler = (envelope: RealtimeRelayEnvelope) => void | Promise<void>;
 
+export interface RedisRealtimeLifecycle {
+  /**
+   * Synchronous local fence invoked once for each ready -> unavailable
+   * transition. The daemon uses it to clear authorization caches and retire
+   * process-local terminal capabilities before transports reconnect.
+   */
+  onUnavailable?: () => void;
+}
+
 function safeRedisError(label: string, error: unknown): void {
   // ioredis errors may contain a credential-bearing URL. Only expose the
   // stable error code/name; the configured URL never crosses this boundary.
@@ -92,10 +101,12 @@ export class RedisRealtimeRuntime {
   private relayHandler: RelayHandler | null = null;
   private adapterAttached = false;
   private draining = false;
+  private unavailableFenced = false;
 
   constructor(
     private readonly settings: ResolvedRedisSettings,
-    private readonly diagnostics: { instanceId: string; bootId: string }
+    private readonly diagnostics: { instanceId: string; bootId: string },
+    private readonly lifecycle: RedisRealtimeLifecycle = {}
   ) {
     this.pubClient = new Redis(settings.url, redisRealtimeClientOptions(settings, 'publisher'));
     this.subClient = new Redis(settings.url, redisRealtimeClientOptions(settings, 'subscriber'));
@@ -111,6 +122,12 @@ export class RedisRealtimeRuntime {
     }) as Redis['publish'];
     this.pubClient.on('error', (error) => safeRedisError('publisher connection error', error));
     this.subClient.on('error', (error) => safeRedisError('subscriber connection error', error));
+    for (const client of [this.pubClient, this.subClient]) {
+      client.on('ready', () => this.handleAvailabilityChange());
+      client.on('close', () => this.handleAvailabilityChange());
+      client.on('end', () => this.handleAvailabilityChange());
+      client.on('reconnecting', () => this.handleAvailabilityChange());
+    }
   }
 
   async connect(): Promise<void> {
@@ -143,6 +160,13 @@ export class RedisRealtimeRuntime {
     this.io = io;
     this.namespace = io.of('/');
     this.adapterAttached = true;
+    // A namespace middleware rejection is terminal to Socket.IO's automatic
+    // reconnect loop. Reject unhealthy HA admission one layer lower by closing
+    // the Engine.IO transport instead; clients keep retrying and will present a
+    // fresh authenticated namespace handshake after Redis recovers.
+    io.engine.on('connection', (connection) => {
+      if (!this.isReady()) connection.close(true);
+    });
     // serverSideEmit is namespace-scoped. Use the root Namespace explicitly
     // rather than relying on Server's EventEmitter delegation so send and
     // receive are guaranteed to bind to the same adapter instance.
@@ -157,6 +181,7 @@ export class RedisRealtimeRuntime {
         safeRedisError('relayed Feathers publication rejected', error)
       );
     });
+    this.handleAvailabilityChange();
   }
 
   setRelayHandler(handler: RelayHandler): void {
@@ -179,6 +204,36 @@ export class RedisRealtimeRuntime {
 
   beginDrain(): void {
     this.draining = true;
+  }
+
+  /**
+   * Fence one Redis outage without turning it into a permanent namespace
+   * disconnect. Ordinary database/REST authority remains available; only the
+   * distributed realtime plane is retired until both Redis clients are ready.
+   */
+  private handleAvailabilityChange(): void {
+    if (!this.adapterAttached || this.draining) return;
+    if (this.isReady()) {
+      this.unavailableFenced = false;
+      return;
+    }
+    if (this.unavailableFenced) return;
+    this.unavailableFenced = true;
+    console.warn(
+      `[realtime/redis] required fanout unavailable; fencing socket transports instance=${this.diagnostics.instanceId} boot=${this.diagnostics.bootId}`
+    );
+    try {
+      this.lifecycle.onUnavailable?.();
+    } catch (error) {
+      // Transport retirement must still happen if one local cache/capability
+      // listener fails. The replacement handshake remains the final fence.
+      safeRedisError('local outage fence failed', error);
+    }
+    // Close the transport, not the Socket.IO namespace. `disconnect(true)`
+    // disables automatic client reconnection; Engine.IO close preserves it.
+    for (const socket of this.io?.sockets.sockets.values() ?? []) {
+      socket.conn.close();
+    }
   }
 
   isReady(): boolean {
@@ -204,6 +259,7 @@ export class RedisRealtimeRuntime {
   async close(): Promise<void> {
     this.beginDrain();
     this.adapterAttached = false;
+    this.unavailableFenced = false;
     this.io = null;
     this.namespace = null;
     const closeClient = async (client: Redis) => {

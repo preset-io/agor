@@ -1,10 +1,43 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { isTaskFailurePersisted } from '../../terminal-task.js';
 import {
+  createStreamingCallbacks,
   executeToolTask,
   installProviderConnection,
   resolveApiKeyForTask,
   settleTaskFailure,
 } from './base-executor.js';
+
+describe('createStreamingCallbacks', () => {
+  it('stamps every event with immutable task/session attribution', async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    const callbacks = createStreamingCallbacks(
+      { service: () => ({ create }) } as never,
+      'codex',
+      'session-1' as never,
+      'task-1' as never
+    );
+
+    await callbacks.onStreamStart('message-1' as never, {
+      role: 'assistant',
+      timestamp: '2026-08-23T00:00:00.000Z',
+    });
+    await callbacks.onStreamChunk('message-1' as never, 'hello');
+    await callbacks.onStreamEnd('message-1' as never);
+    await callbacks.onStreamError('message-2' as never, new Error('failed'));
+    await callbacks.onThinkingStart('message-3' as never, {});
+    await callbacks.onThinkingChunk('message-3' as never, 'hmm');
+    await callbacks.onThinkingEnd('message-3' as never);
+
+    expect(create).toHaveBeenCalledTimes(7);
+    for (const [envelope] of create.mock.calls) {
+      expect(envelope.data).toMatchObject({
+        session_id: 'session-1',
+        task_id: 'task-1',
+      });
+    }
+  });
+});
 
 vi.mock('./git-safe-directory.js', () => ({
   configureSessionGitSafeDirectories: vi.fn().mockResolvedValue(undefined),
@@ -27,7 +60,6 @@ function makeClient(error: unknown) {
 
 function makeSuccessfulClient(capture: { data?: unknown }) {
   return {
-    executorSessionToken: 'executor-jwt',
     service(name: string) {
       if (name !== 'config/resolve-api-key') {
         throw new Error(`unexpected service ${name}`);
@@ -43,7 +75,7 @@ function makeSuccessfulClient(capture: { data?: unknown }) {
 }
 
 describe('resolveApiKeyForTask', () => {
-  it('sends the executor session token as explicit task-scoped proof', async () => {
+  it('uses the authenticated executor connection without resending its bearer', async () => {
     const capture: { data?: unknown } = {};
 
     await expect(
@@ -59,7 +91,6 @@ describe('resolveApiKeyForTask', () => {
       taskId: 'task-1',
       keyName: 'OPENAI_API_KEY',
       tool: 'codex',
-      executorSessionToken: 'executor-jwt',
     });
   });
 
@@ -106,7 +137,8 @@ describe('settleTaskFailure', () => {
       },
     } as never;
 
-    await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, new Error('failed'), {
+    const failure = new Error('failed');
+    await settleTaskFailure(client, 'session-1' as never, 'task-1' as never, failure, {
       status: 'failed',
       error_message: 'failed',
     });
@@ -120,6 +152,33 @@ describe('settleTaskFailure', () => {
       },
     });
     expect(messageCreate).toHaveBeenCalledWith(expect.objectContaining({ index: 3 }));
+    expect(isTaskFailurePersisted(failure)).toBe(true);
+  });
+
+  it('does not mark a failure persisted until the terminal patch is acknowledged', async () => {
+    const failure = new Error('failed');
+    const client = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return { patch: vi.fn().mockRejectedValue(new Error('socket disconnected')) };
+        }
+        if (name === 'messages') {
+          return {
+            find: vi.fn().mockResolvedValue({ total: 0, data: [] }),
+            create: vi.fn().mockResolvedValue(undefined),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      settleTaskFailure(client, 'session-1' as never, 'task-1' as never, failure, {
+        status: 'failed',
+        error_message: 'failed',
+      })
+    ).rejects.toThrow('socket disconnected');
+    expect(isTaskFailurePersisted(failure)).toBe(false);
   });
 
   it('does not persist Drizzle query parameters in task or transcript diagnostics', async () => {

@@ -622,6 +622,30 @@ describe('BoardRepository.findAll', () => {
     const visible = await repo.findAll({ visibleToUserId: viewerId });
     expect(visible.map((b) => b.board_id)).toEqual([ownedPrivate.board_id]);
   });
+
+  dbTest('should resolve visible board IDs without hidden-prefix ambiguity', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const viewerId = generateId() as UUID;
+    const visible = await repo.create(
+      createBoardData({
+        board_id: '018f0000-0000-7000-8000-000000000001' as BoardID,
+        access_mode: 'private',
+        created_by: viewerId,
+      })
+    );
+    await repo.create(
+      createBoardData({
+        board_id: '018f0000-0000-7000-8000-000000000002' as BoardID,
+        access_mode: 'private',
+        created_by: generateId() as UUID,
+      })
+    );
+
+    await expect(repo.findVisibleById(viewerId, '018f0000')).resolves.toMatchObject({
+      board_id: visible.board_id,
+    });
+    await expect(repo.findVisibleById(generateId() as UUID, '018f0000')).resolves.toBeNull();
+  });
 });
 
 // ============================================================================

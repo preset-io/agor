@@ -4,6 +4,7 @@ import { sessionPath } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { getPromptDraft } from '../../utils/promptDrafts';
 import { CatalogTab } from './CatalogTab';
 
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -14,6 +15,7 @@ vi.mock('react-router-dom', async () => {
 });
 
 const SESSION_ID = '019fd25a-7065-75f8-b6e6-f1963f9817d6';
+const CURRENT_USER_ID = '019fd25a-7065-75f8-b6e6-f1963f9817d7';
 
 const DEEPWIKI = {
   name: 'com.deepwiki/mcp',
@@ -89,7 +91,7 @@ function makeClient(): AgorClient {
 function renderTab({ connected = true }: { connected?: boolean } = {}) {
   return render(
     <MemoryRouter>
-      <CatalogTab client={makeClient()} connected={connected} />
+      <CatalogTab client={makeClient()} connected={connected} currentUserId={CURRENT_USER_ID} />
     </MemoryRouter>
   );
 }
@@ -407,7 +409,7 @@ describe('connect', () => {
     await waitFor(() =>
       expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID))
     );
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBe(DEEPWIKI.starter_prompt);
+    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe(DEEPWIKI.starter_prompt);
   });
 
   /**
@@ -440,7 +442,7 @@ describe('connect', () => {
   it('does not arm the composer when the install still needs signing in', async () => {
     await connectAndLand({ mcp_server_id: 'server-1', auth: { type: 'oauth' } });
 
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe('');
   });
 
   it('still lands in the session so the sign-in is reachable', async () => {
@@ -465,7 +467,7 @@ describe('connect', () => {
       },
     });
 
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBe(DEEPWIKI.starter_prompt);
+    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe(DEEPWIKI.starter_prompt);
   });
 
   it('withholds the prompt when the token the install carries has expired', async () => {
@@ -478,7 +480,7 @@ describe('connect', () => {
       },
     });
 
-    expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
+    expect(getPromptDraft(CURRENT_USER_ID, SESSION_ID)).toBe('');
   });
 
   it('keeps the drawer open and reports why when connect fails', async () => {

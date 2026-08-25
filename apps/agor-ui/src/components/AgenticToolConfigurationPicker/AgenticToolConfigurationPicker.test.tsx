@@ -127,7 +127,7 @@ describe('AgenticToolConfigurationPicker', () => {
     );
 
     rerender(<Harness owner={userWithConfigDefault} resolved />);
-    await screen.findByText(/My default · Claude Sonnet 5 — 1M · Accept edits/);
+    await screen.findByText(/My default · Claude Sonnet 5 · 1M · Accept edits/);
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(onFinish).toHaveBeenCalledOnce());
@@ -138,7 +138,7 @@ describe('AgenticToolConfigurationPicker', () => {
     renderPicker(userWithConfigDefault);
     await waitFor(() =>
       expect(
-        screen.getByText(/My default · Claude Sonnet 5 — 1M · Accept edits/)
+        screen.getByText(/My default · Claude Sonnet 5 · 1M · Accept edits/)
       ).toBeInTheDocument()
     );
   });
@@ -153,7 +153,7 @@ describe('AgenticToolConfigurationPicker', () => {
   });
 
   it('keeps a preset-backed default reachable as "My default" with the preset summary', async () => {
-    // Selection points at a preset (no inline config blob) — must not be hidden
+    // Selection points at a preset (no inline config blob) · must not be hidden
     // or force-switched to inline.
     const user = {
       user_id: 'u3',

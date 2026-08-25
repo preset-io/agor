@@ -61,6 +61,7 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
   // a different set than an earlier deferred one.
   const fetchHooks = new Map<string, (call: number) => unknown>();
   const fetchCounts = new Map<string, number>();
+  const fetchArguments = new Map<string, unknown[]>();
 
   const respond = async (name: string, method: 'findAll' | 'find') => {
     const key = `${name}:${method}`;
@@ -74,9 +75,15 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     return data;
   };
 
+  const recordAndRespond = (name: string, method: 'findAll' | 'find', args: unknown) => {
+    const key = `${name}:${method}`;
+    fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), args]);
+    return respond(name, method);
+  };
+
   const service = (name: string) => ({
-    findAll: vi.fn(() => respond(name, 'findAll')),
-    find: vi.fn(() => respond(name, 'find')),
+    findAll: vi.fn((args) => recordAndRespond(name, 'findAll', args)),
+    find: vi.fn((args) => recordAndRespond(name, 'find', args)),
     get: vi.fn().mockResolvedValue(seed[`${name}:get`] ?? null),
     on: (event: string, fn: Listener) => {
       let svc = serviceListeners.get(name);
@@ -133,6 +140,8 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
       fetchHooks.set(`${name}:${method}`, fn),
     fetchCount: (name: string, method: 'findAll' | 'find') =>
       fetchCounts.get(`${name}:${method}`) ?? 0,
+    fetchArguments: (name: string, method: 'findAll' | 'find') =>
+      fetchArguments.get(`${name}:${method}`) ?? [],
   };
 }
 
@@ -209,6 +218,59 @@ function deferred() {
 }
 
 describe('useAgorData — socket-event bailouts', () => {
+  it('scopes the real cold mobile board load before fetching board entities', async () => {
+    const boardId = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
+    const { client, fetchArguments } = makeMockClient({
+      boards: [{ board_id: boardId, slug: 'delivery' }],
+      'board-objects': [makeBoardObject({ board_id: boardId })],
+    });
+    window.history.pushState({}, '', `/m/board/${boardId}`);
+
+    const { result } = renderHook(() => useAgorData(client));
+    try {
+      await waitForInitialLoad(result);
+
+      for (const service of ['branches', 'sessions', 'board-objects', 'board-comments', 'cards']) {
+        expect(fetchArguments(service, 'findAll')).toContainEqual({
+          query: expect.objectContaining({ board_id: boardId }),
+        });
+      }
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
+  });
+
+  it('heals a cold mobile session outside the recent slice before resolving board scope', async () => {
+    const boardId = '01a012d8-1b9b-7909-b6f4-2024dfc7c51e';
+    const sessionId = '01a012d8-4f50-7c32-9daa-6e3f70819b2c';
+    const branchId = '01a012d8-3e4f-7b21-8c99-5d2e6f708a1b';
+    const directSession = makeSession({
+      session_id: sessionId,
+      branch_id: branchId,
+      branch_board_id: boardId,
+    });
+    const directBranch = makeBranch({ branch_id: branchId, board_id: boardId });
+    const boardObject = makeBoardObject({ board_id: boardId, branch_id: branchId });
+    const { client, fetchArguments } = makeMockClient({
+      sessions: [],
+      boards: [{ board_id: boardId, slug: 'delivery' }],
+      'sessions:get': directSession,
+      'branches:get': directBranch,
+      'board-objects': [boardObject],
+    });
+    window.history.pushState({}, '', `/m/session/${sessionId}`);
+
+    const { result } = renderHook(() => useAgorData(client, { directSessionId: sessionId }));
+    await waitForInitialLoad(result);
+
+    expect(agorStore.getState().sessionById.get(sessionId)).toMatchObject({ branch_id: branchId });
+    expect(agorStore.getState().boardObjectById.get('bo-1')).toMatchObject({ board_id: boardId });
+    expect(fetchArguments('board-objects', 'findAll')).toContainEqual({
+      query: expect.objectContaining({ board_id: boardId }),
+    });
+    window.history.pushState({}, '', '/');
+  });
+
   it('hydrates a direct archived session by id without broadening active board lists', async () => {
     const archivedSession = makeSession({
       session_id: 's-archived-full',

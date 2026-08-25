@@ -4,6 +4,7 @@
  */
 
 import {
+  compare,
   createDatabase,
   createTenantScopedDatabaseProxy,
   type Database,
@@ -18,7 +19,15 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { AuthenticatedParams, User, UserID, UserRole } from '@agor/core/types';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import jwt from 'jsonwebtoken';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createRefreshTokenService } from '../auth/refresh-token-service.js';
+import { issueRuntimeToken } from '../auth/runtime-tokens.js';
+import {
+  AUTH_CREDENTIAL_GENERATION_CLAIM,
+  assertUserTokenNotInvalidated,
+  authTokenIssuedAtClaim,
+} from '../auth/token-invalidation.js';
 import { createGroupMembershipsService } from './groups.js';
 import { UsersService } from './users.js';
 
@@ -29,6 +38,14 @@ function rowsOf(result: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
   const rows = (result as { rows?: unknown[] } | undefined)?.rows;
   return Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe.skipIf(!postgresUrl || !usesPostgresSchema)(
@@ -136,6 +153,178 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
+    it('enforces password assignment policy after RLS authority and stores only accepted hashes', async () => {
+      const tenantA = `users-password-a-${generateId()}`;
+      const tenantB = `users-password-b-${generateId()}`;
+      const adminA = await seed(tenantA, 'admin', 'password-admin-a');
+      const memberA = await seed(tenantA, 'member', 'password-member-a');
+      const memberB = await seed(tenantB, 'member', 'password-member-b');
+      const service = new UsersService(db);
+
+      await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
+        await expect(
+          service.patch(memberA.user_id as UserID, { password: 'short' }, params(adminA, tenantA))
+        ).rejects.toMatchObject({ code: 400, data: { code: 'PASSWORD_TOO_SHORT' } });
+
+        // Target authorization deliberately precedes policy validation, so a
+        // foreign row cannot be distinguished from an absent row by its
+        // candidate password or validation code.
+        await expect(
+          service.patch(memberB.user_id as UserID, { password: 'short' }, params(adminA, tenantA))
+        ).rejects.toMatchObject({ code: 403 });
+
+        const assigned = 'a unique postgres test passphrase';
+        await expect(
+          service.patch(memberA.user_id as UserID, { password: assigned }, params(adminA, tenantA))
+        ).resolves.toMatchObject({ user_id: memberA.user_id });
+
+        const [stored] = rowsOf(
+          await executeRaw(
+            scoped,
+            sql`SELECT password, tokens_valid_after, credential_generation FROM users WHERE user_id = ${memberA.user_id}`
+          )
+        );
+        expect(typeof stored?.password).toBe('string');
+        expect(await compare(assigned, String(stored?.password))).toBe(true);
+        expect(stored?.tokens_valid_after).toBeTruthy();
+        expect(Number(stored?.credential_generation)).toBe(1);
+
+        const created = await service.create(
+          {
+            email: `password-created-${generateId()}@example.test`,
+            password: 'another unique postgres passphrase',
+          },
+          params(adminA, tenantA)
+        );
+        const createdRows = rowsOf(
+          await executeRaw(
+            scoped,
+            sql`SELECT tenant_id FROM users WHERE user_id = ${created.user_id}`
+          )
+        );
+        expect(createdRows).toHaveLength(1);
+        expect(createdRows[0]?.tenant_id).toBe(tenantA);
+      });
+    });
+
+    it('makes a refresh racing a password change stale without replica-clock ordering', async () => {
+      const tenantId = `users-password-refresh-race-${generateId()}`;
+      const member = await seed(tenantId, 'member', 'password-refresh-race');
+      const service = new UsersService(db);
+      const enteredLookup = deferred();
+      const releaseLookup = deferred();
+      const jwtSecret = 'postgres-password-generation-race-secret';
+
+      await runWithTenantDatabaseScope(db, tenantId, () =>
+        service.patch(member.user_id as UserID, {
+          password: 'initial postgres refresh passphrase',
+        })
+      );
+      const generationOne = await runWithTenantDatabaseScope(db, tenantId, () =>
+        service.get(member.user_id as UserID)
+      );
+      expect(generationOne.credential_generation).toBe(1);
+
+      const refreshService = createRefreshTokenService({
+        jwtSecret,
+        accessTokenTtl: '15m',
+        refreshTokenTtl: '30d',
+        usersService: {
+          get: async (...args: Parameters<UsersService['get']>) => {
+            const snapshot = await service.get(...args);
+            enteredLookup.resolve();
+            await releaseLookup.promise;
+            return snapshot;
+          },
+        },
+      });
+      const oldRefreshToken = issueRuntimeToken(
+        {
+          sub: member.user_id,
+          type: 'refresh',
+          tenant_id: tenantId,
+          [AUTH_CREDENTIAL_GENERATION_CLAIM]: 1,
+          ...authTokenIssuedAtClaim(Date.now(), generationOne),
+        },
+        jwtSecret,
+        '30d'
+      );
+
+      const refresh = runWithTenantDatabaseScope(db, tenantId, () =>
+        refreshService.create({ refreshToken: oldRefreshToken })
+      );
+      await enteredLookup.promise;
+      await runWithTenantDatabaseScope(db, tenantId, () =>
+        service.patch(member.user_id as UserID, {
+          password: 'replacement postgres refresh passphrase',
+        })
+      );
+      releaseLookup.resolve();
+
+      const result = await refresh;
+      const current = await runWithTenantDatabaseScope(db, tenantId, () =>
+        service.get(member.user_id as UserID)
+      );
+      const decoded = jwt.verify(result.accessToken, jwtSecret) as jwt.JwtPayload;
+      expect(decoded[AUTH_CREDENTIAL_GENERATION_CLAIM]).toBe(1);
+      expect(current.credential_generation).toBe(2);
+      expect(() => assertUserTokenNotInvalidated(current, decoded)).toThrow(/Session expired/);
+    });
+
+    it('prevents a stale generic update from restoring password credential metadata', async () => {
+      const tenantId = `users-password-profile-race-${generateId()}`;
+      const member = await seed(tenantId, 'member', 'password-profile-race');
+      const service = new UsersService(db);
+      const readSnapshot = deferred();
+      const releaseUpdate = deferred();
+
+      const profileUpdate = runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        const repo = new UsersRepository(scoped);
+        const findById = repo.findById.bind(repo);
+        vi.spyOn(repo, 'findById').mockImplementation(async (id) => {
+          const snapshot = await findById(id);
+          readSnapshot.resolve();
+          await releaseUpdate.promise;
+          return snapshot;
+        });
+
+        return repo.update(member.user_id, { name: 'Concurrent rename' });
+      });
+      await readSnapshot.promise;
+      try {
+        await runWithTenantDatabaseScope(db, tenantId, () =>
+          service.patch(member.user_id as UserID, {
+            password: 'replacement postgres profile passphrase',
+          })
+        );
+      } finally {
+        releaseUpdate.resolve();
+      }
+      await expect(profileUpdate).resolves.toMatchObject({ name: 'Concurrent rename' });
+
+      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        const [stored] = rowsOf(
+          await executeRaw(
+            scoped,
+            sql`SELECT name, credential_generation, tokens_valid_after FROM users WHERE user_id = ${member.user_id}`
+          )
+        );
+        expect(stored?.name).toBe('Concurrent rename');
+        expect(Number(stored?.credential_generation)).toBe(1);
+        expect(stored?.tokens_valid_after).toBeTruthy();
+        expect(() =>
+          assertUserTokenNotInvalidated(
+            { credential_generation: Number(stored?.credential_generation) },
+            {
+              sub: member.user_id,
+              type: 'access',
+              [AUTH_CREDENTIAL_GENERATION_CLAIM]: 0,
+            }
+          )
+        ).toThrow(/Session expired/);
+      });
+    });
+
     it('serializes concurrent peer demotions and preserves a superadmin', async () => {
       const tenantId = `users-authority-race-${generateId()}`;
       const first = await seed(tenantId, 'superadmin', 'first-superadmin');
@@ -156,6 +345,38 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
         const remaining = await new UsersRepository(scoped).findAll();
         expect(remaining.filter((user) => user.role === 'superadmin')).toHaveLength(1);
+      });
+    });
+
+    it('keeps primary-agentic-tool bootstrapping inside the ambient tenant scope', async () => {
+      const tenantA = `primary-agentic-tool-a-${generateId()}`;
+      const tenantB = `primary-agentic-tool-b-${generateId()}`;
+      const memberA = await seed(tenantA, 'member', 'primary-agentic-tool-a');
+      const memberB = await seed(tenantB, 'member', 'primary-agentic-tool-b');
+      const service = new UsersService(db);
+
+      await runWithTenantDatabaseScope(db, tenantA, async () => {
+        // Even a caller-shaped payload naming tenant A cannot make tenant A's
+        // ambient database scope see or mutate tenant B's user row.
+        await expect(
+          service.setPrimaryAgenticToolIfUnset(
+            { tool: 'gemini', expectedUserId: memberB.user_id as UserID },
+            params(memberB, tenantA)
+          )
+        ).rejects.toMatchObject({ code: 403 });
+
+        await expect(
+          service.setPrimaryAgenticToolIfUnset(
+            { tool: 'codex', expectedUserId: memberA.user_id as UserID },
+            params(memberA, tenantA)
+          )
+        ).resolves.toMatchObject({ primary_agentic_tool: 'codex' });
+      });
+
+      await runWithTenantDatabaseScope(db, tenantB, async () => {
+        await expect(
+          service.get(memberB.user_id as UserID, params(memberB, tenantB))
+        ).resolves.toMatchObject({ primary_agentic_tool: undefined });
       });
     });
 

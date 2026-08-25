@@ -33,12 +33,16 @@ import {
 export const VISIBLE_BRANCH_PERMISSION_LEVELS = BRANCH_PERMISSION_LEVELS.filter(
   (level) => level !== 'none'
 );
+export const SESSION_BRANCH_PERMISSION_LEVELS = BRANCH_PERMISSION_LEVELS.filter(
+  (level) => level === 'session' || level === 'prompt' || level === 'all'
+);
 
-/**
- * True when the user is in any active (non-archived) group with an explicit
- * non-none grant on the correlated branch.
- */
-export function activeGroupGrantAccessExists(db: Database, userId: UUID) {
+/** Permission-threshold implementation shared by visibility and session admission. */
+function activeBranchGroupGrantAccessExists(
+  db: Database,
+  userId: UUID,
+  permissionLevels: readonly (typeof BRANCH_PERMISSION_LEVELS)[number][]
+) {
   return exists(
     // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
     (db as any)
@@ -58,13 +62,17 @@ export function activeGroupGrantAccessExists(db: Database, userId: UUID) {
       .where(
         and(
           eq(branchGroupGrants.branch_id, branches.branch_id),
-          inArray(branchGroupGrants.can, VISIBLE_BRANCH_PERMISSION_LEVELS)
+          inArray(branchGroupGrants.can, permissionLevels)
         )
       )
   );
 }
 
-export function activeBoardGroupGrantAccessExists(db: Database, userId: UUID) {
+function activeBoardGroupGrantAccessExistsAtLevel(
+  db: Database,
+  userId: UUID,
+  permissionLevels: readonly (typeof BRANCH_PERMISSION_LEVELS)[number][]
+) {
   return exists(
     // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
     (db as any)
@@ -91,7 +99,7 @@ export function activeBoardGroupGrantAccessExists(db: Database, userId: UUID) {
       .where(
         and(
           eq(boardGroupGrants.board_id, branches.board_id),
-          inArray(boardGroupGrants.can, VISIBLE_BRANCH_PERMISSION_LEVELS)
+          inArray(boardGroupGrants.can, permissionLevels)
         )
       )
   );
@@ -107,7 +115,10 @@ export function activeBoardOwnerAccessExists(db: Database, userId: UUID) {
   );
 }
 
-export function alignedBoardDefaultVisible(db: Database) {
+function alignedBoardDefaultAtLevel(
+  db: Database,
+  permissionLevels: readonly (typeof BRANCH_PERMISSION_LEVELS)[number][]
+) {
   return exists(
     // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
     (db as any)
@@ -119,33 +130,77 @@ export function alignedBoardDefaultVisible(db: Database) {
           eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared'),
           inArray(
             sql`coalesce(${jsonExtract(db, boards.data, 'default_others_can')}, 'session')`,
-            VISIBLE_BRANCH_PERMISSION_LEVELS
+            permissionLevels
           )
         )
       )
   );
 }
 
-/**
- * Branch is visible when the joined/correlated user is:
- * - a direct owner, OR
- * - in a group with an explicit non-none grant, OR
- * - covered by a public/fallback others_can level of view+
- */
-export function visibleBranchAccessCondition(db: Database, userId: UUID): SQL {
+function branchAccessCondition(
+  db: Database,
+  userId: UUID,
+  permissionLevels: readonly (typeof BRANCH_PERMISSION_LEVELS)[number][]
+): SQL {
   return (
     or(
       isNotNull(branchOwners.user_id),
-      activeGroupGrantAccessExists(db, userId),
+      activeBranchGroupGrantAccessExists(db, userId, permissionLevels),
       and(eq(branches.permission_source, 'board'), activeBoardOwnerAccessExists(db, userId)),
-      and(eq(branches.permission_source, 'board'), activeBoardGroupGrantAccessExists(db, userId)),
-      and(eq(branches.permission_source, 'board'), alignedBoardDefaultVisible(db)),
+      and(
+        eq(branches.permission_source, 'board'),
+        activeBoardGroupGrantAccessExistsAtLevel(db, userId, permissionLevels)
+      ),
+      and(
+        eq(branches.permission_source, 'board'),
+        alignedBoardDefaultAtLevel(db, permissionLevels)
+      ),
       and(
         eq(branches.permission_source, 'override'),
-        inArray(branches.others_can, VISIBLE_BRANCH_PERMISSION_LEVELS)
+        inArray(branches.others_can, permissionLevels)
       )
     ) ?? sql`false`
   );
+}
+
+/** Backward-compatible visible-level helpers used by existing repository callers. */
+export function activeGroupGrantAccessExists(db: Database, userId: UUID) {
+  return activeBranchGroupGrantAccessExists(db, userId, VISIBLE_BRANCH_PERMISSION_LEVELS);
+}
+
+export function activeBoardGroupGrantAccessExists(db: Database, userId: UUID) {
+  return activeBoardGroupGrantAccessExistsAtLevel(db, userId, VISIBLE_BRANCH_PERMISSION_LEVELS);
+}
+
+export function alignedBoardDefaultVisible(db: Database) {
+  return alignedBoardDefaultAtLevel(db, VISIBLE_BRANCH_PERMISSION_LEVELS);
+}
+
+/** Branch access at view-or-higher. */
+export function visibleBranchAccessCondition(db: Database, userId: UUID): SQL {
+  return branchAccessCondition(db, userId, VISIBLE_BRANCH_PERMISSION_LEVELS);
+}
+
+/** Set-based counterpart to resolveUserPermission(..., minimum=session). */
+export function sessionBranchAccessCondition(db: Database, userId: UUID): SQL {
+  return branchAccessCondition(db, userId, SESSION_BRANCH_PERMISSION_LEVELS);
+}
+
+/**
+ * Branch access at an arbitrary minimum application permission.
+ *
+ * Point lookups use this predicate while resolving caller-supplied short IDs,
+ * so inaccessible rows cannot make an otherwise-visible prefix ambiguous or
+ * disclose their existence through a different authorization response.
+ */
+export function minimumBranchAccessCondition(
+  db: Database,
+  userId: UUID,
+  minimumPermission: (typeof BRANCH_PERMISSION_LEVELS)[number]
+): SQL {
+  const minimumIndex = BRANCH_PERMISSION_LEVELS.indexOf(minimumPermission);
+  if (minimumIndex <= 0) return sql`true`;
+  return branchAccessCondition(db, userId, BRANCH_PERMISSION_LEVELS.slice(minimumIndex));
 }
 
 /**

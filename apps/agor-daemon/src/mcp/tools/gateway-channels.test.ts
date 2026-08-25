@@ -60,9 +60,11 @@ vi.mock('../../utils/executor-delegated-home.js', () => ({
   resolveDelegatedExecutionHomeKey: vi.fn(async () => undefined),
 }));
 vi.mock('../../utils/spawn-executor.js', () => ({
-  generateScopedServiceToken: vi.fn(() => 'service-token'),
   getDaemonUrl: vi.fn(() => 'http://daemon.test'),
   requestExecutor: vi.fn(),
+}));
+vi.mock('../../services/session-token-service.js', () => ({
+  issueExecutorCommandToken: vi.fn(async () => 'delegated-user-token'),
 }));
 vi.mock('../../utils/upload-staging.js', () => ({
   getUploadStagingStore: () => uploadStoreMock,

@@ -125,6 +125,10 @@ export const sessions = pgTable(
     // migration; new occurrences remain NULL until initialization, retention,
     // and schedule metadata are durable.
     scheduler_init_completed_at: t.timestamp('scheduler_init_completed_at'),
+    scheduler_init_failure_code: text('scheduler_init_failure_code'),
+    scheduler_init_failure_stage: text('scheduler_init_failure_stage'),
+    scheduler_init_attempt_count: integer('scheduler_init_attempt_count').notNull().default(0),
+    scheduler_init_retry_at: t.timestamp('scheduler_init_retry_at'),
 
     // UI state (materialized for efficient highlighting queries)
     ready_for_prompt: t.bool('ready_for_prompt').notNull().default(false),
@@ -239,7 +243,7 @@ export const sessions = pgTable(
     schedulerInitPendingIdx: index('sessions_scheduler_init_pending_idx')
       .on(table.created_at, table.session_id)
       .where(
-        sql`${table.scheduled_from_branch} = true AND ${table.scheduled_run_at} IS NOT NULL AND ${table.scheduler_init_completed_at} IS NULL`
+        sql`${table.scheduled_from_branch} = true AND ${table.scheduled_run_at} IS NOT NULL AND ${table.scheduler_init_completed_at} IS NULL AND (${table.scheduler_init_failure_code} IS NULL OR ${table.scheduler_init_retry_at} IS NOT NULL)`
       ),
   })
 );
@@ -816,6 +820,7 @@ export const branches = pgTable(
 
         // Git state (current)
         base_ref?: string; // Branch this diverged from (e.g., "main")
+        base_remote_url?: string; // Optional remote that owns base_ref
         base_sha?: string; // SHA at branch creation
         last_commit_sha?: string; // Latest commit
         tracking_branch?: string; // Remote tracking branch
@@ -1036,6 +1041,9 @@ export const users = pgTable(
     // Force password change flag (admin-settable, auto-cleared on password change)
     must_change_password: t.bool('must_change_password').notNull().default(false),
 
+    // Monotonic local-credential generation copied into interactive JWTs.
+    credential_generation: integer('credential_generation').notNull().default(0),
+
     // Auth invalidation marker. Password changes set this timestamp so any
     // previously issued browser access or refresh token is rejected.
     tokens_valid_after: t.timestamp('tokens_valid_after'),
@@ -1151,6 +1159,8 @@ export const users = pgTable(
             permissionMode?: string;
           };
         };
+        primary_agentic_tool?: import('../types/agentic-tool').AgenticToolName;
+        primary_teammate_id?: import('../types/id').BranchID;
         default_mcp_server_ids?: string[];
         default_agentic_selection?: import('../types/user').UserAgenticDefaultSelections;
       }>()
@@ -1899,6 +1909,84 @@ export const mcpOauthPendingFlows = pgTable(
       table.grant_generation
     ),
     maintenanceIdx: index('mcp_oauth_pending_flows_maintenance_idx').on(
+      table.status,
+      table.expires_at,
+      table.exchange_started_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
+ * Durable, short-lived authority for Codex ChatGPT device sign-in attempts.
+ *
+ * Device identifiers and user codes live only in `sealed_material`, bound to
+ * tenant/user/attempt/generation. Poll ownership is a DB-clock lease; the
+ * authorization-code exchange is a separate one-shot claim.
+ */
+export const codexDeviceAuthAttempts = pgTable(
+  'codex_device_auth_attempts',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    attempt_id: varchar('attempt_id', { length: 36 }).primaryKey(),
+    user_id: varchar('user_id', { length: 36 }).notNull(),
+    attempt_generation: bigint('attempt_generation', { mode: 'number' }).notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: boolean('is_current').notNull().default(true),
+    status: text('status', {
+      enum: [
+        'starting',
+        'pending',
+        'exchanging',
+        'persisting',
+        'succeeded',
+        'unavailable',
+        'denied',
+        'failed',
+        'ambiguous',
+        'expired',
+        'superseded',
+        'cancelled',
+      ],
+    })
+      .notNull()
+      .default('starting'),
+    // Cleared on every terminal transition.
+    sealed_material: text('sealed_material'),
+    poll_interval_ms: integer('poll_interval_ms'),
+    poll_next_at: t.timestamp('poll_next_at'),
+    poll_claim_id: varchar('poll_claim_id', { length: 36 }),
+    poll_claim_generation: bigint('poll_claim_generation', { mode: 'number' }).notNull().default(0),
+    poll_lease_expires_at: t.timestamp('poll_lease_expires_at'),
+    exchange_claim_id: varchar('exchange_claim_id', { length: 36 }),
+    failure_code: text('failure_code'),
+    plan_type: text('plan_type'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    expires_at: t.timestamp('expires_at').notNull(),
+    exchange_started_at: t.timestamp('exchange_started_at'),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    currentUserUnique: uniqueIndex('codex_device_auth_attempts_current_user_uq')
+      .on(table.tenant_id, table.user_id)
+      .where(sql`${table.is_current} = true`),
+    tenantUserFk: foreignKey({
+      name: 'codex_device_auth_attempts_tenant_user_fk',
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+    }).onDelete('cascade'),
+    tenantUserIdx: index('codex_device_auth_attempts_tenant_user_idx').on(
+      table.tenant_id,
+      table.user_id,
+      table.created_at
+    ),
+    pollIdx: index('codex_device_auth_attempts_poll_idx').on(
+      table.status,
+      table.poll_next_at,
+      table.poll_lease_expires_at
+    ),
+    maintenanceIdx: index('codex_device_auth_attempts_maintenance_idx').on(
       table.status,
       table.expires_at,
       table.exchange_started_at,
@@ -2886,6 +2974,8 @@ export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
+export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;
+export type CodexDeviceAuthAttemptInsert = typeof codexDeviceAuthAttempts.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;
 export type CardTypeInsert = typeof cardTypes.$inferInsert;
 export type CardRow = typeof cards.$inferSelect;

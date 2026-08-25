@@ -15,11 +15,13 @@ export class ExecutorHeartbeatCallbackRunner {
 
   constructor(private config: Pick<ResolvedExecutorHeartbeatConfig, 'enabled' | 'callback'>) {}
 
-  run(payload: ExecutorHeartbeatCallbackPayload): void {
-    if (!this.config.enabled) return;
+  isConfigured(): boolean {
+    return this.config.enabled && Boolean(this.config.callback.command_template);
+  }
 
-    const command = this.config.callback.command_template;
-    if (!command) return;
+  run(payload: ExecutorHeartbeatCallbackPayload): void {
+    if (!this.isConfigured()) return;
+    const command = this.config.callback.command_template!;
 
     if (this.runningByTask.has(payload.task_id)) {
       console.warn(

@@ -10,6 +10,7 @@ import {
 } from './runtime-tokens.js';
 import {
   assertUserTokenNotInvalidated,
+  authCredentialGenerationClaim,
   authTokenIssuedAtClaim,
   type UserAuthTokenPayload,
 } from './token-invalidation.js';
@@ -59,6 +60,7 @@ export function createRefreshTokenService(options: RefreshTokenServiceOptions) {
           options.accessTokenTtl,
           options.refreshTokenTtl,
           {
+            ...authCredentialGenerationClaim(user),
             ...authTokenIssuedAtClaim(Date.now(), user),
             ...runtimeTenantClaims(
               tenantId ?? (user as { tenant_id?: string }).tenant_id,

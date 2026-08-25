@@ -1,8 +1,10 @@
 import { EventEmitter } from 'node:events';
 import { ENVIRONMENT } from '@agor/core/config';
 import { getCurrentTenantId, runWithTenantDatabaseScope } from '@agor/core/db';
+import { feathers } from '@agor/core/feathers';
 import type { Branch } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DrizzleService, type Repository } from '../adapters/drizzle.js';
 import { HealthMonitor } from './health-monitor';
 
 class BranchServiceMock extends EventEmitter {
@@ -297,6 +299,38 @@ describe('HealthMonitor tenant context', () => {
     await vi.advanceTimersByTimeAsync(
       ENVIRONMENT.STARTUP_GRACE_PERIOD_MS + ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS
     );
+    expect(monitor.getStatus().monitoringCount).toBe(0);
+    expect(branches.checkHealth).not.toHaveBeenCalled();
+    await monitor.cleanup();
+  });
+
+  it('stops monitoring when a real DrizzleService lookup misses a deleted branch', async () => {
+    const repository: Repository<Branch> = {
+      create: vi.fn(),
+      findById: vi.fn(async () => null),
+      findAll: vi.fn(async () => []),
+      update: vi.fn(),
+      delete: vi.fn(),
+    };
+    const branchAdapter = Object.assign(
+      new DrizzleService<Branch>(repository, {
+        id: 'branch_id',
+        resourceType: 'Branch',
+      }),
+      { checkHealth: vi.fn() }
+    );
+    const app = feathers();
+    app.use('branches', branchAdapter as never);
+    const branches = app.service('branches') as unknown as BranchServiceMock;
+    const monitor = new HealthMonitor(app as never);
+
+    branches.emit(
+      'patched',
+      makeBranch({ branch_id: 'branch-1', environment_instance: { status: 'running' } })
+    );
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    await vi.waitFor(() => expect(repository.findById).toHaveBeenCalledOnce());
+
     expect(monitor.getStatus().monitoringCount).toBe(0);
     expect(branches.checkHealth).not.toHaveBeenCalled();
     await monitor.cleanup();

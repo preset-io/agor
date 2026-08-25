@@ -1,5 +1,15 @@
 import { spawn } from 'node:child_process';
-import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  access,
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -17,6 +27,7 @@ import {
   isFreshInitState,
   parseInitialAgenticTools,
   shouldDeferAdminSetup,
+  validateInitAdminPassword,
 } from './init.js';
 
 const temporaryDirectories: string[] = [];
@@ -328,15 +339,39 @@ describe('install telemetry config', () => {
 
 describe('headless admin bootstrap', () => {
   it('always defers admin creation during noninteractive init', () => {
-    expect(shouldDeferAdminSetup(true, 'development')).toBe(true);
-    expect(shouldDeferAdminSetup(true, undefined)).toBe(true);
+    expect(
+      shouldDeferAdminSetup(true, {
+        NODE_ENV: 'development',
+        AGOR_ADMIN_PASSWORD: 'admin',
+        AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: 'true',
+      })
+    ).toBe(true);
   });
 
-  it('retains the explicit local force-init development convenience', () => {
-    expect(shouldDeferAdminSetup(false, 'development')).toBe(false);
-    expect(shouldDeferAdminSetup(false, 'test')).toBe(false);
-    expect(shouldDeferAdminSetup(false, '')).toBe(true);
-    expect(shouldDeferAdminSetup(false, 'production')).toBe(true);
+  it('retains force-init convenience only behind the complete development gate', () => {
+    const completeGate = {
+      NODE_ENV: 'development',
+      AGOR_ADMIN_PASSWORD: 'admin',
+      AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: 'true',
+    };
+    expect(shouldDeferAdminSetup(false, completeGate)).toBe(false);
+    for (const incompleteGate of [
+      { ...completeGate, NODE_ENV: 'production' },
+      { ...completeGate, AGOR_ADMIN_PASSWORD: 'not-admin' },
+      { ...completeGate, AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN: 'false' },
+    ]) {
+      expect(shouldDeferAdminSetup(false, incompleteGate)).toBe(true);
+    }
+  });
+
+  it('uses the secure policy for interactive password assignment', () => {
+    expect(validateInitAdminPassword('short', 'operator@example.com')).toMatch(/at least 15/);
+    expect(validateInitAdminPassword('operatoroperatoroperator', 'operator@example.com')).toMatch(
+      /account or Agor name/
+    );
+    expect(validateInitAdminPassword('a unique bootstrap passphrase', 'operator@example.com')).toBe(
+      true
+    );
   });
 });
 
@@ -426,6 +461,7 @@ describe('initial agentic tool selection', () => {
         String(address.port),
       ]);
       expect(firstInit.exitCode, firstInit.output).toBe(0);
+      expect((await stat(join(home, '.agor'))).mode & 0o777).toBe(0o700);
       const originalConfig = loadYaml(
         await readFile(join(home, '.agor', 'config.yaml'), 'utf8')
       ) as { daemon?: { deployment_id?: string; jwtSecret?: string } };

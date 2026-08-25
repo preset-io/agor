@@ -21,9 +21,11 @@ import { promisify } from 'node:util';
 import { type AgorConfig, RETIRED_CONFIG_KEYS } from '@agor/core/config';
 import {
   type AdminBootstrapResult,
+  ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV,
   assertUsableBootstrapAdminPassword,
   BOOTSTRAP_ADMIN_EMAIL,
   bootstrapFirstRunAdmin,
+  createDevelopmentDefaultAdminUser,
   createUser,
   DEVELOPMENT_DEFAULT_ADMIN_USER,
   generateAdminPassword,
@@ -36,8 +38,6 @@ const closeP = promisify(close);
 const unlinkP = promisify(unlink);
 
 const ADMIN_CREDENTIALS_FILENAME = 'admin-credentials';
-const ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV = 'AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN';
-
 /** Where the generated admin password is persisted on first run. */
 export function getAdminCredentialsPath(baseDir: string = join(homedir(), '.agor')): string {
   return join(baseDir, ADMIN_CREDENTIALS_FILENAME);
@@ -155,9 +155,13 @@ export async function runFirstRunAdminBootstrap(
   const allowDevelopmentDefault = process.env[ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV] === 'true';
   let credentialsWritten = false;
 
-  if (allowDevelopmentDefault && process.env.NODE_ENV === 'production') {
+  if (
+    allowDevelopmentDefault &&
+    process.env.NODE_ENV !== 'development' &&
+    process.env.NODE_ENV !== 'test'
+  ) {
     throw new Error(
-      `${ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV}=true is development-only and is refused when NODE_ENV=production.`
+      `${ALLOW_DEVELOPMENT_DEFAULT_ADMIN_ENV}=true is development-only and requires NODE_ENV=development or NODE_ENV=test.`
     );
   }
 
@@ -169,6 +173,12 @@ export async function runFirstRunAdminBootstrap(
         allowDevelopmentDefault && envPassword === DEVELOPMENT_DEFAULT_ADMIN_USER.password;
       if (!useDevelopmentDefault) {
         assertUsableBootstrapAdminPassword(envPassword, 'AGOR_ADMIN_PASSWORD');
+      }
+      if (useDevelopmentDefault) {
+        console.warn(
+          '⚠️  [SECURITY] Creating the fixed admin@agor.live / admin development credential. Do not expose this deployment.'
+        );
+        return await createDevelopmentDefaultAdminUser(db);
       }
       return await createUser(db, {
         email: BOOTSTRAP_ADMIN_EMAIL,

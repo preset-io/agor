@@ -27,13 +27,13 @@ export interface CursorMovedEvent {
 /**
  * Lightweight presence broadcast (server → clients).
  *
- * Used by global presence consumers like the navbar facepile, which only need
- * to know that a user is active and which board they're on — not every cursor
- * coordinate sample.
+ * Used by global presence consumers like the navbar facepile. `boardId` is
+ * present only on a board-authorized delivery; tenant-wide heartbeats omit it
+ * so private board identity is not disclosed through presence metadata.
  */
 export interface PresenceUpdatedEvent {
   userId: string;
-  boardId: BoardID;
+  boardId?: BoardID;
   timestamp: number;
 }
 

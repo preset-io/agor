@@ -635,8 +635,29 @@
     {
       "idx": 91,
       "version": "7",
-      "when": 1787317142954,
-      "tag": "0091_discord_gateway_hybrid",
+      "when": 1787356800000,
+      "tag": "0091_codex_device_auth_attempts",
+      "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1787443200000,
+      "tag": "0092_add_user_credential_generation",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1787529600000,
+      "tag": "0093_scheduler_poison_recovery",
+      "breakpoints": true
+    },
+    {
+      "idx": 94,
+      "version": "7",
+      "when": 1787662889950,
+      "tag": "0094_discord_gateway_hybrid",
       "breakpoints": true
     }
   ]

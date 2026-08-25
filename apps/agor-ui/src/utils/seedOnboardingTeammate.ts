@@ -1,4 +1,5 @@
-import type { AgenticToolName, AgorClient, Branch, Repo, Session } from '@agor-live/client';
+import type { AgenticToolName, AgorClient, Branch, Repo, Session, UserID } from '@agor-live/client';
+import type { NewSessionConfig, SessionCreationResult } from '../domain/sessionCreation';
 import type { OnboardingIntegrationRecommendation } from './onboardingGoals';
 import { startTeammateBootstrapSession } from './startTeammateBootstrapSession';
 import {
@@ -15,12 +16,14 @@ export interface SeedOnboardingTeammateInput {
   teammateName?: string;
   teammateEmoji?: string;
   /**
-Framework source branch from the chosen gallery template. Undefined falls
+   * Framework source branch from the chosen gallery template. Undefined falls
    * back to the framework repo's default branch (createTeammateBranch). A
    * missing template branch on the remote surfaces as a non-fatal warning
    * rather than blocking completion.
    */
   sourceBranch?: string;
+  /** Remote that owns sourceBranch when a built-in template is not on the destination remote. */
+  sourceRemoteUrl?: string;
   /**
    * Agent chosen in the LLM step. `null`/`undefined` means the user skipped that
    * step and has no credentials, so no bootstrap session is started.
@@ -33,6 +36,10 @@ Framework source branch from the chosen gallery template. Undefined falls
   /** Chosen gallery template id (persona); null/undefined = blank starter. */
   templateId?: string | null;
   user?: { name?: string | null; email?: string | null } | null;
+  /** Identity that initiated onboarding; the daemon independently validates it. */
+  expectedUserId: UserID;
+  /** True only while this onboarding completion still belongs to the active caller. */
+  isCurrentUser: (expectedUserId: UserID) => boolean;
   client: AgorClient | null;
   repoById: TeammateCreationDeps['repoById'];
   /** Current tenant-scoped maps used to resume a partially completed setup. */
@@ -43,7 +50,10 @@ Framework source branch from the chosen gallery template. Undefined falls
   existingSessionId?: string;
   onCreateBranch: TeammateCreationDeps['onCreateBranch'];
   onUpdateBranch: TeammateCreationDeps['onUpdateBranch'];
-  onCreateSession: (config: unknown, boardId: string) => Promise<string | null>;
+  onCreateSession: (
+    config: NewSessionConfig,
+    boardId: string
+  ) => Promise<SessionCreationResult | null>;
   /** Non-fatal warning surface — teammate creation must never block completion. */
   onWarn: (message: string) => void;
 }
@@ -138,16 +148,25 @@ async function findExistingSession(
   return sessions.find((session) => session.branch_id === branchId);
 }
 
-export async function seedOnboardingTeammate(
-  input: SeedOnboardingTeammateInput
-): Promise<{ branchId?: string; sessionId?: string }> {
+export async function seedOnboardingTeammate(input: SeedOnboardingTeammateInput): Promise<{
+  branchId?: string;
+  sessionId?: string;
+  initialization?: SessionCreationResult;
+}> {
+  const isCurrentUser = () => input.isCurrentUser(input.expectedUserId);
+  const warn = (message: string) => {
+    if (isCurrentUser()) input.onWarn(message);
+  };
+
   const teammateName = input.teammateName?.trim();
   // Nothing to seed — the user skipped naming a teammate.
-  if (!teammateName || !input.boardId) return {};
+  if (!teammateName || !input.boardId || !isCurrentUser()) return {};
 
   let branch: Branch | undefined;
   try {
     branch = await findExistingOnboardingBranch(input);
+    if (!isCurrentUser()) return {};
+
     if (branch) {
       // A refresh or failed final preference patch can leave the durable branch
       // behind while onboarding is still incomplete. Reassert the primary link
@@ -157,7 +176,7 @@ export async function seedOnboardingTeammate(
         .setPrimaryTeammate({ boardId: input.boardId, branchId: branch.branch_id });
     } else {
       if (!input.frameworkRepo) {
-        input.onWarn(
+        warn(
           "Your board is ready, but your AI teammate's workspace is still finishing setup. You can add a teammate from the board in a moment."
         );
         return {};
@@ -169,6 +188,7 @@ export async function seedOnboardingTeammate(
             emoji: input.teammateEmoji,
             repoId: input.frameworkRepo.repo_id,
             sourceBranch: input.sourceBranch,
+            sourceRemoteUrl: input.sourceRemoteUrl,
             boardId: input.boardId,
             createdViaOnboarding: true,
           },
@@ -177,18 +197,45 @@ export async function seedOnboardingTeammate(
             repoById: input.repoById,
             onCreateBranch: input.onCreateBranch,
             onUpdateBranch: input.onUpdateBranch,
+            shouldContinue: isCurrentUser,
           }
         )) ?? undefined;
     }
 
+    if (!isCurrentUser()) return {};
     if (!branch) {
-      input.onWarn(
+      warn(
         "Your board is ready, but we couldn't set up your AI teammate's workspace. You can add a teammate from the board anytime."
       );
       return {};
     }
 
+    // Persist the caller's default immediately. The daemon validates session
+    // eligibility and uses set-if-unset so a concurrent explicit Settings pick
+    // always wins. This also covers users who skip model setup and never create
+    // the bootstrap session below.
+    if (!input.client) {
+      warn(
+        `${teammateName}'s workspace is ready, but it could not be saved as your primary assistant yet.`
+      );
+    } else {
+      try {
+        await input.client.service('users').setPrimaryTeammateIfUnset({
+          branchId: branch.branch_id,
+          expectedUserId: input.expectedUserId,
+        });
+      } catch (error) {
+        warn(
+          `${teammateName}'s workspace is ready, but it could not be saved as your primary assistant: ${
+            error instanceof Error ? error.message : String(error)
+          }.`
+        );
+      }
+    }
+    if (!isCurrentUser()) return {};
+
     const existingSession = await findExistingSession(input, branch.branch_id);
+    if (!isCurrentUser()) return {};
     if (existingSession) {
       return { branchId: branch.branch_id, sessionId: existingSession.session_id };
     }
@@ -198,13 +245,13 @@ export async function seedOnboardingTeammate(
     // very first turn fails on missing credentials, so stop at the workspace and
     // tell the user what to do instead.
     if (!input.agent) {
-      input.onWarn(
+      warn(
         `${teammateName}'s workspace is ready. Connect an AI model in Settings - AI & Agents to start your first session.`
       );
       return { branchId: branch.branch_id };
     }
 
-    const sessionId = await startTeammateBootstrapSession({
+    const initialization = await startTeammateBootstrapSession({
       client: input.client,
       branchId: branch.branch_id,
       boardId: branch.board_id || input.boardId,
@@ -226,15 +273,21 @@ export async function seedOnboardingTeammate(
         }),
       },
       onCreateSession: input.onCreateSession,
+      shouldContinue: isCurrentUser,
     });
 
-    return { branchId: branch.branch_id, sessionId };
+    if (!isCurrentUser()) return {};
+    return {
+      branchId: branch.branch_id,
+      sessionId: initialization.sessionId,
+      initialization,
+    };
   } catch (error) {
-    input.onWarn(
+    warn(
       `Your board is ready, but we couldn't start your AI teammate: ${
         error instanceof Error ? error.message : String(error)
       }. You can create one from the board anytime.`
     );
-    return branch ? { branchId: branch.branch_id } : {};
+    return isCurrentUser() && branch ? { branchId: branch.branch_id } : {};
   }
 }

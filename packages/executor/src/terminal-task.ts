@@ -20,6 +20,23 @@ import type { Task } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import type { AgorClient } from './services/feathers-client.js';
 
+const persistedTaskFailures = new WeakSet<Error>();
+
+/**
+ * Remember that the authoritative SDK failure path received the daemon's
+ * acknowledgement for its terminal Task patch. The task-scoped credential is
+ * revoked by that patch, so the top-level fail-safe must not try to read and
+ * patch the same Task again after the failure is rethrown.
+ */
+export function markTaskFailurePersisted<T extends Error>(failure: T): T {
+  persistedTaskFailures.add(failure);
+  return failure;
+}
+
+export function isTaskFailurePersisted(failure: unknown): failure is Error {
+  return failure instanceof Error && persistedTaskFailures.has(failure);
+}
+
 /**
  * Statuses past which any subsequent terminal-write is a no-op.
  * Includes `TIMED_OUT` so a subsequent uncaught-rejection/SIGTERM

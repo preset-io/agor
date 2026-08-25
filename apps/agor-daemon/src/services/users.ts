@@ -16,11 +16,14 @@ import {
   AgorRoleAuthority,
   AgorUserLifecycleAuthority,
   assertInlineAgenticConfigurationAllowed,
+  assertSecurePassword,
   assertV05Scope,
   getEnvVarBlockReason,
   AgorIdentityCapability as IdentityCapability,
   isEnvVarAllowed,
   normalizeStoredEnvMap,
+  PasswordPolicyError,
+  PasswordValidationCode,
   type ResolvedIdentityAuthority,
   resolveIdentityAuthority,
   resolveUserEnvironment,
@@ -35,16 +38,25 @@ import {
   encryptApiKey,
   eq,
   generateId,
-  hash,
+  hashLocalPassword,
   insert,
   isExecutionHomeKeyAvailable,
+  isNull,
+  jsonExtract,
   select,
   sql,
   type TenantScopeAwareDatabase,
+  UserPrimaryTeammateRepository,
   update,
   users,
 } from '@agor/core/db';
-import { type Application, BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  type Application,
+  BadRequest,
+  Forbidden,
+  NotAuthenticated,
+  NotFound,
+} from '@agor/core/feathers';
 import { isLikelyGitToken } from '@agor/core/git/pure';
 import { isInvalidModelConfigError } from '@agor/core/models';
 import type {
@@ -52,6 +64,8 @@ import type {
   AgenticToolsConfig,
   AgenticToolsUpdate,
   AuthenticatedParams,
+  Branch,
+  BranchID,
   EnvVarMetadata,
   EnvVarScope,
   InternalUser,
@@ -71,6 +85,7 @@ import {
   extractAgenticToolsPublicValues,
   hasMinimumRole,
   hasRoleAuthorityOver,
+  isAgenticToolName,
   isUserRole,
   isValidExecutionHomeKey,
   normalizeRole,
@@ -78,6 +93,7 @@ import {
   toAgenticToolsStatus,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
+import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { lockUserAuthorityMutation } from './user-authority-lock.js';
 import { UserAvatarSyncManager } from './user-avatar-sync.js';
 import {
@@ -133,6 +149,11 @@ export const USERS_SERVICE_TRANSPORT_METHODS = [
   'getAvatarSettings',
   'updateAvatarSettings',
   'syncAvatars',
+  'getPrimaryTeammate',
+  'getPrimaryTeammateCandidates',
+  'setPrimaryTeammate',
+  'setPrimaryTeammateIfUnset',
+  'setPrimaryAgenticToolIfUnset',
 ] as const;
 
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
@@ -179,6 +200,14 @@ function isAdmin(params: Params | undefined): boolean {
 function isSelfEmailLookup(params: Params | undefined, email: string): boolean {
   const requesterEmail = (params as AuthenticatedParams | undefined)?.user?.email;
   return !!requesterEmail && requesterEmail.toLowerCase() === email.toLowerCase();
+}
+
+function requireCallerId(params: Params | undefined): UserID {
+  const userId = (params as AuthenticatedParams | undefined)?.user?.user_id as UserID | undefined;
+  if (!userId) {
+    throw new NotAuthenticated('Authentication required');
+  }
+  return userId;
 }
 
 function ensureCanExactEmailLookup(params: Params | undefined, email: string): void {
@@ -294,6 +323,7 @@ interface UpdateUserData {
   // changes in the same PATCH. Scope for a var that doesn't exist is a no-op.
   env_var_scopes?: Record<string, EnvVarScope>;
   // Default agentic tool configurations
+  primary_agentic_tool?: AgenticToolName;
   default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
   default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
   default_mcp_server_ids?: string[];
@@ -338,6 +368,17 @@ function assertSingleUserMutation(data: unknown): void {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new BadRequest('Bulk user mutations are not supported');
   }
+  if (Object.hasOwn(data, 'password_hash') || Object.hasOwn(data, 'passwordHash')) {
+    throw new BadRequest('Password hashes cannot be assigned through the users service.', {
+      code: PasswordValidationCode.HASH_NOT_ACCEPTED,
+    });
+  }
+  if (Object.hasOwn(data, 'credential_generation') || Object.hasOwn(data, 'tokens_valid_after')) {
+    throw new BadRequest(
+      'Password credential metadata cannot be assigned through the users service.',
+      { code: PasswordValidationCode.CREDENTIAL_METADATA_NOT_ACCEPTED }
+    );
+  }
 }
 
 function assertTrustedMutationFields(
@@ -357,6 +398,21 @@ function assertValidExecutionHomeKeyWrite(value: string | undefined): void {
   );
 }
 
+function validatedAssignedPassword(password: unknown, email?: string): string {
+  try {
+    assertSecurePassword(password, { email });
+    return password;
+  } catch (error) {
+    if (!(error instanceof PasswordPolicyError)) throw error;
+    throw new BadRequest(error.message, {
+      code: error.code,
+      policy: error.requirements.profile,
+      min_length: error.requirements.min_length,
+      max_utf8_bytes: error.requirements.max_utf8_bytes,
+    });
+  }
+}
+
 /**
  * Users Service Methods
  */
@@ -366,7 +422,7 @@ export class UsersService {
 
   constructor(
     protected db: TenantScopeAwareDatabase,
-    app?: Application,
+    protected app?: Application,
     config?: AgorConfig
   ) {
     const effectiveConfig = config ?? (app?.get('config') as AgorConfig | undefined) ?? {};
@@ -425,7 +481,7 @@ export class UsersService {
     }
 
     if (
-      (data.password !== undefined || data.must_change_password !== undefined) &&
+      (Object.hasOwn(data, 'password') || data.must_change_password !== undefined) &&
       !this.identityAuthority.capabilities.users.passwordWrite
     ) {
       this.externallyManaged(
@@ -698,7 +754,7 @@ export class UsersService {
       .one();
 
     if (!row) {
-      throw new Error(`User not found: ${id}`);
+      throw new NotFound(`User not found: ${id}`);
     }
 
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
@@ -720,6 +776,7 @@ export class UsersService {
     if (Object.hasOwn(data, 'role')) data.role = canonicalizeRoleWrite(data.role);
     await lockUserAuthorityMutation(this.db, params);
     await this.authorizeCreate(data, params);
+    const assignedPassword = validatedAssignedPassword(data.password, data.email);
     // Check if email already exists
     const existing = await select(this.db)
       .from(users)
@@ -731,7 +788,7 @@ export class UsersService {
     }
 
     // Hash password
-    const hashedPassword = await hash(data.password, 10);
+    const hashedPassword = await hashLocalPassword(assignedPassword);
 
     // Create user
     const now = new Date();
@@ -779,6 +836,9 @@ export class UsersService {
     assertSingleUserMutation(data);
     this.assertPatchAllowed(data);
     assertValidExecutionHomeKeyWrite(data.unix_username);
+    if (data.primary_agentic_tool !== undefined && !isAgenticToolName(data.primary_agentic_tool)) {
+      throw new BadRequest('Invalid primary agentic tool');
+    }
     if (
       data.unix_username &&
       !(await isExecutionHomeKeyAvailable(this.db, data.unix_username, id))
@@ -787,6 +847,10 @@ export class UsersService {
     }
     await lockUserAuthorityMutation(this.db, params);
     const authority = await this.authorizePatch(id, data, params);
+    const hasPasswordWrite = Object.hasOwn(data, 'password');
+    const assignedPassword = hasPasswordWrite
+      ? validatedAssignedPassword(data.password, data.email ?? authority.target.email)
+      : undefined;
     if (
       Object.hasOwn(data, 'role') &&
       data.role !== undefined &&
@@ -799,11 +863,12 @@ export class UsersService {
     const updates: Record<string, unknown> = { updated_at: now };
 
     // Handle password separately (needs hashing)
-    if (data.password) {
-      updates.password = await hash(data.password, 10);
-      // Any password change requires fresh browser authentication; previously
-      // issued access and refresh tokens are rejected after this marker.
-      updates.tokens_valid_after = now;
+    if (assignedPassword !== undefined) {
+      updates.password = await hashLocalPassword(assignedPassword);
+      // Increment in the same SQL UPDATE as the hash. Interactive tokens carry
+      // this generation, so racing login/refresh responses minted from an old
+      // credential snapshot remain invalid regardless of replica clock skew.
+      updates.credential_generation = sql`${users.credential_generation} + 1`;
       // Auto-clear must_change_password when password is changed,
       // UNLESS explicitly set in the same request (admin reset + force change scenario)
       // e.g., `user update --password newpass --force-password-change` should keep flag true
@@ -835,6 +900,7 @@ export class UsersService {
       data.agentic_auth_methods ||
       data.env_vars ||
       data.env_var_scopes ||
+      data.primary_agentic_tool !== undefined ||
       data.default_agentic_config ||
       data.default_agentic_selection ||
       data.default_mcp_server_ids !== undefined
@@ -856,6 +922,7 @@ export class UsersService {
         agentic_tools?: StoredAgenticTools;
         agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
         env_vars?: Record<string, string | StoredEnvVar>;
+        primary_agentic_tool?: AgenticToolName;
         default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
         default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
         default_mcp_server_ids?: string[];
@@ -1045,10 +1112,20 @@ export class UsersService {
             ? { ...current.agentic_auth_methods, ...data.agentic_auth_methods }
             : current.agentic_auth_methods,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
+        primary_agentic_tool: data.primary_agentic_tool ?? current.primary_agentic_tool,
         default_agentic_config: nextDefaultAgenticConfig,
         default_agentic_selection: nextDefaultAgenticSelection,
         default_mcp_server_ids: data.default_mcp_server_ids ?? current.default_mcp_server_ids,
       };
+    }
+
+    if (assignedPassword !== undefined) {
+      // Retain the timestamp marker for backward-compatible invalidation of
+      // pre-generation tokens. Capture it immediately before the authoritative
+      // write rather than before bcrypt or the other awaited preparation work.
+      const credentialUpdatedAt = new Date();
+      updates.updated_at = credentialUpdatedAt;
+      updates.tokens_valid_after = credentialUpdatedAt;
     }
 
     const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
@@ -1223,8 +1300,8 @@ export class UsersService {
    * Feathers RPC so per-user credentials flow through the daemon's auth
    * boundary instead of being baked into spawn payloads.
    *
-   * Auth: service-account JWTs may fetch any user's env (executor is trusted).
-   * User JWTs may only fetch their own env.
+   * Auth: explicit daemon service JWTs may fetch any user's env. Delegated
+   * executors and ordinary user JWTs may fetch only their own env.
    */
   async getGitEnvironment(
     data: { userId: string },
@@ -1233,8 +1310,8 @@ export class UsersService {
     const userId = data.userId as UserID;
     const caller = (params as AuthenticatedParams | undefined)?.user;
 
-    // Auth check: service accounts can fetch any user's env;
-    // regular users can only fetch their own.
+    // Auth check: explicit daemon service accounts can fetch any user's env;
+    // delegated executors and other user identities can fetch only their own.
     if (params?.provider) {
       if (!caller) {
         throw new NotAuthenticated('Authentication required');
@@ -1283,6 +1360,203 @@ export class UsersService {
     return this.requireAvatarSync().refreshUserFromSettings(userId);
   }
 
+  /** Resolve the calling user's primary teammate branch, or null when unset or inaccessible. */
+  async getPrimaryTeammate(_data: unknown, params?: Params): Promise<Branch | null> {
+    const userId = requireCallerId(params);
+    return new UserPrimaryTeammateRepository(this.db).resolvePrimaryTeammate(userId, {
+      enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
+    });
+  }
+
+  private async emitUserPreferencePatched(userId: UserID, params?: Params): Promise<void> {
+    if (!this.app) return;
+    const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
+    if (!row) return;
+    emitServiceEvent(this.app, {
+      path: 'users',
+      event: 'patched',
+      id: userId,
+      data: this.rowToUser(row, false, undefined, false),
+      params,
+    });
+  }
+
+  private shouldEnforcePrimaryTeammateAccess(params?: Params): boolean {
+    // Services instantiated without an Application (focused repository/service
+    // tests) retain the safer RBAC-on behavior. Production supplies the app.
+    if (!this.app) return true;
+    const execution = this.app.get('config').execution;
+    if (execution?.branch_rbac !== true) return false;
+    if (
+      execution.allow_superadmin === true &&
+      hasMinimumRole((params as AuthenticatedParams | undefined)?.user?.role, ROLES.SUPERADMIN)
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  /** List active teammates the caller is allowed to start sessions on. */
+  async getPrimaryTeammateCandidates(_data: unknown, params?: Params): Promise<Branch[]> {
+    const userId = this.requirePrimaryTeammateMember(params);
+    return new UserPrimaryTeammateRepository(this.db).findEligiblePrimaryTeammates(userId, {
+      enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
+    });
+  }
+
+  /**
+   * Set the calling user's primary teammate to a branch they can access. The
+   * pick is a manual user action, so it is recorded with `source: 'explicit'`.
+   * Rejects branches the caller cannot access to avoid persisting a pointer
+   * that would immediately resolve back to null.
+   */
+  async setPrimaryTeammate(
+    data: { branchId: string; expectedUserId: UserID },
+    params?: Params
+  ): Promise<Branch | null> {
+    const userId = this.requirePrimaryTeammateMember(params);
+    if (data?.expectedUserId !== userId) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    const branchId = data?.branchId as BranchID | undefined;
+    if (!branchId) {
+      throw new Forbidden('A branchId is required to set a primary teammate');
+    }
+
+    const primaryTeammates = new UserPrimaryTeammateRepository(this.db);
+    const branch = await primaryTeammates.findEligiblePrimaryTeammate(branchId, userId, {
+      enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
+    });
+    if (!branch) {
+      throw new Forbidden(
+        'Primary assistant must be an active teammate you can create sessions on'
+      );
+    }
+
+    await primaryTeammates.setPrimaryTeammate(userId, branchId, {
+      source: 'explicit',
+    });
+    await this.emitUserPreferencePatched(userId, params);
+    return branch;
+  }
+
+  /**
+   * Persist an onboarding/default selection without overwriting a concurrent
+   * manual pick. Validation is identical to explicit selection, but provenance
+   * remains `default` for analytics and future preference migrations.
+   */
+  async setPrimaryTeammateIfUnset(
+    data: { branchId: string; expectedUserId: UserID },
+    params?: Params
+  ): Promise<Branch | null> {
+    const userId = this.requirePrimaryTeammateMember(params);
+    if (data?.expectedUserId !== userId) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    const branchId = data?.branchId as BranchID | undefined;
+    if (!branchId) {
+      throw new Forbidden('A branchId is required to set a primary teammate');
+    }
+
+    const primaryTeammates = new UserPrimaryTeammateRepository(this.db);
+    const branch = await primaryTeammates.findEligiblePrimaryTeammate(branchId, userId, {
+      enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
+    });
+    if (!branch) {
+      throw new Forbidden(
+        'Primary assistant must be an active teammate you can create sessions on'
+      );
+    }
+
+    const inserted = await primaryTeammates.setPrimaryTeammateIfUnset(userId, branchId, {
+      source: 'default',
+    });
+    if (inserted) await this.emitUserPreferencePatched(userId, params);
+    return inserted
+      ? branch
+      : primaryTeammates.resolvePrimaryTeammate(userId, {
+          enforceAccess: this.shouldEnforcePrimaryTeammateAccess(params),
+        });
+  }
+
+  /**
+   * Seed the caller's primary coding agent after onboarding or their first
+   * successful session creation. The conditional update makes the first
+   * successful choice win without overwriting an explicit Settings change.
+   */
+  async setPrimaryAgenticToolIfUnset(
+    data: { tool: AgenticToolName; expectedUserId: UserID },
+    params?: Params
+  ): Promise<User> {
+    const userId = this.requireMemberCaller(params, 'set a primary coding agent');
+    if (data?.expectedUserId !== userId) {
+      throw new Forbidden(USER_AUTHORITY_DENIED);
+    }
+    const tool = data?.tool;
+    if (!isAgenticToolName(tool)) {
+      throw new BadRequest('Invalid primary agentic tool');
+    }
+
+    await lockUserAuthorityMutation(this.db, params);
+    // Tenant ownership is ambient here: the users service hook has already
+    // entered the trusted tenant database scope, and PostgreSQL RLS applies it
+    // to every query through this.db. Do not derive SQL scope from request
+    // params; those identify the caller, not the persistence boundary.
+    const currentRow = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
+    if (!currentRow) throw new Forbidden(USER_AUTHORITY_DENIED);
+
+    const currentData = currentRow.data as Record<string, unknown> & {
+      primary_agentic_tool?: AgenticToolName;
+    };
+    if (currentData.primary_agentic_tool !== undefined) {
+      return this.rowToUser(currentRow, false, userId, shouldIncludeAuthMetadata(params)) as User;
+    }
+
+    const updatedRow = await update(this.db, users)
+      .set({
+        updated_at: new Date(),
+        data: { ...currentData, primary_agentic_tool: tool },
+      })
+      .where(
+        and(
+          eq(users.user_id, userId),
+          isNull(jsonExtract(this.db, users.data, 'primary_agentic_tool'))
+        )
+      )
+      .returning()
+      .one();
+
+    const effectiveRow =
+      updatedRow ?? (await select(this.db).from(users).where(eq(users.user_id, userId)).one());
+    if (!effectiveRow) throw new Forbidden(USER_AUTHORITY_DENIED);
+
+    if (updatedRow && this.app) {
+      emitServiceEvent(this.app, {
+        path: 'users',
+        event: 'patched',
+        id: userId,
+        // Owner-only decrypted presentation values must never ride a broadcast.
+        data: this.rowToUser(updatedRow, false, undefined, false),
+        params,
+      });
+    }
+
+    return this.rowToUser(effectiveRow, false, userId, shouldIncludeAuthMetadata(params)) as User;
+  }
+
+  private requireMemberCaller(params: Params | undefined, action: string): UserID {
+    const userId = requireCallerId(params);
+    const caller = (params as AuthenticatedParams | undefined)?.user;
+    if (!hasMinimumRole(caller?.role, ROLES.MEMBER)) {
+      throw new Forbidden(`Member role or higher is required to ${action}`);
+    }
+    return userId;
+  }
+
+  private requirePrimaryTeammateMember(params?: Params): UserID {
+    return this.requireMemberCaller(params, 'create assistant sessions');
+  }
+
   /**
    * Convert database row to User type
    *
@@ -1311,6 +1585,8 @@ export class UsersService {
       agentic_tools?: StoredAgenticTools; // Encrypted per-tool credential blobs
       agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
       env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
+      primary_agentic_tool?: AgenticToolName;
+      primary_teammate_id?: BranchID;
       default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
       default_agentic_selection?: import('@agor/core/types').UserAgenticDefaultSelections;
       default_mcp_server_ids?: string[];
@@ -1357,13 +1633,20 @@ export class UsersService {
       // Return env var metadata (presence + scope), NOT actual values
       env_vars: envVarMetadata,
       // Return default agentic config
+      primary_agentic_tool: isAgenticToolName(data.primary_agentic_tool)
+        ? data.primary_agentic_tool
+        : undefined,
+      primary_teammate_id: data.primary_teammate_id,
       default_agentic_config: data.default_agentic_config,
       default_agentic_selection: data.default_agentic_selection,
       default_mcp_server_ids: data.default_mcp_server_ids,
     };
 
-    if (includeAuthMetadata && row.tokens_valid_after) {
-      (user as InternalUser).tokens_valid_after = new Date(row.tokens_valid_after);
+    if (includeAuthMetadata) {
+      (user as InternalUser).credential_generation = row.credential_generation;
+      if (row.tokens_valid_after) {
+        (user as InternalUser).tokens_valid_after = new Date(row.tokens_valid_after);
+      }
     }
     if (includeAuthMetadata && 'tenant_id' in row) {
       (user as InternalUser).tenant_id = row.tenant_id;
@@ -1398,7 +1681,7 @@ class UsersServiceWithAuth extends UsersService {
     const row = await select(this.db).from(users).where(eq(users.user_id, id)).one();
 
     if (!row) {
-      throw new Error(`User not found: ${id}`);
+      throw new NotFound(`User not found: ${id}`);
     }
 
     const data = row.data as {
@@ -1438,6 +1721,7 @@ class UsersServiceWithAuth extends UsersService {
       preferences: data.preferences,
       onboarding_completed: !!row.onboarding_completed,
       must_change_password: !!row.must_change_password,
+      credential_generation: row.credential_generation,
       tokens_valid_after: row.tokens_valid_after ? new Date(row.tokens_valid_after) : undefined,
       created_at: row.created_at,
       updated_at: row.updated_at ?? undefined,

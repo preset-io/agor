@@ -33,6 +33,7 @@ import {
   normalizeKnowledgeFolderPath,
   parseKnowledgeUri,
 } from '@agor/core/types';
+import { isNotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { createTwoFilesPatch } from 'diff';
 import { z } from 'zod';
@@ -46,17 +47,14 @@ import {
   hasKnowledgeNamespacePermission,
   resolveKnowledgeNamespacePermission,
 } from '../../services/knowledge-access.js';
+import { issueExecutorCommandToken } from '../../services/session-token-service.js';
 import {
   TEAMMATE_MEMORY_PATH_TEMPLATE,
   TEAMMATE_NAMESPACE_MISSING_MESSAGE,
 } from '../../services/teammate-knowledge.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
-import {
-  generateScopedServiceToken,
-  getDaemonUrl,
-  requestExecutor,
-} from '../../utils/spawn-executor.js';
+import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import { resolveBranchId } from '../resolve-ids.js';
 import {
   mcpLimit,
@@ -645,16 +643,6 @@ function versionToken(version: KnowledgeDocumentVersion | null | undefined) {
   };
 }
 
-function isNotFoundError(error: unknown): boolean {
-  return (
-    error instanceof NotFound ||
-    (typeof error === 'object' &&
-      error !== null &&
-      ((error as { code?: unknown }).code === 404 ||
-        (error as { name?: unknown }).name === 'NotFound'))
-  );
-}
-
 function namespaceSlugForDocument(result: HydratedKnowledgeDocumentResult): string | undefined {
   const doc = result.document ?? result;
   const uri = typeof doc.uri === 'string' ? doc.uri : undefined;
@@ -747,9 +735,7 @@ async function runBranchKnowledgeCommand(
   const result = await requestExecutor(
     {
       command,
-      sessionToken: generateScopedServiceToken(
-        ctx.app as unknown as { settings: { authentication?: { secret?: string } } }
-      ),
+      sessionToken: await issueExecutorCommandToken(ctx.app, command, ctx.userId, branchId),
       daemonUrl: getDaemonUrl(),
       params,
     },

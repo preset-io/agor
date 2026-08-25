@@ -8,10 +8,17 @@ import type {
   PermissionMode,
   User,
 } from '@agor-live/client';
-import { getDefaultPermissionMode, mapToCodexPermissionConfig } from '@agor-live/client';
+import {
+  DEFAULT_AGENTIC_TOOL_NAME,
+  getDefaultPermissionMode,
+  mapToCodexPermissionConfig,
+  resolveUserPrimaryAgenticTool,
+} from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Button, Collapse, Flex, Form, Input, Modal, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useState } from 'react';
+import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
+
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
@@ -32,7 +39,6 @@ import {
 } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CodexSettingsForm } from '../CodexSettingsForm';
-import type { ModelConfig } from '../ModelSelector';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { useComposerAttachments } from '../SessionPanel/useComposerAttachments';
@@ -43,38 +49,10 @@ const PASTE_SHORTCUT =
     ? '⌘V'
     : 'Ctrl+V';
 
-export interface NewSessionConfig {
-  branch_id: string; // Required - sessions are always created from a branch
-  agent: string;
-  agenticToolPresetId?: string;
-  title?: string;
-  initialPrompt?: string;
-
-  // Advanced configuration
-  modelConfig?: ModelConfig;
-  effort?: EffortLevel;
-  mcpServerIds?: string[];
-  permissionMode?: PermissionMode;
-  codexSandboxMode?: CodexSandboxMode;
-  codexApprovalPolicy?: CodexApprovalPolicy;
-  codexNetworkAccess?: boolean;
-  /**
-   * Session-scope env var names (belonging to the creator) to export into this
-   * session's executor process once it is created.
-   */
-  envVarNames?: string[];
-  /**
-   * Raw files pasted/dropped into the initial prompt before the session
-   * exists. Uploaded to the new session after creation, then folded into the
-   * initial prompt. Never included in the session-create REST payload.
-   */
-  attachmentFiles?: File[];
-}
-
 export interface NewSessionModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (config: NewSessionConfig) => void;
+  onCreate: (config: NewSessionConfig) => Promise<SessionCreationResult | null>;
   availableAgents: AgenticToolOption[];
   branchId: string; // Required - the branch to create the session in
   branch?: Branch; // Optional - branch details for display
@@ -101,14 +79,19 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   const [form] = Form.useForm();
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
-  const [selectedAgent, setSelectedAgent] = useState<string>('claude-code');
+  const [selectedAgent, setSelectedAgent] = useState<string>(DEFAULT_AGENTIC_TOOL_NAME);
   const [isCreating, setIsCreating] = useState(false);
   const [envVarNames, setEnvVarNames] = useState<string[]>([]);
   const [configValidity, setConfigValidity] = useState<{ valid: boolean; reason?: string }>({
     valid: true,
   });
   const { attachments, addAttachments, removeAttachment, clearAttachments } =
-    useComposerAttachments({ sessionId: null, showError, uploadPolicy });
+    useComposerAttachments({
+      sessionId: null,
+      scopeKey: `new-session:${currentUser?.user_id ?? 'anonymous'}:${branchId ?? 'none'}`,
+      showError,
+      uploadPolicy,
+    });
 
   // Stable callback so the chip row's reporting effect doesn't loop.
   const handleConfigValidity = useCallback((valid: boolean, reason?: string) => {
@@ -137,14 +120,15 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   useEffect(() => {
     if (!open) return;
 
-    setSelectedAgent('claude-code');
+    const primaryTool = resolveUserPrimaryAgenticTool(currentUser);
+    setSelectedAgent(primaryTool);
     setIsCreating(false); // Reset creating state when modal opens
     setEnvVarNames([]);
     clearAttachments();
 
     // Get default config for the selected agent
-    const agentDefaults = getUserAgenticToolDefault(currentUser, 'claude-code').configuration;
-    const baseValues = getFormValuesFromConfig('claude-code', agentDefaults);
+    const agentDefaults = getUserAgenticToolDefault(currentUser, primaryTool).configuration;
+    const baseValues = getFormValuesFromConfig(primaryTool, agentDefaults);
 
     // MCP inheritance: branch config > user defaults
     const branchMcpIds = branch?.mcp_server_ids;
@@ -153,7 +137,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
     form.setFieldsValue({
       title: '',
       initialPrompt: '',
-      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, 'claude-code'),
+      agenticToolPresetId: getUserDefaultConfigurationSource(currentUser, primaryTool),
       // Never carry a checked save-as-default across opens — it could silently
       // overwrite the user's default on a later create.
       saveAsDefault: false,
@@ -278,7 +262,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
           codexDefaults.networkAccess;
       }
 
-      onCreate(config);
+      void onCreate(config).catch(() => setIsCreating(false));
       // Note: isCreating will be reset when modal reopens via useEffect
     });
   };
@@ -355,7 +339,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
 
         {/* Configuration — source Select + resolved chips */}
         <AgenticConfigChipRow
-          tool={(selectedAgent as AgenticToolName) || 'claude-code'}
+          tool={(selectedAgent as AgenticToolName) || DEFAULT_AGENTIC_TOOL_NAME}
           mcpServerById={mcpServerById}
           currentUser={currentUser}
           client={client}

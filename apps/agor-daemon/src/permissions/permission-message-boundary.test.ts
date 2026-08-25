@@ -8,6 +8,7 @@ const externalParams = { provider: 'rest' } as never;
 const executorParams = {
   provider: 'socketio',
   authentication: {
+    strategy: 'jwt',
     payload: {
       type: 'executor-session',
       purpose: 'executor-task',
@@ -110,5 +111,32 @@ describe('external permission Message boundary', () => {
       content: expect.objectContaining({ status: 'approved' }),
     });
     expect(rows.get(permission.message_id)?.content).toMatchObject({ status: 'approved' });
+  });
+
+  it('rejects permission writes attributed to another task or session', async () => {
+    const permission = permissionMessage();
+    const { service } = makeTransportService([permission]);
+    const otherTask = {
+      ...executorParams,
+      authentication: {
+        ...executorParams.authentication,
+        payload: { ...executorParams.authentication.payload, task_id: 'task-2' },
+      },
+    } as never;
+    const otherSession = {
+      ...executorParams,
+      authentication: {
+        ...executorParams.authentication,
+        payload: { ...executorParams.authentication.payload, session_id: 'session-2' },
+      },
+    } as never;
+
+    await expect(service.create(permission, otherTask)).rejects.toThrow('task-scoped executor');
+    await expect(
+      service.patch(permission.message_id, { content: permission.content }, otherTask)
+    ).rejects.toThrow('task-scoped executor');
+    await expect(service.remove(permission.message_id, otherSession)).rejects.toThrow(
+      'task-scoped executor'
+    );
   });
 });

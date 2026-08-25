@@ -134,6 +134,9 @@ export interface ConversationViewProps {
   forceExpandAll?: boolean;
 
   onOpenAgenticToolSettings?: (tool: AgenticToolName) => void;
+
+  /** Use the denser, full-width task treatment for phone-sized session routes. */
+  compact?: boolean;
 }
 
 export const ConversationView = React.memo<ConversationViewProps>(
@@ -155,6 +158,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
     teammateEmoji,
     forceExpandAll = false,
     onOpenAgenticToolSettings,
+    compact = false,
   }) => {
     const { token } = theme.useToken();
     const [copied, copy] = useCopyToClipboard();
@@ -507,6 +511,7 @@ export const ConversationView = React.memo<ConversationViewProps>(
               isLatestTask={taskIndex === tasks.length - 1}
               client={client}
               onOpenAgenticToolSettings={onOpenAgenticToolSettings}
+              compact={compact}
             />
           ))}
         </div>

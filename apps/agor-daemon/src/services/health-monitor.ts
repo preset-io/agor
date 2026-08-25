@@ -27,7 +27,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantContext, TenantID } from '@agor/core/types';
-import { NotFoundError } from '@agor/core/utils/errors';
+import { isNotFoundError } from '@agor/core/utils/errors';
 import type { BranchesServiceImpl } from '../declarations';
 
 const DEBUG_HEALTH_MONITOR =
@@ -315,7 +315,7 @@ export class HealthMonitor {
     } catch (error) {
       // If branch was deleted or not found, stop monitoring silently
       // This is expected when branches are deleted while health checks are in progress
-      if (error instanceof NotFoundError) {
+      if (isNotFoundError(error)) {
         this.stopMonitoring(branchId);
         // Only log at debug level - this is normal cleanup, not an error
         if (process.env.DEBUG) {

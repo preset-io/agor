@@ -150,11 +150,10 @@ const MessageContent: React.FC<MessageContentProps> = ({
             size="small"
             icon={<CloseOutlined />}
             aria-label="Dismiss error message"
+            title="Dismiss error message"
             data-agor-error-dismiss
             onClick={handleDismiss}
-          >
-            Dismiss
-          </Button>
+          />
         )}
       </Space>
       <output aria-live="polite" aria-atomic="true" style={VISUALLY_HIDDEN_STYLE}>

@@ -1,18 +1,20 @@
+import { join } from 'node:path';
+import { mutateCredentialFile, writeVerifiedCodexAuthFile } from '@agor/core/codex/credential-file';
 import { requestExecutor } from './spawn-executor.js';
 
-export interface ExecutorCodexAuthRouting {
+export interface CodexAuthCredentialRouting {
   delegatedHomeKey: string | null;
   userId: string;
   /**
-   * Explicit `CODEX_HOME` (the `.codex` dir) for the auth-file executor op.
-   * Set in `unix_user_mode: sandbox` to the caller's per-user store `.codex` so
-   * auth persists where the sandboxed session reads it. Unset otherwise (the
-   * executor falls back to the effective user's `~/.codex`).
+   * Explicit `CODEX_HOME` (the `.codex` dir) for the auth-file route. HA
+   * generation-fenced mutations use it directly; executor operations receive
+   * it as `CODEX_HOME`. Unset routes the executor to its effective user's
+   * `~/.codex`.
    */
   codexHome?: string;
 }
 
-export type ExecutorCodexAuthInspection =
+export type CodexAuthInspection =
   | {
       ok: true;
       authMode: 'chatgpt' | 'api_key';
@@ -22,18 +24,16 @@ export type ExecutorCodexAuthInspection =
     }
   | { ok: false; reason: 'not-found' | 'malformed' | 'unreadable' };
 
-const options = (routing: ExecutorCodexAuthRouting) => ({
+const options = (routing: CodexAuthCredentialRouting) => ({
   delegatedHomeKey: routing.delegatedHomeKey ?? undefined,
   templateVariables: {
     unix_user: routing.delegatedHomeKey ?? undefined,
     user_id: routing.userId,
   },
-  // In sandbox mode the auth flow runs unsandboxed as the daemon user, but the
-  // executor resolves the auth file from CODEX_HOME. Point it at the caller's
-  // per-user store `.codex` so the write lands where the SANDBOXED session (with
-  // that store overlaid at ~) will later read it — otherwise auth.json goes to
-  // the daemon home and the session can't see it. Merge OVER process.env
-  // (options.env REPLACES the spawn env), keeping PATH/keys/etc.
+  // Executor-routed operations resolve the auth file from CODEX_HOME. Point
+  // them at the caller's per-user store `.codex` so they inspect the same file
+  // as the sandboxed session (with that store overlaid at ~). Merge OVER
+  // process.env because options.env replaces the spawn environment.
   ...(routing.codexHome
     ? { env: { ...(process.env as Record<string, string>), CODEX_HOME: routing.codexHome } }
     : {}),
@@ -42,9 +42,42 @@ const options = (routing: ExecutorCodexAuthRouting) => ({
   logPrefix: '[CodexAuthExecutor]',
 });
 
+async function mutateViaExecutor(
+  payload: Record<string, unknown>,
+  routing: CodexAuthCredentialRouting
+) {
+  return requestExecutor(payload, options(routing));
+}
+
+/**
+ * HA sandbox mutations run inside the authority-owning daemon instead of a
+ * detached helper. A daemon crash therefore stops the writer; retry can safely
+ * supersede it. The shared credential-file primitive anchors Linux operations
+ * to an opened directory so the daemon cannot follow a cross-home symlink.
+ */
+async function writeCodexAuthLocally(
+  content: string,
+  codexHome: string,
+  authorityGeneration: number
+): Promise<{ authMode: 'chatgpt' | 'api_key'; planType?: string; lastRefresh?: string }> {
+  const written = await writeVerifiedCodexAuthFile({
+    target: join(codexHome, 'auth.json'),
+    content,
+    generation: authorityGeneration,
+  });
+  if (written.outcome === 'stale') {
+    throw new Error('Codex credential write was superseded');
+  }
+  return {
+    authMode: written.authMode,
+    ...(written.planType ? { planType: written.planType } : {}),
+    ...(written.lastRefresh ? { lastRefresh: written.lastRefresh } : {}),
+  };
+}
+
 export async function inspectCodexAuthViaExecutor(
-  routing: ExecutorCodexAuthRouting
-): Promise<ExecutorCodexAuthInspection> {
+  routing: CodexAuthCredentialRouting
+): Promise<CodexAuthInspection> {
   const result = await requestExecutor(
     { command: 'codex.auth-file', params: { operation: 'inspect' } },
     options(routing)
@@ -69,13 +102,20 @@ export async function inspectCodexAuthViaExecutor(
   };
 }
 
-export async function writeCodexAuthViaExecutor(
+export async function writeCodexAuthCredential(
   content: string,
-  routing: ExecutorCodexAuthRouting
+  routing: CodexAuthCredentialRouting,
+  authorityGeneration?: number
 ): Promise<{ authMode: 'chatgpt' | 'api_key'; planType?: string; lastRefresh?: string }> {
-  const result = await requestExecutor(
-    { command: 'codex.auth-file', params: { operation: 'write', content } },
-    options(routing)
+  if (authorityGeneration !== undefined && routing.codexHome) {
+    return writeCodexAuthLocally(content, routing.codexHome, authorityGeneration);
+  }
+  const result = await mutateViaExecutor(
+    {
+      command: 'codex.auth-file',
+      params: { operation: 'write', content, generation: authorityGeneration },
+    },
+    routing
   );
   if (!result.success) throw new Error('Executor credential write failed');
   const data = result.data as Record<string, unknown>;
@@ -89,10 +129,24 @@ export async function writeCodexAuthViaExecutor(
   };
 }
 
-export async function deleteCodexAuthViaExecutor(routing: ExecutorCodexAuthRouting): Promise<void> {
-  const result = await requestExecutor(
-    { command: 'codex.auth-file', params: { operation: 'delete' } },
-    options(routing)
+export async function deleteCodexAuthCredential(
+  routing: CodexAuthCredentialRouting,
+  authorityGeneration?: number
+): Promise<void> {
+  if (authorityGeneration !== undefined && routing.codexHome) {
+    const outcome = await mutateCredentialFile({
+      target: join(routing.codexHome, 'auth.json'),
+      generation: authorityGeneration,
+    });
+    if (outcome === 'stale') throw new Error('Codex credential delete was superseded');
+    return;
+  }
+  const result = await mutateViaExecutor(
+    {
+      command: 'codex.auth-file',
+      params: { operation: 'delete', generation: authorityGeneration },
+    },
+    routing
   );
   if (!result.success) throw new Error('Executor credential delete failed');
 }

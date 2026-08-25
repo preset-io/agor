@@ -263,6 +263,9 @@ async function probeCodexAuthFile(
     if (identity.reason === 'unsupported-mode') {
       return unknown(identity.message);
     }
+    if (identity.reason === 'unsupported-home-override') {
+      return unknown(identity.message);
+    }
     return unknown('Could not resolve the execution home that holds the Codex login.');
   }
 

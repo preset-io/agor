@@ -4,9 +4,30 @@
  * Type-safe CRUD operations for sessions with short ID support.
  */
 
-import type { BranchID, Session, SessionID, SessionUpdate, UUID } from '@agor/core/types';
+import type {
+  BranchID,
+  SchedulerInitializationFailureCode,
+  SchedulerInitializationStage,
+  Session,
+  SessionID,
+  SessionUpdate,
+  UUID,
+} from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
-import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, like, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  like,
+  lte,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId, shortId } from '../../lib/ids';
 import { getSessionUrl } from '../../utils/url';
@@ -16,6 +37,7 @@ import {
   insert,
   isPostgresDatabase,
   lockRowForUpdate,
+  runDatabaseTransaction,
   select,
   txAsDb,
   update,
@@ -151,6 +173,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         scheduled_run_at: row.scheduled_run_at ?? undefined,
         scheduled_from_branch: row.scheduled_from_branch ?? false,
         schedule_id: (row.schedule_id as UUID | null) ?? undefined,
+        scheduler_init_failure_code:
+          (row.scheduler_init_failure_code as SchedulerInitializationFailureCode | null) ??
+          undefined,
+        scheduler_init_failure_stage:
+          (row.scheduler_init_failure_stage as SchedulerInitializationStage | null) ?? undefined,
+        scheduler_init_attempt_count: row.scheduler_init_attempt_count,
+        scheduler_init_retry_at: row.scheduler_init_retry_at?.toISOString(),
         ready_for_prompt: row.ready_for_prompt ?? false,
         archived: Boolean(row.archived), // Convert SQLite integer (0/1) to boolean
         archived_reason: row.archived_reason ?? undefined,
@@ -192,6 +221,12 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       scheduled_run_at: session.scheduled_run_at ?? null,
       scheduled_from_branch: session.scheduled_from_branch ?? false,
       schedule_id: session.schedule_id ?? null,
+      scheduler_init_failure_code: session.scheduler_init_failure_code ?? null,
+      scheduler_init_failure_stage: session.scheduler_init_failure_stage ?? null,
+      scheduler_init_attempt_count: session.scheduler_init_attempt_count ?? 0,
+      scheduler_init_retry_at: session.scheduler_init_retry_at
+        ? new Date(session.scheduler_init_retry_at)
+        : null,
       ready_for_prompt: session.ready_for_prompt ?? false,
       archived: session.archived ?? false, // Default false for new sessions
       archived_reason: session.archived_reason ?? null,
@@ -1049,7 +1084,8 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   /** Bounded routing-only discovery for recoverable scheduler initialization. */
   async findIncompleteScheduledRefs(
     limit = 25,
-    after?: IncompleteScheduledSessionCursor
+    after?: IncompleteScheduledSessionCursor,
+    options?: { eligibleAt?: number }
   ): Promise<IncompleteScheduledSessionRef[]> {
     if (!Number.isInteger(limit) || limit <= 0 || limit > 1_000) {
       throw new RepositoryError('Incomplete scheduled Session limit must be between 1 and 1000');
@@ -1071,6 +1107,14 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           )
         )
       : undefined;
+    // Production retry eligibility uses the same database clock that authors
+    // retry deadlines. eligibleAt exists only for deterministic repository tests.
+    const retryEligibilityTime =
+      options?.eligibleAt !== undefined
+        ? new Date(options.eligibleAt)
+        : isPostgresDatabase(this.db)
+          ? sql`CURRENT_TIMESTAMP`
+          : sql`CAST(strftime('%s', 'now') AS integer) * 1000`;
     const rows = await select(this.db, columns)
       .from(sessions)
       .where(
@@ -1078,6 +1122,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           eq(sessions.scheduled_from_branch, true),
           isNotNull(sessions.scheduled_run_at),
           isNull(sessions.scheduler_init_completed_at),
+          or(
+            isNull(sessions.scheduler_init_failure_code),
+            and(
+              isNotNull(sessions.scheduler_init_retry_at),
+              lte(sessions.scheduler_init_retry_at, retryEligibilityTime)
+            )
+          ),
           afterCondition
         )
       )
@@ -1109,16 +1160,112 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   /** Conditional/idempotent completion marker written after schedule finalization. */
   async markScheduledInitializationComplete(sessionId: SessionID): Promise<boolean> {
     const result = await update(this.db, sessions)
-      .set({ scheduler_init_completed_at: new Date() })
+      .set({
+        scheduler_init_completed_at: new Date(),
+        scheduler_init_failure_code: null,
+        scheduler_init_failure_stage: null,
+        scheduler_init_retry_at: null,
+      })
       .where(
         and(
           eq(sessions.session_id, sessionId),
           eq(sessions.scheduled_from_branch, true),
-          isNull(sessions.scheduler_init_completed_at)
+          isNull(sessions.scheduler_init_completed_at),
+          or(
+            isNull(sessions.scheduler_init_failure_code),
+            isNotNull(sessions.scheduler_init_retry_at)
+          )
         )
       )
       .run();
     return result.rowsAffected === 1;
+  }
+
+  /** Persist a sanitized retry diagnosis without reviving a completed occurrence. */
+  async markScheduledInitializationRetry(input: {
+    sessionId: SessionID;
+    code: 'initialization_transient';
+    stage: SchedulerInitializationStage;
+  }): Promise<{ recorded: boolean; attempt: number; retryAt: number }> {
+    return runDatabaseTransaction(this.db, async (txDb) => {
+      await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, input.sessionId));
+      const current = await select(txDb)
+        .from(sessions)
+        .where(eq(sessions.session_id, input.sessionId))
+        .one();
+      const attempt = (current?.scheduler_init_attempt_count ?? 0) + 1;
+      const delayMs = Math.min(15 * 60_000, 5_000 * 2 ** Math.min(attempt - 1, 8));
+      const databaseNowRow = await select(txDb, {
+        now: isPostgresDatabase(this.db)
+          ? sql<number>`EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000`
+          : sql<number>`CAST(strftime('%s', 'now') AS integer) * 1000`,
+      })
+        .from(sessions)
+        .where(eq(sessions.session_id, input.sessionId))
+        .one();
+      const databaseNow = Number(databaseNowRow?.now ?? Date.now());
+      const retryAt = databaseNow + delayMs;
+      if (!current) return { recorded: false, attempt, retryAt };
+      if (
+        !current.scheduled_from_branch ||
+        current.scheduler_init_completed_at ||
+        (current.scheduler_init_failure_code && !current.scheduler_init_retry_at)
+      ) {
+        return { recorded: false, attempt, retryAt };
+      }
+      const result = await update(txDb, sessions)
+        .set({
+          scheduler_init_failure_code: input.code,
+          scheduler_init_failure_stage: input.stage,
+          scheduler_init_attempt_count: attempt,
+          scheduler_init_retry_at: new Date(retryAt),
+        })
+        .where(eq(sessions.session_id, input.sessionId))
+        .run();
+      return { recorded: result.rowsAffected === 1, attempt, retryAt };
+    });
+  }
+
+  /** Permanently diagnose an occurrence while retaining its incomplete marker. */
+  async markScheduledInitializationPermanentFailure(input: {
+    sessionId: SessionID;
+    code: Exclude<SchedulerInitializationFailureCode, 'initialization_transient'>;
+    stage: SchedulerInitializationStage;
+  }): Promise<'recorded' | 'task_exists' | 'settled'> {
+    return runDatabaseTransaction(this.db, async (txDb) => {
+      // Prompt admission takes this same row lock before inserting the stable
+      // Task. Whichever transition wins is therefore visible to the loser.
+      await lockRowForUpdate(txDb, this.db, sessions, eq(sessions.session_id, input.sessionId));
+      const current = await select(txDb)
+        .from(sessions)
+        .where(eq(sessions.session_id, input.sessionId))
+        .one();
+      if (!current) return 'settled';
+      if (
+        !current.scheduled_from_branch ||
+        current.scheduler_init_completed_at ||
+        (current.scheduler_init_failure_code && !current.scheduler_init_retry_at)
+      ) {
+        return 'settled';
+      }
+      const durableTask = await select(txDb, { one: sql<number>`1` })
+        .from(tasks)
+        .where(eq(tasks.session_id, input.sessionId))
+        .limit(1)
+        .one();
+      if (durableTask) return 'task_exists';
+      await update(txDb, sessions)
+        .set({
+          status: SessionStatus.FAILED,
+          scheduler_init_failure_code: input.code,
+          scheduler_init_failure_stage: input.stage,
+          scheduler_init_attempt_count: current.scheduler_init_attempt_count + 1,
+          scheduler_init_retry_at: null,
+        })
+        .where(eq(sessions.session_id, input.sessionId))
+        .run();
+      return 'recorded';
+    });
   }
 
   /**
@@ -1260,7 +1407,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
               // scheduler writes its internal completion marker. Migrations
               // backfill historical Sessions so old no-Task rows do not block
               // a schedule forever.
-              isNull(sessions.scheduler_init_completed_at),
+              and(
+                isNull(sessions.scheduler_init_completed_at),
+                or(
+                  isNull(sessions.scheduler_init_failure_code),
+                  isNotNull(sessions.scheduler_init_retry_at)
+                )
+              ),
               sql`EXISTS (SELECT 1 FROM ${tasks} WHERE ${tasks.session_id} = ${sessions.session_id} AND ${taskIsActive})`
             )
           )

@@ -152,8 +152,6 @@ export function mapCopilotEvents(
       if (!streamStarted) {
         streamingCallbacks
           .onStreamStart(messageId, {
-            session_id: sessionId,
-            task_id: taskId,
             role: MessageRole.ASSISTANT,
             timestamp: new Date().toISOString(),
           })

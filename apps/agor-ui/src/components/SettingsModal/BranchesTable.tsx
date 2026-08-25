@@ -16,19 +16,7 @@ import {
   PlusOutlined,
   RobotOutlined,
 } from '@ant-design/icons';
-import {
-  Button,
-  Empty,
-  Form,
-  Input,
-  Modal,
-  Select,
-  Space,
-  Table,
-  Tooltip,
-  Typography,
-  theme,
-} from 'antd';
+import { Button, Empty, Form, Input, Select, Space, Table, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
@@ -38,7 +26,9 @@ import { ArchiveToggleButton } from '../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../ArchiveDeleteBranchModal';
 import { BranchFormFields } from '../BranchFormFields';
 import { HighlightMatch } from '../HighlightMatch';
+import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
 import { renderEnvCell } from './BranchEnvColumn';
+import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 
 interface BranchesTableProps {
@@ -535,22 +525,19 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
 
   return (
     <div>
-      <Space
-        orientation="vertical"
-        size={token.sizeUnit * 2}
-        style={{ marginBottom: token.sizeUnit * 2, width: '100%' }}
-      >
-        <Typography.Text type="secondary">
-          Manage git branches for isolated development contexts across sessions.
-        </Typography.Text>
-        <Space style={{ width: '100%', display: 'flex', justifyContent: 'space-between' }}>
-          <Space>
+      <ResponsiveSettingsHeader
+        description="Manage git branches for isolated development contexts across sessions."
+        actions={(compact) => (
+          <Space wrap style={{ width: compact ? '100%' : undefined }}>
             <Input
               allowClear
               placeholder="Search by name, repo, slug, path, or ID"
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              style={{ maxWidth: token.sizeUnit * 40 }}
+              style={{
+                width: compact ? '100%' : token.sizeUnit * 40,
+                flex: compact ? '1 1 100%' : undefined,
+              }}
             />
             <Select
               value={archiveFilter}
@@ -564,17 +551,17 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
                 { value: 'archived', label: 'Archived' },
               ]}
             />
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => setCreateModalOpen(true)}
+              disabled={repos.length === 0}
+            >
+              Create Branch
+            </Button>
           </Space>
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setCreateModalOpen(true)}
-            disabled={repos.length === 0}
-          >
-            Create Branch
-          </Button>
-        </Space>
-      </Space>
+        )}
+      />
 
       {repos.length === 0 && (
         <div
@@ -617,6 +604,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
           rowKey="branch_id"
           pagination={{ defaultPageSize: 10 }}
           size="small"
+          scroll={{ x: 1000 }}
           onRow={(record) => ({
             onClick: () => onRowClick?.(record),
             style: { cursor: onRowClick ? 'pointer' : 'default' },
@@ -624,7 +612,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
         />
       )}
 
-      <Modal
+      <AdaptiveSettingsModal
         title="Create Branch"
         open={createModalOpen}
         onOk={handleCreate}
@@ -649,7 +637,7 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
             branchStorageConfig={branchStorageConfig}
           />
         </Form>
-      </Modal>
+      </AdaptiveSettingsModal>
 
       {selectedBranch && (
         <ArchiveDeleteBranchModal

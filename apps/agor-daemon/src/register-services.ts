@@ -86,6 +86,7 @@ import {
 import type { UnixUserMode } from '@agor/core/unix';
 import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
+import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -130,6 +131,8 @@ import { createClaudeModelsService } from './services/claude-models.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
+import { CodexDeviceAuthAttemptAuthority } from './services/codex-device-auth-attempt-authority.js';
+import { createDurableCodexDeviceAuthService } from './services/codex-device-auth-durable.js';
 import { createConfigService } from './services/config.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
@@ -228,7 +231,7 @@ import {
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
-import { createFreshTenantWriteDatabaseRunner } from './utils/tenant-db-scope.js';
+import { withFreshTenantWrite } from './utils/tenant-db-scope.js';
 
 /**
  * Interface for dependencies needed by service registration.
@@ -291,7 +294,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
       expiration_ms: config.execution?.session_token_expiration_ms ?? 24 * 60 * 60 * 1000,
       max_uses: config.execution?.session_token_max_uses ?? -1,
     },
-    { db }
+    {
+      db,
+      onRevoked: (revocation) => {
+        app.emit('realtime:executor-token-invalidated', revocation);
+      },
+    }
   );
 
   const appRecord = app as unknown as Record<string, unknown>;
@@ -326,7 +334,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // events reach only the tabs actively viewing that session. Access is gated
   // by the session read inside the service. The create/remove events are
   // control-plane only and must never broadcast, so publish to no connections.
-  app.use('/session-streams', createSessionStreamsService(app), {
+  app.use('/session-streams', createSessionStreamsService(app, resolveMultiTenancyConfig(config)), {
     methods: ['create', 'remove'],
   });
   app.service('/session-streams').hooks({
@@ -334,7 +342,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
   app.service('/session-streams').publish(() => []);
 
-  app.use('/tasks', createTasksService(db, app), {
+  app.use('/tasks', createTasksService(db, app, sessionTokenService), {
     methods: [...TASKS_SERVICE_TRANSPORT_METHODS],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
@@ -708,22 +716,30 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Imports a pasted Codex CLI auth.json for the authenticated user — writes
   // it 0600 into the resolved Codex credential home and flips the caller's auth
   // method to subscription. Token material never leaves the daemon.
-  app.use('/codex-auth/import', createCodexAuthImportService(app, db));
+  const codexDeviceAttempts =
+    ctx.deployment.mode === 'ha' ? new CodexDeviceAuthAttemptAuthority(db) : undefined;
+
+  app.use('/codex-auth/import', createCodexAuthImportService(app, db, codexDeviceAttempts));
   app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
 
   // ChatGPT device-code sign-in: create starts an attempt (code + verification
   // URL back to the UI, daemon polls OpenAI for approval); find reports the
   // caller's attempt status. Tokens stay daemon-side end to end.
-  app.use('/codex-auth/device', createCodexDeviceAuthService(app, db));
-  app
-    .service('/codex-auth/device')
-    .hooks({ before: { create: [ctx.requireAuth], find: [ctx.requireAuth] } });
+  app.use(
+    '/codex-auth/device',
+    codexDeviceAttempts
+      ? createDurableCodexDeviceAuthService(app, db, codexDeviceAttempts)
+      : createCodexDeviceAuthService(app, db)
+  );
+  app.service('/codex-auth/device').hooks({
+    before: { create: [ctx.requireAuth], find: [ctx.requireAuth], remove: [ctx.requireAuth] },
+  });
 
   // Removes the caller's Codex login — deletes auth.json through the resolved
   // credential route and clears the stored auth method (emitting `patched` so the
   // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
   // grant, so other machines stay signed in.
-  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db));
+  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db, codexDeviceAttempts));
   app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
@@ -994,21 +1010,18 @@ function createExecuteHandler(
       {
         taskId: data.taskId,
         branchId: session.branch_id,
-        // Executor JWTs authenticate on every daemon API call over the runtime
-        // connection, so low per-call max-use limits make normal execution
-        // fail after startup. Keep expiry + revocation for these scoped runtime
-        // credentials; reconnect reuses the same token and does not consume a
-        // separate connection allowance. Bounded tokens retain per-validation
-        // use counting for compatibility.
+        // Executor JWTs authenticate at Socket.IO handshake/reconnect (and on
+        // every REST request), so low use limits make normal execution fail
+        // during transport recovery. Keep expiry + lifecycle revocation for
+        // these runtime credentials. Bounded tokens retain per-validation use
+        // counting for compatibility.
         maxUses: -1,
       }
     );
 
     const taskId = data.taskId;
-    const runInFreshTerminationTenantWriteDatabase = createFreshTenantWriteDatabaseRunner(
-      db,
-      tenantId
-    );
+    const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
+      withFreshTenantWrite(db, tenantId, work);
 
     // Get branch path (+ authoritative base repo path for the sandbox) and, for
     // RBAC-aware mounting, the session OWNER's effective filesystem access to
@@ -1034,8 +1047,13 @@ function createExecuteHandler(
         const branch = await branchRepo.findById(session.branch_id);
         if (!branch?.path) return undefined;
         let baseRepoPath: string | undefined;
-        // Only linked worktrees need the shared git dir; a self-standing clone
-        // carries its own `.git` inside the branch dir.
+        // Only linked worktrees need the shared git dir; a clone carries its
+        // own `.git` inside the branch dir — EXCEPT for its object store when
+        // it was created with `git clone --reference`, which leaves an
+        // alternates pointer into `<data_home>/repos/<slug>/.git/objects`.
+        // The daemon refuses to create that pointer when this sandbox would
+        // hide it (see `shouldUseCloneReferencePath`), so a clone-mode branch
+        // needs nothing mounted from `repos/`.
         if (branch.storage_mode !== 'clone' && branch.repo_id) {
           const repo = await new RepoRepository(tenantDb).findById(branch.repo_id);
           baseRepoPath = repo?.local_path ?? undefined;
@@ -3596,7 +3614,7 @@ export async function registerMCPServices(
   // --------------------------------------------------------------------------
   app.use('/mcp-servers/oauth-auth-headers', {
     async create(
-      data: { mcp_server_ids: string[]; executorSessionToken?: string },
+      data: { mcp_server_ids: string[] },
       params?: AuthenticatedParams
     ): Promise<{
       headers: Record<string, { authorization?: string; error?: string }>;
@@ -3613,33 +3631,11 @@ export async function registerMCPServices(
         return { headers };
       }
 
-      const sessionId = (params as (AuthenticatedParams & { session_id?: string }) | undefined)
-        ?.session_id;
+      const executorSessionId = authenticatedTaskExecutorRuntimeScope(params)?.sessionId;
       const trustedInternalOrService = shouldExposeMCPServerSecrets(params);
-      let trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
-        sessionId,
+      const trustedSessionExecutor = shouldExposeMCPServerSecretsForSessionToken(params, {
+        sessionId: executorSessionId,
       });
-      let executorSessionId = sessionId;
-      if (!trustedSessionExecutor && params?.provider && data.executorSessionToken) {
-        const executorTokenService = (
-          app as unknown as {
-            sessionTokenService?: {
-              validateToken: (
-                token: string,
-                expected?: { sessionId?: string; taskId?: string; branchId?: string }
-              ) => Promise<{ session_id: string } | null>;
-            };
-          }
-        ).sessionTokenService;
-        const sessionInfo = await executorTokenService?.validateToken(
-          data.executorSessionToken,
-          {}
-        );
-        if (sessionInfo?.session_id) {
-          executorSessionId = sessionInfo.session_id;
-          trustedSessionExecutor = true;
-        }
-      }
       if (!trustedInternalOrService && !trustedSessionExecutor) {
         throw new Forbidden('oauth-auth-headers is only available to trusted executor paths');
       }
@@ -3689,9 +3685,9 @@ export async function registerMCPServices(
        *
        * A refresh is not a read: `refreshAndPersistToken` obtains and stores a
        * *new* access token, which is issuance by the same definition the rest of
-       * this file uses. The caller here is an executor under a session token or
-       * a service account, so flooring the caller would floor a robot — the
-       * standing that matters belongs to the user the grant is keyed on.
+       * this file uses. A delegated task executor already carries its user's
+       * identity; an explicit daemon service account does not. In either case,
+       * the standing that matters belongs to the user the grant is keyed on.
        *
        * Resolved once. Every per-user grant in one request belongs to the same
        * user: `tokenUserId` is the caller's own id, and cross-user lookup is

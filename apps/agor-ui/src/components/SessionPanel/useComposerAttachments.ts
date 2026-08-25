@@ -14,25 +14,37 @@ import {
 
 interface UseComposerAttachmentsOptions {
   sessionId: SessionID | null;
+  scopeKey: string;
   showError: (message: string) => void;
   uploadPolicy?: UploadIngressPolicy;
 }
 
 export function useComposerAttachments({
   sessionId,
+  scopeKey,
   showError,
   uploadPolicy,
 }: UseComposerAttachmentsOptions) {
-  const [attachments, setAttachments] = React.useState<ComposerAttachment[]>([]);
+  const [storedAttachments, setStoredAttachments] = React.useState<ComposerAttachment[]>([]);
   const [validationError, setValidationError] = React.useState<string | null>(null);
   const [uploading, setUploading] = React.useState(false);
 
-  const previousSessionIdRef = React.useRef<SessionID | null>(sessionId);
+  const previousScopeKeyRef = React.useRef(scopeKey);
+  const scopeKeyRef = React.useRef(scopeKey);
   const attachmentsRef = React.useRef<ComposerAttachment[]>([]);
+  const storedAttachmentsRef = React.useRef<ComposerAttachment[]>([]);
   const uploadingRef = React.useRef(false);
 
+  // Hide the previous caller's state synchronously; the effect below owns
+  // cleanup/revocation once React has committed the new scope.
+  const scopeMatches = previousScopeKeyRef.current === scopeKey;
+  const attachments = scopeMatches ? storedAttachments : [];
+  const visibleUploading = scopeMatches ? uploading : false;
+  const visibleValidationError = scopeMatches ? validationError : null;
   attachmentsRef.current = attachments;
-  uploadingRef.current = uploading;
+  storedAttachmentsRef.current = storedAttachments;
+  uploadingRef.current = visibleUploading;
+  scopeKeyRef.current = scopeKey;
 
   const revokePreview = React.useCallback((attachment: ComposerAttachment) => {
     if (attachment.previewUrl?.startsWith('blob:')) {
@@ -41,23 +53,28 @@ export function useComposerAttachments({
   }, []);
 
   const clearAttachments = React.useCallback(() => {
-    attachmentsRef.current.forEach(revokePreview);
-    setAttachments([]);
+    const previous = storedAttachmentsRef.current;
+    attachmentsRef.current = [];
+    storedAttachmentsRef.current = [];
+    previous.forEach(revokePreview);
+    setStoredAttachments([]);
   }, [revokePreview]);
 
   React.useEffect(
     () => () => {
-      attachmentsRef.current.forEach(revokePreview);
+      storedAttachmentsRef.current.forEach(revokePreview);
     },
     [revokePreview]
   );
 
   React.useEffect(() => {
-    if (previousSessionIdRef.current === sessionId) return;
+    if (previousScopeKeyRef.current === scopeKey) return;
     clearAttachments();
     setValidationError(null);
-    previousSessionIdRef.current = sessionId;
-  }, [sessionId, clearAttachments]);
+    uploadingRef.current = false;
+    setUploading(false);
+    previousScopeKeyRef.current = scopeKey;
+  }, [scopeKey, clearAttachments]);
 
   const addAttachments = React.useCallback(
     (files: File[]) => {
@@ -78,8 +95,8 @@ export function useComposerAttachments({
       }
       if (acceptedFiles.length === 0) return;
 
-      setAttachments((prev) => [
-        ...prev,
+      setStoredAttachments([
+        ...attachmentsRef.current,
         ...acceptedFiles.map((file) => {
           const supported = isPreviewableComposerImage(file);
           return {
@@ -102,13 +119,14 @@ export function useComposerAttachments({
       if (uploadingRef.current) return;
       setValidationError(null);
 
-      setAttachments((prev) => {
-        const removed = prev.find((attachment) => attachment.id === id);
+      setStoredAttachments((prev) => {
+        const current = scopeKeyRef.current === scopeKey ? prev : [];
+        const removed = current.find((attachment) => attachment.id === id);
         if (removed) revokePreview(removed);
-        return prev.filter((attachment) => attachment.id !== id);
+        return current.filter((attachment) => attachment.id !== id);
       });
     },
-    [revokePreview]
+    [revokePreview, scopeKey]
   );
 
   const uploadAttachments = React.useCallback(
@@ -121,6 +139,7 @@ export function useComposerAttachments({
       }
 
       const current = attachmentsAtUploadStart;
+      const uploadScopeKey = scopeKeyRef.current;
       if (current.length === 0) return [];
 
       const blockingAttachment = current.find(isBlockingComposerAttachment);
@@ -141,7 +160,7 @@ export function useComposerAttachments({
 
       setUploading(true);
       uploadingRef.current = true;
-      setAttachments((prev) =>
+      setStoredAttachments((prev) =>
         prev.map((attachment) =>
           uploadable.some((candidate) => candidate.id === attachment.id)
             ? { ...attachment, status: 'uploading', error: undefined }
@@ -168,14 +187,16 @@ export function useComposerAttachments({
           if (uploaded) uploadedById.set(attachment.id, uploaded);
         });
 
-        setAttachments((prev) =>
-          prev.map((attachment) => {
-            const uploadedFile = uploadedById.get(attachment.id);
-            return uploadedFile
-              ? { ...attachment, status: 'uploaded', uploadedFile, error: undefined }
-              : attachment;
-          })
-        );
+        if (scopeKeyRef.current === uploadScopeKey) {
+          setStoredAttachments((prev) =>
+            prev.map((attachment) => {
+              const uploadedFile = uploadedById.get(attachment.id);
+              return uploadedFile
+                ? { ...attachment, status: 'uploaded', uploadedFile, error: undefined }
+                : attachment;
+            })
+          );
+        }
 
         const uploadedFileById = new Map<string, UploadedFile>();
         current.forEach((attachment) => {
@@ -191,17 +212,21 @@ export function useComposerAttachments({
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to upload files';
-        setAttachments((prev) =>
-          prev.map((attachment) =>
-            uploadable.some((candidate) => candidate.id === attachment.id)
-              ? { ...attachment, status: 'failed', error: message }
-              : attachment
-          )
-        );
+        if (scopeKeyRef.current === uploadScopeKey) {
+          setStoredAttachments((prev) =>
+            prev.map((attachment) =>
+              uploadable.some((candidate) => candidate.id === attachment.id)
+                ? { ...attachment, status: 'failed', error: message }
+                : attachment
+            )
+          );
+        }
         throw error;
       } finally {
-        uploadingRef.current = false;
-        setUploading(false);
+        if (scopeKeyRef.current === uploadScopeKey) {
+          uploadingRef.current = false;
+          setUploading(false);
+        }
       }
     },
     [sessionId]
@@ -216,9 +241,9 @@ export function useComposerAttachments({
     addAttachments,
     removeAttachment,
     uploadAttachments,
-    uploading,
+    uploading: visibleUploading,
     uploadingRef,
-    validationError,
+    validationError: visibleValidationError,
     setValidationError,
   };
 }

@@ -314,4 +314,19 @@ describe('check-auth codex auth.json probe', () => {
       'unauthenticated'
     );
   });
+
+  it('passes through the actionable HA home-override recovery message', async () => {
+    resolveCodexCredentialRouteMock.mockResolvedValue({
+      ok: false,
+      reason: 'unsupported-home-override',
+      message: 'Remove the filesystem_home override for this account or use an API key.',
+    });
+
+    const result = await service().create({ tool: 'codex', validateNative: true }, params);
+
+    expect(result).toMatchObject({
+      status: 'unknown',
+      hint: 'Remove the filesystem_home override for this account or use an API key.',
+    });
+  });
 });

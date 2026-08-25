@@ -88,10 +88,10 @@ export const AudioSettingsTab: React.FC<AudioSettingsTabProps> = ({ form, onValu
     <div>
       <div style={{ marginBottom: 16 }}>
         <Text strong style={{ fontSize: token.fontSizeLG }}>
-          🔊 Task Completion Chimes
+          Task completion chimes
         </Text>
         <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-          Play a sound when agent tasks finish executing. Perfect for long-running tasks!
+          Play a sound when an agent task finishes, so you can move on while it works.
         </Paragraph>
       </div>
 

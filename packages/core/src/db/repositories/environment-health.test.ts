@@ -112,7 +112,12 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
         environmentGeneration: claim.claim.environment_generation,
         observation: { status: 'healthy', message: 'HTTP 200', recordWhileStarting: true },
       })
-    ).resolves.toMatchObject({ outcome: 'committed', environmentStatus: 'running' });
+    ).resolves.toEqual({
+      outcome: 'committed',
+      mutated: true,
+      stateChanged: true,
+      environmentStatus: 'running',
+    });
     await expect(
       health.commit({
         branchId: branch.branch_id,
@@ -126,6 +131,99 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
       last_health_check: { status: 'unhealthy', message: 'Timeout' },
     });
   });
+
+  dbTest(
+    'accepts an unrecorded startup observation without mutating branch state',
+    async ({ db }) => {
+      const branch = await seedStartingBranch(db);
+      const branches = new BranchRepository(db);
+      const health = new EnvironmentHealthRepository(db);
+      const claim = await health.claim({
+        branchId: branch.branch_id,
+        claimToken: 'startup-network-failure',
+        leaseDurationMs: 30_000,
+        identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+      });
+      if (claim.outcome !== 'claimed') throw new Error('Expected claim');
+
+      await expect(
+        health.commit({
+          branchId: branch.branch_id,
+          claimToken: claim.claim.claim_token,
+          environmentGeneration: claim.claim.environment_generation,
+          observation: {
+            status: 'unhealthy',
+            message: 'Health endpoint unreachable',
+            recordWhileStarting: false,
+          },
+        })
+      ).resolves.toEqual({
+        outcome: 'committed',
+        mutated: false,
+        stateChanged: false,
+        environmentStatus: 'starting',
+      });
+      expect(await branches.findById(branch.branch_id)).toMatchObject({
+        updated_at: branch.updated_at,
+        environment_instance: { status: 'starting' },
+      });
+      expect(
+        (await branches.findById(branch.branch_id))?.environment_instance?.last_health_check
+      ).toBeUndefined();
+    }
+  );
+
+  dbTest(
+    'persists repeated healthy and unhealthy observation times without state churn',
+    async ({ db }) => {
+      const branches = new BranchRepository(db);
+      const health = new EnvironmentHealthRepository(db);
+
+      for (const observation of [
+        { status: 'healthy' as const, message: 'HTTP 200' },
+        { status: 'unhealthy' as const, message: 'HTTP 503 Service Unavailable' },
+      ]) {
+        const seeded = await seedStartingBranch(db, 'running');
+        await branches.update(seeded.branch_id, {
+          environment_instance: {
+            status: 'running',
+            last_health_check: {
+              timestamp: '2026-01-01T00:00:00.000Z',
+              ...observation,
+            },
+          },
+        });
+        const before = await branches.findById(seeded.branch_id);
+        const claim = await health.claim({
+          branchId: seeded.branch_id,
+          claimToken: `repeated-${observation.status}`,
+          leaseDurationMs: 30_000,
+          identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+        });
+        if (claim.outcome !== 'claimed') throw new Error('Expected claim');
+
+        await expect(
+          health.commit({
+            branchId: seeded.branch_id,
+            claimToken: claim.claim.claim_token,
+            environmentGeneration: claim.claim.environment_generation,
+            observation: { ...observation, recordWhileStarting: true },
+          })
+        ).resolves.toEqual({
+          outcome: 'committed',
+          mutated: true,
+          stateChanged: false,
+          environmentStatus: 'running',
+        });
+        const after = await branches.findById(seeded.branch_id);
+        expect(after?.updated_at).toBe(before?.updated_at);
+        expect(after?.environment_instance?.last_health_check).toMatchObject(observation);
+        expect(after?.environment_instance?.last_health_check?.timestamp).not.toBe(
+          '2026-01-01T00:00:00.000Z'
+        );
+      }
+    }
+  );
 
   dbTest('invalidates an in-flight result across stop and restart', async ({ db }) => {
     const branch = await seedStartingBranch(db);

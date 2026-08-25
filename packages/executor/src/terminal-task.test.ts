@@ -16,7 +16,12 @@
 import { TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgorClient } from './services/feathers-client.js';
-import { TERMINAL_STATUSES, tryMarkTaskTerminal } from './terminal-task.js';
+import {
+  isTaskFailurePersisted,
+  markTaskFailurePersisted,
+  TERMINAL_STATUSES,
+  tryMarkTaskTerminal,
+} from './terminal-task.js';
 
 type TaskShape = { task_id: string; status: TaskStatus };
 
@@ -61,6 +66,19 @@ describe('TERMINAL_STATUSES', () => {
     expect(TERMINAL_STATUSES.has(TaskStatus.STOPPING)).toBe(false);
     expect(TERMINAL_STATUSES.has(TaskStatus.AWAITING_PERMISSION)).toBe(false);
     expect(TERMINAL_STATUSES.has(TaskStatus.AWAITING_INPUT)).toBe(false);
+  });
+});
+
+describe('persisted task failure marker', () => {
+  it('marks only the acknowledged Error instance', () => {
+    const failure = new Error('provider failed');
+    const unrelated = new Error('provider failed');
+
+    expect(isTaskFailurePersisted(failure)).toBe(false);
+    expect(markTaskFailurePersisted(failure)).toBe(failure);
+    expect(isTaskFailurePersisted(failure)).toBe(true);
+    expect(isTaskFailurePersisted(unrelated)).toBe(false);
+    expect(isTaskFailurePersisted('provider failed')).toBe(false);
   });
 });
 

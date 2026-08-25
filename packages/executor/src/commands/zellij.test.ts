@@ -5,11 +5,104 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildZellijLaunchArgs,
   createReconnectGrace,
+  createTerminalInputGate,
   ensurePrivateZellijCacheDirectory,
   forceZellijRepaint,
+  waitForTerminalOutputSettled,
   waitForZellijReady,
   zellijListingHasSession,
 } from './zellij.js';
+
+describe('createTerminalInputGate', () => {
+  it('flushes startup input in order and passes later input through', () => {
+    const write = vi.fn();
+    const gate = createTerminalInputGate(write);
+
+    expect(gate.write('echo one\r')).toBe(true);
+    expect(gate.write('echo two\r')).toBe(true);
+    expect(write).not.toHaveBeenCalled();
+
+    gate.open();
+    expect(write.mock.calls.map(([input]) => input)).toEqual(['echo one\r', 'echo two\r']);
+    expect(gate.isOpen()).toBe(true);
+
+    expect(gate.write('pwd\r')).toBe(true);
+    expect(write).toHaveBeenLastCalledWith('pwd\r');
+  });
+
+  it('bounds pending UTF-8 input without affecting an open gate', () => {
+    const write = vi.fn();
+    const gate = createTerminalInputGate(write, 4);
+
+    expect(gate.write('é')).toBe(true); // two UTF-8 bytes
+    expect(gate.write('🙂')).toBe(false); // four more bytes would exceed the bound
+    gate.open();
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledWith('é');
+
+    expect(gate.write('🙂')).toBe(true);
+    expect(write).toHaveBeenLastCalledWith('🙂');
+  });
+
+  it('passes terminal-emulator protocol responses through during startup', () => {
+    const write = vi.fn();
+    const gate = createTerminalInputGate(write, 1024, (input) => input.startsWith('\u001b'));
+
+    gate.write('echo queued\r');
+    gate.write('\u001b]4;0;rgb:0000/0000/0000\u001b\\');
+    expect(write).toHaveBeenCalledOnce();
+    expect(write).toHaveBeenCalledWith('\u001b]4;0;rgb:0000/0000/0000\u001b\\');
+
+    gate.open();
+    expect(write).toHaveBeenLastCalledWith('echo queued\r');
+  });
+
+  it('drops pending input when startup fails', () => {
+    const write = vi.fn();
+    const gate = createTerminalInputGate(write);
+    gate.write('should-not-run\r');
+    gate.clear();
+    gate.open();
+    expect(write).not.toHaveBeenCalled();
+  });
+});
+
+describe('waitForTerminalOutputSettled', () => {
+  it('waits for output and a full quiet window', async () => {
+    let now = 0;
+    let lastOutputAt: number | null = null;
+    const sleep = vi.fn(async (ms: number) => {
+      now += ms;
+      if (now === 50) lastOutputAt = now;
+      if (now === 100) lastOutputAt = now;
+    });
+
+    const settled = await waitForTerminalOutputSettled(() => lastOutputAt, {
+      quietMs: 100,
+      maxWaitMs: 500,
+      pollMs: 50,
+      now: () => now,
+      sleep,
+    });
+    expect(settled).toBe(true);
+    expect(now).toBe(200);
+  });
+
+  it('fails open at the bounded deadline when no PTY output arrives', async () => {
+    let now = 0;
+    const settled = await waitForTerminalOutputSettled(() => null, {
+      quietMs: 100,
+      maxWaitMs: 250,
+      pollMs: 50,
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+    });
+    expect(settled).toBe(false);
+    expect(now).toBe(250);
+  });
+});
 
 describe('buildZellijLaunchArgs', () => {
   it('attaches directly when an active or exited session is known', () => {
@@ -27,6 +120,12 @@ describe('buildZellijLaunchArgs', () => {
       '1000',
       '--serialization-interval',
       '1',
+      '--show-startup-tips',
+      'false',
+      '--show-release-notes',
+      'false',
+      '--default-mode',
+      'locked',
     ]);
   });
 
@@ -45,6 +144,12 @@ describe('buildZellijLaunchArgs', () => {
       '1000',
       '--serialization-interval',
       '1',
+      '--show-startup-tips',
+      'false',
+      '--show-release-notes',
+      'false',
+      '--default-mode',
+      'locked',
       '--attach-to-session',
       'true',
     ]);
@@ -197,10 +302,10 @@ describe('createReconnectGrace', () => {
     expect(onGraceElapsed).toHaveBeenCalledTimes(1);
   });
 
-  it('tears down when the bridge never becomes healthy again (reconnect without re-auth)', () => {
+  it('tears down when the daemon never accepts the replacement connection', () => {
     // Models a socket that flaps back to transport-connected but never
-    // re-authenticates: onReconnect (which zellij.ts only calls after a
-    // successful re-auth) is never invoked, so the window still fires.
+    // completes an authenticated namespace handshake: onReconnect is never
+    // invoked, so the window still fires.
     let bridgeHealthy = false;
     const onGraceElapsed = vi.fn();
     const grace = createReconnectGrace({
@@ -210,8 +315,8 @@ describe('createReconnectGrace', () => {
     });
 
     grace.onDisconnect();
-    // Transport blips but re-auth keeps failing; bridgeHealthy stays false and
-    // onReconnect is never called.
+    // Transport blips but the handshake keeps failing; bridgeHealthy stays
+    // false and onReconnect is never called.
     bridgeHealthy = false;
     vi.advanceTimersByTime(30_000);
     expect(onGraceElapsed).toHaveBeenCalledTimes(1);
