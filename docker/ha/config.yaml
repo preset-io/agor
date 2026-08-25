@@ -1,4 +1,8 @@
 agentic_tools:
+  # This disposable validation stack deliberately opts into native Claude
+  # subscription OAuth. Production remains default-off unless an operator
+  # makes the same explicit release decision.
+  claude_subscription_oauth: true
   # Headless/container deployments must declare their managed integrations.
   # The Compose preparation job reconciles this exact list before either
   # daemon starts, into the shared /home/agor/.agor volume.

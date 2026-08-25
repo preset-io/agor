@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertHaTaskPermissionSupported,
   HA_UNSUPPORTED_FEATURES,
+  hasClaudeSubscriptionOAuthCapability,
   haUnavailable,
   isHaFeatureUnavailable,
   isHaNonInteractivePermission,
@@ -166,6 +167,30 @@ describe('constrained HA support profile', () => {
         'claudeOAuth'
       )
     ).toBe(true);
+  });
+
+  it('requires operator authorization and topology support for the Claude OAuth capability', () => {
+    const standalone = { mode: 'standalone' as const };
+    expect(hasClaudeSubscriptionOAuthCapability({}, standalone)).toBe(false);
+    expect(
+      hasClaudeSubscriptionOAuthCapability(
+        { agentic_tools: { claude_subscription_oauth: true } },
+        standalone
+      )
+    ).toBe(true);
+    expect(
+      hasClaudeSubscriptionOAuthCapability(
+        { agentic_tools: { claude_subscription_oauth: true } },
+        ha
+      )
+    ).toBe(true);
+    expect(hasClaudeSubscriptionOAuthCapability({}, ha)).toBe(false);
+    expect(
+      hasClaudeSubscriptionOAuthCapability(
+        { agentic_tools: { claude_subscription_oauth: true } },
+        { ...ha, capabilities: { ...ha.capabilities, claudeOAuth: false } }
+      )
+    ).toBe(false);
   });
 
   it('gives gated Codex routes actionable cross-replica lock guidance', () => {

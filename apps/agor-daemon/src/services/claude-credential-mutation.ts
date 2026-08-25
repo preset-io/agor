@@ -21,6 +21,7 @@ export { CLAUDE_AUTH_TRUSTED_USER_MUTATION } from './claude-credential-mutation-
 
 interface ClaudeCredentialPatch {
   agentic_auth_methods?: Record<string, unknown>;
+  agentic_credential_sources?: Record<string, unknown>;
   agentic_tools?: Record<string, Record<string, unknown> | undefined>;
   unix_username?: string;
   filesystem_home?: string;
@@ -103,6 +104,7 @@ export function createClaudeUserCredentialPatchCoordinator(
       return false;
     }
     if (Object.hasOwn(data.agentic_auth_methods ?? {}, 'claude-code')) return true;
+    if (Object.hasOwn(data.agentic_credential_sources ?? {}, 'claude-code')) return true;
     const patch = data.agentic_tools?.['claude-code'];
     return !!patch && Object.keys(patch).some((field) => CLAUDE_SECRET_FIELDS.has(field));
   };

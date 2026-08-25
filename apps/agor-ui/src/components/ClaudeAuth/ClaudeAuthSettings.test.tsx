@@ -24,6 +24,7 @@ interface HarnessOptions {
   onSaveField?: ReturnType<typeof vi.fn>;
   onClearField?: ReturnType<typeof vi.fn>;
   allowSubscriptionLogin?: boolean;
+  allowOAuthSignIn?: boolean;
 }
 
 function Harness({
@@ -34,6 +35,7 @@ function Harness({
   onSaveField,
   onClearField,
   allowSubscriptionLogin = true,
+  allowOAuthSignIn = true,
 }: HarnessOptions) {
   const services: Record<string, unknown> = {
     'check-auth': { create: checkAuth ?? vi.fn(async () => UNKNOWN) },
@@ -64,6 +66,7 @@ function Harness({
       onClearField={onClearField ?? vi.fn(async () => undefined)}
       savingFields={{}}
       allowSubscriptionLogin={allowSubscriptionLogin}
+      allowOAuthSignIn={allowOAuthSignIn}
     />
   );
 }
@@ -75,6 +78,13 @@ function clickText(text: string | RegExp) {
 }
 
 describe('ClaudeAuthSettings', () => {
+  it('hides daemon-driven OAuth when the deployment capability is off', () => {
+    render(<Harness allowOAuthSignIn={false} />);
+    expect(screen.queryByText('Sign in with Claude')).not.toBeInTheDocument();
+    expect(screen.getByText('Subscription token')).toBeInTheDocument();
+    expect(screen.getByText('API key')).toBeInTheDocument();
+  });
+
   it('shows a Connected banner when the probe reports an authenticated API key', async () => {
     const checkAuth = vi.fn(
       async (): Promise<AuthCheckResult> => ({

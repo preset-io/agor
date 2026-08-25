@@ -458,6 +458,13 @@ try {
     'ok - distinct daemon/boot identities expose the constrained merged-foundation profile'
   );
 
+  const authorizedClaudeConfig = await fetch(`${daemonB}/health`, {
+    headers: { authorization: `Bearer ${memberAccessToken}` },
+  });
+  assert.equal(authorizedClaudeConfig.status, 200);
+  assert.equal((await authorizedClaudeConfig.json()).features.claudeSubscriptionOAuth, true);
+  console.log('ok - the HA validation profile explicitly authorizes Claude subscription OAuth');
+
   // Status is safe to probe without creating an uncontrolled provider device
   // attempt. Both replicas must admit it and observe the same durable state.
   const [codexDeviceStatusA, codexDeviceStatusB] = await Promise.all(
@@ -650,7 +657,7 @@ try {
       body: JSON.stringify({ agentic_auth_methods: { 'claude-code': 'subscription' } }),
     });
     assert.equal(selectNative.status, 200);
-    await selectNative.text();
+    assert.equal((await selectNative.json()).agentic_credential_sources?.['claude-code'], 'none');
     cleanupClaudeAccessToken = memberAccessToken;
     const afterExternalChoice = await fetch(`${daemonA}/claude-auth/oauth`, {
       headers: { authorization: `Bearer ${memberAccessToken}` },
@@ -683,6 +690,25 @@ try {
       '-c',
       `mkdir -p '${claudeConfigDir}' && printf '%s' '${credentialPayload}' | base64 -d > '${claudeConfigDir}/.credentials.json' && chmod 600 '${claudeConfigDir}/.credentials.json'`
     );
+    // The provider exchange is deliberately not invoked by this deterministic
+    // smoke. Complete its trusted metadata half as a fixture so check-auth
+    // exercises the explicit credential-source model rather than inferring a
+    // managed file from the legacy coarse auth method.
+    const trustedMetadataUpdate = dockerOutput(
+      'exec',
+      '-T',
+      'postgres',
+      'psql',
+      '--set',
+      'ON_ERROR_STOP=1',
+      '--username',
+      'agor_bootstrap',
+      '--dbname',
+      'agor',
+      '--command',
+      `UPDATE users SET data = COALESCE(data, '{}'::jsonb) || jsonb_build_object('agentic_credential_sources', COALESCE(data->'agentic_credential_sources', '{}'::jsonb) || '{"claude-code":"managed_file"}'::jsonb) WHERE tenant_id = '${memberTenantId}' AND user_id = '${memberUserId}'`
+    );
+    assert.match(trustedMetadataUpdate, /UPDATE 1/);
 
     const visibleThroughB = await fetch(`${daemonB}/check-auth`, {
       method: 'POST',

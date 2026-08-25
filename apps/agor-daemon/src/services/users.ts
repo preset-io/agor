@@ -61,6 +61,8 @@ import {
 import { isLikelyGitToken } from '@agor/core/git/pure';
 import { isInvalidModelConfigError } from '@agor/core/models';
 import type {
+  AgenticAuthMethods,
+  AgenticCredentialSources,
   AgenticToolName,
   AgenticToolsConfig,
   AgenticToolsUpdate,
@@ -318,7 +320,8 @@ interface UpdateUserData {
    * Field names are env var names exported into the SDK CLI environment.
    */
   agentic_tools?: AgenticToolsUpdate;
-  agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
+  agentic_auth_methods?: AgenticAuthMethods;
+  agentic_credential_sources?: AgenticCredentialSources;
   // Environment variables for update (accepts plaintext, encrypted before storage)
   env_vars?: Record<string, string | null>; // { "GITHUB_TOKEN": "ghp_...", "NPM_TOKEN": null }
   // Per-var scope updates (v0.5: 'global' | 'session'). Applied after env_vars
@@ -356,6 +359,7 @@ const TRUSTED_USER_MUTATION_FIELDS: Readonly<
     'avatar_synced_at',
   ]),
   'env-vars-widget': new Set(['env_vars', 'env_var_scopes']),
+  'claude-auth': new Set(['agentic_tools', 'agentic_auth_methods', 'agentic_credential_sources']),
 };
 
 function canonicalizeRoleWrite(value: unknown): UserRole {
@@ -940,6 +944,7 @@ export class UsersService {
       data.preferences ||
       data.agentic_tools ||
       data.agentic_auth_methods ||
+      data.agentic_credential_sources ||
       data.env_vars ||
       data.env_var_scopes ||
       data.primary_agentic_tool !== undefined ||
@@ -962,7 +967,8 @@ export class UsersService {
         avatar_synced_at?: string;
         preferences?: Record<string, unknown>;
         agentic_tools?: StoredAgenticTools;
-        agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
+        agentic_auth_methods?: AgenticAuthMethods;
+        agentic_credential_sources?: AgenticCredentialSources;
         env_vars?: Record<string, string | StoredEnvVar>;
         primary_agentic_tool?: AgenticToolName;
         default_agentic_config?: import('@agor/core/types').DefaultAgenticConfig;
@@ -1031,6 +1037,117 @@ export class UsersService {
       const nextAgenticTools: StoredAgenticTools = data.agentic_tools
         ? applyAgenticToolsPatch(currentData?.agentic_tools ?? {}, data.agentic_tools)
         : (currentData?.agentic_tools ?? {});
+
+      // Keep Claude's coarse auth method and exact credential source in the
+      // same users-row update as the encrypted credential patch. This is the
+      // authority boundary for every UI/API save and clear, including older
+      // clients that do not yet send `agentic_credential_sources`.
+      const nextAgenticAuthMethods: AgenticAuthMethods = {
+        ...currentData.agentic_auth_methods,
+        ...data.agentic_auth_methods,
+      };
+      const nextAgenticCredentialSources: AgenticCredentialSources = {
+        ...currentData.agentic_credential_sources,
+      };
+      const claudePatch = data.agentic_tools?.['claude-code'];
+      if (claudePatch) {
+        const writesSubscriptionToken =
+          typeof claudePatch.CLAUDE_CODE_OAUTH_TOKEN === 'string' &&
+          claudePatch.CLAUDE_CODE_OAUTH_TOKEN.trim().length > 0;
+        const writesApiCredential = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'].some((field) => {
+          const value = claudePatch[field as keyof typeof claudePatch];
+          return typeof value === 'string' && value.trim().length > 0;
+        });
+        if (writesSubscriptionToken) {
+          nextAgenticCredentialSources['claude-code'] = 'subscription_token';
+        } else if (writesApiCredential) {
+          nextAgenticCredentialSources['claude-code'] = 'api_key';
+        } else if (
+          claudePatch.CLAUDE_CODE_OAUTH_TOKEN === null &&
+          (nextAgenticCredentialSources['claude-code'] === 'subscription_token' ||
+            (nextAgenticCredentialSources['claude-code'] === undefined &&
+              currentData.agentic_auth_methods?.['claude-code'] === 'subscription' &&
+              Boolean(currentData.agentic_tools?.['claude-code']?.CLAUDE_CODE_OAUTH_TOKEN)))
+        ) {
+          // Source-less rows written before this field existed still need a
+          // durable transition. Require the pre-patch token as well as the
+          // legacy subscription marker so an unrelated clear cannot invent
+          // authority or disable a different credential family.
+          nextAgenticCredentialSources['claude-code'] = 'none';
+        } else if (
+          nextAgenticCredentialSources['claude-code'] === 'api_key' &&
+          (claudePatch.ANTHROPIC_API_KEY === null || claudePatch.ANTHROPIC_AUTH_TOKEN === null) &&
+          !nextAgenticTools['claude-code']?.ANTHROPIC_API_KEY &&
+          !nextAgenticTools['claude-code']?.ANTHROPIC_AUTH_TOKEN
+        ) {
+          nextAgenticCredentialSources['claude-code'] = 'none';
+        }
+      }
+      const requestedClaudeSource = data.agentic_credential_sources?.['claude-code'];
+      if (
+        requestedClaudeSource !== undefined &&
+        !(['api_key', 'subscription_token', 'managed_file', 'none'] as const).includes(
+          requestedClaudeSource
+        )
+      ) {
+        throw new BadRequest('Invalid Claude credential source');
+      }
+      if (requestedClaudeSource !== undefined) {
+        nextAgenticCredentialSources['claude-code'] = requestedClaudeSource;
+      } else if (
+        claudePatch === undefined &&
+        Object.hasOwn(data.agentic_auth_methods ?? {}, 'claude-code')
+      ) {
+        // Preserve the released method-only API as a source transition for old
+        // clients and external callers. Exact source in the same patch wins;
+        // otherwise select only a backed source and never infer a native file
+        // from a coarse subscription marker.
+        const requestedClaudeMethod = data.agentic_auth_methods?.['claude-code'];
+        if (requestedClaudeMethod === 'api_key') {
+          nextAgenticCredentialSources['claude-code'] =
+            nextAgenticTools['claude-code']?.ANTHROPIC_API_KEY ||
+            nextAgenticTools['claude-code']?.ANTHROPIC_AUTH_TOKEN
+              ? 'api_key'
+              : 'none';
+        } else if (requestedClaudeMethod === 'subscription') {
+          if (currentData.agentic_credential_sources?.['claude-code'] === 'managed_file') {
+            nextAgenticCredentialSources['claude-code'] = 'managed_file';
+          } else {
+            nextAgenticCredentialSources['claude-code'] = nextAgenticTools['claude-code']
+              ?.CLAUDE_CODE_OAUTH_TOKEN
+              ? 'subscription_token'
+              : 'none';
+          }
+        } else {
+          nextAgenticCredentialSources['claude-code'] = 'none';
+        }
+      }
+
+      const claudeSource = nextAgenticCredentialSources['claude-code'];
+      if (
+        requestedClaudeSource === 'managed_file' &&
+        getTrustedUserMutationPurpose(params) !== 'claude-auth'
+      ) {
+        throw new Forbidden('Managed Claude credential sources can only be set by Claude sign-in');
+      }
+      if (claudeSource === 'subscription_token') {
+        if (!nextAgenticTools['claude-code']?.CLAUDE_CODE_OAUTH_TOKEN) {
+          throw new BadRequest('A pasted Claude subscription source requires a stored token');
+        }
+        nextAgenticAuthMethods['claude-code'] = 'subscription';
+      } else if (claudeSource === 'managed_file') {
+        nextAgenticAuthMethods['claude-code'] = 'subscription';
+      } else if (claudeSource === 'api_key') {
+        if (
+          !nextAgenticTools['claude-code']?.ANTHROPIC_API_KEY &&
+          !nextAgenticTools['claude-code']?.ANTHROPIC_AUTH_TOKEN
+        ) {
+          throw new BadRequest('A Claude API-key source requires a stored API credential');
+        }
+        nextAgenticAuthMethods['claude-code'] = 'api_key';
+      } else if (claudeSource === 'none') {
+        nextAgenticAuthMethods['claude-code'] = undefined;
+      }
 
       // Handle env vars (encrypt before storage).
       //
@@ -1150,9 +1267,11 @@ export class UsersService {
         preferences: data.preferences ?? current.preferences,
         agentic_tools: Object.keys(nextAgenticTools).length > 0 ? nextAgenticTools : undefined,
         agentic_auth_methods:
-          data.agentic_auth_methods !== undefined
-            ? { ...current.agentic_auth_methods, ...data.agentic_auth_methods }
-            : current.agentic_auth_methods,
+          Object.keys(nextAgenticAuthMethods).length > 0 ? nextAgenticAuthMethods : undefined,
+        agentic_credential_sources:
+          Object.keys(nextAgenticCredentialSources).length > 0
+            ? nextAgenticCredentialSources
+            : undefined,
         env_vars: Object.keys(nextEnvVars).length > 0 ? nextEnvVars : undefined,
         primary_agentic_tool: data.primary_agentic_tool ?? current.primary_agentic_tool,
         default_agentic_config: nextDefaultAgenticConfig,
@@ -1675,7 +1794,8 @@ export class UsersService {
       avatar_synced_at?: string;
       preferences?: Record<string, unknown>;
       agentic_tools?: StoredAgenticTools; // Encrypted per-tool credential blobs
-      agentic_auth_methods?: import('@agor/core/types').AgenticAuthMethods;
+      agentic_auth_methods?: AgenticAuthMethods;
+      agentic_credential_sources?: AgenticCredentialSources;
       env_vars?: Record<string, string | StoredEnvVar>; // Encrypted env vars (legacy + v0.5 shape)
       primary_agentic_tool?: AgenticToolName;
       primary_teammate_id?: BranchID;
@@ -1715,6 +1835,7 @@ export class UsersService {
       // Per-tool credential presence (boolean only — never expose decrypted values).
       agentic_tools: toAgenticToolsStatus(data.agentic_tools),
       agentic_auth_methods: data.agentic_auth_methods,
+      agentic_credential_sources: data.agentic_credential_sources,
       // Self-only: return plaintext for whitelisted non-secret fields
       // (base URLs) so the UI can render the saved value back. Field-level
       // secrets are NEVER on the whitelist; see `AGENTIC_TOOLS_PUBLIC_FIELDS`.

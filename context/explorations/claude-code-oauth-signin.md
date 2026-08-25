@@ -174,7 +174,7 @@ sequenceDiagram
   Daemon->>Anthropic: POST /v1/oauth/token (code + verifier)
   Anthropic-->>Daemon: access/refresh/expires
   Daemon->>Home: generation-fenced write ~/.claude/.credentials.json 0600
-  Daemon->>Daemon: agentic_auth_methods['claude-code'] = subscription
+  Daemon->>Daemon: auth method = subscription; credential source = managed_file
   Daemon-->>UI: {phase: success}
 ```
 
@@ -182,17 +182,17 @@ sequenceDiagram
 
 ## Mapping onto the Codex module structure
 
-| Codex                                            | Claude equivalent                                                                              |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `codex-device-auth.ts` service (`create`+`find`) | `claude-oauth.ts` service (two-call `create` + `find`)                                         |
-| device usercode + daemon poll loop               | authorize URL + user paste-back (no poll)                                                      |
-| server-issued PKCE (returned by poll)            | **daemon-generated PKCE** (we own verifier/challenge/state)                                    |
-| `buildDeviceAuthJson` → Codex `auth.json`        | `buildClaudeCredentialsJson` → `.credentials.json`                                             |
-| durable Codex mutation authority                 | Claude attempt authority + the shared tenant/user advisory-lock and credential-file primitives |
-| `resolveCodexCredentialRoute`                    | **reused as-is** (routing is provider-neutral despite the legacy name)                         |
-| `writeCodexAuthViaExecutor` / `codex.auth-file`  | `writeClaudeAuthViaExecutor` / `claude.auth-file`                                              |
-| `agentic_auth_methods.codex = 'subscription'`    | `agentic_auth_methods['claude-code'] = 'subscription'`                                         |
-| `CodexDeviceAuthStatus` type                     | `ClaudeOAuthStatus` type                                                                       |
+| Codex                                            | Claude equivalent                                                                                                     |
+| ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `codex-device-auth.ts` service (`create`+`find`) | `claude-oauth.ts` service (two-call `create` + `find`)                                                                |
+| device usercode + daemon poll loop               | authorize URL + user paste-back (no poll)                                                                             |
+| server-issued PKCE (returned by poll)            | **daemon-generated PKCE** (we own verifier/challenge/state)                                                           |
+| `buildDeviceAuthJson` → Codex `auth.json`        | `buildClaudeCredentialsJson` → `.credentials.json`                                                                    |
+| durable Codex mutation authority                 | Claude attempt authority + the shared tenant/user advisory-lock and credential-file primitives                        |
+| `resolveCodexCredentialRoute`                    | **reused as-is** (routing is provider-neutral despite the legacy name)                                                |
+| `writeCodexAuthViaExecutor` / `codex.auth-file`  | `writeClaudeAuthViaExecutor` / `claude.auth-file`                                                                     |
+| `agentic_auth_methods.codex = 'subscription'`    | `agentic_auth_methods['claude-code'] = 'subscription'` + `agentic_credential_sources['claude-code'] = 'managed_file'` |
+| `CodexDeviceAuthStatus` type                     | `ClaudeOAuthStatus` type                                                                                              |
 
 Reused: `resolveCodexCredentialRoute` (execution-home resolution plus hosted
 tenant-safe home checks), the #2521 tenant/user advisory-lock primitive, the
@@ -235,26 +235,24 @@ Constraint: existing accounts that authenticate via a pasted
 writes a managed `.credentials.json`. Because env out-ranks the file (resolved
 above), the two must not coexist for one user.
 
-**The guard lives in the credential resolver, not in `spawn-executor.ts`.**
-`resolveTenantAgenticTool` (`packages/core/src/config/tenant-agentic-tool-resolver.ts`)
-already models this for Codex: subscription → `{ connection: {}, useNativeAuth: true }`,
-i.e. inject nothing and let the SDK read the on-disk login. Claude now gets the
-same branch, keyed on "OAuth-flow onboarding" = subscription method **and no
-stored pasted token**:
+**The authority lives in the credential resolver, not in `spawn-executor.ts`.**
+`agentic_credential_sources['claude-code']` explicitly selects `api_key`,
+`subscription_token`, `managed_file`, or the durable opt-out `none`.
+`managed_file` alone produces native auth:
 
 ```ts
-if (tool === 'claude-code' && method === 'subscription' && !stored?.CLAUDE_CODE_OAUTH_TOKEN) {
+if (tool === 'claude-code' && claudeSource === 'managed_file') {
   return { connection: {}, useNativeAuth: true };
 }
 ```
 
 Why this is correct and non-breaking:
 
-- **OAuth-flow user** (managed `.credentials.json`, no pasted token): matches the
+- **OAuth-flow user** (`managed_file`): matches the
   guard → `useNativeAuth`, empty connection → `spawn-executor.ts:693` forwards no
   `CLAUDE_CODE_OAUTH_TOKEN` → the SDK reads the refreshing file. `spawn-executor`
   is **untouched** — it only ever forwards a value the resolver decided to set.
-- **Pasted-token user** (`stored.CLAUDE_CODE_OAUTH_TOKEN` present): fails the
+- **Pasted-token user** (`subscription_token`): fails the
   guard → falls through to the existing env-injection path, byte-for-byte
   unchanged. No regression.
 - The claude executor tool already accepts a `useNativeAuth` flag with "no
@@ -341,13 +339,19 @@ no daemon-driven on-disk path at all (only env injection).
 
 ---
 
-## `agentic_auth_methods` flip
+## Credential-source transition
 
-On success the service patches the user:
-`agentic_auth_methods['claude-code'] = 'subscription'` (the key is `'claude-code'`
-per `AgenticAuthMethods = Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>`;
-`AgenticAuthMethod = 'api_key' | 'subscription'`). This is what the tenant
-agentic-tool resolver already keys on to select subscription auth for Claude.
+`agentic_auth_methods['claude-code']` remains the coarse UI choice. OAuth
+success atomically persists `managed_file` and clears a pasted token. Generic
+credential saves and clears transition the source inside the users service's
+existing atomic row update, including for older clients that send only the
+credential patch.
+
+The resolver never infers native-file authority from `subscription` plus an
+absent token. Therefore managed-file → pasted-token → clear persists `none` and
+cannot silently reactivate an older `.credentials.json`. Source switches retain
+inactive credentials but never combine or fall back to them; logout deletes the
+file and persists `none`.
 
 ---
 
@@ -424,14 +428,26 @@ silently mutate account metadata in a background read.
    Rename to `resolveAgenticCredentialRoute` (and generalize its Codex-specific error
    strings), left as a separate change to keep this diff focused.
 2. **`subscriptionType` response field** (cosmetic; see UNVERIFIED).
-3. **ToS / acceptable use** (see below).
+3. **Provider authorization / acceptable use** (see below). The product
+   boundary is implemented; the policy decision remains external.
 
 ---
 
 ## ToS / acceptable-use considerations (NOT cleared)
 
-**Status: proceeding on the same basis as the already-shipped Codex OAuth flow;
-this needs a human/legal skim before GA — it is not cleared here.**
+**Status: NOT cleared. The endpoint and UI are disabled by default.**
+
+The deployment operator must set
+`agentic_tools.claude_subscription_oauth: true` only after confirming an
+authorized provider/client contract. Absence or `false` returns the stable
+`CLAUDE_SUBSCRIPTION_OAUTH_DISABLED` error and hides the OAuth tab. This flag is
+an operator attestation, not a legal-policy decision made by Agor. API keys,
+pasted `claude setup-token` credentials, ordinary Claude execution, and logout
+are not gated by it. HA support remains an independent topology boundary: the
+constrained profile exposes the capability only when it also proves durable
+attempts, an exact per-user credential home, and cross-replica home locking.
+Other HA topologies remain unavailable even when the operator authorizes the
+provider flow.
 
 - The flow drives the **fixed public Claude Code client id** programmatically.
   The user authenticates with **their own** browser + credentials, and tokens
@@ -446,7 +462,5 @@ this needs a human/legal skim before GA — it is not cleared here.**
   requires the strict per-user isolation guarantees (the
   `hasExactUserExecutorCredentialHome` gate). Do not enable this path in modes
   that can't guarantee per-user credential homes.
-- Recommendation: before GA, confirm with Anthropic (or via the Claude Code
-  terms) that daemon-driven `/login`-equivalent sign-in on the user's behalf is
-  acceptable, and keep API-key and pasted-token paths as first-class
-  alternatives.
+- Recommendation: obtain the provider/client clearance before enabling the
+  flag, and keep API-key and pasted-token paths as first-class alternatives.

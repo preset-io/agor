@@ -323,6 +323,14 @@ Agor uses these credentials only to authenticate the agent runtime with the prov
 
 Mixing is fine: one user can run on a Claude subscription token while teammates use a workspace API key.
 
+The in-app **Sign in with Claude** OAuth flow is intentionally not a default
+authentication option. Operators must explicitly enable
+`agentic_tools.claude_subscription_oauth: true` after obtaining the appropriate
+provider authorization/client contract; see [Operator configuration](./config-yaml).
+Absent that clearance flag, Agor continues to support Anthropic API keys and
+manually pasted `claude setup-token` credentials without exposing the OAuth
+endpoint or tab.
+
 <a id="claude-max-pro" />
 
 ### Claude subscription auth (`claude setup-token`)

@@ -71,6 +71,8 @@ export interface FeaturesConfig {
   multiUser?: boolean;
   /** Experimental Cursor SDK provider enabled on the daemon. */
   cursorSdk?: boolean;
+  /** Daemon-driven Claude subscription OAuth is explicitly operator-authorized. */
+  claudeSubscriptionOAuth?: boolean;
   /**
    * Resolved branch storage policy from execution.branch_storage.
    * Defaults server-side to { defaultMode: 'worktree',

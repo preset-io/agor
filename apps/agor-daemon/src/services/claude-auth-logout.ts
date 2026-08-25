@@ -32,6 +32,7 @@ import {
 import { BadRequest, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type {
   AgenticAuthMethods,
+  AgenticCredentialSources,
   AuthenticatedParams,
   ClaudeAuthLogoutResult,
   UserID,
@@ -44,6 +45,7 @@ import {
   CODEX_AUTH_DEFER_USER_REALTIME,
   resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
+import { markTrustedUserMutation } from './user-mutation-trust.js';
 
 /** Minimal users-service surface — mirrors the Claude OAuth service's typing. */
 interface UsersServiceLike {
@@ -51,6 +53,7 @@ interface UsersServiceLike {
     id: UserID,
     data: {
       agentic_auth_methods?: AgenticAuthMethods;
+      agentic_credential_sources?: AgenticCredentialSources;
       agentic_tools?: Partial<Record<'claude-code', Record<string, string | null>>>;
     },
     params?: unknown
@@ -119,18 +122,21 @@ export function createClaudeAuthLogoutService(
         // record — preserving any concurrently-updated method for another tool.
         const usersService = app.service('users') as UsersServiceLike;
         try {
+          const patchParams = {
+            user: authUser,
+            authenticated: true,
+            [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: true,
+            ...(generation === undefined ? {} : { [CODEX_AUTH_DEFER_USER_REALTIME]: true }),
+          };
+          markTrustedUserMutation(patchParams, 'claude-auth');
           await usersService.patch(
             userId,
             {
               agentic_auth_methods: { 'claude-code': undefined },
+              agentic_credential_sources: { 'claude-code': 'none' },
               agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
             },
-            {
-              user: authUser,
-              authenticated: true,
-              [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: true,
-              ...(generation === undefined ? {} : { [CODEX_AUTH_DEFER_USER_REALTIME]: true }),
-            }
+            patchParams
           );
         } catch (error) {
           // The generation-fenced file deletion has already made native auth

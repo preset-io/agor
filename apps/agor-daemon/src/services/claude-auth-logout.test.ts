@@ -80,6 +80,7 @@ describe('claude-auth-logout', () => {
       'user-1',
       {
         agentic_auth_methods: { 'claude-code': undefined },
+        agentic_credential_sources: { 'claude-code': 'none' },
         agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
       },
       expect.objectContaining({ authenticated: true })

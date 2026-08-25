@@ -37,16 +37,21 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { hasExactUserExecutorCredentialHome, isTenantAgenticToolEnabled } from '@agor/core/config';
+import {
+  hasExactUserExecutorCredentialHome,
+  isClaudeSubscriptionOAuthEnabled,
+  isTenantAgenticToolEnabled,
+} from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
 } from '@agor/core/db';
-import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type {
   AgenticAuthMethods,
+  AgenticCredentialSources,
   AuthenticatedParams,
   ClaudeOAuthStatus,
   TenantID,
@@ -65,6 +70,7 @@ import {
   CODEX_AUTH_DEFER_USER_REALTIME,
   resolveCodexCredentialRoute,
 } from './codex-auth-shared.js';
+import { markTrustedUserMutation } from './user-mutation-trust.js';
 
 // Constants are the PROD OAuth config (`yol`) read out of the native `claude`
 // binary bundled by the pinned SDK: package.json pins
@@ -99,6 +105,14 @@ const CLAUDE_SCOPES = [
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_PASTED_CODE_LENGTH = 16 * 1024;
+
+function assertClaudeSubscriptionOAuthEnabled(app: AppLike): void {
+  if (isClaudeSubscriptionOAuthEnabled(app.get('config'))) return;
+  throw new Unavailable(
+    'Claude subscription sign-in is disabled on this deployment. Use an API key or a pasted subscription token.',
+    { code: 'CLAUDE_SUBSCRIPTION_OAUTH_DISABLED' }
+  );
+}
 
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
@@ -317,6 +331,7 @@ interface UsersServiceLike {
     id: UserID,
     data: {
       agentic_auth_methods?: AgenticAuthMethods;
+      agentic_credential_sources?: AgenticCredentialSources;
       // `null` deletes a stored credential field (applyAgenticToolsPatch), used
       // to drop a previously pasted CLAUDE_CODE_OAUTH_TOKEN on OAuth success.
       agentic_tools?: Partial<Record<'claude-code', Record<string, string | null>>>;
@@ -419,12 +434,19 @@ export function createClaudeOAuthService(
       }
 
       const usersService = app.service('users') as UsersServiceLike;
-      // Flip to `subscription` AND drop any previously pasted
-      // CLAUDE_CODE_OAUTH_TOKEN: with the field gone, resolveTenantAgenticTool
-      // routes this user to native on-disk auth (no env injection), so the
-      // higher-precedence env var can't shadow the managed, refreshing file.
-      // `null` deletes just that field and leaves other Claude settings intact.
+      // Select the explicit `managed_file` source and drop any previously
+      // pasted CLAUDE_CODE_OAUTH_TOKEN. The source is the authority that makes
+      // resolveTenantAgenticTool choose native on-disk auth; deleting the token
+      // prevents a dormant higher-precedence env value from shadowing the
+      // managed, refreshing file. `null` deletes only that credential field.
       try {
+        const patchParams = {
+          user: authUser,
+          authenticated: true,
+          [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: true,
+          [CODEX_AUTH_DEFER_USER_REALTIME]: true,
+        };
+        markTrustedUserMutation(patchParams, 'claude-auth');
         await usersService.patch(
           ctx.userId,
           {
@@ -432,14 +454,10 @@ export function createClaudeOAuthService(
             // fresh row, so a concurrent Codex auth change is not overwritten
             // by a stale read/whole-map write.
             agentic_auth_methods: { 'claude-code': 'subscription' },
+            agentic_credential_sources: { 'claude-code': 'managed_file' },
             agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
           },
-          {
-            user: authUser,
-            authenticated: true,
-            [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: true,
-            [CODEX_AUTH_DEFER_USER_REALTIME]: true,
-          }
+          patchParams
         );
       } catch {
         // The file write may have committed. Never path-delete here: a newer
@@ -538,6 +556,7 @@ export function createClaudeOAuthService(
       params?: AuthenticatedParams
     ): Promise<ClaudeOAuthStatus> {
       const { authUser, userId, tenantId, ctx } = await requireContext(params);
+      assertClaudeSubscriptionOAuthEnabled(app);
 
       if (
         !(await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
@@ -613,6 +632,7 @@ export function createClaudeOAuthService(
 
     async find(params?: AuthenticatedParams): Promise<ClaudeOAuthStatus> {
       const { ctx } = await requireContext(params);
+      assertClaudeSubscriptionOAuthEnabled(app);
       const attemptId = (params?.query as { attemptId?: string } | undefined)?.attemptId;
       return store.status(ctx, attemptId);
     },

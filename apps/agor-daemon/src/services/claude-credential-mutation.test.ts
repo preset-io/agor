@@ -86,6 +86,10 @@ describe('Claude user credential mutation boundary', () => {
 
   it.each([
     ['auth method', { agentic_auth_methods: { 'claude-code': 'subscription' } }],
+    [
+      'explicit credential source',
+      { agentic_credential_sources: { 'claude-code': 'subscription_token' } },
+    ],
     ['Anthropic API key', { agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: 'secret' } } }],
     [
       'Anthropic auth token',
@@ -188,9 +192,15 @@ describe('Claude user credential mutation boundary', () => {
 
   it('does not recursively acquire authority for the trusted OAuth/logout users patch', () => {
     expect(
-      coordinator.applies({ agentic_auth_methods: { 'claude-code': 'subscription' } }, {
-        [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: true,
-      } as never)
+      coordinator.applies(
+        {
+          agentic_auth_methods: { 'claude-code': 'subscription' },
+          agentic_credential_sources: { 'claude-code': 'managed_file' },
+        },
+        {
+          [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: true,
+        } as never
+      )
     ).toBe(false);
   });
 

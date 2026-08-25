@@ -45,6 +45,27 @@ agentic_tools:
     - codex
 ```
 
+Daemon-driven **Sign in with Claude** is a separate, fail-closed release
+capability. It is disabled when the key is absent or `false`; API-key setup,
+manually pasted `claude setup-token` credentials, ordinary Claude sessions, and
+disconnect/cleanup remain available.
+
+```yaml
+agentic_tools:
+  claude_subscription_oauth: true
+```
+
+Set this to `true` only after the deployment operator has confirmed an
+authorized provider/client contract for this flow, then restart every daemon
+replica with the same immutable config. Agor does not make that policy decision:
+the flag records the operator's clearance. When disabled, `/claude-auth/oauth`
+fails with `CLAUDE_SUBSCRIPTION_OAUTH_DISABLED` and the UI omits the OAuth tab.
+Topology gates still apply after authorization; the constrained HA profile in
+this release exposes Claude OAuth only when its resolved deployment capability
+also proves durable attempts, an exact per-user credential home, and
+cross-replica home locking. Other HA topologies remain fail-closed even when
+the flag is true.
+
 After editing this list, run `agor install --sync`. It installs the exact matching package version, removes
 unconfigured tools and packages from older Agor versions, and leaves `config.yaml` untouched. The
 packaged daemon fails before listening if any configured integration is missing or misaligned.

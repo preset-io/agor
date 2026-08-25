@@ -50,6 +50,7 @@ const USER_DATA_UPDATE_FIELDS = [
   'avatar_synced_at',
   'preferences',
   'agentic_auth_methods',
+  'agentic_credential_sources',
   'default_agentic_config',
   'primary_agentic_tool',
   'primary_teammate_id',
@@ -116,6 +117,7 @@ export class UsersRepository
       // Convert encrypted per-tool credential blobs into boolean presence flags.
       agentic_tools: toAgenticToolsStatus(row.data.agentic_tools as StoredAgenticTools | undefined),
       agentic_auth_methods: row.data.agentic_auth_methods,
+      agentic_credential_sources: row.data.agentic_credential_sources,
       // Convert stored env vars to presence + scope metadata (never exposes secrets).
       // Handles both legacy string form and v0.5 object form via normalizeStoredEnvMap.
       // The schema stores `scope` as a generic string (no SQL CHECK constraint); the
@@ -191,6 +193,7 @@ export class UsersRepository
         // uniformity. Runtime never writes opencode, so the cast is safe.
         agentic_tools: user.agentic_tools_raw as SchemaUserInsert['data']['agentic_tools'],
         agentic_auth_methods: user.agentic_auth_methods,
+        agentic_credential_sources: user.agentic_credential_sources,
         // Same pass-through as agentic_tools: env_vars are encrypted blobs
         // not represented on the public DTO. `update()` threads the raw value
         // from the existing row so a generic field update doesn't wipe them.

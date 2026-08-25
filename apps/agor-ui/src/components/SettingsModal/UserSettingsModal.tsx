@@ -7,6 +7,7 @@ import type {
   AgenticToolConfigField,
   AgenticToolName,
   AgorClient,
+  ClaudeCredentialSource,
   EnvVarMetadata,
   EnvVarScope,
   Group,
@@ -267,7 +268,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   initialTab,
 }) => {
   const { token } = theme.useToken();
-  const { config: authConfig, identityContractState } = useAuthConfig();
+  const { config: authConfig, featuresConfig, identityContractState } = useAuthConfig();
   const screens = Grid.useBreakpoint();
   const compact = !screens.md;
 
@@ -405,6 +406,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const [savingToolField, setSavingToolField] = useState<Record<string, boolean>>({});
   const [agenticAuthMethods, setAgenticAuthMethods] = useState<
     Partial<Record<'claude-code' | 'codex', AgenticAuthMethod>>
+  >({});
+  const [agenticCredentialSources, setAgenticCredentialSources] = useState<
+    Partial<Record<'claude-code', ClaudeCredentialSource>>
   >({});
 
   // Environment variable management state (scope-aware, v0.5 env-var-access)
@@ -618,6 +622,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     }
     setAgenticToolStatus(next);
     setAgenticAuthMethods(user?.agentic_auth_methods ?? {});
+    setAgenticCredentialSources(user?.agentic_credential_sources ?? {});
 
     if (user?.env_vars) {
       setUserEnvVars(user.env_vars);
@@ -812,6 +817,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       if (patch.agentic_auth_methods) {
         setAgenticAuthMethods((current) => ({ ...current, ...patch.agentic_auth_methods }));
       }
+      if (patch.agentic_credential_sources) {
+        setAgenticCredentialSources((current) => ({
+          ...current,
+          ...patch.agentic_credential_sources,
+        }));
+      }
       setAgenticToolStatus((prev) => ({
         ...prev,
         [tool]: { ...(prev[tool] ?? {}), [field]: true },
@@ -834,7 +845,32 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, null));
+      const patch = buildAgenticToolCredentialPatch(tool, field, null);
+      await onUpdate?.(user.user_id, patch);
+      if (patch.agentic_auth_methods) {
+        setAgenticAuthMethods((current) => ({ ...current, ...patch.agentic_auth_methods }));
+      }
+      if (tool === 'claude-code') {
+        const remaining = { ...(agenticToolStatus[tool] ?? {}) };
+        delete remaining[field];
+        setAgenticCredentialSources((current) => {
+          const active = current['claude-code'];
+          const clearedActiveToken =
+            field === 'CLAUDE_CODE_OAUTH_TOKEN' &&
+            (active === 'subscription_token' ||
+              (active === undefined &&
+                agenticAuthMethods['claude-code'] === 'subscription' &&
+                !!agenticToolStatus['claude-code']?.CLAUDE_CODE_OAUTH_TOKEN));
+          const clearedLastApiCredential =
+            active === 'api_key' &&
+            (field === 'ANTHROPIC_API_KEY' || field === 'ANTHROPIC_AUTH_TOKEN') &&
+            !remaining.ANTHROPIC_API_KEY &&
+            !remaining.ANTHROPIC_AUTH_TOKEN;
+          return clearedActiveToken || clearedLastApiCredential
+            ? { ...current, 'claude-code': 'none' }
+            : current;
+        });
+      }
       setAgenticToolStatus((prev) => {
         const nextToolFields = { ...(prev[tool] ?? {}) };
         delete nextToolFields[field];
@@ -958,10 +994,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       // expose an explicit method so dormant credentials are never selected by accident.
       const allToolFields = TOOL_FIELD_CONFIGS[tool] ?? [];
       const fieldStatus: FieldStatus = agenticToolStatus[tool] ?? {};
+      const claudeSource =
+        tool === 'claude-code' ? agenticCredentialSources['claude-code'] : undefined;
       const authMethod =
         tool === 'claude-code'
-          ? (agenticAuthMethods['claude-code'] ??
-            (fieldStatus.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'api_key'))
+          ? claudeSource === 'managed_file' || claudeSource === 'subscription_token'
+            ? 'subscription'
+            : claudeSource === 'api_key' || claudeSource === 'none'
+              ? 'api_key'
+              : (agenticAuthMethods['claude-code'] ??
+                (fieldStatus.CLAUDE_CODE_OAUTH_TOKEN ? 'subscription' : 'api_key'))
           : tool === 'codex'
             ? (agenticAuthMethods.codex ?? 'api_key')
             : undefined;
@@ -976,8 +1018,19 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       const tenantSettings = tenantToolSettings.get(tool as TenantAgenticToolName);
       const resolutionPolicy = tenantSettings?.resolution_policy ?? 'user_preferred';
       const personalConfigured =
-        ((tool === 'codex' || tool === 'claude-code') && authMethod === 'subscription') ||
-        toolFields.some(({ field }) => fieldStatus[field] && !String(field).endsWith('_BASE_URL'));
+        tool === 'claude-code'
+          ? claudeSource === 'managed_file' ||
+            (claudeSource === 'subscription_token' && !!fieldStatus.CLAUDE_CODE_OAUTH_TOKEN) ||
+            (claudeSource === 'api_key' &&
+              (!!fieldStatus.ANTHROPIC_API_KEY || !!fieldStatus.ANTHROPIC_AUTH_TOKEN)) ||
+            (claudeSource === undefined &&
+              (authMethod === 'subscription'
+                ? !!fieldStatus.CLAUDE_CODE_OAUTH_TOKEN
+                : !!fieldStatus.ANTHROPIC_API_KEY || !!fieldStatus.ANTHROPIC_AUTH_TOKEN))
+          : (tool === 'codex' && authMethod === 'subscription') ||
+            toolFields.some(
+              ({ field }) => fieldStatus[field] && !String(field).endsWith('_BASE_URL')
+            );
       const workspaceConfigured = Object.entries(tenantSettings?.connection ?? {}).some(
         ([field, status]) => status?.configured && !field.endsWith('_BASE_URL')
       );
@@ -1016,6 +1069,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         allToolFields,
         fieldStatus,
         authMethod,
+        claudeSource,
         toolFields,
         resolutionPolicy,
         personalConfigured,
@@ -1024,7 +1078,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         status,
       };
     },
-    [agenticAuthMethods, agenticToolStatus, tenantToolSettings]
+    [agenticAuthMethods, agenticCredentialSources, agenticToolStatus, tenantToolSettings]
   );
 
   const statusDotColor = useMemo<Record<AgenticToolReadiness['tone'], string>>(
@@ -1839,6 +1893,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       allToolFields,
       fieldStatus,
       authMethod,
+      claudeSource,
       toolFields,
       resolutionPolicy,
       personalConfigured,
@@ -1985,10 +2040,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </Typography.Paragraph>
       ) : null;
 
-    const nativeClaudeLogin =
-      tool === 'claude-code' &&
-      authMethod === 'subscription' &&
-      !fieldStatus.CLAUDE_CODE_OAUTH_TOKEN;
+    const nativeClaudeLogin = tool === 'claude-code' && claudeSource === 'managed_file';
 
     const authPane = (
       <>
@@ -2052,6 +2104,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             client={client}
             authMethod={authMethod ?? 'api_key'}
             allowSubscriptionLogin={isSelf}
+            allowOAuthSignIn={featuresConfig?.claudeSubscriptionOAuth === true}
             apiKeyFields={allToolFields}
             fieldStatus={fieldStatus}
             onSaveField={(field, value) => handleToolFieldSave(tool, field, value)}

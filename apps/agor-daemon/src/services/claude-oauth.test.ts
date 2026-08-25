@@ -25,6 +25,10 @@ let exactUserHome = true;
 vi.mock('@agor/core/config', () => ({
   isTenantAgenticToolEnabled: vi.fn(async () => toolEnabled),
   hasExactUserExecutorCredentialHome: vi.fn(() => exactUserHome),
+  isClaudeSubscriptionOAuthEnabled: vi.fn(
+    (config: { agentic_tools?: { claude_subscription_oauth?: boolean } }) =>
+      config.agentic_tools?.claude_subscription_oauth === true
+  ),
 }));
 
 let activeTenantId = 'tenant-1';
@@ -93,7 +97,7 @@ function makeService(coordinator?: ClaudeOAuthAttemptStore, config: Record<strin
   const usersGet = vi.fn(async () => ({ agentic_auth_methods: {} }));
   const usersPatch = vi.fn(async () => ({}));
   const app = {
-    get: () => config,
+    get: () => ({ agentic_tools: { claude_subscription_oauth: true }, ...config }),
     service: (path: string) =>
       path === 'users' ? { get: usersGet, patch: usersPatch } : undefined,
   };
@@ -252,6 +256,19 @@ describe('exchangeCodeForTokens contract validation', () => {
 });
 
 describe('createClaudeOAuthService — flow + security', () => {
+  it('fails closed when the deployment has not authorized Claude subscription OAuth', async () => {
+    const { svc } = makeService(undefined, {
+      agentic_tools: {},
+    });
+    await expect(svc.create({}, asUserA)).rejects.toMatchObject({
+      data: { code: 'CLAUDE_SUBSCRIPTION_OAUTH_DISABLED' },
+    });
+    await expect(svc.find(asUserA)).rejects.toMatchObject({
+      data: { code: 'CLAUDE_SUBSCRIPTION_OAUTH_DISABLED' },
+    });
+    expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
+  });
+
   it('start returns the authorize URL and never leaks the verifier or tokens', async () => {
     const { svc } = makeService();
     const status = await svc.create({}, asUserA);
@@ -291,6 +308,7 @@ describe('createClaudeOAuthService — flow + security', () => {
       'user-A',
       {
         agentic_auth_methods: { 'claude-code': 'subscription' },
+        agentic_credential_sources: { 'claude-code': 'managed_file' },
         agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
       },
       expect.anything()

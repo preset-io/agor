@@ -1,4 +1,8 @@
-import type { ResolvedDeploymentConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  isClaudeSubscriptionOAuthEnabled,
+  type ResolvedDeploymentConfig,
+} from '@agor/core/config';
 import { Unavailable } from '@agor/core/feathers';
 import type { HookContext, PermissionMode, Session } from '@agor/core/types';
 import { mapPermissionMode } from '@agor/core/utils/permission-mode-mapper';
@@ -46,6 +50,16 @@ export function isHaFeatureUnavailable(
   if (feature === 'claudeAuth') return !deployment.capabilities.claudeAuth;
   if (feature === 'claudeOAuth') return !deployment.capabilities.claudeOAuth;
   return true;
+}
+
+/** Effective UI/runtime capability: provider authorization AND topology support. */
+export function hasClaudeSubscriptionOAuthCapability(
+  config: AgorConfig,
+  deployment: ResolvedDeploymentConfig
+): boolean {
+  return (
+    isClaudeSubscriptionOAuthEnabled(config) && !isHaFeatureUnavailable(deployment, 'claudeOAuth')
+  );
 }
 
 export function rejectInConstrainedHa(
