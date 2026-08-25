@@ -200,7 +200,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   if (status.phase === 'awaiting_code' || status.phase === 'exchanging') {
     const busy = submitting || status.phase === 'exchanging';
     return (
-      <Space direction="vertical" size={10} style={{ display: 'flex', padding: '4px 0' }}>
+      <Space orientation="vertical" size={10} style={{ display: 'flex', padding: '4px 0' }}>
         <Text type="secondary">
           Open the Claude sign-in page, approve access, then paste the code it shows back here:
         </Text>
@@ -244,7 +244,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
 
   // expired / error
   return (
-    <Space direction="vertical" size={10} style={{ display: 'flex', padding: '4px 0' }}>
+    <Space orientation="vertical" size={10} style={{ display: 'flex', padding: '4px 0' }}>
       <Alert
         type={status.phase === 'expired' ? 'warning' : 'error'}
         showIcon

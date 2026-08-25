@@ -34,7 +34,11 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { hasExactUserExecutorCredentialHome, isTenantAgenticToolEnabled } from '@agor/core/config';
+import {
+  hasExactUserExecutorCredentialHome,
+  isClaudeSubscriptionOAuthEnabled,
+  isTenantAgenticToolEnabled,
+} from '@agor/core/config';
 import {
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -44,6 +48,7 @@ import {
 import { BadRequest, NotAuthenticated, Unavailable } from '@agor/core/feathers';
 import type {
   AgenticAuthMethods,
+  AgenticCredentialSources,
   AuthenticatedParams,
   ClaudeOAuthStatus,
   TenantID,
@@ -54,6 +59,7 @@ import {
   writeClaudeAuthViaExecutor,
 } from '../utils/executor-claude-auth.js';
 import { type AppLike, resolveCodexCredentialRoute } from './codex-auth-shared.js';
+import { markTrustedUserMutation } from './user-mutation-trust.js';
 
 // Constants are the PROD OAuth config (`yol`) read out of the native `claude`
 // binary bundled by the pinned SDK: package.json pins
@@ -92,6 +98,14 @@ const ATTEMPT_LIFETIME_MS = 10 * 60 * 1000;
 /** How long a finished attempt stays queryable before eviction. */
 const TERMINAL_ATTEMPT_TTL_MS = 60 * 60 * 1000;
 const MAX_PASTED_CODE_LENGTH = 16 * 1024;
+
+function assertClaudeSubscriptionOAuthEnabled(app: AppLike): void {
+  if (isClaudeSubscriptionOAuthEnabled(app.get('config'))) return;
+  throw new Unavailable(
+    'Claude subscription sign-in is disabled on this deployment. Use an API key or a pasted subscription token.',
+    { code: 'CLAUDE_SUBSCRIPTION_OAUTH_DISABLED' }
+  );
+}
 
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
   const controller = new AbortController();
@@ -329,6 +343,7 @@ interface UsersServiceLike {
     id: UserID,
     data: {
       agentic_auth_methods?: AgenticAuthMethods;
+      agentic_credential_sources?: AgenticCredentialSources;
       // `null` deletes a stored credential field (applyAgenticToolsPatch), used
       // to drop a previously pasted CLAUDE_CODE_OAUTH_TOKEN on OAuth success.
       agentic_tools?: Partial<Record<'claude-code', Record<string, string | null>>>;
@@ -519,15 +534,18 @@ export function createClaudeOAuthService(
       // `null` deletes just that field and leaves other Claude settings intact.
       const usersService = app.service('users') as UsersServiceLike;
       try {
+        const patchParams = { user: attempt.authUser, authenticated: true };
+        markTrustedUserMutation(patchParams, 'claude-auth');
         await usersService.patch(
           attempt.userId,
           {
             // Send only this tool's method; UsersService merges against its fresh
             // row so concurrent Codex changes cannot be overwritten.
             agentic_auth_methods: { 'claude-code': 'subscription' },
+            agentic_credential_sources: { 'claude-code': 'managed_file' },
             agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } },
           },
-          { user: attempt.authUser, authenticated: true }
+          patchParams
         );
       } catch (error) {
         // The filesystem write precedes the short metadata transaction. If its
@@ -637,6 +655,7 @@ export function createClaudeOAuthService(
       params?: AuthenticatedParams
     ): Promise<ClaudeOAuthStatus> {
       const { authUser, userId, tenantId, key } = await requireContext(params);
+      assertClaudeSubscriptionOAuthEnabled(app);
       expireAndPrune();
 
       const withTenantDatabase = <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
@@ -710,6 +729,7 @@ export function createClaudeOAuthService(
 
     async find(params?: AuthenticatedParams): Promise<ClaudeOAuthStatus> {
       const { key } = await requireContext(params);
+      assertClaudeSubscriptionOAuthEnabled(app);
       expireAndPrune();
       return statusOf(attempts.get(key));
     },

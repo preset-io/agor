@@ -1,3 +1,4 @@
+import { UsersRepository } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, Params, User, UserID, UserRole } from '@agor/core/types';
 import { describe, expect } from 'vitest';
@@ -324,4 +325,247 @@ describe('UsersService role authority', () => {
       service.patch(superadmin.user_id, { name: 'hook bypass' }, externalParams(admin))
     ).rejects.toMatchObject({ code: 403 });
   });
+});
+
+describe('UsersService Claude credential-source authority', () => {
+  dbTest(
+    'linearizes managed-file → pasted-token → clear without reactivating the file',
+    async ({ db }) => {
+      const service = new UsersService(db);
+      const user = await createUser(service, 'member', 'claude-source');
+      const params = externalParams(user);
+      const trustedParams = { ...params, provider: undefined } as Params;
+      markTrustedUserMutation(trustedParams, 'claude-auth');
+
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          {
+            agentic_auth_methods: { 'claude-code': 'subscription' },
+            agentic_credential_sources: { 'claude-code': 'managed_file' },
+          },
+          trustedParams
+        )
+      ).resolves.toMatchObject({
+        agentic_credential_sources: { 'claude-code': 'managed_file' },
+      });
+
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          {
+            agentic_tools: {
+              'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-pasted' },
+            },
+          },
+          params
+        )
+      ).resolves.toMatchObject({
+        agentic_auth_methods: { 'claude-code': 'subscription' },
+        agentic_credential_sources: { 'claude-code': 'subscription_token' },
+        agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: true } },
+      });
+
+      // Even an older client that sends only the field clear gets the source
+      // transition in the same users-row write.
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          { agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } } },
+          params
+        )
+      ).resolves.toMatchObject({
+        agentic_credential_sources: { 'claude-code': 'none' },
+        agentic_tools: {},
+      });
+    }
+  );
+
+  dbTest('persists none when an older client clears a legacy source-less token', async ({ db }) => {
+    const service = new UsersService(db);
+    const user = await createUser(service, 'member', 'claude-legacy-source');
+    const params = externalParams(user);
+
+    await service.patch(
+      user.user_id as UserID,
+      {
+        agentic_tools: {
+          'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-legacy' },
+        },
+      },
+      params
+    );
+    // Model a row written before exact-source persistence was introduced.
+    await new UsersRepository(db).update(user.user_id, { agentic_credential_sources: {} });
+
+    await expect(
+      service.patch(
+        user.user_id as UserID,
+        { agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } } },
+        params
+      )
+    ).resolves.toMatchObject({
+      agentic_credential_sources: { 'claude-code': 'none' },
+      agentic_tools: {},
+    });
+  });
+
+  dbTest('keeps inactive credentials dormant across every Claude source switch', async ({ db }) => {
+    const service = new UsersService(db);
+    const user = await createUser(service, 'member', 'claude-permutations');
+    const params = externalParams(user);
+    const trustedParams = { ...params, provider: undefined } as Params;
+    markTrustedUserMutation(trustedParams, 'claude-auth');
+
+    const api = await service.patch(
+      user.user_id as UserID,
+      {
+        agentic_tools: {
+          'claude-code': {
+            ANTHROPIC_API_KEY: 'sk-ant-api-test',
+            ANTHROPIC_AUTH_TOKEN: 'sk-ant-auth-test',
+          },
+        },
+      },
+      params
+    );
+    expect(api).toMatchObject({
+      agentic_auth_methods: { 'claude-code': 'api_key' },
+      agentic_credential_sources: { 'claude-code': 'api_key' },
+    });
+
+    // Either API credential is sufficient. Clearing one must not deactivate
+    // the other credential in the same active source family.
+    await expect(
+      service.patch(
+        user.user_id as UserID,
+        { agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: null } } },
+        params
+      )
+    ).resolves.toMatchObject({
+      agentic_auth_methods: { 'claude-code': 'api_key' },
+      agentic_credential_sources: { 'claude-code': 'api_key' },
+      agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: true } },
+    });
+
+    const token = await service.patch(
+      user.user_id as UserID,
+      {
+        agentic_tools: {
+          'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-pasted' },
+        },
+      },
+      params
+    );
+    expect(token).toMatchObject({
+      agentic_credential_sources: { 'claude-code': 'subscription_token' },
+      agentic_tools: {
+        'claude-code': { ANTHROPIC_AUTH_TOKEN: true, CLAUDE_CODE_OAUTH_TOKEN: true },
+      },
+    });
+
+    const managed = await service.patch(
+      user.user_id as UserID,
+      {
+        agentic_credential_sources: { 'claude-code': 'managed_file' },
+      },
+      trustedParams
+    );
+    expect(managed).toMatchObject({
+      agentic_auth_methods: { 'claude-code': 'subscription' },
+      agentic_credential_sources: { 'claude-code': 'managed_file' },
+      agentic_tools: {
+        'claude-code': { ANTHROPIC_AUTH_TOKEN: true, CLAUDE_CODE_OAUTH_TOKEN: true },
+      },
+    });
+
+    // Clearing a dormant pasted token must not log out the active managed file.
+    await expect(
+      service.patch(
+        user.user_id as UserID,
+        { agentic_tools: { 'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: null } } },
+        params
+      )
+    ).resolves.toMatchObject({
+      agentic_auth_methods: { 'claude-code': 'subscription' },
+      agentic_credential_sources: { 'claude-code': 'managed_file' },
+      agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: true } },
+    });
+
+    // Clearing an inactive API credential must not log out the managed file.
+    await expect(
+      service.patch(
+        user.user_id as UserID,
+        { agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: null } } },
+        params
+      )
+    ).resolves.toMatchObject({
+      agentic_auth_methods: { 'claude-code': 'subscription' },
+      agentic_credential_sources: { 'claude-code': 'managed_file' },
+    });
+
+    await expect(
+      service.patch(
+        user.user_id as UserID,
+        { agentic_credential_sources: { 'claude-code': 'managed_file' } },
+        params
+      )
+    ).rejects.toMatchObject({ code: 403 });
+  });
+
+  dbTest(
+    'maps legacy method-only switches and clears onto exact backed sources',
+    async ({ db }) => {
+      const service = new UsersService(db);
+      const user = await createUser(service, 'member', 'claude-method-switch');
+      const params = externalParams(user);
+
+      await service.patch(
+        user.user_id as UserID,
+        { agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: 'sk-ant-api-dormant' } } },
+        params
+      );
+      await service.patch(
+        user.user_id as UserID,
+        {
+          agentic_tools: {
+            'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-active' },
+          },
+        },
+        params
+      );
+
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          { agentic_auth_methods: { 'claude-code': 'api_key' } },
+          params
+        )
+      ).resolves.toMatchObject({
+        agentic_auth_methods: { 'claude-code': 'api_key' },
+        agentic_credential_sources: { 'claude-code': 'api_key' },
+      });
+
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          { agentic_auth_methods: { 'claude-code': 'subscription' } },
+          params
+        )
+      ).resolves.toMatchObject({
+        agentic_auth_methods: { 'claude-code': 'subscription' },
+        agentic_credential_sources: { 'claude-code': 'subscription_token' },
+      });
+
+      await expect(
+        service.patch(
+          user.user_id as UserID,
+          { agentic_auth_methods: { 'claude-code': undefined } },
+          params
+        )
+      ).resolves.toMatchObject({
+        agentic_credential_sources: { 'claude-code': 'none' },
+      });
+    }
+  );
 });

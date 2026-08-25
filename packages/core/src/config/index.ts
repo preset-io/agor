@@ -5,6 +5,7 @@
  */
 
 export * from './agentic-tool-preset-resolver';
+export * from './claude-subscription-oauth';
 export * from './config-manager';
 export * from './constants';
 export * from './deployment';

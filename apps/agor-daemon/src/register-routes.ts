@@ -128,6 +128,7 @@ import type {
   TasksServiceImpl,
 } from './declarations.js';
 import { registerExecutorResponseRoutes } from './executor-response-channel.js';
+import { hasClaudeSubscriptionOAuthCapability } from './ha-support.js';
 import { probeDatabase, probePendingMigrations } from './health/db-probe.js';
 import {
   authenticatedHealthDb,
@@ -4871,6 +4872,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           multiUser: (config.execution?.unix_user_mode ?? 'simple') !== 'simple',
           // Tenant agentic-tool settings provide the authoritative availability gate.
           cursorSdk: true,
+          // Provider-policy release boundary. Absence is false; the daemon
+          // independently rejects the OAuth service when disabled.
+          claudeSubscriptionOAuth: hasClaudeSubscriptionOAuthCapability(config, deployment),
           // Resolved branch storage policy. The daemon still enforces this at
           // create time; the UI uses it to pick the right default and disable
           // unavailable storage modes before submit.

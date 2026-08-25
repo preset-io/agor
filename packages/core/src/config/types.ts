@@ -13,6 +13,12 @@ export type ManagedEnvsExecutionMode = ManagedEnvExecutionMode;
 export interface AgorAgenticToolsSettings {
   /** Integrations that must match the running Agor version exactly. */
   installed?: InstallableAgenticTool[];
+
+  /**
+   * Enable daemon-driven Claude subscription OAuth after the operator has an
+   * authorized provider/client contract. Default: false.
+   */
+  claude_subscription_oauth?: boolean;
 }
 
 /**

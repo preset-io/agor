@@ -51,6 +51,8 @@ export interface ClaudeAuthSettingsProps {
    * them. Defaults to true (self-editing).
    */
   allowSubscriptionLogin?: boolean;
+  /** Deployment capability for daemon-driven Claude OAuth. Fail-closed by default. */
+  allowOAuthSignIn?: boolean;
 }
 
 /**
@@ -69,6 +71,7 @@ export function ClaudeAuthSettings({
   savingFields,
   publicValues,
   allowSubscriptionLogin = true,
+  allowOAuthSignIn = false,
 }: ClaudeAuthSettingsProps) {
   const { token } = useToken();
   const [view, setView] = useState<ClaudeMethodView>(() => viewForMethod(authMethod, 'oauth'));
@@ -91,14 +94,17 @@ export function ClaudeAuthSettings({
   // stays on the sign-in view showing the signed-out state instead of jumping.
   useEffect(() => {
     if (authMethod === 'subscription') {
-      setView((prev) => (prev === 'token' || !allowSubscriptionLogin ? 'token' : 'oauth'));
+      setView((prev) =>
+        prev === 'token' || !allowSubscriptionLogin || !allowOAuthSignIn ? 'token' : 'oauth'
+      );
     }
-  }, [authMethod, allowSubscriptionLogin]);
+  }, [authMethod, allowSubscriptionLogin, allowOAuthSignIn]);
 
   // An administrator editing another user cannot invoke the caller-bound OAuth
   // endpoints, but must still be able to manage that user's pasted subscription
   // token. Keep only the native OAuth tab self-only.
-  const visibleView = !allowSubscriptionLogin && view === 'oauth' ? 'token' : view;
+  const visibleView =
+    (!allowSubscriptionLogin || !allowOAuthSignIn) && view === 'oauth' ? 'token' : view;
 
   // Invalidate an in-flight probe and clear the prior verdict whenever the client
   // OR the effective method changes (and on unmount) — a verdict captured under
@@ -227,14 +233,14 @@ export function ClaudeAuthSettings({
 
   return (
     <Form component={false} layout="vertical">
-      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+      <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
         <Text type="secondary">
           API keys and pasted tokens are encrypted at rest. Claude sign-in uses a private credential
           file in the execution home.
         </Text>
 
         {allowSubscriptionLogin && (connectionBanner || authMethod === 'subscription') && (
-          <Space direction="vertical" size="small" style={{ width: '100%' }}>
+          <Space orientation="vertical" size="small" style={{ width: '100%' }}>
             {connectionBanner}
             <Space size="middle" wrap>
               <Button
@@ -294,7 +300,7 @@ export function ClaudeAuthSettings({
             onChange={(event) => handleSelect(event.target.value as ClaudeMethodView)}
           >
             <Radio.Button value="api_key">API key</Radio.Button>
-            {allowSubscriptionLogin && (
+            {allowSubscriptionLogin && allowOAuthSignIn && (
               <Radio.Button value="oauth">Sign in with Claude</Radio.Button>
             )}
             <Radio.Button value="token">Subscription token</Radio.Button>
@@ -312,7 +318,7 @@ export function ClaudeAuthSettings({
             publicValues={publicValues}
           />
         )}
-        {allowSubscriptionLogin && view === 'oauth' && (
+        {allowSubscriptionLogin && allowOAuthSignIn && view === 'oauth' && (
           <div>
             <Text type="secondary" style={{ display: 'block', marginBottom: token.marginSM }}>
               Sign in with your Claude subscription — Agor stores the login on the server, no token
