@@ -113,7 +113,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           _tenantId: TenantID,
           serverId: MCPServerID
         ) => {
-          await new MCPServerRepository(scoped).update(serverId, { transport: 'stdio' });
+          await new MCPServerRepository(scoped).update(serverId, {
+            transport: 'stdio',
+            command: 'catalog-authority-replacement',
+          });
         },
       ],
     ] as const)('rejects stale request authority after %s', async (_name, change) => {
