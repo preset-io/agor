@@ -53,7 +53,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { writeClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
-import { CLAUDE_AUTH_TRUSTED_USER_MUTATION } from './claude-credential-mutation.js';
+import { CLAUDE_AUTH_TRUSTED_USER_MUTATION } from './claude-credential-mutation-trust.js';
 import {
   type ClaudeOAuthAttemptContext,
   type ClaudeOAuthAttemptStore,
@@ -364,6 +364,18 @@ export function createClaudeOAuthService(
       app.get('config')
     );
 
+  async function claimRouteIsCurrent(
+    ctx: ClaudeOAuthAttemptContext,
+    claim: Pick<ClaudeOAuthExchangeClaim, 'delegatedHomeKey' | 'claudeConfigDir'>
+  ): Promise<boolean> {
+    const identity = await routeFor(ctx.userId, ctx.tenantId);
+    return (
+      identity.ok &&
+      identity.delegatedHomeKey === claim.delegatedHomeKey &&
+      identity.claudeConfigDir === claim.claudeConfigDir
+    );
+  }
+
   /** Finalize under the store's tenant/user + filesystem generation authority. */
   async function persist(
     ctx: ClaudeOAuthAttemptContext,
@@ -376,16 +388,7 @@ export function createClaudeOAuthService(
       // compare rather than trusting either value alone: a mid-flow identity
       // change would otherwise silently redirect the credential to a home the
       // user's sessions do not read.
-      const identity = await routeFor(ctx.userId, ctx.tenantId);
-      if (!identity.ok) {
-        throw new BadRequest(
-          `Cannot determine which Unix account should hold this Claude login: ${identity.message}`
-        );
-      }
-      if (
-        identity.delegatedHomeKey !== claim.delegatedHomeKey ||
-        identity.claudeConfigDir !== claim.claudeConfigDir
-      ) {
+      if (!(await claimRouteIsCurrent(ctx, claim))) {
         throw new BadRequest(
           'The execution home this sign-in would be saved to changed while you were approving it. ' +
             'Start over so the login is written to the right place.'
@@ -477,6 +480,20 @@ export function createClaudeOAuthService(
         throw new BadRequest('No sign-in is in progress — start over to get a fresh link.');
     }
     const claim = claimed.claim;
+
+    // Avoid consuming a one-time provider code after a route mutation that won
+    // before this submit. A mutation that wins after this check still
+    // invalidates/fences finalization, which rechecks under credential authority.
+    if (!(await claimRouteIsCurrent(ctx, claim))) {
+      await store.finish(ctx, claim, {
+        status: 'failed',
+        failureCode: 'execution_home_changed',
+        hint: 'The execution home changed — start over to save the login in the new home.',
+      });
+      throw new BadRequest(
+        'The execution home changed while this sign-in was open. Start over before using the code.'
+      );
+    }
 
     let tokens: ExchangedTokens;
     try {
@@ -571,6 +588,19 @@ export function createClaudeOAuthService(
         state,
         delegatedHomeKey: identity.delegatedHomeKey,
         ...(identity.claudeConfigDir ? { claudeConfigDir: identity.claudeConfigDir } : {}),
+        validateRoute: async () => {
+          const current = await routeFor(userId, tenantId);
+          if (
+            !current.ok ||
+            current.delegatedHomeKey !== identity.delegatedHomeKey ||
+            current.claudeConfigDir !== identity.claudeConfigDir
+          ) {
+            throw new BadRequest(
+              'The execution home changed before sign-in started. Start again to use the current home.'
+            );
+          }
+          return true;
+        },
         buildVerificationUrl: claudeVerificationUrlFrom,
       });
       return {

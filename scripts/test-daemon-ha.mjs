@@ -700,6 +700,66 @@ try {
       hint: 'Claude subscription login found.',
     });
 
+    // A route-affecting users.patch on B must join the same tenant/user
+    // authority as an attempt started on A, invalidate that attempt, and
+    // generation-delete the old canonical credential before the users row
+    // publishes the override. The checked-in HA profile intentionally refuses
+    // to use the override as a native credential route.
+    const routeRaceStart = await fetch(`${daemonA}/claude-auth/oauth`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${memberAccessToken}`,
+        'content-type': 'application/json',
+      },
+      body: '{}',
+    });
+    assert.equal(routeRaceStart.status, 201);
+    const routeRaceAttempt = await routeRaceStart.json();
+    const temporaryOverride = `/home/agor/ha-route-retired-${crypto.randomUUID()}`;
+    const routeChangeThroughB = await fetch(`${daemonB}/users/${memberUserId}`, {
+      method: 'PATCH',
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ filesystem_home: temporaryOverride }),
+    });
+    const routeChangeBody = await routeChangeThroughB.text();
+    assert.equal(routeChangeThroughB.status, 200, routeChangeBody);
+    const routeAttemptAfterPatch = await fetch(
+      `${daemonA}/claude-auth/oauth?attemptId=${encodeURIComponent(routeRaceAttempt.attemptId)}`,
+      { headers: { authorization: `Bearer ${memberAccessToken}` } }
+    );
+    assert.equal(routeAttemptAfterPatch.status, 200);
+    assert.equal((await routeAttemptAfterPatch.json()).phase, 'error');
+    dockerOutput(
+      'exec',
+      '-T',
+      'daemon-a',
+      'sh',
+      '-c',
+      `test ! -e '${claudeConfigDir}/.credentials.json'`
+    );
+
+    const restoreCanonicalThroughA = await fetch(`${daemonA}/users/${memberUserId}`, {
+      method: 'PATCH',
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ filesystem_home: null }),
+    });
+    const restoreCanonicalBody = await restoreCanonicalThroughA.text();
+    assert.equal(restoreCanonicalThroughA.status, 200, restoreCanonicalBody);
+    dockerOutput(
+      'exec',
+      '-T',
+      'daemon-b',
+      'sh',
+      '-c',
+      `mkdir -p '${claudeConfigDir}' && printf '%s' '${credentialPayload}' | base64 -d > '${claudeConfigDir}/.credentials.json' && chmod 600 '${claudeConfigDir}/.credentials.json'`
+    );
+
     const logoutThroughB = await fetch(`${daemonB}/claude-auth/logout`, {
       method: 'POST',
       headers: {
@@ -728,7 +788,7 @@ try {
       'Claude refresh token appeared in HA logs'
     );
     console.log(
-      'ok - Claude attempts start/replace across replicas; external choice fences them; exact-user credentials are visible on B, removed on B, and absent on A'
+      'ok - Claude attempts start/replace across replicas; source and route changes fence them; old-route credentials are cleaned before route publication; exact-user logout remains cross-replica'
     );
   }
 

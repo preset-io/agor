@@ -127,7 +127,10 @@ import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeAuthLogoutService } from './services/claude-auth-logout.js';
-import { createClaudeUserCredentialPatchCoordinator } from './services/claude-credential-mutation.js';
+import {
+  createClaudeUserCredentialPatchCoordinator,
+  needsUserCredentialRouteCoordinator,
+} from './services/claude-credential-mutation.js';
 import { createClaudeModelsService } from './services/claude-models.js';
 import { createClaudeOAuthService } from './services/claude-oauth.js';
 import { ClaudeOAuthAttemptAuthority } from './services/claude-oauth-attempt-authority.js';
@@ -717,24 +720,37 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   registerOpenCodeServices(ctx);
 
+  // Claude's standalone store also supplies the process-global credential
+  // route queue used by standalone Codex finalization and users route changes.
+  // In HA, each provider uses its durable authority over the same advisory
+  // tenant/user lock instead.
+  const claudeOAuthAuthority =
+    ctx.deployment.mode === 'ha' ? new ClaudeOAuthAttemptAuthority(db) : undefined;
+  const claudeOAuthStore = claudeOAuthAuthority
+    ? new DurableClaudeOAuthAttemptStore(claudeOAuthAuthority)
+    : new InMemoryClaudeOAuthAttemptStore();
+
   // Imports a pasted Codex CLI auth.json for the authenticated user — writes
   // it 0600 into the resolved Codex credential home and flips the caller's auth
   // method to subscription. Token material never leaves the daemon.
   const codexDeviceAttempts =
     ctx.deployment.mode === 'ha' ? new CodexDeviceAuthAttemptAuthority(db) : undefined;
 
-  app.use('/codex-auth/import', createCodexAuthImportService(app, db, codexDeviceAttempts));
-  app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
-
   // ChatGPT device-code sign-in: create starts an attempt (code + verification
   // URL back to the UI, daemon polls OpenAI for approval); find reports the
   // caller's attempt status. Tokens stay daemon-side end to end.
-  app.use(
-    '/codex-auth/device',
-    codexDeviceAttempts
-      ? createDurableCodexDeviceAuthService(app, db, codexDeviceAttempts)
-      : createCodexDeviceAuthService(app, db)
-  );
+  const standaloneCodexDeviceService = codexDeviceAttempts
+    ? undefined
+    : createCodexDeviceAuthService(app, db, claudeOAuthStore);
+  const codexDeviceService = codexDeviceAttempts
+    ? createDurableCodexDeviceAuthService(app, db, codexDeviceAttempts)
+    : standaloneCodexDeviceService!;
+  const codexCredentialMutations = codexDeviceAttempts ?? standaloneCodexDeviceService!;
+
+  app.use('/codex-auth/import', createCodexAuthImportService(app, db, codexCredentialMutations));
+  app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
+
+  app.use('/codex-auth/device', codexDeviceService);
   app.service('/codex-auth/device').hooks({
     before: { create: [ctx.requireAuth], find: [ctx.requireAuth], remove: [ctx.requireAuth] },
   });
@@ -743,7 +759,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // credential route and clears the stored auth method (emitting `patched` so the
   // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
   // grant, so other machines stay signed in.
-  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db, codexDeviceAttempts));
+  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db, codexCredentialMutations));
   app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude subscription OAuth sign-in. Anthropic has no device endpoint,
@@ -752,11 +768,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // writes ~/.claude/.credentials.json 0600 as the right Unix identity; find
   // reports status. Tokens stay daemon-side end to end.
   // See context/explorations/claude-code-oauth-signin.md.
-  const claudeOAuthAuthority =
-    ctx.deployment.mode === 'ha' ? new ClaudeOAuthAttemptAuthority(db) : undefined;
-  const claudeOAuthStore = claudeOAuthAuthority
-    ? new DurableClaudeOAuthAttemptStore(claudeOAuthAuthority)
-    : new InMemoryClaudeOAuthAttemptStore();
   if (claudeOAuthAuthority) {
     const maintenance = setInterval(() => {
       void claudeOAuthAuthority.maintain().catch((error) => {
@@ -927,20 +938,23 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Users service
   // ============================================================================
 
-  // Only exact-home HA deployments admit the native Claude writer. Other HA
-  // profiles still need to save API keys/pasted tokens through users.patch;
-  // there is no competing OAuth writer to fence while those endpoints are
-  // capability-gated.
-  const usersService = createUsersService(
-    db,
-    app,
-    ctx.deployment.mode === 'ha' &&
-      claudeOAuthAuthority &&
-      ctx.deployment.capabilities.claudeOAuth &&
-      ctx.deployment.capabilities.claudeAuth
-      ? createClaudeUserCredentialPatchCoordinator(app, db, claudeOAuthAuthority)
-      : undefined
-  );
+  // Standalone users mutations share the in-process store's credential queue;
+  // HA mutations share the durable tenant/user authority whenever either
+  // provider admits a credential-file writer. A delegated Codex-only profile
+  // still needs unix_username lifecycle coordination, but must not gain Claude
+  // path deletion when exact-home Claude auth is capability-gated.
+  const userCredentialRouteCoordinator = needsUserCredentialRouteCoordinator(ctx.deployment)
+    ? createClaudeUserCredentialPatchCoordinator(
+        app,
+        db,
+        claudeOAuthStore,
+        codexDeviceAttempts ?? standaloneCodexDeviceService,
+        {
+          manageClaudeRoute: ctx.deployment.mode !== 'ha' || ctx.deployment.capabilities.claudeAuth,
+        }
+      )
+    : undefined;
+  const usersService = createUsersService(db, app, userCredentialRouteCoordinator);
   // UsersService implements find/get/create/patch/remove (no `update`), plus
   // custom RPCs like `getGitEnvironment` and avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.

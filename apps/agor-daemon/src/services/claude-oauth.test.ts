@@ -284,7 +284,7 @@ describe('createClaudeOAuthService — flow + security', () => {
       claudeConfigDir: '/homes/user-A/.claude',
     });
     expect(JSON.parse(content as string).claudeAiOauth.accessToken).toBe(TOKENS.access_token);
-    expect(generation).toEqual(expect.any(Number));
+    expect(generation).toBeUndefined();
 
     // Flips to subscription AND deletes the stale pasted token (null) in one patch.
     expect(usersPatch).toHaveBeenCalledWith(
@@ -408,6 +408,32 @@ describe('createClaudeOAuthService — flow + security', () => {
     await submit;
     expect((await replacement).phase).toBe('awaiting_code');
     expect((await svc.find(asUserA)).phase).toBe('awaiting_code');
+  });
+
+  it.each([
+    ['execution-home change', 'execution_home_changed'],
+    ['user removal', 'user_removed'],
+  ] as const)('serializes standalone %s against OAuth finalization', async (_label, reason) => {
+    const coordinator = new InMemoryClaudeOAuthAttemptStore();
+    const { svc } = makeService(coordinator);
+    const { state, attemptId } = await startAndGetState(svc);
+    const release = await coordinator.lockExternalUserMutation('tenant-1', 'user-A');
+    expect(release).toBeTypeOf('function');
+
+    const submit = svc.create({ attemptId, code: `AUTHCODE#${state}` }, asUserA);
+    await flush();
+    expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
+
+    await coordinator.completeExternalUserMutation(
+      'tenant-1',
+      'user-A',
+      async () => undefined,
+      reason
+    );
+    await release?.();
+
+    await expect(submit).resolves.toMatchObject({ phase: 'error', attemptId });
+    expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
   });
 
   it('retains the prior attempt when replacement routing fails', async () => {

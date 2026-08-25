@@ -125,7 +125,7 @@ describe('claude-auth-logout', () => {
     await write;
     await logout;
     expect(events).toEqual(['write-start', 'write-end', 'delete']);
-    expect(deleteClaudeAuthViaExecutorMock.mock.calls[0]?.[1]).toEqual(expect.any(Number));
+    expect(deleteClaudeAuthViaExecutorMock.mock.calls[0]?.[1]).toBeUndefined();
   });
 
   it('surfaces a friendly error and does NOT clear anything if the delete fails', async () => {

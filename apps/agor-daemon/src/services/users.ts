@@ -850,16 +850,45 @@ export class UsersService {
     }
     const coordinateClaudeCredential = this.claudeCredentialPatches?.applies(data, params) === true;
     const credentialTenantId = coordinateClaudeCredential ? getCurrentTenantId() : undefined;
-    if (coordinateClaudeCredential) {
-      if (!credentialTenantId) {
-        throw new Error('Missing active tenant context for Claude credential mutation');
-      }
-      // Keep lock ordering consistent with OAuth finalization: credential
-      // authority first, then the users-service role/identity authority.
-      await this.claudeCredentialPatches!.lock(String(credentialTenantId), id);
+    if (coordinateClaudeCredential && !credentialTenantId) {
+      throw new Error('Missing active tenant context for Claude credential mutation');
     }
+    // Keep lock ordering consistent with OAuth finalization: credential
+    // authority first, then the users-service role/identity authority.
+    const releaseClaudeCredential = coordinateClaudeCredential
+      ? await this.claudeCredentialPatches!.lock(String(credentialTenantId), id)
+      : undefined;
+    try {
+      return await this.patchWithClaudeCredentialAuthority(
+        id,
+        data,
+        params,
+        coordinateClaudeCredential,
+        credentialTenantId
+      );
+    } finally {
+      await releaseClaudeCredential?.();
+    }
+  }
+
+  private async patchWithClaudeCredentialAuthority(
+    id: UserID,
+    data: UpdateUserData,
+    params: Params | undefined,
+    coordinateClaudeCredential: boolean,
+    credentialTenantId: string | undefined
+  ): Promise<User> {
     await lockUserAuthorityMutation(this.db, params);
     const authority = await this.authorizePatch(id, data, params);
+    const changesClaudeCredentialSource =
+      coordinateClaudeCredential && this.claudeCredentialPatches!.changesSource(data, params);
+    const changesClaudeCredentialRoute =
+      coordinateClaudeCredential &&
+      this.claudeCredentialPatches!.changesRoute(data) &&
+      ((data.unix_username !== undefined &&
+        data.unix_username !== authority.target.unix_username) ||
+        (data.filesystem_home !== undefined &&
+          data.filesystem_home !== authority.target.filesystem_home));
     const hasPasswordWrite = Object.hasOwn(data, 'password');
     const assignedPassword = hasPasswordWrite
       ? validatedAssignedPassword(data.password, data.email ?? authority.target.email)
@@ -1142,6 +1171,13 @@ export class UsersService {
     }
 
     const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
+    if (changesClaudeCredentialRoute) {
+      // The old row is still authoritative here. Invalidate attempts and
+      // generation-delete its credential before publishing a different route;
+      // reversing this order would strand secrets in a home no longer
+      // discoverable from the user record.
+      await this.claudeCredentialPatches!.cleanupRouteBeforePatch(String(credentialTenantId), id);
+    }
     const row = await update(this.db, users)
       .set(updates)
       .where(
@@ -1157,7 +1193,7 @@ export class UsersService {
       throw new Forbidden(USER_AUTHORITY_DENIED);
     }
 
-    if (coordinateClaudeCredential) {
+    if (changesClaudeCredentialSource) {
       // Authorization and the SQL update have succeeded, but the surrounding
       // tenant transaction has not committed. Invalidate attempts and advance
       // the per-home generation now; a failure rolls back the metadata change.
@@ -1178,6 +1214,35 @@ export class UsersService {
       throw new BadRequest('Bulk user mutations are not supported');
     }
     this.assertDeleteAllowed();
+    const coordinateClaudeCredential = this.claudeCredentialPatches?.coordinatesRemoval() === true;
+    const credentialTenantId = coordinateClaudeCredential ? getCurrentTenantId() : undefined;
+    if (coordinateClaudeCredential && !credentialTenantId) {
+      throw new Error('Missing active tenant context for Claude credential mutation');
+    }
+    // Credential authority always precedes users/role authority. OAuth
+    // finalization and route deletion therefore cannot deadlock by taking
+    // these locks in opposite orders.
+    const releaseClaudeCredential = coordinateClaudeCredential
+      ? await this.claudeCredentialPatches.lock(String(credentialTenantId), id)
+      : undefined;
+    try {
+      return await this.removeWithClaudeCredentialAuthority(
+        id,
+        params,
+        coordinateClaudeCredential,
+        credentialTenantId
+      );
+    } finally {
+      await releaseClaudeCredential?.();
+    }
+  }
+
+  private async removeWithClaudeCredentialAuthority(
+    id: UserID,
+    params: Params | undefined,
+    coordinateClaudeCredential: boolean,
+    credentialTenantId: string | undefined
+  ): Promise<User> {
     await lockUserAuthorityMutation(this.db, params);
     const authority = await this.authorizeRemove(id, params);
     await this.assertNotLastSuperadmin(authority.target, params);
@@ -1190,6 +1255,13 @@ export class UsersService {
       requesterId,
       shouldIncludeAuthMetadata(params)
     );
+
+    if (coordinateClaudeCredential) {
+      // Remove the generation-fenced file while the old route and owner row
+      // still exist. Only after cleanup succeeds may the home key become
+      // reusable through the SQL delete below.
+      await this.claudeCredentialPatches!.cleanupRouteBeforeRemove(String(credentialTenantId), id);
+    }
 
     const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
     const removed = await deleteFrom(this.db, users)

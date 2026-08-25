@@ -180,6 +180,107 @@ describe('codex-device-auth', () => {
     expect(fetchMock.mock.calls.length).toBe(callsAfterSuccess);
   });
 
+  it('cancels a pending attempt under the shared route authority before home reuse', async () => {
+    const routeAuthority = { lockExternalUserMutation: vi.fn(async () => undefined) };
+    const { app } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB, routeAuthority);
+    mockUserCodeIssued();
+
+    await withTenant(() => service.create({}, AUTH_PARAMS));
+    const cleanup = vi.fn(async () => undefined);
+    await service.completeExternalUserRouteMutation(
+      'tenant-test',
+      'user-1',
+      cleanup,
+      'execution_home_changed',
+      41
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(cleanup).toHaveBeenCalledWith(41);
+    expect((await withTenant(() => service.find(AUTH_PARAMS))).phase).toBe('error');
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs stale import/logout preflight before cancelling the current standalone attempt', async () => {
+    const routeAuthority = {
+      lockExternalUserMutation: vi.fn(async () => async () => undefined),
+    };
+    const { app } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB, routeAuthority);
+    mockUserCodeIssued();
+    const started = await withTenant(() => service.create({}, AUTH_PARAMS));
+
+    await expect(
+      service.runCredentialMutation(
+        'tenant-test',
+        'user-1' as never,
+        'credentials_imported',
+        async () => undefined,
+        async () => {
+          throw new Error('retired route');
+        }
+      )
+    ).rejects.toThrow(/retired route/);
+
+    expect(await withTenant(() => service.find(AUTH_PARAMS))).toEqual(started);
+  });
+
+  it('resolves and reserves only after a winning standalone route mutation releases authority', async () => {
+    let unblock!: (release: () => Promise<void>) => void;
+    const routeAuthority = {
+      lockExternalUserMutation: vi.fn(
+        () => new Promise<() => Promise<void>>((resolve) => (unblock = resolve))
+      ),
+    };
+    const { app } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB, routeAuthority);
+
+    const starting = withTenant(() => service.create({}, AUTH_PARAMS));
+    await vi.waitFor(() => expect(routeAuthority.lockExternalUserMutation).toHaveBeenCalled());
+    loadConfigSyncMock.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth' },
+    } as never);
+    unblock(async () => undefined);
+
+    await expect(starting).rejects.toThrow(/Cannot determine which execution home/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('revalidates the standalone route under authority before a post-approval write', async () => {
+    const routeAuthority = {
+      lockExternalUserMutation: vi.fn(async () => async () => undefined),
+    };
+    const { app } = makeApp();
+    const service = createCodexDeviceAuthService(app as never, TEST_DB, routeAuthority);
+    mockUserCodeIssued();
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          authorization_code: 'authz-1',
+          code_challenge: 'chal',
+          code_verifier: 'verif',
+        })
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          id_token: ID_TOKEN,
+          access_token: 'access-tok',
+          refresh_token: 'refresh-tok',
+        })
+      );
+
+    await withTenant(() => service.create({}, AUTH_PARAMS));
+    loadConfigSyncMock.mockReturnValue({
+      multi_tenancy: { mode: 'required_from_auth' },
+    } as never);
+    await vi.advanceTimersByTimeAsync(2_100);
+
+    expect(writeCodexAuthCredentialMock).not.toHaveBeenCalled();
+    expect((await withTenant(() => service.find(AUTH_PARAMS))).phase).toBe('error');
+  });
+
   it('a provider 5xx mid-window is transient — polling continues instead of erroring', async () => {
     const { app } = makeApp();
     const service = createCodexDeviceAuthService(app as never, TEST_DB);

@@ -42,6 +42,8 @@ export interface ClaudeOAuthStartInput {
   claudeConfigDir?: string;
   /** Rebuilt from the verifier + state whenever a status read needs it. */
   buildVerificationUrl: (verifier: string, state: string) => string;
+  /** Recheck the captured route after acquiring the credential authority. */
+  validateRoute?: () => Promise<boolean>;
 }
 
 export interface ClaudeOAuthStarted {
@@ -94,7 +96,7 @@ export interface ClaudeOAuthAttemptStore {
   finalize<T>(
     ctx: ClaudeOAuthAttemptContext,
     claim: ClaudeOAuthExchangeClaim,
-    work: (generation: number) => Promise<{ value: T; subscriptionType?: string }>
+    work: (generation?: number) => Promise<{ value: T; subscriptionType?: string }>
   ): Promise<{ outcome: 'committed'; value: T } | { outcome: 'stale' }>;
   finish(
     ctx: ClaudeOAuthAttemptContext,
@@ -107,14 +109,23 @@ export interface ClaudeOAuthAttemptStore {
   runCredentialMutation<T>(
     ctx: ClaudeOAuthAttemptContext,
     reason: 'signed_out' | 'credentials_changed',
-    work: (generation: number) => Promise<T>
+    work: (generation?: number) => Promise<T>
   ): Promise<T>;
+  /** Acquire the same authority for a users-service route/source mutation. */
+  lockExternalUserMutation(tenantId: string, userId: UserID): Promise<(() => Promise<void>) | void>;
+  /** Invalidate and generation-fence while the external caller retains that authority. */
+  completeExternalUserMutation(
+    tenantId: string,
+    userId: UserID,
+    work: (generation?: number) => Promise<void>,
+    reason?: 'credentials_changed' | 'execution_home_changed' | 'user_removed'
+  ): Promise<void>;
 }
 
 class InProcessCredentialMutationQueue {
   private readonly tails = new Map<string, Promise<void>>();
 
-  async run<T>(key: string, work: () => Promise<T>): Promise<T> {
+  async acquire(key: string): Promise<() => Promise<void>> {
     const previous = this.tails.get(key) ?? Promise.resolve();
     let release!: () => void;
     const mine = new Promise<void>((resolve) => {
@@ -123,14 +134,26 @@ class InProcessCredentialMutationQueue {
     const tail = previous.then(() => mine);
     this.tails.set(key, tail);
     await previous;
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      release();
+      if (this.tails.get(key) === tail) this.tails.delete(key);
+    };
+  }
+
+  async run<T>(key: string, work: () => Promise<T>): Promise<T> {
+    const release = await this.acquire(key);
     try {
       return await work();
     } finally {
-      release();
-      if (this.tails.get(key) === tail) this.tails.delete(key);
+      await release();
     }
   }
 }
+
+const STANDALONE_CLAUDE_CREDENTIAL_HOME = 'standalone-claude-credential-home';
 
 /** How long a finished attempt stays queryable before eviction. */
 const TERMINAL_ATTEMPT_TTL_MS = 60 * 60 * 1000;
@@ -164,6 +187,10 @@ function hintForFailureCode(failureCode: string | null): string | undefined {
       return 'The Claude login was removed — start over to sign in again.';
     case 'credentials_changed':
       return 'A newer Claude authentication choice replaced this sign-in.';
+    case 'execution_home_changed':
+      return 'The execution home changed — start over to save the login in the new home.';
+    case 'user_removed':
+      return 'The account was removed while Claude sign-in was in progress.';
     case 'exchange_owner_lost':
       return 'Sign-in could not be completed and the code may be used up — start over to get a fresh link.';
     default:
@@ -196,7 +223,6 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
   private readonly attempts = new Map<string, MemoryAttempt>();
   private readonly credentialMutations = new InProcessCredentialMutationQueue();
   private sequence = 0;
-  private lastMutationGeneration = 0;
 
   private key(ctx: ClaudeOAuthAttemptContext): string {
     return `${ctx.tenantId}:${ctx.userId}`;
@@ -260,7 +286,10 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
     // home, so starts participate in the same queue as finalize/logout. This
     // makes "new start wins" linearizable even if the prior submit is already
     // inside its credential write.
-    return this.credentialMutations.run('standalone-claude-credential-home', async () => {
+    return this.credentialMutations.run(STANDALONE_CLAUDE_CREDENTIAL_HOME, async () => {
+      if (input.validateRoute && !(await input.validateRoute())) {
+        throw new Error('Credential route changed before sign-in reservation');
+      }
       this.expireAndPrune();
       const prior = this.attempts.get(this.key(ctx));
       if (prior) prior.cancelled = true;
@@ -330,14 +359,16 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
   async finalize<T>(
     ctx: ClaudeOAuthAttemptContext,
     claim: ClaudeOAuthExchangeClaim,
-    work: (generation: number) => Promise<{ value: T; subscriptionType?: string }>
+    work: (generation?: number) => Promise<{ value: T; subscriptionType?: string }>
   ): Promise<{ outcome: 'committed'; value: T } | { outcome: 'stale' }> {
-    return this.credentialMutations.run('standalone-claude-credential-home', async () => {
+    return this.credentialMutations.run(STANDALONE_CLAUDE_CREDENTIAL_HOME, async () => {
       const attempt = this.live(ctx, claim);
       if (!attempt) return { outcome: 'stale' as const };
-      const generation = Math.max(Date.now() * 1_000, this.lastMutationGeneration + 1);
-      this.lastMutationGeneration = generation;
-      const completed = await work(generation);
+      // Standalone has no detached credential writer: every writer and route
+      // mutation shares this process-global queue. Do not advance durable file
+      // tombstones here; retained PostgreSQL sequences remain the sole durable
+      // generation domain across offline deployment-mode changes.
+      const completed = await work(undefined);
       attempt.subscriptionType = completed.subscriptionType;
       this.settle(
         attempt,
@@ -388,14 +419,30 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
   runCredentialMutation<T>(
     ctx: ClaudeOAuthAttemptContext,
     reason: 'signed_out' | 'credentials_changed',
-    work: (generation: number) => Promise<T>
+    work: (generation?: number) => Promise<T>
   ): Promise<T> {
-    return this.credentialMutations.run('standalone-claude-credential-home', async () => {
+    return this.credentialMutations.run(STANDALONE_CLAUDE_CREDENTIAL_HOME, async () => {
       await this.invalidate(ctx, reason);
-      const generation = Math.max(Date.now() * 1_000, this.lastMutationGeneration + 1);
-      this.lastMutationGeneration = generation;
-      return work(generation);
+      return work(undefined);
     });
+  }
+
+  lockExternalUserMutation(_tenantId: string, _userId: UserID): Promise<() => Promise<void>> {
+    return this.credentialMutations.acquire(STANDALONE_CLAUDE_CREDENTIAL_HOME);
+  }
+
+  async completeExternalUserMutation(
+    tenantId: string,
+    userId: UserID,
+    work: (generation?: number) => Promise<void>,
+    reason:
+      | 'credentials_changed'
+      | 'execution_home_changed'
+      | 'user_removed' = 'credentials_changed'
+  ): Promise<void> {
+    const ctx = { tenantId, userId };
+    await this.invalidate(ctx, reason);
+    await work(undefined);
   }
 }
 
@@ -425,6 +472,7 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
       state: input.state,
       delegatedHomeKey: input.delegatedHomeKey,
       ...(input.claudeConfigDir ? { claudeConfigDir: input.claudeConfigDir } : {}),
+      ...(input.validateRoute ? { validateRoute: input.validateRoute } : {}),
     });
     const record = await this.authority.getForUser(ctx.tenantId, ctx.userId, attemptId);
     return {
@@ -546,5 +594,21 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
     work: (generation: number) => Promise<T>
   ): Promise<T> {
     return this.authority.runCredentialMutation(ctx.tenantId, ctx.userId, reason, work);
+  }
+
+  lockExternalUserMutation(tenantId: string, userId: UserID): Promise<void> {
+    return this.authority.lockExternalUserMutation(tenantId, userId);
+  }
+
+  completeExternalUserMutation(
+    tenantId: string,
+    userId: UserID,
+    work: (generation: number) => Promise<void>,
+    reason:
+      | 'credentials_changed'
+      | 'execution_home_changed'
+      | 'user_removed' = 'credentials_changed'
+  ): Promise<void> {
+    return this.authority.completeExternalUserMutation(tenantId, userId, work, reason);
   }
 }

@@ -150,7 +150,8 @@ live daemon connections hold shared locks that will trip the timeout.
 ### Protocol-breaking migrations require an enforced offline cutover
 
 If old and new workers cannot safely share the additive schema, register the
-migration in `OFFLINE_CUTOVER_MIGRATIONS` in `src/db/migrate.ts`. Existing
+migration in `MIGRATION_IMPACT_REGISTRY` in `src/db/migrate.ts`, mark
+`requiresOfflineCutover`, and state its rollback compatibility. Existing
 PostgreSQL databases then refuse automatic migration until an operator stops
 every daemon and runs `agor db migrate --offline-cutover`. Fresh databases may
 still migrate automatically because no old worker can exist. Document the

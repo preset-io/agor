@@ -25,6 +25,7 @@ export interface DurableClaudeOAuthCreate {
   state: string;
   delegatedHomeKey: string | null;
   claudeConfigDir?: string;
+  validateRoute?: () => Promise<boolean>;
 }
 
 export interface OpenedClaudeOAuthAttempt {
@@ -89,6 +90,9 @@ export class ClaudeOAuthAttemptAuthority {
         input.tenantId,
         input.userId
       );
+      if (input.validateRoute && !(await input.validateRoute())) {
+        throw new Error('Credential route changed before sign-in reservation');
+      }
       const material: ClaudeOAuthSealedMaterial = {
         version: 1,
         attemptId,
@@ -292,7 +296,11 @@ export class ClaudeOAuthAttemptAuthority {
   async completeExternalUserMutation(
     tenantId: string,
     userId: UserID,
-    work: (generation: number) => Promise<void>
+    work: (generation: number) => Promise<void>,
+    reason:
+      | 'credentials_changed'
+      | 'execution_home_changed'
+      | 'user_removed' = 'credentials_changed'
   ): Promise<void> {
     const scope = getCurrentTenantDatabaseScope();
     if (scope?.kind !== 'tenant' || !scope.transactionActive || scope.tenantId !== tenantId) {
@@ -300,7 +308,7 @@ export class ClaudeOAuthAttemptAuthority {
     }
     const repository = new ClaudeOAuthAttemptRepository(scope.db);
     const generation = await repository.allocateAttemptGeneration(tenantId, userId);
-    await repository.invalidateForUser(tenantId, userId, 'credentials_changed');
+    await repository.invalidateForUser(tenantId, userId, reason);
     await work(generation);
   }
 

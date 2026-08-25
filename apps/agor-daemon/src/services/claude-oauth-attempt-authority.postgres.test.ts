@@ -13,11 +13,13 @@
  *     src/services/claude-oauth-attempt-authority.postgres.test.ts
  */
 
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { mutateCredentialFile } from '@agor/core/codex/credential-file';
 import {
   ClaudeOAuthAttemptRepository,
+  CodexDeviceAuthAttemptRepository,
   claudeOauthAttempts,
   createDatabase,
   createTenantScopedDatabaseProxy,
@@ -44,6 +46,8 @@ import {
   ClaudeOAuthAttemptAuthority,
   fingerprintClaudeOAuthState,
 } from './claude-oauth-attempt-authority.js';
+import { InMemoryClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
+import { CodexDeviceAuthAttemptAuthority } from './codex-device-auth-attempt-authority.js';
 import { UsersService } from './users.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -106,12 +110,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ]);
     });
 
-    async function seed(label: string): Promise<TenantSeed> {
+    async function seed(label: string, unixUsername?: string): Promise<TenantSeed> {
       const tenantId = `claude-oauth-${label}-${crypto.randomUUID()}`;
       return runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
         const user = await new UsersRepository(scoped).create({
           email: `${crypto.randomUUID()}@example.test`,
           name: `Claude OAuth ${label}`,
+          ...(unixUsername ? { unix_username: unixUsername } : {}),
         });
         return { tenantId, userId: user.user_id as UserID };
       });
@@ -132,6 +137,25 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         delegatedHomeKey,
         ...(claudeConfigDir ? { claudeConfigDir } : {}),
       });
+
+    it('revalidates a captured route while holding durable reservation authority', async () => {
+      const seeded = await seed('route-before-reservation');
+      await expect(
+        authorityA.create({
+          tenantId: seeded.tenantId,
+          userId: seeded.userId,
+          codeVerifier: 'pkce-route-before-reservation',
+          state: stateFor('route-before-reservation'),
+          delegatedHomeKey: 'retired-home',
+          validateRoute: async () => false,
+        })
+      ).rejects.toThrow(/route changed/i);
+      await expect(
+        runWithTenantDatabaseScope(dbA, seeded.tenantId, (scoped) =>
+          new ClaudeOAuthAttemptRepository(scoped).getCurrentForUser(seeded.tenantId, seeded.userId)
+        )
+      ).resolves.toBeNull();
+    });
 
     it('lets replica B finish the attempt replica A started', async () => {
       const seeded = await seed('handoff');
@@ -485,6 +509,98 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       }
     });
 
+    it('keeps the durable sequence authoritative across offline standalone transitions', async () => {
+      const seeded = await seed('generation-mode-transition');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-generation-transition-'));
+      const claudeConfigDir = join(root, '.claude');
+      try {
+        const firstStandalone = new InMemoryClaudeOAuthAttemptStore();
+        const releaseFirst = await firstStandalone.lockExternalUserMutation(
+          seeded.tenantId,
+          seeded.userId
+        );
+        await firstStandalone.completeExternalUserMutation(
+          seeded.tenantId,
+          seeded.userId,
+          async (generation) => {
+            expect(generation).toBeUndefined();
+            expect(
+              await mutateCredentialFile({
+                target: join(claudeConfigDir, '.credentials.json'),
+                content: '{"mode":"standalone-before-ha"}\n',
+              })
+            ).toBe('applied');
+          }
+        );
+        await releaseFirst?.();
+
+        await expect(stat(join(claudeConfigDir, '.agor-auth-generation'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+
+        let firstDurableGeneration = 0;
+        await authorityA.runCredentialMutation(
+          seeded.tenantId,
+          seeded.userId,
+          'signed_out',
+          async (generation) => {
+            firstDurableGeneration = generation;
+            await deleteClaudeAuthViaExecutor(
+              { delegatedHomeKey: null, userId: seeded.userId, claudeConfigDir },
+              generation
+            );
+          }
+        );
+        expect(firstDurableGeneration).toBeGreaterThan(0);
+
+        const rollbackStandalone = new InMemoryClaudeOAuthAttemptStore();
+        const releaseRollback = await rollbackStandalone.lockExternalUserMutation(
+          seeded.tenantId,
+          seeded.userId
+        );
+        await rollbackStandalone.completeExternalUserMutation(
+          seeded.tenantId,
+          seeded.userId,
+          async (generation) => {
+            expect(generation).toBeUndefined();
+            expect(
+              await mutateCredentialFile({
+                target: join(claudeConfigDir, '.credentials.json'),
+                content: '{"mode":"standalone-rollback"}\n',
+              })
+            ).toBe('applied');
+          }
+        );
+        await releaseRollback?.();
+        expect(await readFile(join(claudeConfigDir, '.credentials.json'), 'utf8')).toBe(
+          '{"mode":"standalone-rollback"}\n'
+        );
+        expect(Number(await readFile(join(claudeConfigDir, '.agor-auth-generation'), 'utf8'))).toBe(
+          firstDurableGeneration
+        );
+
+        let reupgradeGeneration = 0;
+        await authorityB.runCredentialMutation(
+          seeded.tenantId,
+          seeded.userId,
+          'signed_out',
+          async (generation) => {
+            reupgradeGeneration = generation;
+            await deleteClaudeAuthViaExecutor(
+              { delegatedHomeKey: null, userId: seeded.userId, claudeConfigDir },
+              generation
+            );
+          }
+        );
+        expect(reupgradeGeneration).toBeGreaterThan(firstDurableGeneration);
+        await expect(stat(join(claudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
     it('routes a real users-service Claude method patch through the exact-home authority', async () => {
       const seeded = await seed('users-service-source');
       const root = await mkdtemp(join(tmpdir(), 'agor-claude-users-authority-'));
@@ -558,6 +674,409 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             claim.attempt.attemptGeneration
           )
         ).rejects.toThrow(/superseded/);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('linearizes a route change after OAuth persistence and cleans the old home before patching the user', async () => {
+      const seeded = await seed('route-change-race');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-route-change-'));
+      try {
+        const config = {
+          paths: { data_home: root },
+          deployment: { mode: 'ha' },
+          multi_tenancy: { mode: 'required_from_auth' },
+          execution: {
+            unix_user_mode: 'sandbox',
+            sandbox: { enabled: true, home_mode: 'per_user' },
+            executor_storage: {
+              user_home: 'persistent-per-user',
+              user_home_locking: 'cross-replica-flock',
+            },
+          },
+        } as const;
+        const app = { get: () => config, service: () => undefined };
+        const codexAuthorityA = new CodexDeviceAuthAttemptAuthority(dbA, masterSecret);
+        const codexAuthorityB = new CodexDeviceAuthAttemptAuthority(dbB, masterSecret);
+        const users = new UsersService(
+          dbB,
+          app as never,
+          config as never,
+          createClaudeUserCredentialPatchCoordinator(app as never, dbB, authorityB, codexAuthorityB)
+        );
+        const claudeConfigDir = join(
+          root,
+          'tenants',
+          seeded.tenantId,
+          'homes',
+          seeded.userId,
+          '.claude'
+        );
+        const codexHome = join(root, 'tenants', seeded.tenantId, 'homes', seeded.userId, '.codex');
+        const codexAttempt = await codexAuthorityA.reserve({
+          tenantId: seeded.tenantId,
+          userId: seeded.userId,
+          delegatedHomeKey: null,
+          codexHome,
+        });
+        await mkdir(codexHome, { recursive: true });
+        await writeFile(join(codexHome, 'auth.json'), '{"former":"codex-credential"}\n');
+        const attemptId = await start(
+          authorityA,
+          seeded,
+          'route-change-race',
+          null,
+          claudeConfigDir
+        );
+        const claim = await authorityA.claimForExchange(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          stateFor('route-change-race')
+        );
+        expect(claim.outcome).toBe('claimed');
+        if (claim.outcome !== 'claimed') return;
+
+        let releaseFinalize!: () => void;
+        const holdFinalize = new Promise<void>((resolve) => {
+          releaseFinalize = resolve;
+        });
+        let credentialWritten!: () => void;
+        const didWrite = new Promise<void>((resolve) => {
+          credentialWritten = resolve;
+        });
+        const finalize = authorityA.finalize(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          claim.attempt.exchangeClaimId!,
+          async (material) => {
+            await writeClaudeAuthViaExecutor(
+              '{"winner":"oauth-before-route-change"}\n',
+              {
+                delegatedHomeKey: null,
+                userId: seeded.userId,
+                claudeConfigDir: material.claudeConfigDir!,
+              },
+              material.attemptGeneration
+            );
+            credentialWritten();
+            await holdFinalize;
+            return { value: true };
+          }
+        );
+        await didWrite;
+
+        const overrideHome = join(root, 'retired-override-home');
+        let patchSettled = false;
+        const patch = runWithTenantDatabaseScope(dbB, seeded.tenantId, () =>
+          users.patch(seeded.userId, { filesystem_home: overrideHome })
+        ).finally(() => {
+          patchSettled = true;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(patchSettled).toBe(false);
+
+        releaseFinalize();
+        await expect(finalize).resolves.toEqual({ outcome: 'committed', value: true });
+        await expect(patch).resolves.toMatchObject({ user_id: seeded.userId });
+        await expect(
+          runWithTenantDatabaseScope(dbB, seeded.tenantId, (scoped) =>
+            new UsersRepository(scoped).findById(seeded.userId)
+          )
+        ).resolves.toMatchObject({ filesystem_home: overrideHome });
+        await expect(stat(join(claudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+        await expect(stat(join(codexHome, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(
+          runWithTenantDatabaseScope(dbB, seeded.tenantId, (scoped) =>
+            new CodexDeviceAuthAttemptRepository(scoped).getForUser(
+              seeded.tenantId,
+              seeded.userId,
+              codexAttempt.record.attemptId
+            )
+          )
+        ).resolves.toMatchObject({ status: 'superseded', isCurrent: false, sealedMaterial: null });
+        let staleCodexWriterRan = false;
+        await expect(
+          codexAuthorityA.finalize(codexAttempt.record, async () => {
+            staleCodexWriterRan = true;
+            return { value: true };
+          })
+        ).resolves.toEqual({ outcome: 'stale' });
+        expect(staleCodexWriterRan).toBe(false);
+        await expect(
+          writeClaudeAuthViaExecutor(
+            '{"loser":"stale-oauth"}\n',
+            { delegatedHomeKey: null, userId: seeded.userId, claudeConfigDir },
+            claim.attempt.attemptGeneration
+          )
+        ).rejects.toThrow(/superseded/);
+        expect(
+          await authorityB.getForUser(seeded.tenantId, seeded.userId, attemptId)
+        ).toMatchObject({ status: 'succeeded', isCurrent: false });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('does not invalidate an OAuth attempt for an idempotent route patch', async () => {
+      const seeded = await seed('route-noop');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-route-noop-'));
+      try {
+        const config = {
+          paths: { data_home: root },
+          deployment: { mode: 'ha' },
+          multi_tenancy: { mode: 'required_from_auth' },
+          execution: {
+            unix_user_mode: 'sandbox',
+            sandbox: { enabled: true, home_mode: 'per_user' },
+            executor_storage: {
+              user_home: 'persistent-per-user',
+              user_home_locking: 'cross-replica-flock',
+            },
+          },
+        } as const;
+        const app = { get: () => config, service: () => undefined };
+        const users = new UsersService(
+          dbB,
+          app as never,
+          config as never,
+          createClaudeUserCredentialPatchCoordinator(
+            app as never,
+            dbB,
+            authorityB,
+            new CodexDeviceAuthAttemptAuthority(dbB, masterSecret)
+          )
+        );
+        const attemptId = await start(
+          authorityA,
+          seeded,
+          'route-noop',
+          null,
+          join(root, 'tenants', seeded.tenantId, 'homes', seeded.userId, '.claude')
+        );
+
+        await runWithTenantDatabaseScope(dbB, seeded.tenantId, () =>
+          users.patch(seeded.userId, { filesystem_home: null } as never)
+        );
+
+        expect(
+          await authorityA.getForUser(seeded.tenantId, seeded.userId, attemptId)
+        ).toMatchObject({ status: 'pending', isCurrent: true });
+
+        await runWithTenantDatabaseScope(dbB, seeded.tenantId, () =>
+          users.patch(seeded.userId, {
+            filesystem_home: null,
+            agentic_auth_methods: { 'claude-code': 'api_key' },
+          } as never)
+        );
+        expect(
+          await authorityA.getForUser(seeded.tenantId, seeded.userId, attemptId)
+        ).toMatchObject({ failureCode: 'credentials_changed', isCurrent: false });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('makes removal-first finalization stale without invoking its credential writer', async () => {
+      const seeded = await seed('remove-first');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-remove-first-'));
+      try {
+        const config = {
+          paths: { data_home: root },
+          deployment: { mode: 'ha' },
+          multi_tenancy: { mode: 'required_from_auth' },
+          execution: {
+            unix_user_mode: 'sandbox',
+            sandbox: { enabled: true, home_mode: 'per_user' },
+            executor_storage: {
+              user_home: 'persistent-per-user',
+              user_home_locking: 'cross-replica-flock',
+            },
+          },
+        } as const;
+        const app = { get: () => config, service: () => undefined };
+        const users = new UsersService(
+          dbB,
+          app as never,
+          config as never,
+          createClaudeUserCredentialPatchCoordinator(
+            app as never,
+            dbB,
+            authorityB,
+            new CodexDeviceAuthAttemptAuthority(dbB, masterSecret)
+          )
+        );
+        const claudeConfigDir = join(
+          root,
+          'tenants',
+          seeded.tenantId,
+          'homes',
+          seeded.userId,
+          '.claude'
+        );
+        const attemptId = await start(authorityA, seeded, 'remove-first', null, claudeConfigDir);
+        const claim = await authorityA.claimForExchange(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          stateFor('remove-first')
+        );
+        expect(claim.outcome).toBe('claimed');
+        if (claim.outcome !== 'claimed') return;
+
+        await expect(
+          runWithTenantDatabaseScope(dbB, seeded.tenantId, () => users.remove(seeded.userId))
+        ).resolves.toMatchObject({ user_id: seeded.userId });
+
+        let staleWriterCalls = 0;
+        await expect(
+          authorityA.finalize(
+            seeded.tenantId,
+            seeded.userId,
+            attemptId,
+            claim.attempt.exchangeClaimId!,
+            async () => {
+              staleWriterCalls += 1;
+              return { value: true };
+            }
+          )
+        ).resolves.toEqual({ outcome: 'stale' });
+        expect(staleWriterCalls).toBe(0);
+        await expect(stat(join(claudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('deletes credentials before the user row and isolates a canonical replacement despite a reused non-route key', async () => {
+      const reusedHomeKey = `claude_reused_${crypto.randomUUID().slice(0, 12)}`;
+      const seeded = await seed('delete-home-reuse', reusedHomeKey);
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-delete-reuse-'));
+      try {
+        const config = {
+          paths: { data_home: root },
+          deployment: { mode: 'ha' },
+          multi_tenancy: { mode: 'required_from_auth' },
+          execution: {
+            unix_user_mode: 'sandbox',
+            sandbox: { enabled: true, home_mode: 'per_user' },
+            executor_storage: {
+              user_home: 'persistent-per-user',
+              user_home_locking: 'cross-replica-flock',
+            },
+          },
+        } as const;
+        const app = { get: () => config, service: () => undefined };
+        const users = new UsersService(
+          dbB,
+          app as never,
+          config as never,
+          createClaudeUserCredentialPatchCoordinator(
+            app as never,
+            dbB,
+            authorityB,
+            new CodexDeviceAuthAttemptAuthority(dbB, masterSecret)
+          )
+        );
+        const oldClaudeConfigDir = join(
+          root,
+          'tenants',
+          seeded.tenantId,
+          'homes',
+          seeded.userId,
+          '.claude'
+        );
+        const attemptId = await start(
+          authorityA,
+          seeded,
+          'delete-home-reuse',
+          null,
+          oldClaudeConfigDir
+        );
+        const claim = await authorityA.claimForExchange(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          stateFor('delete-home-reuse')
+        );
+        expect(claim.outcome).toBe('claimed');
+        if (claim.outcome !== 'claimed') return;
+        let releaseFinalize!: () => void;
+        const holdFinalize = new Promise<void>((resolve) => {
+          releaseFinalize = resolve;
+        });
+        let credentialWritten!: () => void;
+        const didWrite = new Promise<void>((resolve) => {
+          credentialWritten = resolve;
+        });
+        const finalize = authorityA.finalize(
+          seeded.tenantId,
+          seeded.userId,
+          attemptId,
+          claim.attempt.exchangeClaimId!,
+          async (material) => {
+            await writeClaudeAuthViaExecutor(
+              '{"former":"credential"}\n',
+              {
+                delegatedHomeKey: null,
+                userId: seeded.userId,
+                claudeConfigDir: material.claudeConfigDir!,
+              },
+              material.attemptGeneration
+            );
+            credentialWritten();
+            await holdFinalize;
+            return { value: true };
+          }
+        );
+        await didWrite;
+
+        let removalSettled = false;
+        const removal = runWithTenantDatabaseScope(dbB, seeded.tenantId, () =>
+          users.remove(seeded.userId)
+        ).finally(() => {
+          removalSettled = true;
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        expect(removalSettled).toBe(false);
+        releaseFinalize();
+        await expect(finalize).resolves.toEqual({ outcome: 'committed', value: true });
+        await expect(removal).resolves.toMatchObject({
+          user_id: seeded.userId,
+          unix_username: reusedHomeKey,
+        });
+        await expect(stat(join(oldClaudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+
+        const replacement = await runWithTenantDatabaseScope(dbB, seeded.tenantId, (scoped) =>
+          new UsersRepository(scoped).create({
+            email: `${crypto.randomUUID()}@example.test`,
+            name: 'Reused Claude home key',
+            unix_username: reusedHomeKey,
+          })
+        );
+        expect(replacement.unix_username).toBe(reusedHomeKey);
+        const replacementClaudeConfigDir = join(
+          root,
+          'tenants',
+          seeded.tenantId,
+          'homes',
+          replacement.user_id,
+          '.claude'
+        );
+        expect(replacementClaudeConfigDir).not.toBe(oldClaudeConfigDir);
+        await expect(
+          stat(join(replacementClaudeConfigDir, '.credentials.json'))
+        ).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
       } finally {
         await rm(root, { recursive: true, force: true });
       }

@@ -28,7 +28,6 @@ import type {
   AgenticAuthMethods,
   AuthenticatedParams,
   DeepReadonly,
-  User,
   UserID,
 } from '@agor/core/types';
 import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
@@ -49,8 +48,23 @@ export interface CodexCredentialMutationCoordinator {
     tenantId: string,
     userId: UserID,
     reason: 'credentials_imported' | 'credentials_removed',
-    work: (authorityGeneration: number) => Promise<T>
+    work: (authorityGeneration?: number) => Promise<T>,
+    preflight?: () => Promise<void>
   ): Promise<T>;
+}
+
+/** Compare the complete filesystem/executor identity captured by an auth flow. */
+export function sameCodexCredentialRoute(
+  left: Pick<
+    Extract<CodexCredentialRouteResolution, { ok: true }>,
+    'delegatedHomeKey' | 'codexHome'
+  >,
+  right: Pick<
+    Extract<CodexCredentialRouteResolution, { ok: true }>,
+    'delegatedHomeKey' | 'codexHome'
+  >
+): boolean {
+  return left.delegatedHomeKey === right.delegatedHomeKey && left.codexHome === right.codexHome;
 }
 
 /** In-process users-service flag: publish this mutation only after its outer DB commit. */
@@ -58,7 +72,6 @@ export const CODEX_AUTH_DEFER_USER_REALTIME = Symbol('codex-auth-defer-user-real
 
 /** Minimal users-service surface — mirrors the widget handlers' structural typing. */
 interface UsersServiceLike {
-  get(id: UserID, params?: unknown): Promise<User>;
   patch(
     id: UserID,
     data: { agentic_auth_methods: AgenticAuthMethods },
@@ -241,10 +254,9 @@ export async function persistVerifiedCodexAuth(options: {
   }
 
   const usersService = app.service('users') as UsersServiceLike;
-  const current = await usersService.get(userId, { user: authUser, authenticated: true });
   await usersService.patch(
     userId,
-    { agentic_auth_methods: { ...current.agentic_auth_methods, codex: 'subscription' } },
+    { agentic_auth_methods: { codex: 'subscription' } },
     {
       user: authUser,
       authenticated: true,

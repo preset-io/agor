@@ -294,12 +294,14 @@ hold in sandbox/delegated modes:
   (never from request data) via `resolveCodexCredentialRoute` and invokes the
   executor with the resulting delegated home key and Claude config directory.
 
-Standalone OAuth start/replacement, final persistence, and logout share one
-process-local credential mutation coordinator. In constrained HA, PostgreSQL
+Standalone Claude OAuth start/replacement/final persistence, Codex device final
+persistence, logout, credential-source patches, per-user route changes, and
+removal share one process-local credential mutation coordinator. Route changes
+cancel pending standalone Codex attempts while holding that queue. In constrained HA, PostgreSQL
 stores a SHA-256 state fingerprint plus an AES-GCM sealed PKCE/route envelope,
 and one transaction-scoped tenant/user advisory lock serializes OAuth
 finalization, logout, replacement starts, and external Claude method/API-key/
-token patches. Provider exchange happens before that lock. The winning daemon
+token patches, execution-home changes, and user removal. Provider exchange happens before that lock. The winning daemon
 then marks the attempt `persisting`, re-resolves the exact tenant/user route,
 holds the database authority through the bounded daemon-contained file write,
 read-back validation, users-service mutation, and terminal CAS, and uses the
@@ -309,6 +311,30 @@ exchange are terminally ambiguous and are never replayed; they also never
 path-delete a possible newer winner. External auth-source patches advance only
 the tombstone, preserving existing credential bytes while fencing a delayed
 OAuth writer.
+
+Route mutation and removal use the same credential-before-user ordering as
+logout: after authorization and bounded patch preparation, but before changing
+or deleting the users row, Agor invalidates attempts and generation-deletes the
+Claude and Codex credentials from the still-resolvable old canonical route.
+Both durable attempt authorities share the tenant/user lock, so a pending Codex
+attempt holding a sealed old route is invalidated in the same transaction and
+cannot write after the route moves. Only then can
+the SQL mutation publish a new route or release a reusable home key. The HA
+writer never targets `filesystem_home` overrides because those paths are not
+schema-proven unique across tenants/users; cleanup likewise refuses to turn an
+already-present override into ambient daemon filesystem authority. A canonical
+route is cleaned when it changes into an override, and canonical homes remain
+tenant/user-ID keyed even when a delegated `unix_username` is later reused.
+
+Standalone does not write generation tombstones: its Claude/Codex writers and
+route mutations share one process-global queue, so it has no detached stale
+writer to fence. PostgreSQL HA remains the sole durable generation domain.
+Across an **offline** HA → standalone → HA transition, standalone writes bypass
+but do not erase the retained tombstone, and the retained PostgreSQL sequences
+resume above their prior HA generations. A fresh HA database starts without a
+tombstone. This avoids any unsafe dependency on daemon/database wall-clock
+alignment. It does not make mixed standalone/HA or old/new cohorts safe;
+migration `0094` remains an offline, protocol-incompatible cutover.
 
 This also fixes the known strict-impersonation gap where subscription auth had
 no daemon-driven on-disk path at all (only env injection).

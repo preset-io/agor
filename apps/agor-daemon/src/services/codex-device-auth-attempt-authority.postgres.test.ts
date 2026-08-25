@@ -107,6 +107,19 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       return { owner, record };
     }
 
+    it('revalidates a captured route while holding durable reservation authority', async () => {
+      const owner = await seed('route-before-reservation');
+      await expect(
+        authorityA.reserve({
+          ...owner,
+          delegatedHomeKey: 'retired-home',
+          codexHome: '/retired/.codex',
+          validateRoute: async () => false,
+        })
+      ).rejects.toThrow(/route changed/i);
+      await expect(authorityA.getCurrentForUser(owner.tenantId, owner.userId)).resolves.toBeNull();
+    });
+
     it('runs the simulated provider flow from service A while service B observes and competes', async () => {
       const owner = await seed('service-flow');
       const idToken = `${Buffer.from('{}').toString('base64url')}.${Buffer.from(
@@ -213,6 +226,28 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         deviceAuthId: 'device-peer',
         userCode: 'CODE-peer',
       });
+    });
+
+    it('rejects stale-route import/logout before invalidating a newer durable attempt', async () => {
+      const { owner, record } = await pending('stale-mutation-preflight');
+      const work = vi.fn(async () => undefined);
+
+      await expect(
+        authorityB.runCredentialMutation(
+          owner.tenantId,
+          owner.userId,
+          'credentials_imported',
+          work,
+          async () => {
+            throw new Error('retired route');
+          }
+        )
+      ).rejects.toThrow(/retired route/);
+
+      expect(work).not.toHaveBeenCalled();
+      await expect(
+        authorityA.getCurrentForUser(owner.tenantId, owner.userId)
+      ).resolves.toMatchObject({ attemptId: record.attemptId, status: 'pending', isCurrent: true });
     });
 
     it('admits one poll owner, permits bounded takeover, and rejects the stale owner', async () => {

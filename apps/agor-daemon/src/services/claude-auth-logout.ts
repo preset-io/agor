@@ -37,7 +37,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
-import { CLAUDE_AUTH_TRUSTED_USER_MUTATION } from './claude-credential-mutation.js';
+import { CLAUDE_AUTH_TRUSTED_USER_MUTATION } from './claude-credential-mutation-trust.js';
 import type { ClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
 import {
   type AppLike,

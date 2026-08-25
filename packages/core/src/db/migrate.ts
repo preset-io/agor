@@ -138,6 +138,7 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     '0078_mcp_oauth_pending_flows',
     '0082_github_install_state',
     '0091_codex_device_auth_attempts',
+    '0094_claude_oauth_attempts',
   ].map(
     (name) =>
       [

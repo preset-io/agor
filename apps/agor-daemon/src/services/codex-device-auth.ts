@@ -66,7 +66,12 @@ import {
   type AppLike,
   persistVerifiedCodexAuth,
   resolveCodexCredentialRoute,
+  sameCodexCredentialRoute,
 } from './codex-auth-shared.js';
+
+interface StandaloneCredentialRouteAuthority {
+  lockExternalUserMutation(tenantId: string, userId: UserID): Promise<(() => Promise<void>) | void>;
+}
 
 const UNAVAILABLE_HINT =
   'Your ChatGPT account does not allow device-code sign-in. Personal accounts can turn it on under ChatGPT Settings → Security → "Device code authorization for Codex"; workspace accounts need an admin to enable it. You can also paste an auth.json or use an API key instead.';
@@ -109,7 +114,11 @@ function statusOf(attempt: DeviceAuthAttempt | undefined): CodexDeviceAuthStatus
   return base;
 }
 
-export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareDatabase) {
+export function createCodexDeviceAuthService(
+  app: AppLike,
+  db: TenantScopeAwareDatabase,
+  routeAuthority?: StandaloneCredentialRouteAuthority
+) {
   const attempts = new Map<string, DeviceAuthAttempt>();
 
   function cancelAttempt(key: string): void {
@@ -186,28 +195,56 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         return;
       }
       const { tokens } = exchanged;
-      // Ownership check in addition to the cancelled flag: a replacement
-      // attempt registered during the exchange must not have its freshly
-      // written credential clobbered by this older one.
-      if (attempt.cancelled || attempts.get(attempt.key) !== attempt) return;
-      const summary = await runWithTenantDatabaseScope(db, attempt.tenantId, () =>
-        persistVerifiedCodexAuth({
-          app,
-          normalized: buildDeviceAuthJson(tokens),
-          delegatedHomeKey: attempt.delegatedHomeKey,
-          userId: attempt.userId,
-          authUser: attempt.authUser,
-          codexHome: attempt.codexHome,
-        })
+      const releaseRouteAuthority = await routeAuthority?.lockExternalUserMutation(
+        String(attempt.tenantId),
+        attempt.userId
       );
-      attempt.planType = summary.planType;
-      finish(
-        attempt,
-        'success',
-        summary.planType
-          ? `Signed in with ChatGPT (${summary.planType} plan).`
-          : 'Signed in with ChatGPT.'
-      );
+      try {
+        // Ownership check in addition to the cancelled flag: replacement and
+        // users-service route/removal mutations take this same process queue,
+        // then cancel the attempt before a retired route can be written.
+        if (attempt.cancelled || attempts.get(attempt.key) !== attempt) return;
+        const currentRoute = await resolveCodexCredentialRoute(
+          attempt.userId,
+          <T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>) =>
+            runWithTenantDatabaseScope(db, attempt.tenantId, work),
+          app.get('config')
+        );
+        if (
+          !currentRoute.ok ||
+          !sameCodexCredentialRoute(currentRoute, {
+            delegatedHomeKey: attempt.delegatedHomeKey,
+            codexHome: attempt.codexHome,
+          })
+        ) {
+          finish(
+            attempt,
+            'error',
+            'The execution home changed while you were signing in. Start over to save the login in the right home.'
+          );
+          return;
+        }
+        const summary = await runWithTenantDatabaseScope(db, attempt.tenantId, () =>
+          persistVerifiedCodexAuth({
+            app,
+            normalized: buildDeviceAuthJson(tokens),
+            delegatedHomeKey: attempt.delegatedHomeKey,
+            userId: attempt.userId,
+            authUser: attempt.authUser,
+            codexHome: attempt.codexHome,
+          })
+        );
+        attempt.planType = summary.planType;
+        finish(
+          attempt,
+          'success',
+          summary.planType
+            ? `Signed in with ChatGPT (${summary.planType} plan).`
+            : 'Signed in with ChatGPT.'
+        );
+      } finally {
+        await releaseRouteAuthority?.();
+      }
     } catch (err) {
       // Messages reaching this catch are already sanitized: the raw-token
       // write path rethrows as BadRequest with operator-safe text inside
@@ -252,6 +289,58 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
   }
 
   return {
+    async runCredentialMutation<T>(
+      tenantId: string,
+      userId: UserID,
+      reason: 'credentials_imported' | 'credentials_removed',
+      work: (authorityGeneration?: number) => Promise<T>,
+      preflight?: () => Promise<void>
+    ): Promise<T> {
+      const release = await routeAuthority?.lockExternalUserMutation(tenantId, userId);
+      try {
+        await preflight?.();
+        const key = `${tenantId}:${userId}`;
+        const attempt = attempts.get(key);
+        cancelAttempt(key);
+        if (attempt) {
+          finish(
+            attempt,
+            'error',
+            reason === 'credentials_imported'
+              ? 'Imported credentials replaced this sign-in.'
+              : 'The Codex login was removed while sign-in was in progress.'
+          );
+        }
+        return await work(undefined);
+      } finally {
+        await release?.();
+      }
+    },
+
+    async completeExternalUserRouteMutation(
+      tenantId: string,
+      userId: UserID,
+      work: (authorityGeneration?: number) => Promise<void>,
+      _reason: 'execution_home_changed' | 'user_removed',
+      sharedGeneration?: number
+    ): Promise<void> {
+      // The caller retains routeAuthority's process-global queue. Cancel while
+      // holding it, then clean the old Codex route before the users row changes.
+      const key = `${tenantId}:${userId}`;
+      const attempt = attempts.get(key);
+      cancelAttempt(key);
+      if (attempt) {
+        finish(
+          attempt,
+          'error',
+          _reason === 'user_removed'
+            ? 'The account was removed while sign-in was in progress.'
+            : 'The execution home changed — start over to save the login in the new home.'
+        );
+      }
+      await work(sharedGeneration);
+    },
+
     async create(_data: unknown, params?: AuthenticatedParams): Promise<CodexDeviceAuthStatus> {
       const { authUser, userId, tenantId, key } = await requireContext(params);
 
@@ -263,40 +352,47 @@ export function createCodexDeviceAuthService(app: AppLike, db: TenantScopeAwareD
         throw new BadRequest('Codex is disabled for this workspace.');
       }
 
-      // Resolve the credential destination before the user approves the code.
-      const identity = await resolveCodexCredentialRoute(
-        userId,
-        withTenantDatabase,
-        app.get('config')
+      // Resolve and reserve while holding the same process-global route queue
+      // as users.patch/remove. A route mutation that wins first cannot be
+      // followed by a freshly reserved attempt carrying its retired route.
+      const releaseRouteAuthority = await routeAuthority?.lockExternalUserMutation(
+        String(tenantId),
+        userId
       );
-      if (!identity.ok) {
-        throw new BadRequest(
-          `Cannot determine which execution home should hold this Codex login: ${identity.message}`
+      let attempt: DeviceAuthAttempt;
+      try {
+        const identity = await resolveCodexCredentialRoute(
+          userId,
+          withTenantDatabase,
+          app.get('config')
         );
-      }
+        if (!identity.ok) {
+          throw new BadRequest(
+            `Cannot determine which execution home should hold this Codex login: ${identity.message}`
+          );
+        }
 
-      // Reserve the per-user slot BEFORE any await: an overlapping create()
-      // (double-click, impatient retry) then cancels THIS attempt instead of
-      // racing past a not-yet-registered one and leaving its poll loop
-      // orphaned against OpenAI for the full 15-minute window.
-      cancelAttempt(key);
-      pruneFinishedAttempts();
-      const attempt: DeviceAuthAttempt = {
-        attemptId: generateId() as CodexDeviceAuthAttemptID,
-        key,
-        userId,
-        tenantId,
-        authUser,
-        delegatedHomeKey: identity.delegatedHomeKey,
-        codexHome: identity.codexHome,
-        phase: 'pending',
-        deviceAuthId: '',
-        userCode: '',
-        intervalMs: 0,
-        expiresAtMs: Date.now() + DEVICE_CODE_LIFETIME_MS,
-        cancelled: false,
-      };
-      attempts.set(key, attempt);
+        cancelAttempt(key);
+        pruneFinishedAttempts();
+        attempt = {
+          attemptId: generateId() as CodexDeviceAuthAttemptID,
+          key,
+          userId,
+          tenantId,
+          authUser,
+          delegatedHomeKey: identity.delegatedHomeKey,
+          codexHome: identity.codexHome,
+          phase: 'pending',
+          deviceAuthId: '',
+          userCode: '',
+          intervalMs: 0,
+          expiresAtMs: Date.now() + DEVICE_CODE_LIFETIME_MS,
+          cancelled: false,
+        };
+        attempts.set(key, attempt);
+      } finally {
+        await releaseRouteAuthority?.();
+      }
 
       let grant: UserCodeGrant | 'unavailable';
       try {
