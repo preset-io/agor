@@ -3417,16 +3417,17 @@ export class GatewayService {
     if (params?.provider) {
       const user = params.user;
       if (!user) throw new NotAuthenticated('Authentication required');
+      const userId = user.user_id as UserID;
       const session = await this.sessionRepo.findById(data.session_id as SessionID);
       if (!session) throw new Forbidden('Gateway outbound access denied');
       const branch = await this.branchRepo.findById(session.branch_id);
       if (!branch) throw new Forbidden('Gateway outbound access denied');
-      const isOwner = await this.branchRepo.isOwner(branch.branch_id, user.user_id);
-      const effectivePermission = await this.branchRepo.resolveUserPermission(branch, user.user_id);
+      const isOwner = await this.branchRepo.isOwner(branch.branch_id, userId);
+      const effectivePermission = await this.branchRepo.resolveUserPermission(branch, userId);
       if (
         !hasBranchPermission(
           branch,
-          user.user_id,
+          userId,
           isOwner,
           'all' as BranchPermissionLevel,
           user.role,
