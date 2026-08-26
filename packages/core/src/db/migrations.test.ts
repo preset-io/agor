@@ -367,31 +367,48 @@ describe('Board and branch capability-policy migration', () => {
       expect(owners.rows.map((row) => row.primary_owner_user_id)).toEqual(['owner', 'owner']);
 
       const template = await client.execute(
-        `SELECT sharing_mode,others_preset,others_fs_access,others_capabilities
+        `SELECT sharing_mode,others_role,others_fs_access
          FROM branch_permission_configs WHERE board_id='board-1'`
       );
       expect(template.rows[0]).toMatchObject({
         sharing_mode: 'shared',
-        others_preset: 'collaborator',
+        others_role: 'collaborator',
         others_fs_access: 'write',
       });
-      expect(JSON.parse(String(template.rows[0]?.others_capabilities))).toEqual([
-        'branch.view',
-        'sessions.create',
-        'sessions.prompt_own',
-        'terminal.open',
-      ]);
 
       const migratedGroup = await client.execute(
-        `SELECT preset,fs_access,capabilities FROM branch_permission_entries
+        `SELECT role,fs_access FROM branch_permission_entries
          WHERE group_id='design' AND config_id IN (
            SELECT config_id FROM branch_permission_configs WHERE branch_id='branch-1'
          )`
       );
-      expect(migratedGroup.rows[0]).toMatchObject({ preset: 'collaborator', fs_access: 'write' });
-      expect(JSON.parse(String(migratedGroup.rows[0]?.capabilities))).not.toContain(
-        'sessions.manage_others'
+      expect(migratedGroup.rows[0]).toMatchObject({ role: 'collaborator', fs_access: 'write' });
+      const branchEntryColumns = await client.execute(
+        "SELECT name FROM pragma_table_info('branch_permission_entries')"
       );
+      expect(branchEntryColumns.rows.map((row) => row.name)).toContain('role');
+      expect(branchEntryColumns.rows.map((row) => row.name)).not.toContain('capabilities');
+      const configColumns = await client.execute(
+        "SELECT name FROM pragma_table_info('branch_permission_configs')"
+      );
+      expect(configColumns.rows.map((row) => row.name)).toContain('others_role');
+      expect(configColumns.rows.map((row) => row.name)).not.toContain('others_capabilities');
+      const boardEntryColumns = await client.execute(
+        "SELECT name FROM pragma_table_info('board_access_entries')"
+      );
+      expect(boardEntryColumns.rows.map((row) => row.name)).toContain('role');
+      expect(boardEntryColumns.rows.map((row) => row.name)).not.toContain('capabilities');
+      const boardPolicyColumns = await client.execute(
+        "SELECT name FROM pragma_table_info('board_access_policies')"
+      );
+      expect(boardPolicyColumns.rows.map((row) => row.name)).toContain('others_role');
+      expect(boardPolicyColumns.rows.map((row) => row.name)).not.toContain('others_capabilities');
+      await expect(
+        client.execute("UPDATE branch_permission_entries SET role='editor' WHERE group_id='design'")
+      ).rejects.toThrow(/CHECK constraint failed/);
+      await expect(
+        client.execute("UPDATE board_access_entries SET role='collaborator'")
+      ).rejects.toThrow(/CHECK constraint failed/);
       const sharing = await client.execute(
         'SELECT count(*) AS count FROM branch_session_sharing_rules'
       );
@@ -479,6 +496,10 @@ describe('Board and branch capability-policy migration', () => {
     expect(migration).toContain("string_agg(kind||':'||id");
     expect(migration).toContain('RBAC migration cannot attribute primary owners');
     expect(migration).toContain("SET LOCAL lock_timeout = '3s'");
+    expect(migration).toContain('"others_role" text');
+    expect(migration).toContain('"role" text');
+    expect(migration).not.toContain('"capabilities" jsonb');
+    expect(migration).not.toContain('"others_capabilities"');
     expect(migration).toContain(
       'FOREIGN KEY ("tenant_id","board_id") REFERENCES "board_access_policies"("tenant_id","board_id")'
     );

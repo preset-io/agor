@@ -284,6 +284,9 @@ visibility, and branch mounts use the actual caller. See
 - Normalized board/branch capability policies exist independently of execution
   mode. Historical owner/grant tables and `others_can` fields are inert,
   fail-closed compatibility shells.
+- Policy tables persist fixed roles (plus branch filesystem access), not
+  capability JSON. API capability arrays are derived and validated read
+  models; SQL inventory predicates compare normalized role/principal columns.
 - `sandbox` uses application RBAC to derive filesystem mounts; it creates no
   POSIX users or groups.
 - `delegated` passes trusted tenant/user identifiers, `{branch_fs_access}`, and

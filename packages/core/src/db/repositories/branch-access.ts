@@ -1,9 +1,8 @@
 /** Shared SQL predicates for normalized board/branch capability policies. */
 
 import type { UUID } from '@agor/core/types';
-import { and, eq, exists, or, type SQL, type SQLWrapper, sql } from 'drizzle-orm';
+import { and, eq, exists, inArray, or, type SQL, type SQLWrapper, sql } from 'drizzle-orm';
 import type { Database } from '../client';
-import { isPostgresDatabase } from '../database-wrapper';
 import {
   boardAccessEntries,
   boardAccessPolicies,
@@ -18,11 +17,46 @@ import {
   tasks,
 } from '../schema';
 
-function jsonCapabilitiesContain(db: Database, column: unknown, capability: string): SQL {
-  if (isPostgresDatabase(db)) {
-    return sql`${column as never} @> ${JSON.stringify([capability])}::jsonb`;
-  }
-  return sql`EXISTS (SELECT 1 FROM json_each(${column as never}) WHERE json_each.value = ${capability})`;
+const BOARD_ROLES_BY_CAPABILITY = {
+  'board.view': ['viewer', 'editor', 'manager'],
+  'board.edit': ['editor', 'manager'],
+  'board.attach_branch': ['editor', 'manager'],
+  'board.policy.manage': ['manager'],
+} as const;
+
+const BRANCH_ROLES_BY_CAPABILITY = {
+  'branch.view': ['viewer', 'collaborator', 'manager'],
+  'sessions.create': ['collaborator', 'manager'],
+  'sessions.prompt_own': ['collaborator', 'manager'],
+  'sessions.manage_others': ['manager'],
+  'branch.manage': ['manager'],
+  'environment.control': ['manager'],
+  'terminal.open': ['collaborator', 'manager'],
+  'branch.policy.manage': ['manager'],
+} as const;
+
+function roleGrantsCapability(
+  column: SQLWrapper,
+  kind: 'board' | 'branch',
+  capability: string
+): SQL {
+  const roles =
+    kind === 'board'
+      ? BOARD_ROLES_BY_CAPABILITY[capability as keyof typeof BOARD_ROLES_BY_CAPABILITY]
+      : BRANCH_ROLES_BY_CAPABILITY[capability as keyof typeof BRANCH_ROLES_BY_CAPABILITY];
+  if (!roles) return sql`false`;
+  return inArray(column, [...roles]);
+}
+
+function branchRoleGrantsCapability(
+  roleColumn: SQLWrapper,
+  fsAccessColumn: SQLWrapper,
+  capability: string
+): SQL {
+  const roleCondition = roleGrantsCapability(roleColumn, 'branch', capability);
+  return capability === 'terminal.open'
+    ? (and(roleCondition, inArray(fsAccessColumn, ['read', 'write'])) ?? sql`false`)
+    : roleCondition;
 }
 
 function effectiveConfigCondition(): SQL {
@@ -53,7 +87,13 @@ function directBranchEntryExists(db: Database, userId: UUID, capability?: string
           effectiveConfigCondition(),
           eq(branchPermissionEntries.user_id, userId),
           ...(capability
-            ? [jsonCapabilitiesContain(db, branchPermissionEntries.capabilities, capability)]
+            ? [
+                branchRoleGrantsCapability(
+                  branchPermissionEntries.role,
+                  branchPermissionEntries.fs_access,
+                  capability
+                ),
+              ]
             : [])
         )
       )
@@ -83,7 +123,13 @@ function activeBranchGroupEntryExists(db: Database, userId: UUID, capability?: s
         and(
           effectiveConfigCondition(),
           ...(capability
-            ? [jsonCapabilitiesContain(db, branchPermissionEntries.capabilities, capability)]
+            ? [
+                branchRoleGrantsCapability(
+                  branchPermissionEntries.role,
+                  branchPermissionEntries.fs_access,
+                  capability
+                ),
+              ]
             : [])
         )
       )
@@ -98,7 +144,11 @@ function branchOthersHasCapability(db: Database, capability: string): SQL {
         and(
           effectiveConfigCondition(),
           eq(branchPermissionConfigs.sharing_mode, 'shared'),
-          jsonCapabilitiesContain(db, branchPermissionConfigs.others_capabilities, capability)
+          branchRoleGrantsCapability(
+            branchPermissionConfigs.others_role,
+            branchPermissionConfigs.others_fs_access,
+            capability
+          )
         )
       )
   );
@@ -160,7 +210,7 @@ function directBoardEntryExists(db: Database, userId: UUID, capability?: string)
           eq(boardAccessEntries.board_id, boards.board_id),
           eq(boardAccessEntries.user_id, userId),
           ...(capability
-            ? [jsonCapabilitiesContain(db, boardAccessEntries.capabilities, capability)]
+            ? [roleGrantsCapability(boardAccessEntries.role, 'board', capability)]
             : [])
         )
       )
@@ -186,7 +236,7 @@ function activeBoardGroupEntryExists(db: Database, userId: UUID, capability?: st
         and(
           eq(boardAccessEntries.board_id, boards.board_id),
           ...(capability
-            ? [jsonCapabilitiesContain(db, boardAccessEntries.capabilities, capability)]
+            ? [roleGrantsCapability(boardAccessEntries.role, 'board', capability)]
             : [])
         )
       )
@@ -211,7 +261,7 @@ export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
               and(
                 eq(boardAccessPolicies.board_id, boards.board_id),
                 eq(boardAccessPolicies.sharing_mode, 'shared'),
-                jsonCapabilitiesContain(db, boardAccessPolicies.others_capabilities, 'board.view')
+                roleGrantsCapability(boardAccessPolicies.others_role, 'board', 'board.view')
               )
             )
         )

@@ -103,11 +103,26 @@ function entryInsert(entry: CapabilityPolicyEntry, now: Date) {
     entry_id: generateId(),
     user_id: principal.principal_type === 'user' ? principal.user_id : null,
     group_id: principal.principal_type === 'group' ? principal.group_id : null,
-    preset: entry.preset,
-    capabilities: entry.capabilities,
+    role: entry.preset,
     created_at: now,
     updated_at: now,
   };
+}
+
+function capabilitiesForStoredRole(
+  kind: CapabilityPolicy['policy_kind'],
+  role: string,
+  fsAccess: CapabilityPolicyFsAccess = 'none'
+): CapabilityPolicyCapability[] {
+  const capabilities = capabilityPolicyPresetCapabilities(
+    kind,
+    role as CapabilityPolicyPresetId,
+    fsAccess
+  );
+  if (!capabilities) {
+    throw new RepositoryError(`Invalid ${kind} role ${role}`);
+  }
+  return capabilities;
 }
 
 function legacyCan(access: EffectiveCapabilityPolicyAccess): 'none' | 'view' | 'session' | 'all' {
@@ -258,8 +273,7 @@ export class CapabilityPolicyRepository {
         board_id: boardId,
         schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
         sharing_mode: value.board_access.sharing_mode,
-        others_preset: value.board_access.others.preset,
-        others_capabilities: value.board_access.others.capabilities,
+        others_role: value.board_access.others.preset,
         revision: 1,
         // The resource's created_by field is the authoritative creation audit.
         // Keep this nullable because low-level imports may preserve a logical
@@ -363,13 +377,12 @@ export class CapabilityPolicyRepository {
           entry_id: string;
           user_id: string | null;
           group_id: string | null;
-          preset: string;
-          capabilities: unknown;
+          role: string;
         }) => ({
           entry_id: row.entry_id as UUID,
           principal: rowPrincipal(row),
-          preset: row.preset as CapabilityPolicyPresetId,
-          capabilities: row.capabilities as CapabilityPolicyCapability[],
+          preset: row.role as CapabilityPolicyPresetId,
+          capabilities: capabilitiesForStoredRole('board_access', row.role),
           fs_access: 'none',
         })
       );
@@ -383,14 +396,17 @@ export class CapabilityPolicyRepository {
         entry_id: string;
         user_id: string | null;
         group_id: string | null;
-        preset: string;
-        capabilities: unknown;
+        role: string;
         fs_access: string;
       }) => ({
         entry_id: row.entry_id as UUID,
         principal: rowPrincipal(row),
-        preset: row.preset as CapabilityPolicyPresetId,
-        capabilities: row.capabilities as CapabilityPolicyCapability[],
+        preset: row.role as CapabilityPolicyPresetId,
+        capabilities: capabilitiesForStoredRole(
+          'branch_access',
+          row.role,
+          row.fs_access as CapabilityPolicyFsAccess
+        ),
         fs_access: row.fs_access as CapabilityPolicyFsAccess,
       })
     );
@@ -433,8 +449,12 @@ export class CapabilityPolicyRepository {
         sharing_mode: row.sharing_mode as CapabilityPolicy['sharing_mode'],
         entries,
         others: {
-          preset: row.others_preset as CapabilityPolicyPresetId,
-          capabilities: row.others_capabilities as CapabilityPolicyCapability[],
+          preset: row.others_role as CapabilityPolicyPresetId,
+          capabilities: capabilitiesForStoredRole(
+            'branch_access',
+            row.others_role,
+            row.others_fs_access as CapabilityPolicyFsAccess
+          ),
           fs_access: row.others_fs_access as CapabilityPolicyFsAccess,
         },
       },
@@ -471,8 +491,8 @@ export class CapabilityPolicyRepository {
         sharing_mode: policy.sharing_mode as CapabilityPolicy['sharing_mode'],
         entries: await this.loadPolicyEntries('board', boardId),
         others: {
-          preset: policy.others_preset as CapabilityPolicyPresetId,
-          capabilities: policy.others_capabilities as CapabilityPolicyCapability[],
+          preset: policy.others_role as CapabilityPolicyPresetId,
+          capabilities: capabilitiesForStoredRole('board_access', policy.others_role),
           fs_access: 'none',
         },
       },
@@ -547,8 +567,7 @@ export class CapabilityPolicyRepository {
       await update(tx, branchPermissionConfigs)
         .set({
           sharing_mode: config.access.sharing_mode,
-          others_preset: config.access.others.preset,
-          others_capabilities: config.access.others.capabilities,
+          others_role: config.access.others.preset,
           others_fs_access: config.access.others.fs_access,
           revision: sql`${branchPermissionConfigs.revision} + 1`,
           updated_by: actorId,
@@ -571,8 +590,7 @@ export class CapabilityPolicyRepository {
           branch_id: target.branch_id ?? null,
           schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
           sharing_mode: config.access.sharing_mode,
-          others_preset: config.access.others.preset,
-          others_capabilities: config.access.others.capabilities,
+          others_role: config.access.others.preset,
           others_fs_access: config.access.others.fs_access,
           revision: 1,
           updated_by: actorId,
@@ -659,8 +677,7 @@ export class CapabilityPolicyRepository {
           await update(tx, boardAccessPolicies)
             .set({
               sharing_mode: value.board_access.sharing_mode,
-              others_preset: value.board_access.others.preset,
-              others_capabilities: value.board_access.others.capabilities,
+              others_role: value.board_access.others.preset,
               revision: currentPolicy.revision + 1,
               updated_by: actorId,
               updated_at: now,
@@ -679,8 +696,7 @@ export class CapabilityPolicyRepository {
               board_id: boardId,
               schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
               sharing_mode: value.board_access.sharing_mode,
-              others_preset: value.board_access.others.preset,
-              others_capabilities: value.board_access.others.capabilities,
+              others_role: value.board_access.others.preset,
               revision: 1,
               updated_by: actorId,
               created_at: now,

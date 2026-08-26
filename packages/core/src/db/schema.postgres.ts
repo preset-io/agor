@@ -1296,10 +1296,9 @@ export const boardAccessPolicies = pgTable(
     board_id: varchar('board_id', { length: 36 }).primaryKey(),
     schema_version: integer('schema_version').notNull().default(1),
     sharing_mode: text('sharing_mode', { enum: ['private', 'shared'] }).notNull(),
-    others_preset: text('others_preset').notNull().default('none'),
-    others_capabilities: t
-      .json<import('@agor/core/types').CapabilityPolicyCapability[]>('others_capabilities')
-      .notNull(),
+    others_role: text('others_role', { enum: ['none', 'viewer', 'editor', 'manager'] })
+      .notNull()
+      .default('none'),
     revision: integer('revision').notNull().default(1),
     updated_by: varchar('updated_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
@@ -1331,10 +1330,7 @@ export const boardAccessEntries = pgTable(
     board_id: varchar('board_id', { length: 36 }).notNull(),
     user_id: varchar('user_id', { length: 36 }),
     group_id: varchar('group_id', { length: 36 }),
-    preset: text('preset').notNull(),
-    capabilities: t
-      .json<import('@agor/core/types').CapabilityPolicyCapability[]>('capabilities')
-      .notNull(),
+    role: text('role', { enum: ['none', 'viewer', 'editor', 'manager'] }).notNull(),
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at').notNull(),
   },
@@ -1389,10 +1385,11 @@ export const branchPermissionConfigs = pgTable(
     branch_id: varchar('branch_id', { length: 36 }),
     schema_version: integer('schema_version').notNull().default(1),
     sharing_mode: text('sharing_mode', { enum: ['private', 'shared'] }).notNull(),
-    others_preset: text('others_preset').notNull().default('none'),
-    others_capabilities: t
-      .json<import('@agor/core/types').CapabilityPolicyCapability[]>('others_capabilities')
-      .notNull(),
+    others_role: text('others_role', {
+      enum: ['none', 'viewer', 'collaborator', 'manager'],
+    })
+      .notNull()
+      .default('none'),
     others_fs_access: text('others_fs_access', { enum: ['none', 'read', 'write'] })
       .notNull()
       .default('none'),
@@ -1440,10 +1437,7 @@ export const branchPermissionEntries = pgTable(
     config_id: varchar('config_id', { length: 36 }).notNull(),
     user_id: varchar('user_id', { length: 36 }),
     group_id: varchar('group_id', { length: 36 }),
-    preset: text('preset').notNull(),
-    capabilities: t
-      .json<import('@agor/core/types').CapabilityPolicyCapability[]>('capabilities')
-      .notNull(),
+    role: text('role', { enum: ['none', 'viewer', 'collaborator', 'manager'] }).notNull(),
     fs_access: text('fs_access', { enum: ['none', 'read', 'write'] })
       .notNull()
       .default('none'),

@@ -29,6 +29,14 @@ are the only authorization source. The historical owner/grant rows and
 `others_can` fields remain empty, fail-closed compatibility shells; runtime
 code does not read or write them.
 
+Normalized policy rows persist a fixed role (`Viewer`, `Editor`/
+`Collaborator`, or `Manager`) and, for branch access, `none | read | write`
+filesystem access. They do not persist capability arrays or query JSON blobs.
+API read models derive the corresponding low-level capabilities from the
+canonical role map, and writes are rejected unless their derived capability
+view matches the submitted role and filesystem access. Set-based list queries
+compare indexed role/principal columns; point checks use the same role map.
+
 Every board and branch has one immutable `primary_owner_user_id`. Ownership is
 not part of a policy entry and cannot be reassigned. Administrators retain the
 existing tenant-management bypass, but that does not change primary ownership.

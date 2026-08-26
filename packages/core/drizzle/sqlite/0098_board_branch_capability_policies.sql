@@ -37,8 +37,7 @@ CREATE TABLE `board_access_policies` (
   `board_id` text PRIMARY KEY NOT NULL REFERENCES `boards`(`board_id`) ON DELETE CASCADE,
   `schema_version` integer DEFAULT 1 NOT NULL,
   `sharing_mode` text NOT NULL,
-  `others_preset` text DEFAULT 'none' NOT NULL,
-  `others_capabilities` text NOT NULL,
+  `others_role` text DEFAULT 'none' NOT NULL CHECK (`others_role` IN ('none','viewer','editor','manager')),
   `revision` integer DEFAULT 1 NOT NULL,
   `updated_by` text REFERENCES `users`(`user_id`) ON DELETE SET NULL,
   `created_at` integer NOT NULL,
@@ -52,8 +51,7 @@ CREATE TABLE `board_access_entries` (
   `board_id` text NOT NULL REFERENCES `board_access_policies`(`board_id`) ON DELETE CASCADE,
   `user_id` text REFERENCES `users`(`user_id`) ON DELETE CASCADE,
   `group_id` text REFERENCES `groups`(`group_id`) ON DELETE CASCADE,
-  `preset` text NOT NULL,
-  `capabilities` text NOT NULL,
+  `role` text NOT NULL CHECK (`role` IN ('none','viewer','editor','manager')),
   `created_at` integer NOT NULL,
   `updated_at` integer NOT NULL,
   CHECK ((`user_id` IS NOT NULL) <> (`group_id` IS NOT NULL))
@@ -76,8 +74,7 @@ CREATE TABLE `branch_permission_configs` (
   `branch_id` text REFERENCES `branches`(`branch_id`) ON DELETE CASCADE,
   `schema_version` integer DEFAULT 1 NOT NULL,
   `sharing_mode` text NOT NULL,
-  `others_preset` text DEFAULT 'none' NOT NULL,
-  `others_capabilities` text NOT NULL,
+  `others_role` text DEFAULT 'none' NOT NULL CHECK (`others_role` IN ('none','viewer','collaborator','manager')),
   `others_fs_access` text DEFAULT 'none' NOT NULL,
   `revision` integer DEFAULT 1 NOT NULL,
   `updated_by` text REFERENCES `users`(`user_id`) ON DELETE SET NULL,
@@ -97,8 +94,7 @@ CREATE TABLE `branch_permission_entries` (
   `config_id` text NOT NULL REFERENCES `branch_permission_configs`(`config_id`) ON DELETE CASCADE,
   `user_id` text REFERENCES `users`(`user_id`) ON DELETE CASCADE,
   `group_id` text REFERENCES `groups`(`group_id`) ON DELETE CASCADE,
-  `preset` text NOT NULL,
-  `capabilities` text NOT NULL,
+  `role` text NOT NULL CHECK (`role` IN ('none','viewer','collaborator','manager')),
   `fs_access` text DEFAULT 'none' NOT NULL,
   `created_at` integer NOT NULL,
   `updated_at` integer NOT NULL,
@@ -155,21 +151,19 @@ SELECT b.`board_id`, 1,
          OR EXISTS (SELECT 1 FROM `board_owners` bo WHERE bo.`board_id`=b.`board_id` AND bo.`user_id`<>b.`primary_owner_user_id`)
        THEN 'shared' ELSE 'private' END,
   CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared') = 'shared' THEN 'viewer' ELSE 'none' END,
-  CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared') = 'shared' THEN json_array('board.view') ELSE json_array() END,
   1, b.`primary_owner_user_id`, COALESCE(b.`created_at`, unixepoch()*1000), COALESCE(b.`updated_at`, b.`created_at`, unixepoch()*1000)
 FROM `boards` b;
 --> statement-breakpoint
 INSERT INTO `board_access_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   bo.`board_id`, bo.`user_id`, NULL, 'manager',
-  json_array('board.view','board.edit','board.attach_branch','board.policy.manage'),
   COALESCE(bo.`created_at`, unixepoch()*1000), COALESCE(bo.`created_at`, unixepoch()*1000)
 FROM `board_owners` bo JOIN `boards` b ON b.`board_id`=bo.`board_id`
 WHERE bo.`user_id`<>b.`primary_owner_user_id`;
 --> statement-breakpoint
 INSERT INTO `board_access_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
-  bg.`board_id`, NULL, bg.`group_id`, 'viewer', json_array('board.view'),
+  bg.`board_id`, NULL, bg.`group_id`, 'viewer',
   COALESCE(bg.`created_at`, unixepoch()*1000), COALESCE(bg.`updated_at`, bg.`created_at`, unixepoch()*1000)
 FROM `board_group_grants` bg JOIN `boards` b ON b.`board_id`=bg.`board_id`
 WHERE bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared';
@@ -186,15 +180,6 @@ SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(l
              AND EXISTS (SELECT 1 FROM `board_group_grants` bg WHERE bg.`board_id`=b.`board_id` AND bg.`can`<>'none'))
        THEN 'shared' ELSE 'private' END,
   CASE COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
-  CASE COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session')
-    WHEN 'none' THEN json_array()
-    WHEN 'view' THEN json_array('branch.view')
-    WHEN 'all' THEN CASE WHEN COALESCE(json_extract(b.`data`, '$.default_others_fs_access'), 'read')='none'
-      THEN json_array('branch.view','sessions.create','sessions.prompt_own','sessions.manage_others','branch.manage','environment.control','branch.policy.manage')
-      ELSE json_array('branch.view','sessions.create','sessions.prompt_own','sessions.manage_others','branch.manage','environment.control','terminal.open','branch.policy.manage') END
-    ELSE CASE WHEN COALESCE(json_extract(b.`data`, '$.default_others_fs_access'), 'read')='none'
-      THEN json_array('branch.view','sessions.create','sessions.prompt_own')
-      ELSE json_array('branch.view','sessions.create','sessions.prompt_own','terminal.open') END END,
   CASE WHEN COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session')='none' THEN 'none' ELSE COALESCE(json_extract(b.`data`, '$.default_others_fs_access'), 'read') END,
   1, b.`primary_owner_user_id`, COALESCE(b.`created_at`, unixepoch()*1000), COALESCE(b.`updated_at`, b.`created_at`, unixepoch()*1000)
 FROM `boards` b;
@@ -202,7 +187,6 @@ FROM `boards` b;
 INSERT INTO `branch_permission_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   c.`config_id`, bo.`user_id`, NULL, 'manager',
-  json_array('branch.view','sessions.create','sessions.prompt_own','sessions.manage_others','branch.manage','environment.control','terminal.open','branch.policy.manage'),
   'write', COALESCE(bo.`created_at`, unixepoch()*1000), COALESCE(bo.`created_at`, unixepoch()*1000)
 FROM `board_owners` bo JOIN `boards` b ON b.`board_id`=bo.`board_id`
 JOIN `branch_permission_configs` c ON c.`board_id`=bo.`board_id`
@@ -211,10 +195,6 @@ WHERE bo.`user_id`<>b.`primary_owner_user_id`;
 INSERT INTO `branch_permission_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   c.`config_id`, NULL, bg.`group_id`, CASE bg.`can` WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
-  CASE bg.`can` WHEN 'view' THEN json_array('branch.view') WHEN 'all' THEN CASE WHEN COALESCE(bg.`fs_access`,'read')='none'
-    THEN json_array('branch.view','sessions.create','sessions.prompt_own','sessions.manage_others','branch.manage','environment.control','branch.policy.manage')
-    ELSE json_array('branch.view','sessions.create','sessions.prompt_own','sessions.manage_others','branch.manage','environment.control','terminal.open','branch.policy.manage') END
-    ELSE CASE WHEN COALESCE(bg.`fs_access`,'read')='none' THEN json_array('branch.view','sessions.create','sessions.prompt_own') ELSE json_array('branch.view','sessions.create','sessions.prompt_own','terminal.open') END END,
   CASE WHEN bg.`can`='none' THEN 'none' ELSE COALESCE(bg.`fs_access`,'read') END,
   COALESCE(bg.`created_at`, unixepoch()*1000), COALESCE(bg.`updated_at`, bg.`created_at`, unixepoch()*1000)
 FROM `board_group_grants` bg JOIN `boards` b ON b.`board_id`=bg.`board_id`
@@ -231,18 +211,13 @@ SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(l
          OR EXISTS (SELECT 1 FROM `branch_group_grants` bg WHERE bg.`branch_id`=br.`branch_id` AND bg.`can`<>'none')
        THEN 'shared' ELSE 'private' END,
   CASE COALESCE(br.`others_can`,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
-  CASE COALESCE(br.`others_can`,'session') WHEN 'none' THEN json_array() WHEN 'view' THEN json_array('branch.view')
-    WHEN 'all' THEN CASE WHEN COALESCE(br.`others_fs_access`,'read')='none'
-      THEN json_array('branch.view','sessions.create','sessions.prompt_own','sessions.manage_others','branch.manage','environment.control','branch.policy.manage')
-      ELSE json_array('branch.view','sessions.create','sessions.prompt_own','sessions.manage_others','branch.manage','environment.control','terminal.open','branch.policy.manage') END
-    ELSE CASE WHEN COALESCE(br.`others_fs_access`,'read')='none' THEN json_array('branch.view','sessions.create','sessions.prompt_own') ELSE json_array('branch.view','sessions.create','sessions.prompt_own','terminal.open') END END,
   CASE WHEN COALESCE(br.`others_can`,'session')='none' THEN 'none' ELSE COALESCE(br.`others_fs_access`,'read') END,
   1, br.`primary_owner_user_id`, COALESCE(br.`created_at`, unixepoch()*1000), COALESCE(br.`updated_at`, br.`created_at`, unixepoch()*1000)
 FROM `branches` br WHERE br.`permission_binding`='override';
 --> statement-breakpoint
 INSERT INTO `branch_permission_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
-  c.`config_id`, bo.`user_id`, NULL, 'manager', json_array('branch.view','sessions.create','sessions.prompt_own','sessions.manage_others','branch.manage','environment.control','terminal.open','branch.policy.manage'),
+  c.`config_id`, bo.`user_id`, NULL, 'manager',
   'write', COALESCE(bo.`created_at`, unixepoch()*1000), COALESCE(bo.`created_at`, unixepoch()*1000)
 FROM `branch_owners` bo JOIN `branches` br ON br.`branch_id`=bo.`branch_id`
 JOIN `branch_permission_configs` c ON c.`branch_id`=bo.`branch_id`
@@ -251,10 +226,6 @@ WHERE bo.`user_id`<>br.`primary_owner_user_id`;
 INSERT INTO `branch_permission_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   c.`config_id`, NULL, bg.`group_id`, CASE bg.`can` WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
-  CASE bg.`can` WHEN 'view' THEN json_array('branch.view') WHEN 'all' THEN CASE WHEN COALESCE(bg.`fs_access`,'read')='none'
-    THEN json_array('branch.view','sessions.create','sessions.prompt_own','sessions.manage_others','branch.manage','environment.control','branch.policy.manage')
-    ELSE json_array('branch.view','sessions.create','sessions.prompt_own','sessions.manage_others','branch.manage','environment.control','terminal.open','branch.policy.manage') END
-    ELSE CASE WHEN COALESCE(bg.`fs_access`,'read')='none' THEN json_array('branch.view','sessions.create','sessions.prompt_own') ELSE json_array('branch.view','sessions.create','sessions.prompt_own','terminal.open') END END,
   COALESCE(bg.`fs_access`,'read'), COALESCE(bg.`created_at`, unixepoch()*1000), COALESCE(bg.`updated_at`, bg.`created_at`, unixepoch()*1000)
 FROM `branch_group_grants` bg JOIN `branch_permission_configs` c ON c.`branch_id`=bg.`branch_id`
 WHERE bg.`can`<>'none';
