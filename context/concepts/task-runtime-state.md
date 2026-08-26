@@ -122,7 +122,13 @@ The shared pulse vocabulary is:
 
 - `sdk_started` — the SDK boundary or a supervised resume was reached;
 - `progress` — known meaningful SDK activity;
-- `waiting` — a known permission/input wait that pauses watchdog time;
+- `waiting` — a known wait that pauses watchdog time. The pause is keyed by
+  source (`approval` for permission/input prompts, `rate_limit` for a Claude
+  rate-limit block) and lifts only when every source has reported its own
+  resume detail, so one wait clearing cannot un-pause another. **Every producer
+  of a `waiting` pulse owes a resume** — a pause has no clock of its own, so an
+  unmatched one disables the watchdog for the rest of the task. The shared
+  detail vocabulary is `ExecutorPulseDetail` in `packages/core/src/types/task.ts`;
 - `unknown_activity` — an unrecognized event that is retained as diagnostic
   evidence and fails open.
 
@@ -182,9 +188,14 @@ an explicit mapping-review point.
 - Starts at the executor boundary, before SDK import/subscription/prompt setup,
   so a silent SDK startup is covered.
 - Uses semantic activity rather than heartbeat time.
-- Pauses while waiting for a known permission/input decision.
-- Tracks known active tool/background-task lifetimes so healthy silent work is
-  not treated as idle.
+- Pauses while waiting for a known permission/input decision or a Claude
+  rate-limit block, keyed by wait source (see the pulse vocabulary above).
+- Tracks foreground tool lifetimes so healthy silent work is not treated as
+  idle. A Claude background task only _relaxes_ the idle policy to plain SDK
+  silence rather than suspending it: `task_progress` and forwarded subagent
+  traffic keep a healthy task alive, while a task ID that never reports a
+  terminal signal can no longer disarm the check that would notice the
+  resulting hang ([#2447](https://github.com/preset-io/agor/pull/2447)).
 - Records unknown vocabulary once as `unknown_activity` and continues rather
   than terminating work it cannot classify.
 - In `observe` mode, writes a `would_fire` diagnosis and leaves lifecycle state
@@ -354,3 +365,11 @@ the present boundaries:
   with durable quiescence reporting.
 - [#2057](https://github.com/preset-io/agor/pull/2057) aligned Claude
   background-task lifetime with query and watchdog lifetime.
+- [#2447](https://github.com/preset-io/agor/pull/2447) bounded that alignment:
+  the query a finished turn holds open for background tasks now has a two-tier
+  last-resort budget (`execution.claude_background_tasks`), background tasks no
+  longer suspend the watchdog outright, and `waiting` pauses are keyed to the
+  wait that installed them. **A timeout recovery settles the turn on the
+  accumulated parent result and may discard background work that had not
+  finished** — the turn is reported as completed, not failed, because the model
+  had already stopped responding.

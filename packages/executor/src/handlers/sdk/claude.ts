@@ -5,6 +5,7 @@
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
+import { resolveClaudeBackgroundTaskConfig } from '@agor/core/config';
 import type {
   ExecutorPulseKind,
   MessageSource,
@@ -42,6 +43,12 @@ export async function executeClaudeCodeTask(params: {
   // Permission timeout: daemon-resolved slice, fallback to 10-minute default.
   const permissionTimeoutMs = params.resolvedConfig?.execution?.permission_timeout_ms ?? 600_000;
 
+  // Bounds on the query a finished turn holds open for background tasks.
+  // Daemon-resolved slice, with the same defaults when running without one.
+  const backgroundTaskConfig =
+    params.resolvedConfig?.execution?.claude_background_tasks ??
+    resolveClaudeBackgroundTaskConfig();
+
   // Create PermissionService that emits via Feathers WebSocket
   const permissionService = new PermissionService(async (event, data) => {
     if (event === 'permission:request') params.onPulse?.('waiting', 'permission.request');
@@ -76,7 +83,8 @@ export async function executeClaudeCodeTask(params: {
           true, // mcpEnabled
           useNativeAuth, // Flag for Claude CLI OAuth (`claude login`)
           repos.users,
-          repos.mcpOAuthAuthHeaders
+          repos.mcpOAuthAuthHeaders,
+          backgroundTaskConfig
         ),
     });
   } finally {

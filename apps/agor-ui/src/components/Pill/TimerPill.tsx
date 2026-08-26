@@ -3,7 +3,7 @@ import type {
   SessionStatus as SessionStatusValue,
   TaskStatus as TaskStatusValue,
 } from '@agor-live/client';
-import { SessionStatus, TaskStatus } from '@agor-live/client';
+import { isRateLimitBlockPulse, SessionStatus, TaskStatus } from '@agor-live/client';
 import {
   CheckCircleOutlined,
   ClockCircleOutlined,
@@ -47,6 +47,18 @@ const PULSE_LABELS: Record<ExecutorPulse['kind'], string> = {
   waiting: 'Waiting',
   unknown_activity: 'Active',
 };
+
+/**
+ * A blocked session and a hung one look identical from the outside — both sit
+ * in `running` with no output — so the label has to read the detail, not just
+ * the kind. The executor emits one `waiting` pulse when the SDK is refused and
+ * the heartbeat re-sends it every beat, so this stays true for the whole wait
+ * even though the SDK itself is silent throughout.
+ */
+export function pulseLabel(pulse: ExecutorPulse): string {
+  if (isRateLimitBlockPulse(pulse)) return 'Rate limited';
+  return PULSE_LABELS[pulse.kind];
+}
 
 const PulseIcon = () => (
   <svg
@@ -303,7 +315,7 @@ export const TimerPill: React.FC<TimerPillProps> = ({
                 }
               >
                 <span style={{ color: token.colorTextSecondary, marginLeft: 6 }}>
-                  {PULSE_LABELS[latestExecutorPulse.kind]}
+                  {pulseLabel(latestExecutorPulse)}
                 </span>
               </Tooltip>
             </span>
@@ -317,7 +329,16 @@ export const TimerPill: React.FC<TimerPillProps> = ({
     return null;
   }
 
-  const config = statusConfig[status] || statusConfig.pending;
+  const baseConfig = statusConfig[status] || statusConfig.pending;
+  // A rate-limited task is still RUNNING — the status enum has no room for
+  // "running but blocked", which is what the pulse channel is for. Borrow the
+  // awaiting-permission affordance so the pill reads as parked rather than
+  // working, without inventing a status. The elapsed timer keeps running,
+  // which is the useful reading during a multi-hour reset.
+  const config =
+    isActive && isRateLimitBlockPulse(latestExecutorPulse)
+      ? { ...baseConfig, icon: <PauseCircleOutlined />, color: PILL_COLORS.warning }
+      : baseConfig;
   const label = config.label ?? formatDuration(elapsedMs);
 
   const tag = (

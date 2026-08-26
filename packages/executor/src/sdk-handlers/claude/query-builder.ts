@@ -95,6 +95,17 @@ export interface QuerySetupDeps {
  */
 export interface InterruptibleQuery {
   interrupt(): Promise<void>;
+  /**
+   * Tear the query down locally: abort the spawn, end stdin, drop the abort
+   * handler, and reject anything still in flight.
+   *
+   * Structurally unlike {@link InterruptibleQuery.interrupt}, which is a
+   * *control request* — it round-trips over the same transport as the message
+   * stream, so on a wedged query it never resolves. `close()` touches only this
+   * process's own state, so it is the one teardown that still works when the
+   * subprocess has stopped answering. Synchronous, per the SDK's `Query`.
+   */
+  close(): void;
   getContextUsage(): Promise<import('@agor/core/sdk').SDKControlGetContextUsageResponse>;
   /**
    * Signal that post-result control requests (like getContextUsage) are done.

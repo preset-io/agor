@@ -1,4 +1,4 @@
-import { TaskStatus } from '@agor-live/client';
+import { isRateLimitBlockPulse, TaskStatus } from '@agor-live/client';
 import { render, screen } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -82,5 +82,58 @@ describe('TimerPill pulse diagnostics', () => {
     render(<TimerPill status={TaskStatus.RUNNING} startedAt="2026-07-18T22:47:23.000Z" />);
 
     expect(screen.queryByText('Pulse')).not.toBeInTheDocument();
+  });
+
+  // A rate-limited task stays RUNNING and stops producing output, which is
+  // indistinguishable from a hang unless the label reads the pulse detail.
+  it.each([
+    ['rate_limit.five_hour', 'Rate limited'],
+    ['rate_limit.seven_day_opus', 'Rate limited'],
+    ['permission.request', 'Waiting'],
+  ])('distinguishes a waiting pulse detailed %s as %s', (detail, label) => {
+    render(
+      <TimerPill
+        status={TaskStatus.RUNNING}
+        startedAt="2026-07-18T22:47:23.000Z"
+        latestExecutorPulse={{
+          sequence: 1,
+          kind: 'waiting',
+          detail,
+          observed_at: '2026-07-18T22:47:24.000Z',
+        }}
+      />
+    );
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it('reports a rate-limit block from the pulse alone', () => {
+    expect(
+      isRateLimitBlockPulse({
+        sequence: 1,
+        kind: 'waiting',
+        detail: 'rate_limit.five_hour',
+        observed_at: '2026-07-18T22:47:24.000Z',
+      })
+    ).toBe(true);
+    // Not every wait is a block, and not every rate-limit detail is a wait:
+    // the resume signal rides the same prefix on a different kind.
+    expect(
+      isRateLimitBlockPulse({
+        sequence: 2,
+        kind: 'waiting',
+        detail: 'permission.request',
+        observed_at: '2026-07-18T22:47:24.000Z',
+      })
+    ).toBe(false);
+    expect(
+      isRateLimitBlockPulse({
+        sequence: 3,
+        kind: 'sdk_started',
+        detail: 'rate_limit.resolved',
+        observed_at: '2026-07-18T22:47:24.000Z',
+      })
+    ).toBe(false);
+    expect(isRateLimitBlockPulse(null)).toBe(false);
   });
 });

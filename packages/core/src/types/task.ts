@@ -43,6 +43,41 @@ export interface ExecutorPulse {
   observed_at: string;
 }
 
+/**
+ * Shared `detail` vocabulary for executor pulses.
+ *
+ * A `waiting` pulse pauses the executor's SDK watchdog, and only a matching
+ * resume detail lifts that pause — so producer and reader agreeing on these
+ * exact strings is an invariant, not a style preference. They are declared once
+ * here because they are read in three places across two processes (the Claude
+ * prompt service that emits them, the watchdog that pairs pause with resume,
+ * and the UI that labels the pulse), and a rename that missed any one of them
+ * would silently unpair a pause from its resume.
+ */
+export const ExecutorPulseDetail = {
+  /** Prefix of a rate-limit block; the suffix is the SDK's own limit type. */
+  RATE_LIMIT_PREFIX: 'rate_limit.',
+  /** Lifts the pause a rate-limit block installed. */
+  RATE_LIMIT_RESOLVED: 'rate_limit.resolved',
+  /** Lifts the pause a permission / user-input prompt installed. */
+  PERMISSION_RESOLVED: 'permission.resolved',
+} as const;
+
+/**
+ * Whether a pulse says the session is blocked on a rate limit.
+ *
+ * Checks the kind as well as the prefix: {@link ExecutorPulseDetail.RATE_LIMIT_RESOLVED}
+ * shares the prefix but rides a `sdk_started` pulse and means the opposite.
+ */
+export function isRateLimitBlockPulse(
+  pulse?: { kind: ExecutorPulseKind; detail?: string } | null
+): boolean {
+  return (
+    pulse?.kind === ExecutorPulseKind.WAITING &&
+    (pulse.detail?.startsWith(ExecutorPulseDetail.RATE_LIMIT_PREFIX) ?? false)
+  );
+}
+
 export interface RuntimeTelemetryInput {
   task_id: string;
   pulse?: Omit<ExecutorPulse, 'observed_at'>;

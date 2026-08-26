@@ -19,6 +19,7 @@ import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
 import { DAEMON, MCP_TOKEN } from './constants';
 import { validateRedisKeyPrefix, validateRedisUrl } from './deployment';
 import {
+  resolveClaudeBackgroundTaskConfig,
   resolveDispatchConnectTimeoutMs,
   resolveExecutorHeartbeatConfig,
   resolveSdkWatchdogConfig,
@@ -766,6 +767,7 @@ function validateConfig(config: AgorConfig): void {
     'executor_heartbeat',
     'executor_response',
     'sdk_watchdog',
+    'claude_background_tasks',
     'dispatch_connect_timeout_ms',
     'unix_user_mode',
     'branch_rbac',
@@ -816,6 +818,13 @@ function validateConfig(config: AgorConfig): void {
   ]);
   if (config.execution?.sdk_watchdog) {
     resolveSdkWatchdogConfig(config.execution);
+  }
+  only(config.execution?.claude_background_tasks, 'execution.claude_background_tasks', [
+    'silence_timeout_ms',
+    'settled_grace_ms',
+  ]);
+  if (config.execution?.claude_background_tasks) {
+    resolveClaudeBackgroundTaskConfig(config.execution);
   }
   resolveDispatchConnectTimeoutMs(config.execution);
   only(config.execution?.branch_storage, 'execution.branch_storage', [
