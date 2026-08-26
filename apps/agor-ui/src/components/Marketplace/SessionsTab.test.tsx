@@ -56,13 +56,59 @@ describe('Marketplace session attachments', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
-  it('keeps attachment columns in a horizontally scrollable table', () => {
-    const { container } = render(
+  it('keeps loading distinct from empty and exposes error recovery', () => {
+    const refresh = vi.fn(async () => undefined);
+    const props = {
+      client: null,
+      authorityKey: null,
+      overview: { ...overview, attachments: [] },
+      refresh,
+    };
+    const view = render(
+      <MemoryRouter>
+        <SessionsTab {...props} loading error={null} />
+      </MemoryRouter>
+    );
+    expect(screen.queryByText('No sessions use your MCP servers')).not.toBeInTheDocument();
+    expect(document.querySelector('.ant-spin-spinning')).toBeInTheDocument();
+
+    view.rerender(
+      <MemoryRouter>
+        <SessionsTab {...props} loading={false} error="Overview read failed" />
+      </MemoryRouter>
+    );
+    expect(screen.getByText('Could not load Marketplace sessions')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(refresh).toHaveBeenCalledOnce();
+  });
+
+  it('groups multiple attached servers into one cross-server session card', () => {
+    const secondServer = {
+      ...overview.servers[0],
+      mcp_server_id: 'server-2',
+      name: 'linear',
+      display_name: 'Linear',
+    };
+    const secondAttachment = {
+      ...overview.attachments[0],
+      mcp_server_id: 'server-2',
+      enabled: false,
+    };
+    const anotherSession = {
+      ...overview.attachments[0],
+      session_id: 'session-2',
+      session_title: 'Plan release',
+    };
+    render(
       <MemoryRouter>
         <SessionsTab
           client={null}
           authorityKey={null}
-          overview={overview}
+          overview={{
+            ...overview,
+            servers: [...overview.servers, secondServer],
+            attachments: [...overview.attachments, secondAttachment, anotherSession],
+          }}
           loading={false}
           error={null}
           refresh={vi.fn(async () => undefined)}
@@ -70,8 +116,16 @@ describe('Marketplace session attachments', () => {
       </MemoryRouter>
     );
 
-    expect(container.querySelector('table')).toHaveStyle({ width: 'max-content' });
-    expect(container.querySelector('.ant-table-content')).toHaveStyle({ overflowX: 'auto' });
+    expect(screen.getAllByText('GitHub')).toHaveLength(2);
+    expect(screen.getByText('Linear · Disabled')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open session Triage bugs' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open session Plan release' })).toBeInTheDocument();
+    const cards = document.querySelectorAll('.ant-card');
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      expect(card.parentElement).toHaveClass('ant-col-xs-24');
+      expect(card.parentElement).toHaveClass('ant-col-lg-12');
+    }
   });
 
   it('uses a contextual label and requires confirmation before detach', async () => {

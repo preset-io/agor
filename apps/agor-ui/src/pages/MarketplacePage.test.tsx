@@ -5,11 +5,36 @@ import { MarketplacePage } from './MarketplacePage';
 
 vi.mock('../components/Marketplace', () => ({
   CatalogTab: () => <div>Catalog content</div>,
-  MyServersTab: () => <div>Servers content</div>,
+  MyServersTab: ({ requestedServerId }: { requestedServerId?: string | null }) => (
+    <div>Servers content {requestedServerId && `Drawer ${requestedServerId}`}</div>
+  ),
   SessionsTab: () => <div>Sessions content</div>,
-  CredentialsTab: () => <div>Credentials content</div>,
+  CredentialsTab: ({
+    onOpenServerSettings,
+  }: {
+    onOpenServerSettings?: (serverId: string) => void;
+  }) => (
+    <div>
+      Credentials content
+      <button type="button" onClick={() => onOpenServerSettings?.('server-1')}>
+        Mock manage server
+      </button>
+    </div>
+  ),
   useMarketplaceOverview: () => ({
-    overview: { servers: [], attachments: [], credentials: [], generated_at: '' },
+    overview: {
+      servers: [],
+      attachments: [],
+      credentials: [
+        {
+          mcp_server_id: 'server-1',
+          server_name: 'server',
+          method: 'oauth',
+          status: 'active',
+        },
+      ],
+      generated_at: '',
+    },
     loading: false,
     error: null,
     refresh: vi.fn(async () => undefined),
@@ -53,12 +78,23 @@ function renderPage(entries: string[], index = entries.length - 1) {
 describe('Marketplace tab routes', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('exposes exactly the four production tabs', () => {
+    renderPage(['/marketplace/catalog']);
+
+    expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
+      'Catalog',
+      'My Servers',
+      'Sessions',
+      'Credentials (1)',
+    ]);
+  });
+
   it('deep-links directly to each tab and normalizes the root to Catalog', async () => {
     renderPage(['/marketplace/sessions']);
     expect(screen.getByText('Sessions content')).toBeVisible();
     expect(screen.getByTestId('route')).toHaveTextContent('/marketplace/sessions');
 
-    fireEvent.click(screen.getByText('Credentials'));
+    fireEvent.click(screen.getByText('Credentials (1)'));
     await waitFor(() =>
       expect(screen.getByTestId('route')).toHaveTextContent('/marketplace/credentials')
     );
@@ -76,6 +112,16 @@ describe('Marketplace tab routes', () => {
       expect(screen.getByTestId('route')).toHaveTextContent('/marketplace/credentials')
     );
     expect(screen.getByText('Credentials content')).toBeVisible();
+  });
+
+  it('routes credential recovery into the Marketplace server drawer', async () => {
+    renderPage(['/marketplace/credentials']);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Mock manage server' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('route')).toHaveTextContent('/marketplace/servers')
+    );
+    expect(screen.getByText(/Drawer server-1/)).toBeVisible();
   });
 
   it('redirects the legacy root without adding a history entry', async () => {

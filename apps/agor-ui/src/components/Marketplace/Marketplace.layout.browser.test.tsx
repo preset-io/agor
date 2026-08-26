@@ -14,6 +14,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CatalogTab } from './CatalogTab';
 import { CredentialsTab } from './CredentialsTab';
 import { MyServersTab } from './MyServersTab';
+import {
+  MARKETPLACE_CATALOG_DRAWER_WIDTH,
+  MARKETPLACE_SERVER_DRAWER_WIDTH,
+} from './marketplaceLayout';
+import { SessionsTab } from './SessionsTab';
 
 const CATALOG_ENTRY: MCPCatalogEntry = {
   name: 'com.deepwiki/mcp',
@@ -135,9 +140,67 @@ describe('Marketplace responsive layout (real browser)', () => {
     expect(wrapper, 'drawer wrapper should render').toBeTruthy();
     if (!wrapper) return;
     const rect = wrapper.getBoundingClientRect();
-    expect(rect.width).toBeLessThanOrEqual(Math.min(480, window.innerWidth) + 1);
+    expect(rect.width).toBeCloseTo(
+      Math.min(MARKETPLACE_CATALOG_DRAWER_WIDTH, window.innerWidth),
+      0
+    );
     expect(rect.left).toBeGreaterThanOrEqual(-1);
     expect(rect.right).toBeLessThanOrEqual(window.innerWidth + 1);
+  });
+
+  it('uses two session-card columns only on wide screens', () => {
+    const sessionOverview = {
+      servers: [],
+      credentials: [],
+      attachments: [
+        {
+          session_id: 'session-1',
+          mcp_server_id: 'server-1',
+          enabled: true,
+          added_at: '2026-08-21T12:34:56.000Z',
+          session_title: 'First session',
+          session_status: 'idle',
+          agentic_tool: 'claude-code',
+          branch_id: 'branch-1',
+          branch_name: 'main',
+        },
+        {
+          session_id: 'session-2',
+          mcp_server_id: 'server-2',
+          enabled: true,
+          added_at: '2026-08-21T12:34:56.000Z',
+          session_title: 'Second session',
+          session_status: 'idle',
+          agentic_tool: 'claude-code',
+          branch_id: 'branch-1',
+          branch_name: 'main',
+        },
+      ],
+      generated_at: '2026-08-21T12:34:56.000Z',
+    } as unknown as MCPMarketplaceOverview;
+    render(
+      <MemoryRouter>
+        <SessionsTab
+          client={null}
+          authorityKey={null}
+          overview={sessionOverview}
+          loading={false}
+          error={null}
+          refresh={vi.fn(async () => undefined)}
+        />
+      </MemoryRouter>
+    );
+
+    const card = screen.getByText('First session').closest('.ant-card') as HTMLElement | null;
+    const column = card?.parentElement as HTMLElement | null;
+    const row = column?.parentElement as HTMLElement | null;
+    expect(column && row).toBeTruthy();
+    if (!column || !row) return;
+    const expectedFraction = window.innerWidth >= 992 ? 1 / 2 : 1;
+    expect(column.getBoundingClientRect().width / row.getBoundingClientRect().width).toBeCloseTo(
+      expectedFraction,
+      1
+    );
   });
 
   it('provides real horizontal table overflow on the phone viewport', async () => {
@@ -176,7 +239,7 @@ describe('Marketplace responsive layout (real browser)', () => {
     expect(getComputedStyle(scroller).overflowX).toBe('auto');
   });
 
-  it('wraps My Servers actions below server metadata on the phone viewport', () => {
+  it('keeps My Servers inventory usable with horizontal overflow on phone', async () => {
     if (window.innerWidth > 480) return;
     const overview = {
       servers: [
@@ -211,18 +274,25 @@ describe('Marketplace responsive layout (real browser)', () => {
       />
     );
 
-    const title = screen.getByRole('heading', {
-      name: 'A deliberately long server display name',
+    expect(screen.getByText('A deliberately long server display name')).toBeVisible();
+    const settings = screen.getByRole('button', {
+      name: 'Settings for A deliberately long server display name',
     });
-    const header = title.parentElement?.parentElement as HTMLElement | null;
-    const metadata = header?.children[0] as HTMLElement | undefined;
-    const actions = header?.children[1] as HTMLElement | undefined;
-    expect(header && metadata && actions, 'server header regions should render').toBeTruthy();
-    if (!header || !metadata || !actions) return;
-    expect(header).toHaveClass('ant-flex-wrap-wrap');
-    expect(actions.getBoundingClientRect().top).toBeGreaterThanOrEqual(
-      metadata.getBoundingClientRect().bottom - 1
+    expect(settings).toBeVisible();
+    const scroller = document.querySelector('.ant-table-content') as HTMLElement | null;
+    expect(scroller, 'server inventory scroller should render').toBeTruthy();
+    if (!scroller) return;
+    await waitFor(() => expect(scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth));
+    expect(getComputedStyle(scroller).overflowX).toBe('auto');
+
+    fireEvent.click(settings);
+    await screen.findByText('Server settings');
+    const wrapper = document.querySelector('.ant-drawer-content-wrapper') as HTMLElement | null;
+    expect(wrapper, 'server settings drawer should render').toBeTruthy();
+    if (!wrapper) return;
+    expect(wrapper.getBoundingClientRect().width).toBeCloseTo(
+      Math.min(MARKETPLACE_SERVER_DRAWER_WIDTH, window.innerWidth),
+      0
     );
-    expect(actions.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth + 1);
   });
 });

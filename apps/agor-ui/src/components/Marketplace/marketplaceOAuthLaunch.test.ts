@@ -51,7 +51,7 @@ describe('Marketplace OAuth launch', () => {
         authority: { userId: 'alice', role: 'member', authGeneration: 3 },
         isCurrent: () => true,
       })
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ attemptId: 'attempt-1' });
     expect(create).toHaveBeenCalledWith({ mcp_server_id: 'server-oauth' });
     expect(replace).toHaveBeenCalledWith('https://accounts.example.test/authorize');
     expect(close).not.toHaveBeenCalled();
@@ -92,7 +92,7 @@ describe('Marketplace OAuth launch', () => {
         authority,
         isCurrent: () => true,
       })
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ attemptId: 'attempt-newer' });
     expect(earlier).not.toBeNull();
     expect(
       consumeMarketplacePromptSuggestionState(result.session.session_id, authority)
@@ -113,7 +113,7 @@ describe('Marketplace OAuth launch', () => {
         authority: { userId: 'alice', role: 'member', authGeneration: 3 },
         isCurrent: () => true,
       })
-    ).resolves.toBe(false);
+    ).resolves.toBeNull();
     expect(close).toHaveBeenCalledOnce();
     expect(sessionStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')).toBeNull();
   });
@@ -134,7 +134,7 @@ describe('Marketplace OAuth launch', () => {
       authorizationUrl: 'https://accounts.example.test/authorize',
       attempt_id: 'attempt-stale',
     });
-    await expect(launched).resolves.toBe(false);
+    await expect(launched).resolves.toBeNull();
     expect(popup.close).toHaveBeenCalledOnce();
     expect(popup.navigate).not.toHaveBeenCalled();
     expect(localStorage.length).toBe(0);

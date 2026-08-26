@@ -54,8 +54,9 @@ export type MCPMarketplaceCredentialMethod = (typeof MCP_MARKETPLACE_CREDENTIAL_
 
 export const MCP_MARKETPLACE_CREDENTIAL_STATUSES = [
   'active',
-  'expired',
-  'attention',
+  'refreshable',
+  'refreshing',
+  'reauthentication_required',
   'not_connected',
   'configured',
 ] as const;

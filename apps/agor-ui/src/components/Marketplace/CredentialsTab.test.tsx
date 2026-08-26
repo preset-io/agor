@@ -7,7 +7,17 @@ const TIMESTAMP = '2026-08-21T12:34:56.000Z';
 
 function overview(credentials: MCPMarketplaceOverview['credentials']): MCPMarketplaceOverview {
   return {
-    servers: [],
+    servers: credentials.map((credential) => ({
+      mcp_server_id: credential.mcp_server_id,
+      name: credential.server_name,
+      source: 'user',
+      transport: 'http',
+      enabled: true,
+      tools: [],
+      session_count: 0,
+      created_at: TIMESTAMP,
+      updated_at: TIMESTAMP,
+    })),
     attachments: [],
     credentials,
     generated_at: TIMESTAMP,
@@ -15,7 +25,8 @@ function overview(credentials: MCPMarketplaceOverview['credentials']): MCPMarket
 }
 
 describe('Marketplace credential metadata', () => {
-  it('renders every status with its semantic color and trustworthy timestamps', () => {
+  it('shows redacted auth method, semantic status, timestamps, and real recovery actions', () => {
+    const openSettings = vi.fn();
     render(
       <CredentialsTab
         overview={overview([
@@ -26,55 +37,95 @@ describe('Marketplace credential metadata', () => {
             method: 'oauth',
             status: 'active',
             expires_at: TIMESTAMP,
-            created_at: TIMESTAMP,
             updated_at: TIMESTAMP,
           },
-          {
-            mcp_server_id: 'server-configured',
-            server_name: 'configured-server',
-            method: 'bearer',
-            status: 'configured',
-          },
-          {
-            mcp_server_id: 'server-attention',
-            server_name: 'attention-server',
-            method: 'jwt',
-            status: 'attention',
-          },
-          {
-            mcp_server_id: 'server-expired',
-            server_name: 'expired-server',
-            method: 'oauth',
-            status: 'expired',
-          },
-          {
-            mcp_server_id: 'server-disconnected',
-            server_name: 'disconnected-server',
-            method: 'oauth',
-            status: 'not_connected',
-          },
-        ] as unknown as MCPMarketplaceOverview['credentials'])}
+        ])}
         loading={false}
         error={null}
         refresh={vi.fn(async () => undefined)}
+        canManageCredentials
+        onOpenServerSettings={openSettings}
       />
     );
 
-    const activeRow = screen.getByText('Active server').closest('tr');
-    expect(activeRow).not.toBeNull();
-    expect(within(activeRow!).getByText('OAUTH')).toBeInTheDocument();
-    expect(within(activeRow!).getByText('active').closest('.ant-tag')).toHaveClass('ant-tag-green');
-    expect(within(activeRow!).getAllByText(new Date(TIMESTAMP).toLocaleString())).toHaveLength(3);
+    const active = screen.getByText('Active server').closest('tr');
+    expect(active).not.toBeNull();
+    expect(within(active!).getByText('OAuth')).toBeInTheDocument();
+    expect(within(active!).getByText('Connected')).toBeInTheDocument();
+    expect(within(active!).getAllByText(new Date(TIMESTAMP).toLocaleString())).toHaveLength(2);
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'Settings OAuth connection for Active server',
+      })
+    );
+    expect(openSettings).toHaveBeenCalledWith('server-active');
+  });
 
-    expect(screen.getByText('configured').closest('.ant-tag')).toHaveClass('ant-tag-green');
-    expect(screen.getByText('attention').closest('.ant-tag')).toHaveClass('ant-tag-orange');
-    expect(screen.getByText('expired').closest('.ant-tag')).not.toHaveClass('ant-tag-green');
-    expect(screen.getByText('not connected').closest('.ant-tag')).not.toHaveClass('ant-tag-orange');
+  it('renders every credential status with production copy and semantic color', () => {
+    const statuses = [
+      ['active', 'Connected', 'success', 'Settings'],
+      ['configured', 'Connected', 'success', 'Settings'],
+      ['refreshable', 'Connected', 'success', 'Settings'],
+      ['refreshing', 'Refreshing', 'processing', 'Settings'],
+      ['reauthentication_required', 'Reconnect required', 'error', 'Reconnect'],
+      ['not_connected', 'Sign-in required', 'warning', 'Connect'],
+    ] as const;
+    render(
+      <CredentialsTab
+        overview={overview(
+          statuses.map(([status], index) => ({
+            mcp_server_id: `server-${status}`,
+            server_name: `Server ${index + 1}`,
+            method: status === 'configured' ? 'bearer' : 'oauth',
+            status,
+          }))
+        )}
+        loading={false}
+        error={null}
+        refresh={vi.fn(async () => undefined)}
+        canManageCredentials
+        onOpenServerSettings={vi.fn()}
+      />
+    );
 
-    const configuredRow = screen.getByText('configured-server').closest('tr');
-    expect(configuredRow).not.toBeNull();
-    expect(within(configuredRow!).getByText('BEARER')).toBeInTheDocument();
-    expect(within(configuredRow!).getAllByText('—')).toHaveLength(3);
+    for (const [status, label, color, action] of statuses) {
+      const row = screen
+        .getByText(`Server ${statuses.findIndex(([value]) => value === status) + 1}`)
+        .closest('tr');
+      expect(row).not.toBeNull();
+      const badge = within(row!).getByText(label).closest('.ant-badge-status');
+      expect(badge?.querySelector(`.ant-badge-status-${color}`)).not.toBeNull();
+      expect(row).not.toHaveTextContent('not_connected');
+      expect(within(row!).getByRole('button', { name: new RegExp(`^${action} `) })).toBeEnabled();
+    }
+  });
+
+  it('shows disabled separately and never offers reconnect for a healthy OAuth grant', () => {
+    const value = overview([
+      {
+        mcp_server_id: 'server-disabled',
+        server_name: 'Disabled server',
+        method: 'oauth',
+        status: 'active',
+      },
+    ]);
+    value.servers[0].enabled = false;
+    render(
+      <CredentialsTab
+        overview={value}
+        loading={false}
+        error={null}
+        refresh={vi.fn(async () => undefined)}
+        canManageCredentials
+        onOpenServerSettings={vi.fn()}
+      />
+    );
+
+    const row = screen.getByText('Disabled server').closest('tr')!;
+    expect(within(row).getByText('Disabled')).toBeVisible();
+    expect(within(row).queryByText('Connected')).not.toBeInTheDocument();
+    expect(within(row).queryByRole('button', { name: /Reconnect/ })).not.toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: /^Settings / })).toBeEnabled();
   });
 
   it('projects explicit metadata only and never renders secret-shaped extras', () => {
@@ -117,35 +168,44 @@ describe('Marketplace credential metadata', () => {
     expect(screen.queryByRole('button', { name: /copy|reveal/i })).not.toBeInTheDocument();
   });
 
-  it('renders a dedicated empty state only after loading finishes', () => {
-    const props = {
-      overview: overview([]),
-      error: null,
-      refresh: vi.fn(async () => undefined),
-    };
+  it('separates loading, empty, and error states', () => {
+    const refresh = vi.fn(async () => undefined);
+    const props = { overview: overview([]), error: null, refresh };
     const view = render(<CredentialsTab {...props} loading />);
-    expect(screen.queryByText('No credential metadata')).not.toBeInTheDocument();
+    expect(screen.queryByText('No saved Marketplace credentials')).not.toBeInTheDocument();
 
     view.rerender(<CredentialsTab {...props} loading={false} />);
-    expect(screen.getByText('No credential metadata')).toBeVisible();
+    expect(screen.getByText('No saved Marketplace credentials')).toBeVisible();
+
+    view.rerender(<CredentialsTab {...props} loading={false} error="Overview read failed" />);
+    expect(screen.getByText('Could not load credential metadata')).toBeVisible();
+    expect(screen.queryByText('No saved Marketplace credentials')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(refresh).toHaveBeenCalledOnce();
   });
 
-  it('shows a visible error and retries without presenting it as empty', () => {
-    const refresh = vi.fn(async () => undefined);
+  it('fails closed for users without credential-management authority', () => {
     render(
       <CredentialsTab
-        overview={overview([])}
+        overview={overview([
+          {
+            mcp_server_id: 'server-1',
+            server_name: 'server',
+            method: 'oauth',
+            status: 'not_connected',
+          },
+        ])}
         loading={false}
-        error="Overview read failed"
-        refresh={refresh}
+        error={null}
+        refresh={vi.fn(async () => undefined)}
+        canManageCredentials={false}
+        onOpenServerSettings={vi.fn()}
       />
     );
 
-    expect(screen.getByText('Could not load credential metadata')).toBeVisible();
-    expect(screen.getByText('Overview read failed')).toBeVisible();
-    expect(screen.queryByText('No credential metadata')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(refresh).toHaveBeenCalledOnce();
+    expect(
+      screen.getByRole('button', { name: 'Connect OAuth connection for server' })
+    ).toBeDisabled();
   });
 
   it('keeps the credential table horizontally scrollable', () => {
@@ -158,14 +218,13 @@ describe('Marketplace credential metadata', () => {
             method: 'oauth',
             status: 'active',
           },
-        ] as unknown as MCPMarketplaceOverview['credentials'])}
+        ])}
         loading={false}
         error={null}
         refresh={vi.fn(async () => undefined)}
       />
     );
 
-    expect(container.querySelector('table')).toHaveStyle({ width: 'max-content' });
     expect(container.querySelector('.ant-table-content')).toHaveStyle({ overflowX: 'auto' });
   });
 });
