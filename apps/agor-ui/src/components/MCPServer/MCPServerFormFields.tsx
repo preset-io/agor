@@ -21,6 +21,7 @@ import {
 } from 'antd';
 import { useEffect, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
+import { FIELD_WIDTHS } from '../SettingsModal/panelPrimitives';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
 import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
 import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-utils';
@@ -424,6 +425,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
       <Form.Item
         label="Transport"
         name="transport"
+        style={FIELD_WIDTHS.short}
         rules={mode === 'create' ? [{ required: true }] : []}
         initialValue={mode === 'create' ? offeredTransports[0] : undefined}
         tooltip={
@@ -443,6 +445,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="Command"
             name="command"
+            style={FIELD_WIDTHS.medium}
             // Required in both modes: a stdio server with no command is as
             // unusable after an edit as it would be on creation.
             rules={[{ required: true, message: 'Please enter a command' }]}
@@ -453,6 +456,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="Arguments"
             name="args"
+            style={FIELD_WIDTHS.medium}
             tooltip="Comma-separated arguments. Each argument will be passed separately to the command. Example: -y, @modelcontextprotocol/server-filesystem, /allowed/path"
           >
             <Input placeholder="-y, @modelcontextprotocol/server-filesystem, /allowed/path" />
@@ -463,6 +467,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           <Form.Item
             label="URL"
             name="url"
+            style={FIELD_WIDTHS.medium}
             rules={[{ required: true, message: 'Please enter a URL' }]}
             tooltip="Server URL. Supports templates like {{ user.env.MCP_URL }}"
           >
@@ -473,6 +478,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             label="Auth Type"
             name="auth_type"
             initialValue="none"
+            style={FIELD_WIDTHS.short}
             tooltip="Authentication method for the MCP server"
           >
             <Select
@@ -512,6 +518,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
             <Form.Item
               label="Token"
               name="auth_token"
+              style={FIELD_WIDTHS.short}
               rules={[{ required: true, message: 'Please enter a bearer token' }]}
               tooltip="Bearer token. Supports templates like {{ user.env.API_TOKEN }}"
             >
@@ -524,6 +531,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               <Form.Item
                 label="API URL"
                 name="jwt_api_url"
+                style={FIELD_WIDTHS.medium}
                 rules={[{ required: true, message: 'Please enter the API URL' }]}
                 tooltip="JWT auth API URL. Supports templates."
               >
@@ -532,6 +540,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               <Form.Item
                 label="API Token"
                 name="jwt_api_token"
+                style={FIELD_WIDTHS.short}
                 rules={[{ required: true, message: 'Please enter the API token' }]}
                 tooltip="JWT API token. Supports templates like {{ user.env.JWT_TOKEN }}"
               >
@@ -540,6 +549,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
               <Form.Item
                 label="API Secret"
                 name="jwt_api_secret"
+                style={FIELD_WIDTHS.short}
                 rules={[{ required: true, message: 'Please enter the API secret' }]}
                 tooltip="JWT API secret. Supports templates like {{ user.env.JWT_SECRET }}"
               >
@@ -767,6 +777,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Client ID"
                     name="oauth_client_id"
+                    style={FIELD_WIDTHS.short}
                     tooltip="Register an OAuth app with the provider and paste its client ID. Otherwise Agor can use a registration endpoint advertised by the provider."
                   >
                     <Input
@@ -778,6 +789,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="Dynamic Client Registration"
                     name="oauth_dcr_mode"
                     initialValue="advertised"
+                    style={FIELD_WIDTHS.short}
                     tooltip="Advertised registration uses only validated provider metadata. Legacy fallback additionally guesses an issuer-relative /register endpoint."
                   >
                     <Select>
@@ -794,6 +806,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="OAuth Compatibility"
                     name="oauth_compatibility_mode"
                     initialValue="strict"
+                    style={FIELD_WIDTHS.short}
                     tooltip="Legacy mode narrowly permits older discovery and metadata deviations. It never relaxes outbound network protections."
                   >
                     <Select>
@@ -830,6 +843,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Client Secret"
                     name="oauth_client_secret"
+                    style={FIELD_WIDTHS.short}
                     tooltip="Required for servers that use confidential clients. The secret is sent via HTTP Basic Auth during token exchange."
                   >
                     <Input.Password
@@ -841,6 +855,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="OAuth Mode"
                     name="oauth_mode"
                     initialValue="per_user"
+                    style={FIELD_WIDTHS.short}
                     tooltip="Per User: Each user authenticates separately (recommended). Shared: One token for all users."
                   >
                     <Select>
@@ -855,6 +870,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Authorization URL"
                     name="oauth_authorization_url"
+                    style={FIELD_WIDTHS.medium}
                     tooltip="OAuth authorization endpoint for browser-based login. Leave empty for auto-discovery (RFC 8414)."
                   >
                     <Input placeholder="https://auth.example.com/oauth/authorize" allowClear />
@@ -862,6 +878,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Token URL"
                     name="oauth_token_url"
+                    style={FIELD_WIDTHS.medium}
                     tooltip="OAuth token endpoint. Leave empty for auto-discovery (OAuth 2.1 RFC 9728)"
                   >
                     <Input placeholder="Auto-detect or {{ user.env.OAUTH_TOKEN_URL }}" allowClear />
@@ -869,6 +886,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                   <Form.Item
                     label="Scope"
                     name="oauth_scope"
+                    style={FIELD_WIDTHS.short}
                     tooltip="Optional: OAuth scopes (space-separated, e.g., 'read write')"
                   >
                     <Input placeholder="Leave empty or specify scopes" allowClear />
@@ -877,6 +895,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     label="Grant Type"
                     name="oauth_grant_type"
                     initialValue="client_credentials"
+                    style={FIELD_WIDTHS.short}
                     tooltip="OAuth grant type for Client Credentials flow. OAuth 2.1 auto-discovery uses Authorization Code with PKCE instead."
                   >
                     <Select disabled>
