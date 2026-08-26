@@ -26,7 +26,12 @@ import {
   SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
 } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
-import type { BranchID, UserID } from '@agor/core/types';
+import {
+  type BranchID,
+  MAX_PRESENCE_BOARD_SUBSCRIPTIONS,
+  PRESENCE_SOCKET_EVENTS,
+  type UserID,
+} from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   finalizeAuthenticatedConnectionAuthority,
@@ -38,6 +43,7 @@ import {
   getOrCreateExecutorConnectionRevocationFence,
 } from '../auth/executor-connection-admission.js';
 import {
+  boardPresenceAssociationRoomName,
   boardPresenceRoomName,
   HA_AUTHORIZATION_INVALIDATION_EVENT,
   HA_EXECUTOR_TOKEN_INVALIDATION_EVENT,
@@ -253,7 +259,16 @@ function makeApp(multiTenancy?: ResolvedMultiTenancyConfig) {
         ? { matchesOwnedAttachment }
         : path === 'authentication'
           ? authentication
-          : { get: async (userId: string) => ({ user_id: userId }) },
+          : path === 'boards'
+            ? {
+                get: async (boardId: string) => ({ board_id: boardId, archived: false }),
+                find: async (params?: { query?: { board_id?: { $in?: string[] } } }) =>
+                  (params?.query?.board_id?.$in ?? []).map((boardId) => ({
+                    board_id: boardId,
+                    archived: false,
+                  })),
+              }
+            : { get: async (userId: string) => ({ user_id: userId }) },
     on: (event: string, handler: (...args: any[]) => void) => eventHandlers.set(event, handler),
     emit: vi.fn(),
     eventHandlers,
@@ -306,6 +321,15 @@ afterEach(() => {
 function connect(io: FakeIO, socket: FakeSocket) {
   io.sockets.sockets.set(socket.id, socket);
   io.connectionHandler?.(socket);
+}
+
+function subscribeBoardAssociations(
+  socket: FakeSocket,
+  boardIds: string[]
+): Promise<{ ok: boolean }> {
+  return new Promise((resolve) => {
+    socket.handlers.get(PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations)?.({ boardIds }, resolve);
+  });
 }
 
 it('binds a server-only terminal subscription capability to the Feathers connection', async () => {
@@ -1039,8 +1063,14 @@ describe('Socket.IO handshake credential extraction', () => {
 
   it('retires impersonated user authority at the verified JWT expiry', async () => {
     vi.useFakeTimers();
-    const { io } = buildHarness();
+    const { io } = buildHarness({
+      multiTenancy: { mode: 'static', static_tenant_id: 'default' as never },
+    });
     const socket = makeSocket('expiring-impersonation', io);
+    const observer = makeSocket('expiry-observer', io);
+    asUser(observer, BOB);
+    connect(io, observer);
+    await expect(subscribeBoardAssociations(observer, ['board-1'])).resolves.toEqual({ ok: true });
     socket.handshake.auth = { token: 'signed-impersonation-token' };
     socket.feathers = {
       pendingAuthenticationResult: {
@@ -1057,11 +1087,22 @@ describe('Socket.IO handshake credential extraction', () => {
     );
     expect(error).toBeUndefined();
     connect(io, socket);
+    await socket.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+    socket.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
+    expect(observer.received).toContainEqual({
+      event: PRESENCE_SOCKET_EVENTS.updated,
+      data: expect.objectContaining({ userId: ALICE, boardId: 'board-1' }),
+    });
+    observer.received.length = 0;
 
     await vi.advanceTimersByTimeAsync(1_001);
 
     expect(socket.connected).toBe(false);
     expect(getAuthenticatedConnectionAuthority(socket.feathers)).toBeUndefined();
+    expect(observer.received).toContainEqual({
+      event: PRESENCE_SOCKET_EVENTS.left,
+      data: expect.objectContaining({ userId: ALICE, boardId: 'board-1' }),
+    });
   });
 });
 
@@ -1677,10 +1718,11 @@ describe('terminal:* handler authorization', () => {
         event: 'cursor-moved',
         data: {
           userId: ALICE,
+          presenceId: expect.any(String),
           boardId: 'board-1',
           x: 10,
           y: 20,
-          timestamp: 1_000,
+          timestamp: expect.any(Number),
         },
       });
 
@@ -1689,7 +1731,8 @@ describe('terminal:* handler authorization', () => {
         event: 'presence-updated',
         data: {
           userId: ALICE,
-          timestamp: 1_000,
+          presenceId: expect.any(String),
+          timestamp: expect.any(Number),
         },
       });
     });
@@ -1727,6 +1770,281 @@ describe('terminal:* handler authorization', () => {
             entry.channel === boardPresenceRoomName('default', 'board-1')
         )
       ).toHaveLength(2);
+    });
+
+    it('publishes board identity only to separately authorized association subscribers', async () => {
+      const { io } = buildHarness();
+      const publisher = makeSocket('publisher', io);
+      const authorized = makeSocket('authorized', io);
+      const tenantOnly = makeSocket('tenant-only', io);
+      const foreignTenant = makeSocket('foreign-tenant', io);
+      asUser(publisher, ALICE, 'tenant-a');
+      asUser(authorized, BOB, 'tenant-a');
+      asUser(tenantOnly, '33333333-cccc-4ccc-8ccc-333333333333', 'tenant-a');
+      asUser(foreignTenant, BOB, 'tenant-b');
+      for (const socket of [publisher, authorized, tenantOnly, foreignTenant]) connect(io, socket);
+
+      await publisher.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+      await expect(subscribeBoardAssociations(authorized, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.cursorMove)?.({
+        boardId: 'board-1',
+        x: 10,
+        y: 20,
+        timestamp: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(authorized.received).toContainEqual({
+        event: PRESENCE_SOCKET_EVENTS.updated,
+        data: expect.objectContaining({
+          userId: ALICE,
+          presenceId: expect.any(String),
+          boardId: 'board-1',
+        }),
+      });
+      const authorizedPayload = authorized.received.find(
+        (entry) =>
+          entry.event === PRESENCE_SOCKET_EVENTS.updated &&
+          (entry.data as { boardId?: string }).boardId === 'board-1'
+      )?.data as Record<string, unknown> | undefined;
+      expect(Object.keys(authorizedPayload ?? {}).sort()).toEqual([
+        'boardId',
+        'presenceId',
+        'timestamp',
+        'userId',
+      ]);
+      expect(
+        tenantOnly.received.filter(
+          (entry) =>
+            entry.event === PRESENCE_SOCKET_EVENTS.updated &&
+            (entry.data as { boardId?: string }).boardId !== undefined
+        )
+      ).toEqual([]);
+      expect(tenantOnly.received).toContainEqual({
+        event: PRESENCE_SOCKET_EVENTS.updated,
+        data: expect.objectContaining({ userId: ALICE, presenceId: expect.any(String) }),
+      });
+      expect(foreignTenant.received).toEqual([]);
+    });
+
+    it('silently omits missing, foreign, private, and archived association subscriptions', async () => {
+      const { app, io } = buildHarness();
+      const findBoards = vi.fn(async () => [{ board_id: 'visible-board', archived: false }]);
+      (app as any).service = (path: string) =>
+        path === 'boards'
+          ? {
+              get: vi.fn(async (id: string) => ({ board_id: id, archived: false })),
+              find: findBoards,
+            }
+          : { get: vi.fn(async (id: string) => ({ user_id: id })) };
+      const socket = makeSocket('subscriber', io);
+      asUser(socket, ALICE);
+      connect(io, socket);
+
+      await expect(
+        subscribeBoardAssociations(socket, [
+          'visible-board',
+          'private-board',
+          'foreign-board',
+          'archived-board',
+          'missing-board',
+        ])
+      ).resolves.toEqual({ ok: true });
+
+      expect(socket.joined).toContain(boardPresenceAssociationRoomName('default', 'visible-board'));
+      expect(findBoards).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: 'socketio',
+          tenant: expect.objectContaining({ tenant_id: 'default' }),
+          query: expect.objectContaining({ archived: false, lean: true }),
+        })
+      );
+      for (const denied of ['private-board', 'foreign-board', 'archived-board', 'missing-board']) {
+        expect(socket.joined).not.toContain(boardPresenceAssociationRoomName('default', denied));
+      }
+    });
+
+    it('rejects forged heartbeats and bounds association/cursor room membership', async () => {
+      const { io } = buildHarness();
+      const socket = makeSocket('publisher', io);
+      asUser(socket, ALICE);
+      connect(io, socket);
+      const acknowledge = vi.fn();
+
+      socket.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'private-board' });
+      socket.handlers.get(PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations)?.(
+        {
+          boardIds: Array.from(
+            { length: MAX_PRESENCE_BOARD_SUBSCRIPTIONS + 1 },
+            (_, index) => `board-${index}`
+          ),
+        },
+        acknowledge
+      );
+
+      expect(io.emitted).toEqual([]);
+      expect(acknowledge).toHaveBeenCalledWith({ ok: false });
+      expect(socket.joined.size).toBe(2); // server-derived tenant + user rooms only
+    });
+
+    it('uses per-connection identities so one tab leaving cannot clear another tab', async () => {
+      const { io } = buildHarness();
+      const tabOne = makeSocket('tab-one', io);
+      const tabTwo = makeSocket('tab-two', io);
+      const observer = makeSocket('observer', io);
+      asUser(tabOne, ALICE);
+      asUser(tabTwo, ALICE);
+      asUser(observer, BOB);
+      for (const socket of [tabOne, tabTwo, observer]) connect(io, socket);
+      await expect(subscribeBoardAssociations(observer, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
+      await observer.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+      for (const [index, tab] of [tabOne, tabTwo].entries()) {
+        await tab.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+        tab.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
+        tab.handlers.get(PRESENCE_SOCKET_EVENTS.cursorMove)?.({
+          boardId: 'board-1',
+          x: index,
+          y: index,
+          timestamp: 0,
+        });
+      }
+
+      const boardUpdates = observer.received.filter(
+        (entry) =>
+          entry.event === PRESENCE_SOCKET_EVENTS.updated &&
+          (entry.data as { boardId?: string }).boardId === 'board-1'
+      );
+      const presenceIds = boardUpdates.map(
+        (entry) => (entry.data as { presenceId: string }).presenceId
+      );
+      expect(new Set(presenceIds).size).toBe(2);
+
+      tabOne.handlers.get(PRESENCE_SOCKET_EVENTS.leave)?.();
+      const boardLeaves = observer.received.filter(
+        (entry) =>
+          entry.event === PRESENCE_SOCKET_EVENTS.left &&
+          (entry.data as { boardId?: string }).boardId === 'board-1'
+      );
+      expect(boardLeaves).toHaveLength(1);
+      const leftPresence = boardLeaves[0]?.data as { presenceId: string } | undefined;
+      expect(leftPresence?.presenceId).toBe(presenceIds[0]);
+      expect(leftPresence?.presenceId).not.toBe(presenceIds[1]);
+
+      tabOne.handlers.get(PRESENCE_SOCKET_EVENTS.cursorLeave)?.({ boardId: 'board-1' });
+      const cursorLeaves = observer.received.filter(
+        (entry) => entry.event === PRESENCE_SOCKET_EVENTS.cursorLeft
+      );
+      expect(cursorLeaves).toContainEqual({
+        event: PRESENCE_SOCKET_EVENTS.cursorLeft,
+        data: expect.objectContaining({ presenceId: presenceIds[0], boardId: 'board-1' }),
+      });
+      expect(cursorLeaves).not.toContainEqual({
+        event: PRESENCE_SOCKET_EVENTS.cursorLeft,
+        data: expect.objectContaining({ presenceId: presenceIds[1], boardId: 'board-1' }),
+      });
+    });
+
+    it('retracts a published board before acknowledging a full-set unsubscribe', async () => {
+      const { io } = buildHarness();
+      const publisher = makeSocket('subscription-publisher', io);
+      const observer = makeSocket('subscription-observer', io);
+      asUser(publisher, ALICE);
+      asUser(observer, BOB);
+      connect(io, publisher);
+      connect(io, observer);
+      await expect(subscribeBoardAssociations(publisher, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
+      await expect(subscribeBoardAssociations(observer, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
+      observer.received.length = 0;
+
+      await expect(subscribeBoardAssociations(publisher, [])).resolves.toEqual({ ok: true });
+
+      expect(observer.received).toContainEqual({
+        event: PRESENCE_SOCKET_EVENTS.left,
+        data: expect.objectContaining({ userId: ALICE, boardId: 'board-1' }),
+      });
+    });
+
+    it('disconnects explicit logouts and promptly retracts their board association', async () => {
+      const { app, io } = buildHarness();
+      const publisher = makeSocket('logout-publisher', io);
+      const observer = makeSocket('logout-observer', io);
+      asUser(publisher, ALICE);
+      asUser(observer, BOB);
+      connect(io, publisher);
+      connect(io, observer);
+      await expect(subscribeBoardAssociations(observer, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
+      await publisher.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
+      const presenceId = (
+        observer.received.find(
+          (entry) =>
+            entry.event === PRESENCE_SOCKET_EVENTS.updated &&
+            (entry.data as { boardId?: string }).boardId === 'board-1'
+        )?.data as { presenceId?: string } | undefined
+      )?.presenceId;
+      observer.received.length = 0;
+
+      retireAuthenticatedConnectionAuthority(publisher.feathers);
+      app.eventHandlers.get('disconnect')?.(publisher.feathers);
+
+      expect(publisher.connected).toBe(false);
+      expect(observer.received).toContainEqual({
+        event: PRESENCE_SOCKET_EVENTS.left,
+        data: expect.objectContaining({
+          userId: ALICE,
+          presenceId,
+          boardId: 'board-1',
+        }),
+      });
+    });
+
+    it('validates cursor payloads and replaces caller timestamps with server time', async () => {
+      const { io } = buildHarness();
+      const publisher = makeSocket('publisher', io);
+      const observer = makeSocket('observer', io);
+      asUser(publisher, ALICE);
+      asUser(observer, BOB);
+      connect(io, publisher);
+      connect(io, observer);
+      await publisher.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+      await observer.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+      const before = Date.now();
+
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.cursorMove)?.({
+        boardId: 'board-1',
+        x: 10,
+        y: 20,
+        timestamp: Number.MAX_SAFE_INTEGER,
+      });
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.cursorMove)?.({
+        boardId: 'board-1',
+        x: Number.NaN,
+        y: 20,
+        timestamp: 1,
+      });
+
+      const cursorEvents = observer.received.filter(
+        (entry) => entry.event === PRESENCE_SOCKET_EVENTS.cursorMoved
+      );
+      expect(cursorEvents).toHaveLength(1);
+      expect(cursorEvents[0]?.data).toMatchObject({
+        userId: ALICE,
+        presenceId: expect.any(String),
+        timestamp: expect.any(Number),
+      });
+      const cursorEvent = cursorEvents[0]?.data as { timestamp: number } | undefined;
+      expect(cursorEvent?.timestamp).toBeGreaterThanOrEqual(before);
+      expect(cursorEvent?.timestamp).toBeLessThanOrEqual(Date.now());
     });
   });
 });
@@ -1792,6 +2110,26 @@ describe('presence/cursor exclude the terminal-executor identity', () => {
     expect(io.emitted).toEqual([]);
   });
 
+  it('does not grant a cursor room when the authorized lookup returns an archived board', async () => {
+    const { app, io } = buildHarness();
+    (app as any).service = (path: string) =>
+      path === 'boards'
+        ? { get: vi.fn(async () => ({ board_id: 'archived-board', archived: true })) }
+        : { get: vi.fn(async (id: string) => ({ user_id: id })) };
+    const socket = makeSocket('archived-board-watcher', io);
+    asUser(socket, ALICE);
+    connect(io, socket);
+    const acknowledge = vi.fn();
+
+    await socket.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.(
+      'archived-board',
+      acknowledge
+    );
+
+    expect(acknowledge).toHaveBeenCalledWith({ ok: false });
+    expect(socket.joined).not.toContain(boardPresenceRoomName('default', 'archived-board'));
+  });
+
   it('does not restore a board room when disconnect races an in-flight authorization', async () => {
     const { app, io } = buildHarness();
     let resolveBoard!: (value: { board_id: string }) => void;
@@ -1814,6 +2152,28 @@ describe('presence/cursor exclude the terminal-executor identity', () => {
 
     expect(s.joined.has(boardPresenceRoomName('default', 'board-1'))).toBe(false);
     expect(acknowledge).toHaveBeenCalledWith({ ok: false });
+  });
+
+  it('does not restore association rooms when disconnect races a full-set authorization', async () => {
+    const { app, io } = buildHarness();
+    let resolveBoards!: (value: Array<{ board_id: string; archived: boolean }>) => void;
+    const boardLookup = new Promise<Array<{ board_id: string; archived: boolean }>>((resolve) => {
+      resolveBoards = resolve;
+    });
+    (app as any).service = (path: string) =>
+      path === 'boards'
+        ? { find: vi.fn(async () => boardLookup) }
+        : { get: vi.fn(async (id: string) => ({ user_id: id })) };
+    const socket = makeSocket('association-race', io);
+    asUser(socket, ALICE);
+    connect(io, socket);
+    const result = subscribeBoardAssociations(socket, ['board-1']);
+
+    socket.disconnect();
+    resolveBoards([{ board_id: 'board-1', archived: false }]);
+
+    await expect(result).resolves.toEqual({ ok: false });
+    expect(socket.joined).not.toContain(boardPresenceAssociationRoomName('default', 'board-1'));
   });
 });
 

@@ -1,8 +1,9 @@
 import type {
-  BoardID,
+  CursorLeftEvent,
   CursorMovedEvent,
   MCPOAuthAttemptID,
   MCPServerID,
+  PresenceLeftEvent,
   PresenceUpdatedEvent,
   RepoCloneError,
 } from '@agor/core/types';
@@ -83,6 +84,17 @@ export function boardPresenceRoomName(tenantId: string, boardId: string): string
   return `${tenantChannelName(tenantId)}:board:${encodeRealtimeRoomComponent(boardId)}:presence`;
 }
 
+/**
+ * Low-frequency board association room for navbar presence.
+ *
+ * This is deliberately distinct from the high-frequency cursor room: navbar
+ * consumers subscribe to every currently visible board without receiving
+ * cursor coordinates from boards they are not rendering.
+ */
+export function boardPresenceAssociationRoomName(tenantId: string, boardId: string): string {
+  return `${tenantChannelName(tenantId)}:board:${encodeRealtimeRoomComponent(boardId)}:presence-association`;
+}
+
 export function sessionStreamRoomName(tenantId: string, sessionId: string): string {
   return `${tenantChannelName(tenantId)}:session-stream:${encodeRealtimeRoomComponent(sessionId)}`;
 }
@@ -122,8 +134,9 @@ export function isExecutorTaskRoomName(name: string): boolean {
 
 interface HaNativeSocketPayloads {
   'cursor-moved': CursorMovedEvent;
-  'cursor-left': { userId: string; boardId: BoardID; timestamp: number };
+  'cursor-left': CursorLeftEvent;
   'presence-updated': PresenceUpdatedEvent;
+  'presence-left': PresenceLeftEvent;
   'repo:cloneError': {
     slug: string;
     url: string;
@@ -151,6 +164,7 @@ export const HA_NATIVE_SOCKET_EVENT_INVENTORY = [
   'cursor-moved',
   'cursor-left',
   'presence-updated',
+  'presence-left',
   'repo:cloneError',
   'oauth:completed',
   'oauth:disconnected',

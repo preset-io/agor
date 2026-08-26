@@ -98,6 +98,7 @@ describe('classifyRealtimeAuthorizationInvalidation', () => {
     ['branches', 'patch', { board_id: 'board-2' }],
     ['branches', 'remove', {}],
     ['boards', 'patch', { access_mode: 'private' }],
+    ['boards', 'patch', { archived: true }],
     ['boards', 'patch', { default_others_fs_access: 'read' }],
     ['boards', 'remove', {}],
     ['users', 'patch', { role: 'suspended' }],

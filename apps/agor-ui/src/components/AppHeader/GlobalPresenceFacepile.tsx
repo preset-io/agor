@@ -1,6 +1,7 @@
 import type { ActiveUser, AgorClient, Board, BoardID, User } from '@agor-live/client';
 import { useMemo } from 'react';
 import { PRESENCE_CONFIG } from '../../config/presence';
+import { useGlobalPresenceHeartbeat } from '../../hooks/useGlobalPresenceHeartbeat';
 import { usePresence } from '../../hooks/usePresence';
 import { Facepile } from '../Facepile';
 
@@ -31,6 +32,21 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
   staticActiveUsers,
   maxVisible = 5,
 }) => {
+  const visibleBoardIds = useMemo(
+    () =>
+      [...boardById.values()]
+        .filter((board) => !board.archived)
+        .map((board) => board.board_id as BoardID),
+    [boardById]
+  );
+
+  useGlobalPresenceHeartbeat({
+    client,
+    currentBoardId: currentBoardId ?? null,
+    visibleBoardIds,
+    enabled: !!client && !staticActiveUsers,
+  });
+
   const { activeUsers } = usePresence({
     client,
     boardId: currentBoardId ?? null,
@@ -42,18 +58,23 @@ export const GlobalPresenceFacepile: React.FC<GlobalPresenceFacepileProps> = ({
 
   const allActiveUsers = useMemo(() => {
     if (staticActiveUsers) return staticActiveUsers;
-    if (!currentUser) return activeUsers;
+    const visibleActiveUsers = activeUsers.map((activeUser) =>
+      activeUser.boardId && !boardById.has(activeUser.boardId)
+        ? { ...activeUser, boardId: undefined, cursor: undefined }
+        : activeUser
+    );
+    if (!currentUser) return visibleActiveUsers;
 
     return [
       {
         user: currentUser,
         lastSeen: Date.now(),
-        boardId: currentBoardId ?? undefined,
+        boardId: currentBoardId && boardById.has(currentBoardId) ? currentBoardId : undefined,
         cursor: undefined,
       },
-      ...activeUsers.filter((activeUser) => activeUser.user.user_id !== currentUser.user_id),
+      ...visibleActiveUsers.filter((activeUser) => activeUser.user.user_id !== currentUser.user_id),
     ];
-  }, [activeUsers, currentBoardId, currentUser, staticActiveUsers]);
+  }, [activeUsers, boardById, currentBoardId, currentUser, staticActiveUsers]);
 
   if (allActiveUsers.length === 0) return null;
 

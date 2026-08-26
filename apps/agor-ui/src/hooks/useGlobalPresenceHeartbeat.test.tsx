@@ -1,0 +1,156 @@
+import {
+  type BoardID,
+  MAX_PRESENCE_BOARD_SUBSCRIPTIONS,
+  PRESENCE_SOCKET_EVENTS,
+} from '@agor-live/client';
+import { act, renderHook } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useGlobalPresenceHeartbeat } from './useGlobalPresenceHeartbeat';
+
+type Listener = () => void;
+
+function makeMockClient() {
+  const ioListeners = new Map<string, Set<Listener>>();
+  const clientListeners = new Map<string, Set<Listener>>();
+  const add = (registry: Map<string, Set<Listener>>, event: string, listener: Listener) => {
+    const listeners = registry.get(event) ?? new Set();
+    listeners.add(listener);
+    registry.set(event, listeners);
+  };
+  const remove = (registry: Map<string, Set<Listener>>, event: string, listener: Listener) => {
+    registry.get(event)?.delete(listener);
+  };
+  const emit = vi.fn(
+    (event: string, _payload?: unknown, acknowledge?: (value: unknown) => void) => {
+      if (event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations) acknowledge?.({ ok: true });
+    }
+  );
+  return {
+    client: {
+      io: {
+        emit,
+        on: vi.fn((event: string, listener: Listener) => add(ioListeners, event, listener)),
+        off: vi.fn((event: string, listener: Listener) => remove(ioListeners, event, listener)),
+      },
+      on: vi.fn((event: string, listener: Listener) => add(clientListeners, event, listener)),
+      off: vi.fn((event: string, listener: Listener) => remove(clientListeners, event, listener)),
+    } as never,
+    emit,
+    emitIo: (event: string) => {
+      for (const listener of ioListeners.get(event) ?? []) listener();
+    },
+    emitClient: (event: string) => {
+      for (const listener of clientListeners.get(event) ?? []) listener();
+    },
+  };
+}
+
+function boardId(value: string): BoardID {
+  return value as BoardID;
+}
+
+describe('useGlobalPresenceHeartbeat', () => {
+  beforeEach(() => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('reauthorizes on route/reconnect and removes board identity when blurred or hidden', () => {
+    const { client, emit, emitClient, emitIo } = makeMockClient();
+    const { rerender, unmount } = renderHook(
+      ({ currentBoardId }: { currentBoardId: BoardID | null }) =>
+        useGlobalPresenceHeartbeat({
+          client,
+          currentBoardId,
+          visibleBoardIds: [boardId('board-a'), boardId('board-b')],
+        }),
+      { initialProps: { currentBoardId: boardId('board-a') } }
+    );
+
+    expect(emit).toHaveBeenCalledWith(
+      PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations,
+      { boardIds: [boardId('board-a'), boardId('board-b')] },
+      expect.any(Function)
+    );
+    expect(emit).toHaveBeenCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, {
+      boardId: boardId('board-a'),
+    });
+
+    rerender({ currentBoardId: boardId('board-b') });
+    expect(emit).toHaveBeenCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, {
+      boardId: boardId('board-b'),
+    });
+
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    act(() => window.dispatchEvent(new Event('blur')));
+    expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, { boardId: null });
+
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    act(() => document.dispatchEvent(new Event('visibilitychange')));
+    expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, { boardId: null });
+
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
+    vi.mocked(document.hasFocus).mockReturnValue(true);
+    act(() => {
+      emitIo('connect');
+      emitClient('authenticated');
+    });
+    expect(emit).toHaveBeenCalledWith(
+      PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations,
+      { boardIds: [boardId('board-b'), boardId('board-a')] },
+      expect.any(Function)
+    );
+
+    unmount();
+    expect(emit).toHaveBeenCalledWith(PRESENCE_SOCKET_EVENTS.leave);
+    expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations, {
+      boardIds: [],
+    });
+  });
+
+  it('prioritizes the current board and enforces the shared subscription bound', () => {
+    const { client, emit } = makeMockClient();
+    const visibleBoardIds = Array.from(
+      { length: MAX_PRESENCE_BOARD_SUBSCRIPTIONS + 5 },
+      (_, index) => boardId(`board-${index}`)
+    );
+    const currentBoardId = boardId('current-board');
+
+    renderHook(() => useGlobalPresenceHeartbeat({ client, currentBoardId, visibleBoardIds }));
+
+    const subscription = emit.mock.calls.find(
+      ([event]) => event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations
+    )?.[1] as { boardIds: BoardID[] };
+    expect(subscription.boardIds).toHaveLength(MAX_PRESENCE_BOARD_SUBSCRIPTIONS);
+    expect(subscription.boardIds[0]).toBe(currentBoardId);
+  });
+
+  it('does not reactivate presence from a subscription acknowledgement after unmount', () => {
+    const { client, emit } = makeMockClient();
+    let acknowledge: ((result: { ok: boolean }) => void) | undefined;
+    emit.mockImplementation((event, payload, callback) => {
+      if (
+        event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations &&
+        (payload as { boardIds?: BoardID[] })?.boardIds?.length
+      ) {
+        acknowledge = callback as (result: { ok: boolean }) => void;
+      }
+    });
+    const { unmount } = renderHook(() =>
+      useGlobalPresenceHeartbeat({
+        client,
+        currentBoardId: boardId('board-a'),
+        visibleBoardIds: [boardId('board-a')],
+      })
+    );
+    unmount();
+
+    act(() => acknowledge?.({ ok: true }));
+
+    expect(emit.mock.calls.filter(([event]) => event === PRESENCE_SOCKET_EVENTS.heartbeat)).toEqual(
+      []
+    );
+  });
+});

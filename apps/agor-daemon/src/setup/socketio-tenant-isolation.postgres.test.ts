@@ -76,6 +76,13 @@ function watchBoard(client: AgorClient, boardId: string): Promise<{ ok: boolean 
   return client.io.timeout(2_000).emitWithAck('presence:watch-board', boardId);
 }
 
+function subscribeBoardAssociations(
+  client: AgorClient,
+  boardIds: string[]
+): Promise<{ ok: boolean }> {
+  return client.io.timeout(2_000).emitWithAck('presence:subscribe-boards', { boardIds });
+}
+
 function delay(ms = 40): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -124,6 +131,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const tenantB = `socket-b-${generateId()}`;
       let viewerA!: User;
       let ownerA!: User;
+      let adminA!: User;
+      let superadminA!: User;
       let viewerB!: User;
       let sharedA!: Board;
       let privateA!: Board;
@@ -139,6 +148,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         viewerA = await users.create({
           email: `viewer-a-${generateId()}@example.test`,
           role: 'member',
+        });
+        adminA = await users.create({
+          email: `admin-a-${generateId()}@example.test`,
+          role: 'admin',
+        });
+        superadminA = await users.create({
+          email: `superadmin-a-${generateId()}@example.test`,
+          role: 'superadmin',
         });
         sharedA = await boards.create({
           name: 'Tenant A shared board',
@@ -190,6 +207,28 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               throw new Error('Board unavailable');
             }
             return board;
+          });
+        },
+        async find(params?: TenantParams): Promise<Board[]> {
+          const tenantId = tenantIdFromParams(params);
+          const userId = params?.user?.user_id;
+          const boardFilter = params?.query?.board_id as { $in?: string[] } | undefined;
+          const requested = boardFilter?.$in ?? [];
+          if (!tenantId || !userId) return [];
+          return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+            const boards = new BoardRepository(scoped);
+            const visible: Board[] = [];
+            for (const boardId of requested) {
+              const board = await boards.findById(boardId);
+              if (
+                board &&
+                !board.archived &&
+                (await boards.canView(board.board_id, userId as UUID))
+              ) {
+                visible.push(board);
+              }
+            }
+            return visible;
           });
         },
       });
@@ -250,18 +289,53 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         JWT_SECRET,
         '5m'
       );
+      const ownerTokenA = issueRuntimeToken(
+        { sub: ownerA.user_id as UserID, type: 'access', tenant_id: tenantA },
+        JWT_SECRET,
+        '5m'
+      );
+      const adminTokenA = issueRuntimeToken(
+        { sub: adminA.user_id as UserID, type: 'access', tenant_id: tenantA },
+        JWT_SECRET,
+        '5m'
+      );
+      const superadminTokenA = issueRuntimeToken(
+        { sub: superadminA.user_id as UserID, type: 'access', tenant_id: tenantA },
+        JWT_SECRET,
+        '5m'
+      );
       const clientA = createClient(url, false, { reconnectionAttempts: 0, ackTimeout: 2_000 });
+      const ownerClientA = createClient(url, false, { reconnectionAttempts: 0, ackTimeout: 2_000 });
+      const ownerPeerClientA = createClient(url, false, {
+        reconnectionAttempts: 0,
+        ackTimeout: 2_000,
+      });
+      const adminClientA = createClient(url, false, { reconnectionAttempts: 0, ackTimeout: 2_000 });
+      const superadminClientA = createClient(url, false, {
+        reconnectionAttempts: 0,
+        ackTimeout: 2_000,
+      });
       const clientB = createClient(url, false, { reconnectionAttempts: 0, ackTimeout: 2_000 });
-      clients.push(clientA, clientB);
+      clients.push(
+        clientA,
+        ownerClientA,
+        ownerPeerClientA,
+        adminClientA,
+        superadminClientA,
+        clientB
+      );
       clientA.io.auth = {
         token: tokenA,
         // Caller-controlled auth metadata must not override the signed claim.
         tenant_id: tenantB,
       };
+      ownerClientA.io.auth = { token: ownerTokenA };
+      ownerPeerClientA.io.auth = { token: ownerTokenA };
+      adminClientA.io.auth = { token: adminTokenA };
+      superadminClientA.io.auth = { token: superadminTokenA };
       clientB.io.auth = { token: tokenB };
-      clientA.io.connect();
-      clientB.io.connect();
-      await Promise.all([waitForConnect(clientA), waitForConnect(clientB)]);
+      for (const client of clients) client.io.connect();
+      await Promise.all(clients.map(waitForConnect));
 
       const receivedA: Array<{ event: string; payload: unknown }> = [];
       const receivedB: Array<{ event: string; payload: unknown }> = [];
@@ -274,11 +348,74 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         }
       }
 
+      const presenceByViewer: Array<{ boardId?: BoardID }> = [];
+      const presenceByOwnerPeer: Array<{ boardId?: BoardID }> = [];
+      const presenceByAdmin: Array<{ boardId?: BoardID }> = [];
+      const presenceBySuperadmin: Array<{ boardId?: BoardID }> = [];
+      const presenceByTenantB: Array<{ boardId?: BoardID }> = [];
+      const cursorsByOwner: Array<{ boardId?: BoardID }> = [];
+      clientA.io.on('presence-updated', (event) => presenceByViewer.push(event));
+      ownerPeerClientA.io.on('presence-updated', (event) => presenceByOwnerPeer.push(event));
+      adminClientA.io.on('presence-updated', (event) => presenceByAdmin.push(event));
+      superadminClientA.io.on('presence-updated', (event) => presenceBySuperadmin.push(event));
+      clientB.io.on('presence-updated', (event) => presenceByTenantB.push(event));
+      ownerClientA.io.on('cursor-moved', (event) => cursorsByOwner.push(event));
+
       await expect(watchBoard(clientA, sharedA.board_id)).resolves.toEqual({ ok: true });
+      await expect(watchBoard(ownerClientA, sharedA.board_id)).resolves.toEqual({ ok: true });
       await expect(watchBoard(clientB, sharedB.board_id)).resolves.toEqual({ ok: true });
       await expect(watchBoard(clientA, sharedB.board_id)).resolves.toEqual({ ok: false });
       await expect(watchBoard(clientA, privateA.board_id)).resolves.toEqual({ ok: false });
       await expect(watchBoard(clientA, generateId())).resolves.toEqual({ ok: false });
+
+      const missingBoardId = generateId();
+      for (const client of [clientA, adminClientA, superadminClientA]) {
+        // Success is intentionally non-enumerating: private, missing, and
+        // foreign IDs are silently omitted from the authorized room set.
+        await expect(
+          subscribeBoardAssociations(client, [
+            sharedA.board_id,
+            privateA.board_id,
+            sharedB.board_id,
+            missingBoardId,
+          ])
+        ).resolves.toEqual({ ok: true });
+      }
+      await expect(
+        subscribeBoardAssociations(ownerClientA, [sharedA.board_id, privateA.board_id])
+      ).resolves.toEqual({ ok: true });
+      await expect(
+        subscribeBoardAssociations(ownerPeerClientA, [sharedA.board_id, privateA.board_id])
+      ).resolves.toEqual({ ok: true });
+      await expect(subscribeBoardAssociations(clientB, [sharedB.board_id])).resolves.toEqual({
+        ok: true,
+      });
+
+      ownerClientA.io.emit('presence:heartbeat', { boardId: sharedA.board_id });
+      await delay();
+      ownerClientA.io.emit('presence:heartbeat', { boardId: privateA.board_id });
+      await delay();
+
+      expect(presenceByViewer.some((event) => event.boardId === sharedA.board_id)).toBe(true);
+      expect(presenceByOwnerPeer.some((event) => event.boardId === privateA.board_id)).toBe(true);
+      for (const unauthorized of [
+        presenceByViewer,
+        presenceByAdmin,
+        presenceBySuperadmin,
+        presenceByTenantB,
+      ]) {
+        expect(unauthorized.some((event) => event.boardId === privateA.board_id)).toBe(false);
+      }
+      expect(presenceByTenantB).toEqual([]);
+
+      const authorizedPrivateEvents = presenceByOwnerPeer.filter(
+        (event) => event.boardId === privateA.board_id
+      ).length;
+      clientA.io.emit('presence:heartbeat', { boardId: privateA.board_id });
+      await delay();
+      expect(
+        presenceByOwnerPeer.filter((event) => event.boardId === privateA.board_id)
+      ).toHaveLength(authorizedPrivateEvents);
 
       const missingError = await clientA
         .service('boards')
@@ -323,7 +460,8 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       // tenant B receives neither A's authorized cursor nor A's forged cursor,
       // and A did not join B's guessed terminal channel.
       expect(receivedB).toEqual([]);
-      expect(receivedA).toEqual([]);
+      expect(receivedA.filter(({ event }) => event !== 'presence-updated')).toEqual([]);
+      expect(cursorsByOwner.filter((event) => event.boardId === sharedA.board_id)).toHaveLength(1);
       const serverSocketA = socketConfig.getSocketServer()?.sockets.sockets.get(clientA.io.id!);
       expect(serverSocketA?.rooms.has(foreignTerminalRoom)).toBe(false);
 

@@ -70,14 +70,19 @@ const checks = [
       // derived from trusted tenant/user/terminal identity before executor
       // startup. Same-room operations are serialized and re-check immutable
       // authority so retirement cannot leave stale membership; clients cannot
-      // supply that room or capability.
-      'apps/agor-daemon/src/setup/socketio.ts': 11,
+      // supply that room or capability. The navbar board-association protocol
+      // adds one join and one leave at this same audited boundary; each room is
+      // constructed from immutable tenant authority plus a boards.find-
+      // authorized canonical board ID.
+      'apps/agor-daemon/src/setup/socketio.ts': 13,
       // Adversarial integration harnesses intentionally exercise the raw
       // Socket.IO boundary: the PostgreSQL test probes a guessed foreign room
-      // and inspects passive delivery, while the Redis test emits one cursor
-      // packet across two real adapter-backed replicas. Production room names
-      // and authorization still come from the centralized routing/config code.
-      'apps/agor-daemon/src/setup/socketio-tenant-isolation.postgres.test.ts': 3,
+      // and inspects passive delivery, including authorized/private/forged
+      // board-association heartbeats for member/admin/superadmin roles, while
+      // the Redis test emits one cursor packet across two real adapter-backed
+      // replicas. Production room names and authorization still come from the
+      // centralized routing/config code.
+      'apps/agor-daemon/src/setup/socketio-tenant-isolation.postgres.test.ts': 6,
       // The second cursor packet is deliberately sent after revoke/reconnect
       // denial to prove a stale client cannot publish through its former room.
       'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 2,

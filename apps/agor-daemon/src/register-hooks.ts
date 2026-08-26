@@ -1035,6 +1035,10 @@ export function classifyRealtimeAuthorizationInvalidation(
       'primary_teammate_id',
       'default_others_can',
       'default_others_fs_access',
+      // Archiving removes a board from active presence subscriptions. Evict
+      // passive room capabilities across replicas so stale tabs cannot retain
+      // or publish an archived board association.
+      'archived',
     ].some((field) => Object.hasOwn(data, field))
       ? 'evict'
       : 'none';

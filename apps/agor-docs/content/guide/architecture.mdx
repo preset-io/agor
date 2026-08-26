@@ -163,8 +163,10 @@ sequenceDiagram
   connections in the event's tenant, further filtered by board/branch/resource
   access where applicable
 - **Service-level events** - `created`, `patched`, `removed`, `updated`
-- **Custom events** - Board-authorized cursor position and tenant-scoped
-  presence updates (100ms throttle)
+- **Custom events** - Board-authorized cursor positions (100ms throttle),
+  tenant-scoped online presence without resource identity, and a separate
+  low-frequency board-association stream authorized for both publisher and
+  subscriber
 - **Fail-closed routing** - Missing/conflicting tenant context has no global
   broadcast fallback; clients cannot select tenant rooms
 - **Optimistic UI** - React hooks listen to events and update state immediately

@@ -1,0 +1,116 @@
+import {
+  type AgorClient,
+  type BoardID,
+  MAX_PRESENCE_BOARD_SUBSCRIPTIONS,
+  PRESENCE_SOCKET_EVENTS,
+  type PresenceSubscriptionAcknowledgement,
+} from '@agor-live/client';
+import { useEffect, useMemo, useRef } from 'react';
+import { PRESENCE_CONFIG } from '../config/presence';
+
+interface UseGlobalPresenceHeartbeatOptions {
+  client: AgorClient | null;
+  currentBoardId: BoardID | null;
+  visibleBoardIds: BoardID[];
+  enabled?: boolean;
+}
+
+function browserMayPublishBoardAssociation(): boolean {
+  if (typeof document === 'undefined') return true;
+  if (document.hidden) return false;
+  return typeof document.hasFocus !== 'function' || document.hasFocus();
+}
+
+/**
+ * Publish one tab's liveness and subscribe its navbar to low-frequency board
+ * associations for boards already returned by the authorized boards API.
+ *
+ * Hidden/blurred tabs remain tenant-online but publish no board identity. On a
+ * focus/visibility/routing transition, the full desired subscription set is
+ * re-authorized server-side before the next board-bearing heartbeat.
+ */
+export function useGlobalPresenceHeartbeat({
+  client,
+  currentBoardId,
+  visibleBoardIds,
+  enabled = true,
+}: UseGlobalPresenceHeartbeatOptions): void {
+  const subscribedBoardIds = useMemo(() => {
+    const ids = new Set<BoardID>();
+    if (currentBoardId) ids.add(currentBoardId);
+    for (const boardId of visibleBoardIds) ids.add(boardId);
+    return [...ids].slice(0, MAX_PRESENCE_BOARD_SUBSCRIPTIONS);
+  }, [currentBoardId, visibleBoardIds]);
+  const subscriptionKey = subscribedBoardIds.join('\0');
+
+  const currentBoardRef = useRef(currentBoardId);
+  currentBoardRef.current = currentBoardId;
+  const subscribedBoardIdsRef = useRef(subscribedBoardIds);
+  subscribedBoardIdsRef.current = subscribedBoardIds;
+  const synchronizeRef = useRef<() => void>(() => undefined);
+
+  useEffect(() => {
+    if (!enabled || !client?.io) return;
+    let active = true;
+    let synchronizationGeneration = 0;
+
+    const publishHeartbeat = () => {
+      client.io.emit(PRESENCE_SOCKET_EVENTS.heartbeat, {
+        boardId: browserMayPublishBoardAssociation() ? currentBoardRef.current : null,
+      });
+    };
+    const synchronize = () => {
+      const generation = ++synchronizationGeneration;
+      client.io.emit(
+        PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations,
+        { boardIds: subscribedBoardIdsRef.current },
+        (result: PresenceSubscriptionAcknowledgement) => {
+          if (active && generation === synchronizationGeneration && result?.ok) {
+            publishHeartbeat();
+          }
+        }
+      );
+    };
+    synchronizeRef.current = synchronize;
+
+    const handleVisibilityChange = () => {
+      if (browserMayPublishBoardAssociation()) synchronize();
+      else publishHeartbeat();
+    };
+    const handleFocus = () => synchronize();
+    const handleBlur = () => publishHeartbeat();
+
+    client.io.on('connect', synchronize);
+    client.on('authenticated', synchronize);
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      window.addEventListener('focus', handleFocus);
+      window.addEventListener('blur', handleBlur);
+    }
+    const heartbeatInterval = setInterval(publishHeartbeat, PRESENCE_CONFIG.HEARTBEAT_INTERVAL_MS);
+
+    return () => {
+      active = false;
+      synchronizationGeneration++;
+      synchronizeRef.current = () => undefined;
+      clearInterval(heartbeatInterval);
+      client.io.off('connect', synchronize);
+      client.off('authenticated', synchronize);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        window.removeEventListener('focus', handleFocus);
+        window.removeEventListener('blur', handleBlur);
+      }
+      client.io.emit(PRESENCE_SOCKET_EVENTS.leave);
+      client.io.emit(PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations, { boardIds: [] });
+    };
+  }, [client, enabled]);
+
+  useEffect(() => {
+    if (enabled && client) synchronizeRef.current();
+    // These values select when the ref-backed synchronizer must run without
+    // rebuilding its transport listeners.
+    void currentBoardId;
+    void subscriptionKey;
+  }, [client, currentBoardId, enabled, subscriptionKey]);
+}
