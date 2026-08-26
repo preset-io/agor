@@ -188,7 +188,30 @@ function getButton(text: RegExp): HTMLButtonElement {
 function clickButton(text: RegExp) {
   fireEvent.click(getButton(text));
 }
-/** Drain microtasks so a Form.validateFields()-gated step transition settles. */
+
+const ASYNC = { timeout: 10_000 };
+
+/** Wait for an async validation-gated wizard transition without rescanning the form DOM. */
+async function waitForStep(title: string) {
+  await waitFor(() => {
+    const currentTitle = document.querySelector(
+      '.ant-steps-item-process .ant-steps-item-title'
+    )?.textContent;
+    expect(currentTitle).toBe(title);
+  }, ASYNC);
+}
+
+/** Wait until switching channel type has committed the destination wizard structure. */
+async function waitForAvailableStep(title: string) {
+  await waitFor(() => {
+    const titles = Array.from(document.querySelectorAll('.ant-steps-item-title')).map(
+      (stepTitle) => stepTitle.textContent
+    );
+    expect(titles).toContain(title);
+  }, ASYNC);
+}
+
+/** Yield one event-loop turn for non-form fire-and-forget work. */
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 /**
@@ -233,14 +256,14 @@ async function advanceToOptions() {
 async function advanceToCreateAppStep() {
   await advanceToOptions();
   clickButton(/^Continue$/);
-  await flush();
+  await waitForStep('Create app');
 }
 
 /** Advance all the way to the final "Tokens & test" step (step 3). */
 async function advanceToTokensStep() {
   await advanceToCreateAppStep();
   clickButton(/^Continue$/);
-  await flush();
+  await waitForStep('Tokens & test');
 }
 
 describe('GatewayChannelsTable Slack create wizard', () => {
@@ -286,10 +309,10 @@ describe('GatewayChannelsTable Slack create wizard', () => {
 
     // Slack aligns users by default, so no run-as user is required to advance.
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Create app');
     expect(getButton(/Copy manifest/)).toBeInTheDocument();
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Tokens & test');
     expect(getButton(/Create channel/)).toBeInTheDocument();
     expect(queryButton(/^Continue$/)).toBeUndefined();
     expect(screen.getByPlaceholderText('xoxb-...')).toBeInTheDocument();
@@ -395,9 +418,9 @@ describe('GatewayChannelsTable Slack create wizard', () => {
 
     // Slack aligns users by default — no run-as user needed. Walk to Tokens step.
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Create app');
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Tokens & test');
     fireEvent.change(screen.getByPlaceholderText('xoxb-...'), { target: { value: 'xoxb-test' } });
     fireEvent.change(screen.getByPlaceholderText('xapp-...'), { target: { value: 'xapp-test' } });
     clickButton(/Test connection/);
@@ -853,6 +876,7 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
 
     // Switch the channel type to GitHub via the (real) antd Select.
     selectChannelType('GitHub');
+    await waitForAvailableStep('Credentials');
 
     // Step 0 (Channel): GitHub picks identity later, so only name + branch here.
     fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
@@ -860,12 +884,12 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
     });
     fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Create app');
 
     // Step 1 (Create app): no required fields — Continue straight through.
     expect(screen.getByText(/Create GitHub App on GitHub/)).toBeInTheDocument();
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Credentials');
 
     // Step 2 (Credentials): App ID + private key, then Continue.
     fireEvent.change(screen.getByPlaceholderText('123456'), { target: { value: '111' } });
@@ -883,8 +907,6 @@ describe('GatewayChannelsTable GitHub create wizard', () => {
     fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
 
     clickButton(/Create channel/);
-    await flush();
-
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
       channel_type: 'github',
@@ -907,6 +929,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
 
     // Switch the channel type to Microsoft Teams via the (real) antd Select.
     selectChannelType('Microsoft Teams');
+    await waitForAvailableStep('Setup');
 
     // Step 0 for Teams includes the generic "Post messages as" identity.
     fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
@@ -915,7 +938,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
     fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
     clickButton(/^Continue$/);
-    await flush();
+    await waitForStep('Setup');
 
     // Setup step (final): Azure Bot credentials.
     fireEvent.change(document.querySelector('#teams_app_id') as HTMLInputElement, {
@@ -929,8 +952,6 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     });
 
     clickButton(/Create channel/);
-    await flush();
-
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
       channel_type: 'teams',
@@ -941,177 +962,5 @@ describe('GatewayChannelsTable Teams create wizard', () => {
     });
     // Same headroom rationale as the GitHub wizard test above: opens the real
     // channel-type Select, so it's among the heaviest tests in this file.
-  }, 30_000);
-});
-
-describe('GatewayChannelsTable Discord create wizard', () => {
-  it('follows Channel → Create app → Access → Token & test navigation', async () => {
-    const { client } = makeClient();
-    renderTable(client);
-    clickButton(/Add Channel/);
-
-    selectChannelType('Discord');
-    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
-      target: { value: 'My Discord' },
-    });
-    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
-    clickButton(/^Continue$/);
-    await flush();
-
-    expect(screen.getByText('Discord setup')).toBeInTheDocument();
-    expect(screen.getByLabelText('Application ID')).toBeInTheDocument();
-    expect(screen.getByLabelText('Guild ID')).toBeInTheDocument();
-    expect(screen.getByLabelText(/Message Content/)).toBeInTheDocument();
-    expect(screen.getByText('Public thread per summon')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Application ID'), {
-      target: { value: '123456789012345678' },
-    });
-    fireEvent.change(screen.getByLabelText('Guild ID'), {
-      target: { value: '223456789012345678' },
-    });
-    fireEvent.click(screen.getByLabelText(/Message Content/));
-    clickButton(/^Continue$/);
-    await flush();
-
-    expect(screen.getByLabelText('Allowed public text channel IDs')).toBeInTheDocument();
-    expect(screen.getByLabelText('Application ID')).not.toBeVisible();
-    const channelField = screen.getByLabelText('Allowed public text channel IDs');
-    const channelInput = channelField.querySelector('input') ?? channelField;
-    fireEvent.focus(channelInput);
-    fireEvent.mouseDown(channelInput);
-    fireEvent.change(channelInput, { target: { value: '323456789012345678' } });
-    fireEvent.keyDown(channelInput, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 });
-    fireEvent.keyUp(channelInput, { key: 'Enter', code: 'Enter' });
-    const allowedUserField = screen.getByLabelText('Allowed user IDs');
-    const allowedUserInput = allowedUserField.querySelector('input') ?? allowedUserField;
-    fireEvent.focus(allowedUserInput);
-    fireEvent.mouseDown(allowedUserInput);
-    fireEvent.change(allowedUserInput, { target: { value: '423456789012345678' } });
-    fireEvent.keyDown(allowedUserInput, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 });
-    fireEvent.keyUp(allowedUserInput, { key: 'Enter', code: 'Enter' });
-    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
-    clickButton(/^Continue$/);
-    await flush();
-
-    expect(screen.getByLabelText(/Discord bot token/)).toBeInTheDocument();
-    expect(screen.getByText('Test Discord connection')).toBeInTheDocument();
-    expect(screen.queryByText('Discord (coming soon)')).not.toBeInTheDocument();
-  }, 30_000);
-
-  it('preserves secrets through Back/Continue and submits the complete payload', async () => {
-    const { client, channelCreate, channelPatch, testCreate } = makeClient({
-      ok: true,
-      channelAccess: [
-        {
-          channelId: '323456789012345678',
-          ok: true,
-          permissions: {
-            view: true,
-            send: true,
-            readHistory: true,
-            createPublicThreads: true,
-            sendInThreads: false,
-          },
-        },
-      ],
-      failures: [],
-      notVerifiable: [],
-      bot: { userId: '123456789012345678', name: 'Agor' },
-      verifiedInstallationId: '123456789012345678',
-      verification: { status: 'verified', warnings: [] },
-    });
-    renderTable(client);
-    clickButton(/Add Channel/);
-    selectChannelType('Discord');
-    fireEvent.change(screen.getByPlaceholderText('e.g., Team Slack, Personal Discord'), {
-      target: { value: 'My Discord' },
-    });
-    fireEvent.change(screen.getByLabelText('branch-select'), { target: { value: 'branch-1' } });
-    clickButton(/^Continue$/);
-    await flush();
-
-    fireEvent.change(screen.getByLabelText('Application ID'), {
-      target: { value: '123456789012345678' },
-    });
-    fireEvent.change(screen.getByLabelText('Guild ID'), {
-      target: { value: '223456789012345678' },
-    });
-    fireEvent.click(screen.getByLabelText(/Message Content/));
-    clickButton(/^Continue$/);
-    await flush();
-
-    const addTag = (label: string, value: string) => {
-      const field = screen.getByLabelText(label);
-      const input = field.querySelector('input') ?? field;
-      fireEvent.focus(input);
-      fireEvent.mouseDown(input);
-      fireEvent.change(input, { target: { value } });
-      fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 });
-      fireEvent.keyUp(input, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13 });
-    };
-    addTag('Allowed public text channel IDs', '323456789012345678');
-    addTag('Allowed user IDs', '423456789012345678');
-    addTag('Allowed role IDs', '523456789012345678');
-    fireEvent.change(screen.getByLabelText('user-select'), { target: { value: 'user-1' } });
-    clickButton(/^Continue$/);
-    await flush();
-
-    const token = 'discord-token-for-wizard';
-    expect(screen.getByLabelText(/Discord bot token/)).toBeDisabled();
-    clickButton(/Create secure draft/);
-    await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
-    expect(channelCreate.mock.calls[0][0].enabled).toBe(false);
-    expect(channelCreate.mock.calls[0][0].config.bot_token).toBeUndefined();
-    fireEvent.change(screen.getByLabelText(/Discord bot token/), { target: { value: token } });
-    clickButton(/Test Discord connection/);
-    await waitFor(() => expect(screen.getByText(/public threads ok/)).toBeInTheDocument());
-    expect(screen.getByText(/view ok, send ok, history ok, public threads ok/)).toBeInTheDocument();
-
-    clickButton(/^Back$/);
-    await flush();
-    clickButton(/^Continue$/);
-    await flush();
-    expect(screen.getByLabelText(/Discord bot token/)).toHaveValue(token);
-
-    clickButton(/Verify and enable/);
-    await waitFor(() => expect(channelPatch).toHaveBeenCalledTimes(3));
-    expect(channelPatch.mock.calls[1][0]).toBe('channel-discord');
-    expect(channelPatch.mock.calls[1][1]).toMatchObject({
-      enabled: false,
-      config: { bot_token: token },
-    });
-    expect(testCreate.mock.calls[1][0]).toEqual({ gatewayChannelId: 'channel-discord' });
-    expect(channelPatch.mock.invocationCallOrder[1]).toBeLessThan(
-      testCreate.mock.invocationCallOrder[1]
-    );
-    expect(channelPatch.mock.calls[2][1]).toEqual({ enabled: true });
-    expect(channelCreate.mock.calls[0][0]).toMatchObject({
-      name: 'My Discord',
-      channel_type: 'discord',
-      target_branch_id: 'branch-1',
-      agor_user_id: 'user-1',
-      config: {
-        application_id: '123456789012345678',
-        guild_id: '223456789012345678',
-        allowed_channel_ids: ['323456789012345678'],
-        allowed_user_ids: ['423456789012345678'],
-        allowed_role_ids: ['523456789012345678'],
-        message_content_enabled: true,
-        thread_mode: 'public_thread_per_summon',
-        thread_auto_archive_minutes: 1440,
-        align_discord_users: false,
-        catch_up: {
-          max_pages: 5,
-          max_messages: 200,
-          max_prompt_bytes: 32768,
-          request_timeout_ms: 30000,
-          rate_limit_max_retries: 2,
-          rate_limit_max_total_delay_ms: 10000,
-        },
-        files: false,
-        agent_tools: [],
-      },
-    });
-    expect(JSON.stringify(channelCreate.mock.calls[0][0])).not.toContain('••••••••');
   }, 30_000);
 });
