@@ -473,7 +473,20 @@ describe('Board and branch capability-policy migration', () => {
       expect(retired.rows[0]).toEqual({
         others_can: 'none',
         others_fs_access: 'none',
-        sharing: null,
+        sharing: 0,
+      });
+      const legacyBoardCompatibility = await client.execute(
+        `SELECT json_extract(data,'$.access_mode') AS access_mode,
+                json_extract(data,'$.default_others_can') AS others_can,
+                json_extract(data,'$.default_others_fs_access') AS fs_access,
+                json_extract(data,'$.default_dangerously_allow_session_sharing') AS sharing
+         FROM boards WHERE board_id='board-1'`
+      );
+      expect(legacyBoardCompatibility.rows[0]).toEqual({
+        access_mode: 'private',
+        others_can: 'none',
+        fs_access: 'none',
+        sharing: 0,
       });
       await expect(
         client.execute(
@@ -497,9 +510,13 @@ describe('Board and branch capability-policy migration', () => {
         INSERT INTO boards VALUES (
           'private-board',1,2,'removed-creator',
           '{"access_mode":"private","default_others_can":"session","default_others_fs_access":"write"}'
+        ),(
+          'creator-only-private',1,2,'removed-creator',
+          '{"access_mode":"private","default_others_can":"none","default_others_fs_access":"none"}'
         );
         INSERT INTO board_owners VALUES
-          ('private-board','owner',1),('private-board','manager',2);
+          ('private-board','owner',1),('private-board','manager',2),
+          ('creator-only-private','owner',1);
         INSERT INTO board_group_grants VALUES
           ('private-board','design','all','write',1,2);
         INSERT INTO branches VALUES
@@ -528,6 +545,7 @@ describe('Board and branch capability-policy migration', () => {
         Object.fromEntries(owners.rows.map((row) => [row.resource, row.primary_owner_user_id]))
       ).toMatchObject({
         'board:private-board': 'owner',
+        'board:creator-only-private': 'owner',
         'branch:inherited': 'owner',
         'branch:removed-creator': 'manager',
         'branch:nullable-owner-order': 'owner',
@@ -554,6 +572,38 @@ describe('Board and branch capability-policy migration', () => {
          WHERE c.board_id='private-board' AND e.group_id='design'`
       );
       expect(Number(ignoredGroup.rows[0]?.count)).toBe(0);
+      const creatorGrant = await client.execute(
+        `SELECT role FROM board_access_entries
+         WHERE board_id='private-board' AND user_id='removed-creator'`
+      );
+      expect(creatorGrant.rows[0]).toEqual({ role: 'manager' });
+      const creatorOnlyPolicy = await client.execute(
+        `SELECT p.sharing_mode,p.others_role,e.role
+         FROM board_access_policies p
+         JOIN board_access_entries e ON e.board_id=p.board_id AND e.user_id='removed-creator'
+         WHERE p.board_id='creator-only-private'`
+      );
+      expect(creatorOnlyPolicy.rows[0]).toEqual({
+        sharing_mode: 'shared',
+        others_role: 'none',
+        role: 'manager',
+      });
+      const unmatchedLegacyVisibility = await client.execute(
+        `SELECT count(*) AS count FROM boards
+         WHERE created_by='unmatched'
+            OR COALESCE(json_extract(data,'$.access_mode'),'shared')='shared'
+            OR EXISTS (
+              SELECT 1 FROM board_owners
+              WHERE board_owners.board_id=boards.board_id AND board_owners.user_id='unmatched'
+            )
+            OR EXISTS (
+              SELECT 1 FROM branches
+              WHERE branches.board_id=boards.board_id
+                AND branches.permission_source='override'
+                AND branches.others_can<>'none'
+            )`
+      );
+      expect(Number(unmatchedLegacyVisibility.rows[0]?.count)).toBe(0);
 
       await expect(
         client.execute(
@@ -634,6 +684,8 @@ describe('Board and branch capability-policy migration', () => {
     expect(migration).toContain("CHECK (\"sharing_mode\" IN ('private','shared'))");
     expect(migration).toContain("CHECK (\"others_fs_access\" IN ('none','read','write'))");
     expect(migration).toContain("CHECK (\"fs_access\" IN ('none','read','write'))");
+    expect(migration).toContain('"access_mode":"private"');
+    expect(migration).toContain('"default_others_can":"none"');
     expect(migration).toContain('"others_role" text');
     expect(migration).toContain('"role" text');
     expect(migration).not.toContain('"capabilities" jsonb');

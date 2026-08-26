@@ -198,6 +198,7 @@ INSERT INTO board_access_policies
 SELECT b.tenant_id,b.board_id,1,
  CASE WHEN COALESCE(b.data->>'access_mode','shared')='shared'
    OR EXISTS(SELECT 1 FROM board_owners bo WHERE bo.tenant_id=b.tenant_id AND bo.board_id=b.board_id AND bo.user_id<>b.primary_owner_user_id)
+   OR EXISTS(SELECT 1 FROM users u WHERE u.tenant_id=b.tenant_id AND u.user_id=b.created_by AND b.created_by<>b.primary_owner_user_id)
    THEN 'shared' ELSE 'private' END,
  CASE WHEN COALESCE(b.data->>'access_mode','shared')='shared' THEN 'viewer' ELSE 'none' END,
  1,b.primary_owner_user_id,COALESCE(b.created_at,now()),COALESCE(b.updated_at,b.created_at,now()) FROM boards b;
@@ -205,6 +206,16 @@ SELECT b.tenant_id,b.board_id,1,
 INSERT INTO board_access_entries
 SELECT bo.tenant_id,gen_random_uuid()::text,bo.board_id,bo.user_id,NULL,'manager',COALESCE(bo.created_at,now()),COALESCE(bo.created_at,now())
 FROM board_owners bo JOIN boards b ON b.tenant_id=bo.tenant_id AND b.board_id=bo.board_id WHERE bo.user_id<>b.primary_owner_user_id;
+--> statement-breakpoint
+-- Legacy board visibility always included a valid creator independently of
+-- the mutable owner table. Preserve that authority as Manager without making
+-- a removed creator the immutable primary owner.
+INSERT INTO board_access_entries
+SELECT b.tenant_id,gen_random_uuid()::text,b.board_id,b.created_by,NULL,'manager',
+ COALESCE(b.created_at,now()),COALESCE(b.updated_at,b.created_at,now())
+FROM boards b JOIN users u ON u.tenant_id=b.tenant_id AND u.user_id=b.created_by
+WHERE b.created_by<>b.primary_owner_user_id
+ON CONFLICT (tenant_id,board_id,user_id) DO UPDATE SET role='manager',updated_at=EXCLUDED.updated_at;
 --> statement-breakpoint
 INSERT INTO board_access_entries
 SELECT bg.tenant_id,gen_random_uuid()::text,bg.board_id,NULL,bg.group_id,CASE bg.can WHEN 'all' THEN 'manager' ELSE 'viewer' END,
@@ -299,9 +310,11 @@ DELETE FROM branch_group_grants;
 --> statement-breakpoint
 DELETE FROM board_group_grants;
 --> statement-breakpoint
-UPDATE branches SET permission_source='override',others_can='none',others_fs_access='none',data=data-'dangerously_allow_session_sharing';
+UPDATE branches SET permission_source='override',others_can='none',others_fs_access='none',
+ data=(data-'dangerously_allow_session_sharing')||'{"dangerously_allow_session_sharing":false}'::jsonb;
 --> statement-breakpoint
-UPDATE boards SET data=data-'access_mode'-'default_others_can'-'default_others_fs_access'-'default_dangerously_allow_session_sharing';
+UPDATE boards SET data=(data-'access_mode'-'default_others_can'-'default_others_fs_access'-'default_dangerously_allow_session_sharing')||
+ '{"access_mode":"private","default_others_can":"none","default_others_fs_access":"none","default_dangerously_allow_session_sharing":false}'::jsonb;
 --> statement-breakpoint
 
 CREATE FUNCTION agor_reject_primary_owner_change() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN

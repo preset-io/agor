@@ -30,7 +30,7 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor/core/types';
 import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
-import { lockUserAuthorityMutation } from './user-authority-lock.js';
+import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
 
 function requireMember(context: HookContext): HookContext {
   if (!context.params.provider) return context;
@@ -88,23 +88,44 @@ export function createGroupsService(db: TenantScopeAwareDatabase) {
       return group;
     },
     async create(data: Partial<Group>, params?: Params): Promise<Group> {
-      return repo.create({
-        name: data.name || '',
-        slug: data.slug,
-        description: data.description,
-        created_by: paramsUser(params)?.user_id as UserID | undefined,
-      });
+      return runWithTenantDatabaseTransaction(
+        db,
+        (params as AuthenticatedParams | undefined)?.tenant?.tenant_id,
+        async (operationDb) => {
+          await lockTenantAuthorizationFence(operationDb, params);
+          return new GroupRepository(operationDb).create({
+            name: data.name || '',
+            slug: data.slug,
+            description: data.description,
+            created_by: paramsUser(params)?.user_id as UserID | undefined,
+          });
+        }
+      );
     },
-    async patch(id: string, data: Partial<Group>): Promise<Group> {
-      return repo.update(id, {
-        name: data.name,
-        slug: data.slug,
-        description: data.description,
-        archived: data.archived,
-      });
+    async patch(id: string, data: Partial<Group>, params?: Params): Promise<Group> {
+      return runWithTenantDatabaseTransaction(
+        db,
+        (params as AuthenticatedParams | undefined)?.tenant?.tenant_id,
+        async (operationDb) => {
+          await lockTenantAuthorizationFence(operationDb, params);
+          return new GroupRepository(operationDb).update(id, {
+            name: data.name,
+            slug: data.slug,
+            description: data.description,
+            archived: data.archived,
+          });
+        }
+      );
     },
-    async remove(id: string): Promise<Group> {
-      return repo.delete(id);
+    async remove(id: string, params?: Params): Promise<Group> {
+      return runWithTenantDatabaseTransaction(
+        db,
+        (params as AuthenticatedParams | undefined)?.tenant?.tenant_id,
+        async (operationDb) => {
+          await lockTenantAuthorizationFence(operationDb, params);
+          return new GroupRepository(operationDb).delete(id);
+        }
+      );
     },
   };
 }
@@ -118,6 +139,7 @@ export function createGroupMembershipsService(db: TenantScopeAwareDatabase) {
     params?: Params
   ) => {
     const authenticated = params as AuthenticatedParams | undefined;
+    await lockTenantAuthorizationFence(operationDb, params);
     // Actor-less provider-less calls are the explicit trusted provisioning
     // seam. A provider-less call that carries a human actor is still a user
     // action and must not acquire internal-call authority by changing transport.
@@ -125,8 +147,6 @@ export function createGroupMembershipsService(db: TenantScopeAwareDatabase) {
     if (authenticated?.user?._isServiceAccount) return;
     const actorId = authenticated?.user?.user_id;
     if (!actorId) throw new NotAuthenticated('Authentication required');
-
-    await lockUserAuthorityMutation(operationDb, params);
 
     // Load both sides under the active tenant/RLS scope. Missing and
     // cross-tenant targets intentionally produce the same response as an

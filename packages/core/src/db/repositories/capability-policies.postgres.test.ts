@@ -237,5 +237,76 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         expect(branch).toBeNull();
       }
     });
+
+    it('conflicts instead of combining a board move with stale inheritance state', async () => {
+      const tenantId = `policy-board-move-binding-${generateId()}` as TenantID;
+      const value = await seed(tenantId);
+      const destination = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new BoardRepository(scoped).create({
+          name: `Destination ${generateId()}`,
+          created_by: value.ownerId,
+          access_mode: 'private',
+        })
+      );
+      const sourcePolicy = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new CapabilityPolicyRepository(scoped).getBranchPolicy(value.branchId)
+      );
+      const inheritSource = {
+        ...sourcePolicy,
+        binding_mode: 'inherit' as const,
+        override_config: undefined,
+      };
+
+      await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+        new CapabilityPolicyRepository(scoped).replaceBranchPolicy(
+          value.branchId,
+          inheritSource,
+          value.ownerId
+        )
+      );
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new BranchRepository(scoped).update(value.branchId, {
+            board_id: destination.board_id,
+          })
+        )
+      ).rejects.toThrow(/explicit permission override/);
+
+      const inverseTenantId = `policy-board-move-binding-inverse-${generateId()}` as TenantID;
+      const inverse = await seed(inverseTenantId);
+      const inverseDestination = await runWithTenantDatabaseScope(dbA, inverseTenantId, (scoped) =>
+        new BoardRepository(scoped).create({
+          name: `Inverse destination ${generateId()}`,
+          created_by: inverse.ownerId,
+          access_mode: 'private',
+        })
+      );
+      const staleSourcePolicy = await runWithTenantDatabaseScope(dbA, inverseTenantId, (scoped) =>
+        new CapabilityPolicyRepository(scoped).getBranchPolicy(inverse.branchId)
+      );
+      await runWithTenantDatabaseScope(dbB, inverseTenantId, (scoped) =>
+        new BranchRepository(scoped).update(inverse.branchId, {
+          board_id: inverseDestination.board_id,
+        })
+      );
+      await expect(
+        runWithTenantDatabaseScope(dbA, inverseTenantId, (scoped) =>
+          new CapabilityPolicyRepository(scoped).replaceBranchPolicy(
+            inverse.branchId,
+            {
+              ...staleSourcePolicy,
+              binding_mode: 'inherit',
+              override_config: undefined,
+            },
+            inverse.ownerId
+          )
+        )
+      ).rejects.toThrow(/Branch board changed/);
+      await expect(
+        runWithTenantDatabaseScope(dbA, inverseTenantId, (scoped) =>
+          new CapabilityPolicyRepository(scoped).getBranchPolicy(inverse.branchId)
+        )
+      ).resolves.toMatchObject({ binding_mode: 'override' });
+    });
   }
 );

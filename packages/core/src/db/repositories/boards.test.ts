@@ -31,6 +31,7 @@ function createBoardData(overrides?: Partial<Board>): Partial<Board> {
     description: overrides?.description,
     color: overrides?.color,
     icon: overrides?.icon,
+    custom_css: overrides?.custom_css,
     objects: overrides?.objects,
     custom_context: overrides?.custom_context,
     created_by: overrides?.created_by ?? 'test-user',
@@ -1489,11 +1490,22 @@ describe('BoardRepository import/export', () => {
         name: 'Imported Blob Board',
         slug: 'imported-blob-board',
         icon: ':compass:',
+        custom_css: '.imported { color: teal; }',
+        access_mode: 'shared',
+        default_others_can: 'all',
+        default_others_fs_access: 'write',
       },
       'test-user'
     );
 
     expect(imported.icon).toBe('🧭');
+    expect(imported.custom_css).toBe('.imported { color: teal; }');
+    const policy = await new CapabilityPolicyRepository(db).getBoardPolicies(imported.board_id);
+    expect(policy.board_access.sharing_mode).toBe('shared');
+    expect(policy.branch_template.access.others).toMatchObject({
+      preset: 'manager',
+      fs_access: 'write',
+    });
     await expect(getStoredBoardIcon(db, imported.board_id)).resolves.toBe('🧭');
   });
 
@@ -1501,14 +1513,42 @@ describe('BoardRepository import/export', () => {
     const repo = new BoardRepository(db);
 
     const imported = await repo.fromYaml(
-      ['name: Imported YAML Board', 'slug: imported-yaml-board', 'icon: ":compass:"', ''].join(
-        '\n'
-      ),
+      [
+        'name: Imported YAML Board',
+        'slug: imported-yaml-board',
+        'icon: ":compass:"',
+        'custom_css: ".yaml { color: navy; }"',
+        '',
+      ].join('\n'),
       'test-user'
     );
 
     expect(imported.icon).toBe('🧭');
+    expect(imported.custom_css).toBe('.yaml { color: navy; }');
     await expect(getStoredBoardIcon(db, imported.board_id)).resolves.toBe('🧭');
+  });
+
+  dbTest('uses the same portable mapping for repository clones', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const original = await repo.create(
+      createBoardData({
+        name: 'Clone source',
+        custom_css: '.clone { display: grid; }',
+        access_mode: 'shared',
+        default_others_can: 'view',
+        default_others_fs_access: 'read',
+      })
+    );
+
+    const cloned = await repo.clone(original.board_id, 'Clone target', 'test-user');
+
+    expect(cloned.custom_css).toBe('.clone { display: grid; }');
+    const policy = await new CapabilityPolicyRepository(db).getBoardPolicies(cloned.board_id);
+    expect(policy.board_access.sharing_mode).toBe('shared');
+    expect(policy.branch_template.access.others).toMatchObject({
+      preset: 'viewer',
+      fs_access: 'read',
+    });
   });
 });
 

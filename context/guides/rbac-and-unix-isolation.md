@@ -184,7 +184,11 @@ owner, abort with the unresolved IDs when attribution is impossible, create
 normalized policies, then empty the legacy authority tables/fields. Backfill
 is deliberately equal-or-less:
 
-- creator, then an existing owner, is used for primary-owner attribution;
+- an existing current owner, then the creator as a fallback, is used for
+  primary-owner attribution;
+- a valid Board creator who is not selected as primary owner remains a Board
+  Manager, matching legacy Board visibility without restoring removed Branch
+  creators;
 - additional owners become Managers;
 - legacy prompt-like grants become Collaborators, not personal home-sharing;
 - named user/group grants map to the closest equal-or-less fixed role;
@@ -192,7 +196,9 @@ is deliberately equal-or-less:
   complete overrides copied from the board template;
 - personal sharing starts empty and the workspace gate starts off.
 
-Old daemon versions must never run after this migration. Rollback means stopping
+Legacy authority fields are tombstoned to private/none so a stray old daemon
+fails closed, and daemon startup rejects a database newer than its migration
+journal. Old daemon versions must still never run after this migration. Rollback means stopping
 all new daemons and restoring the complete pre-migration database backup; the
 historical columns are not a dual-read rollback path.
 

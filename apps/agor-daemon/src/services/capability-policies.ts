@@ -18,7 +18,7 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { isSuperAdmin } from '../utils/branch-authorization.js';
-import { lockUserAuthorityMutation } from './user-authority-lock.js';
+import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
 
 export const CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS = ['find', 'patch'] as const;
 
@@ -125,7 +125,7 @@ export function setupCapabilityPolicyServices(
       async patch(_id: string | null, value: BoardCapabilityPolicies, params?: Params) {
         return runWithTenantDatabaseTransaction(db, routeTenantId(params), async (operationDb) => {
           const operationRepository = new CapabilityPolicyRepository(operationDb);
-          await lockUserAuthorityMutation(operationDb, params);
+          await lockTenantAuthorizationFence(operationDb, params);
           const current = requireActor(params);
           const boardId = routeId(params) as BoardID;
           const existing = await operationRepository.getBoardPolicies(boardId);
@@ -197,7 +197,7 @@ export function setupCapabilityPolicyServices(
       async patch(_id: string | null, value: BranchCapabilityPolicy, params?: Params) {
         return runWithTenantDatabaseTransaction(db, routeTenantId(params), async (operationDb) => {
           const operationRepository = new CapabilityPolicyRepository(operationDb);
-          await lockUserAuthorityMutation(operationDb, params);
+          await lockTenantAuthorizationFence(operationDb, params);
           const current = requireActor(params);
           const branchId = routeId(params) as BranchID;
           const existing = await operationRepository.getBranchPolicy(branchId);
@@ -285,16 +285,26 @@ export function setupCapabilityPolicyServices(
         value: CapabilityPolicyWorkspacePreferences,
         params?: Params
       ): Promise<CapabilityPolicyWorkspacePreferences> {
-        const current = requireActor(params);
-        if (params?.provider && !current?.service && !hasMinimumRole(current?.role, ROLES.ADMIN)) {
-          throw new Forbidden('Only admins can manage workspace preferences');
-        }
-        if (!current) throw new NotAuthenticated('Authentication required');
-        const saved = await repository.setWorkspacePreferences(value, current.user_id);
-        console.info(
-          `[rbac.workspace_preferences] updated personal_session_sharing_enabled=${saved.personal_session_sharing_enabled}`
-        );
-        return saved;
+        return runWithTenantDatabaseTransaction(db, routeTenantId(params), async (operationDb) => {
+          await lockTenantAuthorizationFence(operationDb, params);
+          const current = requireActor(params);
+          if (
+            params?.provider &&
+            !current?.service &&
+            !hasMinimumRole(current?.role, ROLES.ADMIN)
+          ) {
+            throw new Forbidden('Only admins can manage workspace preferences');
+          }
+          if (!current) throw new NotAuthenticated('Authentication required');
+          const saved = await new CapabilityPolicyRepository(operationDb).setWorkspacePreferences(
+            value,
+            current.user_id
+          );
+          console.info(
+            `[rbac.workspace_preferences] updated personal_session_sharing_enabled=${saved.personal_session_sharing_enabled}`
+          );
+          return saved;
+        });
       },
     },
     { methods: CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS }

@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import type { Task, User } from '@agor/core/types';
+import { describe, expect, it, vi } from 'vitest';
+import { resolveQueuedTaskActor } from './register-routes';
 
 describe('prompt and widget transaction scopes', () => {
   const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
@@ -31,7 +33,7 @@ describe('prompt and widget transaction scopes', () => {
     // 'session'-tier collaborator prompting another user's session would be
     // admitted (and run under the owner's identity/home) instead of 403'd.
     const transaction = prompt.indexOf('runWithTenantDatabaseTransaction(');
-    const authorityLock = prompt.indexOf('lockUserAuthorityMutation(operationDb, params)');
+    const authorityLock = prompt.indexOf('lockTenantAuthorizationFence(operationDb, params)');
     const rbacCheck = prompt.lastIndexOf('assertCurrentPromptAuthority(');
     const taskAdmission = prompt.indexOf('new TaskRepository(operationDb).createPending(');
     expect(transaction).toBeGreaterThan(0);
@@ -77,11 +79,16 @@ describe('prompt and widget transaction scopes', () => {
     expect(initialization).toContain('registerLongAuthenticatedRoute(');
     expect(initialization).toContain('data?.expectedUserId !== callerId');
     const scopedAuthorization = initialization.indexOf(
-      'await inCurrentTenantDatabaseScope(() =>\n          authorizeAndLoadSessionForMcpConfig(id, params)'
+      'await inCurrentTenantDatabaseScope(async () => {'
+    );
+    const ownerCheck = initialization.indexOf(
+      'requireSessionScopedConfigOwnerOrAdmin(id, params)',
+      scopedAuthorization
     );
     const stagedInitialization = initialization.indexOf('runSessionInitializationStages({');
     expect(scopedAuthorization).toBeGreaterThan(0);
-    expect(stagedInitialization).toBeGreaterThan(scopedAuthorization);
+    expect(ownerCheck).toBeGreaterThan(scopedAuthorization);
+    expect(stagedInitialization).toBeGreaterThan(ownerCheck);
     const mcpSetup = initialization.indexOf('sessionMCPServersService.setServers(');
     const envSetup = initialization.indexOf('sessionEnvSelectionsService.setAll(');
     const promptAdmission = initialization.indexOf("service('/sessions/:id/prompt').create(");
@@ -98,14 +105,43 @@ describe('prompt and widget transaction scopes', () => {
     const drain = source.slice(start, end);
 
     expect(start).toBeGreaterThan(0);
+    const canonicalActor = drain.indexOf('resolveQueuedTaskActor(nextTask');
     const userLookup = drain.indexOf('userRepo.findById(userId)');
     const sessionRead = drain.indexOf('sessionsService.get(sessionId, taskParams)');
+    expect(canonicalActor).toBeGreaterThan(0);
     expect(userLookup).toBeGreaterThan(0);
+    expect(userLookup).toBeGreaterThan(canonicalActor);
     expect(sessionRead).toBeGreaterThan(userLookup);
+    expect(drain).not.toContain('metadata?.queued_by_user_id ?? nextTask.created_by');
+    expect(drain).toContain('event=actor_missing');
     expect(drain).toContain(
       'reconcileSessionPromptStateIfStuck(queuedSession, taskRepo, taskParams)'
     );
     expect(drain).not.toContain('event=drain_started');
     expect(drain).toContain('event=dispatched');
+  });
+
+  it('uses Task.created_by even when legacy queue metadata names someone else', async () => {
+    const task = {
+      created_by: 'caller-c',
+      metadata: { queued_by_user_id: 'ambient-b' },
+    } as unknown as Task;
+    const caller = { user_id: 'caller-c' } as User;
+    const findUser = vi.fn(async (userId: string) =>
+      userId === caller.user_id ? caller : undefined
+    );
+
+    await expect(resolveQueuedTaskActor(task, findUser)).resolves.toBe(caller);
+    expect(findUser).toHaveBeenCalledOnce();
+    expect(findUser).toHaveBeenCalledWith('caller-c');
+  });
+
+  it('fails closed when the durable queued Task actor no longer exists', async () => {
+    const findUser = vi.fn(async () => undefined);
+
+    await expect(
+      resolveQueuedTaskActor({ created_by: 'deleted-caller' } as Pick<Task, 'created_by'>, findUser)
+    ).resolves.toBeNull();
+    expect(findUser).toHaveBeenCalledWith('deleted-caller');
   });
 });

@@ -806,6 +806,12 @@ export class CapabilityPolicyRepository {
         if (branch.board_id !== initialBranch.board_id) {
           throw new RepositoryError('Branch board changed; reload before saving permissions');
         }
+        if (
+          value.inherited_from_board_id !== undefined &&
+          value.inherited_from_board_id !== branch.board_id
+        ) {
+          throw new RepositoryError('Branch board changed; reload before saving permissions');
+        }
         if (branch.owner !== value.primary_owner_user_id)
           throw new RepositoryError('Primary ownership is immutable');
         if (value.binding_mode === 'inherit' && !branch.board_id) {

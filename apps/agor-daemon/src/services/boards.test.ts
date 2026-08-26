@@ -109,6 +109,7 @@ describe('BoardsService - Custom Methods', () => {
       access_mode: 'shared',
       default_others_can: 'all',
       default_others_fs_access: 'write',
+      custom_css: '.board { color: rebeccapurple; }',
       created_by: TEST_USER,
     })) as Board;
 
@@ -124,6 +125,7 @@ describe('BoardsService - Custom Methods', () => {
     expect(imported.slug).toBe('imported-board');
     expect(imported.board_id).not.toBe(original.board_id);
     expect(imported.icon).toBe('🔷'); // Icon should be preserved
+    expect(imported.custom_css).toBe('.board { color: rebeccapurple; }');
     const importedPolicy = await new CapabilityPolicyRepository(db).getBoardPolicies(
       imported.board_id
     );
@@ -161,6 +163,7 @@ describe('BoardsService - Custom Methods', () => {
       name: 'Original YAML Board',
       slug: 'original-yaml',
       description: 'Test description',
+      custom_css: '.yaml-board { gap: 8px; }',
       created_by: TEST_USER,
     })) as Board;
 
@@ -177,6 +180,7 @@ describe('BoardsService - Custom Methods', () => {
     expect(imported.slug).toBe('imported-yaml');
     expect(imported.board_id).not.toBe(original.board_id);
     expect(imported.description).toBe('Test description'); // Preserved from YAML
+    expect(imported.custom_css).toBe('.yaml-board { gap: 8px; }');
   });
 
   dbTest('clone should create a copy with new name', async ({ db }) => {
@@ -189,6 +193,7 @@ describe('BoardsService - Custom Methods', () => {
       description: 'To be cloned',
       icon: '🔵',
       access_mode: 'private',
+      custom_css: '.clone { opacity: 0.9; }',
       created_by: TEST_USER,
     })) as Board;
 
@@ -199,6 +204,7 @@ describe('BoardsService - Custom Methods', () => {
     expect(cloned.board_id).not.toBe(original.board_id);
     expect(cloned.icon).toBe(original.icon);
     expect(cloned.description).toBe(original.description);
+    expect(cloned.custom_css).toBe('.clone { opacity: 0.9; }');
     const clonedPolicy = await new CapabilityPolicyRepository(db).getBoardPolicies(cloned.board_id);
     expect(clonedPolicy.board_access.sharing_mode).toBe('private');
     expect(clonedPolicy.branch_template.access.sharing_mode).toBe('private');

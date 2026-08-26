@@ -785,6 +785,42 @@ describe('BranchRepository.findByRepoAndName', () => {
 // ============================================================================
 
 describe('BranchRepository.update', () => {
+  dbTest(
+    'revalidates inherited binding under the row lock before moving boards',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const repo = await repoRepo.create(createRepoData());
+      const sourceBoardId = generateId() as BoardID;
+      const destinationBoardId = generateId() as BoardID;
+      for (const boardId of [sourceBoardId, destinationBoardId]) {
+        await (db as any).insert(boards).values({
+          board_id: boardId,
+          created_at: new Date(),
+          created_by: 'test-user' as UUID,
+          primary_owner_user_id: 'test-user' as UUID,
+          name: `Board ${boardId}`,
+          data: {},
+        });
+      }
+      const branch = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: sourceBoardId,
+          permission_source: 'board',
+        })
+      );
+
+      await expect(
+        branchRepo.update(branch.branch_id, { board_id: destinationBoardId })
+      ).rejects.toThrow('explicit permission override');
+      await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+        board_id: sourceBoardId,
+        permission_binding: 'inherit',
+      });
+    }
+  );
+
   dbTest('can preserve updated_at for observation-only bookkeeping', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);

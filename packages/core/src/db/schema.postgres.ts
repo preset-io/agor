@@ -1337,6 +1337,10 @@ export const boardAccessPolicies = pgTable(
       'board_access_policies_sharing_mode_check',
       sql`${table.sharing_mode} IN ('private','shared')`
     ),
+    othersRoleCheck: check(
+      'board_access_policies_others_role_check',
+      sql`${table.others_role} IN ('none','viewer','editor','manager')`
+    ),
   })
 );
 
@@ -1390,6 +1394,14 @@ export const boardAccessEntries = pgTable(
       table.tenant_id,
       table.board_id,
       table.group_id
+    ),
+    roleCheck: check(
+      'board_access_entries_role_check',
+      sql`${table.role} IN ('none','viewer','editor','manager')`
+    ),
+    principalCheck: check(
+      'board_access_entries_principal_check',
+      sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
     ),
   })
 );
@@ -1452,6 +1464,14 @@ export const branchPermissionConfigs = pgTable(
       'branch_permission_configs_others_fs_access_check',
       sql`${table.others_fs_access} IN ('none','read','write')`
     ),
+    othersRoleCheck: check(
+      'branch_permission_configs_others_role_check',
+      sql`${table.others_role} IN ('none','viewer','collaborator','manager')`
+    ),
+    targetCheck: check(
+      'branch_permission_configs_target_check',
+      sql`(${table.board_id} IS NOT NULL) <> (${table.branch_id} IS NOT NULL)`
+    ),
   })
 );
 
@@ -1512,6 +1532,14 @@ export const branchPermissionEntries = pgTable(
     fsAccessCheck: check(
       'branch_permission_entries_fs_access_check',
       sql`${table.fs_access} IN ('none','read','write')`
+    ),
+    roleCheck: check(
+      'branch_permission_entries_role_check',
+      sql`${table.role} IN ('none','viewer','collaborator','manager')`
+    ),
+    principalCheck: check(
+      'branch_permission_entries_principal_check',
+      sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
     ),
   })
 );
@@ -1600,6 +1628,10 @@ export const branchSessionSharingGrants = pgTable(
       table.config_id,
       table.session_owner_user_id,
       table.group_id
+    ),
+    principalCheck: check(
+      'branch_session_sharing_grants_principal_check',
+      sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
     ),
   })
 );

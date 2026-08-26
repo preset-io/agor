@@ -116,6 +116,19 @@ describe('initializeDatabase logging', () => {
     expect(dbMocks.createDatabaseAsync).toHaveBeenCalledWith({ url, pool });
   });
 
+  it('refuses to start an older binary against a newer database schema', async () => {
+    dbMocks.checkMigrationStatus.mockResolvedValue({
+      hasPending: false,
+      pending: [],
+      dbAheadOfBinary: true,
+    });
+
+    await expect(
+      initializeDatabase('file:/tmp/agor-newer.db', { skipFirstRunAdminBootstrap: true })
+    ).rejects.toThrow('Database schema is newer than this Agor binary');
+    expect(dbMocks.seedInitialData).not.toHaveBeenCalled();
+  });
+
   it('does not log a hostile SQLite directory when creating it', async () => {
     const url = 'file:/tmp/SQLITE_DIRECTORY_SENTINEL/agor.db';
     fsMocks.access.mockRejectedValueOnce(new Error('missing directory'));

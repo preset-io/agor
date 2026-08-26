@@ -86,6 +86,12 @@ async function checkAndReportMigrations(
   console.log('🔍 Checking database migration status...');
   const migrationStatus = await checkMigrationStatus(db);
 
+  if (migrationStatus.dbAheadOfBinary) {
+    throw new Error(
+      'Database schema is newer than this Agor binary. Refusing to start because an older daemon cannot safely interpret newer authorization state. Upgrade this binary to match the database.'
+    );
+  }
+
   if (migrationStatus.hasPending) {
     // Use the shared formatter from @agor/core/db so this message stays
     // in lockstep with the CLI pre-flight check (agor daemon start).

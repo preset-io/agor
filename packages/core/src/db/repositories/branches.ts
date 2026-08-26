@@ -565,6 +565,16 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         throw new EntityNotFoundError('Branch', id);
       }
 
+      if (
+        Object.hasOwn(updates, 'board_id') &&
+        currentRow.board_id !== (updates.board_id ?? null) &&
+        currentRow.permission_binding === 'inherit'
+      ) {
+        throw new RepositoryError(
+          'Switch this branch to an explicit permission override before moving it to another board.'
+        );
+      }
+
       const current = this.rowToBranch(currentRow, baseUrl);
 
       // STEP 3: Deep merge updates into current branch (in memory)

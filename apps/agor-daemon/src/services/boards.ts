@@ -9,6 +9,7 @@ import { PAGINATION } from '@agor/core/config';
 import {
   BoardObjectRepository,
   BoardRepository,
+  mapBoardExportBlobToCreateData,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import {
@@ -345,7 +346,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     // Hook chain enforces auth before we get here.
     const userId = params!.user!.user_id;
     this.boardRepo.validateBoardBlob(blob);
-    const data = this.buildBoardDataFromBlob(blob, userId);
+    const data = mapBoardExportBlobToCreateData(blob, userId);
 
     // Create board through repository (not super.create to avoid double-emit issues)
     const board = await this.boardRepo.create(data);
@@ -412,7 +413,7 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const userId = params!.user!.user_id;
     const resolvedBoardId = await this.resolveBoardId(boardIdentifier);
     const blob = await this.boardRepo.toBlob(resolvedBoardId);
-    const boardData = this.buildBoardDataFromBlob(blob, userId, name);
+    const boardData = mapBoardExportBlobToCreateData(blob, userId, name);
     // Create board through repository (not super.create to avoid double-emit issues)
     const clonedBoard = await this.boardRepo.create(boardData);
 
@@ -506,32 +507,6 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     }
 
     return board.board_id;
-  }
-
-  private buildBoardDataFromBlob(
-    blob: BoardExportBlob,
-    userId: string,
-    nameOverride?: string
-  ): Partial<Board> {
-    const name = nameOverride ?? blob.name;
-    const slug = nameOverride ? nameOverride : (blob.slug ?? blob.name);
-
-    return {
-      name,
-      slug,
-      description: blob.description,
-      icon: blob.icon,
-      color: blob.color,
-      background_color: blob.background_color,
-      custom_css: blob.custom_css,
-      objects: blob.objects,
-      custom_context: blob.custom_context,
-      access_mode: blob.access_mode,
-      default_others_can: blob.default_others_can,
-      default_others_fs_access: blob.default_others_fs_access,
-      default_dangerously_allow_session_sharing: blob.default_dangerously_allow_session_sharing,
-      created_by: userId,
-    };
   }
 }
 

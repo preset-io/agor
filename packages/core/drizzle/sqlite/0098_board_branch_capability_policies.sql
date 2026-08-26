@@ -161,12 +161,14 @@ CREATE UNIQUE INDEX `branch_session_sharing_grants_rule_user_unique` ON `branch_
 CREATE UNIQUE INDEX `branch_session_sharing_grants_rule_group_unique` ON `branch_session_sharing_grants` (`config_id`,`session_owner_user_id`,`group_id`);
 --> statement-breakpoint
 
--- Board access: the old shared audience becomes Viewer; private boards preserve
--- only active additional owners as Manager entries.
+-- Board access: the old shared audience becomes Viewer; private boards become
+-- named-only shared policies when current owners or a valid legacy creator
+-- besides the primary owner must remain Managers.
 INSERT INTO `board_access_policies`
 SELECT b.`board_id`, 1,
   CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared') = 'shared'
          OR EXISTS (SELECT 1 FROM `board_owners` bo WHERE bo.`board_id`=b.`board_id` AND bo.`user_id`<>b.`primary_owner_user_id`)
+         OR EXISTS (SELECT 1 FROM `users` u WHERE u.`user_id`=b.`created_by` AND b.`created_by`<>b.`primary_owner_user_id`)
        THEN 'shared' ELSE 'private' END,
   CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared') = 'shared' THEN 'viewer' ELSE 'none' END,
   1, b.`primary_owner_user_id`, COALESCE(b.`created_at`, unixepoch()*1000), COALESCE(b.`updated_at`, b.`created_at`, unixepoch()*1000)
@@ -178,6 +180,17 @@ SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(l
   COALESCE(bo.`created_at`, unixepoch()*1000), COALESCE(bo.`created_at`, unixepoch()*1000)
 FROM `board_owners` bo JOIN `boards` b ON b.`board_id`=bo.`board_id`
 WHERE bo.`user_id`<>b.`primary_owner_user_id`;
+--> statement-breakpoint
+-- Legacy board visibility always included a valid creator independently of
+-- the mutable owner table. Preserve that authority as Manager without making
+-- a removed creator the immutable primary owner.
+INSERT INTO `board_access_entries`
+SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
+  b.`board_id`, b.`created_by`, NULL, 'manager',
+  COALESCE(b.`created_at`, unixepoch()*1000), COALESCE(b.`updated_at`, b.`created_at`, unixepoch()*1000)
+FROM `boards` b JOIN `users` u ON u.`user_id`=b.`created_by`
+WHERE b.`created_by`<>b.`primary_owner_user_id`
+ON CONFLICT (`board_id`,`user_id`) DO UPDATE SET `role`='manager',`updated_at`=excluded.`updated_at`;
 --> statement-breakpoint
 INSERT INTO `board_access_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
@@ -305,9 +318,15 @@ DELETE FROM `branch_group_grants`;
 DELETE FROM `board_group_grants`;
 --> statement-breakpoint
 UPDATE `branches` SET `permission_source`='override', `others_can`='none', `others_fs_access`='none',
-  `data`=json_remove(`data`, '$.dangerously_allow_session_sharing');
+  `data`=json_set(json_remove(`data`, '$.dangerously_allow_session_sharing'), '$.dangerously_allow_session_sharing', json('false'));
 --> statement-breakpoint
-UPDATE `boards` SET `data`=json_remove(`data`, '$.access_mode', '$.default_others_can', '$.default_others_fs_access', '$.default_dangerously_allow_session_sharing');
+UPDATE `boards` SET `data`=json_set(
+  json_remove(`data`, '$.access_mode', '$.default_others_can', '$.default_others_fs_access', '$.default_dangerously_allow_session_sharing'),
+  '$.access_mode', 'private',
+  '$.default_others_can', 'none',
+  '$.default_others_fs_access', 'none',
+  '$.default_dangerously_allow_session_sharing', json('false')
+);
 --> statement-breakpoint
 CREATE TRIGGER `boards_primary_owner_immutable` BEFORE UPDATE OF `primary_owner_user_id` ON `boards`
 WHEN NEW.`primary_owner_user_id` IS NOT OLD.`primary_owner_user_id`

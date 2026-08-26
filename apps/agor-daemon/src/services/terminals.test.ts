@@ -285,6 +285,29 @@ describe('process-affine attachment creation', () => {
     expect(b.isNew).toBe(false);
   });
 
+  it('cancels a pending start when tenant authorization is invalidated', async () => {
+    let release!: () => void;
+    mocks.config = {
+      daemon: { port: 3030 },
+      execution: { branch_rbac: true, unix_user_mode: 'simple' },
+    };
+    mocks.createUserProcessEnvironment.mockImplementation(
+      () => new Promise<Record<string, string>>((resolve) => (release = () => resolve({})))
+    );
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const starting = service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    await vi.waitFor(() => expect(mocks.createUserProcessEnvironment).toHaveBeenCalledOnce());
+
+    service.closeTenant('tenant-x');
+    mocks.canOpen = false;
+    release();
+
+    await expect(starting).rejects.toThrow('Terminal access changed');
+    expect(mocks.generateTerminalExecutorToken).not.toHaveBeenCalled();
+    expect(mocks.joinRequestingSocket).not.toHaveBeenCalled();
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
   it('uses separate attachments and Zellij sessions for separate branches', async () => {
     mocks.branchesById.set('branch-2', {
       ...mocks.branch,

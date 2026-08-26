@@ -75,6 +75,13 @@ interface OwnedTerminal extends TerminalAttachment {
   startedAt: Date;
 }
 
+interface TerminalStartReservation {
+  tenantId: string;
+  branchId: BranchID;
+  promise: Promise<void>;
+  cancelled: boolean;
+}
+
 /**
  * Trusted identity carried by a terminal executor capability.
  *
@@ -121,7 +128,7 @@ function terminalRequestAllocation(terminal: TerminalAttachment): TerminalAlloca
 export class TerminalsService {
   private readonly terminals = new Map<string, OwnedTerminal>();
   private readonly terminalByScope = new Map<string, string>();
-  private readonly starting = new Map<string, Promise<void>>();
+  private readonly starting = new Map<string, TerminalStartReservation>();
 
   constructor(
     private readonly app: Application,
@@ -213,7 +220,7 @@ export class TerminalsService {
     const scopeKey = `${tenantId}:${userId}:${branch.branch_id}`;
     const pending = this.starting.get(scopeKey);
     if (pending) {
-      await pending;
+      await pending.promise;
       return this.create(data, params);
     }
     const existingId = this.terminalByScope.get(scopeKey);
@@ -228,9 +235,15 @@ export class TerminalsService {
     }
 
     let release!: () => void;
-    const reservation = new Promise<void>((resolve) => {
+    const reservationPromise = new Promise<void>((resolve) => {
       release = resolve;
     });
+    const reservation: TerminalStartReservation = {
+      tenantId,
+      branchId: branch.branch_id,
+      promise: reservationPromise,
+      cancelled: false,
+    };
     this.starting.set(scopeKey, reservation);
     try {
       return await this.spawnTerminal({
@@ -242,6 +255,8 @@ export class TerminalsService {
         scopeKey,
         joinRequestingSocket,
         principalBranchAccess,
+        enforceBranchAccess,
+        reservation,
       });
     } finally {
       if (this.starting.get(scopeKey) === reservation) this.starting.delete(scopeKey);
@@ -258,17 +273,23 @@ export class TerminalsService {
     scopeKey: string;
     joinRequestingSocket: (channel: string, allocation: TerminalAllocatedEvent) => Promise<boolean>;
     principalBranchAccess: 'write' | 'read' | 'none';
+    enforceBranchAccess: boolean;
+    reservation: TerminalStartReservation;
   }): Promise<TerminalAttachment> {
     const {
       tenantId,
       userId,
-      branch,
+      branch: initiallyAuthorizedBranch,
       data,
       config,
       scopeKey,
       joinRequestingSocket,
-      principalBranchAccess,
+      principalBranchAccess: initiallyAuthorizedBranchAccess,
+      enforceBranchAccess,
+      reservation,
     } = args;
+    let branch = initiallyAuthorizedBranch;
+    let principalBranchAccess = initiallyAuthorizedBranchAccess;
     const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
     const user = await this.withTenantDatabase((tenantDb) =>
       new UsersRepository(tenantDb).findById(userId)
@@ -314,6 +335,34 @@ export class TerminalsService {
         });
       }
     }
+
+    // Authorization invalidation also cancels starts that have not entered the
+    // live attachment registry yet. Re-read the Branch and effective access at
+    // the final pre-registration boundary so stale mounts cannot survive a
+    // group/policy revocation committed during environment resolution.
+    if (reservation.cancelled) {
+      throw new Forbidden('Terminal access changed while the terminal was starting.');
+    }
+    const currentAuthorization = await this.withTenantDatabase(async (tenantDb) => {
+      const branchRepo = new BranchRepository(tenantDb);
+      const currentBranch = await branchRepo.findAccessibleById(branch.branch_id, userId, {
+        minimumPermission: 'session',
+        enforceAccess: enforceBranchAccess,
+      });
+      if (!currentBranch || currentBranch.archived) return null;
+      if (!enforceBranchAccess) {
+        return { branch: currentBranch, fsAccess: 'write' as const };
+      }
+      const access = await branchRepo.resolveUserAccess(currentBranch, userId);
+      const fsAccess = access.fs_access ?? 'none';
+      return fsAccess === 'none' ? null : { branch: currentBranch, fsAccess };
+    });
+    if (reservation.cancelled || !currentAuthorization) {
+      throw new Forbidden('Terminal access changed while the terminal was starting.');
+    }
+    branch = currentAuthorization.branch;
+    principalBranchAccess = currentAuthorization.fsAccess;
+
     const identity = this.app.get('distributedWorkIdentity') ?? {
       instanceId: 'daemon',
       bootId: `process-${process.pid}`,
@@ -336,16 +385,6 @@ export class TerminalsService {
       startedAt: new Date(),
     };
 
-    const token = generateTerminalExecutorToken(
-      this.app,
-      {
-        terminal_user_id: userId,
-        terminal_id: terminalId,
-        terminal_branch_id: branch.branch_id,
-        terminal_owner_boot_id: identity.bootId,
-      },
-      TERMINAL_EXECUTOR_TOKEN_TTL
-    );
     const daemonUrl = getDaemonUrl();
 
     this.terminals.set(terminalId, terminal);
@@ -356,6 +395,20 @@ export class TerminalsService {
       // otherwise a fast optional-runtime failure can be lost permanently.
       const joined = await joinRequestingSocket(channel, terminalRequestAllocation(terminal));
       if (!joined) throw new BadRequest('The owning Socket.IO connection disconnected.');
+      if (reservation.cancelled || this.terminals.get(terminalId) !== terminal) {
+        throw new Forbidden('Terminal access changed while the terminal was starting.');
+      }
+
+      const token = generateTerminalExecutorToken(
+        this.app,
+        {
+          terminal_user_id: userId,
+          terminal_id: terminalId,
+          terminal_branch_id: branch.branch_id,
+          terminal_owner_boot_id: identity.bootId,
+        },
+        TERMINAL_EXECUTOR_TOKEN_TTL
+      );
 
       spawnExecutorFireAndForget(
         {
@@ -432,11 +485,16 @@ export class TerminalsService {
   }
 
   cleanup(): void {
+    for (const reservation of this.starting.values()) reservation.cancelled = true;
     for (const terminal of [...this.terminals.values()]) this.stopTerminal(terminal);
-    this.starting.clear();
   }
 
   closeBranch(tenantId: string, branchId: string): void {
+    for (const reservation of this.starting.values()) {
+      if (reservation.tenantId === tenantId && reservation.branchId === branchId) {
+        reservation.cancelled = true;
+      }
+    }
     for (const terminal of [...this.terminals.values()]) {
       if (terminal.tenantId === tenantId && terminal.branchId === branchId) {
         this.stopTerminal(terminal);
@@ -446,6 +504,9 @@ export class TerminalsService {
 
   /** Revoke every process-local terminal capability for an invalidated tenant. */
   closeTenant(tenantId: string): void {
+    for (const reservation of this.starting.values()) {
+      if (reservation.tenantId === tenantId) reservation.cancelled = true;
+    }
     for (const terminal of [...this.terminals.values()]) {
       if (terminal.tenantId === tenantId) this.stopTerminal(terminal);
     }

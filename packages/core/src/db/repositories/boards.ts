@@ -63,6 +63,31 @@ function validateBoardPermissionDefaults(board: Partial<Board>): void {
   }
 }
 
+/** Canonical portable Board template → create payload mapping. */
+export function mapBoardExportBlobToCreateData(
+  blob: BoardExportBlob,
+  userId: string,
+  nameOverride?: string
+): Partial<Board> {
+  const name = nameOverride ?? blob.name;
+  return {
+    name,
+    slug: nameOverride ? nameOverride : (blob.slug ?? blob.name),
+    description: blob.description,
+    icon: blob.icon,
+    color: blob.color,
+    background_color: blob.background_color,
+    custom_css: blob.custom_css,
+    objects: blob.objects,
+    custom_context: blob.custom_context,
+    access_mode: blob.access_mode,
+    default_others_can: blob.default_others_can,
+    default_others_fs_access: blob.default_others_fs_access,
+    default_dangerously_allow_session_sharing: blob.default_dangerously_allow_session_sharing,
+    created_by: userId,
+  };
+}
+
 /**
  * Board repository implementation
  */
@@ -1084,21 +1109,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     // Validate blob structure
     this.validateBoardBlob(blob);
 
-    return this.create({
-      name: blob.name,
-      slug: blob.slug ?? blob.name,
-      description: blob.description,
-      icon: blob.icon,
-      color: blob.color,
-      background_color: blob.background_color,
-      objects: blob.objects,
-      custom_context: blob.custom_context,
-      access_mode: blob.access_mode,
-      default_others_can: blob.default_others_can,
-      default_others_fs_access: blob.default_others_fs_access,
-      default_dangerously_allow_session_sharing: blob.default_dangerously_allow_session_sharing,
-      created_by: userId,
-    });
+    return this.create(mapBoardExportBlobToCreateData(blob, userId));
   }
 
   /**
@@ -1154,21 +1165,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    */
   async clone(boardId: string, newName: string, userId: string): Promise<Board> {
     const blob = await this.toBlob(boardId);
-    return this.create({
-      name: newName,
-      slug: newName,
-      description: blob.description,
-      icon: blob.icon,
-      color: blob.color,
-      background_color: blob.background_color,
-      objects: blob.objects,
-      custom_context: blob.custom_context,
-      access_mode: blob.access_mode,
-      default_others_can: blob.default_others_can,
-      default_others_fs_access: blob.default_others_fs_access,
-      default_dangerously_allow_session_sharing: blob.default_dangerously_allow_session_sharing,
-      created_by: userId,
-    });
+    return this.create(mapBoardExportBlobToCreateData(blob, userId, newName));
   }
 
   /**
