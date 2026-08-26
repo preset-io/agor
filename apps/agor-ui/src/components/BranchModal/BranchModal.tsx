@@ -88,7 +88,12 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   const userById = useAgorStore(selectUserById);
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
-  const [activeTab, setActiveTab] = useState<BranchModalTab>('general');
+  // Teammate records render a 'teammate' tab FIRST (see tabItems below), so the
+  // default tab must follow the record kind — otherwise a teammate opens on its
+  // second tab. Lazy init avoids a flash of 'general' before the open effect runs.
+  const [activeTab, setActiveTab] = useState<BranchModalTab>(
+    () => defaultTab ?? (branch && isTeammate(branch) ? 'teammate' : 'general')
+  );
 
   const form = useBranchModalForm({
     branch,
@@ -98,10 +103,15 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   });
   const branchBoard = boardById.get(form.general.boardId || branch?.board_id || '');
 
-  // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
+  // Sync active tab when the modal opens — use defaultTab if specified, else the
+  // record's own first tab ('teammate' for teammates, 'general' otherwise).
+  // `branch` is read at open-time only and deliberately kept out of the deps: a
+  // realtime branch re-emit while the modal is open must NOT reset the tab the
+  // user has since clicked into.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: branch read at open-time only (see comment)
   useEffect(() => {
     if (open) {
-      setActiveTab(defaultTab || 'general');
+      setActiveTab(defaultTab ?? (branch && isTeammate(branch) ? 'teammate' : 'general'));
     }
   }, [open, defaultTab]);
 
