@@ -1,5 +1,4 @@
 import {
-  type Branch,
   type BranchID,
   type BranchRealtimeVisibility,
   BranchRealtimeVisibilityMode,
@@ -10,13 +9,10 @@ import {
   LOCAL_AUTHORIZATION_CACHE_INVALIDATION_EVENT,
   LOCAL_AUTHORIZATION_INVALIDATION_EVENT,
 } from '../realtime/routing.js';
-import { PERMISSION_RANK } from './branch-authorization.js';
 
 export type RealtimeAccessBranchRepository = {
-  findRealtimeVisibilityBranch(
-    branchId: string
-  ): Promise<Pick<Branch, 'branch_id' | 'others_can'> | null>;
-  findExplicitViewUserIds(branchId: BranchID): Promise<UUID[]>;
+  findRealtimeVisibilityBranch(branchId: string): Promise<{ branch_id: BranchID } | null>;
+  findRealtimeViewUserIds(branchId: BranchID): Promise<UUID[]>;
 };
 
 export type RealtimeAccessSessionRepository = {
@@ -50,11 +46,6 @@ export interface RealtimeAccessCacheOptions {
 const DEFAULT_BRANCH_VISIBILITY_TTL_MS = 5 * 60_000;
 const DEFAULT_SESSION_BRANCH_TTL_MS = 60 * 60_000;
 
-function branchAllowsAllAuthenticated(branch: Pick<Branch, 'others_can'>): boolean {
-  const othersCan = branch.others_can ?? 'session';
-  return PERMISSION_RANK[othersCan] >= PERMISSION_RANK.view;
-}
-
 /** Resolve current branch visibility without consulting daemon-local cache state. */
 export async function resolveBranchRealtimeVisibility(
   repository: RealtimeAccessBranchRepository,
@@ -63,16 +54,12 @@ export async function resolveBranchRealtimeVisibility(
   const branch = await repository.findRealtimeVisibilityBranch(branchId);
   if (!branch) return null;
 
-  return branchAllowsAllAuthenticated(branch)
-    ? { mode: BranchRealtimeVisibilityMode.ALL_AUTHENTICATED }
-    : {
-        mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
-        userIds: new Set(
-          (await repository.findExplicitViewUserIds(branch.branch_id)).map(
-            (userId) => userId as UserID
-          )
-        ),
-      };
+  return {
+    mode: BranchRealtimeVisibilityMode.EXPLICIT_USERS,
+    userIds: new Set(
+      (await repository.findRealtimeViewUserIds(branch.branch_id)).map((userId) => userId as UserID)
+    ),
+  };
 }
 
 /**

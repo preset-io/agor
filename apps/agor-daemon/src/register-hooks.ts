@@ -1430,6 +1430,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       params: context.params,
       branchRepository,
       branchId: branch.branch_id,
+      branchRbacEnabled: executionMode.appRbacEnabled,
       realtimeAccessCache,
     });
     return context;

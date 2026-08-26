@@ -44,7 +44,7 @@ import {
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { Application } from '@agor/core/feathers';
+import { type Application, Forbidden } from '@agor/core/feathers';
 import type {
   GatewayConnector,
   GatewayContext,
@@ -847,6 +847,7 @@ export class GatewayService {
   private userTokenRepo: UserMCPOAuthTokenRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
+  private appRbacEnabled: boolean;
 
   /** Active listeners keyed by immutable tenant + channel identity. */
   private activeListeners = new Map<string, GatewayConnector>();
@@ -901,7 +902,11 @@ export class GatewayService {
   private static SLACK_STREAM_STATUS_REFRESH_MS = 300;
   private static SLACK_STREAMED_MESSAGE_CACHE_MAX = 500;
 
-  constructor(db: TenantScopeAwareDatabase, app: Application) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    app: Application,
+    options: { appRbacEnabled?: boolean } = {}
+  ) {
     // Long-lived listener orchestration carries tenant identity without
     // holding a transaction. Every repository field is therefore bound to a
     // short per-method tenant unit of work here; provider/process/network work
@@ -930,6 +935,7 @@ export class GatewayService {
     this.userTokenRepo = bindRepositoryToTenantUnitOfWork(db, new UserMCPOAuthTokenRepository(db));
     this.db = db;
     this.app = app;
+    this.appRbacEnabled = options.appRbacEnabled ?? resolveExecutionSecurityMode().appRbacEnabled;
     this.workIdentity = (
       app as unknown as { get?: (name: string) => DistributedWorkIdentity | undefined }
     ).get?.('distributedWorkIdentity') ?? {
@@ -1876,6 +1882,61 @@ export class GatewayService {
     }
   }
 
+  /**
+   * Gateway calls the Session and Prompt services internally, so their
+   * provider-only RBAC hooks do not run. Keep inbound admission on the same
+   * normalized branch policy as browser, REST, MCP, and scheduler callers.
+   */
+  private async requireInboundSessionCreateAccess(
+    channel: GatewayChannel,
+    userId: UserID
+  ): Promise<void> {
+    if (!this.appRbacEnabled) return;
+
+    const branch = await this.branchRepo.findById(channel.target_branch_id);
+    if (!branch) {
+      throw new Forbidden('Gateway inbound denied: target branch is unavailable');
+    }
+    const access = await this.branchRepo.resolveUserAccess(branch, userId);
+    if (!['session', 'prompt', 'all'].includes(access.can)) {
+      throw new Forbidden(
+        'Gateway inbound denied: Collaborator access is required to create a session'
+      );
+    }
+  }
+
+  /**
+   * Resolve the target Session again immediately before prompt admission.
+   * This both binds a durable thread mapping to its configured branch and
+   * applies owner-authored personal session sharing for aligned users. A
+   * Manager role alone never grants authority over another user's home.
+   */
+  private async requireInboundPromptAuthority(
+    channel: GatewayChannel,
+    sessionId: SessionID,
+    userId: UserID
+  ): Promise<Session> {
+    const session = await this.sessionRepo.findById(sessionId);
+    if (!session || session.branch_id !== channel.target_branch_id) {
+      throw new Forbidden('Gateway inbound denied: target session is unavailable');
+    }
+    if (!this.appRbacEnabled) return session;
+
+    const authority = await this.branchRepo.resolveSessionPromptAuthority(
+      channel.target_branch_id,
+      userId,
+      session.created_by as UserID
+    );
+    if (!authority.allowed) {
+      throw new Forbidden(
+        session.created_by === userId
+          ? 'Gateway inbound denied: Collaborator access is required to prompt this session'
+          : 'Gateway inbound denied: the session owner has not shared their sessions with this user'
+      );
+    }
+    return session;
+  }
+
   async emitMessage(data: EmitGatewayMessageData): Promise<EmitGatewayMessageResult> {
     const channel = await this.channelRepo.findById(data.gatewayChannelId);
     if (!channel) throw new Error('Gateway channel not found');
@@ -2427,6 +2488,15 @@ export class GatewayService {
     let mcpAuthWarning: string | undefined;
     let mappingForCursor: ThreadSessionMap | null = existingMapping ?? null;
 
+    // Authorize before resolving configuration or mutating an existing
+    // Session. Re-check at the actual Session/Task admission boundaries below
+    // so a revoked aligned user cannot keep using a durable platform thread.
+    if (existingMapping) {
+      await this.requireInboundPromptAuthority(channel, existingMapping.session_id, user.user_id);
+    } else {
+      await this.requireInboundSessionCreateAccess(channel, user.user_id);
+    }
+
     // Resolve agentic config: channel config > user defaults > system defaults.
     // Channel-level agentic_config maps to the helper's `overrides` (it's the
     // gateway's analogue of an MCP tool's explicit args). Codex sub-config is
@@ -2756,6 +2826,7 @@ export class GatewayService {
       ) {
         throw new Error('Gateway listener ownership lost before Session admission');
       }
+      await this.requireInboundSessionCreateAccess(channel, user.user_id);
       try {
         session = await sessionsService.create(sessionInput, { _agenticConfigResolved: true });
       } catch (error) {
@@ -3210,6 +3281,8 @@ export class GatewayService {
       if (created) {
         promptText = `${promptText}\n\n${GATEWAY_STARTUP_BOOTSTRAP_HINT}`;
       }
+
+      await this.requireInboundPromptAuthority(channel, sessionId, user.user_id);
 
       const task = await promptService.create(
         {
@@ -4451,7 +4524,8 @@ export class GatewayService {
  */
 export function createGatewayService(
   db: TenantScopeAwareDatabase,
-  app: Application
+  app: Application,
+  options?: { appRbacEnabled?: boolean }
 ): GatewayService {
-  return new GatewayService(db, app);
+  return new GatewayService(db, app, options);
 }

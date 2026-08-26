@@ -53,6 +53,11 @@ vi.mock('@agor/core/config', async (importOriginal) => {
     ...actual,
     assertInlineAgenticConfigurationAllowed: vi.fn(async () => undefined),
     getBaseUrl: vi.fn(async () => 'https://agor.example.com'),
+    resolveExecutionSecurityMode: vi.fn(() => ({
+      appRbacEnabled: true,
+      unixUserMode: 'simple',
+      requiresExecutionHomeKey: false,
+    })),
   };
 });
 
@@ -155,6 +160,13 @@ function makeGatewayHarness(args: {
   db?: TenantScopeAwareDatabase;
   user?: User;
   alignedUser?: User | null;
+  branchPermission?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+  promptAuthority?: {
+    allowed: boolean;
+    execution_user_id?: UserID;
+    source: 'own_session' | 'personal_session_sharing' | 'denied';
+  };
+  sessionOwnerUserId?: UserID;
   outboundSeed?: GatewayOutboundMessage | null;
   setMCPServers?: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
 }) {
@@ -215,6 +227,36 @@ function makeGatewayHarness(args: {
     findById: vi.fn(async () => channel),
     listenerClaimIsCurrent: vi.fn(async () => true),
     updateLastMessage: vi.fn(async () => undefined),
+  };
+  const resolveUserAccess = vi.fn(async () => ({
+    can: args.branchPermission ?? 'all',
+    fs_access: 'write',
+    is_owner: (args.sessionOwnerUserId ?? executionUser.user_id) === executionUser.user_id,
+    source: 'owner',
+  }));
+  const resolveSessionPromptAuthority = vi.fn(
+    async () =>
+      args.promptAuthority ?? {
+        allowed: true,
+        execution_user_id: args.sessionOwnerUserId ?? executionUser.user_id,
+        source:
+          args.sessionOwnerUserId && args.sessionOwnerUserId !== executionUser.user_id
+            ? 'personal_session_sharing'
+            : 'own_session',
+      }
+  );
+  const branchRepo = {
+    findById: vi.fn(async () => ({ branch_id: channel.target_branch_id })),
+    resolveUserAccess,
+    resolveSessionPromptAuthority,
+  };
+  const sessionRepo = {
+    findById: vi.fn(async (sessionId: SessionID) => ({
+      session_id: sessionId,
+      branch_id: channel.target_branch_id,
+      created_by: args.sessionOwnerUserId ?? executionUser.user_id,
+      status: SessionStatus.IDLE,
+    })),
   };
   const threadMapRepo = {
     findByChannelAndThread: vi.fn(async () => mapping),
@@ -305,6 +347,8 @@ function makeGatewayHarness(args: {
   );
   const completeReplyAdmission = vi.fn(async () => args.outboundSeed ?? undefined);
   (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
+  (service as unknown as { branchRepo: typeof branchRepo }).branchRepo = branchRepo;
+  (service as unknown as { sessionRepo: typeof sessionRepo }).sessionRepo = sessionRepo;
   (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
   (
     service as unknown as {
@@ -331,6 +375,10 @@ function makeGatewayHarness(args: {
     sessionsGet,
     setMCPServers,
     channelRepo,
+    branchRepo,
+    sessionRepo,
+    resolveUserAccess,
+    resolveSessionPromptAuthority,
     threadMapRepo,
     outboundRepo,
     findByEmailForAlignment,
@@ -400,6 +448,93 @@ describe('gateway tenant metadata helpers', () => {
 
     expect(tenantIdFromGatewayChannel(channel)).toBe('tenant-channel');
     expect(Object.keys(channel)).not.toContain('tenant_id');
+  });
+});
+
+describe('GatewayService inbound permission admission', () => {
+  it('does not create a gateway session after the execution user loses Collaborator access', async () => {
+    const { service, sessionsCreate, promptCreate, resolveUserAccess } = makeGatewayHarness({
+      existingMapping: null,
+      branchPermission: 'view',
+    });
+
+    await expect(
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'C123-100.000000',
+        text: 'start a session',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '100.000000',
+        },
+      })
+    ).rejects.toThrow(/Collaborator access is required to create a session/);
+
+    expect(resolveUserAccess).toHaveBeenCalledOnce();
+    expect(sessionsCreate).not.toHaveBeenCalled();
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a mapped foreign session unless its owner shared their sessions', async () => {
+    const sessionOwnerUserId = 'session-owner' as UserID;
+    const { service, promptCreate, resolveSessionPromptAuthority } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      sessionOwnerUserId,
+      promptAuthority: { allowed: false, source: 'denied' },
+    });
+
+    await expect(
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'C123-100.000000',
+        text: 'continue',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '103.000000',
+        },
+      })
+    ).rejects.toThrow(/session owner has not shared their sessions/);
+
+    expect(resolveSessionPromptAuthority).toHaveBeenCalledWith(
+      slackChannel.target_branch_id,
+      user.user_id,
+      sessionOwnerUserId
+    );
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('rechecks an owner-authored sharing grant before prompting a mapped foreign session', async () => {
+    const sessionOwnerUserId = 'session-owner' as UserID;
+    const { service, promptCreate, resolveSessionPromptAuthority } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      sessionOwnerUserId,
+      promptAuthority: {
+        allowed: true,
+        execution_user_id: sessionOwnerUserId,
+        source: 'personal_session_sharing',
+      },
+    });
+
+    await expect(
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'C123-100.000000',
+        text: 'continue',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '103.000000',
+        },
+      })
+    ).resolves.toMatchObject({ success: true, sessionId: 'sess-1', created: false });
+
+    expect(resolveSessionPromptAuthority).toHaveBeenCalledTimes(2);
+    expect(promptCreate).toHaveBeenCalledOnce();
   });
 });
 

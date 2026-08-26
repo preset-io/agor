@@ -16,6 +16,7 @@ import {
   getBranchesDir,
   PAGINATION,
   resolveBranchStorageConfig,
+  resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
@@ -162,6 +163,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private taskRepo: TaskRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
+  private appRbacEnabled: boolean;
   private processes = new Map<BranchID, ManagedProcess>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
@@ -175,7 +177,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     patch: (id: string, data: { zone_id?: string | null }) => Promise<unknown>;
   };
 
-  constructor(db: TenantScopeAwareDatabase, app: Application) {
+  constructor(
+    db: TenantScopeAwareDatabase,
+    app: Application,
+    options: { appRbacEnabled?: boolean } = {}
+  ) {
     const branchRepo = new BranchRepository(db);
     super(branchRepo, {
       id: 'branch_id',
@@ -191,6 +197,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     this.taskRepo = new TaskRepository(db);
     this.db = db;
     this.app = app;
+    this.appRbacEnabled = options.appRbacEnabled ?? resolveExecutionSecurityMode().appRbacEnabled;
   }
 
   /** Refuse a metadata cascade that would orphan a live executor lease. */
@@ -1363,6 +1370,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         params: removalParams,
         branchRepository: branchRepo,
         branchId: branch.branch_id,
+        branchRbacEnabled: this.appRbacEnabled,
       });
 
       // This custom method deliberately bypasses Feathers' standard method
@@ -2630,7 +2638,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
  */
 export function createBranchesService(
   db: TenantScopeAwareDatabase,
-  app: Application
+  app: Application,
+  options?: { appRbacEnabled?: boolean }
 ): BranchesService {
-  return new BranchesService(db, app);
+  return new BranchesService(db, app, options);
 }

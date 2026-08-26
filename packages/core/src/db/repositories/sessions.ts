@@ -1399,9 +1399,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   /**
    * Find all sessions in branches accessible to a user (optimized RBAC query)
    *
-   * Uses INNER JOIN + LEFT JOIN to filter sessions by branch access in one query
-   * instead of N+1. Returns sessions where user is a branch owner OR branch.others_can
-   * allows at least 'view' access.
+   * Uses the normalized branch-access predicate in one joined query instead
+   * of N+1 point checks. Its direct-entry, additive-group, and unmatched-Others
+   * precedence is shared with branch inventory and point authorization.
    *
    * Also populates board_id and url via the branches JOIN.
    *

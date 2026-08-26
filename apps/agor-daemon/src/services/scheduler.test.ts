@@ -1,6 +1,7 @@
 import {
   AgenticToolPresetRepository,
   BranchRepository,
+  CapabilityPolicyRepository,
   createTenantScopedDatabaseProxy,
   generateId,
   MCPServerRepository,
@@ -16,6 +17,7 @@ import {
 import { resolveSessionDefaults } from '@agor/core/sessions';
 import type { Branch, Schedule, Session, Task, UserID } from '@agor/core/types';
 import {
+  capabilityPolicyPresetCapabilities,
   SessionStatus,
   TaskStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
@@ -114,7 +116,7 @@ async function seedRunnableSchedule(
     allow_concurrent_runs: false,
     agentic_tool_config: agenticToolConfig,
   });
-  return { creator, schedule };
+  return { branch, creator, schedule };
 }
 
 function createSchedulerApp(db: SchedulerDb) {
@@ -715,6 +717,74 @@ describe('scheduler HA occurrence recovery', () => {
       }
     }
   );
+
+  dbTest('fails closed when a schedule creator loses Collaborator access', async ({ db }) => {
+    const { branch, creator: owner } = await seedRunnableSchedule(
+      db,
+      {
+        email: `scheduler-owner-${Math.random()}@example.com`,
+        name: 'Branch owner',
+      },
+      { agentic_tool: 'claude-code' }
+    );
+    const collaborator = await new UsersRepository(db).create({
+      email: `scheduler-revoked-${Math.random()}@example.com`,
+      name: 'Revoked schedule creator',
+    });
+    const policies = new CapabilityPolicyRepository(db);
+    const current = await policies.getBranchPolicy(branch.branch_id);
+    const collaboratorConfig = structuredClone(current.override_config!);
+    collaboratorConfig.access.sharing_mode = 'shared';
+    collaboratorConfig.access.entries = [
+      {
+        entry_id: generateId(),
+        principal: { principal_type: 'user', user_id: collaborator.user_id },
+        preset: 'collaborator',
+        capabilities:
+          capabilityPolicyPresetCapabilities('branch_access', 'collaborator', 'read') ?? [],
+        fs_access: 'read',
+      },
+    ];
+    const granted = await policies.replaceBranchPolicy(
+      branch.branch_id,
+      { ...current, override_config: collaboratorConfig },
+      owner.user_id
+    );
+    const schedule = await new ScheduleRepository(db).create({
+      branch_id: branch.branch_id,
+      created_by: collaborator.user_id,
+      name: 'Revoked creator schedule',
+      cron_expression: '0 * * * *',
+      timezone_mode: 'utc',
+      prompt: 'Must not run',
+      enabled: true,
+      retention: 0,
+      allow_concurrent_runs: false,
+      agentic_tool_config: { agentic_tool: 'claude-code' },
+    });
+
+    const viewerConfig = structuredClone(granted.override_config!);
+    viewerConfig.access.entries[0] = {
+      ...viewerConfig.access.entries[0],
+      preset: 'viewer',
+      capabilities: capabilityPolicyPresetCapabilities('branch_access', 'viewer') ?? [],
+      fs_access: 'none',
+    };
+    await policies.replaceBranchPolicy(
+      branch.branch_id,
+      { ...granted, override_config: viewerConfig },
+      owner.user_id
+    );
+
+    const { app, prompt } = createSchedulerApp(db);
+    await expect(
+      new SchedulerService(db, app, { appRbacEnabled: true }).executeScheduleNow({
+        scheduleId: schedule.schedule_id,
+        triggeredBy: collaborator.user_id,
+      })
+    ).rejects.toMatchObject<ScheduleNotReadyError>({ code: 'schedule_permission_revoked' });
+    expect(prompt).not.toHaveBeenCalled();
+  });
 
   dbTest('retention defers active overflow occurrences until they are terminal', async ({ db }) => {
     const { creator, schedule: createdSchedule } = await seedRunnableSchedule(

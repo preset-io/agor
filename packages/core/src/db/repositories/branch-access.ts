@@ -17,6 +17,8 @@ import {
   tasks,
 } from '../schema';
 
+type UserIdExpression = UUID | SQLWrapper;
+
 const BOARD_ROLES_BY_CAPABILITY = {
   'board.view': ['viewer', 'editor', 'manager'],
   'board.edit': ['editor', 'manager'],
@@ -74,7 +76,7 @@ function effectiveConfigCondition(): SQL {
   );
 }
 
-function directBranchEntryExists(db: Database, userId: UUID, capability?: string): SQL {
+function directBranchEntryExists(db: Database, userId: UserIdExpression, capability?: string): SQL {
   return exists(
     selectRaw(db)
       .from(branchPermissionConfigs)
@@ -85,6 +87,7 @@ function directBranchEntryExists(db: Database, userId: UUID, capability?: string
       .where(
         and(
           effectiveConfigCondition(),
+          eq(branchPermissionConfigs.sharing_mode, 'shared'),
           eq(branchPermissionEntries.user_id, userId),
           ...(capability
             ? [
@@ -100,7 +103,11 @@ function directBranchEntryExists(db: Database, userId: UUID, capability?: string
   );
 }
 
-function activeBranchGroupEntryExists(db: Database, userId: UUID, capability?: string): SQL {
+function activeBranchGroupEntryExists(
+  db: Database,
+  userId: UserIdExpression,
+  capability?: string
+): SQL {
   return exists(
     selectRaw(db)
       .from(branchPermissionConfigs)
@@ -122,6 +129,7 @@ function activeBranchGroupEntryExists(db: Database, userId: UUID, capability?: s
       .where(
         and(
           effectiveConfigCondition(),
+          eq(branchPermissionConfigs.sharing_mode, 'shared'),
           ...(capability
             ? [
                 branchRoleGrantsCapability(
@@ -161,7 +169,11 @@ function selectRaw(db: Database): any {
   return (db as any).select({ _: sql`1` });
 }
 
-function branchCapabilityCondition(db: Database, userId: UUID, capability: string): SQL {
+function branchCapabilityCondition(
+  db: Database,
+  userId: UserIdExpression,
+  capability: string
+): SQL {
   const directMatch = directBranchEntryExists(db, userId);
   const groupMatch = activeBranchGroupEntryExists(db, userId);
   return (
@@ -178,17 +190,17 @@ function branchCapabilityCondition(db: Database, userId: UUID, capability: strin
   );
 }
 
-export function visibleBranchAccessCondition(db: Database, userId: UUID): SQL {
+export function visibleBranchAccessCondition(db: Database, userId: UserIdExpression): SQL {
   return branchCapabilityCondition(db, userId, 'branch.view');
 }
 
-export function sessionBranchAccessCondition(db: Database, userId: UUID): SQL {
+export function sessionBranchAccessCondition(db: Database, userId: UserIdExpression): SQL {
   return branchCapabilityCondition(db, userId, 'sessions.create');
 }
 
 export function minimumBranchAccessCondition(
   db: Database,
-  userId: UUID,
+  userId: UserIdExpression,
   minimumPermission: 'none' | 'view' | 'session' | 'prompt' | 'all'
 ): SQL {
   if (minimumPermission === 'none') return sql`true`;
@@ -201,13 +213,15 @@ export function minimumBranchAccessCondition(
   return branchCapabilityCondition(db, userId, capability);
 }
 
-function directBoardEntryExists(db: Database, userId: UUID, capability?: string): SQL {
+function directBoardEntryExists(db: Database, userId: UserIdExpression, capability?: string): SQL {
   return exists(
     selectRaw(db)
       .from(boardAccessEntries)
+      .innerJoin(boardAccessPolicies, eq(boardAccessPolicies.board_id, boardAccessEntries.board_id))
       .where(
         and(
           eq(boardAccessEntries.board_id, boards.board_id),
+          eq(boardAccessPolicies.sharing_mode, 'shared'),
           eq(boardAccessEntries.user_id, userId),
           ...(capability
             ? [roleGrantsCapability(boardAccessEntries.role, 'board', capability)]
@@ -217,10 +231,15 @@ function directBoardEntryExists(db: Database, userId: UUID, capability?: string)
   );
 }
 
-function activeBoardGroupEntryExists(db: Database, userId: UUID, capability?: string): SQL {
+function activeBoardGroupEntryExists(
+  db: Database,
+  userId: UserIdExpression,
+  capability?: string
+): SQL {
   return exists(
     selectRaw(db)
       .from(boardAccessEntries)
+      .innerJoin(boardAccessPolicies, eq(boardAccessPolicies.board_id, boardAccessEntries.board_id))
       .innerJoin(
         groupMemberships,
         and(
@@ -235,6 +254,7 @@ function activeBoardGroupEntryExists(db: Database, userId: UUID, capability?: st
       .where(
         and(
           eq(boardAccessEntries.board_id, boards.board_id),
+          eq(boardAccessPolicies.sharing_mode, 'shared'),
           ...(capability
             ? [roleGrantsCapability(boardAccessEntries.role, 'board', capability)]
             : [])
@@ -243,7 +263,7 @@ function activeBoardGroupEntryExists(db: Database, userId: UUID, capability?: st
   );
 }
 
-export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
+export function visibleBoardAccessCondition(db: Database, userId: UserIdExpression): SQL {
   const directMatch = directBoardEntryExists(db, userId);
   const groupMatch = activeBoardGroupEntryExists(db, userId);
   return (
@@ -272,7 +292,7 @@ export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
 
 export function visibleBoardReferenceAccessExists(
   db: Database,
-  userId: UUID,
+  userId: UserIdExpression,
   boardId: SQLWrapper
 ): SQL {
   return exists(
@@ -284,7 +304,7 @@ export function visibleBoardReferenceAccessExists(
 
 export function visibleBranchReferenceAccessExists(
   db: Database,
-  userId: UUID,
+  userId: UserIdExpression,
   branchId: SQLWrapper
 ): SQL {
   return exists(
@@ -296,7 +316,7 @@ export function visibleBranchReferenceAccessExists(
 
 export function visibleSessionReferenceAccessExists(
   db: Database,
-  userId: UUID,
+  userId: UserIdExpression,
   sessionId: SQLWrapper
 ): SQL {
   return exists(
@@ -309,7 +329,7 @@ export function visibleSessionReferenceAccessExists(
 
 export function visibleTaskReferenceAccessExists(
   db: Database,
-  userId: UUID,
+  userId: UserIdExpression,
   taskId: SQLWrapper
 ): SQL {
   return exists(
@@ -326,7 +346,7 @@ export function visibleTaskReferenceAccessExists(
 
 export function visibleMessageReferenceAccessExists(
   db: Database,
-  userId: UUID,
+  userId: UserIdExpression,
   messageId: SQLWrapper
 ): SQL {
   return exists(

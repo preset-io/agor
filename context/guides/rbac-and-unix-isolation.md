@@ -103,7 +103,11 @@ Effective access uses these deterministic rules:
    no active direct or group match.
 
 Private policies carry no named entries or `Others` grant. Inactive/deleted
-principals remain visible for repair but do not become fallback matches.
+principals remain visible for repair but do not become fallback matches. User
+deactivation is being delivered separately; until that branch adds a persisted
+active-state column, database authorization can distinguish only an existing
+same-tenant user from a deleted one. Its cutover must add the active-user
+predicate to both the point resolver and the set-based SQL below.
 
 ## Personal session sharing
 
@@ -141,6 +145,20 @@ existing hooks; it is backed exclusively by the normalized resolver. SQL list
 queries mirror direct-user shadowing, additive active groups, and unmatched
 `Others`. PostgreSQL RLS and tenant-qualified foreign keys remain an additional
 boundary, not a substitute for application authorization.
+
+Realtime delivery materializes the exact current set of viewers with that same
+SQL predicate. A permissive `Others` role is never represented as a tenant-wide
+broadcast because a direct `No access` entry or a matched non-view group can
+suppress it for one user. ACL and group mutations invalidate daemon-local
+caches and evict affected sockets across HA; hard-delete paths snapshot the
+audience before policy rows cascade.
+
+Internal runtime callers do not rely on provider-only Feathers hooks. Gateway
+inbound traffic checks Collaborator access before Session creation, binds a
+durable platform thread to the configured branch, and resolves personal
+session-sharing authority immediately before Prompt admission. The scheduler
+checks its creator at Session admission and again before its initial Prompt so
+revocation races and crash recovery fail closed.
 
 ## Execution modes
 

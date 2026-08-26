@@ -511,6 +511,7 @@ export const SCHEDULER_INITIALIZATION_FAILURE_CODES = [
   'schedule_identity_unavailable',
   'schedule_branch_unavailable',
   'schedule_prompt_unavailable',
+  'schedule_permission_revoked',
   'mcp_server_not_usable',
 ] as const;
 

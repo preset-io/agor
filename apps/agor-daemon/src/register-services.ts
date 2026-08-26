@@ -555,7 +555,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Branches, repos
   // ============================================================================
 
-  app.use('/branches', createBranchesService(db, app), {
+  app.use('/branches', createBranchesService(db, app, { appRbacEnabled: branchRbacEnabled }), {
     methods: [
       'find',
       'get',
@@ -701,7 +701,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.service('gateway-channels/app-info').publish(() => []);
 
     app.use('/thread-session-map', createThreadSessionMapService(db));
-    app.use('/gateway', createGatewayService(db, app), {
+    app.use('/gateway', createGatewayService(db, app, { appRbacEnabled: branchRbacEnabled }), {
       // Only expose the inbound gateway entrypoint and existing route hook
       // externally. Proactive outbound emits are intentionally invoked through
       // the authenticated Agor MCP tool surface; exposing emitMessage here would

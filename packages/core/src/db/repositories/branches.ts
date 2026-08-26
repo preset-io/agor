@@ -39,6 +39,7 @@ import {
   branchPermissionEntries,
   groupMemberships,
   schedules,
+  users,
 } from '../schema';
 import {
   attachHiddenTenant,
@@ -52,6 +53,7 @@ import {
   minimumBranchAccessCondition,
   sessionBranchAccessCondition,
   visibleBranchAccessCondition,
+  visibleBranchReferenceAccessExists,
 } from './branch-access';
 import { CapabilityPolicyRepository } from './capability-policies';
 import { deepMerge } from './merge-utils';
@@ -309,9 +311,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   /**
    * Find only the fields needed by realtime delivery visibility checks.
    */
-  async findRealtimeVisibilityBranch(
-    id: string
-  ): Promise<Pick<Branch, 'branch_id' | 'others_can'> | null> {
+  async findRealtimeVisibilityBranch(id: string): Promise<Pick<Branch, 'branch_id'> | null> {
     try {
       const fullId = await resolveByShortIdPrefix(id, 'Branch', async (pattern) => {
         const rows = await select(this.db, { branch_id: branches.branch_id })
@@ -328,16 +328,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         .where(eq(branches.branch_id, fullId))
         .one();
       if (!row) return null;
-
-      const policy = await new CapabilityPolicyRepository(this.db).getBranchPolicy(
-        row.branch_id as BranchID
-      );
-      const config =
-        policy.binding_mode === 'inherit' ? policy.inherited_config : policy.override_config;
-      const openToOthers =
-        config?.access.sharing_mode === 'shared' &&
-        config.access.others.capabilities.includes('branch.view');
-      return { branch_id: row.branch_id as BranchID, others_can: openToOthers ? 'view' : 'none' };
+      return { branch_id: row.branch_id as BranchID };
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       throw error;
@@ -718,7 +709,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
   /**
    * Resolve app-layer branch permission excluding global superadmin bypass.
-   * Order: direct owner → highest group grant → others_can fallback.
+   * Order: primary owner → direct user entry → additive group entries →
+   * unmatched Others fallback.
    */
   async resolveUserPermission(
     branch: Branch,
@@ -755,13 +747,19 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   }
 
   /**
-   * Find users with explicit view-or-better access to a branch through direct
-   * ownership or active group grants. This intentionally does not expand
-   * `others_can`; callers can handle public branch visibility without loading
-   * every user row.
+   * Materialize the exact current realtime audience in one set-based query.
+   *
+   * Never represent a permissive Others role as "all authenticated": a direct
+   * No access row or a matched non-view group suppresses Others for that user.
+   * The same SQL predicate used by branch/session inventory therefore decides
+   * every user included in a cached publication audience.
    */
-  async findExplicitViewUserIds(branchId: BranchID): Promise<UUID[]> {
-    return this.findExplicitUsers(branchId, (access) => access.can !== 'none');
+  async findRealtimeViewUserIds(branchId: BranchID): Promise<UUID[]> {
+    const rows = await select(this.db, { user_id: users.user_id })
+      .from(users)
+      .where(visibleBranchReferenceAccessExists(this.db, users.user_id, sql`${branchId}`))
+      .all();
+    return rows.map((row: { user_id: string }) => row.user_id as UUID);
   }
 
   private async findExplicitUsers(
@@ -968,8 +966,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   /**
    * Find all branches accessible to a user (optimized RBAC query)
    *
-   * Uses LEFT JOIN to check ownership in one query instead of N+1.
-   * Returns branches where user is an owner OR others_can allows at least 'view' access.
+   * Uses the normalized, correlated access predicate in one query instead of
+   * N+1 point checks. Direct user entries shadow groups, active groups are
+   * additive, and Others applies only when neither one matches.
    *
    * NOTE: This method should only be called when RBAC is enabled. The branch
    * find RBAC hook uses it to resolve accessible branch IDs and compose them

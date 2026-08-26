@@ -483,7 +483,7 @@ describe('HA Feathers publication relay', () => {
     );
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => null),
-      findExplicitViewUserIds: vi.fn(async () => []),
+      findRealtimeViewUserIds: vi.fn(async () => []),
     } as unknown as RealtimeAccessBranchRepository;
     const params = {
       tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
@@ -935,7 +935,7 @@ function repos(options: {
     findRealtimeVisibilityBranch: vi.fn(async (id: string) =>
       id === options.branch.branch_id ? options.branch : null
     ),
-    findExplicitViewUserIds: vi.fn(async () => viewableUserIds),
+    findRealtimeViewUserIds: vi.fn(async () => viewableUserIds),
   } as unknown as RealtimeAccessBranchRepository;
   const sessionsRepository = {
     findBranchIdBySessionId: vi.fn(async (id: string) =>
@@ -1227,7 +1227,10 @@ describe('configureRealtimePublish', () => {
         'tenant:tenant-a': [{ user: tenantUser }],
       }
     );
-    const r = repos({ branch: branch('b1', 'view'), permissions: {} });
+    const r = repos({
+      branch: branch('b1', 'view'),
+      permissions: { 'tenant-user': 'view' },
+    });
     vi.mocked(r.branchRepository.findRealtimeVisibilityBranch).mockImplementation(async () => {
       expect(getCurrentTenantId()).toBe('tenant-a');
       return branch('b1', 'view');
@@ -1485,7 +1488,7 @@ describe('configureRealtimePublish', () => {
     const deletedBranch = branch('b1', 'none');
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => null),
-      findExplicitViewUserIds: vi.fn(async () => []),
+      findRealtimeViewUserIds: vi.fn(async () => []),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
       findBranchIdBySessionId: vi.fn(async () => null),
@@ -1591,13 +1594,13 @@ describe('configureRealtimePublish', () => {
     expect(channel.connections ?? []).toEqual([]);
   });
 
-  it('broadcasts broadly visible branch events without explicit user expansion', async () => {
+  it('publishes broadly visible branch events only to the materialized audience', async () => {
     const u1 = user('u1');
     const u2 = user('u2');
     const app = makeApp([{ user: u1 }, { user: u2 }]);
     const r = repos({
       branch: branch('b1', 'session'),
-      permissions: {},
+      permissions: { u1: 'view', u2: 'view' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
 
@@ -1607,7 +1610,7 @@ describe('configureRealtimePublish', () => {
     );
 
     expect(channel.connections).toEqual([{ user: u1 }, { user: u2 }]);
-    expect(vi.mocked(r.branchRepository.findExplicitViewUserIds)).not.toHaveBeenCalled();
+    expect(vi.mocked(r.branchRepository.findRealtimeViewUserIds)).toHaveBeenCalledOnce();
   });
 
   it('honors allowSuperadmin=false for branch events', async () => {
@@ -1670,7 +1673,7 @@ describe('configureRealtimePublish', () => {
     const r = repos({
       branch: branch('b1', 'view'),
       session: session('s1', 'b1'),
-      permissions: {},
+      permissions: { 'owner-user': 'view' },
       owner: 'owner-user',
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -2250,7 +2253,7 @@ describe('configureRealtimePublish streaming scope', () => {
     );
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'view')),
-      findExplicitViewUserIds: vi.fn(async () => []),
+      findRealtimeViewUserIds: vi.fn(async () => []),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
       findBranchIdBySessionId: vi.fn(async () => 'b1'),

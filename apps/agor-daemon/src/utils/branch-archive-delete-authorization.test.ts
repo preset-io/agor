@@ -35,7 +35,7 @@ describe('authorizeBranchArchiveDelete', () => {
       isOwner: vi.fn(async () => false),
       resolveUserPermission: vi.fn(async () => 'view'),
       findRealtimeVisibilityBranch,
-      findExplicitViewUserIds: vi.fn(),
+      findRealtimeViewUserIds: vi.fn(),
     } as unknown as BranchRepository;
     const hook = context();
 
@@ -58,13 +58,13 @@ describe('authorizeBranchArchiveDelete', () => {
       others_can: 'none',
     };
     const findRealtimeVisibilityBranch = vi.fn();
-    const findExplicitViewUserIds = vi.fn();
+    const findRealtimeViewUserIds = vi.fn();
     const branchRepository = {
       findById: vi.fn(async () => branch),
       isOwner: vi.fn(async () => true),
       resolveUserPermission: vi.fn(async () => 'all'),
       findRealtimeVisibilityBranch,
-      findExplicitViewUserIds,
+      findRealtimeViewUserIds,
     } as unknown as BranchRepository;
     const hook = context();
     hook.params.route = { id: '018F0000' };
@@ -79,7 +79,7 @@ describe('authorizeBranchArchiveDelete', () => {
     expect(branchRepository.findById).toHaveBeenCalledWith('018F0000');
     expect(hook.params.route?.id).toBe(branch.branch_id);
     expect(findRealtimeVisibilityBranch).not.toHaveBeenCalled();
-    expect(findExplicitViewUserIds).not.toHaveBeenCalled();
+    expect(findRealtimeViewUserIds).not.toHaveBeenCalled();
     expect(() =>
       consumeBranchArchiveDeleteAuthorization(hook.params, branch.branch_id as never, 'delete')
     ).not.toThrow();

@@ -78,7 +78,7 @@ function repos() {
   return {
     branchRepository: {
       findRealtimeVisibilityBranch: vi.fn(async () => ({ branch_id: 'b1' }) as Branch),
-      findExplicitViewUserIds: vi.fn(async () => []),
+      findRealtimeViewUserIds: vi.fn(async () => []),
     } as unknown as RealtimeAccessBranchRepository,
     sessionsRepository: {
       findBranchIdBySessionId: vi.fn(async () => null),

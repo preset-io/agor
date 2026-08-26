@@ -227,7 +227,15 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     taskRepo: {
       findById: vi.fn(async () => (taskMetadata ? { metadata: taskMetadata } : null)),
     },
-    sessionRepo: { findById: vi.fn(async () => null) },
+    sessionRepo: {
+      findById: vi.fn(async (sessionId: string) => ({
+        session_id: sessionId,
+        branch_id: githubChannel.target_branch_id,
+        created_by: alignedUser.user_id,
+        status: SessionStatus.IDLE,
+        custom_context: { gateway_source: { channel_id: githubChannel.id } },
+      })),
+    },
   });
 
   return {

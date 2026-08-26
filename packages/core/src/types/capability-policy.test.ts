@@ -75,7 +75,7 @@ describe('capability policy proposal contract', () => {
       ...branchPolicy(),
       policy_kind: 'board_access',
       others: {
-        preset: 'custom',
+        preset: 'collaborator',
         capabilities: ['sessions.create'],
         fs_access: 'read',
       },
@@ -97,7 +97,7 @@ describe('capability policy proposal contract', () => {
     const issues = validateCapabilityPolicyDraft(
       branchPolicy({
         others: {
-          preset: 'custom',
+          preset: 'manager',
           capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own', 'terminal.open'],
           fs_access: 'none',
         },

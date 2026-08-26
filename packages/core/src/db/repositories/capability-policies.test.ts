@@ -7,10 +7,13 @@ import type {
   GroupID,
   UserID,
 } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { capabilityPolicyPresetCapabilities } from '../../types/capability-policy';
 import type { Database } from '../client';
+import { update } from '../database-wrapper';
+import { branchPermissionConfigs } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
@@ -193,6 +196,75 @@ describe('CapabilityPolicyRepository', () => {
       expect(
         (await policies.resolveBranchAccess(value.branchId, value.grouped)).capabilities
       ).toContain('branch.policy.manage');
+    }
+  );
+
+  dbTest(
+    'materializes realtime viewers with the same direct/group/Others precedence',
+    async ({ db }) => {
+      const value = await fixture(db);
+      const policies = new CapabilityPolicyRepository(db);
+      const branches = new BranchRepository(db);
+      const current = await policies.getBranchPolicy(value.branchId);
+      const config = structuredClone(current.override_config!);
+      config.access.sharing_mode = 'shared';
+      config.access.entries = [
+        // This explicit deny shadows the Readers group and permissive Others.
+        userEntry(value.direct, 'none'),
+        groupEntry(value.readers, 'collaborator', 'read'),
+      ];
+      config.access.others = {
+        preset: 'viewer',
+        capabilities: capabilityPolicyPresetCapabilities('branch_access', 'viewer') ?? [],
+        fs_access: 'none',
+      };
+      await policies.replaceBranchPolicy(
+        value.branchId,
+        { ...current, override_config: config },
+        value.owner
+      );
+
+      const viewers = await branches.findRealtimeViewUserIds(value.branchId);
+      expect(viewers).toEqual(
+        expect.arrayContaining([value.owner, value.grouped, value.unmatched, value.viewer])
+      );
+      expect(viewers).not.toContain(value.direct);
+    }
+  );
+
+  dbTest(
+    'keeps Private a hard SQL gate even if named rows survive outside the API',
+    async ({ db }) => {
+      const value = await fixture(db);
+      const policies = new CapabilityPolicyRepository(db);
+      const branches = new BranchRepository(db);
+      const current = await policies.getBranchPolicy(value.branchId);
+      const config = structuredClone(current.override_config!);
+      config.access.sharing_mode = 'shared';
+      config.access.entries = [userEntry(value.direct, 'viewer')];
+      const saved = await policies.replaceBranchPolicy(
+        value.branchId,
+        { ...current, override_config: config },
+        value.owner
+      );
+
+      // Normal writes clear entries when switching to Private. This simulates a
+      // damaged/manual row so the inventory predicate itself still fails closed.
+      await update(db, branchPermissionConfigs)
+        .set({ sharing_mode: 'private' })
+        .where(eq(branchPermissionConfigs.branch_id, value.branchId))
+        .run();
+
+      expect(saved.override_config?.access.entries).toHaveLength(1);
+      await expect(
+        policies.resolveBranchAccess(value.branchId, value.direct)
+      ).resolves.toMatchObject({ capabilities: [] });
+      await expect(
+        branches.findAccessibleById(value.branchId, value.direct, { minimumPermission: 'view' })
+      ).resolves.toBeNull();
+      await expect(branches.findRealtimeViewUserIds(value.branchId)).resolves.not.toContain(
+        value.direct
+      );
     }
   );
 

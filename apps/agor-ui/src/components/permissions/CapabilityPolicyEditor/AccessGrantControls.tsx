@@ -5,7 +5,7 @@ import type {
   CapabilityPolicyPresetId,
 } from '@agor/core/types';
 import { InfoCircleOutlined } from '@ant-design/icons';
-import { Alert, Button, Flex, Select, Tooltip, Typography, theme } from 'antd';
+import { Button, Flex, Select, Tooltip, Typography, theme } from 'antd';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
 import {
   applyCapabilityPreset,
@@ -67,25 +67,12 @@ export function AccessGrantControls<T extends GrantValue>({
                 disabled={disabled}
                 style={{ flex: 1, minWidth: 0 }}
                 onChange={(preset) => onChange(applyCapabilityPreset(value, context, preset))}
-                options={[
-                  ...context.presets.map((preset) => ({
-                    value: preset.id,
-                    label: preset.label,
-                    title: preset.summary,
-                    summary: preset.summary,
-                  })),
-                  ...(value.preset === 'custom'
-                    ? [
-                        {
-                          value: 'custom' as const,
-                          label: 'Custom — needs mapping',
-                          title: 'This imported combination must be mapped to one role.',
-                          summary: 'This imported combination must be mapped to one role.',
-                          disabled: true,
-                        },
-                      ]
-                    : []),
-                ]}
+                options={context.presets.map((preset) => ({
+                  value: preset.id,
+                  label: preset.label,
+                  title: preset.summary,
+                  summary: preset.summary,
+                }))}
                 optionRender={(option) => (
                   <Flex vertical gap={2} style={{ paddingBlock: token.paddingXXS }}>
                     <Typography.Text strong>{option.label}</Typography.Text>
@@ -128,14 +115,6 @@ export function AccessGrantControls<T extends GrantValue>({
           </Flex>
         )}
       </Flex>
-
-      {showRole && value.preset === 'custom' && (
-        <Alert
-          type="warning"
-          showIcon
-          description="Choose a supported role for this imported permission."
-        />
-      )}
     </Flex>
   );
 }

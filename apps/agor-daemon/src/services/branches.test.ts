@@ -204,7 +204,7 @@ const teammateContext = {
   },
 };
 
-function createServiceHarness() {
+function createServiceHarness(appRbacEnabled = true) {
   const boardObjectsService = {
     find: vi.fn(async () => ({ data: [] })),
     findByBranchId: vi.fn(async () => null),
@@ -246,7 +246,9 @@ function createServiceHarness() {
     },
   } as unknown as Application;
 
-  const service = new BranchesService(createTenantScopeTestDb() as never, app);
+  const service = new BranchesService(createTenantScopeTestDb() as never, app, {
+    appRbacEnabled,
+  });
   const branchRepo = (
     service as unknown as {
       branchRepo: BranchRepository;
@@ -1441,7 +1443,7 @@ describe('BranchesService.archiveOrDelete', () => {
       branch_id: branchId,
       others_can: 'none',
     } as never);
-    vi.spyOn(branchRepo, 'findExplicitViewUserIds').mockResolvedValue(['user-1' as UUID]);
+    vi.spyOn(branchRepo, 'findRealtimeViewUserIds').mockResolvedValue(['user-1' as UUID]);
     const repositoryDelete = vi.spyOn(branchRepo, 'delete').mockResolvedValue();
     markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
 
@@ -1523,7 +1525,7 @@ describe('BranchesService.archiveOrDelete', () => {
     vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
     vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch').mockResolvedValue(removedBranch);
     let currentViewers = [oldViewer];
-    vi.spyOn(branchRepo, 'findExplicitViewUserIds').mockImplementation(async () => currentViewers);
+    vi.spyOn(branchRepo, 'findRealtimeViewUserIds').mockImplementation(async () => currentViewers);
     vi.spyOn(branchRepo, 'delete').mockResolvedValue();
 
     markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
@@ -1545,6 +1547,42 @@ describe('BranchesService.archiveOrDelete', () => {
       mode: 'explicitUsers',
       userIds: [newViewer],
     });
+  });
+
+  it('captures a tenant-wide hard-delete tombstone when branch RBAC is disabled', async () => {
+    const { service, branchRepo, branchesService } = createServiceHarness(false);
+    const branchId = 'wt-delete-open-mode' as BranchID;
+    const removedBranch = {
+      branch_id: branchId,
+      name: 'WT Delete Open Mode',
+      path: '/tmp/wt-delete-open-mode',
+      archived: false,
+      environment_instance: { status: 'stopped' },
+    } as never;
+    const params = {
+      user: { user_id: 'user-1' as UUID },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(removedBranch);
+    vi.spyOn(branchRepo, 'findById').mockResolvedValue(removedBranch);
+    const findRealtimeVisibility = vi.spyOn(branchRepo, 'findRealtimeVisibilityBranch');
+    vi.spyOn(branchRepo, 'delete').mockResolvedValue();
+
+    markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
+    await service.archiveOrDelete(
+      branchId,
+      { metadataAction: 'delete', filesystemAction: 'preserved' },
+      params
+    );
+
+    const eventHook = branchesService.emit.mock.calls[0][2] as {
+      params: Record<string, unknown>;
+    };
+    expect(eventHook.params[BRANCH_REMOVAL_VISIBILITY_PARAM]).toEqual({
+      branchId,
+      mode: 'allAuthenticated',
+    });
+    expect(findRealtimeVisibility).not.toHaveBeenCalled();
   });
 
   it('rejects direct callers before any environment, token, executor, or metadata work', async () => {

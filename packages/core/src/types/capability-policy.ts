@@ -32,13 +32,7 @@ export type BoardPolicyCapability = (typeof BOARD_POLICY_CAPABILITIES)[number];
 export type BranchPolicyCapability = (typeof BRANCH_POLICY_CAPABILITIES)[number];
 export type CapabilityPolicyCapability = BoardPolicyCapability | BranchPolicyCapability;
 
-export type CapabilityPolicyPresetId =
-  | 'none'
-  | 'viewer'
-  | 'editor'
-  | 'collaborator'
-  | 'manager'
-  | 'custom';
+export type CapabilityPolicyPresetId = 'none' | 'viewer' | 'editor' | 'collaborator' | 'manager';
 
 export type CapabilityPolicyPrincipalRef =
   | { principal_type: 'user'; user_id: UserID }

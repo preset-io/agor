@@ -104,7 +104,7 @@ async function startReplica(adapterKey: string, instanceId: string): Promise<Rep
           ? { branch_id: 'branch-a' as never, others_can: 'none' }
           : null;
       },
-      async findExplicitViewUserIds() {
+      async findRealtimeViewUserIds() {
         return replicaVisibilityUsers;
       },
     },

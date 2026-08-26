@@ -28,7 +28,7 @@ export interface CapabilityControlGroup {
 }
 
 export interface CapabilityPresetDefinition {
-  id: Exclude<CapabilityPolicyPresetId, 'custom'>;
+  id: CapabilityPolicyPresetId;
   label: string;
   summary: string;
   capabilities: readonly CapabilityPolicyCapability[];
@@ -194,14 +194,16 @@ export function matchingCapabilityPreset(
       roleCapabilities.every((capability) => normalized.includes(capability))
     );
   });
-  return preset?.id ?? 'custom';
+  return preset?.id ?? 'none';
 }
 
 export function applyCapabilityPreset<
   T extends CapabilityPolicyEntryDraft | CapabilityPolicyOthersDraft,
 >(value: T, context: CapabilityPolicyEditorContext, presetId: CapabilityPolicyPresetId): T {
   const preset = getCapabilityPreset(context, presetId);
-  if (!preset) return { ...value, preset: 'custom' };
+  if (!preset) {
+    return { ...value, preset: 'none', capabilities: [], fs_access: 'none' };
+  }
   const fsAccess = context.supportsFilesystem && preset.id !== 'none' ? value.fs_access : 'none';
   const capabilities = capabilityPolicyPresetCapabilities(context.kind, preset.id, fsAccess) ?? [];
   return {

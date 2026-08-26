@@ -119,7 +119,7 @@ describe('branch hard-delete realtime hook', () => {
       isOwner: async () => true,
       resolveUserPermission: async () => 'all',
       findRealtimeVisibilityBranch: async () => branch,
-      findExplicitViewUserIds: async () => [ownerId, '00000000-0000-7000-8000-0000000000aa'],
+      findRealtimeViewUserIds: async () => [ownerId, '00000000-0000-7000-8000-0000000000aa'],
     } as unknown as RegisterHooksContext['branchRepository'];
     const hooks = captureRegisteredHooks(true, branchRepository).get('branches')?.before;
     if (!hooks) throw new Error('branches registers no before hooks');
@@ -153,7 +153,7 @@ describe('branch hard-delete realtime hook', () => {
       isOwner: async () => true,
       resolveUserPermission: async () => 'session',
       findRealtimeVisibilityBranch: async () => branch,
-      findExplicitViewUserIds: async () => [],
+      findRealtimeViewUserIds: async () => [],
     } as unknown as RegisterHooksContext['branchRepository'];
     const hooks = captureRegisteredHooks(false, branchRepository).get('branches')?.before;
     if (!hooks) throw new Error('branches registers no before hooks');
@@ -185,7 +185,7 @@ describe('branch hard-delete realtime hook', () => {
       isOwner: async () => false,
       resolveUserPermission: async () => 'session',
       findRealtimeVisibilityBranch,
-      findExplicitViewUserIds: async () => [],
+      findRealtimeViewUserIds: async () => [],
     } as unknown as RegisterHooksContext['branchRepository'];
     const hooks = captureRegisteredHooks(false, branchRepository).get('branches')?.before;
     if (!hooks) throw new Error('branches registers no before hooks');

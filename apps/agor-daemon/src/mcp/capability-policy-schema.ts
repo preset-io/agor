@@ -7,9 +7,12 @@ const principal = z.discriminatedUnion('principal_type', [
   z.object({ principal_type: z.literal('group'), group_id: id }),
 ]);
 const fsAccess = z.enum(['none', 'read', 'write']);
-const preset = z.enum(['none', 'viewer', 'editor', 'collaborator', 'manager', 'custom']);
 
 function policy(kind: 'board_access' | 'branch_access') {
+  const preset =
+    kind === 'board_access'
+      ? z.enum(['none', 'viewer', 'editor', 'manager'])
+      : z.enum(['none', 'viewer', 'collaborator', 'manager']);
   const capability = z.enum(
     kind === 'board_access' ? BOARD_POLICY_CAPABILITIES : BRANCH_POLICY_CAPABILITIES
   );

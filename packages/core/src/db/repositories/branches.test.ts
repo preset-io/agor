@@ -579,7 +579,6 @@ describe('BranchRepository.findAll', () => {
 
     await expect(branchRepo.findRealtimeVisibilityBranch(archived.branch_id)).resolves.toEqual({
       branch_id: archived.branch_id,
-      others_can: 'view',
     });
   });
 
