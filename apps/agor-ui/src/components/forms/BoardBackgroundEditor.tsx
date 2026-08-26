@@ -18,6 +18,7 @@ import type { AggregationColor } from 'antd/es/color-picker/color';
 import { useEffect, useRef, useState } from 'react';
 import { hasBoardStyling } from '../../utils/boardBackground';
 import { validateBoardCss } from '../../utils/sanitizeCss';
+import { FIELD_WIDTHS } from '../SettingsModal/panelPrimitives';
 import { BoardBackgroundPreview } from './BoardBackgroundPreview';
 import { ANIMATION_PRESETS, BACKGROUND_PRESETS, findPresetByValue } from './boardBackgroundPresets';
 
@@ -188,7 +189,9 @@ export function BoardBackgroundEditor({ form, resetSignal }: BoardBackgroundEdit
             </Typography.Text>
             <Select
               placeholder="Load an animation preset…"
-              style={{ width: '100%', marginBottom: 8 }}
+              // `short` to match the gradient-helper Select/InputNumber below it,
+              // instead of full-bleed for a fixed preset list.
+              style={{ width: '100%', marginBottom: 8, ...FIELD_WIDTHS.short }}
               allowClear
               showSearch
               optionFilterProp="label"
