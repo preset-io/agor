@@ -28,7 +28,7 @@ Sandbox mode automatically enables branch RBAC and the per-user filesystem sandb
 
 For each launch the daemon derives mount access from trusted tenant and branch authorization state:
 
-- the active branch is writable, read-only, or absent according to the principal's permission;
+- the active branch is writable, read-only, or absent according to the prompt actor's file access;
 - sibling worktrees and tenant homes are masked;
 - daemon state and external data roots are hidden;
 - the principal receives a persistent private home overlay;
@@ -38,7 +38,7 @@ For each launch the daemon derives mount access from trusted tenant and branch a
 
 ### Web terminals
 
-A branch terminal requires at least `session` permission. In sandbox mode it receives the same filesystem boundary as an agent launch. In `simple` mode it is a daemon-user shell and should be disabled on shared instances:
+A branch terminal requires Collaborator or Manager access plus `read` or `read/write` file access. In sandbox mode it receives the same filesystem boundary as an agent launch. In `simple` mode it is a daemon-user shell and should be disabled on shared instances:
 
 ```yaml
 execution:
@@ -51,7 +51,7 @@ execution:
 execution:
   unix_user_mode: delegated
   executor_command_template: >-
-    launcher --tenant {tenant_id} --user {user_id}
+    launcher --tenant {tenant_id} --user {user_id} --branch-access {branch_fs_access}
 ```
 
 Agor does not claim to prove an external launcher's isolation. The operator must ensure:
@@ -63,21 +63,40 @@ Agor does not claim to prove an external launcher's isolation. The operator must
 - terminal support is owner-affine or disabled;
 - network access is explicitly controlled.
 
-Prefer `{tenant_id}` and `{user_id}`. `{unix_user}` remains temporarily as an opaque, validated home key for compatible hosted launchers; it is not a Unix account and is never passed to sudo.
+Prefer `{tenant_id}`, `{user_id}`, and `{branch_fs_access}`. `{unix_user}` remains temporarily as an opaque, validated home key for compatible hosted launchers; it is not a Unix account and is never passed to sudo.
 
-## Branch permissions
+## Board and branch permissions
 
-`others_can` controls non-owner access:
+Every board and branch has one primary owner. Primary ownership cannot be reassigned.
 
-| Value     | Meaning                                      |
-| --------- | -------------------------------------------- |
-| `none`    | no access                                    |
-| `view`    | read branch, session, task, and message data |
-| `session` | create and prompt the caller's own sessions  |
-| `prompt`  | prompt sessions created by other users       |
-| `all`     | full branch/session control                  |
+A board has two separate settings:
 
-`session` is the safe collaboration default. Keep `dangerously_allow_session_sharing` off unless cross-user credential execution is explicitly intended.
+- **Board access** controls who can see and edit the canvas.
+- **Branch defaults** are the complete permission package inherited by branches on that board.
+
+A branch either inherits that entire package or uses one override copied from the current defaults. This includes session sharing—there is no separate inheritance switch for it.
+
+Board roles are **Viewer**, **Editor**, and **Manager**. Branch roles are:
+
+| Role         | Meaning                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| Viewer       | View the branch and its conversations                                                      |
+| Collaborator | View, create sessions, and prompt their own sessions                                       |
+| Manager      | Collaborator access plus branch, environment, session-lifecycle, and permission management |
+
+Branch file access is selected separately as `none`, `read`, or `read/write`. Collaborator and Manager can open a terminal only when file access is not `none`.
+
+Each entry names exactly one person or group. A person's direct entry overrides their group memberships; otherwise group permissions combine and the highest file access wins. **Others** is a fallback only for active members of the same workspace who match no person or group entry.
+
+Manager access never grants permission to prompt another person's session. Personal session sharing requires a workspace administrator to enable the feature and the session owner to name trusted people or groups. Shared prompts use the owner's home to preserve native agent-tool state, so review [the session-sharing warning](/faq#session-sharing-home-access) first.
+
+## Capability-policy upgrade
+
+The normalized board/branch permission migration is a coordinated offline cutover. Stop every daemon, take and test a complete database backup, then run the migration with only the new version installed.
+
+The migration maps legacy rules conservatively. Where an exact mapping is impossible, it grants equal or less access; foreign-session sharing starts empty and disabled. Some users may therefore have less access after the upgrade. Review important board and branch permission screens before resuming normal work.
+
+If a board or branch cannot be attributed to a primary owner, migration stops and lists the affected IDs. Resolve those resources manually rather than assigning an arbitrary owner. Old daemon versions cannot run against the migrated authority model. Rollback requires restoring the complete pre-migration database backup.
 
 ## Migrating from 0.24
 

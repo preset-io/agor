@@ -12,73 +12,167 @@ execution:
   unix_user_mode: sandbox # simple | sandbox | delegated
 ```
 
-| Mode        | Process                                | Filesystem boundary                            | Home selection                                  |
-| ----------- | -------------------------------------- | ---------------------------------------------- | ----------------------------------------------- |
-| `simple`    | Local daemon account                   | None; trusted local execution                  | Daemon home                                     |
-| `sandbox`   | Local daemon account inside bubblewrap | Fail-closed RBAC-derived mounts                | Tenant-scoped sandbox home or `filesystem_home` |
-| `delegated` | Explicit external command template     | Claimed and enforced by the external substrate | Opaque `unix_username` home key                 |
+| Mode        | Process                                | Filesystem boundary                | Home selection                                  |
+| ----------- | -------------------------------------- | ---------------------------------- | ----------------------------------------------- |
+| `simple`    | Local daemon account                   | None; trusted local execution      | Daemon home                                     |
+| `sandbox`   | Local daemon account inside bubblewrap | Fail-closed RBAC-derived mounts    | Tenant-scoped sandbox home or `filesystem_home` |
+| `delegated` | Explicit external command template     | Enforced by the external substrate | Opaque `unix_username` home key                 |
 
-`strict` and `insulated` were removed in 0.25. They are refused during config
-validation rather than silently downgraded. Agor no longer creates host users or
-POSIX groups, changes passwords, repairs ACLs, creates branch symlinks, or uses
+`strict` and `insulated` were removed in 0.25. Agor no longer creates host
+users/groups, changes passwords, repairs ACLs, creates branch symlinks, or uses
 sudo to launch executors.
 
-## Authorization boundary
+## Capability policy model
 
-`execution.branch_rbac` controls application permissions independently of
-execution mode. Tenant context and immutable Agor user IDs remain the trust
-source for branch/session/task access. `others_can`, `others_fs_access`, branch
-owners, Agor groups, board grants, and membership records are product RBAC—not
-host POSIX groups.
+When `execution.branch_rbac` is enabled, normalized capability-policy tables
+are the only authorization source. The historical owner/grant rows and
+`others_can` fields remain empty, fail-closed compatibility shells; runtime
+code does not read or write them.
 
-Sandbox mode implies application RBAC and projects the effective principal's
-`write | read | none` access into writable, read-only, or absent branch mounts.
-It also masks daemon state and sibling tenant homes. It must fail when Linux
-user namespaces or bubblewrap policy setup are unavailable; it never falls back
-to `simple`.
+Every board and branch has one immutable `primary_owner_user_id`. Ownership is
+not part of a policy entry and cannot be reassigned. Administrators retain the
+existing tenant-management bypass, but that does not change primary ownership.
 
-## Delegated execution
+### Boards
 
-Delegated mode requires an explicit `executor_command_template` and a
-`unix_username` on every launching user/session. Despite the legacy field and
-`{unix_user}` variable names, this value is only an opaque execution-home key.
-It is validated and stamped immutably on sessions; it is never resolved to a
-host uid or passed to sudo.
+A board stores two distinct policies:
 
-Prefer `{tenant_id}` and `{user_id}` in external launchers. The launcher owns
-runtime identity, storage, credentials, containment, cancellation, and tenant
-isolation. A shell command template is configuration, not proof of those
-properties.
+1. `board_access`: who can see or manage the canvas.
+2. `branch_template`: the complete branch permission package inherited by
+   branches on that board, including personal session-sharing rules.
 
-## Web terminals
+Board roles are cumulative:
 
-`execution.allow_web_terminal` controls availability and branch RBAC controls
-access. In `simple`, a terminal is a daemon-account shell and can reach daemon
-state. In `sandbox`, eligible terminals receive the same fail-closed filesystem
-policy as agents. A delegated deployment must provide an explicitly supported
-owner-affine terminal route or leave terminals unavailable.
+| Role    | Capabilities                                 |
+| ------- | -------------------------------------------- |
+| Viewer  | `board.view`                                 |
+| Editor  | Viewer + `board.edit`, `board.attach_branch` |
+| Manager | Editor + `board.policy.manage`               |
 
-## Database compatibility
+Board listing and canvas delivery consult `board_access` only. Seeing any
+branch on a board no longer makes the board visible. Within a visible board,
+branch objects are returned only when the caller can also view that branch.
 
-`branches.unix_group` and `repos.unix_group` are nullable historical columns for
-rollback/audit. Runtime repositories do not expose or interpret them and new
-records write `NULL`. Do not delete or rewrite historical migrations.
+### Branches
 
-`users.unix_username` and `sessions.unix_username` remain temporarily for the
-delegated home-key contract. Their effective namespace is tenant-local.
+A branch has one monolithic binding:
 
-## Migration
+- `inherit`: use its current board's entire `branch_template`.
+- `override`: use a branch-owned copy of the complete configuration.
 
-There is no published 0.24 bridge release. Perform an offline 0.24.7 → 0.25.1
-cutover using
-[`context/guides/migrate-strict-to-sandbox.md`](migrate-strict-to-sandbox.md)
-and the scripts from the 0.25.1 source tree. They are historical compatibility
-tools, not active host-management APIs.
+Switching to override starts from the current board template. A branch must be
+overridden before it can be moved to another board, which prevents a board move
+from silently changing access. Deleting a board materializes every inheriting
+branch as an override before the board reference is cleared.
+
+Branch roles are cumulative:
+
+| Role         | Capabilities                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------- |
+| Viewer       | `branch.view`                                                                               |
+| Collaborator | Viewer + `sessions.create`, `sessions.prompt_own`                                           |
+| Manager      | Collaborator + session lifecycle, branch/environment management, and `branch.policy.manage` |
+
+Manager does not imply permission to prompt another person's session or use
+their home. Filesystem access is a separate `none | read | write` dimension.
+Terminal access is derived: Collaborator or Manager plus non-`none` filesystem
+access. Sandbox mounts and `{branch_fs_access}` for delegated executors use the
+actual prompt actor's effective filesystem access, never the session owner's.
+
+### Principal resolution
+
+Each access row points to exactly one user or one group. Groups are tenant
+objects managed by administrators; membership changes take effect everywhere
+without rewriting policies.
+
+Effective access uses these deterministic rules:
+
+1. The immutable primary owner receives the owner capabilities.
+2. A direct user entry shadows every group entry for that user.
+3. Otherwise all active group entries are additive; filesystem access takes
+   the highest of `none < read < write`.
+4. `Others` applies only to an active, authenticated same-tenant member who has
+   no active direct or group match.
+
+Private policies carry no named entries or `Others` grant. Inactive/deleted
+principals remain visible for repair but do not become fallback matches.
+
+## Personal session sharing
+
+Personal session sharing is disabled by default at workspace level. When an
+administrator enables it, each session owner may grant named users/groups
+permission to prompt sessions that owner owns. Nobody, including a branch
+Manager, may edit or discard another owner's rule; those rules are read-only in
+the form.
+
+An allowed shared prompt preserves:
+
+- the original `session.created_by`, native conversation genealogy, and owner
+  home (`~/`);
+- the actual caller on `task.created_by`, prompt attribution, Agor-managed
+  environment variables, connector credentials, and private MCP visibility;
+- the caller's branch filesystem projection.
+
+The shared home remains a high-trust boundary. Home-resident tool credentials
+such as `~/.codex/auth.json`, native histories, dotfiles, and any files left by
+users or agents can still be read or changed by an agent operating there. See
+[`context/explorations/session-sharing.md`](../explorations/session-sharing.md).
+
+## Listing and point checks
+
+Set-based inventory predicates live in
+`packages/core/src/db/repositories/branch-access.ts`. Point checks resolve the
+same normalized policies through `CapabilityPolicyRepository`:
+
+- `resolveBoardAccess(boardId, userId)`
+- `resolveBranchAccess(branchId, userId)`
+- `resolveSessionPromptAuthority({ branch_id, caller_user_id, session_owner_user_id })`
+
+`BranchRepository.resolveUserAccess` is the compatibility projection used by
+existing hooks; it is backed exclusively by the normalized resolver. SQL list
+queries mirror direct-user shadowing, additive active groups, and unmatched
+`Others`. PostgreSQL RLS and tenant-qualified foreign keys remain an additional
+boundary, not a substitute for application authorization.
+
+## Execution modes
+
+Sandbox mode implies application RBAC and projects effective `write | read |
+none` access into writable, read-only, or absent branch mounts. It masks daemon
+state and sibling tenant homes and fails closed when bubblewrap policy setup is
+unavailable.
+
+Delegated mode requires an explicit `executor_command_template`. Prefer
+`{tenant_id}`, `{user_id}`, and `{branch_fs_access}`. `{unix_user}` remains an
+opaque compatibility home key. The launcher owns runtime identity, storage,
+credentials, containment, cancellation, and tenant isolation.
+
+In `simple` mode, agents and terminals run as the daemon account and application
+RBAC cannot provide filesystem isolation. Use it only on trusted installations.
+
+## Migration and rollback
+
+The capability remodel is an offline, big-bang migration. SQLite and
+PostgreSQL preflight every board/branch primary owner, abort with the unresolved
+IDs when attribution is impossible, create normalized policies, then empty the
+legacy authority tables/fields. Backfill is deliberately equal-or-less:
+
+- creator, then an existing owner, is used for primary-owner attribution;
+- additional owners become Managers;
+- legacy prompt-like grants become Collaborators, not personal home-sharing;
+- named board groups become Viewers;
+- personal sharing starts empty and the workspace gate starts off.
+
+Old daemon versions must never run after this migration. Rollback means stopping
+all new daemons and restoring the complete pre-migration database backup; the
+historical columns are not a dual-read rollback path.
 
 ## Key implementation files
 
-- `packages/core/src/config/types.ts` and `config-manager.ts`
-- `apps/agor-daemon/src/utils/spawn-executor.ts`
-- `apps/agor-daemon/src/utils/executor-delegated-identity.ts`
-- `packages/core/src/unix/delegated-home-key.ts` (home-key validation only)
+- `packages/core/src/types/capability-policy.ts`
+- `packages/core/src/db/repositories/capability-policies.ts`
+- `packages/core/src/db/repositories/branch-access.ts`
 - `packages/core/src/db/schema.{sqlite,postgres}.ts`
+- `apps/agor-daemon/src/services/capability-policies.ts`
+- `apps/agor-daemon/src/utils/branch-authorization.ts`
+- `apps/agor-daemon/src/utils/spawn-executor.ts`
+- `apps/agor-ui/src/components/permissions/CapabilityPolicyEditor/`

@@ -66,4 +66,10 @@ deleting the relationship. Spawned child and `btw` callbacks remain one-shot.
 
 ## Security note for spawn/fork
 
-Cross-user `agor_sessions_spawn` / `agor_sessions_prompt(mode:"fork"|"subsession")` attribution depends on the branch's `dangerously_allow_session_sharing` flag. See [`context/explorations/session-sharing.md`](../explorations/session-sharing.md) and AGENTS.md "Branch-Level Flags".
+Creating a new session attributes that new conversation to the caller. Continuing
+an existing foreign-owned native conversation is different: it requires
+`sessions.prompt_own` on the branch, the tenant-level personal-sharing gate,
+and an owner-authored user/group grant. The original session owner and genealogy
+are preserved, while the task, managed credentials, MCP visibility, and branch
+filesystem projection use the actual caller. See
+[`context/explorations/session-sharing.md`](../explorations/session-sharing.md).

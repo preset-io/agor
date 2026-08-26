@@ -62,14 +62,14 @@ Each branch is fully isolated. Changes in one don't affect another. AI agents ca
 
 A branch is a filesystem directory plus a database record. The record tracks:
 
-| Field                           | Purpose                                             |
-| ------------------------------- | --------------------------------------------------- |
-| `name`                          | Human-readable label shown on the card              |
-| `branch`                        | Git branch checked out in the working directory     |
-| `issue_url`, `pull_request_url` | GitHub linkage, auto-injected into zone prompts    |
-| `owners` / `others_can`         | RBAC permissions (when branch RBAC is enabled)      |
-| `board_id` + `(x, y)`           | Where the card lives on the canvas                  |
-| `environment`                   | Per-branch dev environment (start/stop, ports, URL) |
+| Field                              | Purpose                                             |
+| ---------------------------------- | --------------------------------------------------- |
+| `name`                             | Human-readable label shown on the card              |
+| `branch`                           | Git branch checked out in the working directory     |
+| `issue_url`, `pull_request_url`    | GitHub linkage, auto-injected into zone prompts     |
+| primary owner + permission package | RBAC roles, file access, and session sharing        |
+| `board_id` + `(x, y)`              | Where the card lives on the canvas                  |
+| `environment`                      | Per-branch dev environment (start/stop, ports, URL) |
 
 <img
   src="/screenshots/branch-modal.png"
@@ -249,15 +249,21 @@ The branch is also where several other features attach:
 
 ## Permissions (RBAC)
 
-When `execution.branch_rbac: true` is set, branches enforce ownership and a per-tier `others_can` permission:
+When `execution.branch_rbac: true` is set, every branch has one primary owner and a complete permission package. Primary ownership cannot be reassigned.
 
-| Tier      | What others can do                                                                           |
-| --------- | -------------------------------------------------------------------------------------------- |
-| `none`    | No access, completely private to owners                                                     |
-| `view`    | Read branches, sessions, tasks, messages                                                     |
-| `session` | **Default.** Create their own sessions on this branch                                        |
-| `prompt`  | Prompt any session, including others' (but the session still runs as its creator's identity) |
-| `all`     | Full control                                                                                 |
+A branch can inherit its board's defaults or override the whole package. Choosing an override starts with a copy of the current defaults, so you only need to change the exceptions. Moving an inherited branch to another board is blocked until you choose an override; this prevents a move from silently changing access.
+
+| Role         | What it allows                                                                      |
+| ------------ | ----------------------------------------------------------------------------------- |
+| Viewer       | View the branch and its conversations                                               |
+| Collaborator | Viewer access plus creating and prompting their own sessions                        |
+| Manager      | Collaborator access plus branch, environment, session-lifecycle, and access control |
+
+File access is selected separately as `none`, `read`, or `read/write`. A Collaborator or Manager can open a terminal only with `read` or `read/write` file access.
+
+Each access row names one person or group. A direct person entry wins over group memberships. Otherwise group entries combine and the highest file access wins. **Others** applies only to active members of the workspace who have no direct or group match.
+
+Manager does not mean “prompt as anyone.” Prompting another person's existing session requires that owner to grant personal session sharing and a workspace administrator to enable the feature. Because continuing the native conversation uses the owner's home, read [the session-sharing FAQ](/faq#session-sharing-home-access) before enabling it.
 
 See **[Security](/security)** for deployment modes and the trust boundary discussion.
 
