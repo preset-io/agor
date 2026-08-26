@@ -1453,7 +1453,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     <>
       <PanelHeader title={PANEL_META.profile.title} />
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('profile')}>
-        <FieldRow label="Name" name="name">
+        <FieldRow label="Name" name="name" width="short">
           <Input placeholder="John Doe" />
         </FieldRow>
 
@@ -1461,6 +1461,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           label="Email"
           required
           name="email"
+          width="medium"
           rules={[
             { required: true, message: 'Please enter an email' },
             { type: 'email', message: 'Please enter a valid email' },
