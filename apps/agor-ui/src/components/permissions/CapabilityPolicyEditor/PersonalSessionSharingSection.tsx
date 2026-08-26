@@ -7,7 +7,19 @@ import type {
 } from '@agor/core/types';
 import { capabilityPolicyPrincipalKey, validateBranchSessionSharingDraft } from '@agor/core/types';
 import { DeleteOutlined, SafetyCertificateOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Divider, Flex, Popconfirm, Switch, Typography, theme } from 'antd';
+import {
+  Alert,
+  Button,
+  Card,
+  Collapse,
+  Divider,
+  Flex,
+  Popconfirm,
+  Switch,
+  Typography,
+  theme,
+} from 'antd';
+import { useEffect, useState } from 'react';
 import { Tag } from '@/components/Tag';
 import { PrincipalEntryPicker } from './PrincipalEntryPicker';
 import { PrincipalIdentity } from './PrincipalIdentity';
@@ -48,6 +60,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
   scope,
 }) => {
   const { token } = theme.useToken();
+  const [expanded, setExpanded] = useState(false);
   const descriptorByKey = new Map(
     principals.map((principal) => [capabilityPolicyPrincipalKey(principal.principal), principal])
   );
@@ -86,6 +99,10 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
       ? 'Default for my sessions in branches using these settings.'
       : 'For my sessions in this branch.';
 
+  useEffect(() => {
+    if (issues.length > 0) setExpanded(true);
+  }, [issues.length]);
+
   const updateCurrentRule = (nextRule: BranchSessionSharingOwnerRuleDraft) => {
     const existingIndex = value.owner_rules.findIndex(
       (rule) => rule.session_owner_user_id === currentUserId
@@ -96,204 +113,221 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
     onChange({ ...value, owner_rules: ownerRules });
   };
 
-  return (
-    <Card
-      size="small"
-      title={
-        <Flex align="center" gap={token.paddingXS} wrap>
-          <SafetyCertificateOutlined aria-hidden />
-          <span>Session sharing</span>
-          <Tag color="error">High risk</Tag>
-        </Flex>
-      }
-    >
-      <Flex vertical gap={token.paddingMD}>
-        {!workspaceEnabled && (
-          <Alert
-            type="warning"
-            showIcon
-            description="Disabled in Workspace Preferences. Existing rules have no effect."
-          />
-        )}
+  const content = (
+    <Flex vertical gap={token.paddingMD}>
+      {!workspaceEnabled && (
+        <Alert
+          type="warning"
+          showIcon
+          description="Disabled in Workspace Preferences. Existing rules have no effect."
+        />
+      )}
 
-        {issues.length > 0 && (
+      {issues.length > 0 && (
+        <Alert
+          type="error"
+          showIcon
+          description={
+            <ul style={{ margin: 0, paddingInlineStart: token.paddingLG }}>
+              {issues.map((issue, index) => (
+                <li key={`${issue.code}:${issue.owner_user_id}:${issue.grant_id ?? index}`}>
+                  {issue.message}
+                </li>
+              ))}
+            </ul>
+          }
+        />
+      )}
+
+      <Flex justify="space-between" align="center" gap={token.paddingMD} wrap>
+        <Flex vertical gap={token.paddingXXS} style={{ flex: 1, minWidth: 240 }}>
+          <Typography.Text strong>My sessions</Typography.Text>
+          <Typography.Text type="secondary">{scopeDescription}</Typography.Text>
+        </Flex>
+        <Switch
+          checked={currentRule.enabled}
+          disabled={!workspaceEnabled || readOnly}
+          aria-label={`Allow others to use sessions owned by ${currentUser?.display_name ?? 'me'}`}
+          onChange={(enabled) =>
+            updateCurrentRule({
+              ...currentRule,
+              enabled,
+              grantees: enabled ? currentRule.grantees : [],
+            })
+          }
+        />
+      </Flex>
+
+      {currentRule.enabled && (
+        <Flex vertical gap={token.paddingSM}>
           <Alert
             type="error"
             showIcon
+            icon={<WarningOutlined />}
             description={
-              <ul style={{ margin: 0, paddingInlineStart: token.paddingLG }}>
-                {issues.map((issue, index) => (
-                  <li key={`${issue.code}:${issue.owner_user_id}:${issue.grant_id ?? index}`}>
-                    {issue.message}
-                  </li>
-                ))}
-              </ul>
+              <Typography.Text>
+                Listed people can prompt your sessions from your home (
+                <Typography.Text code>~/</Typography.Text>). Prompts identify the caller and use
+                their Agor-managed environment variables and credentials, but the agent may access
+                anything already in your home—including other session data and tool credential
+                files. Use this only with people you trust.{' '}
+                <Typography.Link
+                  href={SESSION_SHARING_FAQ_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Learn more in the FAQ.
+                </Typography.Link>
+              </Typography.Text>
             }
           />
-        )}
 
-        <Flex justify="space-between" align="center" gap={token.paddingMD} wrap>
-          <Flex vertical gap={token.paddingXXS} style={{ flex: 1, minWidth: 240 }}>
-            <Typography.Text strong>My sessions</Typography.Text>
-            <Typography.Text type="secondary">{scopeDescription}</Typography.Text>
-          </Flex>
-          <Switch
-            checked={currentRule.enabled}
-            disabled={!workspaceEnabled || readOnly}
-            aria-label={`Allow others to use sessions owned by ${currentUser?.display_name ?? 'me'}`}
-            onChange={(enabled) =>
-              updateCurrentRule({
-                ...currentRule,
-                enabled,
-                grantees: enabled ? currentRule.grantees : [],
-              })
-            }
-          />
-        </Flex>
-
-        {currentRule.enabled && (
-          <Flex vertical gap={token.paddingSM}>
-            <Alert
-              type="error"
-              showIcon
-              icon={<WarningOutlined />}
-              description={
-                <Typography.Text>
-                  Listed people can prompt your sessions from your home (
-                  <Typography.Text code>~/</Typography.Text>). Prompts identify the caller and use
-                  their Agor-managed environment variables and credentials, but the agent may access
-                  anything already in your home—including other session data and tool credential
-                  files. Use this only with people you trust.{' '}
-                  <Typography.Link
-                    href={SESSION_SHARING_FAQ_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Learn more in the FAQ.
-                  </Typography.Link>
-                </Typography.Text>
-              }
-            />
-
-            {!readOnly && (
-              <Flex vertical gap={token.paddingXXS}>
-                <Typography.Text strong>Who may use my sessions</Typography.Text>
-                <PrincipalEntryPicker
-                  principals={availablePrincipals}
-                  ariaLabel="Add one person or group to my session sharing"
-                  placeholder="Add one trusted person or group"
-                  onAdd={(principal) =>
-                    updateCurrentRule({
-                      ...currentRule,
-                      grantees: [...currentRule.grantees, makeGrant(principal)],
-                    })
-                  }
-                />
-                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                  They must also have branch access.
-                </Typography.Text>
-              </Flex>
-            )}
-
-            {currentRule.grantees.length === 0 ? (
-              <Typography.Text type="secondary">No one added yet.</Typography.Text>
-            ) : (
-              <Flex vertical gap={token.paddingXS}>
-                {currentRule.grantees.map((grant) => {
-                  const descriptor = descriptorByKey.get(
-                    capabilityPolicyPrincipalKey(grant.principal)
-                  );
-                  const label = descriptor?.display_name ?? 'Unavailable principal';
-                  return (
-                    <Flex
-                      key={grant.grant_id}
-                      align="center"
-                      justify="space-between"
-                      gap={token.paddingSM}
-                      style={{
-                        border: `1px solid ${token.colorBorderSecondary}`,
-                        borderRadius: token.borderRadius,
-                        padding: token.paddingXS,
-                      }}
-                    >
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <PrincipalIdentity descriptor={descriptor} compact />
-                      </div>
-                      {!readOnly && (
-                        <Popconfirm
-                          title={`Stop sharing with ${label}?`}
-                          okText="Remove sharing"
-                          okButtonProps={{ danger: true }}
-                          onConfirm={() =>
-                            updateCurrentRule({
-                              ...currentRule,
-                              grantees: currentRule.grantees.filter(
-                                (candidate) => candidate.grant_id !== grant.grant_id
-                              ),
-                            })
-                          }
-                        >
-                          <Button
-                            danger
-                            type="text"
-                            icon={<DeleteOutlined />}
-                            aria-label={`Stop sharing my sessions with ${label}`}
-                          />
-                        </Popconfirm>
-                      )}
-                    </Flex>
-                  );
-                })}
-              </Flex>
-            )}
-
-            {hasGroupGrant && (
-              <Alert
-                type="warning"
-                showIcon
-                description="Group membership changes this access without another branch edit."
+          {!readOnly && (
+            <Flex vertical gap={token.paddingXXS}>
+              <Typography.Text strong>Who may use my sessions</Typography.Text>
+              <PrincipalEntryPicker
+                principals={availablePrincipals}
+                ariaLabel="Add one person or group to my session sharing"
+                placeholder="Add one trusted person or group"
+                onAdd={(principal) =>
+                  updateCurrentRule({
+                    ...currentRule,
+                    grantees: [...currentRule.grantees, makeGrant(principal)],
+                  })
+                }
               />
-            )}
-          </Flex>
-        )}
+              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                They must also have branch access.
+              </Typography.Text>
+            </Flex>
+          )}
 
-        <Divider style={{ marginBlock: 0 }} />
-
-        <Flex vertical gap={token.paddingXS}>
-          <Flex align="center" gap={token.paddingXS} wrap>
-            <Typography.Text strong>Other people’s sessions</Typography.Text>
-            <Tag>Read only</Tag>
-          </Flex>
-          {otherRules.length === 0 ? (
-            <Typography.Text type="secondary">No one else is sharing sessions.</Typography.Text>
+          {currentRule.grantees.length === 0 ? (
+            <Typography.Text type="secondary">No one added yet.</Typography.Text>
           ) : (
             <Flex vertical gap={token.paddingXS}>
-              {otherRules.map((rule) => {
-                const owner = principalDescriptor(principals, rule.session_owner_user_id);
+              {currentRule.grantees.map((grant) => {
+                const descriptor = descriptorByKey.get(
+                  capabilityPolicyPrincipalKey(grant.principal)
+                );
+                const label = descriptor?.display_name ?? 'Unavailable principal';
                 return (
-                  <Card
-                    key={rule.session_owner_user_id}
-                    size="small"
-                    title={`${owner?.display_name ?? 'Unavailable owner'} shares with`}
+                  <Flex
+                    key={grant.grant_id}
+                    align="center"
+                    justify="space-between"
+                    gap={token.paddingSM}
+                    style={{
+                      border: `1px solid ${token.colorBorderSecondary}`,
+                      borderRadius: token.borderRadius,
+                      padding: token.paddingXS,
+                    }}
                   >
-                    <Flex vertical gap={token.paddingXS}>
-                      {rule.grantees.map((grant) => (
-                        <PrincipalIdentity
-                          key={grant.grant_id}
-                          descriptor={descriptorByKey.get(
-                            capabilityPolicyPrincipalKey(grant.principal)
-                          )}
-                          compact
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <PrincipalIdentity descriptor={descriptor} compact />
+                    </div>
+                    {!readOnly && (
+                      <Popconfirm
+                        title={`Stop sharing with ${label}?`}
+                        okText="Remove sharing"
+                        okButtonProps={{ danger: true }}
+                        onConfirm={() =>
+                          updateCurrentRule({
+                            ...currentRule,
+                            grantees: currentRule.grantees.filter(
+                              (candidate) => candidate.grant_id !== grant.grant_id
+                            ),
+                          })
+                        }
+                      >
+                        <Button
+                          danger
+                          type="text"
+                          icon={<DeleteOutlined />}
+                          aria-label={`Stop sharing my sessions with ${label}`}
                         />
-                      ))}
-                    </Flex>
-                  </Card>
+                      </Popconfirm>
+                    )}
+                  </Flex>
                 );
               })}
             </Flex>
           )}
+
+          {hasGroupGrant && (
+            <Alert
+              type="warning"
+              showIcon
+              description="Group membership changes this access without another branch edit."
+            />
+          )}
         </Flex>
+      )}
+
+      <Divider style={{ marginBlock: 0 }} />
+
+      <Flex vertical gap={token.paddingXS}>
+        <Flex align="center" gap={token.paddingXS} wrap>
+          <Typography.Text strong>Other people’s sessions</Typography.Text>
+          <Tag>Read only</Tag>
+        </Flex>
+        {otherRules.length === 0 ? (
+          <Typography.Text type="secondary">No one else is sharing sessions.</Typography.Text>
+        ) : (
+          <Flex vertical gap={token.paddingXS}>
+            {otherRules.map((rule) => {
+              const owner = principalDescriptor(principals, rule.session_owner_user_id);
+              return (
+                <Card
+                  key={rule.session_owner_user_id}
+                  size="small"
+                  title={`${owner?.display_name ?? 'Unavailable owner'} shares with`}
+                >
+                  <Flex vertical gap={token.paddingXS}>
+                    {rule.grantees.map((grant) => (
+                      <PrincipalIdentity
+                        key={grant.grant_id}
+                        descriptor={descriptorByKey.get(
+                          capabilityPolicyPrincipalKey(grant.principal)
+                        )}
+                        compact
+                      />
+                    ))}
+                  </Flex>
+                </Card>
+              );
+            })}
+          </Flex>
+        )}
       </Flex>
-    </Card>
+    </Flex>
+  );
+
+  const status = !workspaceEnabled
+    ? 'Disabled by workspace'
+    : currentRule.enabled
+      ? `My sessions: On${currentRule.grantees.length > 0 ? ` · ${currentRule.grantees.length} entries` : ''}`
+      : 'My sessions: Off';
+
+  return (
+    <Collapse
+      size="small"
+      activeKey={expanded ? ['session-sharing'] : []}
+      onChange={(keys) => setExpanded(keys.includes('session-sharing'))}
+      items={[
+        {
+          key: 'session-sharing',
+          label: (
+            <Flex align="center" gap={token.paddingXS} wrap>
+              <SafetyCertificateOutlined aria-hidden />
+              <Typography.Text strong>Session sharing</Typography.Text>
+              <Tag color="error">High risk</Tag>
+            </Flex>
+          ),
+          extra: <Typography.Text type="secondary">{status}</Typography.Text>,
+          children: content,
+        },
+      ]}
+    />
   );
 };

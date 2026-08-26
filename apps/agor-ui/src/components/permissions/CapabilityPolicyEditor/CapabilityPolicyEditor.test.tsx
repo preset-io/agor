@@ -90,6 +90,8 @@ describe('shared capability policy forms', () => {
     expect(screen.getByRole('radio', { name: 'Board defaults' })).toBeChecked();
     expect(screen.getByText('Branch access')).toBeInTheDocument();
     expect(screen.queryByLabelText('Branch access sharing mode')).not.toBeInTheDocument();
+    expect(screen.queryByText('My sessions')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Session sharing/ }));
     expect(
       screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
     ).toBeDisabled();
@@ -230,7 +232,9 @@ describe('shared capability policy forms', () => {
     renderWithTheme(<Harness />);
 
     fireEvent.click(screen.getByRole('tab', { name: /Branch defaults/ }));
-    expect(await screen.findByText('Session sharing')).toBeInTheDocument();
+    const sessionSharing = await screen.findByRole('button', { name: /Session sharing/ });
+    expect(screen.queryByText('My sessions')).not.toBeInTheDocument();
+    fireEvent.click(sessionSharing);
     expect(screen.getByText('My sessions')).toBeInTheDocument();
     expect(screen.getByText(/branches using these settings/)).toBeInTheDocument();
     expect(
@@ -254,6 +258,11 @@ describe('shared capability policy forms', () => {
     };
     renderWithTheme(<Harness />);
 
+    expect(screen.getByRole('button', { name: /Session sharing/ })).toHaveAttribute(
+      'aria-expanded',
+      'false'
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Session sharing/ }));
     expect(screen.getByText('Seb V. shares with')).toBeInTheDocument();
     expect(screen.getByText('GTM')).toBeInTheDocument();
     expect(screen.getByText('Other people’s sessions')).toBeInTheDocument();
