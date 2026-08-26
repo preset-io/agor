@@ -1,4 +1,7 @@
-const FOCUS_CHAT_STORAGE_KEY = 'agor.session.simple-chat';
+// v2 deliberately ignores the legacy key. The chat-workspace route used to
+// write the old key automatically, leaving every ordinary session stuck in
+// focus mode after the user navigated away.
+const FOCUS_CHAT_STORAGE_KEY = 'agor.session.focus-chat.v2';
 const FOCUS_CHAT_EVENT = 'agor:focus-chat-preference';
 
 export function readFocusChatPreference(): boolean {

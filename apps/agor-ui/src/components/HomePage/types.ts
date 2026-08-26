@@ -11,7 +11,7 @@ export interface HomePageProps {
   onSessionClick: (sessionId: string) => void;
   onChatWorkspaceSessionClick: (sessionId: string) => void;
   onShowChatSessionOnBoard?: (sessionId: string) => void;
-  onManageTeammateChats: () => void;
+  onManageTeammateChats: (sessionId?: string) => void;
   chatWorkspace?: boolean;
   activeSessionId?: string | null;
   onExitChatWorkspace?: () => void;

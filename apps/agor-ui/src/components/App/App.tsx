@@ -66,7 +66,6 @@ import {
 } from '../../store/selectors';
 import type { AgenticToolOption } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
-import { writeFocusChatPreference } from '../../utils/focusChatPreference';
 import { useThemedMessage } from '../../utils/message';
 import { resolveQuickStartMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
 import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
@@ -746,7 +745,6 @@ export const App: React.FC<AppProps> = ({
 
   const handleChatWorkspaceSessionClick = useCallback(
     (sessionId: string) => {
-      writeFocusChatPreference(true);
       routeNavigate(`/chats/${shortId(sessionId)}/`);
     },
     [routeNavigate]
@@ -1749,6 +1747,7 @@ export const App: React.FC<AppProps> = ({
                               onOpenChatWorkspace={
                                 isChatWorkspaceSurface ? undefined : handleChatWorkspaceSessionClick
                               }
+                              preferFocusChat={isChatWorkspaceSurface}
                               uploadPolicy={uploadPolicy}
                             />
                           </div>

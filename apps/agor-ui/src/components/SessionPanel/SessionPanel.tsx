@@ -303,6 +303,8 @@ export interface SessionPanelProps {
   onClose: () => void;
   onPinToChatCollection?: (sessionId: string) => void;
   onOpenChatWorkspace?: (sessionId: string) => void;
+  /** Start focused inside the dedicated chat workspace without changing the user's global choice. */
+  preferFocusChat?: boolean;
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
@@ -316,6 +318,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   onClose,
   onPinToChatCollection,
   onOpenChatWorkspace,
+  preferFocusChat = false,
   uploadPolicy,
 }) => {
   const { token } = theme.useToken();
@@ -323,8 +326,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
   const recenterMap = useRecenterMap();
-  const [simpleChat, setSimpleChat] = React.useState(readFocusChatPreference);
-  React.useEffect(() => subscribeToFocusChatPreference(setSimpleChat), []);
+  const [storedSimpleChat, setStoredSimpleChat] = React.useState(readFocusChatPreference);
+  const simpleChat = preferFocusChat || storedSimpleChat;
+  React.useEffect(() => subscribeToFocusChatPreference(setStoredSimpleChat), []);
   const toggleSimpleChat = React.useCallback(() => {
     writeFocusChatPreference(!simpleChat);
   }, [simpleChat]);
@@ -1605,7 +1609,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
                 />
               </Tooltip>
             )}
-            {simpleChat && (
+            {simpleChat && !preferFocusChat && (
               <Tooltip title="Show full session details">
                 <Button
                   type="text"

@@ -3,6 +3,7 @@ import { getTeammateConfig } from '@agor-live/client';
 import {
   AimOutlined,
   ArrowLeftOutlined,
+  CheckOutlined,
   DownOutlined,
   FolderOpenOutlined,
   PlusOutlined,
@@ -23,7 +24,8 @@ const { Text, Title } = Typography;
 interface ChatSidebarBranch {
   key: string;
   branch: Branch;
-  sessions: Session[];
+  sessions: Array<{ session: Session; pinned: boolean }>;
+  pinnedCount: number;
 }
 
 interface ChatSidebarCollection {
@@ -38,7 +40,7 @@ export interface HomeChatWorkspaceNavProps {
   currentUserId?: string;
   activeSessionId?: string | null;
   onSessionClick: (sessionId: string) => void;
-  onManage: () => void;
+  onManage: (sessionId?: string) => void;
   onExit: () => void;
   onShowOnBoard: (sessionId: string) => void;
 }
@@ -92,11 +94,25 @@ export function HomeChatWorkspaceNav({
             (total, sessions) => total + sessions.length,
             0
           ),
-          branches: Array.from(sessionsByBranch.entries()).map(([branchId, sessions]) => ({
-            key: `branch:${collection.collection_id}:${branchId}`,
-            branch: branchById.get(branchId)!,
-            sessions,
-          })),
+          branches: Array.from(sessionsByBranch.entries()).map(([branchId, pinnedSessions]) => {
+            const pinnedIds = new Set(pinnedSessions.map((session) => session.session_id));
+            const sessions = Array.from(sessionById.values())
+              .filter(
+                (session) =>
+                  !session.archived &&
+                  session.branch_id === branchId &&
+                  branchById.has(session.branch_id)
+              )
+              .sort((left, right) => Date.parse(right.last_updated) - Date.parse(left.last_updated))
+              .slice(0, 50)
+              .map((session) => ({ session, pinned: pinnedIds.has(session.session_id) }));
+            return {
+              key: `branch:${collection.collection_id}:${branchId}`,
+              branch: branchById.get(branchId)!,
+              sessions,
+              pinnedCount: pinnedSessions.length,
+            };
+          }),
         };
       }),
     [branchById, preferences.collections, sessionById]
@@ -178,7 +194,7 @@ export function HomeChatWorkspaceNav({
               type="text"
               aria-label="Manage chat collections"
               icon={<SettingOutlined />}
-              onClick={onManage}
+              onClick={() => onManage()}
             />
           </Flex>
         </Flex>
@@ -224,7 +240,7 @@ export function HomeChatWorkspaceNav({
 
                     {collectionExpanded && (
                       <Flex vertical gap={5} style={{ padding: '6px 0 0 8px' }}>
-                        {collection.branches.map(({ key, branch, sessions }) => {
+                        {collection.branches.map(({ key, branch, sessions, pinnedCount }) => {
                           const branchExpanded = expandedKeys.has(key);
                           const teammate = getTeammateConfig(branch);
                           return (
@@ -257,57 +273,97 @@ export function HomeChatWorkspaceNav({
                                   {teammate?.displayName || branch.name}
                                 </Text>
                                 <Text type="secondary" style={{ fontSize: 10 }}>
-                                  {sessions.length}
+                                  {pinnedCount}/{sessions.length}
                                 </Text>
                               </button>
 
                               {branchExpanded && (
                                 <Flex vertical gap={2} style={{ padding: '2px 0 2px 20px' }}>
-                                  {sessions.map((session) => {
+                                  {sessions.map(({ session, pinned }) => {
                                     const active = session.session_id === activeSessionId;
                                     return (
-                                      <button
+                                      <div
                                         key={session.session_id}
-                                        type="button"
-                                        aria-current={active ? 'page' : undefined}
-                                        onClick={() => onSessionClick(session.session_id)}
                                         style={{
                                           width: '100%',
                                           minHeight: 34,
                                           display: 'grid',
-                                          gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+                                          gridTemplateColumns: 'minmax(0, 1fr) auto',
                                           alignItems: 'center',
-                                          gap: 7,
-                                          padding: '6px 8px',
-                                          border: 0,
+                                          gap: 4,
+                                          padding: '2px 4px 2px 8px',
                                           borderRadius: token.borderRadiusLG,
                                           background: active ? token.colorPrimaryBg : 'transparent',
                                           color: active ? token.colorPrimaryText : token.colorText,
-                                          cursor: 'pointer',
-                                          textAlign: 'left',
                                         }}
                                       >
-                                        <StatusDot status={session.status} />
-                                        <Text
-                                          ellipsis
-                                          strong={active}
+                                        <button
+                                          type="button"
+                                          aria-current={active ? 'page' : undefined}
+                                          onClick={() =>
+                                            pinned
+                                              ? onSessionClick(session.session_id)
+                                              : onManage(session.session_id)
+                                          }
                                           style={{
-                                            minWidth: 0,
-                                            fontSize: 12,
+                                            minHeight: 30,
+                                            display: 'grid',
+                                            gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+                                            alignItems: 'center',
+                                            gap: 7,
+                                            padding: 0,
+                                            border: 0,
+                                            background: 'transparent',
                                             color: 'inherit',
+                                            cursor: 'pointer',
+                                            textAlign: 'left',
                                           }}
                                         >
-                                          {getSessionDisplayTitle(session, {
-                                            includeAgentFallback: true,
-                                          })}
-                                        </Text>
-                                        <Text
-                                          type="secondary"
-                                          style={{ fontSize: 10, whiteSpace: 'nowrap' }}
-                                        >
-                                          {formatRelativeTimeSafe(session.last_updated)}
-                                        </Text>
-                                      </button>
+                                          <StatusDot status={session.status} />
+                                          <Text
+                                            ellipsis
+                                            strong={active || pinned}
+                                            style={{
+                                              minWidth: 0,
+                                              fontSize: 12,
+                                              color: pinned ? 'inherit' : token.colorTextSecondary,
+                                            }}
+                                          >
+                                            {getSessionDisplayTitle(session, {
+                                              includeAgentFallback: true,
+                                            })}
+                                          </Text>
+                                          <Text
+                                            type="secondary"
+                                            style={{ fontSize: 10, whiteSpace: 'nowrap' }}
+                                          >
+                                            {formatRelativeTimeSafe(session.last_updated)}
+                                          </Text>
+                                        </button>
+                                        <Button
+                                          type="text"
+                                          size="small"
+                                          aria-label={
+                                            pinned
+                                              ? `Manage ${getSessionDisplayTitle(session, { includeAgentFallback: true })} in collection`
+                                              : `Add ${getSessionDisplayTitle(session, { includeAgentFallback: true })} to collection`
+                                          }
+                                          title={
+                                            pinned
+                                              ? 'Added — manage or remove'
+                                              : 'Add to collection'
+                                          }
+                                          icon={pinned ? <CheckOutlined /> : <PlusOutlined />}
+                                          onClick={() => onManage(session.session_id)}
+                                          style={{
+                                            width: 28,
+                                            minWidth: 28,
+                                            color: pinned
+                                              ? token.colorPrimary
+                                              : token.colorTextTertiary,
+                                          }}
+                                        />
+                                      </div>
                                     );
                                   })}
                                 </Flex>

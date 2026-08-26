@@ -29,6 +29,14 @@ const alternateSession = {
   status: 'idle',
 } as unknown as Session;
 
+const availableSession = {
+  ...session,
+  session_id: 'session-3',
+  title: 'Unpinned incident review',
+  status: 'idle',
+  last_updated: '2026-08-25T13:00:00.000Z',
+} as unknown as Session;
+
 const user = {
   user_id: 'user-1',
   preferences: {
@@ -53,6 +61,7 @@ describe('HomeChatWorkspaceNav', () => {
       sessionById: new Map([
         [session.session_id, session],
         [alternateSession.session_id, alternateSession],
+        [availableSession.session_id, availableSession],
       ]),
     });
   });
@@ -101,5 +110,30 @@ describe('HomeChatWorkspaceNav', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show active session on board' }));
     expect(onShowOnBoard).toHaveBeenCalledWith(session.session_id);
+  });
+
+  it('shows recent unpinned sessions under a worktree and opens add/remove management', () => {
+    const onManage = vi.fn();
+    render(
+      <HomeChatWorkspaceNav
+        currentUserId={user.user_id}
+        activeSessionId={session.session_id}
+        onSessionClick={vi.fn()}
+        onManage={onManage}
+        onExit={vi.fn()}
+        onShowOnBoard={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Unpinned incident review')).toBeVisible();
+    expect(screen.getByText('2/3')).toBeVisible();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Add Unpinned incident review to collection' })
+    );
+    expect(onManage).toHaveBeenCalledWith(availableSession.session_id);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Support triage in collection' }));
+    expect(onManage).toHaveBeenCalledWith(session.session_id);
   });
 });
