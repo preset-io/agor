@@ -34,10 +34,13 @@ import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
  * Superadmins bypass branch-level RBAC — they can view all branches
- * (including others_can=none) and self-assign ownership.
+ * and perform branch administration without changing the immutable primary
+ * owner. They may add an explicit Manager entry when ordinary policy-based
+ * access is needed.
  *
  * Note: This does NOT grant automatic prompt access. Superadmins must
- * self-assign as branch owner first, leaving an audit trail.
+ * add explicit access for their own sessions, and foreign sessions still
+ * require an owner-authored personal sharing grant.
  *
  * The allow_superadmin config flag gates this. When false, superadmins
  * are treated as regular admins (no branch RBAC bypass).
@@ -177,9 +180,10 @@ async function loadCachedBranch(
  *
  * Logic:
  * - Owners always have 'all' permission
- * - Superadmins get 'view' permission on all branches (can see everything)
- *   but must self-assign ownership to get 'prompt'/'all' (leaves audit trail)
- * - Non-owners inherit from branch.others_can
+ * - Superadmins bypass ordinary branch operations without becoming owners
+ *   (session prompting remains governed by the separate prompt authority)
+ * - Non-owners use the normalized effective permission supplied by the
+ *   repository resolver
  * - Compare effective permission against required level
  *
  * @param branch - Branch to check
@@ -208,8 +212,10 @@ export function hasBranchPermission(
     return true;
   }
 
-  // Non-owners inherit from branch.others_can (defaults to 'session')
-  const effectiveLevel = effectivePermission ?? branch.others_can ?? 'session';
+  // Legacy branch fields are intentionally inert after the capability-policy
+  // cutover. A caller that forgets to supply the normalized repository result
+  // must fail closed rather than silently reactivating `others_can`.
+  const effectiveLevel = effectivePermission ?? 'none';
   const effectiveRank = PERMISSION_RANK[effectiveLevel];
   const requiredRank = PERMISSION_RANK[requiredLevel];
 
@@ -242,7 +248,7 @@ export function resolveBranchPermission(
   if (isSuperAdmin(userRole, allowSuperadmin)) {
     return 'all';
   }
-  return effectivePermission ?? branch.others_can ?? 'session';
+  return effectivePermission ?? 'none';
 }
 
 /**
@@ -299,9 +305,7 @@ export async function cacheBranchAccess(
   if (!access) {
     access = {
       isOwner: userId ? await branchRepo.isOwner(branch.branch_id, userId) : false,
-      branchPermission: userId
-        ? await branchRepo.resolveUserPermission(branch, userId)
-        : (branch.others_can ?? 'session'),
+      branchPermission: userId ? await branchRepo.resolveUserPermission(branch, userId) : 'none',
     };
     rememberBounded(cache.branchAccess, accessKey, access);
   }
@@ -797,11 +801,9 @@ export function filterBranchesByPermission(branchRepo: BranchRepository) {
     // Filter branches by permission
     const authorizedBranches = [];
     for (const branch of branches) {
-      const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
-      // User can access if they're an owner OR others_can allows at least 'view' permission
-      // Check against permission rank: 'none' (-1) blocks access, 'view' (0) and above allows
-      const effectivePermission = await branchRepo.resolveUserPermission(branch, userId);
-      const hasAccess = isOwner || PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
+      const effective = await branchRepo.resolveUserAccess(branch, userId);
+      const hasAccess =
+        effective.is_owner || PERMISSION_RANK[effective.can] >= PERMISSION_RANK.view;
 
       if (hasAccess) {
         authorizedBranches.push(branch);
@@ -2029,8 +2031,8 @@ export function ensureCanModifySchedule(options?: { allowSuperadmin?: boolean })
     const userRole = context.params.user.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
 
-    // "Own" = the schedule's creator gets the session-tier bar
-    // (i.e. branch.others_can >= session); everyone else needs 'all'.
+    // "Own" = the schedule's creator gets the Collaborator/session-tier bar;
+    // everyone else needs Manager/all.
     const requiredTier: BranchPermissionLevel = schedule.created_by === userId ? 'session' : 'all';
 
     if (

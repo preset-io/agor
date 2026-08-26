@@ -646,11 +646,12 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           branch_id: (wt as Branch).branch_id,
           share_owner_home: authority.source === 'personal_session_sharing',
         };
-        if (
-          caller.user_id !== parent.created_by &&
-          authority.source !== 'personal_session_sharing'
-        ) {
-          throw new Forbidden('The session owner has not shared their sessions with you.');
+        if (!authority.allowed) {
+          throw new Forbidden(
+            caller.user_id === parent.created_by
+              ? 'Collaborator access is required to fork or spawn from this session.'
+              : 'The session owner has not shared their sessions with you.'
+          );
         }
       }
     } catch (error) {

@@ -287,7 +287,10 @@ describe('SessionsService archive routes', () => {
     'rejects external archive and unarchive before mutating when RBAC prompt permission is missing',
     async ({ db }) => {
       const service = new SessionsService(db, makeAppWithConfig({ branchRbac: true }));
-      const branchId = await createBranch(db, 'rbac-session-only', { others_can: 'session' });
+      const branchId = await createBranch(db, 'rbac-session-only', {
+        primary_owner_user_id: OTHER_USER_ID,
+        others_can: 'session',
+      });
       const parent = await createSession(db, branchId, { created_by: TEST_USER_ID });
       const child = await createSession(db, branchId, {
         created_by: OTHER_USER_ID,

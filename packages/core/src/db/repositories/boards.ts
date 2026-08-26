@@ -16,7 +16,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { isTeammate } from '@agor/core/types';
-import { and, eq, inArray, isNull, like, ne, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, isNull, like, ne, type SQL, sql } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -25,7 +25,7 @@ import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
 import { getBoardUrl } from '../../utils/url';
 import type { Database } from '../client';
 import { deleteFrom, insert, runDatabaseTransaction, select, update } from '../database-wrapper';
-import { type BoardInsert, type BoardRow, boards } from '../schema';
+import { type BoardInsert, type BoardRow, boards, users } from '../schema';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -35,7 +35,7 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBoardAccessCondition } from './branch-access';
+import { visibleBoardAccessCondition, visibleBoardReferenceAccessExists } from './branch-access';
 import { BranchRepository } from './branches';
 import { CapabilityPolicyRepository } from './capability-policies';
 
@@ -427,6 +427,15 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       .where(this.visibleBoardCondition(userId))
       .all();
     return rows.map((r: { board_id: string }) => r.board_id);
+  }
+
+  /** Materialize the exact current board audience in one set-based query. */
+  async findRealtimeViewUserIds(boardId: BoardID): Promise<UUID[]> {
+    const rows = await select(this.db, { user_id: users.user_id })
+      .from(users)
+      .where(visibleBoardReferenceAccessExists(this.db, users.user_id, sql`${boardId}`))
+      .all();
+    return rows.map((row: { user_id: string }) => row.user_id as UUID);
   }
 
   async isOwner(boardId: string, userId: UUID): Promise<boolean> {

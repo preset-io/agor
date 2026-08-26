@@ -1,7 +1,7 @@
 import type { AgorClient, Board, Branch, Repo, User } from '@agor-live/client';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { App as AntApp } from 'antd';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { BoardTeammatePanel } from './BoardTeammatePanel';
@@ -23,41 +23,22 @@ const branchOne = {
   name: 'teammate',
   filesystem_status: 'ready',
   created_by: 'user-creator',
+  primary_owner_user_id: 'user-alice',
 } as Branch;
 
-const branchTwo = { ...branchOne, branch_id: 'branch-2', created_by: 'user-creator' } as Branch;
+const branchTwo = {
+  ...branchOne,
+  branch_id: 'branch-2',
+  primary_owner_user_id: 'user-bob',
+} as Branch;
 
 const creator = { user_id: 'user-creator', name: 'creator', role: 'member' } as User;
 const alice = { user_id: 'user-alice', name: 'alice', role: 'member' } as User;
 const bob = { user_id: 'user-bob', name: 'bob', role: 'member' } as User;
+const service = vi.fn(() => ({}));
+const client = { service } as unknown as AgorClient;
 
-/**
- * Feathers-shaped stub: `find` is driven per-test and `on`/`off` record the
- * listeners so a test can fire the branch-scoped realtime events the daemon
- * publishes on this route.
- */
-function makeClient(find: ReturnType<typeof vi.fn>) {
-  const listeners = new Map<string, Set<() => void>>();
-  const service = {
-    find,
-    on: (event: string, handler: () => void) => {
-      const set = listeners.get(event) ?? new Set();
-      set.add(handler);
-      listeners.set(event, set);
-    },
-    off: (event: string, handler: () => void) => {
-      listeners.get(event)?.delete(handler);
-    },
-  };
-  const client = { service: () => service } as unknown as AgorClient;
-  const emit = (event: string) => {
-    for (const handler of listeners.get(event) ?? []) handler();
-  };
-  const listenerCount = (event: string) => listeners.get(event)?.size ?? 0;
-  return { client, emit, listenerCount };
-}
-
-function renderPanel(client: AgorClient, branch: Branch = branchOne) {
+function renderPanel(branch: Branch = branchOne) {
   return render(
     <AntApp>
       <BoardTeammatePanel
@@ -75,10 +56,9 @@ function renderPanel(client: AgorClient, branch: Branch = branchOne) {
   );
 }
 
-const notFound = Object.assign(new Error('Service not found'), { code: 404 });
-
-describe('BoardTeammatePanel branch owners badge', () => {
+describe('BoardTeammatePanel primary owner badge', () => {
   beforeEach(() => {
+    service.mockClear();
     agorStore.setState({
       ...EMPTY_MAPS,
       userById: new Map([
@@ -89,64 +69,30 @@ describe('BoardTeammatePanel branch owners badge', () => {
     });
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it('renders the owners returned by the owners route', async () => {
-    const find = vi.fn().mockResolvedValue([alice]);
-    const { client } = makeClient(find);
-    renderPanel(client);
+  it('renders the immutable primary owner from the branch row', async () => {
+    renderPanel();
 
     expect(await screen.findByText('alice')).toBeInTheDocument();
-    expect(find).toHaveBeenCalledWith({ route: { id: 'branch-1' } });
-  });
-
-  it('falls back to the branch creator when the owners table is empty', async () => {
-    const find = vi.fn().mockResolvedValue([]);
-    const { client } = makeClient(find);
-    renderPanel(client);
-
-    // Matches the Settings modal, which seeds created_by as the owner for
-    // branches that predate RBAC rather than showing no owner at all.
-    expect(await screen.findByText('creator')).toBeInTheDocument();
-  });
-
-  it('falls back to the branch creator when RBAC is disabled', async () => {
-    const find = vi.fn().mockRejectedValue(notFound);
-    const { client } = makeClient(find);
-    renderPanel(client);
-
-    expect(await screen.findByText('creator')).toBeInTheDocument();
-  });
-
-  it('asserts no ownership when the owners request fails for another reason', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const find = vi.fn().mockRejectedValue(Object.assign(new Error('boom'), { code: 500 }));
-    const { client } = makeClient(find);
-    renderPanel(client);
-
-    await waitFor(() => {
-      expect(warn).toHaveBeenCalledWith('Failed to load branch owners:', expect.any(Error));
-    });
     expect(screen.queryByText('creator')).not.toBeInTheDocument();
-    expect(screen.queryByText('alice')).not.toBeInTheDocument();
+    expect(service).not.toHaveBeenCalled();
   });
 
-  it('does not show the previous branch owners while the next branch resolves', async () => {
-    let resolveSecond: ((owners: User[]) => void) | undefined;
-    const find = vi
-      .fn()
-      .mockResolvedValueOnce([alice])
-      .mockImplementationOnce(
-        () =>
-          new Promise<User[]>((resolve) => {
-            resolveSecond = resolve;
-          })
-      );
-    const { client } = makeClient(find);
-    const { rerender } = renderPanel(client);
+  it('uses created_by only as a compatibility fallback for an old branch payload', async () => {
+    renderPanel({ ...branchOne, primary_owner_user_id: undefined } as Branch);
 
+    expect(await screen.findByText('creator')).toBeInTheDocument();
+  });
+
+  it('does not invent an owner when the referenced user is unavailable', () => {
+    agorStore.setState({ ...EMPTY_MAPS, userById: new Map() });
+    renderPanel();
+
+    expect(screen.queryByText('alice')).not.toBeInTheDocument();
+    expect(screen.queryByText('creator')).not.toBeInTheDocument();
+  });
+
+  it('does not retain the previous primary owner when the teammate branch changes', async () => {
+    const { rerender } = renderPanel();
     expect(await screen.findByText('alice')).toBeInTheDocument();
 
     rerender(
@@ -166,59 +112,19 @@ describe('BoardTeammatePanel branch owners badge', () => {
     );
 
     expect(screen.queryByText('alice')).not.toBeInTheDocument();
-
-    await act(async () => {
-      resolveSecond?.([bob]);
-    });
     expect(await screen.findByText('bob')).toBeInTheDocument();
   });
 
-  it('refetches owners when the branch-scoped owners route emits', async () => {
-    const find = vi.fn().mockResolvedValueOnce([alice]).mockResolvedValueOnce([bob]);
-    const { client, emit } = makeClient(find);
-    renderPanel(client);
-
-    expect(await screen.findByText('alice')).toBeInTheDocument();
-
-    await act(async () => {
-      emit('created');
-    });
-
-    expect(await screen.findByText('bob')).toBeInTheDocument();
-    expect(find).toHaveBeenCalledTimes(2);
-  });
-
-  it('removes its realtime listeners on unmount', async () => {
-    const find = vi.fn().mockResolvedValue([alice]);
-    const { client, listenerCount } = makeClient(find);
-    const { unmount } = renderPanel(client);
-
-    expect(await screen.findByText('alice')).toBeInTheDocument();
-    expect(listenerCount('created')).toBe(1);
-    expect(listenerCount('removed')).toBe(1);
-
-    unmount();
-
-    expect(listenerCount('created')).toBe(0);
-    expect(listenerCount('removed')).toBe(0);
-  });
-
-  it('resolves a late-hydrating creator without a second owners request', async () => {
+  it('resolves the primary owner when the user directory hydrates later', async () => {
     agorStore.setState({ ...EMPTY_MAPS, userById: new Map() });
-    const find = vi.fn().mockResolvedValue([]);
-    const { client } = makeClient(find);
-    renderPanel(client);
-
-    await waitFor(() => {
-      expect(find).toHaveBeenCalledTimes(1);
-    });
-    expect(screen.queryByText('creator')).not.toBeInTheDocument();
+    renderPanel();
+    expect(screen.queryByText('alice')).not.toBeInTheDocument();
 
     act(() => {
-      agorStore.setState({ userById: new Map([[creator.user_id, creator]]) });
+      agorStore.setState({ userById: new Map([[alice.user_id, alice]]) });
     });
 
-    expect(await screen.findByText('creator')).toBeInTheDocument();
-    expect(find).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText('alice')).toBeInTheDocument();
+    expect(service).not.toHaveBeenCalled();
   });
 });

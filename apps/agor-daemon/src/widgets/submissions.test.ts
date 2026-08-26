@@ -410,6 +410,42 @@ describe('resolveWidget', () => {
     ).rejects.toThrow(/permission from the session owner/);
   });
 
+  it('rechecks prompt authority after submit effects and fails closed before auto-resume', async () => {
+    const { applySubmit } = registerTestWidget();
+    const fixtures = makeFixtures({ sessionCreator: 'session-owner' as UserID });
+    const harness = makeApp(fixtures);
+    const { app, calls, resolutionStore } = harness;
+    const resolveSessionPromptAuthority = vi
+      .fn()
+      .mockResolvedValueOnce({
+        allowed: true,
+        execution_user_id: 'session-owner',
+        source: 'personal_session_sharing',
+      })
+      .mockResolvedValueOnce({ allowed: false, source: 'denied' });
+
+    await expect(
+      resolveWidget(
+        'widget-msg-1',
+        { kind: 'submit', body: { value: 'secret-key', scope: 'global' } },
+        { user_id: 'someone-else' as UserID },
+        {
+          app: app as never,
+          resolutionStore,
+          runInTenantDatabaseScope,
+          resolveSessionPromptAuthority,
+        }
+      )
+    ).rejects.toThrow(/required to resume this widget/);
+
+    expect(resolveSessionPromptAuthority).toHaveBeenCalledTimes(2);
+    expect(applySubmit).toHaveBeenCalledOnce();
+    expect(
+      calls.some((call) => call.service === '/sessions/:id/prompt' && call.method === 'create')
+    ).toBe(false);
+    expect(harness.currentMessage.metadata?.widget?.status).toBe('resolving');
+  });
+
   it('allows a submission with an owner-authored sharing grant', async () => {
     registerTestWidget();
     const fixtures = makeFixtures({ branchOthersCan: 'prompt' });

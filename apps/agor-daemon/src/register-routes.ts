@@ -2790,8 +2790,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const allowed = await runWithTenantDatabaseScope(db, tenantId, async () => {
       const branch = await branchRepo.findById(upload.branchId);
       if (!branch) return false;
-      if (await branchRepo.isOwner(branch.branch_id, userId)) return true;
-      return (await branchRepo.resolveUserPermission(branch, userId)) !== 'none';
+      const access = await branchRepo.resolveUserAccess(branch, userId);
+      return access.is_owner || access.can !== 'none';
     });
     if (
       !allowed &&

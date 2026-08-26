@@ -79,7 +79,11 @@ function row(index: number, text = `message ${index}`) {
   };
 }
 
-async function registerAndGetTool(ctx: { userId: string; role?: string }): Promise<CapturedTool> {
+async function registerAndGetTool(ctx: {
+  userId: string;
+  role?: string;
+  allowSuperadmin?: boolean;
+}): Promise<CapturedTool> {
   const { registerMessageTools } = await import('./messages.js');
   let captured: CapturedTool | undefined;
   const fakeServer = {
@@ -91,7 +95,10 @@ async function registerAndGetTool(ctx: { userId: string; role?: string }): Promi
   registerMessageTools(fakeServer, {
     app: {
       get: () => ({
-        execution: { branch_rbac: mockIsBranchRbacEnabled() },
+        execution: {
+          branch_rbac: mockIsBranchRbacEnabled(),
+          allow_superadmin: ctx.allowSuperadmin === true,
+        },
       }),
     } as any,
     db: {} as any,
@@ -105,7 +112,11 @@ async function registerAndGetTool(ctx: { userId: string; role?: string }): Promi
   return captured;
 }
 
-async function registerAndGetHandler(ctx: { userId: string; role?: string }): Promise<ToolHandler> {
+async function registerAndGetHandler(ctx: {
+  userId: string;
+  role?: string;
+  allowSuperadmin?: boolean;
+}): Promise<ToolHandler> {
   return (await registerAndGetTool(ctx)).cb;
 }
 
@@ -205,12 +216,25 @@ describe('agor_messages_list MCP tool', () => {
     expect(mockAllSpy).toHaveBeenCalled();
   });
 
-  it('bypasses RBAC filter for superadmin role', async () => {
+  it('bypasses the RBAC filter only when the superadmin bypass is enabled', async () => {
     mockIsBranchRbacEnabled.mockReturnValue(true);
-    const handler = await registerAndGetHandler({ userId: 'user-1', role: 'superadmin' });
+    const handler = await registerAndGetHandler({
+      userId: 'user-1',
+      role: 'superadmin',
+      allowSuperadmin: true,
+    });
     await handler({ search: 'secret', createdAfter: recentIso() });
     expect(mockVisibleSessionReferenceAccessExists).not.toHaveBeenCalled();
     expect(mockAllSpy).toHaveBeenCalled();
+
+    mockVisibleSessionReferenceAccessExists.mockClear();
+    const disabledHandler = await registerAndGetHandler({
+      userId: 'user-1',
+      role: 'superadmin',
+      allowSuperadmin: false,
+    });
+    await disabledHandler({ search: 'secret', createdAfter: recentIso() });
+    expect(mockVisibleSessionReferenceAccessExists).toHaveBeenCalledTimes(1);
   });
 
   it('allows browsing a specific session transcript without a time bound', async () => {

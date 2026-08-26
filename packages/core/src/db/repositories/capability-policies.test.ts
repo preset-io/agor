@@ -47,6 +47,16 @@ function boardUserEntry(userId: UserID, preset: 'none' | 'viewer' | 'editor' | '
   };
 }
 
+function boardGroupEntry(groupId: GroupID, preset: 'none' | 'viewer' | 'editor' | 'manager') {
+  return {
+    entry_id: generateId(),
+    principal: { principal_type: 'group' as const, group_id: groupId },
+    preset,
+    capabilities: capabilityPolicyPresetCapabilities('board_access', preset) ?? [],
+    fs_access: 'none' as const,
+  };
+}
+
 function groupEntry(
   groupId: GroupID,
   preset: 'none' | 'viewer' | 'collaborator' | 'manager',
@@ -196,6 +206,33 @@ describe('CapabilityPolicyRepository', () => {
       expect(
         (await policies.resolveBranchAccess(value.branchId, value.grouped)).capabilities
       ).toContain('branch.policy.manage');
+    }
+  );
+
+  dbTest(
+    'materializes board realtime viewers with direct/group/Others precedence',
+    async ({ db }) => {
+      const value = await fixture(db);
+      const policies = new CapabilityPolicyRepository(db);
+      const boards = new BoardRepository(db);
+      const current = await policies.getBoardPolicies(value.boardId);
+      current.board_access.sharing_mode = 'shared';
+      current.board_access.entries = [
+        boardUserEntry(value.direct, 'none'),
+        boardGroupEntry(value.readers, 'viewer'),
+      ];
+      current.board_access.others = {
+        preset: 'viewer',
+        capabilities: capabilityPolicyPresetCapabilities('board_access', 'viewer') ?? [],
+        fs_access: 'none',
+      };
+      await policies.replaceBoardPolicies(value.boardId, current, value.owner);
+
+      const viewers = await boards.findRealtimeViewUserIds(value.boardId);
+      expect(viewers).toEqual(
+        expect.arrayContaining([value.owner, value.grouped, value.unmatched, value.viewer])
+      );
+      expect(viewers).not.toContain(value.direct);
     }
   );
 

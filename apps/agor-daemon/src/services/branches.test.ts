@@ -14,6 +14,7 @@ import {
   type Application,
   type BoardID,
   type BranchID,
+  type CapabilityPolicyFsAccess,
   type CapabilityPolicyPresetId,
   capabilityPolicyPresetCapabilities,
   type GroupID,
@@ -50,14 +51,15 @@ async function setBranchGroupRole(
   branchId: BranchID,
   actorId: UserID,
   groupId: GroupID,
-  preset: CapabilityPolicyPresetId
+  preset: CapabilityPolicyPresetId,
+  fsAccess: CapabilityPolicyFsAccess = 'none'
 ) {
   const policies = new CapabilityPolicyRepository(db);
   const current = await policies.getBranchPolicy(branchId);
   const base =
     current.binding_mode === 'inherit' ? current.inherited_config : current.override_config;
   if (!base) throw new Error('Missing branch permission configuration');
-  const capabilities = capabilityPolicyPresetCapabilities('branch_access', preset, 'none');
+  const capabilities = capabilityPolicyPresetCapabilities('branch_access', preset, fsAccess);
   if (!capabilities) throw new Error(`Invalid test role ${preset}`);
   await policies.replaceBranchPolicy(
     branchId,
@@ -75,7 +77,7 @@ async function setBranchGroupRole(
               principal: { principal_type: 'group', group_id: groupId },
               preset,
               capabilities,
-              fs_access: 'none',
+              fs_access: fsAccess,
             },
           ],
         },
@@ -254,6 +256,12 @@ function createServiceHarness(appRbacEnabled = true) {
       branchRepo: BranchRepository;
     }
   ).branchRepo;
+  vi.spyOn(branchRepo, 'resolveUserAccess').mockResolvedValue({
+    can: 'all',
+    fs_access: 'write',
+    is_owner: true,
+    source: 'owner',
+  });
   const taskRepo = (
     service as unknown as {
       taskRepo: { hasNonterminalForBranch: ReturnType<typeof vi.fn> };
@@ -377,6 +385,8 @@ describe('BranchesService environment start async behavior', () => {
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
       delegatedHomeKey: undefined,
+      executionUserId: 'user-1',
+      branchFsAccess: 'write',
     } as never);
 
     const environmentUpdates: Array<Record<string, unknown>> = [];
@@ -422,6 +432,8 @@ describe('BranchesService environment start async behavior', () => {
           action: 'start',
           branchId: branch.branch_id,
           branchPath: branch.path,
+          cwd: branch.path,
+          principalBranchAccess: 'write',
           startCommand: branch.start_command,
           appUrl: branch.app_url,
         }),
@@ -429,6 +441,11 @@ describe('BranchesService environment start async behavior', () => {
       expect.objectContaining({
         logPrefix: `[Environment.start ${branch.name}]`,
         preparedEnv: { PATH: '/usr/bin:/bin' },
+        templateVariables: {
+          branch_id: branch.branch_id,
+          user_id: 'user-1',
+          branch_fs_access: 'write',
+        },
       })
     );
     expect(environmentUpdates).toEqual(
@@ -482,6 +499,8 @@ describe('BranchesService environment start async behavior', () => {
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
       delegatedHomeKey: undefined,
+      executionUserId: 'user-1',
+      branchFsAccess: 'write',
     } as never);
     vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
       currentEnvironment = {
@@ -550,6 +569,8 @@ describe('BranchesService environment start async behavior', () => {
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
       delegatedHomeKey: undefined,
+      executionUserId: 'user-1',
+      branchFsAccess: 'write',
     } as never);
     const executeWebhookSpy = vi
       .spyOn(service as never, 'executeEnvironmentWebhook')
@@ -603,6 +624,7 @@ describe('BranchesService environment start async behavior', () => {
       name: 'wt-logs',
       path: '/tmp/wt-logs',
       created_by: 'user-1' as UUID,
+      primary_owner_user_id: 'owner-2' as UUID,
       branch_unique_id: 1,
       logs_command: 'docker compose logs --tail=100',
     };
@@ -616,6 +638,8 @@ describe('BranchesService environment start async behavior', () => {
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
       delegatedHomeKey: undefined,
+      executionUserId: 'owner-2',
+      branchFsAccess: 'write',
     } as never);
     mockedRequestExecutor.mockResolvedValue({
       success: true,
@@ -628,7 +652,7 @@ describe('BranchesService environment start async behavior', () => {
 
     expect(app.sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
       'environment-logs',
-      branch.created_by,
+      branch.primary_owner_user_id,
       branch.branch_id
     );
     expect(mockedRequestExecutor).toHaveBeenCalledWith(
@@ -640,12 +664,19 @@ describe('BranchesService environment start async behavior', () => {
         params: expect.objectContaining({
           branchId: branch.branch_id,
           branchPath: branch.path,
+          cwd: branch.path,
+          principalBranchAccess: 'write',
           logsCommand: branch.logs_command,
         }),
       }),
       expect.objectContaining({
         logPrefix: `[Environment.logs ${branch.name}]`,
         timeoutMs: expect.any(Number),
+        templateVariables: {
+          branch_id: branch.branch_id,
+          user_id: branch.primary_owner_user_id,
+          branch_fs_access: 'write',
+        },
       })
     );
   });
@@ -1414,12 +1445,53 @@ describe('BranchesService.archiveOrDelete', () => {
           storageMode: 'clone',
         }),
       }),
-      expect.objectContaining({ logPrefix: `[BranchesService.delete ${branch.name}]` })
+      expect.objectContaining({
+        logPrefix: `[BranchesService.delete ${branch.name}]`,
+        templateVariables: {
+          branch_id: branchId,
+          user_id: 'user-1',
+          branch_fs_access: 'write',
+        },
+      })
     );
     const payload = mockedSpawnExecutor.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(payload).not.toHaveProperty('sessionToken');
     expect(payload).not.toHaveProperty('daemonUrl');
     expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects filesystem cleanup when a Manager has no write grant', async () => {
+    const { service, branchRepo } = createServiceHarness();
+    const branchId = 'wt-delete-read-only' as BranchID;
+    const branch = {
+      branch_id: branchId,
+      name: 'WT Delete Read Only',
+      path: '/safe/worktrees/repo/read-only',
+      archived: false,
+      environment_instance: { status: 'stopped' },
+    } as never;
+    vi.spyOn(service, 'get').mockResolvedValue(branch);
+    vi.mocked(branchRepo.resolveUserAccess).mockResolvedValue({
+      can: 'all',
+      fs_access: 'read',
+      is_owner: false,
+      source: 'group',
+    });
+    const params = {
+      provider: 'rest',
+      user: { user_id: 'read-only-manager' as UUID, role: 'member' },
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+    } as never;
+    markBranchArchiveDeleteAuthorized(params, branchId, 'archive');
+
+    await expect(
+      service.archiveOrDelete(
+        branchId,
+        { metadataAction: 'archive', filesystemAction: 'cleaned' },
+        params
+      )
+    ).rejects.toThrow('filesystem write access required');
+    expect(mockedSpawnExecutor).not.toHaveBeenCalled();
   });
 
   it('deletes metadata without re-entering unrelated remove hooks and emits one tombstone', async () => {
@@ -1947,6 +2019,91 @@ describe('BranchesService managed environment control authorization', () => {
     expect(getSpy).toHaveBeenCalled();
     expect(updateEnvironmentSpy).toHaveBeenCalled();
   });
+
+  dbTest(
+    'uses the initiating Manager identity and normalized filesystem grant for shell executors',
+    async ({ db }) => {
+      const users = new UsersRepository(db);
+      const repos = new RepoRepository(db);
+      const branches = new BranchRepository(db);
+      const groups = new GroupRepository(db);
+      const owner = await users.create({
+        email: 'env-execution-owner@example.com',
+        name: 'Environment Owner',
+        role: 'member',
+      });
+      const manager = await users.create({
+        email: 'env-execution-manager@example.com',
+        name: 'Environment Manager',
+        role: 'member',
+      });
+      const repo = await repos.create({
+        name: 'env-execution-repo',
+        slug: 'env-execution-repo',
+        repo_type: 'local',
+        local_path: '/tmp/env-execution-repo',
+        default_branch: 'main',
+      });
+      const branch = await branches.create({
+        branch_id: '019f0000-0000-7000-8000-00000000e004' as BranchID,
+        repo_id: repo.repo_id,
+        name: 'env-execution',
+        ref: 'env-execution',
+        path: '/tmp/env-execution-repo/env-execution',
+        created_by: owner.user_id as UUID,
+        branch_unique_id: 9004,
+        new_branch: true,
+        others_can: 'none',
+      });
+      const group = await groups.create({
+        name: 'Environment Execution Managers',
+        created_by: owner.user_id,
+      });
+      await groups.addMember(group.group_id, manager.user_id, owner.user_id);
+      await setBranchGroupRole(
+        db,
+        branch.branch_id,
+        owner.user_id,
+        group.group_id,
+        'manager',
+        'read'
+      );
+
+      const service = new BranchesService(db, {
+        get: () => ({ execution: { unix_user_mode: 'simple' } }),
+      } as unknown as Application);
+      const executionParams = paramsFor(manager.user_id, 'member');
+      const readContext = await (
+        service as unknown as {
+          resolveEnvironmentExecutorContext(
+            branch: typeof branch,
+            params: typeof executionParams,
+            requiredFsAccess: 'read' | 'write'
+          ): Promise<{
+            executionUserId: UserID;
+            branchFsAccess: 'read' | 'write';
+          }>;
+        }
+      ).resolveEnvironmentExecutorContext(branch, executionParams, 'read');
+
+      expect(readContext).toMatchObject({
+        executionUserId: manager.user_id,
+        branchFsAccess: 'read',
+      });
+      expect(readContext.executionUserId).not.toBe(owner.user_id);
+      await expect(
+        (
+          service as unknown as {
+            resolveEnvironmentExecutorContext(
+              branch: typeof branch,
+              params: typeof executionParams,
+              requiredFsAccess: 'write'
+            ): Promise<unknown>;
+          }
+        ).resolveEnvironmentExecutorContext(branch, executionParams, 'write')
+      ).rejects.toThrow('filesystem write access required');
+    }
+  );
 
   dbTest('allows direct owners to start environments', async ({ db }) => {
     const users = new UsersRepository(db);

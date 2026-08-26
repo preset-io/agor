@@ -45,7 +45,7 @@ export async function resolveOpenCodeConfigurationDirectory(input: {
         !hasBranchPermission(
           branch,
           callerId,
-          false,
+          effectiveAccess.is_owner,
           'view',
           input.params?.user?.role,
           input.config.execution?.allow_superadmin === true,

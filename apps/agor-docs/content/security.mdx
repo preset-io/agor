@@ -52,25 +52,25 @@ The external launcher is responsible for identity, credentials, storage, contain
 
 > `strict` and `insulated` were removed in 0.25. Upgrade through the latest 0.24.x release and migrate to `sandbox` before upgrading a legacy installation.
 
-## Branch Permission Tiers (RBAC)
+## Board and branch permissions (RBAC)
 
-When `branch_rbac: true` is set, every branch has owners plus an `others_can` tier that controls what non-owners may do:
+When `branch_rbac: true` is set, every board and branch has one primary owner plus normalized user, group, and **Others** rules. The primary owner cannot be reassigned. A direct user rule takes precedence over groups; otherwise matching group rules combine. Others is only the fallback for an active same-workspace member with no direct or group match.
 
-| Tier | What others can do |
+Board access and branch access are separate. A board has one policy for who can see or manage its canvas and one complete default package for its branches. A branch either inherits that package or overrides all of it.
+
+| Branch role | What it allows |
 |---|---|
-| `none` | No access, completely private to owners |
-| `view` | Read branches, sessions, tasks, messages |
-| **`session`** (default) | Create *their own* sessions; prompt their own sessions only |
-| `prompt` | Prompt **any** session, including others' (but each session still runs as its creator's identity) |
-| `all` | Full control (create/update/delete sessions, change permissions) |
+| Viewer | Read the branch and its sessions |
+| Collaborator | Viewer access plus create and prompt the user's own sessions |
+| Manager | Collaborator access plus branch, session-lifecycle, environment, and permission management |
 
-The `session` tier is the safe default. Collaborators can work independently without borrowing each other's execution context.
+Filesystem access is configured separately as `none`, `read`, or `write`. Terminal access requires Collaborator or Manager plus filesystem access. Manager does not grant access to another person's sessions, home, or credentials.
 
-### Session Sharing (`dangerously_allow_session_sharing`)
+### Personal session sharing
 
-A branch-level toggle, **off by default**. When OFF, spawning/forking attributes the new child to the *caller*. It uses the caller's execution-home and credential route. When ON (legacy behavior), children inherit the parent's `created_by`, meaning a collaborator can effectively spawn agents that execute in the original session owner's immutable context.
+Personal session sharing is a workspace-gated, owner-controlled exception. It starts disabled and empty. When enabled, each session owner may name trusted users or groups that can prompt sessions owned by that person. A Manager cannot grant themselves this access or edit another person's sharing rule.
 
-Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See `context/explorations/session-sharing.md` for the full discussion.
+A shared prompt keeps the session owner's native conversation and home, but records the actual caller on the task and uses the caller's Agor-managed environment variables, connector credentials, and branch filesystem projection. Home sharing is still a high-trust boundary because native tool histories, dotfiles, subscription credentials, and files from other sessions can live in the same home. See [What should I know before sharing my sessions?](/faq#session-sharing-home-access).
 
 ---
 

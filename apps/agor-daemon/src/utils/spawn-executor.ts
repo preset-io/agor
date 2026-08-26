@@ -449,6 +449,58 @@ function sendExecutorPayload(
  * Spawn executor as a local subprocess.
  * stdout/stderr are inherited so logs appear in daemon output.
  */
+function sandboxLocalExecutorCommand(
+  payload: Record<string, unknown>,
+  command: { cmd: string; args: string[]; env: Record<string, string | undefined> },
+  logPrefix: string
+): { cmd: string; args: string[]; env: Record<string, string | undefined> } {
+  // Sandbox around the WORK directory, never the executor package cwd. The
+  // daemon supplies this path and the caller's normalized filesystem access;
+  // the executor must not rediscover either from client-controlled data.
+  const params = payload.params as
+    | {
+        cwd?: unknown;
+        sandboxBaseRepoPath?: unknown;
+        sandboxHomeStore?: unknown;
+        sandboxWorktreesRoot?: unknown;
+        principalBranchAccess?: unknown;
+      }
+    | undefined;
+  const workdir =
+    typeof payload.cwd === 'string' && payload.cwd.length > 0
+      ? payload.cwd
+      : typeof params?.cwd === 'string' && params.cwd.length > 0
+        ? params.cwd
+        : undefined;
+  if (!workdir) return command;
+
+  const branchAccess =
+    params?.principalBranchAccess === 'read' || params?.principalBranchAccess === 'none'
+      ? params.principalBranchAccess
+      : 'write';
+  const wrap = buildSandboxWrap({
+    sandbox: configuredExecutorDefaults.sandbox,
+    branchPath: workdir,
+    cmd: command.cmd,
+    args: command.args,
+    baseRepoPath:
+      typeof params?.sandboxBaseRepoPath === 'string' ? params.sandboxBaseRepoPath : undefined,
+    ownerHomeStore:
+      typeof params?.sandboxHomeStore === 'string' ? params.sandboxHomeStore : undefined,
+    worktreesRoot:
+      typeof params?.sandboxWorktreesRoot === 'string' ? params.sandboxWorktreesRoot : undefined,
+    branchAccess,
+    runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
+  });
+  if (!wrap) return command;
+  console.log(`${logPrefix} Sandbox: wrapping executor via bwrap (filesystem-only)`);
+  return {
+    cmd: wrap.cmd,
+    args: wrap.args,
+    env: { ...command.env, ...wrap.extraEnv },
+  };
+}
+
 function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
   const location = resolveLocalExecutorLocation(options);
   const cwdFailure = resolveLocalExecutorCwdFailure(location);
@@ -469,76 +521,21 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     location
   );
 
-  // OS-level sandbox wrap (SRT) — covers ALL tools at this one chokepoint.
-  let spawnCmd = cmd;
-  let spawnArgs = args;
-  let spawnEnv = envWithDaemonUrl;
-  // Sandbox around the WORK directory (the branch the agent operates in): it is
-  // `payload.params.cwd` for prompt/terminal tasks, or top-level `payload.cwd`
-  // for some commands — NOT the executor process cwd (the executor package dir
-  // for prompt tasks). No work dir (e.g. repo-level ops) ⇒ no wrap.
-  const paramsCwd = (payload.params as { cwd?: unknown } | undefined)?.cwd;
-  const candidateCwd =
-    typeof payload.cwd === 'string' && payload.cwd.length > 0
-      ? payload.cwd
-      : typeof paramsCwd === 'string' && paramsCwd.length > 0
-        ? paramsCwd
-        : undefined;
-  const sandboxWorkdir = candidateCwd;
-  // Authoritative mount inputs the daemon resolved from its own DB state and
-  // threaded through `payload.params` (see register-services) — the sandbox
-  // never derives these from disk.
-  const sandboxParams = payload.params as
-    | {
-        sandboxBaseRepoPath?: unknown;
-        sandboxHomeStore?: unknown;
-        sandboxWorktreesRoot?: unknown;
-        principalBranchAccess?: unknown;
-      }
-    | undefined;
-  const sandboxBaseRepoPath =
-    typeof sandboxParams?.sandboxBaseRepoPath === 'string'
-      ? sandboxParams.sandboxBaseRepoPath
-      : undefined;
-  const sandboxHomeStore =
-    typeof sandboxParams?.sandboxHomeStore === 'string'
-      ? sandboxParams.sandboxHomeStore
-      : undefined;
-  const sandboxWorktreesRoot =
-    typeof sandboxParams?.sandboxWorktreesRoot === 'string'
-      ? sandboxParams.sandboxWorktreesRoot
-      : undefined;
-  const principalBranchAccess =
-    sandboxParams?.principalBranchAccess === 'read' ||
-    sandboxParams?.principalBranchAccess === 'none'
-      ? sandboxParams.principalBranchAccess
-      : 'write';
-  if (sandboxWorkdir) {
-    try {
-      const wrap = buildSandboxWrap({
-        sandbox: configuredExecutorDefaults.sandbox,
-        branchPath: sandboxWorkdir,
-        cmd,
-        args,
-        baseRepoPath: sandboxBaseRepoPath,
-        ownerHomeStore: sandboxHomeStore,
-        worktreesRoot: sandboxWorktreesRoot,
-        branchAccess: principalBranchAccess,
-        runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
-      });
-      if (wrap) {
-        spawnCmd = wrap.cmd;
-        spawnArgs = wrap.args;
-        spawnEnv = { ...envWithDaemonUrl, ...wrap.extraEnv };
-        console.log(`${logPrefix} Sandbox: wrapping executor via bwrap (filesystem-only)`);
-      }
-    } catch (err) {
-      console.error(
-        `${logPrefix} Sandbox wrap failed: ${err instanceof Error ? err.message : String(err)}`
-      );
-      observeExitCallback(options.onExit, 126, { mode: 'local' }, logPrefix);
-      return;
-    }
+  // OS-level sandbox wrap (SRT) — covers fire-and-forget prompt processes and
+  // the request/response branch-file commands through one helper.
+  let spawnCommand: ReturnType<typeof sandboxLocalExecutorCommand>;
+  try {
+    spawnCommand = sandboxLocalExecutorCommand(
+      payload,
+      { cmd, args, env: envWithDaemonUrl },
+      logPrefix
+    );
+  } catch (err) {
+    console.error(
+      `${logPrefix} Sandbox wrap failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+    observeExitCallback(options.onExit, 126, { mode: 'local' }, logPrefix);
+    return;
   }
   console.log(`${logPrefix} Spawning executor at: ${executorPath}`);
   console.log(`${logPrefix} Command: ${payload.command}`);
@@ -550,9 +547,9 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     observeExitCallback(options.onExit, code, { mode: 'local' }, logPrefix);
   };
 
-  const executorProcess = spawn(spawnCmd, spawnArgs, {
+  const executorProcess = spawn(spawnCommand.cmd, spawnCommand.args, {
     cwd,
-    env: { ...spawnEnv },
+    env: { ...spawnCommand.env },
     stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
     detached: process.platform !== 'win32',
   });
@@ -1185,11 +1182,30 @@ function requestExecutorLocal(
   const prepared = prepareLocalExecutorSpawn(options, '--stdin', location);
   const { cmd, args, cwd, envWithDaemonUrl } = prepared;
 
+  let spawnCommand: ReturnType<typeof sandboxLocalExecutorCommand>;
+  try {
+    spawnCommand = sandboxLocalExecutorCommand(
+      payload,
+      { cmd, args, env: envWithDaemonUrl },
+      logPrefix
+    );
+  } catch (error) {
+    response.fail({
+      success: false,
+      error: {
+        code: 'EXECUTOR_SPAWN_ERROR',
+        message: `Executor sandbox setup failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+        details: { command: payload.command },
+      },
+    });
+    return;
+  }
+
   console.log(`${logPrefix} Running executor command: ${payload.command ?? '?'}`);
 
-  const child = spawn(cmd, args, {
+  const child = spawn(spawnCommand.cmd, spawnCommand.args, {
     cwd,
-    env: { ...envWithDaemonUrl },
+    env: { ...spawnCommand.env },
     stdio: ['pipe', 'pipe', 'pipe'],
     detached: false,
   });

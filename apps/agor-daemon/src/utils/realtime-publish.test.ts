@@ -372,14 +372,14 @@ describe('HA Feathers publication relay', () => {
       board_id: 'board-a',
       access_mode: 'private' as const,
     }));
-    const canView = vi.fn(async (_boardId: string, userId: string) => userId === 'allowed');
+    const findRealtimeViewUserIds = vi.fn(async () => ['allowed']);
     configureRealtimePublish({
       app,
       branchRbacEnabled: true,
       ...repos({ branch: branch('unused'), permissions: {} }),
       boardRepository: {
         findById: currentBoard,
-        canView,
+        findRealtimeViewUserIds,
       } as unknown as BoardRepository,
       multiTenancy: {
         mode: 'required_from_auth',
@@ -401,7 +401,8 @@ describe('HA Feathers publication relay', () => {
     await remoteHandler?.(forgedSharedEnvelope);
 
     expect(currentBoard).toHaveBeenCalledWith('board-a');
-    expect(canView).toHaveBeenCalledTimes(2);
+    expect(findRealtimeViewUserIds).toHaveBeenCalledOnce();
+    expect(findRealtimeViewUserIds).toHaveBeenCalledWith('board-a');
     expect(app.emit).toHaveBeenCalledOnce();
     const currentPrivateDelivery = app.emit.mock.calls[0]?.[2] as FakeChannel;
     expect(currentPrivateDelivery.connections).toEqual([allowed]);
@@ -950,10 +951,12 @@ function repos(options: {
       board_id: boardId,
       access_mode: options.boardAccessMode ?? 'private',
     })),
-    canView: vi.fn(async (_boardId: string, userId: string) =>
+    findRealtimeViewUserIds: vi.fn(async () =>
       options.boardPermissions
-        ? options.boardPermissions[userId] === true
-        : viewableUserIds.includes(userId)
+        ? Object.entries(options.boardPermissions)
+            .filter(([, canView]) => canView)
+            .map(([userId]) => userId)
+        : viewableUserIds
     ),
   } as unknown as BoardRepository;
   return { branchRepository, sessionsRepository, boardRepository };
@@ -1728,7 +1731,7 @@ describe('configureRealtimePublish', () => {
       { path: 'board-comments', method: 'create', event: 'created' }
     );
 
-    expect(r.boardRepository.canView).not.toHaveBeenCalled();
+    expect(r.boardRepository.findRealtimeViewUserIds).not.toHaveBeenCalled();
     expect(channel.connections).toEqual([{ user: allowed }]);
   });
 

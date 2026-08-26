@@ -169,7 +169,7 @@ import {
 import { captureBranchRemovalRealtimeVisibility as captureBranchRemovalVisibility } from './utils/branch-removal-realtime.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { redactGatewayChannelForTransport } from './utils/gateway-channel-redaction.js';
-import { injectCreatedBy } from './utils/inject-created-by.js';
+import { bindPrimaryOwnerToCreatedBy, injectCreatedBy } from './utils/inject-created-by.js';
 import {
   captureMarketplaceInvalidationTargets as captureMarketplaceTargets,
   publishCapturedMarketplaceInvalidation,
@@ -188,6 +188,7 @@ import {
 } from './utils/realtime-access-cache.js';
 import {
   configureRealtimePublish,
+  type RealtimeAccessBoardRepository,
   setBoardRemovalRealtimeVisibility,
 } from './utils/realtime-publish.js';
 import {
@@ -970,12 +971,10 @@ export function classifyPrimaryTeammateAuthorizationInvalidation(
 /**
  * Classify authorization mutations by the capability they can stale.
  *
- * True record creates are additive: they cannot leave a previously authorized
- * socket with access it has lost. Owner/membership creates still clear every
- * replica's cache so the newly authorized principal does not wait for a stale
- * negative entry, but they must not tear down the Socket.IO RPC that is
- * creating the grant. Upsert-shaped grant creates, patches, and removals can
- * reduce an existing capability and therefore evict.
+ * True record creates are usually additive. Group membership is the exception:
+ * joining a group creates a match, which suppresses Others and can therefore
+ * reduce access when that group's role is lower. Membership changes always
+ * evict; other revocation-capable writes do the same.
  */
 export function classifyRealtimeAuthorizationInvalidation(
   context: Pick<HookContext, 'path' | 'method' | 'data'>
@@ -983,7 +982,7 @@ export function classifyRealtimeAuthorizationInvalidation(
   if (!['create', 'update', 'patch', 'remove'].includes(context.method)) return 'none';
 
   if (context.path === 'group-memberships') {
-    return context.method === 'create' ? 'cache' : 'evict';
+    return 'evict';
   }
 
   if (['branches/:id/permissions', 'boards/:id/permissions'].includes(context.path)) {
@@ -1228,7 +1227,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     sessionsRepository: sessionsRepository as unknown as RealtimeAccessSessionRepository,
   });
   bindRealtimeAccessCacheInvalidation(app, realtimeAccessCache);
-  const boardRepository = new BoardRepository(db);
+  const boardRepository = new BoardRepository(db) as BoardRepository &
+    RealtimeAccessBoardRepository;
   const boardCommentsRepository = new BoardCommentsRepository(db);
   const boardObjectsRepository = new BoardObjectRepository(db);
   const cardRepository = new CardRepository(db);
@@ -1449,18 +1449,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       return context;
     }
 
-    const visibleUserIds = new Set<UserID>();
-    const users = await usersRepository.findAll();
-    await Promise.all(
-      users.map(async (user) => {
-        try {
-          if (await boardRepository.canView(board.board_id, user.user_id)) {
-            visibleUserIds.add(user.user_id);
-          }
-        } catch {
-          // Snapshot construction fails narrow for one principal.
-        }
-      })
+    const visibleUserIds = new Set<UserID>(
+      (await boardRepository.findRealtimeViewUserIds(board.board_id as BoardID)) as UserID[]
     );
     setBoardRemovalRealtimeVisibility(context.params, board.board_id as BoardID, {
       mode: 'explicitUsers',
@@ -2195,6 +2185,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         validateBranchEnvPolicyHook(config),
         ensureCanChangeBranchBoard,
         injectCreatedBy(),
+        bindPrimaryOwnerToCreatedBy(),
       ],
       update: [...branchUpdateAuthorization],
       patch: [
@@ -3503,7 +3494,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       get: [ensureCanViewBoard('view this board')],
       findBySlug: [ensureCanViewBoard('view this board')],
       findBySlugOrId: [ensureCanViewBoard('view this board')],
-      create: [requireMinimumRole(ROLES.MEMBER, 'create boards'), injectCreatedBy()],
+      create: [
+        requireMinimumRole(ROLES.MEMBER, 'create boards'),
+        injectCreatedBy(),
+        bindPrimaryOwnerToCreatedBy(),
+      ],
       // Whole-row replacement carries the same authorization as patch. The
       // `_action` dispatcher below is patch-only: those atomic board-object
       // operations are addressed through PATCH and have no PUT equivalent.

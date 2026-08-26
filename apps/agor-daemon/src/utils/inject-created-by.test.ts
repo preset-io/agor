@@ -12,7 +12,7 @@
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { HookContext } from '@feathersjs/feathers';
 import { describe, expect, it } from 'vitest';
-import { injectCreatedBy } from './inject-created-by';
+import { bindPrimaryOwnerToCreatedBy, injectCreatedBy } from './inject-created-by';
 
 const ALICE = 'user-alice';
 const BOB = 'user-bob';
@@ -111,5 +111,44 @@ describe('injectCreatedBy', () => {
   it('is a no-op when context.data is undefined', () => {
     const ctx = makeContext({ provider: 'rest', user: { user_id: ALICE } });
     expect(() => hook(ctx)).not.toThrow();
+  });
+});
+
+describe('bindPrimaryOwnerToCreatedBy', () => {
+  const bindOwner = bindPrimaryOwnerToCreatedBy();
+
+  it('overwrites an external caller-supplied primary owner', () => {
+    const ctx = makeContext({
+      provider: 'rest',
+      user: { user_id: ALICE },
+      data: { created_by: ALICE, primary_owner_user_id: BOB },
+    });
+    bindOwner(ctx);
+    expect((ctx.data as { primary_owner_user_id: string }).primary_owner_user_id).toBe(ALICE);
+  });
+
+  it('binds every item in an external bulk create', () => {
+    const ctx = makeContext({
+      provider: 'socketio',
+      user: { user_id: ALICE },
+      data: [{ created_by: ALICE, primary_owner_user_id: BOB }, { created_by: ALICE }],
+    });
+    bindOwner(ctx);
+    expect(ctx.data).toEqual([
+      { created_by: ALICE, primary_owner_user_id: ALICE },
+      { created_by: ALICE, primary_owner_user_id: ALICE },
+    ]);
+  });
+
+  it('preserves an explicit initial owner selected by a trusted internal flow', () => {
+    const ctx = makeContext({ data: { created_by: ALICE, primary_owner_user_id: BOB } });
+    bindOwner(ctx);
+    expect((ctx.data as { primary_owner_user_id: string }).primary_owner_user_id).toBe(BOB);
+  });
+
+  it('defaults internal ownership to the attributed creator', () => {
+    const ctx = makeContext({ data: { created_by: ALICE } });
+    bindOwner(ctx);
+    expect((ctx.data as { primary_owner_user_id: string }).primary_owner_user_id).toBe(ALICE);
   });
 });

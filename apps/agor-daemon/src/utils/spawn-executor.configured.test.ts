@@ -5,8 +5,9 @@ import path from 'node:path';
 import { Writable } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { containMock, spawnMock, trackMock, untrackMock } = vi.hoisted(() => ({
+const { containMock, sandboxWrapMock, spawnMock, trackMock, untrackMock } = vi.hoisted(() => ({
   containMock: vi.fn(),
+  sandboxWrapMock: vi.fn(),
   spawnMock: vi.fn(),
   trackMock: vi.fn(),
   untrackMock: vi.fn(),
@@ -41,6 +42,11 @@ vi.mock('./build-resolved-config-slice.js', () => ({
     resolvedConfig: {},
   }),
 }));
+
+vi.mock('./sandbox-wrap.js', async () => {
+  const actual = await vi.importActual<typeof import('./sandbox-wrap.js')>('./sandbox-wrap.js');
+  return { ...actual, buildSandboxWrap: sandboxWrapMock };
+});
 
 function createMockProcess() {
   const proc = new EventEmitter() as EventEmitter & {
@@ -152,6 +158,8 @@ describe('configured executor spawning', () => {
   beforeEach(async () => {
     vi.resetModules();
     spawnMock.mockReset();
+    sandboxWrapMock.mockReset();
+    sandboxWrapMock.mockReturnValue(null);
     containMock.mockReset();
     containMock.mockResolvedValue({ status: 'verified_absent' });
     trackMock.mockReset();
@@ -468,6 +476,61 @@ describe('configured executor spawning', () => {
     expect(spawnOptions.cwd).not.toBe(tenantBranchPath);
     expect(spawnOptions.cwd).toMatch(/\/packages\/executor$/);
     expect(JSON.parse(proc.written)).toMatchObject({ params: { cwd: tenantBranchPath } });
+  });
+
+  it('sandboxes short-lived branch commands with normalized filesystem access', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    sandboxWrapMock.mockReturnValue({
+      cmd: 'bwrap',
+      args: ['--synthetic-wrap', '--', '/operator/agor-executor', '--stdin'],
+      extraEnv: { AGOR_SANDBOXED: '1' },
+    });
+    const { configureExecutor, requestExecutor } = await import('./spawn-executor');
+    configureExecutor(
+      { sandbox: { enabled: true, fail_if_unavailable: true } },
+      {
+        ...LOCAL_RESPONSE_OPTIONS,
+        sandboxRuntimePaths: {
+          homeDir: '/home/agor',
+          dataHome: '/home/agor/.agor',
+          protectedDataRoots: ['/home/agor/.agor'],
+          worktreesRoot: '/home/agor/.agor/worktrees/tenant-a',
+          agenticToolsPath: '/opt/agor/agentic-tools',
+          agorConfigPath: '/home/agor/.agor/config.yaml',
+          agorDbPath: '/home/agor/.agor/agor.db',
+        },
+      }
+    );
+    const promise = requestExecutor({
+      command: 'branch.files.browse',
+      params: {
+        cwd: '/home/agor/.agor/worktrees/tenant-a/repo/feature',
+        principalBranchAccess: 'read',
+      },
+    });
+
+    await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
+    proc.emit('exit', 0);
+
+    await expect(promise).resolves.toEqual({ success: true, data: { files: [] } });
+    expect(sandboxWrapMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        branchPath: '/home/agor/.agor/worktrees/tenant-a/repo/feature',
+        branchAccess: 'read',
+        runtimePaths: expect.objectContaining({
+          worktreesRoot: '/home/agor/.agor/worktrees/tenant-a',
+        }),
+      })
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'bwrap',
+      ['--synthetic-wrap', '--', '/operator/agor-executor', '--stdin'],
+      expect.objectContaining({
+        env: expect.objectContaining({ AGOR_SANDBOXED: '1' }),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+    );
   });
 
   it('waits for asynchronous spawn readiness before sending the executor payload', async () => {

@@ -85,8 +85,8 @@ describe('classifyRealtimeAuthorizationInvalidation', () => {
     expect(classify(path, 'create', data)).toBe('none');
   });
 
-  it('distributes cache-only invalidation for additive group membership', () => {
-    expect(classify('group-memberships', 'create')).toBe('cache');
+  it('evicts when group membership suppresses a potentially broader Others fallback', () => {
+    expect(classify('group-memberships', 'create')).toBe('evict');
   });
 
   it.each([

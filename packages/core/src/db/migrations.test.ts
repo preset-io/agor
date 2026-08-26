@@ -342,16 +342,25 @@ describe('Board and branch capability-policy migration', () => {
         INSERT INTO groups VALUES ('design');
         INSERT INTO boards VALUES (
           'board-1',1,2,'owner',
-          '{"access_mode":"private","default_others_can":"prompt","default_others_fs_access":"write","default_dangerously_allow_session_sharing":true}'
+          '{"access_mode":"shared","default_others_can":"prompt","default_others_fs_access":"write","default_dangerously_allow_session_sharing":true}'
         );
         INSERT INTO board_owners VALUES ('board-1','owner',1),('board-1','manager',2);
-        INSERT INTO board_group_grants VALUES ('board-1','design','prompt','write',1,2);
+        INSERT INTO board_group_grants VALUES ('board-1','design','all','write',1,2);
         INSERT INTO branches VALUES (
           'branch-1','board-1',1,2,'deleted-creator','override','prompt','write',
           '{"dangerously_allow_session_sharing":true}'
         );
         INSERT INTO branch_owners VALUES ('branch-1','owner',1),('branch-1','manager',2);
         INSERT INTO branch_group_grants VALUES ('branch-1','design','prompt','write',1,2);
+        INSERT INTO branches VALUES (
+          'branch-2','board-1',1,2,'member','board','none','none','{}'
+        );
+        INSERT INTO branch_owners VALUES ('branch-2','member',1),('branch-2','manager',2);
+        INSERT INTO branch_group_grants VALUES ('branch-2','design','prompt','read',1,2);
+        INSERT INTO branches VALUES (
+          'branch-3','board-1',1,2,'owner','board','none','none','{}'
+        );
+        INSERT INTO branch_owners VALUES ('branch-3','owner',1);
       `);
       const migration = await readFile(
         new URL('../../drizzle/sqlite/0098_board_branch_capability_policies.sql', import.meta.url),
@@ -362,9 +371,22 @@ describe('Board and branch capability-policy migration', () => {
       }
 
       const owners = await client.execute(
-        'SELECT primary_owner_user_id FROM boards UNION ALL SELECT primary_owner_user_id FROM branches'
+        `SELECT 'board:'||board_id AS resource,primary_owner_user_id FROM boards
+         UNION ALL SELECT 'branch:'||branch_id,primary_owner_user_id FROM branches`
       );
-      expect(owners.rows.map((row) => row.primary_owner_user_id)).toEqual(['owner', 'owner']);
+      expect(
+        Object.fromEntries(owners.rows.map((row) => [row.resource, row.primary_owner_user_id]))
+      ).toEqual({
+        'board:board-1': 'owner',
+        'branch:branch-1': 'owner',
+        'branch:branch-2': 'member',
+        'branch:branch-3': 'owner',
+      });
+
+      const boardGroup = await client.execute(
+        `SELECT role FROM board_access_entries WHERE board_id='board-1' AND group_id='design'`
+      );
+      expect(boardGroup.rows[0]).toMatchObject({ role: 'manager' });
 
       const template = await client.execute(
         `SELECT sharing_mode,others_role,others_fs_access
@@ -383,6 +405,27 @@ describe('Board and branch capability-policy migration', () => {
          )`
       );
       expect(migratedGroup.rows[0]).toMatchObject({ role: 'collaborator', fs_access: 'write' });
+      const bindings = await client.execute(
+        `SELECT branch_id,permission_binding FROM branches WHERE branch_id IN ('branch-2','branch-3') ORDER BY branch_id`
+      );
+      expect(bindings.rows).toEqual([
+        { branch_id: 'branch-2', permission_binding: 'override' },
+        { branch_id: 'branch-3', permission_binding: 'inherit' },
+      ]);
+      const inheritedMaterialization = await client.execute(
+        `SELECT role,fs_access,user_id,group_id FROM branch_permission_entries
+         WHERE config_id IN (SELECT config_id FROM branch_permission_configs WHERE branch_id='branch-2')
+         ORDER BY COALESCE(user_id,group_id)`
+      );
+      expect(inheritedMaterialization.rows).toEqual([
+        { role: 'manager', fs_access: 'write', user_id: null, group_id: 'design' },
+        { role: 'manager', fs_access: 'write', user_id: 'manager', group_id: null },
+        { role: 'manager', fs_access: 'write', user_id: 'owner', group_id: null },
+      ]);
+      const untouchedInheritedConfig = await client.execute(
+        `SELECT count(*) AS count FROM branch_permission_configs WHERE branch_id='branch-3'`
+      );
+      expect(Number(untouchedInheritedConfig.rows[0]?.count)).toBe(0);
       const branchEntryColumns = await client.execute(
         "SELECT name FROM pragma_table_info('branch_permission_entries')"
       );

@@ -1,13 +1,12 @@
 /**
  * Wrap an AGENT executor spawn in an OS sandbox (`bubblewrap`: user + mount
- * namespaces, plus a PID namespace where the host allows it). Applied by
- * `spawnExecutorLocal` — the chokepoint for agent workloads: prompt tasks and
- * web terminals, across all agentic tools (tool-agnostic).
+ * namespaces, plus a PID namespace where the host allows it). Applied by the
+ * local executor spawn chokepoints for agent workloads and branch-scoped
+ * request commands, across all agentic tools (tool-agnostic).
  *
- * NOT applied to daemon-internal command spawns (`requestExecutor` /
- * `startInteractiveExecutor`: git-state/autocomplete probes, file reads, OAuth
- * flows) — those are Agor's own trusted code with no agent-authored payload,
- * analogous to repo-level ops running unwrapped.
+ * Branch-scoped request executors are wrapped when their server-authoritative
+ * payload includes a branch cwd. Other daemon-internal commands remain
+ * unwrapped because they have no branch filesystem projection.
  *
  * The network namespace stays shared (no `--unshare-net`), so the executor
  * keeps its daemon/model connectivity. Network egress control, if wanted, is

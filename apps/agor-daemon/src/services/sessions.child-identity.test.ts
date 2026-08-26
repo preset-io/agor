@@ -9,7 +9,7 @@
  * (or, in hosted deployments, silently shares an identity).
  */
 import type { Application } from '@agor/core/feathers';
-import type { Session, UUID } from '@agor/core/types';
+import type { Branch, Session, UUID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
@@ -66,6 +66,24 @@ async function resolveInternalChildIdentity(
   ).resolveChildIdentity(parent, undefined);
 }
 
+async function resolveExternalChildIdentity(
+  service: SessionsService,
+  parent: Session,
+  userId: UUID
+): Promise<{ created_by: Session['created_by']; unix_username: Session['unix_username'] }> {
+  return (
+    service as unknown as {
+      resolveChildIdentity: (
+        parent: Session,
+        params?: unknown
+      ) => Promise<{ created_by: Session['created_by']; unix_username: Session['unix_username'] }>;
+    }
+  ).resolveChildIdentity(parent, {
+    provider: 'rest',
+    user: { user_id: userId, role: 'member' },
+  });
+}
+
 describe('resolveChildIdentity — internal (provider-less) calls', () => {
   it('rejects a null-stamped parent in delegated mode', async () => {
     mockMode('delegated');
@@ -87,5 +105,33 @@ describe('resolveChildIdentity — internal (provider-less) calls', () => {
       created_by: 'parent-owner',
       unix_username: null,
     });
+  });
+});
+
+describe('resolveChildIdentity — external calls', () => {
+  it('rejects an own-session fork when the creator no longer has Collaborator access', async () => {
+    mockMode('simple');
+    const ownerId = 'parent-owner' as UUID;
+    const service = makeService();
+    const resolveSessionPromptAuthority = vi.fn(async () => ({
+      allowed: false,
+      source: 'denied' as const,
+    }));
+    Object.assign(service as unknown as Record<string, unknown>, {
+      app: {
+        service: (name: string) => {
+          if (name === 'branches') {
+            return { get: vi.fn(async () => ({ branch_id: 'branch-1' }) as Branch) };
+          }
+          throw new Error(`Unexpected service: ${name}`);
+        },
+      },
+      branchRepo: { resolveSessionPromptAuthority },
+    });
+
+    await expect(
+      resolveExternalChildIdentity(service, makeParent('alice'), ownerId)
+    ).rejects.toThrow(/Collaborator access is required/);
+    expect(resolveSessionPromptAuthority).toHaveBeenCalledWith('branch-1', ownerId, ownerId);
   });
 });

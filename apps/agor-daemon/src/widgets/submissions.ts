@@ -266,6 +266,20 @@ async function doResolveWidget(
   // reopen it and replay an already-completed external effect.
   let autoResumeQueued = false;
   if (widget.auto_resume !== false && autoResumePrompt) {
+    // Re-evaluate at Task admission. The owner may revoke personal sharing or
+    // the caller may lose Collaborator access while a submit handler performs
+    // external work. The durable widget claim remains `resolving` on denial so
+    // the already-completed side effect is never replayed.
+    const promptAuthority = await deps.resolveSessionPromptAuthority(
+      branch.branch_id,
+      caller.user_id,
+      session.created_by as UserID
+    );
+    if (!canResolveWidget(promptAuthority)) {
+      throw new Forbidden(
+        'Collaborator access and permission from the session owner are required to resume this widget.'
+      );
+    }
     await deps.app.service('/sessions/:id/prompt').create(
       {
         prompt: autoResumePrompt,

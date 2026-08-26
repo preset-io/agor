@@ -30,7 +30,16 @@ SELECT 0 FROM `branches` WHERE `primary_owner_user_id` IS NULL;
 --> statement-breakpoint
 DROP TABLE `_rbac_owner_preflight`;
 --> statement-breakpoint
-UPDATE `branches` SET `permission_binding` = CASE WHEN `permission_source` = 'board' AND `board_id` IS NOT NULL THEN 'inherit' ELSE 'override' END;
+-- Keep inheritance only when the board package already represents every old
+-- source of authority. Branch-specific owners/groups and a different board
+-- owner require a materialized override so the cutover does not discard a
+-- directly representable grant.
+UPDATE `branches` SET `permission_binding` = CASE
+  WHEN `permission_source` = 'board' AND `board_id` IS NOT NULL
+    AND `primary_owner_user_id` = (SELECT b.`primary_owner_user_id` FROM `boards` b WHERE b.`board_id`=`branches`.`board_id`)
+    AND NOT EXISTS (SELECT 1 FROM `branch_owners` bo WHERE bo.`branch_id`=`branches`.`branch_id` AND bo.`user_id`<>`branches`.`primary_owner_user_id`)
+    AND NOT EXISTS (SELECT 1 FROM `branch_group_grants` bg WHERE bg.`branch_id`=`branches`.`branch_id` AND bg.`can`<>'none')
+  THEN 'inherit' ELSE 'override' END;
 --> statement-breakpoint
 
 CREATE TABLE `board_access_policies` (
@@ -163,7 +172,7 @@ WHERE bo.`user_id`<>b.`primary_owner_user_id`;
 --> statement-breakpoint
 INSERT INTO `board_access_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
-  bg.`board_id`, NULL, bg.`group_id`, 'viewer',
+  bg.`board_id`, NULL, bg.`group_id`, CASE bg.`can` WHEN 'all' THEN 'manager' ELSE 'viewer' END,
   COALESCE(bg.`created_at`, unixepoch()*1000), COALESCE(bg.`updated_at`, bg.`created_at`, unixepoch()*1000)
 FROM `board_group_grants` bg JOIN `boards` b ON b.`board_id`=bg.`board_id`
 WHERE bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared';
@@ -202,18 +211,49 @@ JOIN `branch_permission_configs` c ON c.`board_id`=bg.`board_id`
 WHERE bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared';
 --> statement-breakpoint
 
--- Explicit branch packages. Inherited branches have no shadow override row.
+-- Explicit branch packages. A branch that formerly used board permissions is
+-- materialized only when branch-specific authority or a distinct board owner
+-- must be preserved; its package starts as an exact copy of the board template.
 INSERT INTO `branch_permission_configs`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   NULL, br.`branch_id`, 1,
-  CASE WHEN COALESCE(br.`others_can`,'session')<>'none'
+  CASE WHEN br.`permission_source`='board' THEN 'shared'
+       WHEN COALESCE(br.`others_can`,'session')<>'none'
          OR EXISTS (SELECT 1 FROM `branch_owners` bo WHERE bo.`branch_id`=br.`branch_id` AND bo.`user_id`<>br.`primary_owner_user_id`)
          OR EXISTS (SELECT 1 FROM `branch_group_grants` bg WHERE bg.`branch_id`=br.`branch_id` AND bg.`can`<>'none')
        THEN 'shared' ELSE 'private' END,
-  CASE COALESCE(br.`others_can`,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
-  CASE WHEN COALESCE(br.`others_can`,'session')='none' THEN 'none' ELSE COALESCE(br.`others_fs_access`,'read') END,
+  CASE WHEN br.`permission_source`='board' THEN board_config.`others_role`
+       ELSE CASE COALESCE(br.`others_can`,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
+  CASE WHEN br.`permission_source`='board' THEN board_config.`others_fs_access`
+       WHEN COALESCE(br.`others_can`,'session')='none' THEN 'none' ELSE COALESCE(br.`others_fs_access`,'read') END,
   1, br.`primary_owner_user_id`, COALESCE(br.`created_at`, unixepoch()*1000), COALESCE(br.`updated_at`, br.`created_at`, unixepoch()*1000)
-FROM `branches` br WHERE br.`permission_binding`='override';
+FROM `branches` br
+LEFT JOIN `branch_permission_configs` board_config ON board_config.`board_id`=br.`board_id`
+WHERE br.`permission_binding`='override';
+--> statement-breakpoint
+-- Copy named board-template entries into materialized board-derived overrides.
+INSERT INTO `branch_permission_entries`
+SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
+  target.`config_id`, source_entry.`user_id`, source_entry.`group_id`, source_entry.`role`, source_entry.`fs_access`,
+  source_entry.`created_at`, source_entry.`updated_at`
+FROM `branches` br
+JOIN `branch_permission_configs` target ON target.`branch_id`=br.`branch_id`
+JOIN `branch_permission_configs` source ON source.`board_id`=br.`board_id`
+JOIN `branch_permission_entries` source_entry ON source_entry.`config_id`=source.`config_id`
+WHERE br.`permission_source`='board'
+  AND (source_entry.`user_id` IS NULL OR source_entry.`user_id`<>br.`primary_owner_user_id`);
+--> statement-breakpoint
+-- A board owner was an implicit branch owner under the old board-aligned
+-- resolver. Preserve that Manager grant when the branch has another owner.
+INSERT INTO `branch_permission_entries`
+SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
+  target.`config_id`, b.`primary_owner_user_id`, NULL, 'manager', 'write',
+  COALESCE(b.`created_at`, unixepoch()*1000), COALESCE(b.`updated_at`, b.`created_at`, unixepoch()*1000)
+FROM `branches` br
+JOIN `boards` b ON b.`board_id`=br.`board_id`
+JOIN `branch_permission_configs` target ON target.`branch_id`=br.`branch_id`
+WHERE br.`permission_source`='board' AND b.`primary_owner_user_id`<>br.`primary_owner_user_id`
+  AND NOT EXISTS (SELECT 1 FROM `branch_permission_entries` e WHERE e.`config_id`=target.`config_id` AND e.`user_id`=b.`primary_owner_user_id`);
 --> statement-breakpoint
 INSERT INTO `branch_permission_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
@@ -221,14 +261,25 @@ SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(l
   'write', COALESCE(bo.`created_at`, unixepoch()*1000), COALESCE(bo.`created_at`, unixepoch()*1000)
 FROM `branch_owners` bo JOIN `branches` br ON br.`branch_id`=bo.`branch_id`
 JOIN `branch_permission_configs` c ON c.`branch_id`=bo.`branch_id`
-WHERE bo.`user_id`<>br.`primary_owner_user_id`;
+WHERE bo.`user_id`<>br.`primary_owner_user_id`
+ON CONFLICT (`config_id`,`user_id`) DO UPDATE SET `role`='manager',`fs_access`='write',`updated_at`=excluded.`updated_at`;
 --> statement-breakpoint
 INSERT INTO `branch_permission_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   c.`config_id`, NULL, bg.`group_id`, CASE bg.`can` WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
   COALESCE(bg.`fs_access`,'read'), COALESCE(bg.`created_at`, unixepoch()*1000), COALESCE(bg.`updated_at`, bg.`created_at`, unixepoch()*1000)
 FROM `branch_group_grants` bg JOIN `branch_permission_configs` c ON c.`branch_id`=bg.`branch_id`
-WHERE bg.`can`<>'none';
+WHERE bg.`can`<>'none'
+ON CONFLICT (`config_id`,`group_id`) DO UPDATE SET
+  `role`=CASE
+    WHEN excluded.`role`='manager' OR `branch_permission_entries`.`role`='manager' THEN 'manager'
+    WHEN excluded.`role`='collaborator' OR `branch_permission_entries`.`role`='collaborator' THEN 'collaborator'
+    ELSE 'viewer' END,
+  `fs_access`=CASE
+    WHEN excluded.`fs_access`='write' OR `branch_permission_entries`.`fs_access`='write' THEN 'write'
+    WHEN excluded.`fs_access`='read' OR `branch_permission_entries`.`fs_access`='read' THEN 'read'
+    ELSE 'none' END,
+  `updated_at`=excluded.`updated_at`;
 --> statement-breakpoint
 
 -- Retire all legacy authority. Physical compatibility columns/tables remain so

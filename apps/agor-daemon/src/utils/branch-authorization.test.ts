@@ -114,12 +114,13 @@ describe('hasBranchPermission', () => {
 
     it('superadmin treated as regular user when flag disabled', () => {
       const wt = makeBranch({ others_can: 'view' });
-      // Can view because others_can=view (not because of superadmin)
-      expect(hasBranchPermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN, false)).toBe(true);
-      // Cannot prompt because others_can=view only
-      expect(hasBranchPermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN, false)).toBe(
-        false
+      // Repository-resolved Viewer access applies; the global bypass does not.
+      expect(hasBranchPermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN, false, 'view')).toBe(
+        true
       );
+      expect(
+        hasBranchPermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN, false, 'view')
+      ).toBe(false);
     });
   });
 
@@ -145,9 +146,16 @@ describe('hasBranchPermission', () => {
       ['none', 'session', false],
       ['none', 'prompt', false],
       ['none', 'all', false],
-    ])('others_can=%s, required=%s → %s', (othersCan, required, expected) => {
-      const wt = makeBranch({ others_can: othersCan });
-      expect(hasBranchPermission(wt, USER_ID, false, required, ROLES.MEMBER)).toBe(expected);
+    ])('effective=%s, required=%s → %s', (effective, required, expected) => {
+      const wt = makeBranch({ others_can: 'all' });
+      expect(hasBranchPermission(wt, USER_ID, false, required, ROLES.MEMBER, true, effective)).toBe(
+        expected
+      );
+    });
+
+    it('ignores an inert legacy others_can value when no normalized result is supplied', () => {
+      const wt = makeBranch({ others_can: 'all' });
+      expect(hasBranchPermission(wt, USER_ID, false, 'view', ROLES.MEMBER)).toBe(false);
     });
   });
 });
@@ -168,19 +176,23 @@ describe('resolveBranchPermission', () => {
     expect(resolveBranchPermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
   });
 
-  it('member gets others_can level', () => {
-    const wt = makeBranch({ others_can: 'prompt' });
-    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('prompt');
+  it('member gets the normalized effective level', () => {
+    const wt = makeBranch({ others_can: 'none' });
+    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER, true, 'prompt')).toBe(
+      'prompt'
+    );
   });
 
-  it('member gets none when others_can=none', () => {
-    const wt = makeBranch({ others_can: 'none' });
+  it('member fails closed without a normalized effective level', () => {
+    const wt = makeBranch({ others_can: 'all' });
     expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('none');
   });
 
-  it('member gets session when others_can=session', () => {
-    const wt = makeBranch({ others_can: 'session' });
-    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('session');
+  it('member gets normalized Collaborator access', () => {
+    const wt = makeBranch({ others_can: 'none' });
+    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER, true, 'session')).toBe(
+      'session'
+    );
   });
 
   it('superadmin resolves to all even with others_can=session', () => {

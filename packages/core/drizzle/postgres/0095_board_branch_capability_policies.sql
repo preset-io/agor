@@ -33,7 +33,16 @@ ALTER TABLE "boards" ALTER COLUMN "primary_owner_user_id" SET NOT NULL;
 --> statement-breakpoint
 ALTER TABLE "branches" ALTER COLUMN "primary_owner_user_id" SET NOT NULL;
 --> statement-breakpoint
-UPDATE "branches" SET "permission_binding"=CASE WHEN "permission_source"='board' AND "board_id" IS NOT NULL THEN 'inherit' ELSE 'override' END;
+-- Keep inheritance only when the board package already represents every old
+-- source of authority. Branch-specific owners/groups and a different board
+-- owner require a materialized override so directly representable grants are
+-- not discarded by the cutover.
+UPDATE "branches" br SET "permission_binding"=CASE
+ WHEN br."permission_source"='board' AND br."board_id" IS NOT NULL
+  AND br."primary_owner_user_id"=(SELECT b."primary_owner_user_id" FROM "boards" b WHERE b."tenant_id"=br."tenant_id" AND b."board_id"=br."board_id")
+  AND NOT EXISTS(SELECT 1 FROM "branch_owners" bo WHERE bo."tenant_id"=br."tenant_id" AND bo."branch_id"=br."branch_id" AND bo."user_id"<>br."primary_owner_user_id")
+  AND NOT EXISTS(SELECT 1 FROM "branch_group_grants" bg WHERE bg."tenant_id"=br."tenant_id" AND bg."branch_id"=br."branch_id" AND bg."can"<>'none')
+ THEN 'inherit' ELSE 'override' END;
 --> statement-breakpoint
 
 -- Composite identities let every normalized FK prove that its parent and
@@ -189,7 +198,7 @@ SELECT bo.tenant_id,gen_random_uuid()::text,bo.board_id,bo.user_id,NULL,'manager
 FROM board_owners bo JOIN boards b ON b.tenant_id=bo.tenant_id AND b.board_id=bo.board_id WHERE bo.user_id<>b.primary_owner_user_id;
 --> statement-breakpoint
 INSERT INTO board_access_entries
-SELECT bg.tenant_id,gen_random_uuid()::text,bg.board_id,NULL,bg.group_id,'viewer',
+SELECT bg.tenant_id,gen_random_uuid()::text,bg.board_id,NULL,bg.group_id,CASE bg.can WHEN 'all' THEN 'manager' ELSE 'viewer' END,
  COALESCE(bg.created_at,now()),COALESCE(bg.updated_at,bg.created_at,now())
 FROM board_group_grants bg JOIN boards b ON b.tenant_id=bg.tenant_id AND b.board_id=bg.board_id
 WHERE bg.can<>'none' AND COALESCE(b.data->>'access_mode','shared')='shared';
@@ -218,19 +227,56 @@ WHERE bg.can<>'none' AND COALESCE(b.data->>'access_mode','shared')='shared';
 
 INSERT INTO branch_permission_configs
 SELECT br.tenant_id,gen_random_uuid()::text,NULL,br.branch_id,1,
- CASE WHEN COALESCE(br.others_can,'session')<>'none' OR EXISTS(SELECT 1 FROM branch_owners bo WHERE bo.tenant_id=br.tenant_id AND bo.branch_id=br.branch_id AND bo.user_id<>br.primary_owner_user_id) OR EXISTS(SELECT 1 FROM branch_group_grants bg WHERE bg.tenant_id=br.tenant_id AND bg.branch_id=br.branch_id AND bg.can<>'none') THEN 'shared' ELSE 'private' END,
- CASE COALESCE(br.others_can,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
- CASE WHEN COALESCE(br.others_can,'session')='none' THEN 'none' ELSE COALESCE(br.others_fs_access,'read') END,
- 1,br.primary_owner_user_id,COALESCE(br.created_at,now()),COALESCE(br.updated_at,br.created_at,now()) FROM branches br WHERE br.permission_binding='override';
+ CASE WHEN br.permission_source='board' THEN 'shared'
+  WHEN COALESCE(br.others_can,'session')<>'none' OR EXISTS(SELECT 1 FROM branch_owners bo WHERE bo.tenant_id=br.tenant_id AND bo.branch_id=br.branch_id AND bo.user_id<>br.primary_owner_user_id) OR EXISTS(SELECT 1 FROM branch_group_grants bg WHERE bg.tenant_id=br.tenant_id AND bg.branch_id=br.branch_id AND bg.can<>'none') THEN 'shared' ELSE 'private' END,
+ CASE WHEN br.permission_source='board' THEN board_config.others_role ELSE CASE COALESCE(br.others_can,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
+ CASE WHEN br.permission_source='board' THEN board_config.others_fs_access WHEN COALESCE(br.others_can,'session')='none' THEN 'none' ELSE COALESCE(br.others_fs_access,'read') END,
+ 1,br.primary_owner_user_id,COALESCE(br.created_at,now()),COALESCE(br.updated_at,br.created_at,now())
+FROM branches br
+LEFT JOIN branch_permission_configs board_config ON board_config.tenant_id=br.tenant_id AND board_config.board_id=br.board_id
+WHERE br.permission_binding='override';
+--> statement-breakpoint
+-- Copy named board-template entries into materialized board-derived overrides.
+INSERT INTO branch_permission_entries
+SELECT br.tenant_id,gen_random_uuid()::text,target.config_id,source_entry.user_id,source_entry.group_id,
+ source_entry.role,source_entry.fs_access,source_entry.created_at,source_entry.updated_at
+FROM branches br
+JOIN branch_permission_configs target ON target.tenant_id=br.tenant_id AND target.branch_id=br.branch_id
+JOIN branch_permission_configs source ON source.tenant_id=br.tenant_id AND source.board_id=br.board_id
+JOIN branch_permission_entries source_entry ON source_entry.tenant_id=source.tenant_id AND source_entry.config_id=source.config_id
+WHERE br.permission_source='board'
+ AND (source_entry.user_id IS NULL OR source_entry.user_id<>br.primary_owner_user_id);
+--> statement-breakpoint
+-- A board owner was an implicit branch owner under the old board-aligned
+-- resolver. Preserve that Manager grant when the branch has another owner.
+INSERT INTO branch_permission_entries
+SELECT br.tenant_id,gen_random_uuid()::text,target.config_id,b.primary_owner_user_id,NULL,
+ 'manager','write',COALESCE(b.created_at,now()),COALESCE(b.updated_at,b.created_at,now())
+FROM branches br
+JOIN boards b ON b.tenant_id=br.tenant_id AND b.board_id=br.board_id
+JOIN branch_permission_configs target ON target.tenant_id=br.tenant_id AND target.branch_id=br.branch_id
+WHERE br.permission_source='board' AND b.primary_owner_user_id<>br.primary_owner_user_id
+ON CONFLICT (tenant_id,config_id,user_id) DO NOTHING;
 --> statement-breakpoint
 INSERT INTO branch_permission_entries
 SELECT bo.tenant_id,gen_random_uuid()::text,c.config_id,bo.user_id,NULL,'manager','write',COALESCE(bo.created_at,now()),COALESCE(bo.created_at,now())
-FROM branch_owners bo JOIN branches br ON br.tenant_id=bo.tenant_id AND br.branch_id=bo.branch_id JOIN branch_permission_configs c ON c.tenant_id=bo.tenant_id AND c.branch_id=bo.branch_id WHERE bo.user_id<>br.primary_owner_user_id;
+FROM branch_owners bo JOIN branches br ON br.tenant_id=bo.tenant_id AND br.branch_id=bo.branch_id JOIN branch_permission_configs c ON c.tenant_id=bo.tenant_id AND c.branch_id=bo.branch_id WHERE bo.user_id<>br.primary_owner_user_id
+ON CONFLICT (tenant_id,config_id,user_id) DO UPDATE SET role='manager',fs_access='write',updated_at=EXCLUDED.updated_at;
 --> statement-breakpoint
 INSERT INTO branch_permission_entries
 SELECT bg.tenant_id,gen_random_uuid()::text,c.config_id,NULL,bg.group_id,CASE bg.can WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
  COALESCE(bg.fs_access,'read'),COALESCE(bg.created_at,now()),COALESCE(bg.updated_at,bg.created_at,now())
-FROM branch_group_grants bg JOIN branch_permission_configs c ON c.tenant_id=bg.tenant_id AND c.branch_id=bg.branch_id WHERE bg.can<>'none';
+FROM branch_group_grants bg JOIN branch_permission_configs c ON c.tenant_id=bg.tenant_id AND c.branch_id=bg.branch_id WHERE bg.can<>'none'
+ON CONFLICT (tenant_id,config_id,group_id) DO UPDATE SET
+ role=CASE
+  WHEN EXCLUDED.role='manager' OR branch_permission_entries.role='manager' THEN 'manager'
+  WHEN EXCLUDED.role='collaborator' OR branch_permission_entries.role='collaborator' THEN 'collaborator'
+  ELSE 'viewer' END,
+ fs_access=CASE
+  WHEN EXCLUDED.fs_access='write' OR branch_permission_entries.fs_access='write' THEN 'write'
+  WHEN EXCLUDED.fs_access='read' OR branch_permission_entries.fs_access='read' THEN 'read'
+  ELSE 'none' END,
+ updated_at=EXCLUDED.updated_at;
 --> statement-breakpoint
 
 DELETE FROM branch_owners;

@@ -1,5 +1,5 @@
 import * as configModule from '@agor/core/config';
-import { BranchRepository } from '@agor/core/db';
+import { BranchRepository, CapabilityPolicyRepository } from '@agor/core/db';
 import { Forbidden } from '@agor/core/feathers';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -183,29 +183,40 @@ describe('agor_branches_delete authorization boundary', () => {
 });
 
 describe('agor_branches_update', () => {
-  it('can persist an explicit None override instead of an inherited board default', async () => {
-    const branchesPatch = vi.fn(async (_id, data) => ({ branch_id: 'branch-1', ...data }));
-    const branchesGet = vi.fn(async () => ({ branch_id: 'branch-1' }));
+  it('replaces an explicit normalized override package', async () => {
+    const permissions = {
+      primary_owner_user_id: '00000000-0000-7000-8000-000000000001',
+      revision: 1,
+      binding_mode: 'override',
+      override_config: {
+        access: {
+          schema_version: 1,
+          policy_kind: 'branch_access',
+          sharing_mode: 'private',
+          entries: [],
+          others: { preset: 'none', capabilities: [], fs_access: 'none' },
+        },
+        session_sharing: { owner_rules: [] },
+      },
+    };
+    const permissionsPatch = vi.fn(async (_id, data) => data);
     const app = {
       get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
       service(name: string) {
-        if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
+        if (name === 'branches/:id/permissions') return { patch: permissionsPatch };
         throw new Error(`Unexpected service call: ${name}`);
       },
     };
-    const update = registerAndCaptureUpdate({ app, userId: 'user-1' });
-
-    await update({
-      branchId: 'branch-1',
-      permissionSource: 'override',
-      othersCan: 'none',
+    const update = registerAndCaptureHandler('agor_branches_permissions_update', {
+      app,
+      userId: 'user-1',
     });
 
-    expect(branchesPatch).toHaveBeenCalledWith(
-      'branch-1',
-      { permission_source: 'override', others_can: 'none' },
-      {}
-    );
+    await update({ branchId: 'branch-1', permissions });
+
+    expect(permissionsPatch).toHaveBeenCalledWith(null, permissions, {
+      route: { id: 'branch-1' },
+    });
   });
 
   it('uses authenticated service params when falling back to the current session branch', async () => {
@@ -1291,6 +1302,14 @@ describe('agor_branches_cleanup_candidates', () => {
       if (options?.repoGetFails) throw new Error('repo unavailable');
       return repo;
     });
+    vi.spyOn(CapabilityPolicyRepository.prototype, 'getBranchSharingModes').mockResolvedValue(
+      new Map(
+        branches.map((value) => {
+          const branch = value as { branch_id: string };
+          return [branch.branch_id, branch.branch_id === 'private' ? 'private' : 'shared'];
+        })
+      )
+    );
 
     return {
       branchesFind,

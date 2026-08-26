@@ -244,15 +244,15 @@ export class OfflineMigrationCutoverRequiredError extends MigrationError {
 }
 
 export function pendingOfflineCutoverMigrations(
-  dialect: DatabaseDialect,
+  _dialect: DatabaseDialect,
   status: {
     pending: readonly string[];
     applied: readonly string[];
   }
 ): string[] {
-  // A genuinely fresh database cannot have an old worker using the pre-claim
-  // protocol, so first installation remains automatic.
-  if (dialect !== 'postgresql' || status.applied.length === 0) return [];
+  // A genuinely fresh database cannot have an old worker using the previous
+  // protocol or schema, so first installation remains automatic.
+  if (status.applied.length === 0) return [];
   return status.pending.filter((tag) =>
     MIGRATION_IMPACT_REGISTRY.offlineCutoverMigrations.has(tag)
   );
@@ -525,8 +525,8 @@ export async function runMigrations(
     console.log(`Database dialect: ${dialect === 'sqlite' ? 'sqlite' : 'postgres'}`);
 
     const status = await checkMigrationStatus(db);
-    if (dialect === 'postgresql' && options.allowOfflineCutover !== true) {
-      const offlineMigrations = pendingOfflineCutoverMigrations('postgresql', status);
+    if (options.allowOfflineCutover !== true) {
+      const offlineMigrations = pendingOfflineCutoverMigrations(dialect, status);
       if (offlineMigrations.length > 0) {
         throw new OfflineMigrationCutoverRequiredError(offlineMigrations);
       }
@@ -534,7 +534,7 @@ export async function runMigrations(
 
     if (
       dialect === 'sqlite' &&
-      status.applied.includes('0096_scheduler_poison_recovery') &&
+      status.applied.length > 0 &&
       status.pending.includes('0098_board_branch_capability_policies')
     ) {
       await preflightSQLiteCapabilityPolicyOwners(db);

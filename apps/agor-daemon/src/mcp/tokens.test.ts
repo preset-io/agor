@@ -103,6 +103,7 @@ async function seedSession(
       repo_id: repo.repo_id,
       created_at: new Date(),
       created_by: 'test-user',
+      primary_owner_user_id: 'test-user',
       name: 'main',
       ref: 'main',
       branch_unique_id: 1,

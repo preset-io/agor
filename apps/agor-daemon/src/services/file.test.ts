@@ -23,6 +23,23 @@ function createApp() {
   } as never;
 }
 
+const branch = { branch_id: 'branch-1', path: '/tenant-a/branch-1' };
+
+function createBranchRepo(
+  findById = vi.fn().mockResolvedValue(branch),
+  fsAccess: 'none' | 'read' | 'write' = 'read'
+) {
+  return {
+    findById,
+    resolveUserAccess: vi.fn().mockResolvedValue({
+      can: 'view',
+      fs_access: fsAccess,
+      is_owner: false,
+      source: 'others',
+    }),
+  } as never;
+}
+
 describe('FileService executor failures', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -34,11 +51,7 @@ describe('FileService executor failures', () => {
       success: false,
       error: { code: 'EXECUTOR_FAILED', message: 'executor unavailable' },
     });
-    const service = new FileService(
-      { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
-      { run: vi.fn() } as never,
-      createApp()
-    );
+    const service = new FileService(createBranchRepo(), { run: vi.fn() } as never, createApp());
 
     await expect(
       runWithTenantContext('tenant-a', () =>
@@ -85,11 +98,7 @@ describe('FileService executor failures', () => {
     async ({ invoke, command, data }) => {
       impersonationMocks.resolveDelegatedExecutionHomeKey.mockResolvedValue('alice');
       vi.mocked(requestExecutor).mockResolvedValue({ success: true, data });
-      const service = new FileService(
-        { findById: vi.fn().mockResolvedValue({ branch_id: 'branch-1' }) } as never,
-        { run: vi.fn() } as never,
-        createApp()
-      );
+      const service = new FileService(createBranchRepo(), { run: vi.fn() } as never, createApp());
       const params = {
         query: { branch_id: 'branch-1' },
         user: {
@@ -102,8 +111,21 @@ describe('FileService executor failures', () => {
       await runWithTenantContext('tenant-a', () => invoke(service, params));
 
       expect(requestExecutor).toHaveBeenCalledWith(
-        expect.objectContaining({ command }),
-        expect.objectContaining({ delegatedHomeKey: 'alice' })
+        expect.objectContaining({
+          command,
+          params: expect.objectContaining({
+            cwd: '/tenant-a/branch-1',
+            principalBranchAccess: 'read',
+          }),
+        }),
+        expect.objectContaining({
+          delegatedHomeKey: 'alice',
+          templateVariables: {
+            branch_id: 'branch-1',
+            user_id: 'user-1',
+            branch_fs_access: 'read',
+          },
+        })
       );
     }
   );
@@ -122,7 +144,7 @@ describe('FileService executor failures', () => {
       expect(getCurrentTenantDatabaseScope()).toBeUndefined();
       return { success: true, data: { files: [] } };
     });
-    const service = new FileService({ findById } as never, db, createApp());
+    const service = new FileService(createBranchRepo(findById), db, createApp());
 
     await runWithTenantContext('tenant-a', () =>
       service.find({
@@ -137,7 +159,11 @@ describe('FileService executor failures', () => {
 
   it('fails before repository access when tenant identity is missing', async () => {
     const findById = vi.fn();
-    const service = new FileService({ findById } as never, { run: vi.fn() } as never, createApp());
+    const service = new FileService(
+      createBranchRepo(findById),
+      { run: vi.fn() } as never,
+      createApp()
+    );
 
     await expect(
       service.find({
@@ -151,7 +177,11 @@ describe('FileService executor failures', () => {
   it('reuses the branch authorized by the registered RBAC preload', async () => {
     const findById = vi.fn();
     vi.mocked(requestExecutor).mockResolvedValue({ success: true, data: { files: [] } });
-    const service = new FileService({ findById } as never, { run: vi.fn() } as never, createApp());
+    const service = new FileService(
+      createBranchRepo(findById),
+      { run: vi.fn() } as never,
+      createApp()
+    );
 
     await runWithTenantContext('tenant-a', () =>
       service.find({
@@ -163,5 +193,23 @@ describe('FileService executor failures', () => {
 
     expect(findById).not.toHaveBeenCalled();
     expect(requestExecutor).toHaveBeenCalledOnce();
+  });
+
+  it('requires normalized filesystem read access even when the branch is viewable', async () => {
+    const service = new FileService(
+      createBranchRepo(undefined, 'none'),
+      { run: vi.fn() } as never,
+      createApp()
+    );
+
+    await expect(
+      runWithTenantContext('tenant-a', () =>
+        service.find({
+          query: { branch_id: 'branch-1' },
+          user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+        })
+      )
+    ).rejects.toThrow('branch filesystem read access required');
+    expect(requestExecutor).not.toHaveBeenCalled();
   });
 });

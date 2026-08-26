@@ -24,6 +24,7 @@ const repositoryMocks = vi.hoisted(() => ({
   deleteRepo: vi.fn(),
   findAllBranchesByRepoId: vi.fn(),
   lockRepoForBranchInventory: vi.fn(),
+  resolveBranchUserAccess: vi.fn(),
 }));
 
 vi.mock('@agor/core/db', async (importOriginal) => {
@@ -37,6 +38,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
         findAllByRepoId: repositoryMocks.findAllBranchesByRepoId,
         getAllUsedUniqueIds: vi.fn(async () => []),
         addOwner: vi.fn(async () => undefined),
+        resolveUserAccess: repositoryMocks.resolveBranchUserAccess,
       };
     }),
     RepoRepository: vi.fn().mockImplementation(function RepoRepository() {
@@ -81,6 +83,131 @@ vi.mock('../utils/spawn-executor.js', () => {
 
 beforeEach(() => {
   tenantScopeMocks.withFreshTenantWrite.mockClear();
+  executorMocks.requestExecutor.mockReset();
+  executorMocks.spawnExecutorFireAndForget.mockReset();
+  delegatedHomeMocks.resolve.mockReset().mockResolvedValue(undefined);
+  repositoryMocks.resolveBranchUserAccess.mockReset().mockResolvedValue({
+    can: 'all',
+    fs_access: 'write',
+    is_owner: false,
+    source: 'direct',
+  });
+});
+
+describe('ReposService .agor.yml normalized branch access', () => {
+  const repo = {
+    repo_id: '550e8400-e29b-41d4-a716-446655440001',
+    slug: 'preset-io/agor',
+  };
+  const branch = {
+    branch_id: '550e8400-e29b-41d4-a716-446655440002',
+    repo_id: repo.repo_id,
+    name: 'rbac-remodel',
+    path: '/managed/worktrees/preset-io/agor/rbac-remodel',
+  };
+  const user = {
+    user_id: '550e8400-e29b-41d4-a716-446655440004',
+    role: 'admin' as const,
+  };
+
+  function service() {
+    return new ReposService(
+      {} as never,
+      {
+        get: () => ({}),
+        service: vi.fn(),
+        sessionTokenService: {
+          generateCommandToken: vi.fn(async () => 'delegated-user-token'),
+        },
+      } as unknown as Application
+    );
+  }
+
+  it.each([
+    {
+      command: 'branch.agor-yml.import' as const,
+      access: { can: 'view' as const, fs_access: 'read' as const },
+    },
+    {
+      command: 'branch.agor-yml.export' as const,
+      access: { can: 'session' as const, fs_access: 'write' as const },
+    },
+  ])('passes normalized access to $command', async ({ command, access }) => {
+    repositoryMocks.resolveBranchUserAccess.mockResolvedValue({
+      ...access,
+      is_owner: false,
+      source: 'direct',
+    });
+    executorMocks.requestExecutor.mockResolvedValue({ success: true, data: {} });
+    const instance = service();
+
+    await (
+      instance as unknown as {
+        runAgorYmlExecutorCommand(
+          repo: typeof repo,
+          branch: typeof branch,
+          command: typeof command,
+          params: Record<string, unknown>,
+          serviceParams: unknown
+        ): Promise<unknown>;
+      }
+    ).runAgorYmlExecutorCommand(repo, branch, command, {}, { user });
+
+    expect(executorMocks.requestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command,
+        params: expect.objectContaining({
+          cwd: branch.path,
+          principalBranchAccess: access.fs_access,
+        }),
+      }),
+      expect.objectContaining({
+        templateVariables: {
+          branch_id: branch.branch_id,
+          user_id: user.user_id,
+          branch_fs_access: access.fs_access,
+        },
+      })
+    );
+  });
+
+  it('fails export closed when write access is missing', async () => {
+    repositoryMocks.resolveBranchUserAccess.mockResolvedValue({
+      can: 'session',
+      fs_access: 'read',
+      is_owner: false,
+      source: 'direct',
+    });
+    const instance = service();
+
+    await expect(
+      (
+        instance as unknown as {
+          runAgorYmlExecutorCommand(
+            repo: typeof repo,
+            branch: typeof branch,
+            command: 'branch.agor-yml.export',
+            params: Record<string, unknown>,
+            serviceParams: unknown
+          ): Promise<unknown>;
+        }
+      ).runAgorYmlExecutorCommand(repo, branch, 'branch.agor-yml.export', {}, { user })
+    ).rejects.toThrow('branch filesystem write access required');
+    expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
+  });
+
+  it('rejects repository environment import/export for non-admin callers', async () => {
+    const instance = service();
+    const params = { user: { ...user, role: 'member' as const } } as never;
+
+    await expect(
+      instance.importFromAgorYml(repo.repo_id, { branch_id: branch.branch_id }, params)
+    ).rejects.toThrow('Admin access is required');
+    await expect(
+      instance.exportToAgorYml(repo.repo_id, { branch_id: branch.branch_id }, params)
+    ).rejects.toThrow('Admin access is required');
+    expect(executorMocks.requestExecutor).not.toHaveBeenCalled();
+  });
 });
 
 describe('ReposService.addLocalRepository executor boundary', () => {

@@ -177,15 +177,19 @@ RBAC cannot provide filesystem isolation. Use it only on trusted installations.
 
 ## Migration and rollback
 
-The capability remodel is an offline, big-bang migration. SQLite and
-PostgreSQL preflight every board/branch primary owner, abort with the unresolved
-IDs when attribution is impossible, create normalized policies, then empty the
-legacy authority tables/fields. Backfill is deliberately equal-or-less:
+The capability remodel is an offline, big-bang migration for both SQLite and
+PostgreSQL. Existing databases require the explicit offline-cutover
+acknowledgement; SQLite and PostgreSQL preflight every board/branch primary
+owner, abort with the unresolved IDs when attribution is impossible, create
+normalized policies, then empty the legacy authority tables/fields. Backfill
+is deliberately equal-or-less:
 
 - creator, then an existing owner, is used for primary-owner attribution;
 - additional owners become Managers;
 - legacy prompt-like grants become Collaborators, not personal home-sharing;
-- named board groups become Viewers;
+- named user/group grants map to the closest equal-or-less fixed role;
+- board-aligned branches with branch-specific authority are materialized as
+  complete overrides copied from the board template;
 - personal sharing starts empty and the workspace gate starts off.
 
 Old daemon versions must never run after this migration. Rollback means stopping

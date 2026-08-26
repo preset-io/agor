@@ -107,12 +107,16 @@ async function createAttachedCommentTarget(
   return { branch, session, task, message };
 }
 
-async function createTestBoard(db: any, overrides?: { board_id?: UUID }) {
+async function createTestBoard(
+  db: any,
+  overrides?: { board_id?: UUID; access_mode?: 'private' | 'shared' }
+) {
   const boardRepo = new BoardRepository(db);
   return boardRepo.create({
     board_id: overrides?.board_id ?? generateId(),
     name: `Test Board ${Date.now()}`,
     created_by: 'test-user',
+    access_mode: overrides?.access_mode,
   });
 }
 
@@ -411,8 +415,10 @@ describe('BoardCommentsRepository.findAll', () => {
     async ({ db }) => {
       const repo = new BoardCommentsRepository(db);
       const userId = generateId() as UUID;
-      const privateBoard = await createTestBoard(db, { board_id: generateId() as UUID });
-      await new BoardRepository(db).update(privateBoard.board_id, { access_mode: 'private' });
+      const privateBoard = await createTestBoard(db, {
+        board_id: generateId() as UUID,
+        access_mode: 'private',
+      });
 
       const visibleTarget = await createAttachedCommentTarget(
         db,
@@ -471,20 +477,17 @@ describe('BoardCommentsRepository.findAll', () => {
       });
 
       expect(comments.map((comment) => comment.comment_id).sort()).toEqual(
-        [
-          boardOnlyComment.comment_id,
-          visibleTaskComment.comment_id,
-          visibleMessageComment.comment_id,
-        ].sort()
+        [visibleTaskComment.comment_id, visibleMessageComment.comment_id].sort()
       );
       await expect(
         repo.count({ board_id: privateBoard.board_id, visibleToUserId: userId })
-      ).resolves.toBe(3);
+      ).resolves.toBe(2);
+      await expect(repo.findVisibleById(userId, boardOnlyComment.comment_id)).resolves.toBeNull();
       await expect(
         repo.findVisibleById(userId, visibleTaskComment.comment_id)
       ).resolves.toMatchObject({ comment_id: visibleTaskComment.comment_id });
-      // The same private board is visible through visibleTarget, but that must
-      // not widen access to an attachment on hiddenTarget.
+      // Visibility of one attachment must not widen access to another
+      // attachment or to the private board itself.
       await expect(repo.findVisibleById(userId, hiddenTaskComment.comment_id)).resolves.toBeNull();
       // Hidden rows never participate in prefix resolution: a visible+hidden
       // collision resolves to the one visible row, while a hidden-only prefix
@@ -509,8 +512,8 @@ describe('BoardCommentsRepository.findAll', () => {
         })
       ).resolves.toBe(false);
 
-      const isolatedPrivateBoard = await createTestBoard(db, { board_id: generateId() as UUID });
-      await new BoardRepository(db).update(isolatedPrivateBoard.board_id, {
+      const isolatedPrivateBoard = await createTestBoard(db, {
+        board_id: generateId() as UUID,
         access_mode: 'private',
       });
       await repo.create(
@@ -532,16 +535,11 @@ describe('BoardCommentsRepository.findAll', () => {
         visibleToUserId: userId,
       });
       expect(withReply.map((comment) => comment.comment_id).sort()).toEqual(
-        [
-          boardOnlyComment.comment_id,
-          visibleTaskComment.comment_id,
-          visibleMessageComment.comment_id,
-          reply.comment_id,
-        ].sort()
+        [visibleTaskComment.comment_id, visibleMessageComment.comment_id, reply.comment_id].sort()
       );
       await expect(
         repo.count({ board_id: privateBoard.board_id, visibleToUserId: userId })
-      ).resolves.toBe(4);
+      ).resolves.toBe(3);
     }
   );
 

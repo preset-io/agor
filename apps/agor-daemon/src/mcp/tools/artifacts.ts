@@ -26,7 +26,7 @@ import { isNotFoundError } from '@agor/core/utils/errors';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { ArtifactParams, ArtifactsService } from '../../services/artifacts.js';
-import { hasBranchPermission } from '../../utils/branch-authorization.js';
+import { hasBranchPermission, isSuperAdmin } from '../../utils/branch-authorization.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
 import { resolveArtifactId, resolveBoardId, resolveBranchId } from '../resolve-ids.js';
 import {
@@ -642,35 +642,40 @@ Visibility: public artifacts are readable by anyone; private artifacts are only 
       const branch = (await ctx.app.service('branches').get(branchId, ctx.baseServiceParams)) as {
         branch_id: string;
         path: string;
-        others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
       };
 
       const branchIdBranded = branch.branch_id as BranchID;
       const userIdBranded = ctx.userId as UUID;
       const permission = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
         const branchRepo = new BranchRepository(db);
-        const isOwner = await branchRepo.isOwner(branchIdBranded, userIdBranded);
         const fullBranch = await branchRepo.findById(branchIdBranded);
         if (!fullBranch) return null;
-        const effective = await branchRepo.resolveUserPermission(fullBranch, userIdBranded);
-        return { effective, fullBranch, isOwner };
+        const access = await branchRepo.resolveUserAccess(fullBranch, userIdBranded);
+        return { access, fullBranch };
       });
       if (!permission) {
         return textResult({ error: `Branch ${branchId} not found` });
       }
-      const { effective, fullBranch, isOwner } = permission;
+      const { access, fullBranch } = permission;
       const canWrite = hasBranchPermission(
         fullBranch,
         userIdBranded,
-        isOwner,
+        access.is_owner,
         'session',
         ctx.authenticatedUser.role,
-        true,
-        effective
+        ctx.app.get('config').execution?.allow_superadmin === true,
+        access.can
       );
-      if (!canWrite) {
+      const hasFilesystemWrite =
+        access.is_owner ||
+        isSuperAdmin(
+          ctx.authenticatedUser.role,
+          ctx.app.get('config').execution?.allow_superadmin === true
+        ) ||
+        access.fs_access === 'write';
+      if (!canWrite || !hasFilesystemWrite) {
         return textResult({
-          error: `Forbidden: 'session' permission or higher is required to land artifacts into branch ${branchId}`,
+          error: `Forbidden: Collaborator and filesystem write access are required to land artifacts into branch ${branchId}`,
         });
       }
 

@@ -720,30 +720,42 @@ async function runBranchKnowledgeCommand(
 ): Promise<Record<string, unknown>> {
   const branchId = typeof params.branchId === 'string' ? params.branchId : undefined;
   if (!branchId) throw new Error('branchId is required');
-  await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+  const workspace = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
     const branchRepo = new BranchRepository(db);
     const branch = await branchRepo.findById(branchId);
     if (!branch) throw new Error(`Branch not found: ${branchId}`);
-    await ensureBranchWorkspaceAccess(
+    const fsAccess = await ensureBranchWorkspaceAccess(
       branchRepo,
       branch,
       ctx.userId,
       ctx.authenticatedUser.role as UserRole,
-      'session'
+      'session',
+      command === 'branch.knowledge.write' ? 'write' : 'read',
+      ctx.app.get('config').execution?.allow_superadmin === true
     );
+    return { branch, fsAccess };
   });
   const result = await requestExecutor(
     {
       command,
       sessionToken: await issueExecutorCommandToken(ctx.app, command, ctx.userId, branchId),
       daemonUrl: getDaemonUrl(),
-      params,
+      params: {
+        ...params,
+        cwd: workspace.branch.path,
+        principalBranchAccess: workspace.fsAccess,
+      },
     },
     {
       logPrefix: `[Knowledge ${command}]`,
       delegatedHomeKey: await runWithMcpTenantDatabaseScope(ctx, (db) =>
         resolveDelegatedExecutionHomeKey(db, ctx.authenticatedUser.user_id, ctx.app.get('config'))
       ),
+      templateVariables: {
+        branch_id: workspace.branch.branch_id,
+        user_id: ctx.userId,
+        branch_fs_access: workspace.fsAccess,
+      },
     }
   );
   if (!result.success) {

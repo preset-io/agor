@@ -181,7 +181,7 @@ export function registerMessageTools(server: McpServer, ctx: McpContext): void {
       const allRows = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
         if (ctx.app.get('config').execution?.branch_rbac === true) {
           const userRole = ctx.authenticatedUser?.role as string | undefined;
-          if (!isSuperAdmin(userRole)) {
+          if (!isSuperAdmin(userRole, ctx.app.get('config').execution?.allow_superadmin === true)) {
             conditions.push(
               visibleSessionReferenceAccessExists(db, ctx.userId, messagesTable.session_id)
             );

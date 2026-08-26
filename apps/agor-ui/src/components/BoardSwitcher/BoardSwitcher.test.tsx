@@ -16,19 +16,18 @@ const board = {
   board_id: 'board-1',
   name: adversarialBoardName,
   created_by: 'owner-1',
+  primary_owner_user_id: 'owner-1',
   created_at: '',
   last_updated: '',
 } as Board;
 const owner = { user_id: 'owner-1', role: 'member' } as User;
 
-function clientFor({ owners = [owner], reject }: { owners?: User[]; reject?: unknown } = {}) {
+function clientFor({ reject }: { reject?: unknown } = {}) {
   return {
-    service: (name: string) => ({
+    service: () => ({
       find: vi
         .fn()
-        .mockImplementation(() =>
-          reject ? Promise.reject(reject) : Promise.resolve(name.includes('owners') ? owners : [])
-        ),
+        .mockImplementation(() => (reject ? Promise.reject(reject) : Promise.resolve([]))),
       findAll: vi.fn().mockResolvedValue([]),
     }),
   } as unknown as AgorClient;
@@ -112,7 +111,7 @@ describe('BoardSwitcher long-name layout', () => {
 });
 
 describe('BoardSwitcher current-board edit shortcut', () => {
-  it('allows the board creator even when legacy owner rows are missing', async () => {
+  it('allows the primary owner without consulting a legacy owners route', async () => {
     renderSwitcher(clientFor({ reject: { code: 500 } }));
     expect(await screen.findByRole('button', { name: /Edit current board:/ })).toBeVisible();
   });
@@ -150,8 +149,8 @@ describe('BoardSwitcher current-board edit shortcut', () => {
     );
   });
 
-  it('hides the action when the canonical owner/group inputs deny management', async () => {
-    renderSwitcher(clientFor({ owners: [] }), { user_id: 'member-2', role: 'member' } as User);
+  it('hides the action when normalized policy resolution denies management', async () => {
+    renderSwitcher(clientFor(), { user_id: 'member-2', role: 'member' } as User);
     await waitFor(() =>
       expect(screen.queryByRole('button', { name: /Edit current board:/ })).not.toBeInTheDocument()
     );

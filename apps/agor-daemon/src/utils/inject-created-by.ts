@@ -54,3 +54,31 @@ export function injectCreatedBy() {
     return context;
   };
 }
+
+/**
+ * Bind immutable primary ownership at creation time.
+ *
+ * Run immediately after {@link injectCreatedBy}. External callers can never
+ * name a different initial owner; trusted internal flows may explicitly choose
+ * one when creating the resource, otherwise ownership follows attribution.
+ */
+export function bindPrimaryOwnerToCreatedBy() {
+  return (context: HookContext): HookContext => {
+    const isExternal = context.params.provider != null;
+    const apply = (item: Record<string, unknown>) => {
+      if (typeof item.created_by !== 'string' || item.created_by.length === 0) {
+        throw new Error('bindPrimaryOwnerToCreatedBy must run after injectCreatedBy');
+      }
+      if (isExternal || !item.primary_owner_user_id) {
+        item.primary_owner_user_id = item.created_by;
+      }
+    };
+
+    if (Array.isArray(context.data)) {
+      (context.data as Record<string, unknown>[]).forEach(apply);
+    } else if (context.data) {
+      apply(context.data as Record<string, unknown>);
+    }
+    return context;
+  };
+}

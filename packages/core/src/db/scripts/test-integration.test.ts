@@ -7,8 +7,11 @@
  * JSON serialization, and genealogy queries.
  */
 
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { generateId, SHORT_ID_LENGTH, shortId } from '../../lib/ids';
 import type { Session, SessionID, TaskID, UserID } from '../../types';
 import { SessionStatus, TaskStatus } from '../../types';
@@ -26,9 +29,22 @@ import {
 /**
  * Helper to create a test database instance
  */
+const testDirectories: string[] = [];
+
 function createTestDb() {
-  return createDatabase({ url: ':memory:' });
+  // LibSQL migrations and repositories may use separate transaction
+  // connections. A unique file preserves per-test isolation across those
+  // connections, unlike SQLite's connection-local :memory: databases.
+  const directory = mkdtempSync(join(tmpdir(), 'agor-integration-test-'));
+  testDirectories.push(directory);
+  return createDatabase({ url: `file:${join(directory, 'test.db')}` });
 }
+
+afterAll(() => {
+  for (const directory of testDirectories) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 /**
  * Helper to setup repo and branch for tests
