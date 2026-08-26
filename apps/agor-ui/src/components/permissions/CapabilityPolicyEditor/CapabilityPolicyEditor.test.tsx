@@ -220,7 +220,16 @@ describe('shared capability policy forms', () => {
     fireEvent.click(
       screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
     );
-    expect(screen.getByText(/Listed people can run prompts as you/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Listed people can prompt your sessions from your home/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/use their Agor-managed environment variables and credentials/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Learn more in the FAQ.' })).toHaveAttribute(
+      'href',
+      'https://agor.live/faq#session-sharing-home-access'
+    );
     expect(
       screen.getByLabelText('Add one person or group to my session sharing')
     ).toBeInTheDocument();

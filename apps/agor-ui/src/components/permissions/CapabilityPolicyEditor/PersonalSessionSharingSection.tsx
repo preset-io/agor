@@ -13,6 +13,8 @@ import { PrincipalEntryPicker } from './PrincipalEntryPicker';
 import { PrincipalIdentity } from './PrincipalIdentity';
 import { makePrototypeDraftId } from './prototypeDraftId';
 
+const SESSION_SHARING_FAQ_URL = 'https://agor.live/faq#session-sharing-home-access';
+
 interface PersonalSessionSharingSectionProps {
   value: BranchSessionSharingDraft;
   onChange: (value: BranchSessionSharingDraft) => void;
@@ -155,7 +157,22 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
               type="error"
               showIcon
               icon={<WarningOutlined />}
-              description="Listed people can run prompts as you, using your agent-tool home and credentials. Because session data is stored there, they may access files from your other sessions. This does not grant terminal access."
+              description={
+                <Typography.Text>
+                  Listed people can prompt your sessions from your home (
+                  <Typography.Text code>~/</Typography.Text>). Prompts identify the caller and use
+                  their Agor-managed environment variables and credentials, but the agent may access
+                  anything already in your home—including other session data and tool credential
+                  files. Use this only with people you trust.{' '}
+                  <Typography.Link
+                    href={SESSION_SHARING_FAQ_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Learn more in the FAQ.
+                  </Typography.Link>
+                </Typography.Text>
+              }
             />
 
             {!readOnly && (
