@@ -79,10 +79,10 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
   );
   const issues = validateBranchSessionSharingDraft(value);
   const scopeDescription = readOnly
-    ? 'Inherited from board defaults.'
+    ? 'Uses the board defaults.'
     : scope === 'board_defaults'
-      ? 'Applies to your sessions in branches using these defaults.'
-      : 'Applies to your sessions in this branch.';
+      ? 'Default for my sessions in branches using these settings.'
+      : 'For my sessions in this branch.';
 
   const updateCurrentRule = (nextRule: BranchSessionSharingOwnerRuleDraft) => {
     const existingIndex = value.owner_rules.findIndex(
@@ -100,7 +100,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
       title={
         <Flex align="center" gap={token.paddingXS} wrap>
           <SafetyCertificateOutlined aria-hidden />
-          <span>Personal session sharing</span>
+          <span>Session sharing</span>
           <Tag color="error">High risk</Tag>
         </Flex>
       }
@@ -132,7 +132,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
 
         <Flex justify="space-between" align="center" gap={token.paddingMD} wrap>
           <Flex vertical gap={token.paddingXXS} style={{ flex: 1, minWidth: 240 }}>
-            <Typography.Text strong>Allow others to use my sessions</Typography.Text>
+            <Typography.Text strong>My sessions</Typography.Text>
             <Typography.Text type="secondary">{scopeDescription}</Typography.Text>
           </Flex>
           <Switch
@@ -244,11 +244,11 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
 
         <Flex vertical gap={token.paddingXS}>
           <Flex align="center" gap={token.paddingXS} wrap>
-            <Typography.Text strong>Other people’s sharing</Typography.Text>
+            <Typography.Text strong>Other people’s sessions</Typography.Text>
             <Tag>Read only</Tag>
           </Flex>
           {otherRules.length === 0 ? (
-            <Typography.Text type="secondary">No other session sharing.</Typography.Text>
+            <Typography.Text type="secondary">No one else is sharing sessions.</Typography.Text>
           ) : (
             <Flex vertical gap={token.paddingXS}>
               {otherRules.map((rule) => {

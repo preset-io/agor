@@ -84,8 +84,8 @@ describe('BranchModal — permissions tab visibility', () => {
     expect(
       screen.queryByText('Current persisted permissions · legacy model')
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Apply permissions preview' }));
-    expect(await screen.findByText('Preview updated.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply permissions preview' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset permissions preview' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
     expect(calls.some((call) => ['create', 'patch', 'remove'].includes(call.method))).toBe(false);
   });

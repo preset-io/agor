@@ -94,7 +94,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
       <Divider style={{ marginBlock: 0 }} />
 
       <Flex vertical gap={token.paddingXXS}>
-        <Typography.Text strong>Use permissions from</Typography.Text>
+        <Typography.Text strong>Use settings from</Typography.Text>
         <Segmented<'inherit' | 'override'>
           aria-label="Branch policy binding"
           block
@@ -107,8 +107,8 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
         />
         <Typography.Text type="secondary">
           {value.binding_mode === 'inherit'
-            ? 'Updates with the board defaults.'
-            : 'Replaces the board defaults.'}
+            ? 'Access, files, and session sharing update with the board defaults.'
+            : 'Access, files, and session sharing are configured for this branch.'}
         </Typography.Text>
       </Flex>
       {confirmInherit && (
@@ -186,11 +186,6 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
         </Flex>
       ) : (
         <Flex vertical gap={token.paddingMD}>
-          <Alert
-            type="warning"
-            showIcon
-            description="This policy replaces the board defaults. Board access remains separate."
-          />
           <BranchPermissionConfigEditor
             accessTitle="Branch access"
             value={effectiveConfig}

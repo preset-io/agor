@@ -92,7 +92,9 @@ describe('shared capability policy forms', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Branch access')).toBeInTheDocument();
-      expect(screen.getByText(/This policy replaces the board defaults/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Access, files, and session sharing are configured for this branch/)
+      ).toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: 'Add user/group' })).toBeEnabled();
     expect(
@@ -187,8 +189,9 @@ describe('shared capability policy forms', () => {
     renderWithTheme(<Harness />);
 
     fireEvent.click(screen.getByRole('tab', { name: /Branch defaults/ }));
-    expect(await screen.findByText('Personal session sharing')).toBeInTheDocument();
-    expect(screen.getByText(/branches using these defaults/)).toBeInTheDocument();
+    expect(await screen.findByText('Session sharing')).toBeInTheDocument();
+    expect(screen.getByText('My sessions')).toBeInTheDocument();
+    expect(screen.getByText(/branches using these settings/)).toBeInTheDocument();
     expect(
       screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
     ).toBeEnabled();
@@ -212,7 +215,7 @@ describe('shared capability policy forms', () => {
 
     expect(screen.getByText('Seb V. shares with')).toBeInTheDocument();
     expect(screen.getByText('GTM')).toBeInTheDocument();
-    expect(screen.getByText('Other people’s sharing')).toBeInTheDocument();
+    expect(screen.getByText('Other people’s sessions')).toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
