@@ -5,9 +5,9 @@ import type {
 } from '@agor/core/types';
 import { Divider, Flex, theme } from 'antd';
 import { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
+import type { EffectiveAccessSubject } from './effectiveAccessPreviewModel';
 import { PersonalSessionSharingSection } from './PersonalSessionSharingSection';
 import { BRANCH_ACCESS_EDITOR_CONTEXT } from './policyEditorModel';
-import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
 interface BranchPermissionConfigEditorProps {
   value: BranchPermissionConfigDraft;
@@ -17,8 +17,10 @@ interface BranchPermissionConfigEditorProps {
   primaryOwnerUserId: UserID;
   currentUserId: UserID;
   principals: CapabilityPolicyPrincipalDescriptor[];
-  subjects: PrototypeAccessSubject[];
+  subjects: EffectiveAccessSubject[];
   readOnly?: boolean;
+  accessReadOnly?: boolean;
+  sharingReadOnly?: boolean;
   showModeSelector?: boolean;
   sharingScope: 'board_defaults' | 'branch';
   personalSessionSharingWorkspaceEnabled?: boolean;
@@ -39,6 +41,8 @@ export const BranchPermissionConfigEditor: React.FC<BranchPermissionConfigEditor
   principals,
   subjects,
   readOnly,
+  accessReadOnly,
+  sharingReadOnly,
   showModeSelector = true,
   sharingScope,
   personalSessionSharingWorkspaceEnabled = true,
@@ -52,7 +56,7 @@ export const BranchPermissionConfigEditor: React.FC<BranchPermissionConfigEditor
         description={accessDescription}
         value={value.access}
         onChange={(access) => onChange({ ...value, access })}
-        readOnly={readOnly}
+        readOnly={accessReadOnly ?? readOnly}
         showModeSelector={showModeSelector}
         context={BRANCH_ACCESS_EDITOR_CONTEXT}
         primaryOwnerUserId={primaryOwnerUserId}
@@ -66,7 +70,7 @@ export const BranchPermissionConfigEditor: React.FC<BranchPermissionConfigEditor
         currentUserId={currentUserId}
         principals={principals}
         workspaceEnabled={personalSessionSharingWorkspaceEnabled}
-        readOnly={readOnly}
+        readOnly={sharingReadOnly ?? readOnly}
         scope={sharingScope}
       />
     </Flex>

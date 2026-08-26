@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
       execution: { branch_rbac: false, unix_user_mode: 'simple' },
     },
     canOpen: true,
+    fsAccess: 'write' as 'none' | 'read' | 'write',
   };
 });
 
@@ -53,6 +54,9 @@ vi.mock('@agor/core/db', () => ({
       const branch = mocks.branchesById.get(branchId) ?? null;
       if (!branch || (options.enforceAccess !== false && !mocks.canOpen)) return null;
       return branch;
+    }
+    async resolveUserAccess() {
+      return { fs_access: mocks.fsAccess };
     }
   },
   getCurrentTenantId: () => mocks.tenantId,
@@ -128,6 +132,7 @@ beforeEach(() => {
   mocks.tenantId = 'tenant-x';
   mocks.databaseScopeDepth = 0;
   mocks.canOpen = true;
+  mocks.fsAccess = 'write';
   mocks.branchesById.clear();
   mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
   mocks.resolveDelegatedHomeKey.mockReturnValue({
@@ -315,6 +320,29 @@ describe('process-affine attachment creation', () => {
       message: 'Branch not found',
     });
     expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
+  it('requires filesystem access in every execution mode and forwards its level', async () => {
+    mocks.config = {
+      daemon: { port: 3030 },
+      execution: { branch_rbac: true, unix_user_mode: 'simple' },
+    };
+    mocks.fsAccess = 'none';
+    const denied = new TerminalsService(makeApp() as never, {} as never);
+    await expect(
+      denied.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).rejects.toThrow('Filesystem access is required');
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+
+    mocks.fsAccess = 'read';
+    const allowed = new TerminalsService(makeApp() as never, {} as never);
+    await allowed.create({ branchId: 'branch-1' as BranchID }, params as never);
+    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ principalBranchAccess: 'read' }),
+      }),
+      expect.anything()
+    );
   });
 });
 

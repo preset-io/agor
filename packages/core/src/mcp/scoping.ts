@@ -7,16 +7,16 @@
  * Scoping Rules:
  * - ALL shared global-scoped MCPs are included in every session
  * - PLUS any session-scoped MCPs that are explicitly assigned to this session
- * - MINUS any server private to a user other than the session's creator
+ * - MINUS any server private to a user other than the current prompt actor
  *
  * Template Resolution:
  * MCP server env vars can contain Handlebars templates like {{ user.env.GITHUB_TOKEN }}.
  * Templates are resolved using process.env, which contains the user's decrypted
  * environment variables (populated by createUserProcessEnvironment when spawning).
  *
- * The repository layer filters global rows by the session creator when that
- * identity is supplied, while session assignments are filtered by the session
- * repository. This keeps private credentials out of executor configuration.
+ * The repository layer filters both global rows and session assignments by the
+ * current prompt actor. A shared prompt keeps the session owner's home, but it
+ * must never silently borrow the owner's Agor-managed connectors or credentials.
  */
 
 import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../types';
@@ -96,12 +96,6 @@ export interface MCPResolutionDeps {
    * indistinguishable from it being broken.
    */
   onServerWithheld?: (server: MCPServer, reason: string) => void;
-  /**
-   * Creator of the session being resolved. This is separate from forUserId:
-   * a collaborator may prompt a session, but cannot bring their private MCP
-   * definitions into the session owner's executor.
-   */
-  sessionOwnerId?: string;
 }
 
 /**
@@ -153,13 +147,13 @@ export async function getMcpServersForSession(
     const seenServerIds = new Set<string>();
 
     const addServer = (server: MCPServer, source: MCPServerWithSource['source']) => {
-      if (server.owner_user_id && !deps.sessionOwnerId) {
+      if (server.owner_user_id && !deps.forUserId) {
         console.warn(
-          `   ⚠️  Skipping private MCP server because session owner identity is missing: ${server.name}`
+          `   ⚠️  Skipping private MCP server because prompt actor identity is missing: ${server.name}`
         );
       }
-      if (!isMCPServerUsableBy(server, deps.sessionOwnerId)) {
-        mcpDebug(`   🔒 Skipping private MCP server not owned by session creator: ${server.name}`);
+      if (!isMCPServerUsableBy(server, deps.forUserId)) {
+        mcpDebug(`   🔒 Skipping private MCP server not owned by prompt actor: ${server.name}`);
         return;
       }
       if (!seenServerIds.has(server.mcp_server_id)) {
@@ -185,12 +179,14 @@ export async function getMcpServersForSession(
         addServer(server, server.scope === 'global' ? 'global' : 'session-assigned');
       }
     } else {
-      // STEP 1: Get all usable global definitions. OAuth credentials are
-      // hydrated later through the executor-only auth-header capability.
+      // STEP 1: Get all usable global definitions for the prompt actor. OAuth
+      // credentials are hydrated later through the executor-only auth-header
+      // capability. A shared prompt must never import the session owner's
+      // private MCP definitions or credentials.
       const globalServers = await deps.mcpServerRepo.findAll({
         scope: 'global',
         enabled: true,
-        ...(deps.sessionOwnerId ? { usableByUserId: deps.sessionOwnerId } : {}),
+        ...(deps.forUserId ? { usableByUserId: deps.forUserId } : {}),
       });
 
       mcpDebug(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);

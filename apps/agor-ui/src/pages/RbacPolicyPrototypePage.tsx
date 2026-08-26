@@ -25,8 +25,8 @@ import {
   type BranchPrototypeFixtureId,
   cloneBoardPrototypeFixture,
   cloneBranchPrototypeFixture,
+  EFFECTIVE_ACCESS_SUBJECTS,
   PROTOTYPE_PRINCIPALS,
-  PROTOTYPE_SUBJECTS,
   PROTOTYPE_USERS,
 } from './rbac-policy-prototype/fixtures';
 
@@ -172,7 +172,7 @@ export const RbacPolicyPrototypePage: React.FC = () => {
                   value={boardDraft}
                   onChange={setBoardDraft}
                   principals={PROTOTYPE_PRINCIPALS}
-                  subjects={PROTOTYPE_SUBJECTS}
+                  subjects={EFFECTIVE_ACCESS_SUBJECTS}
                   sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
                   currentUserId={PROTOTYPE_USERS.kasia}
                 />
@@ -181,7 +181,7 @@ export const RbacPolicyPrototypePage: React.FC = () => {
                   value={branchDraft}
                   onChange={setBranchDraft}
                   principals={PROTOTYPE_PRINCIPALS}
-                  subjects={PROTOTYPE_SUBJECTS}
+                  subjects={EFFECTIVE_ACCESS_SUBJECTS}
                   currentUserId={PROTOTYPE_USERS.kasia}
                 />
               )}

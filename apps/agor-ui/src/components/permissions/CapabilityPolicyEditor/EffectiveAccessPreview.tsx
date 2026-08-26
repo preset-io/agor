@@ -7,17 +7,17 @@ import { CheckCircleOutlined, StopOutlined } from '@ant-design/icons';
 import { Alert, Divider, Empty, Flex, Select, Typography, theme } from 'antd';
 import { useMemo, useState } from 'react';
 import { Tag } from '@/components/Tag';
+import type { EffectiveAccessSubject } from './effectiveAccessPreviewModel';
+import { resolveEffectiveAccessPreview } from './effectiveAccessPreviewModel';
 import { PrincipalIdentity } from './PrincipalIdentity';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
 import { fsAccessLabel, selectedCapabilityControlGroupLabels } from './policyEditorModel';
-import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
-import { resolvePrototypeEffectiveAccess } from './prototypeEffectiveAccess';
 
 interface EffectiveAccessPreviewProps {
   policy: CapabilityPolicyDraft;
   primaryOwnerUserId: UserID;
   principals: CapabilityPolicyPrincipalDescriptor[];
-  subjects: PrototypeAccessSubject[];
+  subjects: EffectiveAccessSubject[];
   context: CapabilityPolicyEditorContext;
 }
 
@@ -38,7 +38,7 @@ export const EffectiveAccessPreview: React.FC<EffectiveAccessPreviewProps> = ({
   const effective = useMemo(
     () =>
       subject
-        ? resolvePrototypeEffectiveAccess({
+        ? resolveEffectiveAccessPreview({
             policy,
             primaryOwnerUserId,
             subject,

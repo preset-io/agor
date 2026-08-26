@@ -157,13 +157,6 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     params?: BoardParams
   ): Promise<Board | Board[]> {
     const result = (await super.create(data, params)) as Board | Board[];
-    const creatorId = params?.user?.user_id;
-    if (!creatorId) return result;
-
-    const boards = Array.isArray(result) ? result : [result];
-    await Promise.all(
-      boards.map((board) => this.boardRepo.addOwner(board.board_id, creatorId as UUID))
-    );
     return result;
   }
 
@@ -356,7 +349,6 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
 
     // Create board through repository (not super.create to avoid double-emit issues)
     const board = await this.boardRepo.create(data);
-    await this.boardRepo.addOwner(board.board_id, userId as UUID);
 
     // Note: Events must be emitted by the caller using app.service('boards').emit()
     // this.emit() doesn't work reliably in custom methods due to execution context
@@ -423,7 +415,6 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const boardData = this.buildBoardDataFromBlob(blob, userId, name);
     // Create board through repository (not super.create to avoid double-emit issues)
     const clonedBoard = await this.boardRepo.create(boardData);
-    await this.boardRepo.addOwner(clonedBoard.board_id, userId as UUID);
 
     // Note: Events must be emitted by the caller using app.service('boards').emit()
     // this.emit() doesn't work reliably in custom methods due to execution context

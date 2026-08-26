@@ -28,6 +28,7 @@ import {
   BoardObjectRepository,
   BoardRepository,
   type BranchRepository,
+  CapabilityPolicyRepository,
   CardRepository,
   getMCPEgressGatewayMode,
   requireCurrentTenantId,
@@ -458,13 +459,12 @@ export interface RegisterHooksContext {
 export const AUTHENTICATED_RBAC_SERVICE_PATHS = [
   'groups',
   'group-memberships',
-  'branches/:id/owners',
-  'branches/:id/group-grants',
+  'branches/:id/permissions',
   'branches/:id/effective-access',
   'branches/:id/fs-access-users',
-  'boards/:id/owners',
-  'boards/:id/group-grants',
+  'boards/:id/permissions',
   'boards/:id/aligned-branches',
+  'workspace-preferences',
 ] as const;
 
 /**
@@ -982,13 +982,11 @@ export function classifyRealtimeAuthorizationInvalidation(
 ): RealtimeAuthorizationInvalidationMode {
   if (!['create', 'update', 'patch', 'remove'].includes(context.method)) return 'none';
 
-  if (['branches/:id/owners', 'boards/:id/owners', 'group-memberships'].includes(context.path)) {
+  if (context.path === 'group-memberships') {
     return context.method === 'create' ? 'cache' : 'evict';
   }
 
-  if (['branches/:id/group-grants', 'boards/:id/group-grants'].includes(context.path)) {
-    // These services expose create as an upsert, so a caller can lower an
-    // existing grant through create. Treat it as a possible revocation.
+  if (['branches/:id/permissions', 'boards/:id/permissions'].includes(context.path)) {
     return 'evict';
   }
 
@@ -1010,9 +1008,7 @@ export function classifyRealtimeAuthorizationInvalidation(
   if (context.path === 'branches') {
     if (context.method === 'create') return 'none';
     if (context.method === 'remove') return 'evict';
-    return ['board_id', 'others_can', 'others_fs_access', 'permission_source'].some((field) =>
-      Object.hasOwn(data, field)
-    )
+    return ['board_id', 'permission_binding'].some((field) => Object.hasOwn(data, field))
       ? 'evict'
       : 'none';
   }
@@ -1445,7 +1441,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     if (typeof context.id !== 'string') throw new BadRequest('Board ID is required');
     const board = await boardRepository.findBySlugOrId(context.id);
     if (!board) throw new NotFound(`Board not found: ${String(context.id)}`);
-    if (!executionMode.appRbacEnabled || board.access_mode === 'shared') {
+    if (!executionMode.appRbacEnabled) {
       setBoardRemovalRealtimeVisibility(context.params, board.board_id as BoardID, {
         mode: 'allAuthenticated',
       });
@@ -1519,10 +1515,8 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
 
   for (const path of [
-    'branches/:id/owners',
-    'branches/:id/group-grants',
-    'boards/:id/owners',
-    'boards/:id/group-grants',
+    'branches/:id/permissions',
+    'boards/:id/permissions',
     'groups',
     'group-memberships',
     'board-objects',
@@ -1598,7 +1592,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     ...(executionMode.appRbacEnabled
       ? [
           loadBranchFromSession(branchRepository),
-          ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
+          ensureCanPromptInSession({ ...superadminOpts, branchRepository }), // Require 'prompt' (or 'session' for own sessions)
         ]
       : []),
   ];
@@ -1665,7 +1659,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               resolveSessionContext(),
               loadSession(sessionsService),
               loadBranchFromSession(branchRepository),
-              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
+              ensureCanPromptInSession({ ...superadminOpts, branchRepository }), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
         protectWidgetMessageWrites,
@@ -1678,7 +1672,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               resolveSessionContext(),
               loadSession(sessionsService),
               loadBranchFromSession(branchRepository),
-              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
+              ensureCanPromptInSession({ ...superadminOpts, branchRepository }), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
         protectWidgetMessageWrites,
@@ -2126,6 +2120,44 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
+  const ensureCanChangeBranchBoard = async (context: HookContext): Promise<HookContext> => {
+    if (!executionMode.appRbacEnabled || !context.params.provider) return context;
+    const user = context.params.user;
+    if (!user) throw new NotAuthenticated('Authentication required');
+    if (user._isServiceAccount || hasMinimumRole(user.role, ROLES.ADMIN)) return context;
+
+    const values = Array.isArray(context.data) ? context.data : [context.data];
+    for (const value of values as Array<Partial<Branch> | undefined>) {
+      if (!value) continue;
+      const previousBoardId = context.params.branch?.board_id;
+      const boardWasSupplied = context.method === 'create' || Object.hasOwn(value, 'board_id');
+      if (!boardWasSupplied || previousBoardId === value.board_id) continue;
+
+      const userId = user.user_id as UUID;
+      if (previousBoardId) {
+        const canDetach = await boardRepository
+          .canMutate(previousBoardId, userId)
+          .catch(() => false);
+        if (!canDetach) {
+          throw new Forbidden('Board Editor or Manager access is required to detach this branch');
+        }
+      }
+      if (value.board_id) {
+        const targetBoard = await boardRepository.findBySlugOrId(value.board_id);
+        const canAttach = targetBoard
+          ? await new CapabilityPolicyRepository(db)
+              .resolveBoardAccess(targetBoard.board_id, userId as UserID)
+              .then((access) => access.capabilities.includes('board.attach_branch'))
+              .catch(() => false)
+          : false;
+        if (!canAttach) {
+          throw new Forbidden('Board Editor or Manager access is required to attach a branch');
+        }
+      }
+    }
+    return context;
+  };
+
   const branchUpdateAuthorization = [
     requireMinimumRole(ROLES.MEMBER, 'update branches'),
     requireAdminForEnvConfig(),
@@ -2134,6 +2166,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ? [
           loadBranch(branchRepository),
           ensureBranchPermission('all', 'update branches', superadminOpts),
+          ensureCanChangeBranchBoard,
         ]
       : []),
     captureMarketplaceInvalidationTargets,
@@ -2159,12 +2192,12 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireMinimumRole(ROLES.MEMBER, 'create branches'),
         requireAdminForEnvConfig(),
         validateBranchEnvPolicyHook(config),
+        ensureCanChangeBranchBoard,
         injectCreatedBy(),
       ],
       update: [...branchUpdateAuthorization],
       patch: [
         ...branchUpdateAuthorization,
-        // Capture previous others_fs_access for comparison in after Unix sync hook.
       ],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete branches'),
@@ -2179,29 +2212,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
     after: {
-      create: [
-        ...(executionMode.appRbacEnabled
-          ? [
-              async (context: HookContext) => {
-                // RBAC: Add the creator as the initial branch owner
-                const branch = context.result as import('@agor/core/types').Branch;
-                const creatorId = branch.created_by;
-
-                // Add creator as initial owner
-                await branchRepository.addOwner(
-                  branch.branch_id,
-                  creatorId as import('@agor/core/types').UUID
-                );
-                console.log(
-                  `[RBAC] Added creator ${shortId(creatorId)} as owner of branch ${shortId(branch.branch_id)}`
-                );
-
-                return context;
-              },
-            ]
-          : []),
-        invalidateRealtimeBranchFromResult,
-      ],
+      create: [invalidateRealtimeBranchFromResult],
       update: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
       patch: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
       remove: [invalidateRealtimeBranchFromResult, publishMarketplaceInvalidation],
@@ -2778,48 +2789,20 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
     },
   });
-  safeService('branches/:id/owners')?.hooks({
+  safeService('branches/:id/permissions')?.hooks({
     before: {
-      create: [captureMarketplaceInvalidationTargets],
-      remove: [captureMarketplaceInvalidationTargets],
-    },
-    after: {
-      create: [invalidateRealtimeBranchFromRoute, publishMarketplaceInvalidation],
-      remove: [invalidateRealtimeBranchFromRoute, publishMarketplaceInvalidation],
-    },
-  });
-  safeService('branches/:id/group-grants')?.hooks({
-    before: {
-      create: [captureMarketplaceInvalidationTargets],
       patch: [captureMarketplaceInvalidationTargets],
-      remove: [captureMarketplaceInvalidationTargets],
     },
     after: {
-      create: [invalidateRealtimeBranchFromRoute, publishMarketplaceInvalidation],
       patch: [invalidateRealtimeBranchFromRoute, publishMarketplaceInvalidation],
-      remove: [invalidateRealtimeBranchFromRoute, publishMarketplaceInvalidation],
     },
   });
-  safeService('boards/:id/owners')?.hooks({
+  safeService('boards/:id/permissions')?.hooks({
     before: {
-      create: [captureMarketplaceInvalidationTargets],
-      remove: [captureMarketplaceInvalidationTargets],
-    },
-    after: {
-      create: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
-      remove: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
-    },
-  });
-  safeService('boards/:id/group-grants')?.hooks({
-    before: {
-      create: [captureMarketplaceInvalidationTargets],
       patch: [captureMarketplaceInvalidationTargets],
-      remove: [captureMarketplaceInvalidationTargets],
     },
     after: {
-      create: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
       patch: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
-      remove: [clearRealtimeBranchVisibility, publishMarketplaceInvalidation],
     },
   });
 
@@ -3019,7 +3002,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           // the strict 'all' path, so there's no partial-trust footgun.
           (context: HookContext) => {
             if (isPromptFlowPatchOnly(context.data)) {
-              return ensureCanPromptInSession(superadminOpts)(context);
+              return ensureCanPromptInSession({ ...superadminOpts, branchRepository })(context);
             }
             return ensureBranchPermission(
               'all',
@@ -3368,7 +3351,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
               resolveSessionContext(),
               loadSession(sessionsService),
               loadBranchFromSession(branchRepository),
-              ensureCanPromptInSession(superadminOpts), // Require 'prompt' (or 'session' for own sessions)
+              ensureCanPromptInSession({ ...superadminOpts, branchRepository }), // Require 'prompt' (or 'session' for own sessions)
             ]
           : []),
       ],
@@ -3441,7 +3424,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         throw new Forbidden(
           mode === 'view'
             ? `You need board access to ${action}`
-            : `You need board owner or board group 'all' access to ${action}`
+            : `You need Board Editor or Manager access to ${action}`
         );
       }
       return context;
@@ -3511,9 +3494,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [typedValidateQuery(boardQueryValidator), requireAuth],
       find: [
-        // RBAC: restrict boards.find to boards the caller created or has a
-        // branch on. The service pushes this into the repository query as one
-        // SQL predicate, avoiding a preloaded `board_id IN (...)` list.
+        // Board visibility is independent from branch visibility. Push the
+        // normalized board policy into SQL rather than deriving canvas access
+        // from any branch the caller happens to see.
         ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
       get: [ensureCanViewBoard('view this board')],

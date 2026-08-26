@@ -13,6 +13,7 @@ export * from './board-objects';
 export * from './boards';
 export * from './branch-access';
 export * from './branches';
+export * from './capability-policies';
 export * from './card-types';
 export * from './cards';
 export * from './codex-device-auth-attempts';

@@ -3,6 +3,7 @@ import {
   CAPABILITY_POLICY_SCHEMA_VERSION,
   normalizeCapabilityPolicyCapabilities,
   removeCapabilityPolicyCapability,
+  resolveCapabilityPolicyAccess,
   validateBranchSessionSharingDraft,
   validateCapabilityPolicyDraft,
 } from './capability-policy';
@@ -134,5 +135,104 @@ describe('capability policy proposal contract', () => {
         'duplicate_owner_rule',
       ])
     );
+  });
+});
+
+describe('resolveCapabilityPolicyAccess', () => {
+  const owner = '00000000-0000-7000-8000-000000000001' as UserID;
+  const user = '00000000-0000-7000-8000-000000000002' as UserID;
+  const groupA = '00000000-0000-7000-8000-000000000011' as GroupID;
+  const groupB = '00000000-0000-7000-8000-000000000012' as GroupID;
+  const policy: CapabilityPolicyDraft = {
+    schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
+    policy_kind: 'branch_access',
+    sharing_mode: 'shared',
+    entries: [
+      {
+        entry_id: '00000000-0000-7000-8000-000000000101' as UUID,
+        principal: { principal_type: 'group', group_id: groupA },
+        preset: 'viewer',
+        capabilities: ['branch.view'],
+        fs_access: 'read',
+      },
+      {
+        entry_id: '00000000-0000-7000-8000-000000000102' as UUID,
+        principal: { principal_type: 'group', group_id: groupB },
+        preset: 'collaborator',
+        capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own'],
+        fs_access: 'write',
+      },
+    ],
+    others: { preset: 'viewer', capabilities: ['branch.view'], fs_access: 'none' },
+  };
+
+  it('combines every matching group and takes the highest filesystem access', () => {
+    expect(
+      resolveCapabilityPolicyAccess({
+        policy,
+        primary_owner_user_id: owner,
+        user_id: user,
+        active_group_ids: [groupA, groupB],
+      })
+    ).toMatchObject({
+      source: 'group',
+      fs_access: 'write',
+      group_ids: [groupA, groupB],
+      capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own'],
+    });
+  });
+
+  it('lets an explicit user entry shadow every group, including No access', () => {
+    const directDenied = {
+      ...policy,
+      entries: [
+        ...policy.entries,
+        {
+          entry_id: '00000000-0000-7000-8000-000000000103' as UUID,
+          principal: { principal_type: 'user' as const, user_id: user },
+          preset: 'none' as const,
+          capabilities: [],
+          fs_access: 'none' as const,
+        },
+      ],
+    };
+    expect(
+      resolveCapabilityPolicyAccess({
+        policy: directDenied,
+        primary_owner_user_id: owner,
+        user_id: user,
+        active_group_ids: [groupB],
+      })
+    ).toMatchObject({ source: 'direct_user', capabilities: [], fs_access: 'none' });
+  });
+
+  it('uses Others only for an unmatched active member', () => {
+    expect(
+      resolveCapabilityPolicyAccess({ policy, primary_owner_user_id: owner, user_id: user })
+    ).toMatchObject({ source: 'others', capabilities: ['branch.view'] });
+    expect(
+      resolveCapabilityPolicyAccess({
+        policy,
+        primary_owner_user_id: owner,
+        user_id: user,
+        user_status: 'inactive',
+      }).capabilities
+    ).toEqual([]);
+  });
+
+  it('always grants the immutable primary owner the complete policy kind', () => {
+    const access = resolveCapabilityPolicyAccess({
+      policy: {
+        ...policy,
+        sharing_mode: 'private',
+        entries: [],
+        others: { preset: 'none', capabilities: [], fs_access: 'none' },
+      },
+      primary_owner_user_id: owner,
+      user_id: owner,
+    });
+    expect(access.source).toBe('primary_owner');
+    expect(access.fs_access).toBe('write');
+    expect(access.capabilities).toContain('branch.policy.manage');
   });
 });

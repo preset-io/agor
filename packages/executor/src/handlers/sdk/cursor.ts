@@ -199,7 +199,6 @@ async function buildCursorMcpServers(args: {
   mcpToken?: string;
   repos: ReturnType<typeof createFeathersBackedRepositories>;
   forUserId?: string;
-  sessionOwnerId?: string;
 }): Promise<Record<string, McpServerConfig> | undefined> {
   const claimed = new Set<string>();
   const mcpServers: Record<string, McpServerConfig> = {};
@@ -224,7 +223,6 @@ async function buildCursorMcpServers(args: {
       mcpServerRepo: args.repos.mcpServers,
       mcpOAuthAuthHeadersRepo: args.repos.mcpOAuthAuthHeaders,
       forUserId: args.forUserId,
-      sessionOwnerId: args.sessionOwnerId,
       onServerWithheld: reporter.onServerWithheld,
     },
     // Cursor's MCP config carries no per-tool filter, so a server with gated
@@ -491,7 +489,6 @@ export async function executeCursorTask(params: {
       mcpToken: session.mcp_token,
       repos,
       forUserId: contextUserId,
-      sessionOwnerId: session.created_by,
     });
 
     const agent = session.sdk_session_id

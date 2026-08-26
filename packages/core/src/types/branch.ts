@@ -352,6 +352,12 @@ export interface Branch {
 
   // ===== RBAC: App-layer permissions (rbac.md) =====
 
+  /** Immutable primary owner. This is intentionally independent of attribution. */
+  primary_owner_user_id?: UUID;
+
+  /** Whether the complete branch permission package is inherited or overridden. */
+  permission_binding?: 'inherit' | 'override';
+
   /**
    * Whether this branch uses its own permission fields or aligns to board defaults.
    * Existing branches default/read as 'override' for backcompat.

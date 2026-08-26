@@ -35,7 +35,10 @@ export type PermissionDecisionResult =
 
 export interface PermissionDecisionAuthorization {
   branchRbacEnabled: boolean;
-  branchRepository: Pick<BranchRepository, 'findById' | 'isOwner' | 'resolveUserPermission'>;
+  branchRepository: Pick<
+    BranchRepository,
+    'findById' | 'resolveUserPermission' | 'resolveSessionPromptAuthority'
+  >;
   allowSuperadmin: boolean;
 }
 
@@ -86,31 +89,22 @@ export async function deliverPermissionDecision(options: {
   const session = (await app.service('sessions').get(sessionId, params)) as Session;
 
   // Viewing a Session is not sufficient to control its executor. Permission
-  // decisions share the prompt policy: prompt/all can control any Session,
-  // while session-tier users can control only Sessions they created.
+  // decisions use the same owner-authored sharing policy as prompting.
   if (authorization.branchRbacEnabled) {
     const branch = await authorization.branchRepository.findById(session.branch_id);
     if (!branch) throw new NotFound(`Branch ${session.branch_id} not found`);
     const userId = decidedBy as UUID;
-    const isOwner = await authorization.branchRepository.isOwner(branch.branch_id, userId);
-    const branchPermission = await authorization.branchRepository.resolveUserPermission(
-      branch,
-      userId
-    );
-    const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+    const { allowed, effectiveLevel } = await resolveSessionPromptAccess({
+      branchRepository: authorization.branchRepository,
       branch,
       session,
       userId,
-      isOwner,
-      userRole: params.user?.role,
-      allowSuperadmin: authorization.allowSuperadmin,
-      branchPermission,
     });
     if (!allowed) {
       throw new Forbidden(
         `You have '${effectiveLevel}' permission on this branch, which does not allow ` +
-          `responding to permission requests. Need 'prompt' or 'all' ` +
-          `(or 'session' for your own sessions).`
+          `responding to permission requests. Collaborator access is required, ` +
+          `and foreign sessions must be shared by their owner.`
       );
     }
   }

@@ -21,9 +21,9 @@ import {
 } from 'antd';
 import { useEffect, useState } from 'react';
 import { Tag } from '@/components/Tag';
+import { makeCapabilityPolicyDraftId } from './draftId';
 import { PrincipalEntryPicker } from './PrincipalEntryPicker';
 import { PrincipalIdentity } from './PrincipalIdentity';
-import { makePrototypeDraftId } from './prototypeDraftId';
 
 const SESSION_SHARING_FAQ_URL = 'https://agor.live/faq#session-sharing-home-access';
 
@@ -46,7 +46,7 @@ const principalDescriptor = (principals: CapabilityPolicyPrincipalDescriptor[], 
 const makeGrant = (
   principal: CapabilityPolicyPrincipalDescriptor
 ): BranchSessionSharingGrantDraft => ({
-  grant_id: makePrototypeDraftId(),
+  grant_id: makeCapabilityPolicyDraftId(),
   principal: principal.principal,
 });
 
@@ -197,7 +197,7 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
                 }
               />
               <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                They must also have branch access.
+                They must also be a Collaborator or Manager.
               </Typography.Text>
             </Flex>
           )}

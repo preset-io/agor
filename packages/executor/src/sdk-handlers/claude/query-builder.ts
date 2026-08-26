@@ -440,7 +440,6 @@ export async function setupQuery(
           mcpServerRepo: deps.mcpServerRepo,
           mcpOAuthAuthHeadersRepo: deps.mcpOAuthAuthHeadersRepo,
           forUserId: contextUserId,
-          sessionOwnerId: session.created_by,
         },
         { toolFiltering: 'exclude' }
       );

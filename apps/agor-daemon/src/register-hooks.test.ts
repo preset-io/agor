@@ -85,17 +85,13 @@ describe('classifyRealtimeAuthorizationInvalidation', () => {
     expect(classify(path, 'create', data)).toBe('none');
   });
 
-  it.each(['branches/:id/owners', 'boards/:id/owners', 'group-memberships'])(
-    'distributes cache-only invalidation for additive grants through %s',
-    (path) => {
-      expect(classify(path, 'create')).toBe('cache');
-    }
-  );
+  it('distributes cache-only invalidation for additive group membership', () => {
+    expect(classify('group-memberships', 'create')).toBe('cache');
+  });
 
   it.each([
-    ['branches', 'patch', { others_can: 'none' }],
-    ['branches', 'patch', { others_fs_access: 'none' }],
     ['branches', 'patch', { board_id: 'board-2' }],
+    ['branches', 'patch', { permission_binding: 'inherit' }],
     ['branches', 'remove', {}],
     ['boards', 'patch', { access_mode: 'private' }],
     ['boards', 'patch', { archived: true }],
@@ -105,9 +101,8 @@ describe('classifyRealtimeAuthorizationInvalidation', () => {
     ['users', 'patch', { must_change_password: true }],
     ['users', 'update', { must_change_password: false }],
     ['users', 'remove', {}],
-    ['branches/:id/owners', 'remove', {}],
-    ['branches/:id/group-grants', 'create', { group_id: 'group-1', can: 'none' }],
-    ['boards/:id/group-grants', 'create', { group_id: 'group-1', can: 'none' }],
+    ['branches/:id/permissions', 'patch', {}],
+    ['boards/:id/permissions', 'patch', {}],
     ['group-memberships', 'remove', {}],
     ['groups', 'patch', { archived: true }],
   ] as const)('evicts stale sockets for revoking %s.%s', (path, method, data) => {

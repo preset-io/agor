@@ -13,9 +13,10 @@ import {
   normalizeCapabilityPolicyCapabilities,
   removeCapabilityPolicyCapability,
 } from '@agor/core/types';
+import { capabilityPolicyPresetCapabilities } from '@agor-live/client';
 
 /**
- * Product-facing role implication. The proposed authorization contract stays
+ * Product-facing role implication. The authorization contract stays
  * granular, but the form exposes only named roles rather than independent
  * capability switches.
  */
@@ -95,25 +96,25 @@ const BOARD_PRESETS: readonly CapabilityPresetDefinition[] = [
     id: 'none',
     label: 'No access',
     summary: 'No board access.',
-    capabilities: [],
+    capabilities: capabilityPolicyPresetCapabilities('board_access', 'none') ?? [],
   },
   {
     id: 'viewer',
     label: 'Viewer',
     summary: 'Can view the board.',
-    capabilities: ['board.view'],
+    capabilities: capabilityPolicyPresetCapabilities('board_access', 'viewer') ?? [],
   },
   {
     id: 'editor',
     label: 'Editor',
     summary: 'Can edit the board, but not its permissions.',
-    capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+    capabilities: capabilityPolicyPresetCapabilities('board_access', 'editor') ?? [],
   },
   {
     id: 'manager',
     label: 'Manager',
     summary: 'Can edit the board and manage its permissions.',
-    capabilities: BOARD_POLICY_CAPABILITIES,
+    capabilities: capabilityPolicyPresetCapabilities('board_access', 'manager') ?? [],
   },
 ];
 
@@ -122,34 +123,26 @@ const BRANCH_PRESETS: readonly CapabilityPresetDefinition[] = [
     id: 'none',
     label: 'No access',
     summary: 'No branch access.',
-    capabilities: [],
+    capabilities: capabilityPolicyPresetCapabilities('branch_access', 'none') ?? [],
   },
   {
     id: 'viewer',
     label: 'Viewer',
     summary: 'Can view the branch and its sessions.',
-    capabilities: ['branch.view'],
+    capabilities: capabilityPolicyPresetCapabilities('branch_access', 'viewer') ?? [],
   },
   {
     id: 'collaborator',
     label: 'Collaborator',
     summary: 'Can create and prompt their own sessions. Allows terminal access with file access.',
-    capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own'],
+    capabilities: capabilityPolicyPresetCapabilities('branch_access', 'collaborator') ?? [],
   },
   {
     id: 'manager',
     label: 'Manager',
     summary:
       'Can work in their own sessions and manage the branch, environment, and access. Allows terminal access with file access.',
-    capabilities: [
-      'branch.view',
-      'sessions.create',
-      'sessions.prompt_own',
-      'sessions.manage_others',
-      'branch.manage',
-      'environment.control',
-      'branch.policy.manage',
-    ],
+    capabilities: capabilityPolicyPresetCapabilities('branch_access', 'manager') ?? [],
   },
 ];
 
@@ -210,7 +203,7 @@ export function applyCapabilityPreset<
   const preset = getCapabilityPreset(context, presetId);
   if (!preset) return { ...value, preset: 'custom' };
   const fsAccess = context.supportsFilesystem && preset.id !== 'none' ? value.fs_access : 'none';
-  const capabilities = synchronizeProductCapabilities(context, preset.capabilities, fsAccess);
+  const capabilities = capabilityPolicyPresetCapabilities(context.kind, preset.id, fsAccess) ?? [];
   return {
     ...value,
     preset: preset.id,
@@ -220,7 +213,7 @@ export function applyCapabilityPreset<
 }
 
 /**
- * Apply the prototype's product-level implications to the low-level contract.
+ * Apply the product-level role implications to the low-level contract.
  *
  * Terminal is intentionally not its own form switch. It is available only
  * when a person may work in their own sessions *and* has a filesystem

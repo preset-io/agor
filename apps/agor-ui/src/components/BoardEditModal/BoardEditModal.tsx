@@ -1,12 +1,10 @@
 import type {
   AgorClient,
   Board,
-  BoardGroupGrantWithGroup,
-  BranchFsAccessLevel,
-  BranchPermissionLevel,
+  BoardCapabilityPolicies,
+  CapabilityPolicyWorkspacePreferences,
   Group,
   User,
-  UUID,
 } from '@agor-live/client';
 import { Alert, Form, Modal, Skeleton } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
@@ -15,7 +13,7 @@ import { useAgorStore } from '../../store/agorStore';
 import { selectUserById } from '../../store/selectors';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { JSONEditor, validateJSON } from '../JSONEditor';
-import { BoardCapabilityPolicyModalPrototype } from '../permissions/CapabilityPolicyEditor';
+import { BoardCapabilityPolicyModalEditor } from '../permissions/CapabilityPolicyEditor';
 
 export interface BoardEditModalProps {
   board: Board | null;
@@ -39,15 +37,15 @@ export function BoardEditModal({
   const [form] = Form.useForm();
   const { showError } = useThemedMessage();
   const [loading, setLoading] = useState(false);
-  const [rbacEnabled, setRbacEnabled] = useState(false);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
-  const [boardOwners, setBoardOwners] = useState<User[]>([]);
-  const [boardGroupGrants, setBoardGroupGrants] = useState<BoardGroupGrantWithGroup[]>([]);
+  const [policy, setPolicy] = useState<BoardCapabilityPolicies | null>(null);
+  const [workspacePreferences, setWorkspacePreferences] =
+    useState<CapabilityPolicyWorkspacePreferences>({ personal_session_sharing_enabled: false });
   const [loadedBoard, setLoadedBoard] = useState<Board | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const prototypeUsers = useMemo(() => {
+  const permissionUsers = useMemo(() => {
     const knownUsers = new Map(userById);
     for (const user of allUsers) knownUsers.set(user.user_id, user);
     return [...knownUsers.values()];
@@ -59,23 +57,21 @@ export function BoardEditModal({
     setLoading(true);
     setLoadError(null);
     setLoadedBoard(null);
-    setBoardOwners([]);
-    setBoardGroupGrants([]);
+    setPolicy(null);
 
     // Re-read the board as the modal opens. The selector uses a lean board list,
     // while this form must always start from the full, latest representation.
     const load = async () => {
       try {
-        const fresh = client ? await client.service('boards').get(board.board_id) : board;
-        let ownerIds: string[] = [];
-        let grants: Array<{ group_id: string; can: string; fs_access?: string }> = [];
-        if (client) {
-          const [usersResult, groupsResult, ownersResult, groupGrantsResult] =
+        if (!client) throw new Error('Agor client is unavailable');
+        const fresh = await client.service('boards').get(board.board_id);
+        {
+          const [usersResult, groupsResult, policyResult, preferencesResult] =
             await Promise.allSettled([
               client.service('users').findAll({}),
               client.service('groups').findAll({ query: { archived: false } }),
-              client.service('boards/:id/owners').find({ route: { id: board.board_id } }),
-              client.service('boards/:id/group-grants').find({ route: { id: board.board_id } }),
+              client.service('boards/:id/permissions').find({ route: { id: board.board_id } }),
+              client.service('workspace-preferences').find(),
             ]);
           if (cancelled) return;
 
@@ -92,39 +88,16 @@ export function BoardEditModal({
             console.warn('Failed to load groups for board permissions:', groupsResult.reason);
           }
 
-          if (ownersResult.status === 'fulfilled') {
-            setRbacEnabled(true);
-            const loadedOwners = ownersResult.value as User[];
-            setBoardOwners(loadedOwners);
-            ownerIds = loadedOwners.map((user) => user.user_id);
-          } else if ((ownersResult.reason as { code?: number })?.code === 404) {
-            // Owner routes intentionally do not exist when legacy RBAC is disabled.
-            setRbacEnabled(false);
-            setBoardOwners([]);
+          if (policyResult.status === 'fulfilled') {
+            setPolicy(policyResult.value);
           } else {
-            throw ownersResult.reason;
+            throw policyResult.reason;
           }
-
-          if (groupGrantsResult.status === 'fulfilled') {
-            const loadedGroupGrants = groupGrantsResult.value as BoardGroupGrantWithGroup[];
-            setBoardGroupGrants(loadedGroupGrants);
-            grants = loadedGroupGrants.map((grant) => ({
-              group_id: grant.group_id,
-              can: grant.can,
-              fs_access: grant.fs_access,
-            }));
-          } else {
-            setBoardGroupGrants([]);
-            if ((groupGrantsResult.reason as { code?: number })?.code !== 404) {
-              console.warn(
-                'Failed to load group grants for board permissions:',
-                groupGrantsResult.reason
-              );
-            }
+          if (preferencesResult.status === 'fulfilled') {
+            setWorkspacePreferences(preferencesResult.value);
           }
         }
         if (cancelled) return;
-        if (ownerIds.length === 0 && fresh.created_by) ownerIds = [fresh.created_by];
         // Populate the form BEFORE exposing loadedBoard so the background
         // editor mounts against fully-initialized field values (rather than
         // relying on render batching). loadedBoard is set last, below.
@@ -141,8 +114,6 @@ export function BoardEditModal({
           default_dangerously_allow_session_sharing: Boolean(
             fresh.default_dangerously_allow_session_sharing
           ),
-          owner_ids: ownerIds,
-          board_group_grants: grants,
           custom_context: fresh.custom_context ? JSON.stringify(fresh.custom_context, null, 2) : '',
         });
         // Expose the loaded board last: this is what un-gates the form render.
@@ -163,37 +134,11 @@ export function BoardEditModal({
   }, [board, client, form, open]);
 
   const syncPermissions = async () => {
-    if (!client || !board || !rbacEnabled) return;
-    const id = board.board_id as UUID;
-    const values = form.getFieldsValue(true);
-    const desiredOwners = (values.owner_ids || []) as UUID[];
-    const desiredGrants = (
-      values.access_mode === 'private' ? [] : values.board_group_grants || []
-    ) as Array<{ group_id: string; can: BranchPermissionLevel; fs_access?: BranchFsAccessLevel }>;
-    const owners = (await client.service('boards/:id/owners').find({ route: { id } })) as User[];
-    const currentOwnerIds = owners.map((user) => user.user_id as UUID);
-    const currentGrants = (await client
-      .service('boards/:id/group-grants')
-      .find({ route: { id } })) as BoardGroupGrantWithGroup[];
-    const desiredGroups = new Set(desiredGrants.map((grant) => grant.group_id));
-    await Promise.all([
-      ...desiredOwners
-        .filter((userId) => !currentOwnerIds.includes(userId))
-        .map((user_id) =>
-          client.service('boards/:id/owners').create({ user_id }, { route: { id } })
-        ),
-      ...currentOwnerIds
-        .filter((userId) => !desiredOwners.includes(userId))
-        .map((userId) => client.service('boards/:id/owners').remove(userId, { route: { id } })),
-      ...desiredGrants.map((grant) =>
-        client.service('boards/:id/group-grants').create(grant, { route: { id } })
-      ),
-      ...currentGrants
-        .filter((grant) => !desiredGroups.has(grant.group_id))
-        .map((grant) =>
-          client.service('boards/:id/group-grants').remove(grant.group_id, { route: { id } })
-        ),
-    ]);
+    if (!client || !board || !policy) return;
+    const saved = await client
+      .service('boards/:id/permissions')
+      .patch(null, policy, { route: { id: board.board_id } });
+    setPolicy(saved);
   };
 
   const close = () => {
@@ -206,12 +151,10 @@ export function BoardEditModal({
     try {
       setSaving(true);
       await form.validateFields();
-      const values = form.getFieldsValue(true);
-      if (values.access_mode === 'private' && (values.owner_ids || []).length !== 1) {
-        showError('Private boards must have exactly one private user');
-        return;
-      }
-      const updated = await onUpdate?.(board.board_id, extractBoardFormValues(form));
+      const updated = await onUpdate?.(
+        board.board_id,
+        extractBoardFormValues(form, { includeLegacyPermissions: false })
+      );
       if (updated === false) return;
       await syncPermissions();
       close();
@@ -248,21 +191,23 @@ export function BoardEditModal({
             key={loadedBoard.board_id}
             form={form}
             backgroundResetSignal={loadedBoard.board_id}
-            rbacEnabled={rbacEnabled}
+            rbacEnabled
             allUsers={allUsers}
             allGroups={allGroups}
-            capabilityPolicyPrototype={
-              import.meta.env.DEV ? (
-                <BoardCapabilityPolicyModalPrototype
-                  board={loadedBoard}
+            capabilityPolicyEditor={
+              policy ? (
+                <BoardCapabilityPolicyModalEditor
+                  value={policy}
+                  onChange={setPolicy}
                   client={client}
-                  owners={boardOwners}
-                  groupGrants={boardGroupGrants}
-                  users={prototypeUsers}
+                  users={permissionUsers}
                   groups={allGroups}
                   currentUser={currentUser}
+                  workspacePreferences={workspacePreferences}
                 />
-              ) : undefined
+              ) : (
+                <Alert type="error" showIcon description="Permissions are unavailable." />
+              )
             }
             extra={
               <Form.Item

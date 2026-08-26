@@ -56,7 +56,9 @@ describe('register-hooks MCP server secret redaction', () => {
     expect(routesSource).toContain('redactMCPServerSecrets');
     expect(routesSource).toContain('servers.map(redactMCPServerSecrets)');
     expect(routesSource).toContain('authorizeAndLoadSessionForMcpConfig(id, params)');
-    expect(routesSource).toContain('isMCPServerUsableInSession');
+    expect(routesSource).toContain('isMCPServerUsableBy');
+    expect(routesSource).toContain('const credentialUserId = userId ?? session.created_by');
+    expect(routesSource).toContain('usableByUserId: credentialUserId');
     expect(routesSource).toContain('includeGlobal');
     expect(routesSource).toContain("scope: 'global'");
     expect(routesSource).toContain('forUserId');

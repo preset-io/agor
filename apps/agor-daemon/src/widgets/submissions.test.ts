@@ -2,8 +2,7 @@
  * Unit tests for the widget resolution path.
  *
  * Tests the contract documented in §5 of the design doc:
- *   - Auth gating (session creator passes, non-owner without prompt-tier
- *     RBAC is rejected)
+ *   - Auth gating delegates to the canonical prompt authority decision
  *   - Idempotency (double-submit on a `submitted` widget is rejected)
  *   - Submit dispatches via the registry's applySubmit
  *   - Auto-resume task is queued via `/sessions/:id/prompt`
@@ -39,6 +38,9 @@ interface MockEvent {
 }
 
 const runInTenantDatabaseScope = <T>(work: () => Promise<T>) => work();
+const allowPrompt = async () =>
+  ({ allowed: true, execution_user_id: 'creator-user-id', source: 'own_session' }) as const;
+const denyPrompt = async () => ({ allowed: false, source: 'denied' }) as const;
 
 function makeApp(
   records: { message: Message; session: Session; branch: Branch },
@@ -232,40 +234,12 @@ function registerTestWidget(
 }
 
 describe('canResolveWidget', () => {
-  it('allows the session creator', () => {
-    const session = { created_by: 'alice' as UserID };
-    const branch = { others_can: 'view' } as unknown as Branch;
-    expect(canResolveWidget({ user_id: 'alice' as UserID }, session, branch, false)).toBe(true);
+  it('allows an affirmative canonical prompt decision', () => {
+    expect(canResolveWidget({ allowed: true })).toBe(true);
   });
 
-  it('rejects a non-creator with view-only RBAC', () => {
-    const session = { created_by: 'alice' as UserID };
-    const branch = { others_can: 'view' } as unknown as Branch;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, branch, false)).toBe(false);
-  });
-
-  it('rejects a non-creator with session-tier RBAC (session tier is for own sessions only)', () => {
-    const session = { created_by: 'alice' as UserID };
-    const branch = { others_can: 'session' } as unknown as Branch;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, branch, false)).toBe(false);
-  });
-
-  it('allows a non-creator with prompt-tier RBAC', () => {
-    const session = { created_by: 'alice' as UserID };
-    const branch = { others_can: 'prompt' } as unknown as Branch;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, branch, false)).toBe(true);
-  });
-
-  it('allows a non-creator with all-tier RBAC', () => {
-    const session = { created_by: 'alice' as UserID };
-    const branch = { others_can: 'all' } as unknown as Branch;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, branch, false)).toBe(true);
-  });
-
-  it('allows an explicit branch owner even when others_can is view-only', () => {
-    const session = { created_by: 'alice' as UserID };
-    const branch = { others_can: 'view' } as unknown as Branch;
-    expect(canResolveWidget({ user_id: 'bob' as UserID }, session, branch, true)).toBe(true);
+  it('rejects a denied canonical prompt decision', () => {
+    expect(canResolveWidget({ allowed: false })).toBe(false);
   });
 });
 
@@ -288,7 +262,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       )
     ).rejects.toThrow('is not a widget request');
@@ -311,7 +285,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       )
     ).rejects.toBe(infrastructureError);
@@ -332,7 +306,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       )
     ).rejects.toThrow('Widget widget-msg-1 not found');
@@ -351,7 +325,7 @@ describe('resolveWidget', () => {
         app: app as never,
         resolutionStore,
         runInTenantDatabaseScope,
-        isBranchOwner: async () => false,
+        resolveSessionPromptAuthority: allowPrompt,
       }
     );
 
@@ -416,7 +390,7 @@ describe('resolveWidget', () => {
     expect((event!.payload as { status: string }).status).toBe('submitted');
   });
 
-  it('rejects a submission from a non-creator without prompt-tier RBAC', async () => {
+  it('rejects a submission when canonical prompt authority denies it', async () => {
     registerTestWidget();
     const fixtures = makeFixtures({ branchOthersCan: 'session' });
     const { app, resolutionStore } = makeApp(fixtures);
@@ -430,13 +404,13 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: denyPrompt,
         }
       )
-    ).rejects.toThrow(/session creator|prompt/);
+    ).rejects.toThrow(/permission from the session owner/);
   });
 
-  it('allows a submission from a non-creator with prompt-tier RBAC', async () => {
+  it('allows a submission with an owner-authored sharing grant', async () => {
     registerTestWidget();
     const fixtures = makeFixtures({ branchOthersCan: 'prompt' });
     const { app, calls, resolutionStore } = makeApp(fixtures);
@@ -449,14 +423,14 @@ describe('resolveWidget', () => {
         app: app as never,
         resolutionStore,
         runInTenantDatabaseScope,
-        isBranchOwner: async () => false,
+        resolveSessionPromptAuthority: allowPrompt,
       }
     );
     expect(result.status).toBe('submitted');
     const promptCall = calls.find(
       (call) => call.service === '/sessions/:id/prompt' && call.method === 'create'
     );
-    expect(promptCall?.params).toMatchObject({ user: { user_id: 'creator-user-id' } });
+    expect(promptCall?.params).toMatchObject({ user: { user_id: 'someone-else' } });
     expect(promptCall?.data).toMatchObject({
       metadata: { widget_resolved_by_user_id: 'someone-else' },
     });
@@ -476,7 +450,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       )
     ).rejects.toThrow(/already submitted/);
@@ -495,7 +469,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       )
     ).rejects.toThrow(/not registered/);
@@ -514,7 +488,7 @@ describe('resolveWidget', () => {
         app: app as never,
         resolutionStore,
         runInTenantDatabaseScope,
-        isBranchOwner: async () => false,
+        resolveSessionPromptAuthority: allowPrompt,
       }
     );
 
@@ -536,7 +510,7 @@ describe('resolveWidget', () => {
         app: app as never,
         resolutionStore,
         runInTenantDatabaseScope,
-        isBranchOwner: async () => false,
+        resolveSessionPromptAuthority: allowPrompt,
       }
     );
 
@@ -563,7 +537,7 @@ describe('resolveWidget', () => {
         app: app as never,
         resolutionStore,
         runInTenantDatabaseScope,
-        isBranchOwner: async () => false,
+        resolveSessionPromptAuthority: allowPrompt,
       }
     );
 
@@ -595,7 +569,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       )
     ).rejects.toThrow(/admin/i);
@@ -623,7 +597,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       )
     ).rejects.toThrow(/admin/i);
@@ -648,7 +622,7 @@ describe('resolveWidget', () => {
         app: app as never,
         resolutionStore,
         runInTenantDatabaseScope,
-        isBranchOwner: async () => false,
+        resolveSessionPromptAuthority: allowPrompt,
       }
     );
 
@@ -669,7 +643,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       )
     ).rejects.toThrow(/Authentication/);
@@ -689,7 +663,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       )
     ).rejects.toThrow(/Invalid submit/);
@@ -715,7 +689,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       )
     ).rejects.toMatchObject({
@@ -754,7 +728,7 @@ describe('resolveWidget', () => {
           app: state.app as never,
           resolutionStore: state.resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       );
 
@@ -788,7 +762,7 @@ describe('resolveWidget', () => {
           app: state.app as never,
           resolutionStore: state.resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       );
 
@@ -822,7 +796,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       ),
       resolveWidget(
@@ -833,7 +807,7 @@ describe('resolveWidget', () => {
           app: app as never,
           resolutionStore,
           runInTenantDatabaseScope,
-          isBranchOwner: async () => false,
+          resolveSessionPromptAuthority: allowPrompt,
         }
       ),
     ]);

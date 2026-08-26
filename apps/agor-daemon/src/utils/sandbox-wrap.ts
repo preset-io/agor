@@ -104,7 +104,7 @@ export function buildSandboxWrap(params: {
   ownerHomeStore?: string;
   /** Tenant-scoped worktrees root resolved from the immutable config. */
   worktreesRoot?: string;
-  /** RBAC-resolved fs access of the session owner to the branch. Default 'write'. */
+  /** RBAC-resolved fs access of the current prompt actor. Default 'write'. */
   branchAccess?: 'write' | 'read' | 'none';
   /** Immutable deployment paths injected by configureExecutor at startup. */
   runtimePaths: SandboxRuntimePaths;

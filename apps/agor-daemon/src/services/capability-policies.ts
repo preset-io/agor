@@ -1,0 +1,283 @@
+import {
+  CapabilityPolicyRepository,
+  EntityNotFoundError,
+  RepositoryError,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
+import { BadRequest, Conflict, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
+import type {
+  BoardCapabilityPolicies,
+  BoardID,
+  BranchCapabilityPolicy,
+  BranchID,
+  BranchSessionSharingOwnerRule,
+  CapabilityPolicyWorkspacePreferences,
+  Params,
+  UserID,
+} from '@agor/core/types';
+import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { isSuperAdmin } from '../utils/branch-authorization.js';
+
+function actor(params?: Params): { user_id: UserID; role?: string; service: boolean } | null {
+  const user = (
+    params as
+      | { user?: { user_id?: string; role?: string; _isServiceAccount?: boolean } }
+      | undefined
+  )?.user;
+  if (!user?.user_id) return null;
+  return {
+    user_id: user.user_id as UserID,
+    role: user.role,
+    service: user._isServiceAccount === true,
+  };
+}
+
+function routeId(params?: Params): string {
+  const id = (params as { route?: { id?: string } } | undefined)?.route?.id;
+  if (!id) throw new BadRequest('Resource ID is required');
+  return id;
+}
+
+function requireActor(params?: Params) {
+  if (!params?.provider) return actor(params);
+  const current = actor(params);
+  if (!current) throw new NotAuthenticated('Authentication required');
+  return current;
+}
+
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).sort().join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stable(item)}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function rulesByOwner(rules: BranchSessionSharingOwnerRule[]) {
+  return new Map(rules.map((rule) => [rule.session_owner_user_id, rule]));
+}
+
+function assertForeignRulesUnchanged(
+  before: BranchSessionSharingOwnerRule[],
+  after: BranchSessionSharingOwnerRule[],
+  currentUserId: UserID
+): void {
+  const oldRules = rulesByOwner(before);
+  const newRules = rulesByOwner(after);
+  const owners = new Set([...oldRules.keys(), ...newRules.keys()]);
+  for (const ownerId of owners) {
+    if (ownerId === currentUserId) continue;
+    if (stable(oldRules.get(ownerId)) !== stable(newRules.get(ownerId))) {
+      throw new Forbidden('You can change only your own session sharing rule');
+    }
+  }
+}
+
+function ownRuleWasEnabled(
+  before: BranchSessionSharingOwnerRule[],
+  after: BranchSessionSharingOwnerRule[],
+  currentUserId: UserID
+): boolean {
+  const oldRule = rulesByOwner(before).get(currentUserId);
+  const newRule = rulesByOwner(after).get(currentUserId);
+  return newRule?.enabled === true && stable(oldRule) !== stable(newRule);
+}
+
+function mapRepositoryError(error: unknown): never {
+  if (error instanceof Error && error.message.includes('reload before saving')) {
+    throw new Conflict(error.message);
+  }
+  if (error instanceof EntityNotFoundError) throw new NotFound('Resource not found');
+  if (error instanceof RepositoryError) throw new BadRequest(error.message);
+  throw error;
+}
+
+export function setupCapabilityPolicyServices(
+  app: import('@agor/core/feathers').Application,
+  db: TenantScopeAwareDatabase,
+  options: { allowSuperadmin?: boolean } = {}
+): void {
+  const repository = new CapabilityPolicyRepository(db);
+
+  app.use(
+    'boards/:id/permissions',
+    {
+      async find(params?: Params): Promise<BoardCapabilityPolicies> {
+        const current = requireActor(params);
+        const boardId = routeId(params) as BoardID;
+        if (params?.provider && !current?.service && !hasMinimumRole(current?.role, ROLES.ADMIN)) {
+          const access = await repository.resolveBoardAccess(boardId, current!.user_id);
+          if (!access.capabilities.includes('board.view')) throw new Forbidden('Board not found');
+        }
+        return repository.getBoardPolicies(boardId);
+      },
+      async patch(_id: string | null, value: BoardCapabilityPolicies, params?: Params) {
+        const current = requireActor(params);
+        const boardId = routeId(params) as BoardID;
+        const existing = await repository.getBoardPolicies(boardId);
+        if (params?.provider && !current?.service) {
+          const access = await repository.resolveBoardAccess(boardId, current!.user_id);
+          const managesPolicy =
+            hasMinimumRole(current?.role, ROLES.ADMIN) ||
+            access.capabilities.includes('board.policy.manage');
+          assertForeignRulesUnchanged(
+            existing.branch_template.session_sharing.owner_rules,
+            value.branch_template.session_sharing.owner_rules,
+            current!.user_id
+          );
+          if (!managesPolicy) {
+            const onlyOwnSharingChanged =
+              stable(existing.board_access) === stable(value.board_access) &&
+              stable(existing.branch_template.access) === stable(value.branch_template.access);
+            if (!onlyOwnSharingChanged || !access.capabilities.includes('board.view')) {
+              throw new Forbidden('You cannot manage this board permission policy');
+            }
+          }
+          const preferences = await repository.getWorkspacePreferences();
+          if (
+            !preferences.personal_session_sharing_enabled &&
+            ownRuleWasEnabled(
+              existing.branch_template.session_sharing.owner_rules,
+              value.branch_template.session_sharing.owner_rules,
+              current!.user_id
+            )
+          ) {
+            throw new Forbidden('Session sharing is disabled for this workspace');
+          }
+        }
+        try {
+          const saved = await repository.replaceBoardPolicies(
+            boardId,
+            value,
+            current?.user_id ?? existing.primary_owner_user_id
+          );
+          console.info(
+            `[rbac.policy] updated kind=board board_id=${boardId} access_revision=${saved.board_access_revision} template_revision=${saved.branch_template_revision} access_entries=${saved.board_access.entries.length} template_entries=${saved.branch_template.access.entries.length}`
+          );
+          return saved;
+        } catch (error) {
+          mapRepositoryError(error);
+        }
+      },
+    },
+    { methods: ['find', 'patch'] }
+  );
+
+  app.use(
+    'branches/:id/permissions',
+    {
+      async find(params?: Params): Promise<BranchCapabilityPolicy> {
+        const current = requireActor(params);
+        const branchId = routeId(params) as BranchID;
+        if (
+          params?.provider &&
+          !current?.service &&
+          !isSuperAdmin(current?.role, options.allowSuperadmin ?? true)
+        ) {
+          const access = await repository.resolveBranchAccess(branchId, current!.user_id);
+          if (!access.capabilities.includes('branch.view')) throw new Forbidden('Branch not found');
+        }
+        return repository.getBranchPolicy(branchId);
+      },
+      async patch(_id: string | null, value: BranchCapabilityPolicy, params?: Params) {
+        const current = requireActor(params);
+        const branchId = routeId(params) as BranchID;
+        const existing = await repository.getBranchPolicy(branchId);
+        if (params?.provider && !current?.service) {
+          const access = await repository.resolveBranchAccess(branchId, current!.user_id);
+          const managesPolicy =
+            isSuperAdmin(current?.role, options.allowSuperadmin ?? true) ||
+            access.capabilities.includes('branch.policy.manage');
+          const oldConfig =
+            existing.binding_mode === 'inherit'
+              ? existing.inherited_config
+              : existing.override_config;
+          const newConfig =
+            value.binding_mode === 'inherit' ? value.inherited_config : value.override_config;
+          if (!oldConfig || !newConfig)
+            throw new BadRequest('A complete permission configuration is required');
+          // Binding is monolithic, but changing it must not become an indirect
+          // way for a Manager to erase or rewrite another user's personal
+          // home-sharing decision. Equivalent rules may move between the
+          // board template and an override; semantic changes remain owner-only.
+          assertForeignRulesUnchanged(
+            oldConfig.session_sharing.owner_rules,
+            newConfig.session_sharing.owner_rules,
+            current!.user_id
+          );
+          if (value.binding_mode === 'inherit') {
+            const boardTemplate = existing.inherited_config;
+            if (!boardTemplate || stable(newConfig) !== stable(boardTemplate)) {
+              throw new BadRequest('Inherited permissions are read only');
+            }
+          }
+          if (!managesPolicy) {
+            const onlyOwnSharingChanged =
+              existing.binding_mode === value.binding_mode &&
+              stable(oldConfig.access) === stable(newConfig.access);
+            if (!onlyOwnSharingChanged || !access.capabilities.includes('branch.view')) {
+              throw new Forbidden('You cannot manage this branch permission policy');
+            }
+          }
+          const preferences = await repository.getWorkspacePreferences();
+          if (
+            !preferences.personal_session_sharing_enabled &&
+            ownRuleWasEnabled(
+              oldConfig.session_sharing.owner_rules,
+              newConfig.session_sharing.owner_rules,
+              current!.user_id
+            )
+          ) {
+            throw new Forbidden('Session sharing is disabled for this workspace');
+          }
+        }
+        try {
+          const saved = await repository.replaceBranchPolicy(
+            branchId,
+            value,
+            current?.user_id ?? existing.primary_owner_user_id
+          );
+          const config =
+            saved.binding_mode === 'inherit' ? saved.inherited_config : saved.override_config;
+          console.info(
+            `[rbac.policy] updated kind=branch branch_id=${branchId} binding=${saved.binding_mode} revision=${saved.revision} entries=${config?.access.entries.length ?? 0}`
+          );
+          return saved;
+        } catch (error) {
+          mapRepositoryError(error);
+        }
+      },
+    },
+    { methods: ['find', 'patch'] }
+  );
+
+  app.use(
+    'workspace-preferences',
+    {
+      async find(params?: Params): Promise<CapabilityPolicyWorkspacePreferences> {
+        requireActor(params);
+        return repository.getWorkspacePreferences();
+      },
+      async patch(
+        _id: string | null,
+        value: CapabilityPolicyWorkspacePreferences,
+        params?: Params
+      ): Promise<CapabilityPolicyWorkspacePreferences> {
+        const current = requireActor(params);
+        if (params?.provider && !current?.service && !hasMinimumRole(current?.role, ROLES.ADMIN)) {
+          throw new Forbidden('Only admins can manage workspace preferences');
+        }
+        if (!current) throw new NotAuthenticated('Authentication required');
+        const saved = await repository.setWorkspacePreferences(value, current.user_id);
+        console.info(
+          `[rbac.workspace_preferences] updated personal_session_sharing_enabled=${saved.personal_session_sharing_enabled}`
+        );
+        return saved;
+      },
+    },
+    { methods: ['find', 'patch'] }
+  );
+}

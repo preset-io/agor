@@ -5,8 +5,8 @@ import { describe, expect, it } from 'vitest';
 import {
   cloneBoardPrototypeFixture,
   cloneBranchPrototypeFixture,
+  EFFECTIVE_ACCESS_SUBJECTS,
   PROTOTYPE_PRINCIPALS,
-  PROTOTYPE_SUBJECTS,
   PROTOTYPE_USERS,
 } from '@/pages/rbac-policy-prototype/fixtures';
 import { BoardCapabilityPolicyForm } from './BoardCapabilityPolicyForm';
@@ -23,7 +23,7 @@ describe('shared capability policy forms', () => {
         value={value}
         onChange={() => undefined}
         principals={PROTOTYPE_PRINCIPALS}
-        subjects={PROTOTYPE_SUBJECTS}
+        subjects={EFFECTIVE_ACCESS_SUBJECTS}
         sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
         currentUserId={PROTOTYPE_USERS.kasia}
       />
@@ -44,7 +44,7 @@ describe('shared capability policy forms', () => {
           value={value}
           onChange={setValue}
           principals={PROTOTYPE_PRINCIPALS}
-          subjects={PROTOTYPE_SUBJECTS}
+          subjects={EFFECTIVE_ACCESS_SUBJECTS}
           sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
           currentUserId={PROTOTYPE_USERS.kasia}
         />
@@ -80,7 +80,7 @@ describe('shared capability policy forms', () => {
             setValue(nextValue);
           }}
           principals={PROTOTYPE_PRINCIPALS}
-          subjects={PROTOTYPE_SUBJECTS}
+          subjects={EFFECTIVE_ACCESS_SUBJECTS}
           currentUserId={PROTOTYPE_USERS.kasia}
         />
       );
@@ -122,7 +122,7 @@ describe('shared capability policy forms', () => {
             setValue(nextValue);
           }}
           principals={PROTOTYPE_PRINCIPALS}
-          subjects={PROTOTYPE_SUBJECTS}
+          subjects={EFFECTIVE_ACCESS_SUBJECTS}
           currentUserId={PROTOTYPE_USERS.kasia}
         />
       );
@@ -154,7 +154,7 @@ describe('shared capability policy forms', () => {
           value={value}
           onChange={setValue}
           principals={PROTOTYPE_PRINCIPALS}
-          subjects={PROTOTYPE_SUBJECTS}
+          subjects={EFFECTIVE_ACCESS_SUBJECTS}
           sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
           currentUserId={PROTOTYPE_USERS.kasia}
         />
@@ -176,7 +176,7 @@ describe('shared capability policy forms', () => {
         value={value}
         onChange={() => undefined}
         principals={PROTOTYPE_PRINCIPALS}
-        subjects={PROTOTYPE_SUBJECTS}
+        subjects={EFFECTIVE_ACCESS_SUBJECTS}
         currentUserId={PROTOTYPE_USERS.kasia}
       />
     );
@@ -201,7 +201,7 @@ describe('shared capability policy forms', () => {
         value={value}
         onChange={() => undefined}
         principals={PROTOTYPE_PRINCIPALS}
-        subjects={PROTOTYPE_SUBJECTS}
+        subjects={EFFECTIVE_ACCESS_SUBJECTS}
         sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
         currentUserId={PROTOTYPE_USERS.kasia}
       />
@@ -223,7 +223,7 @@ describe('shared capability policy forms', () => {
           value={value}
           onChange={setValue}
           principals={PROTOTYPE_PRINCIPALS}
-          subjects={PROTOTYPE_SUBJECTS}
+          subjects={EFFECTIVE_ACCESS_SUBJECTS}
           sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
           currentUserId={PROTOTYPE_USERS.kasia}
         />
@@ -251,7 +251,7 @@ describe('shared capability policy forms', () => {
           value={value}
           onChange={setValue}
           principals={PROTOTYPE_PRINCIPALS}
-          subjects={PROTOTYPE_SUBJECTS}
+          subjects={EFFECTIVE_ACCESS_SUBJECTS}
           currentUserId={PROTOTYPE_USERS.kasia}
         />
       );

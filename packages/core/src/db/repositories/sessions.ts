@@ -45,7 +45,6 @@ import {
 import { sanitizeDbError } from '../sanitize-error';
 import {
   branches,
-  branchOwners,
   messages,
   type SessionInsert,
   type SessionRow,
@@ -408,13 +407,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         ? select(this.db)
             .from(sessions)
             .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
-            .leftJoin(
-              branchOwners,
-              and(
-                eq(branchOwners.branch_id, branches.branch_id),
-                eq(branchOwners.user_id, filter.visibleToUserId)
-              )
-            )
         : select(this.db)
             .from(sessions)
             .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
@@ -500,13 +492,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         ? select(this.db)
             .from(sessions)
             .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
-            .leftJoin(
-              branchOwners,
-              and(
-                eq(branchOwners.branch_id, branches.branch_id),
-                eq(branchOwners.user_id, filter.visibleToUserId)
-              )
-            )
         : select(this.db)
             .from(sessions)
             .innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
@@ -570,18 +555,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
       // Total matching rows — drives Feathers pagination + the findAll loop.
       // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
-      let countQuery: any = select(this.db, { count: sql<number>`count(*)` })
+      const countQuery: any = select(this.db, { count: sql<number>`count(*)` })
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
-      if (opts.visibleToUserId) {
-        countQuery = countQuery.leftJoin(
-          branchOwners,
-          and(
-            eq(branchOwners.branch_id, branches.branch_id),
-            eq(branchOwners.user_id, opts.visibleToUserId)
-          )
-        );
-      }
       const countRow = await (whereClause ? countQuery.where(whereClause) : countQuery).one();
       const total = Number(countRow?.count ?? 0);
 
@@ -590,15 +566,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       let dataQuery: any = select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
-      if (opts.visibleToUserId) {
-        dataQuery = dataQuery.leftJoin(
-          branchOwners,
-          and(
-            eq(branchOwners.branch_id, branches.branch_id),
-            eq(branchOwners.user_id, opts.visibleToUserId)
-          )
-        );
-      }
       if (whereClause) dataQuery = dataQuery.where(whereClause);
       if (opts.sortUpdatedAt !== undefined) {
         dataQuery = dataQuery.orderBy(
@@ -1460,10 +1427,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     const results = await select(this.db)
       .from(sessions)
       .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
-      .leftJoin(
-        branchOwners,
-        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
       .where(whereCondition)
       .all();
 

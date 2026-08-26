@@ -673,6 +673,7 @@ export interface AgorExecutionSettings {
    * - {session_id} - Session ID (if available)
    * - {branch_id} - Branch ID (if available)
    * - {user_id} - Trusted authenticated Agor user UUID (if available)
+   * - {branch_fs_access} - Actor's branch projection: none, read, or write
    * - {tenant_id} - Trusted ambient tenant ID (shell-escaped; fails if unavailable)
    *
    * The template command receives JSON payload via stdin and should pipe it

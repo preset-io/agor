@@ -833,13 +833,6 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
       params
     )) as Branch;
 
-    // Add creating user as owner of the branch
-    {
-      const branchRepo = new BranchRepository(this.db);
-      await branchRepo.addOwner(branch.branch_id, userId);
-      console.log(`✓ Added user ${shortId(userId)} as owner of branch ${branch.name}`);
-    }
-
     if (data.boardId) {
       const boardObjectsService = this.app.service('board-objects');
 

@@ -31,6 +31,7 @@ import {
   insert,
   isPostgresDatabase,
   isSQLiteDatabase,
+  runDatabaseTransaction,
 } from './database-wrapper';
 import { sanitizeDbError } from './sanitize-error';
 import { boards } from './schema';
@@ -138,6 +139,8 @@ const MIGRATION_IMPACT_REGISTRY = createMigrationImpactRegistry([
     '0078_mcp_oauth_pending_flows',
     '0082_github_install_state',
     '0091_codex_device_auth_attempts',
+    '0095_board_branch_capability_policies',
+    '0098_board_branch_capability_policies',
   ].map(
     (name) =>
       [
@@ -252,6 +255,41 @@ export function pendingOfflineCutoverMigrations(
   if (dialect !== 'postgresql' || status.applied.length === 0) return [];
   return status.pending.filter((tag) =>
     MIGRATION_IMPACT_REGISTRY.offlineCutoverMigrations.has(tag)
+  );
+}
+
+/**
+ * SQLite cannot interpolate object ids into a trigger/constraint error. Run a
+ * readable preflight before the transactional migration so operators know
+ * exactly which protected resources need manual cleanup or attribution.
+ */
+export async function preflightSQLiteCapabilityPolicyOwners(db: Database): Promise<void> {
+  if (!isSQLiteDatabase(db)) return;
+  const result = await db.run(sql`
+    SELECT 'board' AS kind, b.board_id AS id
+    FROM boards b
+    WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = b.created_by)
+      AND NOT EXISTS (
+        SELECT 1 FROM board_owners bo
+        JOIN users u ON u.user_id = bo.user_id
+        WHERE bo.board_id = b.board_id
+      )
+    UNION ALL
+    SELECT 'branch' AS kind, br.branch_id AS id
+    FROM branches br
+    WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = br.created_by)
+      AND NOT EXISTS (
+        SELECT 1 FROM branch_owners bo
+        JOIN users u ON u.user_id = bo.user_id
+        WHERE bo.branch_id = br.branch_id
+      )
+    ORDER BY kind, id
+    LIMIT 100
+  `);
+  if (result.rows.length === 0) return;
+  const failures = result.rows.map((row) => `${String(row.kind)}:${String(row.id)}`).join(', ');
+  throw new MigrationError(
+    `RBAC migration cannot attribute primary owners: ${failures}. Delete these resources or restore an existing creator/owner, then rerun the migration.`
   );
 }
 
@@ -486,12 +524,20 @@ export async function runMigrations(
     console.log(`Using migrations folder: ${migrationsFolder}`);
     console.log(`Database dialect: ${dialect === 'sqlite' ? 'sqlite' : 'postgres'}`);
 
+    const status = await checkMigrationStatus(db);
     if (dialect === 'postgresql' && options.allowOfflineCutover !== true) {
-      const status = await checkMigrationStatus(db);
       const offlineMigrations = pendingOfflineCutoverMigrations('postgresql', status);
       if (offlineMigrations.length > 0) {
         throw new OfflineMigrationCutoverRequiredError(offlineMigrations);
       }
+    }
+
+    if (
+      dialect === 'sqlite' &&
+      status.applied.includes('0096_scheduler_poison_recovery') &&
+      status.pending.includes('0098_board_branch_capability_policies')
+    ) {
+      await preflightSQLiteCapabilityPolicyOwners(db);
     }
 
     // Drizzle handles everything:
@@ -549,24 +595,65 @@ export async function seedInitialData(db: Database, createdBy?: string): Promise
     // daemons can reach first-run seeding together, and the unique tenant/slug
     // constraint is the correctness fence for that race.
     const tenantId = getCurrentTenantId();
-    const result = await insert(db, boards)
-      .values({
-        board_id: generateId(),
-        name: 'Main Board',
-        slug: 'default',
-        created_at: now,
-        updated_at: now,
-        created_by: owner,
-        data: {
-          description: 'Main board for all sessions',
-          sessions: [],
-          color: '#1677ff',
-          icon: '⭐',
+    const boardId = generateId();
+    const seedOnce = () =>
+      runDatabaseTransaction(
+        db,
+        async (tx) => {
+          const inserted = await insert(tx, boards)
+            .values({
+              board_id: boardId,
+              name: 'Main Board',
+              slug: 'default',
+              created_at: now,
+              updated_at: now,
+              created_by: owner,
+              primary_owner_user_id: owner,
+              data: {
+                description: 'Main board for all sessions',
+                sessions: [],
+                color: '#1677ff',
+                icon: '⭐',
+              },
+              ...(isPostgresDatabase(db) && tenantId ? { tenant_id: String(tenantId) } : {}),
+            })
+            .onConflictDoNothing()
+            .run();
+          if (inserted.rowsAffected > 0) {
+            const { CapabilityPolicyRepository } = await import(
+              './repositories/capability-policies'
+            );
+            await new CapabilityPolicyRepository(tx).initializeBoardInTransaction(
+              tx,
+              boardId as import('@agor/core/types').BoardID,
+              owner as import('@agor/core/types').UserID,
+              { shared: true, defaultOthersCan: 'session', defaultOthersFsAccess: 'read' }
+            );
+          }
+          return inserted;
         },
-        ...(isPostgresDatabase(db) && tenantId ? { tenant_id: String(tenantId) } : {}),
-      })
-      .onConflictDoNothing()
-      .run();
+        { sqliteImmediate: true }
+      );
+
+    // Two first-start daemons can both reach SQLite before either has claimed
+    // the slug. BEGIN IMMEDIATE gives the transaction the right correctness
+    // boundary; bounded busy retries let the loser observe the winning row and
+    // converge through ON CONFLICT rather than failing startup.
+    let result: Awaited<ReturnType<typeof seedOnce>> | undefined;
+    for (let attempt = 0; attempt < (isSQLiteDatabase(db) ? 10 : 1); attempt += 1) {
+      try {
+        result = await seedOnce();
+        break;
+      } catch (error) {
+        const root = getRootCause(error) as { code?: string; message?: string };
+        const busy =
+          root?.code === 'SQLITE_BUSY' ||
+          /SQLITE_BUSY|database is locked/i.test(root?.message ?? '');
+        if (!busy || attempt === 9) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
+      }
+    }
+    if (!result) throw new MigrationError('Failed to seed initial data after SQLite busy retries');
 
     if (result.rowsAffected > 0) {
       console.log('✅ Main Board created');

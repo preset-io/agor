@@ -1545,7 +1545,7 @@ describe('configureRealtimePublish', () => {
     expect(r.branchRepository.findRealtimeVisibilityBranch).not.toHaveBeenCalled();
   });
 
-  it('scopes nested branch permission service events through the route branch id', async () => {
+  it('does not broadcast branch permission mutation payloads', async () => {
     const allowed = user('allowed');
     const denied = user('denied');
     const app = makeApp([{ user: allowed }, { user: denied }]);
@@ -1558,17 +1558,17 @@ describe('configureRealtimePublish', () => {
     const channel = await app.runPublish(
       { user_id: 'owner-user' },
       {
-        path: 'branches/:id/owners',
-        method: 'create',
-        event: 'created',
+        path: 'branches/:id/permissions',
+        method: 'patch',
+        event: 'patched',
         params: { route: { id: 'b1' } },
       }
     );
 
-    expect(channel.connections).toEqual([{ user: allowed }]);
+    expect(channel.connections ?? []).toEqual([]);
   });
 
-  it('scopes nested branch group grant events through the route branch id', async () => {
+  it('does not broadcast board permission mutation payloads', async () => {
     const allowed = user('allowed');
     const denied = user('denied');
     const app = makeApp([{ user: allowed }, { user: denied }]);
@@ -1579,16 +1579,16 @@ describe('configureRealtimePublish', () => {
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
 
     const channel = await app.runPublish(
-      { group_id: 'g1', can: 'view' },
+      { board_access_revision: 2 },
       {
-        path: 'branches/:id/group-grants',
-        method: 'create',
-        event: 'created',
-        params: { route: { id: 'b1' } },
+        path: 'boards/:id/permissions',
+        method: 'patch',
+        event: 'patched',
+        params: { route: { id: 'board-1' } },
       }
     );
 
-    expect(channel.connections).toEqual([{ user: allowed }]);
+    expect(channel.connections ?? []).toEqual([]);
   });
 
   it('broadcasts broadly visible branch events without explicit user expansion', async () => {
@@ -2606,7 +2606,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       expect(delivered(result)).toEqual([allowed]);
     });
 
-    it('branches/:id/owners reaches the branch audience via the route id', async () => {
+    it('branches/:id/permissions does not expose policy payloads', async () => {
       const allowed = { user: user('allowed') };
       const denied = { user: user('denied') };
       const app = allowlistApp([allowed, denied]);
@@ -2617,33 +2617,33 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       const result = await app.runPublish(
         { user_id: 'allowed' },
         {
-          path: 'branches/:id/owners',
-          method: 'create',
-          event: 'created',
+          path: 'branches/:id/permissions',
+          method: 'patch',
+          event: 'patched',
           params: { route: { id: 'b1' } },
         }
       );
 
-      expect(delivered(result)).toEqual([allowed]);
+      expect(delivered(result)).toEqual([]);
     });
 
-    it('branches/:id/group-grants reaches the branch audience via the route id', async () => {
+    it('boards/:id/permissions does not expose policy payloads', async () => {
       const allowed = { user: user('allowed') };
       const denied = { user: user('denied') };
       const app = allowlistApp([allowed, denied]);
       configureRealtimePublish({ app, branchRbacEnabled: true, ...rbacRepos() });
 
       const result = await app.runPublish(
-        { group_id: 'g1' },
+        { board_access_revision: 2 },
         {
-          path: 'branches/:id/group-grants',
-          method: 'create',
-          event: 'created',
-          params: { route: { id: 'b1' } },
+          path: 'boards/:id/permissions',
+          method: 'patch',
+          event: 'patched',
+          params: { route: { id: 'board-1' } },
         }
       );
 
-      expect(delivered(result)).toEqual([allowed]);
+      expect(delivered(result)).toEqual([]);
     });
 
     it.each([
@@ -2719,7 +2719,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       expect(delivered(result)).toEqual([allowed]);
     });
 
-    it('a shared board row still reaches the whole tenant', async () => {
+    it('a board row reaches only principals allowed by the board policy', async () => {
       const u1 = { user: user('u1') };
       const u2 = { user: user('u2') };
       const app = allowlistApp([u1, u2]);
@@ -2729,7 +2729,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
         ...repos({
           branch: branch('b1', 'none'),
           permissions: {},
-          boardAccessMode: 'shared',
+          boardPermissions: { u1: true, u2: true },
         }),
       });
 

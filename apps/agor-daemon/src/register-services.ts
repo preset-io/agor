@@ -23,7 +23,6 @@ import {
 import {
   AmbiguousIdError,
   and,
-  BoardRepository,
   BranchRepository,
   DiscordMessageDeliveryRepository,
   EntityNotFoundError,
@@ -143,10 +142,9 @@ import {
 } from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
-import { setupBoardOwnersService } from './services/board-owners.js';
 import { createBoardsService } from './services/boards.js';
-import { setupBranchOwnersService } from './services/branch-owners.js';
 import { createBranchesService } from './services/branches.js';
+import { setupCapabilityPolicyServices } from './services/capability-policies.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
@@ -176,10 +174,8 @@ import {
   GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
   GROUPS_SERVICE_TRANSPORT_METHODS,
   setupBoardAlignedBranchesService,
-  setupBoardGroupGrantsService,
   setupBranchEffectiveAccessService,
   setupBranchFsAccessUsersService,
-  setupBranchGroupGrantsService,
 } from './services/groups.js';
 import { createKnowledgeDocumentEditsService } from './services/knowledge-document-edits.js';
 import { createKnowledgeDocumentsService } from './services/knowledge-documents.js';
@@ -575,31 +571,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);
 
-  if (
-    branchRbacEnabled &&
-    !app.services['branches/:id/owners'] &&
-    !app.services['branches/:id/owners/:userId']
-  ) {
-    const branchRepo = new BranchRepository(db);
-    setupBranchOwnersService(app, branchRepo, {
-      allowSuperadmin,
-    });
-  }
-
   app.use('/groups', createGroupsService(db), {
     methods: [...GROUPS_SERVICE_TRANSPORT_METHODS],
   });
   app.use('/group-memberships', createGroupMembershipsService(db), {
     methods: [...GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS],
   });
-  setupBranchEffectiveAccessService(app, new BranchRepository(db));
+  setupBranchEffectiveAccessService(app, new BranchRepository(db), { allowSuperadmin });
   setupBoardAlignedBranchesService(app, new BranchRepository(db));
   setupBranchFsAccessUsersService(app, new BranchRepository(db));
-  if (branchRbacEnabled) {
-    setupBoardOwnersService(app, new BoardRepository(db));
-    setupBoardGroupGrantsService(app, db);
-    setupBranchGroupGrantsService(app, db, new BranchRepository(db));
-  }
+  setupCapabilityPolicyServices(app, db, { allowSuperadmin });
 
   // `createBranch` is deliberately NOT a transport method: it takes `(id, data)`,
   // which is not the Feathers custom-method contract, and it is already exposed as
@@ -1079,8 +1060,10 @@ function createExecuteHandler(
       withFreshTenantWrite(db, tenantId, work);
 
     // Get branch path (+ authoritative base repo path for the sandbox) and, for
-    // RBAC-aware mounting, the session OWNER's effective filesystem access to
-    // the branch. The filesystem sandbox binds `<baseRepoPath>/.git` writable so
+    // RBAC-aware mounting, the current PROMPT ACTOR's effective filesystem
+    // access to the branch. Personal session sharing keeps the owner's home,
+    // but it must not upgrade the caller's branch mounts to the owner's access.
+    // The filesystem sandbox binds `<baseRepoPath>/.git` writable so
     // worktree commits work; we resolve `repo.local_path` from Agor's own DB
     // state rather than parsing the on-disk `.git` pointer (deterministic, and
     // unaffected if a worktree's origin/gitdir is later rewritten).
@@ -1092,7 +1075,7 @@ function createExecuteHandler(
       sandboxCfg?.enabled === true
         ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
         : undefined;
-    // Effective fs access of the OWNER on the branch: 'write' | 'read' | 'none'.
+    // Effective fs access of the prompt actor on the branch: write/read/none.
     // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
     // to 'write' when RBAC is off (open-access behavior).
     let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
@@ -1114,8 +1097,9 @@ function createExecuteHandler(
           baseRepoPath = repo?.local_path ?? undefined;
         }
         let fsAccess: 'write' | 'read' | 'none' = 'write';
-        if (rbacOn && session.created_by) {
-          const access = await branchRepo.resolveUserAccess(branch, session.created_by as UUID);
+        if (rbacOn) {
+          if (!userId) throw new Error('Missing prompt actor for branch filesystem authorization');
+          const access = await branchRepo.resolveUserAccess(branch, userId as UUID);
           fsAccess =
             access.fs_access === 'write' ? 'write' : access.fs_access === 'read' ? 'read' : 'none';
         }
@@ -1131,8 +1115,8 @@ function createExecuteHandler(
       // than letting bwrap abort on a missing chdir target.
       if (sandboxCfg?.enabled === true && principalBranchAccess === 'none') {
         throw new Error(
-          `The session owner has no filesystem access to branch ${session.branch_id}. ` +
-            'Grant at least read access (others_fs_access) to run sessions on this branch under ' +
+          `The prompt actor has no filesystem access to branch ${session.branch_id}. ` +
+            'Grant at least Read file access in the branch policy to run sessions under ' +
             'the filesystem sandbox.'
         );
       }
@@ -1347,6 +1331,7 @@ function createExecuteHandler(
         task_id: taskId,
         branch_id: session.branch_id,
         user_id: userId,
+        branch_fs_access: principalBranchAccess,
       },
       onSpawn: (child, spawnContext) => {
         metrics.increment('executor.launches', 1, { mode: spawnContext.mode });
@@ -4511,7 +4496,11 @@ export async function registerMCPServices(
               globalServers: await new MCPServerRepository(db).findAll({
                 scope: 'global',
                 enabled: true,
-                usableByUserId: executorSession.created_by,
+                // The task token is issued to the actual prompter. Even when
+                // personal sharing keeps the session owner's home, connector
+                // credentials and private server visibility stay with the
+                // prompter rather than silently borrowing the owner identity.
+                usableByUserId: userId,
               }),
             };
           }

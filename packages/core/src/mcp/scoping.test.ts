@@ -95,13 +95,17 @@ describe('getMcpServersForSession', () => {
     ]);
   });
 
-  it('filters private servers by session owner, not the OAuth context user', async () => {
+  it('filters private servers by the current prompt actor', async () => {
     const shared = makeServer('shared', 'global');
+    const actorPrivate = {
+      ...makeServer('actor-private', 'session'),
+      owner_user_id: 'prompt-user',
+    } as MCPServer;
     const foreignPrivate = {
       ...makeServer('foreign-private', 'global'),
       owner_user_id: 'owner-b',
     } as MCPServer;
-    const listEffectiveServers = vi.fn().mockResolvedValue([shared, foreignPrivate]);
+    const listEffectiveServers = vi.fn().mockResolvedValue([shared, actorPrivate, foreignPrivate]);
 
     const servers = await getMcpServersForSession(
       'session-a' as SessionID,
@@ -109,15 +113,14 @@ describe('getMcpServersForSession', () => {
         mcpServerRepo: { findAll: vi.fn() } as never,
         sessionMCPRepo: { listEffectiveServers } as never,
         forUserId: 'prompt-user',
-        sessionOwnerId: 'owner-a',
       },
       ENFORCING
     );
 
-    expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['shared']);
+    expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['shared', 'actor-private']);
   });
 
-  it('warns when a private server is withheld because session owner identity is missing', async () => {
+  it('warns when a private server is withheld because prompt actor identity is missing', async () => {
     const privateServer = {
       ...makeServer('private', 'session'),
       owner_user_id: 'owner-a',
@@ -138,14 +141,14 @@ describe('getMcpServersForSession', () => {
 
       expect(servers).toEqual([]);
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('session owner identity is missing')
+        expect.stringContaining('prompt actor identity is missing')
       );
     } finally {
       warn.mockRestore();
     }
   });
 
-  it('passes the session owner to global repository filtering', async () => {
+  it('passes the prompt actor to global repository filtering', async () => {
     const findAll = vi.fn().mockResolvedValue([makeServer('shared', 'global')]);
     const listServers = vi.fn().mockResolvedValue([]);
 
@@ -155,7 +158,6 @@ describe('getMcpServersForSession', () => {
         mcpServerRepo: { findAll } as never,
         sessionMCPRepo: { listServers } as never,
         forUserId: 'prompt-user',
-        sessionOwnerId: 'owner-a',
       },
       ENFORCING
     );
@@ -163,7 +165,7 @@ describe('getMcpServersForSession', () => {
     expect(findAll).toHaveBeenCalledWith({
       scope: 'global',
       enabled: true,
-      usableByUserId: 'owner-a',
+      usableByUserId: 'prompt-user',
     });
   });
 

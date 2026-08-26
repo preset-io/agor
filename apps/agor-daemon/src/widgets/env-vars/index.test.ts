@@ -55,7 +55,7 @@ function makeCtx(
     service(name: string) {
       if (name !== 'users') throw new Error(`Unexpected service call: ${name}`);
       return {
-        get: vi.fn(async () => ({ user_id: 'user-creator', env_vars: user.env_vars ?? {} })),
+        get: vi.fn(async (id: UserID) => ({ user_id: id, env_vars: user.env_vars ?? {} })),
         patch: patchSpy,
       };
     },
@@ -280,7 +280,7 @@ describe('env_vars widget — buildResultMeta', () => {
 });
 
 describe('env_vars widget — applySubmit', () => {
-  it('calls users.patch with { env_vars, env_var_scopes } for the session creator', async () => {
+  it('calls users.patch with { env_vars, env_var_scopes } for the prompt actor', async () => {
     const { ctx, patchSpy } = makeCtx();
     await envVarsWidget.applySubmit(
       ctx,
@@ -315,7 +315,8 @@ describe('env_vars widget — applySubmit', () => {
       { values: { HUBSPOT_API_KEY: 'shh' }, use_existing: [], scope: 'global' },
       { names: ['HUBSPOT_API_KEY'], reason: 'call hubspot', auto_resume: true }
     );
-    const [, , params] = patchSpy.mock.calls[0];
+    const [patchedUserId, , params] = patchSpy.mock.calls[0];
+    expect(patchedUserId).toBe('user-admin');
     // Auth params carry the SUBMITTER identity so the patch is attributable.
     expect(params).toMatchObject({
       user: { user_id: 'user-admin', role: 'admin' },

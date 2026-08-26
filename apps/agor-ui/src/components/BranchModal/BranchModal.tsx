@@ -91,12 +91,11 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     currentUser,
     open,
   });
-  const prototypePermissionUsers = useMemo(() => {
+  const permissionUsers = useMemo(() => {
     const knownUsers = new Map(userById);
     for (const user of form.allUsers) knownUsers.set(user.user_id, user);
     return [...knownUsers.values()];
   }, [userById, form.allUsers]);
-  const branchBoard = boardById.get(form.general.boardId || branch?.board_id || '');
 
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
   useEffect(() => {
@@ -105,14 +104,12 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     }
   }, [open, defaultTab]);
 
-  // Surface owners-load failures to the user. Without this, a non-admin owner
-  // hitting a network/server error would see canEdit silently flip false with
-  // no visible reason. Toasted once per error transition.
+  // Surface permission-package load failures once per error transition.
   useEffect(() => {
-    if (form.ownersLoadError) {
-      showError(`Failed to load branch permissions: ${form.ownersLoadError.message}`);
+    if (form.permissionsLoadError) {
+      showError(`Failed to load branch permissions: ${form.permissionsLoadError.message}`);
     }
-  }, [form.ownersLoadError, showError]);
+  }, [form.permissionsLoadError, showError]);
 
   const isATeammate = branch ? isTeammate(branch) : false;
   const teammateConfig = useMemo(() => (branch ? getTeammateConfig(branch) : null), [branch]);
@@ -248,35 +245,24 @@ export const BranchModal: React.FC<BranchModalProps> = ({
       label: 'Files',
       children: <FilesTab branch={branch} client={client} />,
     },
-    // Permissions tab — shown for RBAC-capable admins/owners. Keep it visible
-    // while owner data is loading so confirmed owners do not see the tab
-    // disappear just because async permissions metadata has not arrived yet.
-    // Development admins also get the local-only target form when the legacy
-    // RBAC endpoints are disabled; production keeps the existing gate.
-    ...(form.canViewPermissions ||
-    (import.meta.env.DEV && (currentUser?.role === 'admin' || currentUser?.role === 'superadmin'))
+    ...(form.canViewPermissions
       ? [
           {
             key: 'permissions',
             label: 'Permissions',
             children: (
               <PermissionsTab
-                loadingOwners={form.loadingOwners}
-                canEdit={form.canEditPermissions}
-                allUsers={form.allUsers}
+                loading={form.permissionsLoading}
+                canManageAccess={form.canManagePolicy}
                 allGroups={form.allGroups}
-                groupGrantsStatus={form.groupGrantsStatus}
-                groupGrantsError={form.groupGrantsError}
                 currentUser={currentUser}
                 client={client}
-                board={branchBoard}
-                state={form.permissions}
-                setField={form.setPermissions}
-                ownersLoadError={form.ownersLoadError}
-                branch={branch}
+                error={form.permissionsLoadError}
                 sessions={sessions}
-                owners={form.owners}
-                prototypeUsers={prototypePermissionUsers}
+                permissionUsers={permissionUsers}
+                capabilityPolicy={form.capabilityPolicy}
+                onCapabilityPolicyChange={form.setCapabilityPolicy}
+                workspacePreferences={form.workspacePreferences}
               />
             ),
           },

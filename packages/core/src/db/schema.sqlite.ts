@@ -23,6 +23,7 @@ import { relations, sql } from 'drizzle-orm';
 import {
   type AnySQLiteColumn,
   blob,
+  foreignKey,
   index,
   integer,
   primaryKey,
@@ -545,6 +546,9 @@ export const boards = sqliteTable(
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
+    // User deletion guards are a separate lifecycle flow; this immutable
+    // logical owner pointer intentionally does not cascade or transfer.
+    primary_owner_user_id: text('primary_owner_user_id', { length: 36 }).notNull(),
 
     // Materialized for lookups
     name: text('name').notNull(),
@@ -695,6 +699,7 @@ export const branches = sqliteTable(
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
+    primary_owner_user_id: text('primary_owner_user_id', { length: 36 }).notNull(),
 
     // Materialized for queries
     name: text('name').notNull(), // "feat-auth", "main"
@@ -743,6 +748,10 @@ export const branches = sqliteTable(
     }),
 
     // RBAC: App-layer permissions (rbac.md)
+    permission_binding: text('permission_binding', { enum: ['inherit', 'override'] })
+      .$type<'inherit' | 'override'>()
+      .notNull()
+      .default('override'),
     permission_source: text('permission_source', { enum: ['board', 'override'] })
       .$type<'board' | 'override'>()
       .notNull()
@@ -1206,6 +1215,198 @@ export const groupMemberships = sqliteTable(
   (table) => ({
     pk: primaryKey({ columns: [table.group_id, table.user_id] }),
     userIdx: index('group_memberships_user_idx').on(table.user_id),
+  })
+);
+
+/** Board visibility/management policy. Branch defaults are stored separately. */
+export const boardAccessPolicies = sqliteTable(
+  'board_access_policies',
+  {
+    board_id: text('board_id', { length: 36 })
+      .primaryKey()
+      .references(() => boards.board_id, { onDelete: 'cascade' }),
+    schema_version: integer('schema_version').notNull().default(1),
+    sharing_mode: text('sharing_mode', { enum: ['private', 'shared'] }).notNull(),
+    others_preset: text('others_preset').notNull().default('none'),
+    others_capabilities: t
+      .json<import('@agor/core/types').CapabilityPolicyCapability[]>('others_capabilities')
+      .notNull(),
+    revision: integer('revision').notNull().default(1),
+    updated_by: text('updated_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({ updatedIdx: index('board_access_policies_updated_idx').on(table.updated_at) })
+);
+
+/** One normalized user or group entry in a board policy. */
+export const boardAccessEntries = sqliteTable(
+  'board_access_entries',
+  {
+    entry_id: text('entry_id', { length: 36 }).primaryKey(),
+    board_id: text('board_id', { length: 36 })
+      .notNull()
+      .references(() => boardAccessPolicies.board_id, { onDelete: 'cascade' }),
+    user_id: text('user_id', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'cascade',
+    }),
+    group_id: text('group_id', { length: 36 }).references(() => groups.group_id, {
+      onDelete: 'cascade',
+    }),
+    preset: text('preset').notNull(),
+    capabilities: t
+      .json<import('@agor/core/types').CapabilityPolicyCapability[]>('capabilities')
+      .notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    boardIdx: index('board_access_entries_board_idx').on(table.board_id),
+    userIdx: index('board_access_entries_user_idx').on(table.user_id, table.board_id),
+    groupIdx: index('board_access_entries_group_idx').on(table.group_id, table.board_id),
+    boardUserUnique: uniqueIndex('board_access_entries_board_user_unique').on(
+      table.board_id,
+      table.user_id
+    ),
+    boardGroupUnique: uniqueIndex('board_access_entries_board_group_unique').on(
+      table.board_id,
+      table.group_id
+    ),
+  })
+);
+
+/** Complete board branch-template or branch-override permission package. */
+export const branchPermissionConfigs = sqliteTable(
+  'branch_permission_configs',
+  {
+    config_id: text('config_id', { length: 36 }).primaryKey(),
+    board_id: text('board_id', { length: 36 }).references(() => boards.board_id, {
+      onDelete: 'cascade',
+    }),
+    branch_id: text('branch_id', { length: 36 }).references(() => branches.branch_id, {
+      onDelete: 'cascade',
+    }),
+    schema_version: integer('schema_version').notNull().default(1),
+    sharing_mode: text('sharing_mode', { enum: ['private', 'shared'] }).notNull(),
+    others_preset: text('others_preset').notNull().default('none'),
+    others_capabilities: t
+      .json<import('@agor/core/types').CapabilityPolicyCapability[]>('others_capabilities')
+      .notNull(),
+    others_fs_access: text('others_fs_access', { enum: ['none', 'read', 'write'] })
+      .notNull()
+      .default('none'),
+    revision: integer('revision').notNull().default(1),
+    updated_by: text('updated_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    boardUnique: uniqueIndex('branch_permission_configs_board_unique').on(table.board_id),
+    branchUnique: uniqueIndex('branch_permission_configs_branch_unique').on(table.branch_id),
+    updatedIdx: index('branch_permission_configs_updated_idx').on(table.updated_at),
+  })
+);
+
+/** One normalized user or group entry in a branch permission package. */
+export const branchPermissionEntries = sqliteTable(
+  'branch_permission_entries',
+  {
+    entry_id: text('entry_id', { length: 36 }).primaryKey(),
+    config_id: text('config_id', { length: 36 })
+      .notNull()
+      .references(() => branchPermissionConfigs.config_id, { onDelete: 'cascade' }),
+    user_id: text('user_id', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'cascade',
+    }),
+    group_id: text('group_id', { length: 36 }).references(() => groups.group_id, {
+      onDelete: 'cascade',
+    }),
+    preset: text('preset').notNull(),
+    capabilities: t
+      .json<import('@agor/core/types').CapabilityPolicyCapability[]>('capabilities')
+      .notNull(),
+    fs_access: text('fs_access', { enum: ['none', 'read', 'write'] })
+      .notNull()
+      .default('none'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    configIdx: index('branch_permission_entries_config_idx').on(table.config_id),
+    userIdx: index('branch_permission_entries_user_idx').on(table.user_id, table.config_id),
+    groupIdx: index('branch_permission_entries_group_idx').on(table.group_id, table.config_id),
+    configUserUnique: uniqueIndex('branch_permission_entries_config_user_unique').on(
+      table.config_id,
+      table.user_id
+    ),
+    configGroupUnique: uniqueIndex('branch_permission_entries_config_group_unique').on(
+      table.config_id,
+      table.group_id
+    ),
+  })
+);
+
+/** Personal, owner-authored opt-in to prompt sessions from the owner's home. */
+export const branchSessionSharingRules = sqliteTable(
+  'branch_session_sharing_rules',
+  {
+    config_id: text('config_id', { length: 36 })
+      .notNull()
+      .references(() => branchPermissionConfigs.config_id, { onDelete: 'cascade' }),
+    session_owner_user_id: text('session_owner_user_id', { length: 36 })
+      .notNull()
+      .references(() => users.user_id, { onDelete: 'cascade' }),
+    enabled: t.bool('enabled').notNull().default(false),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.config_id, table.session_owner_user_id] }),
+    ownerIdx: index('branch_session_sharing_rules_owner_idx').on(table.session_owner_user_id),
+  })
+);
+
+export const branchSessionSharingGrants = sqliteTable(
+  'branch_session_sharing_grants',
+  {
+    grant_id: text('grant_id', { length: 36 }).primaryKey(),
+    config_id: text('config_id', { length: 36 }).notNull(),
+    session_owner_user_id: text('session_owner_user_id', { length: 36 }).notNull(),
+    user_id: text('user_id', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'cascade',
+    }),
+    group_id: text('group_id', { length: 36 }).references(() => groups.group_id, {
+      onDelete: 'cascade',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+  },
+  (table) => ({
+    ruleFk: foreignKey({
+      columns: [table.config_id, table.session_owner_user_id],
+      foreignColumns: [
+        branchSessionSharingRules.config_id,
+        branchSessionSharingRules.session_owner_user_id,
+      ],
+    }).onDelete('cascade'),
+    ruleIdx: index('branch_session_sharing_grants_rule_idx').on(
+      table.config_id,
+      table.session_owner_user_id
+    ),
+    userIdx: index('branch_session_sharing_grants_user_idx').on(table.user_id, table.config_id),
+    groupIdx: index('branch_session_sharing_grants_group_idx').on(table.group_id, table.config_id),
+    ruleUserUnique: uniqueIndex('branch_session_sharing_grants_rule_user_unique').on(
+      table.config_id,
+      table.session_owner_user_id,
+      table.user_id
+    ),
+    ruleGroupUnique: uniqueIndex('branch_session_sharing_grants_rule_group_unique').on(
+      table.config_id,
+      table.session_owner_user_id,
+      table.group_id
+    ),
   })
 );
 
@@ -2767,6 +2968,12 @@ export type GroupRow = typeof groups.$inferSelect;
 export type GroupInsert = typeof groups.$inferInsert;
 export type GroupMembershipRow = typeof groupMemberships.$inferSelect;
 export type GroupMembershipInsert = typeof groupMemberships.$inferInsert;
+export type BoardAccessPolicyRow = typeof boardAccessPolicies.$inferSelect;
+export type BoardAccessEntryRow = typeof boardAccessEntries.$inferSelect;
+export type BranchPermissionConfigRow = typeof branchPermissionConfigs.$inferSelect;
+export type BranchPermissionEntryRow = typeof branchPermissionEntries.$inferSelect;
+export type BranchSessionSharingRuleRow = typeof branchSessionSharingRules.$inferSelect;
+export type BranchSessionSharingGrantRow = typeof branchSessionSharingGrants.$inferSelect;
 export type BranchGroupGrantRow = typeof branchGroupGrants.$inferSelect;
 export type BoardGroupGrantRow = typeof boardGroupGrants.$inferSelect;
 export type BoardOwnerRow = typeof boardOwners.$inferSelect;

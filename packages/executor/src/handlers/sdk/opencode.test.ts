@@ -160,7 +160,7 @@ describe('OpenCode executor adapter', () => {
     );
   });
 
-  it('hydrates MCP OAuth for the task creator while filtering definitions by session owner', async () => {
+  it('hydrates and filters MCP definitions for the task creator', async () => {
     const state = client({ created_by: 'session-owner' });
 
     await execute(state.value);
@@ -173,7 +173,6 @@ describe('OpenCode executor adapter', () => {
       sessionId,
       expect.objectContaining({
         forUserId: 'task-creator',
-        sessionOwnerId: 'session-owner',
       }),
       { toolFiltering: 'intercept' }
     );

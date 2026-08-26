@@ -92,7 +92,6 @@ export async function executeOpenCodeTask(params: {
     const permissionLocks = new Map<SessionID, Promise<void>>();
     const tool = new OpenCodeTool({
       resolveMcpServers: async (targetSessionId) => {
-        const targetSession = await repos.sessionsService.get(targetSessionId);
         const reporter = collectWithheldMcpServers();
         const servers = await getMcpServersForSession(
           targetSessionId,
@@ -101,7 +100,6 @@ export async function executeOpenCodeTask(params: {
             mcpServerRepo: repos.mcpServers,
             mcpOAuthAuthHeadersRepo: repos.mcpOAuthAuthHeaders,
             forUserId: contextUserId,
-            sessionOwnerId: targetSession.created_by,
             onServerWithheld: reporter.onServerWithheld,
           },
           // OpenCode's invocation config still carries no per-tool filter, but

@@ -4,7 +4,7 @@ import type { AnalyticsLogger, AnalyticsProperties, AnalyticsTrackOptions } from
 import { resetAnalyticsLoggerForTests, setAnalyticsLoggerForTests } from '../../analytics';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { dbTest } from '../test-helpers';
+import { dbTest, setTestBranchUserRole } from '../test-helpers';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
@@ -99,7 +99,6 @@ describe('UserPrimaryTeammateRepository', () => {
     'resolves a teammate embedded on another (private) board via direct ownership',
     async ({ db }) => {
       const repo = new UserPrimaryTeammateRepository(db);
-      const branchRepo = new BranchRepository(db);
       const user = await createUser(db, 'cross-board@example.com');
 
       // Teammate lives on a private board the user does not own; only direct
@@ -109,7 +108,7 @@ describe('UserPrimaryTeammateRepository', () => {
         permission_source: 'override',
         others_can: 'none',
       });
-      await branchRepo.addOwner(branchId, user);
+      await setTestBranchUserRole(db, branchId, user, 'manager');
 
       await repo.setPrimaryTeammate(user, branchId, { source: 'default' });
 

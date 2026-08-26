@@ -1,6 +1,7 @@
 import {
   BoardRepository,
   BranchRepository,
+  CapabilityPolicyRepository,
   type Database,
   GroupRepository,
   generateId,
@@ -9,7 +10,16 @@ import {
   runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
-import type { Application, BoardID, BranchID, UUID } from '@agor/core/types';
+import {
+  type Application,
+  type BoardID,
+  type BranchID,
+  type CapabilityPolicyPresetId,
+  capabilityPolicyPresetCapabilities,
+  type GroupID,
+  type UserID,
+  type UUID,
+} from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { markBranchArchiveDeleteAuthorized } from '../utils/branch-archive-delete-authorization.js';
@@ -33,6 +43,46 @@ function createTenantScopeTestDb() {
     transaction: vi.fn(async (work: (scoped: unknown) => Promise<unknown>) => work(db)),
   };
   return db;
+}
+
+async function setBranchGroupRole(
+  db: Database,
+  branchId: BranchID,
+  actorId: UserID,
+  groupId: GroupID,
+  preset: CapabilityPolicyPresetId
+) {
+  const policies = new CapabilityPolicyRepository(db);
+  const current = await policies.getBranchPolicy(branchId);
+  const base =
+    current.binding_mode === 'inherit' ? current.inherited_config : current.override_config;
+  if (!base) throw new Error('Missing branch permission configuration');
+  const capabilities = capabilityPolicyPresetCapabilities('branch_access', preset, 'none');
+  if (!capabilities) throw new Error(`Invalid test role ${preset}`);
+  await policies.replaceBranchPolicy(
+    branchId,
+    {
+      ...current,
+      binding_mode: 'override',
+      override_config: {
+        ...base,
+        access: {
+          ...base.access,
+          sharing_mode: 'shared',
+          entries: [
+            {
+              entry_id: generateId(),
+              principal: { principal_type: 'group', group_id: groupId },
+              preset,
+              capabilities,
+              fs_access: 'none',
+            },
+          ],
+        },
+      },
+    },
+    actorId
+  );
 }
 
 function createRenderEnvHarness(opts: {
@@ -925,6 +975,27 @@ describe('BranchesService.patch primary teammate invariants', () => {
     expect(repository.update).not.toHaveBeenCalled();
   });
 
+  it('requires an inherited branch to materialize an override before moving boards', async () => {
+    const branchId = 'inherited-board-move' as BranchID;
+    const { service, repository } = createPatchHarness({
+      current: {
+        branch_id: branchId,
+        board_id: 'board-a' as BoardID,
+        permission_binding: 'inherit',
+      },
+      updated: {
+        branch_id: branchId,
+        board_id: 'board-b' as BoardID,
+        permission_binding: 'inherit',
+      },
+    });
+
+    await expect(service.patch(branchId, { board_id: 'board-b' as BoardID })).rejects.toThrow(
+      /explicit permission override/
+    );
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
   it('clears the old primary and sets the new board primary when a teammate moves boards', async () => {
     const boardA = 'board-a' as BoardID;
     const boardB = 'board-b' as BoardID;
@@ -1782,7 +1853,7 @@ describe('BranchesService managed environment control authorization', () => {
     expect(branchRepo.findById).not.toHaveBeenCalled();
   });
 
-  dbTest('allows a group grant with effective all to start/stop environments', async ({ db }) => {
+  dbTest('allows a group Manager to start/stop environments', async ({ db }) => {
     const users = new UsersRepository(db);
     const repos = new RepoRepository(db);
     const branches = new BranchRepository(db);
@@ -1818,12 +1889,7 @@ describe('BranchesService managed environment control authorization', () => {
     });
     const group = await groups.create({ name: 'Env Controllers', created_by: owner.user_id });
     await groups.addMember(group.group_id, member.user_id, owner.user_id);
-    await groups.upsertBranchGrant({
-      branch_id: branch.branch_id,
-      group_id: group.group_id,
-      can: 'all',
-      created_by: owner.user_id,
-    });
+    await setBranchGroupRole(db, branch.branch_id, owner.user_id, group.group_id, 'manager');
 
     const service = new BranchesService(db, { service: vi.fn() } as unknown as Application);
     const getSpy = vi.spyOn(service, 'get').mockResolvedValue(branch as never);
@@ -1872,8 +1938,6 @@ describe('BranchesService managed environment control authorization', () => {
       new_branch: true,
       others_can: 'none',
     });
-    await branches.addOwner(branch.branch_id, owner.user_id as UUID);
-
     const service = new BranchesService(db, { service: vi.fn() } as unknown as Application);
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
 
@@ -1882,7 +1946,7 @@ describe('BranchesService managed environment control authorization', () => {
     ).rejects.toThrow(/No start command configured/);
   });
 
-  dbTest('rejects insufficient group grants before environment actions run', async ({ db }) => {
+  dbTest('rejects a group Collaborator before environment actions run', async ({ db }) => {
     const users = new UsersRepository(db);
     const repos = new RepoRepository(db);
     const branches = new BranchRepository(db);
@@ -1918,12 +1982,7 @@ describe('BranchesService managed environment control authorization', () => {
     });
     const group = await groups.create({ name: 'Env Viewers', created_by: owner.user_id });
     await groups.addMember(group.group_id, member.user_id, owner.user_id);
-    await groups.upsertBranchGrant({
-      branch_id: branch.branch_id,
-      group_id: group.group_id,
-      can: 'prompt',
-      created_by: owner.user_id,
-    });
+    await setBranchGroupRole(db, branch.branch_id, owner.user_id, group.group_id, 'collaborator');
 
     const service = new BranchesService(db, { service: vi.fn() } as unknown as Application);
     const getSpy = vi.spyOn(service, 'get').mockResolvedValue(branch as never);
@@ -2158,10 +2217,16 @@ describe('BranchesService.create permission defaults', () => {
         new_branch: true,
       })) as import('@agor/core/types').Branch;
 
-      expect(branch.permission_source).toBe('board');
-      expect(branch.others_can).toBe('prompt');
-      expect(branch.others_fs_access).toBe('write');
-      expect(branch.dangerously_allow_session_sharing).toBe(true);
+      expect(branch.permission_binding).toBe('inherit');
+      // Legacy prompt maps down to Collaborator: it never silently grants
+      // foreign-session authority, and the legacy sharing boolean is dropped.
+      const policy = await new CapabilityPolicyRepository(db).getBranchPolicy(branch.branch_id);
+      expect(policy.binding_mode).toBe('inherit');
+      expect(policy.inherited_config?.access.others).toMatchObject({
+        preset: 'collaborator',
+        fs_access: 'write',
+      });
+      expect(policy.inherited_config?.session_sharing.owner_rules).toEqual([]);
     }
   );
 
@@ -2204,9 +2269,13 @@ describe('BranchesService.create permission defaults', () => {
         others_fs_access: 'none',
       })) as import('@agor/core/types').Branch;
 
-      expect(branch.permission_source).toBe('board');
-      expect(branch.others_can).toBe('prompt');
-      expect(branch.others_fs_access).toBe('write');
+      expect(branch.permission_binding).toBe('inherit');
+      const policy = await new CapabilityPolicyRepository(db).getBranchPolicy(branch.branch_id);
+      expect(policy.binding_mode).toBe('inherit');
+      expect(policy.inherited_config?.access.others).toMatchObject({
+        preset: 'collaborator',
+        fs_access: 'write',
+      });
     }
   );
 });

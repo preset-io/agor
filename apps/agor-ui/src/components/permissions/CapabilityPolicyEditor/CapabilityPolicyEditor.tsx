@@ -30,7 +30,9 @@ import {
 import { useMemo, useState } from 'react';
 import { Tag } from '@/components/Tag';
 import { AccessGrantControls } from './AccessGrantControls';
+import { makeCapabilityPolicyDraftId } from './draftId';
 import { EffectiveAccessPreview } from './EffectiveAccessPreview';
+import type { EffectiveAccessSubject } from './effectiveAccessPreviewModel';
 import { PolicyModeSelector } from './PolicyModeSelector';
 import { PrincipalEntryPicker } from './PrincipalEntryPicker';
 import { PrincipalIdentity } from './PrincipalIdentity';
@@ -40,8 +42,6 @@ import {
   makePrivatePolicy,
   makeSharedClosedPolicy,
 } from './policyEditorModel';
-import { makePrototypeDraftId } from './prototypeDraftId';
-import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
 interface CapabilityPolicyEditorProps {
   title: string;
@@ -51,7 +51,7 @@ interface CapabilityPolicyEditorProps {
   context: CapabilityPolicyEditorContext;
   primaryOwnerUserId: UserID;
   principals: CapabilityPolicyPrincipalDescriptor[];
-  subjects: PrototypeAccessSubject[];
+  subjects: EffectiveAccessSubject[];
   readOnly?: boolean;
   showModeSelector?: boolean;
 }
@@ -131,7 +131,7 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
     const principalKey = capabilityPolicyPrincipalKey(descriptor.principal);
     if (descriptor.status !== 'active' || usedKeys.has(principalKey)) return;
     const entry: CapabilityPolicyEntryDraft = {
-      entry_id: makePrototypeDraftId(),
+      entry_id: makeCapabilityPolicyDraftId(),
       principal: descriptor.principal,
       preset: 'none',
       capabilities: [],
@@ -214,12 +214,14 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
         disabled={readOnly || (entry ? descriptor?.status !== 'active' : false)}
         label={rowLabel(row)}
         onChange={(grant) => {
-          if (entry) updateEntry(row.index, grant as CapabilityPolicyEntryDraft);
-          else
+          if (row.kind === 'entry') {
+            updateEntry(row.index, grant as CapabilityPolicyEntryDraft);
+          } else {
             onChange({
               ...value,
               others: grant as CapabilityPolicyOthersDraft,
             });
+          }
         }}
       />
     );

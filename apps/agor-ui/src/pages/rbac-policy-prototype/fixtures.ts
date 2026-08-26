@@ -9,7 +9,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { CAPABILITY_POLICY_SCHEMA_VERSION } from '@agor/core/types';
-import type { PrototypeAccessSubject } from '@/components/permissions/CapabilityPolicyEditor/prototypeEffectiveAccess';
+import type { EffectiveAccessSubject } from '@/components/permissions/CapabilityPolicyEditor/effectiveAccessPreviewModel';
 
 const userId = (suffix: string) => `10000000-0000-0000-0000-${suffix.padStart(12, '0')}` as UserID;
 const groupId = (suffix: string) =>
@@ -117,10 +117,10 @@ const descriptorForUser = (id: UserID) => {
   if (descriptor?.principal.principal_type !== 'user') {
     throw new Error(`Missing prototype user ${id}`);
   }
-  return descriptor as PrototypeAccessSubject['user'];
+  return descriptor as EffectiveAccessSubject['user'];
 };
 
-export const PROTOTYPE_SUBJECTS: PrototypeAccessSubject[] = [
+export const EFFECTIVE_ACCESS_SUBJECTS: EffectiveAccessSubject[] = [
   { user: descriptorForUser(PROTOTYPE_USERS.max), groupIds: [] },
   {
     user: descriptorForUser(PROTOTYPE_USERS.kasia),

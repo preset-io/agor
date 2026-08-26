@@ -1,4 +1,4 @@
-import type { AgorClient, Board } from '@agor-live/client';
+import type { AgorClient, Board, BoardCapabilityPolicies } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form, Input } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,19 +14,19 @@ vi.mock('../JSONEditor', () => ({
 }));
 vi.mock('../forms/BoardFormFields', () => ({
   BoardFormFields: ({
-    capabilityPolicyPrototype,
+    capabilityPolicyEditor,
     allGroups,
   }: {
-    capabilityPolicyPrototype?: React.ReactNode;
+    capabilityPolicyEditor?: React.ReactNode;
     allGroups?: Array<{ name: string }>;
   }) => (
     <>
       <Form.Item name="name" label="Name" rules={[{ required: true }]}>
         <Input />
       </Form.Item>
-      {capabilityPolicyPrototype && (
+      {capabilityPolicyEditor && (
         <div
-          data-testid="board-modal-policy-prototype"
+          data-testid="board-modal-policy-editor"
           data-group-names={allGroups?.map((group) => group.name).join(',')}
         />
       )}
@@ -46,6 +46,28 @@ const listedBoard = {
   last_updated: '',
 } as Board;
 const freshBoard = { ...listedBoard, name: 'Fresh name', icon: '✨' } as Board;
+const policy = {
+  primary_owner_user_id: 'owner-1',
+  board_access_revision: 1,
+  branch_template_revision: 1,
+  board_access: {
+    schema_version: 1,
+    policy_kind: 'board_access',
+    sharing_mode: 'shared',
+    entries: [],
+    others: { preset: 'viewer', capabilities: ['board.view'], fs_access: 'none' },
+  },
+  branch_template: {
+    access: {
+      schema_version: 1,
+      policy_kind: 'branch_access',
+      sharing_mode: 'shared',
+      entries: [],
+      others: { preset: 'collaborator', capabilities: ['branch.view'], fs_access: 'read' },
+    },
+    session_sharing: { owner_rules: [] },
+  },
+} as BoardCapabilityPolicies;
 
 function makeClient(metadataError: { code?: number; message?: string } = { code: 404 }) {
   const get = vi.fn().mockResolvedValue(freshBoard);
@@ -54,8 +76,20 @@ function makeClient(metadataError: { code?: number; message?: string } = { code:
     client: {
       service: (name: string) => {
         if (name === 'boards') return { get };
-        if (name === 'boards/:id/owners' || name === 'boards/:id/group-grants') {
-          return { find: vi.fn().mockRejectedValue(metadataError) };
+        if (name === 'boards/:id/permissions') {
+          return {
+            find: vi
+              .fn()
+              .mockImplementation(() =>
+                metadataError.code && metadataError.code !== 404
+                  ? Promise.reject(metadataError)
+                  : Promise.resolve(policy)
+              ),
+            patch: vi.fn().mockImplementation(async (_id: unknown, value: unknown) => value),
+          };
+        }
+        if (name === 'workspace-preferences') {
+          return { find: vi.fn().mockResolvedValue({ personal_session_sharing_enabled: false }) };
         }
         return { findAll: vi.fn().mockResolvedValue([]) };
       },
@@ -66,7 +100,7 @@ function makeClient(metadataError: { code?: number; message?: string } = { code:
 describe('BoardEditModal', () => {
   beforeEach(() => showError.mockReset());
 
-  it('loads the latest full board and permits save when RBAC routes are disabled', async () => {
+  it('loads the latest board and normalized permission package before saving', async () => {
     const { client, get } = makeClient({ code: 404 });
     const onUpdate = vi.fn();
     const onClose = vi.fn();
@@ -81,7 +115,7 @@ describe('BoardEditModal', () => {
     );
 
     expect(await screen.findByDisplayValue('Fresh name')).toBeInTheDocument();
-    expect(screen.getByTestId('board-modal-policy-prototype')).toBeInTheDocument();
+    expect(screen.getByTestId('board-modal-policy-editor')).toBeInTheDocument();
     expect(get).toHaveBeenCalledWith(listedBoard.board_id);
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Renamed' } });
     fireEvent.click(await screen.findByRole('button', { name: 'Save' }));
@@ -92,7 +126,7 @@ describe('BoardEditModal', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('keeps selectable groups when legacy board grants are unavailable', async () => {
+  it('keeps normalized group principals selectable', async () => {
     const get = vi.fn().mockResolvedValue(freshBoard);
     const client = {
       service: (name: string) => {
@@ -105,11 +139,14 @@ describe('BoardEditModal', () => {
               .mockResolvedValue([{ group_id: 'group-design', name: 'Product Design' }]),
           };
         }
-        if (name === 'boards/:id/owners') {
-          return { find: vi.fn().mockResolvedValue([]) };
+        if (name === 'boards/:id/permissions') {
+          return {
+            find: vi.fn().mockResolvedValue(policy),
+            patch: vi.fn().mockImplementation(async (_id: unknown, value: unknown) => value),
+          };
         }
-        if (name === 'boards/:id/group-grants') {
-          return { find: vi.fn().mockRejectedValue({ code: 404, message: 'not found' }) };
+        if (name === 'workspace-preferences') {
+          return { find: vi.fn().mockResolvedValue({ personal_session_sharing_enabled: false }) };
         }
         throw new Error(`Unexpected service: ${name}`);
       },
@@ -125,7 +162,7 @@ describe('BoardEditModal', () => {
       />
     );
 
-    expect(await screen.findByTestId('board-modal-policy-prototype')).toHaveAttribute(
+    expect(await screen.findByTestId('board-modal-policy-editor')).toHaveAttribute(
       'data-group-names',
       'Product Design'
     );

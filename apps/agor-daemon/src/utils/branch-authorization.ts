@@ -245,29 +245,38 @@ export function resolveBranchPermission(
   return effectivePermission ?? branch.others_can ?? 'session';
 }
 
-/** Resolve the one prompt-level policy shared by hooks and custom routes. */
-export function resolveSessionPromptAccess(input: {
+/**
+ * Resolve the one prompt-level policy shared by hooks and custom routes.
+ * Branch management never implies authority over another user's home: a
+ * foreign session requires an owner-authored personal sharing grant.
+ */
+export async function resolveSessionPromptAccess(input: {
+  branchRepository: Pick<
+    BranchRepository,
+    'resolveUserPermission' | 'resolveSessionPromptAuthority'
+  >;
   branch: Branch;
   session: Session;
   userId: UUID;
-  isOwner: boolean;
-  userRole?: string;
-  allowSuperadmin?: boolean;
-  branchPermission?: BranchPermissionLevel;
-}): { allowed: boolean; effectiveLevel: BranchPermissionLevel } {
-  const effectiveLevel = resolveBranchPermission(
-    input.branch,
-    input.userId,
-    input.isOwner,
-    input.userRole,
-    input.allowSuperadmin,
-    input.branchPermission
-  );
+}): Promise<{
+  allowed: boolean;
+  effectiveLevel: BranchPermissionLevel;
+  executionUserId?: UUID;
+  source: 'own_session' | 'personal_session_sharing' | 'denied';
+}> {
+  const [effectiveLevel, authority] = await Promise.all([
+    input.branchRepository.resolveUserPermission(input.branch, input.userId),
+    input.branchRepository.resolveSessionPromptAuthority(
+      input.branch.branch_id,
+      input.userId,
+      input.session.created_by as UUID
+    ),
+  ]);
   return {
+    allowed: authority.allowed,
     effectiveLevel,
-    allowed:
-      PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
-      (effectiveLevel === 'session' && input.session.created_by === input.userId),
+    executionUserId: authority.execution_user_id as UUID | undefined,
+    source: authority.source,
   };
 }
 
@@ -451,8 +460,6 @@ export function ensureBranchPermission(
 
     // Branch and ownership should have been cached by loadBranch hook
     const branch = context.params.branch;
-    const isOwner = context.params.isBranchOwner ?? false;
-
     if (!branch) {
       throw new Error('loadBranch hook must run before ensureBranchPermission');
     }
@@ -460,6 +467,7 @@ export function ensureBranchPermission(
     const userId = context.params.user.user_id as UUID;
     const userRole = context.params.user.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
+    const isOwner = context.params.isBranchOwner === true;
 
     if (
       !hasBranchPermission(
@@ -1095,8 +1103,9 @@ export function ensureSessionImmutability() {
  * tested directly and kept aligned with {@link determineSpawnIdentity}.
  *
  * Rules:
- * - Legacy sharing (branch opt-in `dangerously_allow_session_sharing` triggered) →
- *   inherit `parent.unix_username`. Identity borrowing is the whole point of this flag.
+ * - Personal Session sharing → inherit the parent execution-home key. The
+ *   genealogy stays in the Session owner's home while Task credentials still
+ *   resolve from the human prompter.
  * - Otherwise (including the common same-user path) → use the caller's CURRENT
  *   `unix_username`. We must NOT fall back to `parent.unix_username` just because
  *   caller and parent owner share an id: the user's unix_username may have drifted
@@ -1106,16 +1115,16 @@ export function ensureSessionImmutability() {
  * @param parentUnixUsername  - `parent.unix_username` from the parent session (may be null)
  * @param callerUnixUsername  - Caller's CURRENT unix_username (loaded fresh via
  *                              {@link loadUnixUsernameForUser}); may be null
- * @param usedLegacySharing   - Whether {@link determineSpawnIdentity} fell into
- *                              the legacy identity-borrowing branch
+ * @param usesSharedHome      - Whether an owner-authored sharing grant permits
+ *                              use of the parent Session owner's home
  * @returns The unix_username to stamp on the child (string or null)
  */
 export function resolveChildUnixUsername(
   parentUnixUsername: string | null | undefined,
   callerUnixUsername: string | null,
-  usedLegacySharing: boolean
+  usesSharedHome: boolean
 ): string | null {
-  if (usedLegacySharing) {
+  if (usesSharedHome) {
     return parentUnixUsername ?? null;
   }
   return callerUnixUsername;
@@ -1345,30 +1354,15 @@ export async function ensureCanPromptTargetSession(
     throw new Forbidden(`Cannot resolve permissions: branch ${targetSession.branch_id} not found`);
   }
 
-  // Resolve ownership internally — callers shouldn't need to know this
-  const isOwner = await branchRepo.isOwner(branch.branch_id, userId as UUID);
-
-  const { allowed, effectiveLevel } = resolveSessionPromptAccess({
-    branch,
-    session: targetSession,
-    userId: userId as UUID,
-    isOwner,
-    branchPermission: await branchRepo.resolveUserPermission(branch, userId as UUID),
-  });
-  if (allowed) return targetSession;
-
-  if (effectiveLevel === 'session') {
-    throw new Forbidden(
-      `You have 'session' permission — you can only prompt sessions you created. ` +
-        `This session was created by another user. ` +
-        `Ask a branch owner to upgrade your access to 'prompt' if needed.`
-    );
-  }
-
+  const authority = await branchRepo.resolveSessionPromptAuthority(
+    branch.branch_id,
+    userId as UUID,
+    targetSession.created_by as UUID
+  );
+  if (authority.allowed) return targetSession;
   throw new Forbidden(
-    `Cannot set callback target: you need at least 'session' permission on branch ` +
-      `${branch.name || shortId(branch.branch_id)}. ` +
-      `You have '${effectiveLevel}' permission.`
+    `Cannot prompt session ${shortId(targetSession.session_id)}. You need Collaborator access, ` +
+      `and the session owner must explicitly share their sessions with you.`
   );
 }
 
@@ -1411,8 +1405,11 @@ export function ensureCanPrompt(options?: { allowSuperadmin?: boolean }) {
  *
  * @returns Feathers hook
  */
-export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }) {
-  return (context: HookContext) => {
+export function ensureCanPromptInSession(options?: {
+  allowSuperadmin?: boolean;
+  branchRepository?: BranchRepository;
+}) {
+  return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
       return context;
@@ -1428,42 +1425,28 @@ export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }
     }
 
     const branch = context.params.branch;
-    const isOwner = context.params.isBranchOwner ?? false;
-
     if (!branch) {
       throw new Error('loadBranch hook must run before ensureCanPromptInSession');
     }
 
     const userId = context.params.user.user_id as UUID;
-    const userRole = context.params.user.role as string | undefined;
-    const allowSuperadmin = options?.allowSuperadmin ?? true;
-
     const session = context.params.session;
     if (!session) {
       throw new Error('loadSession hook must run before ensureCanPromptInSession');
     }
-    const { allowed, effectiveLevel } = resolveSessionPromptAccess({
-      branch,
-      session,
-      userId,
-      isOwner,
-      userRole,
-      allowSuperadmin,
-      branchPermission: context.params.branchPermission,
-    });
-    if (allowed) return context;
-
-    if (effectiveLevel === 'session') {
-      throw new Forbidden(
-        `You have 'session' permission — you can only prompt sessions you created. ` +
-          `This session was created by another user. ` +
-          `Ask a branch owner to upgrade your access to 'prompt' if you need to prompt other users' sessions.`
-      );
+    if (!options?.branchRepository) {
+      throw new Error('ensureCanPromptInSession requires a BranchRepository');
     }
-
-    // 'view' or 'none' → denied
+    const authority = await options.branchRepository.resolveSessionPromptAuthority(
+      branch.branch_id,
+      userId,
+      session.created_by as UUID
+    );
+    if (authority.allowed) return context;
     throw new Forbidden(
-      `You need 'prompt' permission to create tasks/messages in this branch. You have '${effectiveLevel}' permission.`
+      session.created_by === userId
+        ? 'Collaborator access is required to prompt this session.'
+        : 'The session owner has not shared their sessions with you.'
     );
   };
 }
@@ -1724,15 +1707,13 @@ export function scopeFindToAccessibleSessionsSql(options?: { allowSuperadmin?: b
  * Scope find() queries on the boards service to the set of boards the caller
  * can see.
  *
- * A board is visible if the caller owns it, it is shared, any branch on the
- * board is accessible to them, or the board's primary teammate branch is
- * accessible to them. Empty private boards stay visible to their owners;
- * superadmins bypass.
+ * A board is visible only when its normalized board policy grants View (or the
+ * caller is its primary owner). Branch access never makes the parent board
+ * visible implicitly; superadmins retain their configured bypass.
  *
  * Resolution happens in a single SQL EXISTS query via
- * {@link BoardRepository.findVisibleBoardIds}, avoiding the hydrate-every-
- * branch cost of the previous in-memory after-hook and letting Feathers'
- * pagination/sort run against the already-scoped id set.
+ * {@link BoardRepository.findVisibleBoardIds}, avoiding branch joins and
+ * letting Feathers pagination/sort run against the already-scoped id set.
  *
  * @param boardRepo - BoardRepository instance
  * @param options - Optional flags (allowSuperadmin)
@@ -1873,81 +1854,52 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
  * fork (sessions service: spawn() / fork(), or MCP tools agor_sessions_spawn /
  * agor_sessions_prompt(mode:"fork"|"subsession")).
  *
- * Default behavior — and the behavior whenever the caller is the parent owner,
- * an admin, or a superadmin — attributes the child to the **caller** so it
- * uses the caller's execution-home, credentials, and env vars.
- *
- * Legacy "identity borrowing" (child inherits parent.created_by, so it runs
- * under the *parent owner's* identity even when spawned by a different user)
- * is preserved only when the branch opts in via
- * `dangerously_allow_session_sharing: true`. When that legacy path triggers
- * for a cross-user spawn, the daemon emits a loud warning so it appears in
- * audit logs.
+ * A cross-user child is legal only after an owner-authored personal session
+ * sharing grant. It remains attributed to the parent Session owner so a
+ * genealogy never crosses execution homes. The Task records the human caller.
  *
  * Pure function — no DB, no FeathersJS context — so it can be unit tested
  * directly and invoked from both service methods and MCP tool handlers.
  *
  * @param parent  - Parent session (must include created_by)
  * @param caller  - Authenticated caller (MCP-authenticated user / Feathers user)
- * @param branch - Parent's branch (used for the opt-in flag)
- * @param options - allowSuperadmin (defaults to true)
+ * @param sharing - Resolved, owner-authored session sharing decision
  * @returns The created_by UUID to stamp on the child session
  */
 export function determineSpawnIdentity(
   parent: { created_by: string },
   caller: { user_id?: string; role?: string; _isServiceAccount?: boolean },
-  branch: { branch_id: string; dangerously_allow_session_sharing?: boolean } | undefined,
-  options?: { allowSuperadmin?: boolean }
-): { created_by: string; usedLegacySharing: boolean } {
+  sharing: { branch_id: string; share_owner_home: boolean } | undefined
+): { created_by: string; usesSharedHome: boolean } {
   const callerId = caller.user_id;
-  const role = caller.role;
 
   // Service accounts (executor, internal jobs) preserve parent attribution.
   // They have no human user_id to attribute to, and their callers (the
   // scheduler, callbacks) already ran their own RBAC checks.
   if (caller._isServiceAccount) {
-    return { created_by: parent.created_by, usedLegacySharing: false };
-  }
-
-  // Admin / superadmin → always attributed to themselves so the audit trail
-  // points at the human who pressed the button. Never inherit parent identity.
-  // `allow_superadmin` only gates exceptional branch-RBAC bypasses. A
-  // superadmin always retains the ordinary admin authority represented here.
-  if (hasMinimumRole(role, ROLES.ADMIN)) {
-    if (!callerId) {
-      // Should not happen — admins always have an id — but fall back safely.
-      return { created_by: parent.created_by, usedLegacySharing: false };
-    }
-    return { created_by: callerId, usedLegacySharing: false };
+    return { created_by: parent.created_by, usesSharedHome: false };
   }
 
   // Same user spawning their own session → attribute to caller (same value
   // as parent.created_by, but explicit).
   if (callerId && parent.created_by === callerId) {
-    return { created_by: callerId, usedLegacySharing: false };
+    return { created_by: callerId, usesSharedHome: false };
   }
 
-  // Cross-user spawn: a non-admin caller is spawning/forking from someone
-  // else's session.
-  if (branch?.dangerously_allow_session_sharing === true) {
-    // Opt-in legacy behavior: preserve identity borrowing. Log loudly.
-    // Structured key/value form so it can be queried by log shippers.
-    console.warn('[SECURITY] legacy_session_sharing', {
-      event: 'legacy_session_sharing',
+  if (callerId && sharing?.share_owner_home === true) {
+    console.warn('[SECURITY] personal_session_sharing', {
+      event: 'personal_session_sharing',
       caller_id: callerId ?? null,
-      parent_owner_id: parent.created_by,
-      branch_id: branch.branch_id,
+      session_owner_id: parent.created_by,
+      branch_id: sharing.branch_id,
     });
-    return { created_by: parent.created_by, usedLegacySharing: true };
+    return { created_by: parent.created_by, usesSharedHome: true };
   }
 
-  // Default: attribute child to caller (no identity borrowing).
-  // If we don't have a caller id at this point we cannot safely proceed —
-  // refuse rather than silently fall back to parent ownership.
   if (!callerId) {
     throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
   }
-  return { created_by: callerId, usedLegacySharing: false };
+  throw new Forbidden('The session owner has not shared their sessions with you.');
 }
 
 // ============================================================================

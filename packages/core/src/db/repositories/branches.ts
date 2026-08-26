@@ -8,15 +8,14 @@ import type {
   AgenticToolName,
   BoardID,
   Branch,
-  BranchFsAccessLevel,
   BranchID,
   EffectiveBranchAccess,
   GroupID,
+  SessionPromptAuthority,
   SessionStatus,
   UUID,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS } from '@agor/core/types';
-import { and, desc, eq, exists, getTableColumns, inArray, like, or, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, inArray, like, or, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getBranchUrl } from '../../utils/url';
@@ -27,22 +26,18 @@ import {
   isPostgresDatabase,
   jsonExtract,
   lockRowForUpdate,
+  runDatabaseTransaction,
   select,
   txAsDb,
   update,
 } from '../database-wrapper';
 import {
-  type BranchGroupGrantRow,
   type BranchInsert,
   type BranchRow,
-  boardGroupGrants,
-  boardOwners,
-  boards,
   branches,
-  branchGroupGrants,
-  branchOwners,
+  branchPermissionConfigs,
+  branchPermissionEntries,
   groupMemberships,
-  groups,
   schedules,
 } from '../schema';
 import {
@@ -58,18 +53,9 @@ import {
   sessionBranchAccessCondition,
   visibleBranchAccessCondition,
 } from './branch-access';
-import { GroupRepository } from './groups';
+import { CapabilityPolicyRepository } from './capability-policies';
 import { deepMerge } from './merge-utils';
 
-const BRANCH_PERMISSION_RANK = Object.fromEntries(
-  BRANCH_PERMISSION_LEVELS.map((level, index) => [level, index - 1])
-) as Record<NonNullable<Branch['others_can']>, number>;
-const FS_ACCESS_RANK: Record<BranchFsAccessLevel, number> = {
-  none: 0,
-  read: 1,
-  write: 2,
-};
-const VIEW_OR_BETTER_BRANCH_PERMISSIONS = ['view', 'session', 'prompt', 'all'] as const;
 const BRANCH_PERMISSION_SOURCES = ['board', 'override'] as const;
 const FS_ACCESS_BRANCH_PERMISSIONS = ['read', 'write'] as const;
 
@@ -135,6 +121,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           ? new Date(row.updated_at).toISOString()
           : new Date(row.created_at).toISOString(),
         created_by: row.created_by as UUID,
+        primary_owner_user_id: row.primary_owner_user_id as UUID,
         name: row.name,
         ref: row.ref,
         ref_type: row.ref_type ?? 'branch',
@@ -153,7 +140,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         archived_by: (row.archived_by as UUID | null) ?? undefined,
         filesystem_status: row.filesystem_status ?? undefined,
         // RBAC fields
-        permission_source: row.permission_source ?? 'override',
+        permission_source: row.permission_binding === 'inherit' ? 'board' : 'override',
+        permission_binding: row.permission_binding ?? 'override',
         others_can: row.others_can ?? undefined,
         others_fs_access: row.others_fs_access ?? undefined,
         // Branch storage mode
@@ -181,6 +169,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (!branch.created_by) {
       throw new RepositoryError('Branch must have a created_by');
     }
+    const permissionBinding =
+      branch.permission_binding ?? (branch.permission_source === 'board' ? 'inherit' : 'override');
+    if (permissionBinding === 'inherit' && !branch.board_id) {
+      throw new RepositoryError('A branch without a board cannot inherit permissions');
+    }
 
     return {
       branch_id: branchId,
@@ -188,6 +181,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       created_at: branch.created_at ? new Date(branch.created_at) : new Date(now),
       updated_at: new Date(now),
       created_by: branch.created_by,
+      primary_owner_user_id: branch.primary_owner_user_id ?? branch.created_by,
       name: branch.name!,
       ref: branch.ref!,
       ref_type: branch.ref_type,
@@ -207,10 +201,12 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       archived_at: branch.archived_at ? new Date(branch.archived_at) : null,
       archived_by: branch.archived_by ?? null,
       filesystem_status: branch.filesystem_status ?? null,
-      // RBAC fields (default 'session' for others_can matches schema default)
-      permission_source: branch.permission_source ?? 'override',
-      others_can: branch.others_can ?? 'session',
-      others_fs_access: branch.others_fs_access ?? null,
+      // Legacy authority columns remain only as a fail-closed compatibility
+      // shell. Normalized capability tables are the sole source of truth.
+      permission_source: 'override',
+      permission_binding: permissionBinding,
+      others_can: 'none',
+      others_fs_access: 'none',
       // Branch storage mode (default 'worktree' matches schema default)
       storage_mode: branch.storage_mode ?? 'worktree',
       clone_depth: branch.clone_depth ?? null,
@@ -230,7 +226,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         last_used: branch.last_used ?? new Date(now).toISOString(),
         custom_context: branch.custom_context,
         mcp_server_ids: branch.mcp_server_ids,
-        dangerously_allow_session_sharing: branch.dangerously_allow_session_sharing,
       },
     };
   }
@@ -241,7 +236,25 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async create(branch: Partial<Branch>): Promise<Branch> {
     const insertData = this.branchToInsert(branch);
     try {
-      const row = await insert(this.db, branches).values(insertData).returning().one();
+      const row = await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          const created = await insert(tx, branches).values(insertData).returning().one();
+          if (insertData.permission_binding === 'override') {
+            await new CapabilityPolicyRepository(tx).initializeBranchOverrideInTransaction(
+              tx,
+              created.branch_id as BranchID,
+              created.primary_owner_user_id as UUID,
+              {
+                othersCan: branch.others_can,
+                othersFsAccess: branch.others_fs_access,
+              }
+            );
+          }
+          return created;
+        },
+        { sqliteImmediate: true }
+      );
       const baseUrl = await getBaseUrl();
       return this.rowToBranch(row, baseUrl);
     } catch (error) {
@@ -310,31 +323,21 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       });
       const row = await select(this.db, {
         branch_id: branches.branch_id,
-        others_can: branches.others_can,
-        board_id: branches.board_id,
-        permission_source: branches.permission_source,
       })
         .from(branches)
         .where(eq(branches.branch_id, fullId))
         .one();
       if (!row) return null;
 
-      let othersCan = row.others_can;
-      if (row.permission_source === 'board' && row.board_id) {
-        const board = await select(this.db, { data: boards.data })
-          .from(boards)
-          .where(eq(boards.board_id, row.board_id))
-          .one();
-        const boardData = board?.data as
-          | { access_mode?: 'private' | 'shared'; default_others_can?: Branch['others_can'] }
-          | undefined;
-        othersCan =
-          (boardData?.access_mode ?? 'shared') === 'private'
-            ? 'none'
-            : (boardData?.default_others_can ?? row.others_can);
-      }
-
-      return { branch_id: row.branch_id as BranchID, others_can: othersCan };
+      const policy = await new CapabilityPolicyRepository(this.db).getBranchPolicy(
+        row.branch_id as BranchID
+      );
+      const config =
+        policy.binding_mode === 'inherit' ? policy.inherited_config : policy.override_config;
+      const openToOthers =
+        config?.access.sharing_mode === 'shared' &&
+        config.access.others.capabilities.includes('branch.view');
+      return { branch_id: row.branch_id as BranchID, others_can: openToOthers ? 'view' : 'none' };
     } catch (error) {
       if (error instanceof EntityNotFoundError) return null;
       throw error;
@@ -403,21 +406,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
     }
 
-    // The join shape differs only when RBAC SQL scoping is active. Keep the
-    // execution below uniform; Drizzle's cross-dialect builder types are more
-    // precise than this conditional can express.
-    // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
-    const baseQuery: any = filter?.visibleToUserId
-      ? select(this.db, getTableColumns(branches))
-          .from(branches)
-          .leftJoin(
-            branchOwners,
-            and(
-              eq(branchOwners.branch_id, branches.branch_id),
-              eq(branchOwners.user_id, filter.visibleToUserId)
-            )
-          )
-      : select(this.db).from(branches);
+    const baseQuery = select(this.db).from(branches);
     const rows =
       conditions.length > 0
         ? await baseQuery.where(and(...conditions)).all()
@@ -514,18 +503,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       );
     }
 
-    const baseQuery = select(this.db, getTableColumns(branches)).from(branches);
-    const query = filter?.userId
-      ? baseQuery.leftJoin(
-          branchOwners,
-          and(
-            eq(branchOwners.branch_id, branches.branch_id),
-            eq(branchOwners.user_id, filter.userId)
-          )
-        )
-      : baseQuery;
-
-    const rows = await query
+    const rows = await select(this.db)
+      .from(branches)
       .where(and(...conditions))
       .orderBy(desc(branches.branch_id))
       .limit(filter?.limit ?? 200)
@@ -551,6 +530,22 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       invalidateEnvironmentObservation?: boolean;
     }
   ): Promise<Branch> {
+    if (Object.hasOwn(updates, 'primary_owner_user_id')) {
+      throw new RepositoryError('Primary ownership is immutable');
+    }
+    if (
+      [
+        'permission_binding',
+        'permission_source',
+        'others_can',
+        'others_fs_access',
+        'dangerously_allow_session_sharing',
+      ].some((field) => Object.hasOwn(updates, field))
+    ) {
+      throw new RepositoryError(
+        'Branch permissions must be changed through the branch permission policy service'
+      );
+    }
     // STEP 1: Read current branch (outside transaction for short ID resolution)
     const existing = await this.findById(id);
     if (!existing) {
@@ -714,55 +709,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * @returns true if user is an owner
    */
   async isOwner(branchId: BranchID, userId: UUID): Promise<boolean> {
-    const row = await select(this.db)
-      .from(branchOwners)
-      .where(and(eq(branchOwners.branch_id, branchId), eq(branchOwners.user_id, userId)))
+    const row = await select(this.db, { owner: branches.primary_owner_user_id })
+      .from(branches)
+      .where(eq(branches.branch_id, branchId))
       .one();
-
-    return row != null; // Use != to check for both null and undefined
-  }
-
-  /**
-   * Resolve the highest group grant for a user on a branch.
-   *
-   * Direct branch owners are handled separately; this only considers groups
-   * the user belongs to and explicit branch_group_grants rows.
-   */
-  async getBestGroupGrantForUser(
-    branchId: BranchID,
-    userId: UUID
-  ): Promise<{ can: NonNullable<Branch['others_can']>; groupIds: string[] } | null> {
-    const rows = await select(this.db)
-      .from(branchGroupGrants)
-      .innerJoin(
-        groupMemberships,
-        and(
-          eq(groupMemberships.group_id, branchGroupGrants.group_id),
-          eq(groupMemberships.user_id, userId)
-        )
-      )
-      .innerJoin(
-        groups,
-        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
-      )
-      .where(
-        and(
-          eq(branchGroupGrants.branch_id, branchId),
-          inArray(branchGroupGrants.can, BRANCH_PERMISSION_LEVELS)
-        )
-      )
-      .all();
-
-    let best: NonNullable<Branch['others_can']> | null = null;
-    const groupIds: string[] = [];
-    for (const row of rows as Array<{ branch_group_grants: BranchGroupGrantRow }>) {
-      const can = row.branch_group_grants.can as NonNullable<Branch['others_can']>;
-      groupIds.push(row.branch_group_grants.group_id);
-      if (!best || BRANCH_PERMISSION_RANK[can] > BRANCH_PERMISSION_RANK[best]) {
-        best = can;
-      }
-    }
-    return best ? { can: best, groupIds } : null;
+    return row?.owner === userId;
   }
 
   /**
@@ -785,104 +736,21 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * this method.
    */
   async resolveUserAccess(branch: Branch, userId: UUID): Promise<EffectiveBranchAccess> {
-    const board =
-      branch.permission_source === 'board' && branch.board_id
-        ? await select(this.db, { data: boards.data, board_id: boards.board_id })
-            .from(boards)
-            .where(eq(boards.board_id, branch.board_id))
-            .one()
-        : null;
-    const boardData = board?.data as
-      | {
-          access_mode?: 'private' | 'shared';
-          default_others_can?: Branch['others_can'];
-          default_others_fs_access?: BranchFsAccessLevel;
-          default_dangerously_allow_session_sharing?: boolean;
-        }
-      | undefined;
-    const boardIsShared = (boardData?.access_mode ?? 'shared') === 'shared';
-    const sharing =
-      branch.permission_source === 'board' && boardIsShared
-        ? (boardData?.default_dangerously_allow_session_sharing ?? false)
-        : (branch.dangerously_allow_session_sharing ?? false);
+    return new CapabilityPolicyRepository(this.db).resolveLegacyBranchAccess(
+      branch.branch_id,
+      userId as import('@agor/core/types').UserID
+    ) as Promise<EffectiveBranchAccess>;
+  }
 
-    if (await this.isOwner(branch.branch_id, userId)) {
-      return {
-        can: 'all',
-        fs_access: 'write',
-        dangerously_allow_session_sharing: sharing,
-        is_owner: true,
-        source: 'owner',
-      };
-    }
-
-    const groupRepo = new GroupRepository(this.db);
-    const branchGroupGrants = await groupRepo.getBranchGrantsForUser(branch.branch_id, userId);
-    if (branch.permission_source === 'board' && branch.board_id) {
-      const boardOwner = await select(this.db)
-        .from(boardOwners)
-        .where(and(eq(boardOwners.board_id, branch.board_id), eq(boardOwners.user_id, userId)))
-        .one();
-      if (boardOwner) {
-        return {
-          can: 'all',
-          fs_access: 'write',
-          dangerously_allow_session_sharing: sharing,
-          is_owner: true,
-          source: 'board',
-        };
-      }
-    }
-    const boardGroupGrants =
-      board && boardIsShared && branch.board_id
-        ? await groupRepo.getBoardGrantsForUser(branch.board_id, userId)
-        : [];
-    const others =
-      branch.permission_source === 'board' && boardIsShared
-        ? ((boardData?.default_others_can as NonNullable<Branch['others_can']> | undefined) ??
-          'session')
-        : branch.permission_source === 'board'
-          ? 'none'
-          : (branch.others_can ?? 'session');
-    const othersFs =
-      branch.permission_source === 'board' && boardIsShared
-        ? (boardData?.default_others_fs_access ?? 'read')
-        : branch.permission_source === 'board'
-          ? 'none'
-          : (branch.others_fs_access ?? 'read');
-
-    const candidates: EffectiveBranchAccess[] = [
-      {
-        can: others,
-        fs_access: othersFs,
-        dangerously_allow_session_sharing: sharing,
-        is_owner: false,
-        source: branch.permission_source === 'board' ? 'board' : 'others',
-      },
-      ...branchGroupGrants.map((grant) => ({
-        can: grant.can,
-        fs_access: grant.fs_access ?? 'read',
-        dangerously_allow_session_sharing: sharing,
-        is_owner: false,
-        source: 'group' as const,
-        group_ids: [grant.group_id],
-      })),
-      ...boardGroupGrants.map((grant) => ({
-        can: grant.can,
-        fs_access: grant.fs_access ?? 'read',
-        dangerously_allow_session_sharing: sharing,
-        is_owner: false,
-        source: 'board_group' as const,
-        group_ids: [grant.group_id],
-      })),
-    ];
-
-    return candidates.reduce((best, candidate) => {
-      const canDelta = BRANCH_PERMISSION_RANK[candidate.can] - BRANCH_PERMISSION_RANK[best.can];
-      if (canDelta !== 0) return canDelta > 0 ? candidate : best;
-      const candidateFsRank = FS_ACCESS_RANK[candidate.fs_access ?? 'none'];
-      const bestFsRank = FS_ACCESS_RANK[best.fs_access ?? 'none'];
-      return candidateFsRank > bestFsRank ? candidate : best;
+  async resolveSessionPromptAuthority(
+    branchId: BranchID,
+    callerUserId: UUID,
+    sessionOwnerUserId: UUID
+  ): Promise<SessionPromptAuthority> {
+    return new CapabilityPolicyRepository(this.db).resolveSessionPromptAuthority({
+      branch_id: branchId,
+      caller_user_id: callerUserId as import('@agor/core/types').UserID,
+      session_owner_user_id: sessionOwnerUserId as import('@agor/core/types').UserID,
     });
   }
 
@@ -893,84 +761,36 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * every user row.
    */
   async findExplicitViewUserIds(branchId: BranchID): Promise<UUID[]> {
-    const branchRow = await select(this.db, {
-      board_id: branches.board_id,
-      permission_source: branches.permission_source,
-    })
-      .from(branches)
-      .where(eq(branches.branch_id, branchId))
-      .one();
+    return this.findExplicitUsers(branchId, (access) => access.can !== 'none');
+  }
 
-    const ownerRows = await select(this.db, { user_id: branchOwners.user_id })
-      .from(branchOwners)
-      .where(eq(branchOwners.branch_id, branchId))
-      .all();
-
-    const groupRows = await select(this.db, { user_id: groupMemberships.user_id })
-      .from(branchGroupGrants)
-      .innerJoin(groupMemberships, eq(groupMemberships.group_id, branchGroupGrants.group_id))
-      .innerJoin(
-        groups,
-        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
-      )
-      .where(
-        and(
-          eq(branchGroupGrants.branch_id, branchId),
-          inArray(branchGroupGrants.can, VIEW_OR_BETTER_BRANCH_PERMISSIONS)
-        )
-      )
-      .all();
-
-    const boardOwnerRows =
-      branchRow?.permission_source === 'board' && branchRow.board_id
-        ? await select(this.db, { user_id: boardOwners.user_id })
-            .from(boardOwners)
-            .where(eq(boardOwners.board_id, branchRow.board_id))
-            .all()
-        : [];
-
-    const boardGroupRows =
-      branchRow?.permission_source === 'board' && branchRow.board_id
-        ? await select(this.db, { user_id: groupMemberships.user_id })
-            .from(boardGroupGrants)
-            .innerJoin(groupMemberships, eq(groupMemberships.group_id, boardGroupGrants.group_id))
-            .innerJoin(
-              groups,
-              and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
-            )
-            .innerJoin(
-              boards,
-              and(
-                eq(boards.board_id, boardGroupGrants.board_id),
-                eq(
-                  sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared')`,
-                  'shared'
-                )
-              )
-            )
-            .where(
-              and(
-                eq(boardGroupGrants.board_id, branchRow.board_id),
-                inArray(boardGroupGrants.can, VIEW_OR_BETTER_BRANCH_PERMISSIONS)
-              )
-            )
-            .all()
-        : [];
-
-    const userIds = new Set<UUID>();
-    for (const row of ownerRows as Array<{ user_id: string }>) {
-      userIds.add(row.user_id as UUID);
+  private async findExplicitUsers(
+    branchId: BranchID,
+    accepts: (access: EffectiveBranchAccess) => boolean
+  ): Promise<UUID[]> {
+    const policy = await new CapabilityPolicyRepository(this.db).getBranchPolicy(branchId);
+    const config =
+      policy.binding_mode === 'inherit' ? policy.inherited_config : policy.override_config;
+    if (!config) return [];
+    const ids = new Set<UUID>([policy.primary_owner_user_id as UUID]);
+    const groupIds: GroupID[] = [];
+    for (const entry of config.access.entries) {
+      if (entry.principal.principal_type === 'user') ids.add(entry.principal.user_id as UUID);
+      else groupIds.push(entry.principal.group_id);
     }
-    for (const row of groupRows as Array<{ user_id: string }>) {
-      userIds.add(row.user_id as UUID);
+    if (groupIds.length > 0) {
+      const members = await select(this.db, { user_id: groupMemberships.user_id })
+        .from(groupMemberships)
+        .where(inArray(groupMemberships.group_id, groupIds))
+        .all();
+      for (const member of members) ids.add(member.user_id as UUID);
     }
-    for (const row of boardOwnerRows as Array<{ user_id: string }>) {
-      userIds.add(row.user_id as UUID);
+    const result: UUID[] = [];
+    for (const userId of ids) {
+      const access = await this.resolveUserAccess({ branch_id: branchId } as Branch, userId);
+      if (accepts(access)) result.push(userId);
     }
-    for (const row of boardGroupRows as Array<{ user_id: string }>) {
-      userIds.add(row.user_id as UUID);
-    }
-    return Array.from(userIds);
+    return result;
   }
 
   /**
@@ -984,89 +804,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * must not inherit board grants.
    */
   async findExplicitFsAccessUserIds(branchId: BranchID): Promise<UUID[]> {
-    const branchRow = await select(this.db, {
-      board_id: branches.board_id,
-      permission_source: branches.permission_source,
-    })
-      .from(branches)
-      .where(eq(branches.branch_id, branchId))
-      .one();
-
-    const ownerRows = await select(this.db, { user_id: branchOwners.user_id })
-      .from(branchOwners)
-      .where(eq(branchOwners.branch_id, branchId))
-      .all();
-
-    const groupRows = await select(this.db, { user_id: groupMemberships.user_id })
-      .from(branchGroupGrants)
-      .innerJoin(groupMemberships, eq(groupMemberships.group_id, branchGroupGrants.group_id))
-      .innerJoin(
-        groups,
-        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
-      )
-      .where(
-        and(
-          eq(branchGroupGrants.branch_id, branchId),
-          inArray(
-            sql`coalesce(${branchGroupGrants.fs_access}, 'read')`,
-            FS_ACCESS_BRANCH_PERMISSIONS
-          )
-        )
-      )
-      .all();
-
-    const isBoardAligned = branchRow?.permission_source === 'board' && branchRow.board_id;
-    const boardOwnerRows = isBoardAligned
-      ? await select(this.db, { user_id: boardOwners.user_id })
-          .from(boardOwners)
-          .where(eq(boardOwners.board_id, branchRow.board_id))
-          .all()
-      : [];
-
-    const boardGroupRows = isBoardAligned
-      ? await select(this.db, { user_id: groupMemberships.user_id })
-          .from(boardGroupGrants)
-          .innerJoin(groupMemberships, eq(groupMemberships.group_id, boardGroupGrants.group_id))
-          .innerJoin(
-            groups,
-            and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
-          )
-          .innerJoin(
-            boards,
-            and(
-              eq(boards.board_id, boardGroupGrants.board_id),
-              eq(
-                sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared')`,
-                'shared'
-              )
-            )
-          )
-          .where(
-            and(
-              eq(boardGroupGrants.board_id, branchRow.board_id),
-              inArray(
-                sql`coalesce(${boardGroupGrants.fs_access}, 'read')`,
-                FS_ACCESS_BRANCH_PERMISSIONS
-              )
-            )
-          )
-          .all()
-      : [];
-
-    const userIds = new Set<UUID>();
-    for (const row of ownerRows as Array<{ user_id: string }>) {
-      userIds.add(row.user_id as UUID);
-    }
-    for (const row of groupRows as Array<{ user_id: string }>) {
-      userIds.add(row.user_id as UUID);
-    }
-    for (const row of boardOwnerRows as Array<{ user_id: string }>) {
-      userIds.add(row.user_id as UUID);
-    }
-    for (const row of boardGroupRows as Array<{ user_id: string }>) {
-      userIds.add(row.user_id as UUID);
-    }
-    return Array.from(userIds);
+    return this.findExplicitUsers(branchId, (access) => (access.fs_access ?? 'none') !== 'none');
   }
 
   /**
@@ -1079,65 +817,42 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * membership changes for those grants do not require branch-folder mutation.
    */
   async findExplicitFsAccessBranchIdsForGroup(groupId: GroupID): Promise<BranchID[]> {
-    const directRows = await select(this.db, { branch_id: branchGroupGrants.branch_id })
-      .from(branchGroupGrants)
-      .innerJoin(branches, eq(branches.branch_id, branchGroupGrants.branch_id))
+    const configRows = await select(this.db, {
+      branch_id: branchPermissionConfigs.branch_id,
+      board_id: branchPermissionConfigs.board_id,
+    })
+      .from(branchPermissionEntries)
       .innerJoin(
-        groups,
-        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
+        branchPermissionConfigs,
+        eq(branchPermissionConfigs.config_id, branchPermissionEntries.config_id)
       )
       .where(
         and(
-          eq(branchGroupGrants.group_id, groupId),
-          eq(branches.archived, false),
-          inArray(
-            sql`coalesce(${branchGroupGrants.fs_access}, 'read')`,
-            FS_ACCESS_BRANCH_PERMISSIONS
-          )
+          eq(branchPermissionEntries.group_id, groupId),
+          inArray(branchPermissionEntries.fs_access, FS_ACCESS_BRANCH_PERMISSIONS)
         )
       )
       .all();
-
-    const boardRows = await select(this.db, { branch_id: branches.branch_id })
-      .from(boardGroupGrants)
-      .innerJoin(
-        groups,
-        and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
-      )
-      .innerJoin(
-        boards,
-        and(
-          eq(boards.board_id, boardGroupGrants.board_id),
-          eq(sql`coalesce(${jsonExtract(this.db, boards.data, 'access_mode')}, 'shared')`, 'shared')
-        )
-      )
-      .innerJoin(
-        branches,
-        and(
-          eq(branches.board_id, boardGroupGrants.board_id),
-          eq(branches.permission_source, 'board'),
-          eq(branches.archived, false)
-        )
-      )
-      .where(
-        and(
-          eq(boardGroupGrants.group_id, groupId),
-          inArray(
-            sql`coalesce(${boardGroupGrants.fs_access}, 'read')`,
-            FS_ACCESS_BRANCH_PERMISSIONS
+    const ids = new Set<BranchID>();
+    const boardIds: BoardID[] = [];
+    for (const row of configRows) {
+      if (row.branch_id) ids.add(row.branch_id as BranchID);
+      if (row.board_id) boardIds.push(row.board_id as BoardID);
+    }
+    if (boardIds.length > 0) {
+      const inherited = await select(this.db, { branch_id: branches.branch_id })
+        .from(branches)
+        .where(
+          and(
+            inArray(branches.board_id, boardIds),
+            eq(branches.permission_binding, 'inherit'),
+            eq(branches.archived, false)
           )
         )
-      )
-      .all();
-
-    const branchIds = new Set<BranchID>();
-    for (const row of directRows as Array<{ branch_id: string }>) {
-      branchIds.add(row.branch_id as BranchID);
+        .all();
+      for (const row of inherited) ids.add(row.branch_id as BranchID);
     }
-    for (const row of boardRows as Array<{ branch_id: string }>) {
-      branchIds.add(row.branch_id as BranchID);
-    }
-    return Array.from(branchIds);
+    return [...ids];
   }
 
   async findBoardAlignedBranches(boardId: BoardID): Promise<Branch[]> {
@@ -1146,7 +861,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       .where(
         and(
           eq(branches.board_id, boardId),
-          eq(branches.permission_source, 'board'),
+          eq(branches.permission_binding, 'inherit'),
           eq(branches.archived, false)
         )
       )
@@ -1169,12 +884,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       throw new EntityNotFoundError('Branch', branchId);
     }
 
-    const rows = await select(this.db)
-      .from(branchOwners)
-      .where(eq(branchOwners.branch_id, branch.branch_id))
-      .all();
-
-    return rows.map((row: { user_id: string }) => row.user_id as UUID);
+    return [branch.primary_owner_user_id as UUID];
   }
 
   /**
@@ -1198,14 +908,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       return; // Already an owner, nothing to do
     }
 
-    // Add ownership
-    await insert(this.db, branchOwners)
-      .values({
-        branch_id: branch.branch_id,
-        user_id: userId,
-        created_at: new Date(), // Explicitly set timestamp (migration has wrong default)
-      })
-      .run();
+    throw new RepositoryError(
+      'Primary ownership is immutable; grant Manager access through the branch permission policy'
+    );
   }
 
   /**
@@ -1223,10 +928,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       throw new EntityNotFoundError('Branch', branchId);
     }
 
-    // Remove ownership (idempotent - will do nothing if not an owner)
-    await deleteFrom(this.db, branchOwners)
-      .where(and(eq(branchOwners.branch_id, branch.branch_id), eq(branchOwners.user_id, userId)))
-      .run();
+    throw new RepositoryError(
+      userId === branch.primary_owner_user_id
+        ? 'Primary ownership is immutable'
+        : 'This user is not a branch owner; remove their permission entry instead'
+    );
   }
 
   /**
@@ -1243,22 +949,17 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       return new Map();
     }
 
-    // Query all owners for the given branches using inArray
-    const rows = await select(this.db)
-      .from(branchOwners)
-      .where(inArray(branchOwners.branch_id, branchIds))
+    const rows = await select(this.db, {
+      branch_id: branches.branch_id,
+      primary_owner_user_id: branches.primary_owner_user_id,
+    })
+      .from(branches)
+      .where(inArray(branches.branch_id, branchIds))
       .all();
 
-    // Group by branch_id
     const ownersByBranch = new Map<BranchID, UUID[]>();
     for (const row of rows) {
-      const wtId = row.branch_id as BranchID;
-      const userId = row.user_id as UUID;
-
-      if (!ownersByBranch.has(wtId)) {
-        ownersByBranch.set(wtId, []);
-      }
-      ownersByBranch.get(wtId)!.push(userId);
+      ownersByBranch.set(row.branch_id as BranchID, [row.primary_owner_user_id as UUID]);
     }
 
     return ownersByBranch;
@@ -1290,12 +991,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       conditions.push(eq(branches.archived, false));
     }
 
-    const rows = await select(this.db, getTableColumns(branches))
+    const rows = await select(this.db)
       .from(branches)
-      .leftJoin(
-        branchOwners,
-        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
       .where(and(...conditions))
       .all();
 
@@ -1329,10 +1026,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       const fullId = await resolveByShortIdPrefix(branchId, 'Branch', async (pattern) => {
         const rows = await select(this.db, { branch_id: branches.branch_id })
           .from(branches)
-          .leftJoin(
-            branchOwners,
-            and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-          )
           .where(and(like(branches.branch_id, pattern), accessCondition))
           .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)
           .all();
@@ -1342,12 +1035,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       // Reapply the authorization predicate on retrieval. Besides keeping the
       // point lookup self-contained, this fails closed if access changes after
       // short-ID resolution but before the row is read.
-      const row = await select(this.db, getTableColumns(branches))
+      const row = await select(this.db)
         .from(branches)
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
         .where(and(eq(branches.branch_id, fullId), accessCondition))
         .one();
       if (!row) return null;

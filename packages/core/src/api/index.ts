@@ -9,15 +9,16 @@ import type {
   AgenticToolPreset,
   Artifact,
   Board,
+  BoardCapabilityPolicies,
   BoardComment,
   BoardCommentCreate,
   BoardCommentPatch,
   BoardCommentReposition,
   BoardExportBlob,
-  BoardGroupGrantWithGroup,
   Branch,
+  BranchCapabilityPolicy,
   BranchEnvironmentUpdate,
-  BranchGroupGrantWithGroup,
+  CapabilityPolicyWorkspacePreferences,
   CardType,
   CardWithType,
   CloneRepositoryResult,
@@ -227,6 +228,33 @@ export interface MCPMarketplaceToolPermissionService {
   ): Promise<MCPMarketplaceToolPermissionResult>;
 }
 
+export interface BoardPermissionsService {
+  find(params?: Params): Promise<BoardCapabilityPolicies>;
+  patch(
+    id: null,
+    data: ClientInput<BoardCapabilityPolicies>,
+    params?: Params
+  ): Promise<BoardCapabilityPolicies>;
+}
+
+export interface BranchPermissionsService {
+  find(params?: Params): Promise<BranchCapabilityPolicy>;
+  patch(
+    id: null,
+    data: ClientInput<BranchCapabilityPolicy>,
+    params?: Params
+  ): Promise<BranchCapabilityPolicy>;
+}
+
+export interface WorkspacePreferencesService {
+  find(params?: Params): Promise<CapabilityPolicyWorkspacePreferences>;
+  patch(
+    id: null,
+    data: CapabilityPolicyWorkspacePreferences,
+    params?: Params
+  ): Promise<CapabilityPolicyWorkspacePreferences>;
+}
+
 /**
  * Service interfaces for type safety
  */
@@ -244,10 +272,9 @@ export interface ServiceTypes {
   users: User;
   groups: Group;
   'group-memberships': GroupMembership;
-  'branches/:id/owners': User;
-  'boards/:id/owners': User;
-  'boards/:id/group-grants': BoardGroupGrantWithGroup;
-  'branches/:id/group-grants': BranchGroupGrantWithGroup;
+  'boards/:id/permissions': BoardCapabilityPolicies;
+  'branches/:id/permissions': BranchCapabilityPolicy;
+  'workspace-preferences': CapabilityPolicyWorkspacePreferences;
   cards: CardWithType;
   'card-types': CardType; // CardType CRUD
   artifacts: Artifact;
@@ -795,6 +822,9 @@ export interface AgorClient
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'boards/:id/permissions'): BoardPermissionsService;
+  service(path: 'branches/:id/permissions'): BranchPermissionsService;
+  service(path: 'workspace-preferences'): WorkspacePreferencesService;
   service(path: 'schedules'): SchedulesService;
   service(path: 'gateway-channels'): GatewayChannelsService;
   service(path: 'kb/settings'): KnowledgeSettingsService;

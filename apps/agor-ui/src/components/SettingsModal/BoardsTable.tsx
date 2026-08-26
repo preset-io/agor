@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Branch, Session } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Session, User } from '@agor-live/client';
 import {
   CopyOutlined,
   DeleteOutlined,
@@ -38,6 +38,7 @@ interface BoardsTableProps {
   boardById: Map<string, Board>;
   sessionsByBranch: Map<string, Session[]>;
   branchById: Map<string, Branch>;
+  currentUser?: User | null;
   onCreate?: (board: Partial<Board>) => void;
   onUpdate?: (boardId: string, updates: Partial<Board>) => void;
   onDelete?: (boardId: string) => void;
@@ -50,6 +51,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
   boardById,
   sessionsByBranch,
   branchById,
+  currentUser,
   onCreate,
   onUpdate,
   onDelete,
@@ -397,6 +399,7 @@ export const BoardsTable: React.FC<BoardsTableProps> = ({
         open={Boolean(editingBoard)}
         onClose={() => setEditingBoard(null)}
         onUpdate={onUpdate}
+        currentUser={currentUser}
       />
     </div>
   );

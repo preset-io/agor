@@ -16,7 +16,7 @@ import { dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
-import { GroupRepository } from './groups';
+import { CapabilityPolicyRepository } from './capability-policies';
 import { RepoRepository } from './repos';
 import { UsersRepository } from './users';
 
@@ -70,6 +70,7 @@ async function createBranchForBoard(
   boardId: UUID,
   overrides: {
     name?: string;
+    created_by?: UUID;
     teammate?: boolean;
     archived?: boolean;
     custom_context?: Record<string, unknown>;
@@ -89,7 +90,7 @@ async function createBranchForBoard(
     path: `/tmp/${name}`,
     board_id: boardId,
     archived: overrides.archived,
-    created_by: generateId(),
+    created_by: overrides.created_by ?? generateId(),
     custom_context:
       overrides.custom_context ??
       (overrides.teammate
@@ -804,7 +805,7 @@ describe('BoardRepository.update', () => {
 
 describe('BoardRepository primary teammate', () => {
   dbTest(
-    'keeps private boards visible through an accessible primary teammate even after teammate moves',
+    'does not infer private-board visibility from an accessible primary teammate',
     async ({ db }) => {
       const users = new UsersRepository(db);
       const boardRepo = new BoardRepository(db);
@@ -822,22 +823,19 @@ describe('BoardRepository primary teammate', () => {
       const teammate = await createBranchForBoard(db, oldBoard.board_id, {
         teammate: true,
         name: 'kelly-teammate',
+        created_by: viewer.user_id as UUID,
       });
 
       await boardRepo.setPrimaryTeammate(oldBoard.board_id, teammate.branch_id);
       await branchRepo.update(teammate.branch_id, {
         board_id: newBoard.board_id,
-        permission_source: 'override',
-        others_can: 'none',
       });
 
       await expect(boardRepo.findVisibleBoardIds(viewer.user_id as UUID)).resolves.not.toContain(
         oldBoard.board_id
       );
 
-      await branchRepo.addOwner(teammate.branch_id, viewer.user_id as UUID);
-
-      await expect(boardRepo.findVisibleBoardIds(viewer.user_id as UUID)).resolves.toContain(
+      await expect(boardRepo.findVisibleBoardIds(viewer.user_id as UUID)).resolves.not.toContain(
         oldBoard.board_id
       );
     }
@@ -1718,109 +1716,58 @@ describe('BoardRepository slug uniqueness', () => {
   });
 });
 
-describe('BoardRepository RBAC defaults', () => {
-  dbTest('applies shared backcompat defaults when fields are omitted', async ({ db }) => {
-    const repo = new BoardRepository(db);
-    const board = await repo.create(createBoardData({ name: 'Backcompat Board' }));
+describe('BoardRepository normalized permission boundary', () => {
+  dbTest(
+    'maps legacy create defaults once but exposes only the fail-closed compatibility view',
+    async ({ db }) => {
+      const repo = new BoardRepository(db);
+      const board = await repo.create(
+        createBoardData({
+          name: 'Compatibility Board',
+          access_mode: 'shared',
+          default_others_can: 'prompt',
+          default_others_fs_access: 'write',
+        })
+      );
+      const permissions = await new CapabilityPolicyRepository(db).getBoardPolicies(board.board_id);
 
-    expect(board.access_mode).toBe('shared');
-    expect(board.default_others_can).toBe('session');
-    expect(board.default_others_fs_access).toBe('read');
-    expect(board.default_dangerously_allow_session_sharing).toBe(false);
-  });
-
-  dbTest('round-trips board-level permission defaults', async ({ db }) => {
-    const repo = new BoardRepository(db);
-    const board = await repo.create(
-      createBoardData({
-        name: 'Private Defaults Board',
+      expect(board).toMatchObject({
         access_mode: 'private',
         default_others_can: 'none',
         default_others_fs_access: 'none',
-        default_dangerously_allow_session_sharing: true,
-      })
-    );
+      });
+      expect(permissions).toMatchObject({
+        board_access: { sharing_mode: 'shared', others: { preset: 'viewer' } },
+        branch_template: {
+          access: {
+            sharing_mode: 'shared',
+            others: { preset: 'collaborator', fs_access: 'write' },
+          },
+        },
+      });
+    }
+  );
 
-    expect(board).toMatchObject({
-      access_mode: 'private',
-      default_others_can: 'none',
-      default_others_fs_access: 'none',
-      default_dangerously_allow_session_sharing: true,
-    });
-
-    const updated = await repo.update(board.board_id, {
-      access_mode: 'shared',
-      default_others_can: 'prompt',
-      default_others_fs_access: 'write',
-      default_dangerously_allow_session_sharing: false,
-    });
-
-    expect(updated).toMatchObject({
-      access_mode: 'shared',
-      default_others_can: 'prompt',
-      default_others_fs_access: 'write',
-      default_dangerously_allow_session_sharing: false,
-    });
-  });
-
-  dbTest('treats created_by as a board mutator for historical boards', async ({ db }) => {
+  dbTest('rejects permission changes through generic board updates', async ({ db }) => {
     const repo = new BoardRepository(db);
-    const usersRepo = new UsersRepository(db);
-    const creatorId = generateId() as UUID;
-    await usersRepo.create({
-      user_id: creatorId,
-      email: 'creator@example.com',
-      name: 'Creator',
-    });
-    const board = await repo.create(
-      createBoardData({
-        name: 'Historical Board',
-        created_by: creatorId,
-        access_mode: 'private',
-      })
-    );
+    const board = await repo.create(createBoardData({ name: 'Policy Boundary' }));
 
-    expect(await repo.canMutate(board.board_id, creatorId)).toBe(true);
-    expect(await repo.findVisibleBoardIds(creatorId)).toContain(board.board_id);
+    await expect(repo.update(board.board_id, { access_mode: 'shared' })).rejects.toThrow(
+      'board permission policy service'
+    );
   });
 
-  dbTest('ignores stale board group mutators when a board is private', async ({ db }) => {
-    const boardRepo = new BoardRepository(db);
-    const groupRepo = new GroupRepository(db);
-    const usersRepo = new UsersRepository(db);
+  dbTest('uses immutable primary ownership for creator mutation access', async ({ db }) => {
+    const repo = new BoardRepository(db);
     const creatorId = generateId() as UUID;
-    const memberId = generateId() as UUID;
-    await usersRepo.create({
-      user_id: creatorId,
-      email: 'creator-private@example.com',
-      name: 'Creator',
-    });
-    await usersRepo.create({
-      user_id: memberId,
-      email: 'member-private@example.com',
-      name: 'Member',
-    });
-    const board = await boardRepo.create(
-      createBoardData({
-        name: 'Private Board',
-        created_by: creatorId,
-        access_mode: 'private',
-      })
+    const board = await repo.create(
+      createBoardData({ name: 'Owner Board', created_by: creatorId, access_mode: 'private' })
     );
-    const group = await groupRepo.create({ name: 'Editors', created_by: creatorId });
-    await groupRepo.addMember(group.group_id, memberId, creatorId);
-    await groupRepo.upsertBoardGrant({
-      board_id: board.board_id,
-      group_id: group.group_id,
-      can: 'all',
-      fs_access: 'write',
-      created_by: creatorId,
-    });
 
-    expect(await boardRepo.canMutate(board.board_id, memberId)).toBe(false);
-    expect(await boardRepo.findVisibleBoardIds(memberId)).not.toContain(board.board_id);
-
-    await boardRepo.update(board.board_id, { access_mode: 'shared' });
-    expect(await boardRepo.canMutate(board.board_id, memberId)).toBe(true);
+    expect(board.primary_owner_user_id).toBe(creatorId);
+    expect(await repo.canMutate(board.board_id, creatorId)).toBe(true);
+    await expect(
+      repo.update(board.board_id, { primary_owner_user_id: generateId() })
+    ).rejects.toThrow('Primary ownership is immutable');
   });
 });

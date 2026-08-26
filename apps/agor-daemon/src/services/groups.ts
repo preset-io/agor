@@ -6,7 +6,6 @@
 
 import type { BranchRepository } from '@agor/core/db';
 import {
-  BoardRepository,
   eq,
   GroupRepository,
   runWithTenantDatabaseTransaction,
@@ -18,12 +17,9 @@ import {
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
-  BoardGroupGrantWithGroup,
   BoardID,
   Branch,
-  BranchGroupGrantWithGroup,
   BranchID,
-  BranchPermissionLevel,
   EffectiveBranchAccess,
   Group,
   GroupMembership,
@@ -32,14 +28,8 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import {
-  BRANCH_PERMISSION_LEVELS,
-  hasMinimumRole,
-  hasRoleAuthorityOver,
-  ROLES,
-} from '@agor/core/types';
-import { requireAuthorizedBoardRoute } from '../utils/board-route-authorization.js';
-import { PERMISSION_RANK } from '../utils/branch-authorization.js';
+import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor/core/types';
+import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
 import { lockUserAuthorityMutation } from './user-authority-lock.js';
 
 function requireMember(context: HookContext): HookContext {
@@ -70,30 +60,6 @@ function paramsRoute(params: Params | undefined): Record<string, string | undefi
   return (params as { route?: Record<string, string | undefined> } | undefined)?.route;
 }
 
-function assertPermissionLevel(value: unknown): asserts value is BranchPermissionLevel {
-  if (
-    typeof value !== 'string' ||
-    !BRANCH_PERMISSION_LEVELS.includes(value as BranchPermissionLevel)
-  ) {
-    throw new BadRequest('Invalid branch permission level');
-  }
-}
-
-export function assertBranchGroupGrantPermissionLevel(
-  value: unknown
-): asserts value is BranchPermissionLevel {
-  assertPermissionLevel(value);
-  if (value === 'none') {
-    throw new BadRequest("Use removal instead of a branch group grant with permission 'none'");
-  }
-}
-
-export function branchGroupGrantPermissionLevelOrDefault(value: unknown): BranchPermissionLevel {
-  const nextCan = value ?? 'view';
-  assertBranchGroupGrantPermissionLevel(nextCan);
-  return nextCan;
-}
-
 /**
  * Public Group transport surface. The service is a plain object, not a
  * DrizzleService, and defines no `update`; pinning the list keeps it that way.
@@ -108,18 +74,6 @@ export const GROUPS_SERVICE_TRANSPORT_METHODS = [
 
 /** Nested ACL services expose only their meaningful verbs. */
 export const GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS = ['find', 'create', 'remove'] as const;
-export const BRANCH_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS = [
-  'find',
-  'create',
-  'patch',
-  'remove',
-] as const;
-export const BOARD_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS = [
-  'find',
-  'create',
-  'patch',
-  'remove',
-] as const;
 
 export function createGroupsService(db: TenantScopeAwareDatabase) {
   const repo = new GroupRepository(db);
@@ -238,198 +192,10 @@ export function createGroupMembershipsService(db: TenantScopeAwareDatabase) {
   };
 }
 
-async function requireBranchGrantViewer(
-  branchRepo: BranchRepository,
-  context: HookContext
-): Promise<HookContext> {
-  if (!context.params.provider) return context;
-  if (context.params.user?._isServiceAccount) return context;
-  const user = context.params.user;
-  if (!user) throw new NotAuthenticated('Authentication required');
-  if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
-
-  const branchId = context.params.route?.id;
-  if (!branchId) throw new BadRequest('Branch ID is required');
-  const branch = await branchRepo.findById(branchId);
-  if (!branch) throw new BadRequest(`Branch not found: ${branchId}`);
-  const effective = await branchRepo.resolveUserPermission(branch, user.user_id as UserID);
-  if (PERMISSION_RANK[effective] < PERMISSION_RANK.view) {
-    throw new Forbidden('You need view permission to see branch group grants');
-  }
-  return context;
-}
-
-export async function requireBranchGrantManager(
-  branchRepo: BranchRepository,
-  context: HookContext
-): Promise<HookContext> {
-  if (!context.params.provider) return context;
-  if (context.params.user?._isServiceAccount) return context;
-  const user = context.params.user;
-  if (!user) throw new NotAuthenticated('Authentication required');
-  if (hasMinimumRole(user.role, ROLES.ADMIN)) return context;
-
-  const branchId = context.params.route?.id;
-  if (!branchId) throw new BadRequest('Branch ID is required');
-  const branch = await branchRepo.findById(branchId);
-  if (!branch) throw new BadRequest(`Branch not found: ${branchId}`);
-  const isOwner = await branchRepo.isOwner(branch.branch_id as BranchID, user.user_id as UserID);
-  if (!isOwner) {
-    throw new Forbidden('Only branch owners and admins can manage branch group grants');
-  }
-  return context;
-}
-
-export function setupBranchGroupGrantsService(
-  app: import('@agor/core/feathers').Application,
-  db: TenantScopeAwareDatabase,
-  branchRepo: BranchRepository
-) {
-  const repo = new GroupRepository(db);
-  app.use(
-    'branches/:id/group-grants',
-    {
-      async find(params?: Params): Promise<BranchGroupGrantWithGroup[]> {
-        const branchId = paramsRoute(params)?.id;
-        if (!branchId) throw new BadRequest('Branch ID is required');
-        return repo.listBranchGrants(branchId);
-      },
-      async create(
-        data: {
-          group_id?: string;
-          can?: BranchPermissionLevel;
-          fs_access?: 'none' | 'read' | 'write' | null;
-        },
-        params?: Params
-      ): Promise<BranchGroupGrantWithGroup> {
-        const branchId = paramsRoute(params)?.id;
-        if (!branchId || !data.group_id)
-          throw new BadRequest('branch id and group_id are required');
-        const nextCan = branchGroupGrantPermissionLevelOrDefault(data.can);
-        return repo.upsertBranchGrant({
-          branch_id: branchId,
-          group_id: data.group_id,
-          can: nextCan,
-          fs_access: data.fs_access,
-          created_by: paramsUser(params)?.user_id as UserID | undefined,
-        });
-      },
-      async patch(
-        id: string,
-        data: { can?: BranchPermissionLevel; fs_access?: 'none' | 'read' | 'write' | null },
-        params?: Params
-      ): Promise<BranchGroupGrantWithGroup> {
-        const branchId = paramsRoute(params)?.id;
-        if (!branchId) throw new BadRequest('Branch ID is required');
-        const current = (await repo.listBranchGrants(branchId)).find((g) => g.group_id === id);
-        if (!current) throw new BadRequest(`Branch group grant not found: ${id}`);
-        const nextCan = data.can ?? current.can;
-        assertBranchGroupGrantPermissionLevel(nextCan);
-        return repo.upsertBranchGrant({
-          branch_id: branchId,
-          group_id: id,
-          can: nextCan,
-          fs_access: data.fs_access === undefined ? current.fs_access : data.fs_access,
-          created_by: paramsUser(params)?.user_id as UserID | undefined,
-        });
-      },
-      async remove(id: string, params?: Params): Promise<BranchGroupGrantWithGroup> {
-        const branchId = paramsRoute(params)?.id;
-        if (!branchId) throw new BadRequest('Branch ID is required');
-        const removed = await repo.removeBranchGrant(branchId, id);
-        if (!removed) throw new BadRequest(`Branch group grant not found: ${id}`);
-        return removed;
-      },
-    },
-    { methods: [...BRANCH_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS] }
-  );
-
-  app.service('branches/:id/group-grants').hooks({
-    before: {
-      find: [(context: HookContext) => requireBranchGrantViewer(branchRepo, context)],
-      create: [(context: HookContext) => requireBranchGrantManager(branchRepo, context)],
-      patch: [(context: HookContext) => requireBranchGrantManager(branchRepo, context)],
-      remove: [(context: HookContext) => requireBranchGrantManager(branchRepo, context)],
-    },
-  });
-}
-
-export function setupBoardGroupGrantsService(
-  app: import('@agor/core/feathers').Application,
-  db: TenantScopeAwareDatabase
-) {
-  const repo = new GroupRepository(db);
-  const boardRepo = new BoardRepository(db);
-  app.use(
-    'boards/:id/group-grants',
-    {
-      async find(params?: Params): Promise<BoardGroupGrantWithGroup[]> {
-        const boardId = paramsRoute(params)?.id;
-        if (!boardId) throw new BadRequest('Board ID is required');
-        return repo.listBoardGrants(boardId);
-      },
-      async create(
-        data: {
-          group_id?: string;
-          can?: BranchPermissionLevel;
-          fs_access?: 'none' | 'read' | 'write' | null;
-        },
-        params?: Params
-      ): Promise<BoardGroupGrantWithGroup> {
-        const boardId = paramsRoute(params)?.id;
-        if (!boardId || !data.group_id) throw new BadRequest('board id and group_id are required');
-        const nextCan = branchGroupGrantPermissionLevelOrDefault(data.can);
-        return repo.upsertBoardGrant({
-          board_id: boardId,
-          group_id: data.group_id,
-          can: nextCan,
-          fs_access: data.fs_access,
-          created_by: paramsUser(params)?.user_id as UserID | undefined,
-        });
-      },
-      async patch(
-        id: string,
-        data: { can?: BranchPermissionLevel; fs_access?: 'none' | 'read' | 'write' | null },
-        params?: Params
-      ): Promise<BoardGroupGrantWithGroup> {
-        const boardId = paramsRoute(params)?.id;
-        if (!boardId) throw new BadRequest('Board ID is required');
-        const current = (await repo.listBoardGrants(boardId)).find((g) => g.group_id === id);
-        if (!current) throw new BadRequest(`Board group grant not found: ${id}`);
-        const nextCan = data.can ?? current.can;
-        assertBranchGroupGrantPermissionLevel(nextCan);
-        return repo.upsertBoardGrant({
-          board_id: boardId,
-          group_id: id,
-          can: nextCan,
-          fs_access: data.fs_access === undefined ? current.fs_access : data.fs_access,
-          created_by: paramsUser(params)?.user_id as UserID | undefined,
-        });
-      },
-      async remove(id: string, params?: Params): Promise<BoardGroupGrantWithGroup> {
-        const boardId = paramsRoute(params)?.id;
-        if (!boardId) throw new BadRequest('Board ID is required');
-        const removed = await repo.removeBoardGrant(boardId, id);
-        if (!removed) throw new BadRequest(`Board group grant not found: ${id}`);
-        return removed;
-      },
-    },
-    { methods: [...BOARD_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS] }
-  );
-
-  app.service('boards/:id/group-grants').hooks({
-    before: {
-      find: [requireAuthorizedBoardRoute(boardRepo, 'view', 'view board group grants')],
-      create: [requireAuthorizedBoardRoute(boardRepo, 'mutate', 'manage board group grants')],
-      patch: [requireAuthorizedBoardRoute(boardRepo, 'mutate', 'manage board group grants')],
-      remove: [requireAuthorizedBoardRoute(boardRepo, 'mutate', 'manage board group grants')],
-    },
-  });
-}
-
 export function setupBranchEffectiveAccessService(
   app: import('@agor/core/feathers').Application,
-  branchRepo: BranchRepository
+  branchRepo: BranchRepository,
+  options: { allowSuperadmin?: boolean } = {}
 ) {
   app.use(
     'branches/:id/effective-access',
@@ -451,16 +217,11 @@ export function setupBranchEffectiveAccessService(
         const branch = await branchRepo.findById(branchId);
         if (!branch) throw new BadRequest(`Branch not found: ${branchId}`);
 
-        if (hasMinimumRole(user.role, ROLES.ADMIN)) {
+        if (isSuperAdmin(user.role, options.allowSuperadmin ?? true)) {
           return { can: 'all', is_owner: false, source: 'superadmin' };
         }
 
         const userId = user.user_id as UserID;
-        const isOwner = await branchRepo.isOwner(branch.branch_id as BranchID, userId);
-        if (isOwner) {
-          return { can: 'all', is_owner: true, source: 'owner' };
-        }
-
         const effective = await branchRepo.resolveUserAccess(branch, userId);
         const can = effective.can;
 

@@ -199,6 +199,16 @@ export class TerminalsService {
     // terminal acknowledgement must not be a branch-existence oracle.
     if (!branch) throw new NotFound('Branch not found');
     if (branch.archived) throw new BadRequest(`Branch is archived: ${branch.name}`);
+    let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
+    if (enforceBranchAccess) {
+      const access = await this.withTenantDatabase((tenantDb) =>
+        new BranchRepository(tenantDb).resolveUserAccess(branch, userId)
+      );
+      principalBranchAccess = access.fs_access ?? 'none';
+      if (principalBranchAccess === 'none') {
+        throw new Forbidden('Filesystem access is required to open a terminal on this branch.');
+      }
+    }
 
     const scopeKey = `${tenantId}:${userId}:${branch.branch_id}`;
     const pending = this.starting.get(scopeKey);
@@ -231,6 +241,7 @@ export class TerminalsService {
         config,
         scopeKey,
         joinRequestingSocket,
+        principalBranchAccess,
       });
     } finally {
       if (this.starting.get(scopeKey) === reservation) this.starting.delete(scopeKey);
@@ -246,8 +257,18 @@ export class TerminalsService {
     config: AgorConfig;
     scopeKey: string;
     joinRequestingSocket: (channel: string, allocation: TerminalAllocatedEvent) => Promise<boolean>;
+    principalBranchAccess: 'write' | 'read' | 'none';
   }): Promise<TerminalAttachment> {
-    const { tenantId, userId, branch, data, config, scopeKey, joinRequestingSocket } = args;
+    const {
+      tenantId,
+      userId,
+      branch,
+      data,
+      config,
+      scopeKey,
+      joinRequestingSocket,
+      principalBranchAccess,
+    } = args;
     const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
     const user = await this.withTenantDatabase((tenantDb) =>
       new UsersRepository(tenantDb).findById(userId)
@@ -264,14 +285,12 @@ export class TerminalsService {
     // (they opened the shell), so the per-user home overlay + RBAC branch mount
     // key off `userId` — unlike prompts, which key off session.created_by.
     const sandboxCfg = config.execution?.sandbox;
-    const rbacOn = config.execution?.branch_rbac === true;
     let sandboxHomeStore: string | undefined;
     let sandboxBaseRepoPath: string | undefined;
     const sandboxWorktreesRoot =
       sandboxCfg?.enabled === true
         ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
         : undefined;
-    let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
     if (sandboxCfg?.enabled === true) {
       // Only linked worktrees need the shared git dir bound in. A clone-mode
       // branch carries its own `.git` — EXCEPT for its object store when it was
@@ -285,18 +304,6 @@ export class TerminalsService {
             .findById(branch.repo_id)
             .then((r) => r?.local_path ?? undefined)
         );
-      }
-      if (rbacOn) {
-        const access = await this.withTenantDatabase((tenantDb) =>
-          new BranchRepository(tenantDb).resolveUserAccess(branch, userId)
-        );
-        principalBranchAccess =
-          access.fs_access === 'write' ? 'write' : access.fs_access === 'read' ? 'read' : 'none';
-        if (principalBranchAccess === 'none') {
-          throw new Forbidden(
-            'You have no filesystem access to this branch; cannot open a sandboxed terminal on it.'
-          );
-        }
       }
       if (sandboxCfg.home_mode === 'per_user') {
         sandboxHomeStore = resolveOwnerHomeStore({
@@ -378,6 +385,9 @@ export class TerminalsService {
           templateVariables: {
             unix_user: delegatedHome.delegatedHomeKey || undefined,
             executor_type: 'shell',
+            user_id: userId,
+            branch_id: branch.branch_id,
+            branch_fs_access: principalBranchAccess,
           },
           onExit: () => this.handleExecutorExit(terminalId, userId),
         }

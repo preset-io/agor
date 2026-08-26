@@ -48,7 +48,6 @@ describe('CopilotPromptService MCP identity scoping', () => {
       'session-1',
       expect.objectContaining({
         forUserId: 'task-creator',
-        sessionOwnerId: 'session-owner',
       }),
       { toolFiltering: 'intercept' }
     );

@@ -1,0 +1,1082 @@
+import type {
+  BoardCapabilityPolicies,
+  BoardID,
+  BranchCapabilityPolicy,
+  BranchID,
+  BranchPermissionConfig,
+  BranchSessionSharingOwnerRule,
+  CapabilityPolicy,
+  CapabilityPolicyCapability,
+  CapabilityPolicyEntry,
+  CapabilityPolicyFsAccess,
+  CapabilityPolicyPresetId,
+  CapabilityPolicyPrincipalRef,
+  CapabilityPolicyWorkspacePreferences,
+  EffectiveCapabilityPolicyAccess,
+  GroupID,
+  SessionPromptAuthority,
+  UserID,
+  UUID,
+} from '@agor/core/types';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
+import { generateId } from '../../lib/ids';
+import {
+  CAPABILITY_POLICY_SCHEMA_VERSION,
+  capabilityPolicyPresetCapabilities,
+  resolveCapabilityPolicyAccess,
+  validateBranchSessionSharingDraft,
+  validateCapabilityPolicyDraft,
+} from '../../types/capability-policy';
+import type { Database } from '../client';
+import { deleteFrom, insert, runDatabaseTransaction, select, update } from '../database-wrapper';
+import {
+  appVariables,
+  boardAccessEntries,
+  boardAccessPolicies,
+  boards,
+  branches,
+  branchPermissionConfigs,
+  branchPermissionEntries,
+  branchSessionSharingGrants,
+  branchSessionSharingRules,
+  groupMemberships,
+  groups,
+  users,
+} from '../schema';
+import { currentTenantInsert, EntityNotFoundError, RepositoryError } from './base';
+
+const EMPTY_BOARD_POLICY: CapabilityPolicy = {
+  schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
+  policy_kind: 'board_access',
+  sharing_mode: 'private',
+  entries: [],
+  others: { preset: 'none', capabilities: [], fs_access: 'none' },
+};
+
+const EMPTY_BRANCH_CONFIG: BranchPermissionConfig = {
+  access: {
+    schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
+    policy_kind: 'branch_access',
+    sharing_mode: 'private',
+    entries: [],
+    others: { preset: 'none', capabilities: [], fs_access: 'none' },
+  },
+  session_sharing: { owner_rules: [] },
+};
+
+const WORKSPACE_PREFERENCES_NAMESPACE = 'workspace_preferences';
+const PERSONAL_SESSION_SHARING_KEY = 'personal_session_sharing_enabled';
+
+function assertPolicy(policy: CapabilityPolicy, kind: CapabilityPolicy['policy_kind']): void {
+  if (policy.schema_version !== CAPABILITY_POLICY_SCHEMA_VERSION || policy.policy_kind !== kind) {
+    throw new RepositoryError(`Expected ${kind} capability policy schema version 1`);
+  }
+  const issues = validateCapabilityPolicyDraft(policy);
+  if (issues.length > 0) throw new RepositoryError(issues.map((issue) => issue.message).join(' '));
+}
+
+function assertConfig(config: BranchPermissionConfig): void {
+  assertPolicy(config.access, 'branch_access');
+  const issues = validateBranchSessionSharingDraft(config.session_sharing);
+  if (issues.length > 0) throw new RepositoryError(issues.map((issue) => issue.message).join(' '));
+}
+
+function rowPrincipal(row: {
+  user_id: string | null;
+  group_id: string | null;
+}): CapabilityPolicyPrincipalRef {
+  if (row.user_id && !row.group_id) {
+    return { principal_type: 'user', user_id: row.user_id as UserID };
+  }
+  if (row.group_id && !row.user_id) {
+    return { principal_type: 'group', group_id: row.group_id as GroupID };
+  }
+  throw new RepositoryError('Capability entry must reference exactly one user or group');
+}
+
+function entryInsert(entry: CapabilityPolicyEntry, now: Date) {
+  const principal = entry.principal;
+  return {
+    // Entry IDs are row-local implementation details, not stable API
+    // identities. Mint them server-side so copying a board template into a
+    // branch override cannot collide with the source config's primary keys.
+    entry_id: generateId(),
+    user_id: principal.principal_type === 'user' ? principal.user_id : null,
+    group_id: principal.principal_type === 'group' ? principal.group_id : null,
+    preset: entry.preset,
+    capabilities: entry.capabilities,
+    created_at: now,
+    updated_at: now,
+  };
+}
+
+function legacyCan(access: EffectiveCapabilityPolicyAccess): 'none' | 'view' | 'session' | 'all' {
+  if (access.capabilities.includes('branch.policy.manage')) return 'all';
+  if (
+    access.capabilities.includes('sessions.create') &&
+    access.capabilities.includes('sessions.prompt_own')
+  ) {
+    return 'session';
+  }
+  return access.capabilities.includes('branch.view') ? 'view' : 'none';
+}
+
+function policyPrincipalIds(policy: CapabilityPolicy): { userIds: string[]; groupIds: string[] } {
+  const userIds: string[] = [];
+  const groupIds: string[] = [];
+  for (const entry of policy.entries) {
+    if (entry.principal.principal_type === 'user') userIds.push(entry.principal.user_id);
+    else groupIds.push(entry.principal.group_id);
+  }
+  return { userIds, groupIds };
+}
+
+async function assertPrincipalsExist(
+  db: Database,
+  policies: CapabilityPolicy[],
+  ownerRules: BranchSessionSharingOwnerRule[]
+): Promise<void> {
+  const userIds = new Set<string>();
+  const groupIds = new Set<string>();
+  for (const policy of policies) {
+    const ids = policyPrincipalIds(policy);
+    for (const id of ids.userIds) userIds.add(id);
+    for (const id of ids.groupIds) groupIds.add(id);
+  }
+  for (const rule of ownerRules) {
+    userIds.add(rule.session_owner_user_id);
+    for (const grant of rule.grantees) {
+      if (grant.principal.principal_type === 'user') userIds.add(grant.principal.user_id);
+      else groupIds.add(grant.principal.group_id);
+    }
+  }
+
+  if (userIds.size > 0) {
+    const rows = await select(db, { user_id: users.user_id })
+      .from(users)
+      .where(inArray(users.user_id, [...userIds]))
+      .all();
+    if (rows.length !== userIds.size) {
+      throw new RepositoryError('Every permission user must be an existing workspace member');
+    }
+  }
+  if (groupIds.size > 0) {
+    const rows = await select(db, { group_id: groups.group_id })
+      .from(groups)
+      .where(inArray(groups.group_id, [...groupIds]))
+      .all();
+    if (rows.length !== groupIds.size) {
+      throw new RepositoryError('Every permission group must belong to this workspace');
+    }
+  }
+}
+
+export class CapabilityPolicyRepository {
+  constructor(private db: Database) {}
+
+  private initialBoardPolicies(
+    ownerId: UserID,
+    options: {
+      shared?: boolean;
+      defaultOthersCan?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+      defaultOthersFsAccess?: CapabilityPolicyFsAccess;
+    }
+  ): BoardCapabilityPolicies {
+    const shared = options.shared === true;
+    const defaultPreset =
+      options.defaultOthersCan === 'none'
+        ? 'none'
+        : options.defaultOthersCan === 'view'
+          ? 'viewer'
+          : options.defaultOthersCan === 'all'
+            ? 'manager'
+            : 'collaborator';
+    const defaultFsAccess =
+      defaultPreset === 'none' ? 'none' : (options.defaultOthersFsAccess ?? 'read');
+    const boardPolicy: CapabilityPolicy = shared
+      ? {
+          ...EMPTY_BOARD_POLICY,
+          sharing_mode: 'shared',
+          others: { preset: 'viewer', capabilities: ['board.view'], fs_access: 'none' },
+        }
+      : EMPTY_BOARD_POLICY;
+    const branchConfig: BranchPermissionConfig = shared
+      ? {
+          ...EMPTY_BRANCH_CONFIG,
+          access: {
+            ...EMPTY_BRANCH_CONFIG.access,
+            sharing_mode: 'shared',
+            others: {
+              preset: defaultPreset,
+              capabilities:
+                capabilityPolicyPresetCapabilities(
+                  'branch_access',
+                  defaultPreset,
+                  defaultFsAccess
+                ) ?? [],
+              fs_access: defaultFsAccess,
+            },
+          },
+        }
+      : EMPTY_BRANCH_CONFIG;
+    return {
+      primary_owner_user_id: ownerId,
+      board_access_revision: 0,
+      branch_template_revision: 0,
+      board_access: boardPolicy,
+      branch_template: branchConfig,
+    };
+  }
+
+  /**
+   * Create the two mandatory board policies on an existing transaction.
+   * BoardRepository uses this so a board can never become visible without its
+   * corresponding authorization rows (or vice versa).
+   */
+  async initializeBoardInTransaction(
+    tx: Database,
+    boardId: BoardID,
+    ownerId: UserID,
+    options: {
+      shared?: boolean;
+      defaultOthersCan?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+      defaultOthersFsAccess?: CapabilityPolicyFsAccess;
+    } = {}
+  ): Promise<void> {
+    const value = this.initialBoardPolicies(ownerId, options);
+    const board = await select(tx, { owner: boards.primary_owner_user_id })
+      .from(boards)
+      .where(eq(boards.board_id, boardId))
+      .one();
+    if (!board) throw new EntityNotFoundError('Board', boardId);
+    if (board.owner !== ownerId) throw new RepositoryError('Primary ownership is immutable');
+
+    const now = new Date();
+    await insert(tx, boardAccessPolicies)
+      .values({
+        ...currentTenantInsert(),
+        board_id: boardId,
+        schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
+        sharing_mode: value.board_access.sharing_mode,
+        others_preset: value.board_access.others.preset,
+        others_capabilities: value.board_access.others.capabilities,
+        revision: 1,
+        // The resource's created_by field is the authoritative creation audit.
+        // Keep this nullable because low-level imports may preserve a logical
+        // owner whose user row is materialized separately.
+        updated_by: null,
+        created_at: now,
+        updated_at: now,
+      })
+      .run();
+    await this.writeBranchConfig(tx, { board_id: boardId }, value.branch_template, null);
+  }
+
+  async initializeBoard(
+    boardId: BoardID,
+    ownerId: UserID,
+    options: {
+      shared?: boolean;
+      defaultOthersCan?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+      defaultOthersFsAccess?: CapabilityPolicyFsAccess;
+    } = {}
+  ): Promise<void> {
+    await runDatabaseTransaction(
+      this.db,
+      (tx) => this.initializeBoardInTransaction(tx, boardId, ownerId, options),
+      { sqliteImmediate: true }
+    );
+  }
+
+  /** Create a branch override inside the branch insert transaction. */
+  async initializeBranchOverrideInTransaction(
+    tx: Database,
+    branchId: BranchID,
+    ownerId: UserID,
+    options: {
+      othersCan?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+      othersFsAccess?: CapabilityPolicyFsAccess;
+    } = {}
+  ): Promise<void> {
+    const branch = await select(tx, { owner: branches.primary_owner_user_id })
+      .from(branches)
+      .where(eq(branches.branch_id, branchId))
+      .one();
+    if (!branch) throw new EntityNotFoundError('Branch', branchId);
+    if (branch.owner !== ownerId) throw new RepositoryError('Primary ownership is immutable');
+    const preset =
+      options.othersCan === 'view'
+        ? 'viewer'
+        : options.othersCan === 'all'
+          ? 'manager'
+          : options.othersCan === 'session' || options.othersCan === 'prompt'
+            ? 'collaborator'
+            : 'none';
+    const fsAccess = preset === 'none' ? 'none' : (options.othersFsAccess ?? 'read');
+    const config: BranchPermissionConfig =
+      preset === 'none'
+        ? EMPTY_BRANCH_CONFIG
+        : {
+            access: {
+              ...EMPTY_BRANCH_CONFIG.access,
+              sharing_mode: 'shared',
+              others: {
+                preset,
+                capabilities:
+                  capabilityPolicyPresetCapabilities('branch_access', preset, fsAccess) ?? [],
+                fs_access: fsAccess,
+              },
+            },
+            // Legacy cross-user prompt permission is deliberately not
+            // reproduced: no owner-authored grantees can be inferred here.
+            session_sharing: { owner_rules: [] },
+          };
+    await this.writeBranchConfig(tx, { branch_id: branchId }, config, null);
+  }
+
+  async initializeBranchOverride(
+    branchId: BranchID,
+    ownerId: UserID,
+    options: {
+      othersCan?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+      othersFsAccess?: CapabilityPolicyFsAccess;
+    } = {}
+  ): Promise<void> {
+    await runDatabaseTransaction(
+      this.db,
+      (tx) => this.initializeBranchOverrideInTransaction(tx, branchId, ownerId, options),
+      { sqliteImmediate: true }
+    );
+  }
+
+  private async loadPolicyEntries(
+    kind: 'board' | 'branch',
+    id: string
+  ): Promise<CapabilityPolicyEntry[]> {
+    if (kind === 'board') {
+      const rows = await select(this.db)
+        .from(boardAccessEntries)
+        .where(eq(boardAccessEntries.board_id, id))
+        .all();
+      return rows.map(
+        (row: {
+          entry_id: string;
+          user_id: string | null;
+          group_id: string | null;
+          preset: string;
+          capabilities: unknown;
+        }) => ({
+          entry_id: row.entry_id as UUID,
+          principal: rowPrincipal(row),
+          preset: row.preset as CapabilityPolicyPresetId,
+          capabilities: row.capabilities as CapabilityPolicyCapability[],
+          fs_access: 'none',
+        })
+      );
+    }
+    const rows = await select(this.db)
+      .from(branchPermissionEntries)
+      .where(eq(branchPermissionEntries.config_id, id))
+      .all();
+    return rows.map(
+      (row: {
+        entry_id: string;
+        user_id: string | null;
+        group_id: string | null;
+        preset: string;
+        capabilities: unknown;
+        fs_access: string;
+      }) => ({
+        entry_id: row.entry_id as UUID,
+        principal: rowPrincipal(row),
+        preset: row.preset as CapabilityPolicyPresetId,
+        capabilities: row.capabilities as CapabilityPolicyCapability[],
+        fs_access: row.fs_access as CapabilityPolicyFsAccess,
+      })
+    );
+  }
+
+  private async loadBranchConfig(configId: string): Promise<BranchPermissionConfig> {
+    const row = await select(this.db)
+      .from(branchPermissionConfigs)
+      .where(eq(branchPermissionConfigs.config_id, configId))
+      .one();
+    if (!row) throw new RepositoryError(`Missing branch permission config ${configId}`);
+    const entries = await this.loadPolicyEntries('branch', configId);
+    const ruleRows = await select(this.db)
+      .from(branchSessionSharingRules)
+      .where(eq(branchSessionSharingRules.config_id, configId))
+      .all();
+    const grantRows = await select(this.db)
+      .from(branchSessionSharingGrants)
+      .where(eq(branchSessionSharingGrants.config_id, configId))
+      .all();
+    const owner_rules: BranchSessionSharingOwnerRule[] = ruleRows.map(
+      (rule: { session_owner_user_id: string; enabled: boolean }) => ({
+        session_owner_user_id: rule.session_owner_user_id as UserID,
+        enabled: Boolean(rule.enabled),
+        grantees: grantRows
+          .filter(
+            (grant: { session_owner_user_id: string }) =>
+              grant.session_owner_user_id === rule.session_owner_user_id
+          )
+          .map((grant: { grant_id: string; user_id: string | null; group_id: string | null }) => ({
+            grant_id: grant.grant_id as UUID,
+            principal: rowPrincipal(grant),
+          })),
+      })
+    );
+    return {
+      access: {
+        schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
+        policy_kind: 'branch_access',
+        sharing_mode: row.sharing_mode as CapabilityPolicy['sharing_mode'],
+        entries,
+        others: {
+          preset: row.others_preset as CapabilityPolicyPresetId,
+          capabilities: row.others_capabilities as CapabilityPolicyCapability[],
+          fs_access: row.others_fs_access as CapabilityPolicyFsAccess,
+        },
+      },
+      session_sharing: { owner_rules },
+    };
+  }
+
+  async getBoardPolicies(boardId: BoardID): Promise<BoardCapabilityPolicies> {
+    const board = await select(this.db, {
+      board_id: boards.board_id,
+      primary_owner_user_id: boards.primary_owner_user_id,
+    })
+      .from(boards)
+      .where(eq(boards.board_id, boardId))
+      .one();
+    if (!board) throw new EntityNotFoundError('Board', boardId);
+    const policy = await select(this.db)
+      .from(boardAccessPolicies)
+      .where(eq(boardAccessPolicies.board_id, boardId))
+      .one();
+    const template = await select(this.db)
+      .from(branchPermissionConfigs)
+      .where(eq(branchPermissionConfigs.board_id, boardId))
+      .one();
+    if (!policy || !template)
+      throw new RepositoryError(`Board ${boardId} has no capability policy`);
+    return {
+      primary_owner_user_id: board.primary_owner_user_id as UserID,
+      board_access_revision: policy.revision,
+      branch_template_revision: template.revision,
+      board_access: {
+        schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
+        policy_kind: 'board_access',
+        sharing_mode: policy.sharing_mode as CapabilityPolicy['sharing_mode'],
+        entries: await this.loadPolicyEntries('board', boardId),
+        others: {
+          preset: policy.others_preset as CapabilityPolicyPresetId,
+          capabilities: policy.others_capabilities as CapabilityPolicyCapability[],
+          fs_access: 'none',
+        },
+      },
+      branch_template: await this.loadBranchConfig(template.config_id),
+    };
+  }
+
+  async getBranchPolicy(branchId: BranchID): Promise<BranchCapabilityPolicy> {
+    const branch = await select(this.db, {
+      branch_id: branches.branch_id,
+      board_id: branches.board_id,
+      primary_owner_user_id: branches.primary_owner_user_id,
+      permission_binding: branches.permission_binding,
+    })
+      .from(branches)
+      .where(eq(branches.branch_id, branchId))
+      .one();
+    if (!branch) throw new EntityNotFoundError('Branch', branchId);
+    if (branch.permission_binding === 'inherit') {
+      if (!branch.board_id) throw new RepositoryError('An inherited branch must belong to a board');
+      const template = await select(this.db)
+        .from(branchPermissionConfigs)
+        .where(eq(branchPermissionConfigs.board_id, branch.board_id))
+        .one();
+      if (!template) throw new RepositoryError(`Board ${branch.board_id} has no branch template`);
+      return {
+        primary_owner_user_id: branch.primary_owner_user_id as UserID,
+        revision: template.revision,
+        binding_mode: 'inherit',
+        inherited_from_board_id: branch.board_id as BoardID,
+        inherited_config: await this.loadBranchConfig(template.config_id),
+      };
+    }
+    const override = await select(this.db)
+      .from(branchPermissionConfigs)
+      .where(eq(branchPermissionConfigs.branch_id, branchId))
+      .one();
+    if (!override) throw new RepositoryError(`Branch ${branchId} has no override policy`);
+    return {
+      primary_owner_user_id: branch.primary_owner_user_id as UserID,
+      revision: override.revision,
+      binding_mode: 'override',
+      inherited_from_board_id: (branch.board_id as BoardID | null) ?? undefined,
+      inherited_config: branch.board_id
+        ? await this.loadBoardTemplateIfPresent(branch.board_id)
+        : undefined,
+      override_config: await this.loadBranchConfig(override.config_id),
+    };
+  }
+
+  private async loadBoardTemplateIfPresent(
+    boardId: string
+  ): Promise<BranchPermissionConfig | undefined> {
+    const row = await select(this.db)
+      .from(branchPermissionConfigs)
+      .where(eq(branchPermissionConfigs.board_id, boardId))
+      .one();
+    return row ? this.loadBranchConfig(row.config_id) : undefined;
+  }
+
+  private async writeBranchConfig(
+    tx: Database,
+    target: { board_id?: BoardID; branch_id?: BranchID },
+    config: BranchPermissionConfig,
+    actorId: UserID | null,
+    existingConfigId?: string
+  ): Promise<string> {
+    assertConfig(config);
+    const now = new Date();
+    const configId = existingConfigId ?? generateId();
+    if (existingConfigId) {
+      await update(tx, branchPermissionConfigs)
+        .set({
+          sharing_mode: config.access.sharing_mode,
+          others_preset: config.access.others.preset,
+          others_capabilities: config.access.others.capabilities,
+          others_fs_access: config.access.others.fs_access,
+          revision: sql`${branchPermissionConfigs.revision} + 1`,
+          updated_by: actorId,
+          updated_at: now,
+        })
+        .where(eq(branchPermissionConfigs.config_id, configId))
+        .run();
+      await deleteFrom(tx, branchPermissionEntries)
+        .where(eq(branchPermissionEntries.config_id, configId))
+        .run();
+      await deleteFrom(tx, branchSessionSharingRules)
+        .where(eq(branchSessionSharingRules.config_id, configId))
+        .run();
+    } else {
+      await insert(tx, branchPermissionConfigs)
+        .values({
+          ...currentTenantInsert(),
+          config_id: configId,
+          board_id: target.board_id ?? null,
+          branch_id: target.branch_id ?? null,
+          schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
+          sharing_mode: config.access.sharing_mode,
+          others_preset: config.access.others.preset,
+          others_capabilities: config.access.others.capabilities,
+          others_fs_access: config.access.others.fs_access,
+          revision: 1,
+          updated_by: actorId,
+          created_at: now,
+          updated_at: now,
+        })
+        .run();
+    }
+    if (config.access.entries.length > 0) {
+      await insert(tx, branchPermissionEntries)
+        .values(
+          config.access.entries.map((entry) => ({
+            ...currentTenantInsert(),
+            ...entryInsert(entry, now),
+            config_id: configId,
+            fs_access: entry.fs_access,
+          }))
+        )
+        .run();
+    }
+    for (const rule of config.session_sharing.owner_rules) {
+      await insert(tx, branchSessionSharingRules)
+        .values({
+          ...currentTenantInsert(),
+          config_id: configId,
+          session_owner_user_id: rule.session_owner_user_id,
+          enabled: rule.enabled,
+          updated_at: now,
+        })
+        .run();
+      if (rule.grantees.length > 0) {
+        await insert(tx, branchSessionSharingGrants)
+          .values(
+            rule.grantees.map((grant) => ({
+              ...currentTenantInsert(),
+              // Copied templates likewise need distinct sharing-grant row IDs.
+              grant_id: generateId(),
+              config_id: configId,
+              session_owner_user_id: rule.session_owner_user_id,
+              user_id: grant.principal.principal_type === 'user' ? grant.principal.user_id : null,
+              group_id:
+                grant.principal.principal_type === 'group' ? grant.principal.group_id : null,
+              created_at: now,
+            }))
+          )
+          .run();
+      }
+    }
+    return configId;
+  }
+
+  async replaceBoardPolicies(
+    boardId: BoardID,
+    value: BoardCapabilityPolicies,
+    actorId: UserID,
+    options: { initialize?: boolean } = {}
+  ): Promise<BoardCapabilityPolicies> {
+    assertPolicy(value.board_access, 'board_access');
+    assertConfig(value.branch_template);
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        await assertPrincipalsExist(
+          tx,
+          [value.board_access, value.branch_template.access],
+          value.branch_template.session_sharing.owner_rules
+        );
+        const board = await select(tx, { owner: boards.primary_owner_user_id })
+          .from(boards)
+          .where(eq(boards.board_id, boardId))
+          .one();
+        if (!board) throw new EntityNotFoundError('Board', boardId);
+        if (board.owner !== value.primary_owner_user_id)
+          throw new RepositoryError('Primary ownership is immutable');
+        const now = new Date();
+        const currentPolicy = await select(tx)
+          .from(boardAccessPolicies)
+          .where(eq(boardAccessPolicies.board_id, boardId))
+          .one();
+        if (currentPolicy) {
+          if (!options.initialize && value.board_access_revision !== currentPolicy.revision) {
+            throw new RepositoryError('Board access policy changed; reload before saving');
+          }
+          await update(tx, boardAccessPolicies)
+            .set({
+              sharing_mode: value.board_access.sharing_mode,
+              others_preset: value.board_access.others.preset,
+              others_capabilities: value.board_access.others.capabilities,
+              revision: currentPolicy.revision + 1,
+              updated_by: actorId,
+              updated_at: now,
+            })
+            .where(eq(boardAccessPolicies.board_id, boardId))
+            .run();
+          await deleteFrom(tx, boardAccessEntries)
+            .where(eq(boardAccessEntries.board_id, boardId))
+            .run();
+        } else {
+          if (!options.initialize)
+            throw new RepositoryError(`Board ${boardId} has no capability policy`);
+          await insert(tx, boardAccessPolicies)
+            .values({
+              ...currentTenantInsert(),
+              board_id: boardId,
+              schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
+              sharing_mode: value.board_access.sharing_mode,
+              others_preset: value.board_access.others.preset,
+              others_capabilities: value.board_access.others.capabilities,
+              revision: 1,
+              updated_by: actorId,
+              created_at: now,
+              updated_at: now,
+            })
+            .run();
+        }
+        if (value.board_access.entries.length > 0) {
+          await insert(tx, boardAccessEntries)
+            .values(
+              value.board_access.entries.map((entry) => ({
+                ...currentTenantInsert(),
+                ...entryInsert(entry, now),
+                board_id: boardId,
+              }))
+            )
+            .run();
+        }
+        const currentTemplate = await select(tx)
+          .from(branchPermissionConfigs)
+          .where(eq(branchPermissionConfigs.board_id, boardId))
+          .one();
+        if (
+          currentTemplate &&
+          !options.initialize &&
+          value.branch_template_revision !== currentTemplate.revision
+        ) {
+          throw new RepositoryError('Board branch defaults changed; reload before saving');
+        }
+        await this.writeBranchConfig(
+          tx,
+          { board_id: boardId },
+          value.branch_template,
+          actorId,
+          currentTemplate?.config_id
+        );
+      },
+      { sqliteImmediate: true }
+    );
+    return this.getBoardPolicies(boardId);
+  }
+
+  async replaceBranchPolicy(
+    branchId: BranchID,
+    value: BranchCapabilityPolicy,
+    actorId: UserID,
+    options: { initialize?: boolean } = {}
+  ): Promise<BranchCapabilityPolicy> {
+    await runDatabaseTransaction(
+      this.db,
+      async (tx) => {
+        const submittedConfig =
+          value.binding_mode === 'override' ? value.override_config : value.inherited_config;
+        if (submittedConfig) {
+          await assertPrincipalsExist(
+            tx,
+            [submittedConfig.access],
+            submittedConfig.session_sharing.owner_rules
+          );
+        }
+        const branch = await select(tx, {
+          owner: branches.primary_owner_user_id,
+          board_id: branches.board_id,
+          permission_binding: branches.permission_binding,
+        })
+          .from(branches)
+          .where(eq(branches.branch_id, branchId))
+          .one();
+        if (!branch) throw new EntityNotFoundError('Branch', branchId);
+        if (branch.owner !== value.primary_owner_user_id)
+          throw new RepositoryError('Primary ownership is immutable');
+        if (value.binding_mode === 'inherit' && !branch.board_id) {
+          throw new RepositoryError('A branch without a board cannot inherit permissions');
+        }
+        const current = await select(tx)
+          .from(branchPermissionConfigs)
+          .where(eq(branchPermissionConfigs.branch_id, branchId))
+          .one();
+        if (value.binding_mode === 'inherit') {
+          const template = await select(tx)
+            .from(branchPermissionConfigs)
+            .where(eq(branchPermissionConfigs.board_id, branch.board_id!))
+            .one();
+          if (!template) {
+            throw new RepositoryError(`Board ${branch.board_id} has no branch template`);
+          }
+          if (
+            !options.initialize &&
+            branch.permission_binding === 'inherit' &&
+            value.revision !== template.revision
+          ) {
+            throw new RepositoryError('Board branch defaults changed; reload before saving');
+          }
+          await update(tx, branches)
+            .set({ permission_binding: 'inherit' })
+            .where(eq(branches.branch_id, branchId))
+            .run();
+          if (current)
+            await deleteFrom(tx, branchPermissionConfigs)
+              .where(eq(branchPermissionConfigs.config_id, current.config_id))
+              .run();
+          return;
+        }
+        const config = value.override_config ?? value.inherited_config;
+        if (!config)
+          throw new RepositoryError('Override mode requires a complete permission config');
+        if (current && !options.initialize && value.revision !== current.revision) {
+          throw new RepositoryError('Branch permissions changed; reload before saving');
+        }
+        if (!current && !options.initialize && value.override_config == null) {
+          throw new RepositoryError('Override mode requires a complete permission config');
+        }
+        if (!current && !options.initialize && branch.board_id) {
+          const template = await select(tx)
+            .from(branchPermissionConfigs)
+            .where(eq(branchPermissionConfigs.board_id, branch.board_id))
+            .one();
+          if (!template) {
+            throw new RepositoryError(`Board ${branch.board_id} has no branch template`);
+          }
+          if (value.revision !== template.revision) {
+            throw new RepositoryError('Board branch defaults changed; reload before overriding');
+          }
+        }
+        await update(tx, branches)
+          .set({ permission_binding: 'override' })
+          .where(eq(branches.branch_id, branchId))
+          .run();
+        await this.writeBranchConfig(
+          tx,
+          { branch_id: branchId },
+          config,
+          actorId,
+          current?.config_id
+        );
+      },
+      { sqliteImmediate: true }
+    );
+    return this.getBranchPolicy(branchId);
+  }
+
+  /**
+   * Preserve branch authorization when a board is hard-deleted.
+   *
+   * An inherited branch cannot outlive its template. Before the board row is
+   * removed (which clears branches.board_id), materialize the complete current
+   * template — access plus every owner-authored sharing rule — as an override
+   * for each inherited branch. The caller must run this in the same transaction
+   * as the board delete.
+   */
+  async materializeInheritedBranchesBeforeBoardDeleteInTransaction(
+    tx: Database,
+    boardId: BoardID,
+    actorId: UserID | null = null
+  ): Promise<number> {
+    const scoped = new CapabilityPolicyRepository(tx);
+    const template = await select(tx)
+      .from(branchPermissionConfigs)
+      .where(eq(branchPermissionConfigs.board_id, boardId))
+      .one();
+    if (!template) throw new RepositoryError(`Board ${boardId} has no branch template`);
+    const config = await scoped.loadBranchConfig(template.config_id);
+    const inherited = await select(tx, { branch_id: branches.branch_id })
+      .from(branches)
+      .where(and(eq(branches.board_id, boardId), eq(branches.permission_binding, 'inherit')))
+      .all();
+
+    for (const branch of inherited) {
+      const existing = await select(tx, { config_id: branchPermissionConfigs.config_id })
+        .from(branchPermissionConfigs)
+        .where(eq(branchPermissionConfigs.branch_id, branch.branch_id))
+        .one();
+      await scoped.writeBranchConfig(
+        tx,
+        { branch_id: branch.branch_id as BranchID },
+        structuredClone(config),
+        actorId,
+        existing?.config_id
+      );
+      await update(tx, branches)
+        .set({ permission_binding: 'override', permission_source: 'override' })
+        .where(eq(branches.branch_id, branch.branch_id))
+        .run();
+    }
+    return inherited.length;
+  }
+
+  async resolveBoardAccess(
+    boardId: BoardID,
+    userId: UserID
+  ): Promise<EffectiveCapabilityPolicyAccess> {
+    const value = await this.getBoardPolicies(boardId);
+    const groupIds = await this.activeGroupIds(userId);
+    return resolveCapabilityPolicyAccess({
+      policy: value.board_access,
+      primary_owner_user_id: value.primary_owner_user_id,
+      user_id: userId,
+      active_group_ids: groupIds,
+    });
+  }
+
+  async resolveBranchAccess(
+    branchId: BranchID,
+    userId: UserID
+  ): Promise<EffectiveCapabilityPolicyAccess> {
+    const value = await this.getBranchPolicy(branchId);
+    const config =
+      value.binding_mode === 'inherit' ? value.inherited_config : value.override_config;
+    if (!config) throw new RepositoryError(`Branch ${branchId} has no effective permission config`);
+    return resolveCapabilityPolicyAccess({
+      policy: config.access,
+      primary_owner_user_id: value.primary_owner_user_id,
+      user_id: userId,
+      active_group_ids: await this.activeGroupIds(userId),
+    });
+  }
+
+  async resolveLegacyBranchAccess(branchId: BranchID, userId: UserID) {
+    const access = await this.resolveBranchAccess(branchId, userId);
+    return {
+      can: legacyCan(access),
+      fs_access: access.fs_access,
+      dangerously_allow_session_sharing: false,
+      is_owner: access.is_primary_owner,
+      source:
+        access.source === 'primary_owner'
+          ? 'owner'
+          : access.source === 'group'
+            ? 'group'
+            : 'others',
+      group_ids: access.group_ids,
+    } as const;
+  }
+
+  private async activeGroupIds(userId: UserID): Promise<GroupID[]> {
+    const rows = await select(this.db, { group_id: groupMemberships.group_id })
+      .from(groupMemberships)
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, groupMemberships.group_id), eq(groups.archived, false))
+      )
+      .where(eq(groupMemberships.user_id, userId))
+      .all();
+    return rows.map((row: { group_id: string }) => row.group_id as GroupID);
+  }
+
+  async getWorkspacePreferences(): Promise<CapabilityPolicyWorkspacePreferences> {
+    const row = await select(this.db, { value_text: appVariables.value_text })
+      .from(appVariables)
+      .where(
+        and(
+          eq(appVariables.namespace, WORKSPACE_PREFERENCES_NAMESPACE),
+          eq(appVariables.key, PERSONAL_SESSION_SHARING_KEY)
+        )
+      )
+      .one();
+    return { personal_session_sharing_enabled: row?.value_text === 'true' };
+  }
+
+  async setWorkspacePreferences(
+    value: CapabilityPolicyWorkspacePreferences,
+    actorId: UserID
+  ): Promise<CapabilityPolicyWorkspacePreferences> {
+    const now = new Date();
+    // Insert-if-absent followed by an atomic update avoids the absent-row race
+    // on both SQLite and PostgreSQL. Concurrent writers have ordinary
+    // last-statement-wins semantics rather than a unique-key failure.
+    await insert(this.db, appVariables)
+      .values({
+        ...currentTenantInsert(),
+        variable_id: generateId(),
+        namespace: WORKSPACE_PREFERENCES_NAMESPACE,
+        key: PERSONAL_SESSION_SHARING_KEY,
+        value_text: 'false',
+        value_encrypted: null,
+        is_encrypted: false,
+        content_type: 'text/plain',
+        metadata: null,
+        updated_by: actorId,
+        created_at: now,
+        updated_at: now,
+      })
+      .onConflictDoNothing()
+      .run();
+    await update(this.db, appVariables)
+      .set({
+        value_text: String(value.personal_session_sharing_enabled),
+        updated_by: actorId,
+        updated_at: now,
+      })
+      .where(
+        and(
+          eq(appVariables.namespace, WORKSPACE_PREFERENCES_NAMESPACE),
+          eq(appVariables.key, PERSONAL_SESSION_SHARING_KEY)
+        )
+      )
+      .run();
+    return value;
+  }
+
+  async resolveSessionPromptAuthority(input: {
+    branch_id: BranchID;
+    caller_user_id: UserID;
+    session_owner_user_id: UserID;
+  }): Promise<SessionPromptAuthority> {
+    const access = await this.resolveBranchAccess(input.branch_id, input.caller_user_id);
+    const canPromptOwn = access.capabilities.includes('sessions.prompt_own');
+    if (input.caller_user_id === input.session_owner_user_id) {
+      return canPromptOwn
+        ? { allowed: true, execution_user_id: input.caller_user_id, source: 'own_session' }
+        : { allowed: false, source: 'denied' };
+    }
+    if (!access.capabilities.includes('sessions.prompt_own')) {
+      return { allowed: false, source: 'denied' };
+    }
+    const preferences = await this.getWorkspacePreferences();
+    if (!preferences.personal_session_sharing_enabled) return { allowed: false, source: 'denied' };
+    const policy = await this.getBranchPolicy(input.branch_id);
+    const config =
+      policy.binding_mode === 'inherit' ? policy.inherited_config : policy.override_config;
+    const rule = config?.session_sharing.owner_rules.find(
+      (candidate) =>
+        candidate.session_owner_user_id === input.session_owner_user_id && candidate.enabled
+    );
+    if (!rule) return { allowed: false, source: 'denied' };
+    const callerGroups = new Set(await this.activeGroupIds(input.caller_user_id));
+    const granted = rule.grantees.some((grant) =>
+      grant.principal.principal_type === 'user'
+        ? grant.principal.user_id === input.caller_user_id
+        : callerGroups.has(grant.principal.group_id)
+    );
+    return granted
+      ? {
+          allowed: true,
+          execution_user_id: input.session_owner_user_id,
+          source: 'personal_session_sharing',
+        }
+      : { allowed: false, source: 'denied' };
+  }
+
+  /** Batch read used by inventory/export surfaces that need only private/shared state. */
+  async getBranchSharingModes(
+    branchIds: readonly BranchID[]
+  ): Promise<Map<BranchID, CapabilityPolicy['sharing_mode']>> {
+    if (branchIds.length === 0) return new Map();
+    const branchRows = (await select(this.db, {
+      branch_id: branches.branch_id,
+      board_id: branches.board_id,
+      permission_binding: branches.permission_binding,
+    })
+      .from(branches)
+      .where(inArray(branches.branch_id, [...branchIds]))
+      .all()) as Array<{
+      branch_id: string;
+      board_id: string | null;
+      permission_binding: 'inherit' | 'override';
+    }>;
+    const overrideIds = branchRows
+      .filter((row) => row.permission_binding === 'override')
+      .map((row) => row.branch_id);
+    const boardIds = branchRows
+      .filter((row) => row.permission_binding === 'inherit' && row.board_id)
+      .map((row) => row.board_id as string);
+    const predicates = [
+      ...(overrideIds.length > 0 ? [inArray(branchPermissionConfigs.branch_id, overrideIds)] : []),
+      ...(boardIds.length > 0 ? [inArray(branchPermissionConfigs.board_id, boardIds)] : []),
+    ];
+    if (predicates.length === 0) return new Map();
+    const configRows = (await select(this.db, {
+      branch_id: branchPermissionConfigs.branch_id,
+      board_id: branchPermissionConfigs.board_id,
+      sharing_mode: branchPermissionConfigs.sharing_mode,
+    })
+      .from(branchPermissionConfigs)
+      .where(or(...predicates))
+      .all()) as Array<{
+      branch_id: string | null;
+      board_id: string | null;
+      sharing_mode: CapabilityPolicy['sharing_mode'];
+    }>;
+    const byBranch = new Map(
+      configRows.filter((row) => row.branch_id).map((row) => [row.branch_id!, row.sharing_mode])
+    );
+    const byBoard = new Map(
+      configRows.filter((row) => row.board_id).map((row) => [row.board_id!, row.sharing_mode])
+    );
+    return new Map(
+      branchRows.flatMap((row) => {
+        const mode =
+          row.permission_binding === 'override'
+            ? byBranch.get(row.branch_id)
+            : row.board_id
+              ? byBoard.get(row.board_id)
+              : undefined;
+        return mode ? [[row.branch_id as BranchID, mode as CapabilityPolicy['sharing_mode']]] : [];
+      })
+    );
+  }
+}

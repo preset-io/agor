@@ -10,6 +10,7 @@ import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { BoardsServiceImpl } from '../../declarations.js';
 import { emitServiceEvent } from '../../utils/emit-service-event.js';
+import { boardCapabilityPoliciesSchema } from '../capability-policy-schema.js';
 import {
   mcpListLimit,
   mcpOffset,
@@ -119,6 +120,9 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         await ctx.app.service('boards').get(boardId, ctx.baseServiceParams),
         args.objectTypes as BoardObjectType[] | undefined
       );
+      const permissions = await ctx.app
+        .service('boards/:id/permissions')
+        .find({ ...ctx.baseServiceParams, route: { id: board.board_id } });
 
       const includeEntities = args.includeEntities === true; // default false, opt-in
       if (includeEntities) {
@@ -173,12 +177,13 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
 
         return textResult({
           ...board,
+          permissions,
           entities,
           entities_pagination: { total, limit, skip },
         });
       }
 
-      return textResult(board);
+      return textResult({ ...board, permissions });
     }
   );
 
@@ -250,13 +255,6 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
           'Custom CSS for board canvas animations (@keyframes, animation, background-size, etc.). Rendered in a scoped <style> tag. Dangerous patterns like url(), expression(), @import are blocked.'
         ),
         slug: mcpOptionalString('slug', 'URL-friendly slug (optional)'),
-        defaultOthersCan: z
-          .enum(BRANCH_PERMISSION_LEVELS)
-          .optional()
-          .describe(
-            'Default app-layer permission for non-owners of aligned branches. "none" denies the public fallback; owners and explicit group grants still apply on shared boards.'
-          ),
-        defaultOthersFsAccess: z.enum(['none', 'read', 'write']).optional(),
         customContext: z
           .object({})
           .passthrough()
@@ -289,10 +287,6 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
         metadataUpdates.background_color = args.backgroundColor;
       if (args.customCss !== undefined) metadataUpdates.custom_css = args.customCss;
       if (args.slug !== undefined) metadataUpdates.slug = args.slug;
-      if (args.defaultOthersCan !== undefined)
-        metadataUpdates.default_others_can = args.defaultOthersCan;
-      if (args.defaultOthersFsAccess !== undefined)
-        metadataUpdates.default_others_fs_access = args.defaultOthersFsAccess;
       if (args.customContext !== undefined) metadataUpdates.custom_context = args.customContext;
 
       if (Object.keys(metadataUpdates).length > 0) {
@@ -337,6 +331,27 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
 
       const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
       return textResult({ board, note: 'Board updated successfully.' });
+    }
+  );
+
+  server.registerTool(
+    'agor_boards_permissions_update',
+    {
+      description:
+        'Replace a board permission policy and its complete default branch configuration. ' +
+        'Read the current revision with agor_boards_get first. Primary ownership is immutable.',
+      annotations: { idempotentHint: true },
+      inputSchema: z.object({
+        boardId: mcpRequiredId('boardId', 'Board'),
+        permissions: boardCapabilityPoliciesSchema,
+      }),
+    },
+    async (args) => {
+      const boardId = coerceString(args.boardId)!;
+      const permissions = await ctx.app
+        .service('boards/:id/permissions')
+        .patch(null, args.permissions, { ...ctx.baseServiceParams, route: { id: boardId } });
+      return textResult(permissions);
     }
   );
 

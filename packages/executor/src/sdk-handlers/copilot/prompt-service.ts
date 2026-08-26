@@ -184,7 +184,6 @@ export class CopilotPromptService {
         mcpServerRepo: this.mcpServerRepo,
         mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
         forUserId: contextUserId,
-        sessionOwnerId: session.created_by,
         onServerWithheld: reporter.onServerWithheld,
       },
       // Still no way to filter the tool list handed to the model: the

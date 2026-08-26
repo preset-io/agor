@@ -9,6 +9,7 @@ import { CAPABILITY_POLICY_SCHEMA_VERSION } from '@agor/core/types';
 import { Alert, Button, Divider, Flex, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { BranchPermissionConfigEditor } from './BranchPermissionConfigEditor';
+import type { EffectiveAccessSubject } from './effectiveAccessPreviewModel';
 import { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
 import { PolicyModeSelector, type PolicyModeSelectorValue } from './PolicyModeSelector';
 import {
@@ -16,15 +17,15 @@ import {
   makePrivatePolicy,
   makeSharedClosedPolicy,
 } from './policyEditorModel';
-import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
 interface BranchCapabilityPolicyFormProps {
   value: BranchCapabilityPolicyDraft;
   onChange: (value: BranchCapabilityPolicyDraft) => void;
   principals: CapabilityPolicyPrincipalDescriptor[];
-  subjects: PrototypeAccessSubject[];
+  subjects: EffectiveAccessSubject[];
   currentUserId: UserID;
   personalSessionSharingWorkspaceEnabled?: boolean;
+  canManageAccess?: boolean;
 }
 
 function findUserDescriptor(
@@ -65,6 +66,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
   subjects,
   currentUserId,
   personalSessionSharingWorkspaceEnabled = true,
+  canManageAccess = true,
 }) => {
   const { token } = theme.useToken();
   const [confirmInherit, setConfirmInherit] = useState(false);
@@ -136,6 +138,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
         ariaLabel="Branch permission mode"
         value={selectedMode}
         onChange={setMode}
+        disabled={!canManageAccess}
         descriptions={{
           inherit: 'Uses board defaults for access, files, and session sharing.',
           private: 'Only the primary owner can access this branch.',
@@ -195,7 +198,8 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
         accessTitle="Branch access"
         value={effectiveConfig}
         onChange={(overrideConfig) => onChange({ ...value, override_config: overrideConfig })}
-        readOnly={value.binding_mode === 'inherit'}
+        accessReadOnly={value.binding_mode === 'inherit' || !canManageAccess}
+        sharingReadOnly={value.binding_mode === 'inherit'}
         showModeSelector={false}
         primaryOwnerUserId={value.primary_owner_user_id}
         currentUserId={currentUserId}

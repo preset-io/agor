@@ -40,9 +40,15 @@ import type {
   Message,
   Task,
   User,
+  UserID,
   UUID,
 } from '@agor/core/types';
-import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
+import {
+  capabilityPolicyPresetCapabilities,
+  MessageRole,
+  SessionStatus,
+  TaskStatus,
+} from '@agor/core/types';
 import { assertSecurePassword } from '../config/password-policy';
 import type { Database } from '../db/client';
 import { insert, txAsDb } from '../db/database-wrapper';
@@ -52,6 +58,7 @@ import {
   BoardObjectRepository,
   BoardRepository,
   BranchRepository,
+  CapabilityPolicyRepository,
   CardRepository,
   CardTypeRepository,
   MessagesRepository,
@@ -223,6 +230,7 @@ export async function loadDemoFixtures(
     const repoRepo = new RepoRepository(t);
     const boardRepo = new BoardRepository(t);
     const branchRepo = new BranchRepository(t);
+    const capabilityPolicyRepo = new CapabilityPolicyRepository(t);
     const boardObjectRepo = new BoardObjectRepository(t);
     const sessionRepo = new SessionRepository(t);
     const taskRepo = new TaskRepository(t);
@@ -337,9 +345,31 @@ export async function loadDemoFixtures(
       objects: initialObjects,
     });
     const boardId = board.board_id as BoardID;
-    await boardRepo.addOwner(boardId, alice.user_id);
-    if (options.userId) {
-      await boardRepo.addOwner(boardId, options.userId);
+    if (options.userId && options.userId !== alice.user_id) {
+      const current = await capabilityPolicyRepo.getBoardPolicies(boardId);
+      await capabilityPolicyRepo.replaceBoardPolicies(
+        boardId,
+        {
+          ...current,
+          board_access: {
+            ...current.board_access,
+            sharing_mode: 'shared',
+            entries: [
+              {
+                entry_id: generateId(),
+                principal: {
+                  principal_type: 'user',
+                  user_id: options.userId as UserID,
+                },
+                preset: 'manager',
+                capabilities: capabilityPolicyPresetCapabilities('board_access', 'manager')!,
+                fs_access: 'none',
+              },
+            ],
+          },
+        },
+        alice.user_id as UserID
+      );
     }
 
     // ── STEP 5: Branches (no git ops) ───────────────────────────────────────
@@ -409,9 +439,40 @@ export async function loadDemoFixtures(
         board_id: boardId,
         needs_attention: false,
       });
-      await branchRepo.addOwner(branch.branch_id, spec.creator);
-      if (options.userId) {
-        await branchRepo.addOwner(branch.branch_id, options.userId);
+      if (options.userId && options.userId !== spec.creator) {
+        const current = await capabilityPolicyRepo.getBranchPolicy(branch.branch_id);
+        const config = current.override_config;
+        if (!config) throw new Error(`Demo branch ${branch.branch_id} has no override policy`);
+        await capabilityPolicyRepo.replaceBranchPolicy(
+          branch.branch_id,
+          {
+            ...current,
+            override_config: {
+              ...config,
+              access: {
+                ...config.access,
+                sharing_mode: 'shared',
+                entries: [
+                  {
+                    entry_id: generateId(),
+                    principal: {
+                      principal_type: 'user',
+                      user_id: options.userId as UserID,
+                    },
+                    preset: 'manager',
+                    capabilities: capabilityPolicyPresetCapabilities(
+                      'branch_access',
+                      'manager',
+                      'write'
+                    )!,
+                    fs_access: 'write',
+                  },
+                ],
+              },
+            },
+          },
+          spec.creator as UserID
+        );
       }
 
       // ── STEP 6: Branch placement (board_objects row, pinned to a zone) ────

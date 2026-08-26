@@ -1,6 +1,7 @@
 import type {
   AgorClient,
   Branch,
+  BranchCapabilityPolicy,
   KnowledgeNamespace,
   Repo,
   TeammateConfig,
@@ -38,6 +39,9 @@ export interface StubClientOptions {
   /** Throw a 500-style error on the initial owners.find load. */
   failOwnersFind?: boolean;
   namespaces?: KnowledgeNamespace[];
+  capabilityPolicy?: BranchCapabilityPolicy;
+  failPermissionsFind?: boolean;
+  workspacePreferences?: { personal_session_sharing_enabled: boolean };
 }
 
 export function makeStubClient(opts: StubClientOptions = {}): {
@@ -80,6 +84,13 @@ export function makeStubClient(opts: StubClientOptions = {}): {
           if (path === 'branches/:id/effective-access') {
             return opts.effectiveAccess ?? { can: 'session', is_owner: false, source: 'others' };
           }
+          if (path === 'branches/:id/permissions') {
+            if (opts.failPermissionsFind) throw new Error('permission package unavailable');
+            return opts.capabilityPolicy ?? makeBranchPolicy();
+          }
+          if (path === 'workspace-preferences') {
+            return opts.workspacePreferences ?? { personal_session_sharing_enabled: false };
+          }
           if (path === 'kb/namespaces') {
             return opts.namespaces ?? [];
           }
@@ -121,6 +132,7 @@ export function makeStubClient(opts: StubClientOptions = {}): {
           if (path === 'branches' && opts.failBranchPatch) {
             throw new Error('daemon exploded');
           }
+          if (path === 'branches/:id/permissions') return body;
           return { ...(body as object), branch_id: id };
         },
         async remove(id: string, params?: unknown) {
@@ -181,6 +193,31 @@ export function makeBranch(overrides: Partial<Branch> = {}): Branch {
     dangerously_allow_session_sharing: false,
     ...overrides,
   } as unknown as Branch;
+}
+
+export function makeBranchPolicy(
+  overrides: Partial<BranchCapabilityPolicy> = {}
+): BranchCapabilityPolicy {
+  return {
+    primary_owner_user_id: 'user-1',
+    revision: 1,
+    binding_mode: 'override',
+    override_config: {
+      access: {
+        schema_version: 1,
+        policy_kind: 'branch_access',
+        sharing_mode: 'shared',
+        entries: [],
+        others: {
+          preset: 'collaborator',
+          capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own', 'terminal.open'],
+          fs_access: 'read',
+        },
+      },
+      session_sharing: { owner_rules: [] },
+    },
+    ...overrides,
+  } as BranchCapabilityPolicy;
 }
 
 export function makeTeammateBranch(

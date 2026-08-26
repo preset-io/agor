@@ -129,13 +129,17 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'branch',
     why: 'BranchModal ScheduleTab lists schedules live.',
   },
-  'branches/:id/owners': {
-    audience: 'branch-route',
-    why: 'BoardTeammatePanel refetches owners on created/removed — owner edits never patch the branch row, so this is its only signal.',
+  'branches/:id/permissions': {
+    audience: 'none',
+    why: 'Permission mutations invalidate authorization caches; editors use the mutation response.',
   },
-  'branches/:id/group-grants': {
-    audience: 'branch-route',
-    why: 'Grant rows carry no secret and were already branch-scoped; kept so the permissions UI can subscribe without re-deciding the audience.',
+  'boards/:id/permissions': {
+    audience: 'none',
+    why: 'Permission mutations invalidate authorization caches; editors use the mutation response.',
+  },
+  'workspace-preferences': {
+    audience: 'none',
+    why: 'Workspace settings are fetched by the settings and permissions forms.',
   },
 
   // ---------------------------------------------------------------------------
@@ -324,14 +328,6 @@ export const REALTIME_PUBLISH_POLICY = {
   'copilot-models': { audience: 'none', why: 'Per-caller model list.' },
   'cursor-models': { audience: 'none', why: 'Per-caller model list.' },
   health: { audience: 'none', why: 'Liveness probe.' },
-  'boards/:id/owners': {
-    audience: 'none',
-    why: 'Board owner edits; the panel refetches, no subscriber.',
-  },
-  'boards/:id/group-grants': {
-    audience: 'none',
-    why: 'Board grant edits; the panel refetches, no subscriber.',
-  },
   'boards/:id/aligned-branches': { audience: 'none', why: 'Query route.' },
   'branches/:id/effective-access': { audience: 'none', why: 'Query route.' },
   'branches/:id/fs-access-users': { audience: 'none', why: 'Query route.' },

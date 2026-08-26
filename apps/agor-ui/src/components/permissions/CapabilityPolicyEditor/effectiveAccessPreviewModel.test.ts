@@ -1,22 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EFFECTIVE_ACCESS_SUBJECTS,
   OVERRIDDEN_BRANCH_FIXTURE,
   PROTOTYPE_PRINCIPALS,
-  PROTOTYPE_SUBJECTS,
   PROTOTYPE_USERS,
   SHARED_BOARD_FIXTURE,
 } from '@/pages/rbac-policy-prototype/fixtures';
-import { resolvePrototypeEffectiveAccess } from './prototypeEffectiveAccess';
+import { resolveEffectiveAccessPreview } from './effectiveAccessPreviewModel';
 
 const subject = (userId: string) => {
-  const found = PROTOTYPE_SUBJECTS.find((candidate) => candidate.user.principal.user_id === userId);
+  const found = EFFECTIVE_ACCESS_SUBJECTS.find(
+    (candidate) => candidate.user.principal.user_id === userId
+  );
   if (!found) throw new Error(`Missing subject ${userId}`);
   return found;
 };
 
 describe('prototype effective-access explanation', () => {
   it('uses a direct user entry as a complete override of matching groups', () => {
-    const result = resolvePrototypeEffectiveAccess({
+    const result = resolveEffectiveAccessPreview({
       policy: SHARED_BOARD_FIXTURE.branch_template.access,
       primaryOwnerUserId: PROTOTYPE_USERS.leo,
       subject: subject(PROTOTYPE_USERS.kasia),
@@ -43,7 +45,7 @@ describe('prototype effective-access explanation', () => {
         entry.principal.principal_type !== 'user' ||
         entry.principal.user_id !== PROTOTYPE_USERS.kasia
     );
-    const result = resolvePrototypeEffectiveAccess({
+    const result = resolveEffectiveAccessPreview({
       policy,
       primaryOwnerUserId: PROTOTYPE_USERS.leo,
       subject: subject(PROTOTYPE_USERS.kasia),
@@ -60,7 +62,7 @@ describe('prototype effective-access explanation', () => {
   });
 
   it('uses Others only for an unmatched active same-tenant fixture member', () => {
-    const result = resolvePrototypeEffectiveAccess({
+    const result = resolveEffectiveAccessPreview({
       policy: SHARED_BOARD_FIXTURE.branch_template.access,
       primaryOwnerUserId: PROTOTYPE_USERS.leo,
       subject: subject(PROTOTYPE_USERS.omar),
@@ -73,7 +75,7 @@ describe('prototype effective-access explanation', () => {
   });
 
   it('makes a Manager-only group match cumulative with own-session work', () => {
-    const result = resolvePrototypeEffectiveAccess({
+    const result = resolveEffectiveAccessPreview({
       policy: OVERRIDDEN_BRANCH_FIXTURE.override_config!.access,
       primaryOwnerUserId: PROTOTYPE_USERS.leo,
       subject: subject(PROTOTYPE_USERS.nina),
@@ -93,7 +95,7 @@ describe('prototype effective-access explanation', () => {
 
   it('denies inactive and deleted fixture identities before fallback evaluation', () => {
     for (const userId of [PROTOTYPE_USERS.mia, PROTOTYPE_USERS.deleted]) {
-      const result = resolvePrototypeEffectiveAccess({
+      const result = resolveEffectiveAccessPreview({
         policy: SHARED_BOARD_FIXTURE.branch_template.access,
         primaryOwnerUserId: PROTOTYPE_USERS.leo,
         subject: subject(userId),

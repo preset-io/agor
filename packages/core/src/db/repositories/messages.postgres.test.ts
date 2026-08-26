@@ -1,4 +1,4 @@
-import { type Message, MessageRole, type UUID } from '@agor/core/types';
+import { type Message, MessageRole, type UserID, type UUID } from '@agor/core/types';
 import { eq, sql } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
@@ -9,6 +9,7 @@ import { initializeDatabase } from '../migrate';
 import { sanitizeDbError } from '../sanitize-error';
 import { messages as messagesTable } from '../schema';
 import { runWithTenantDatabaseScope } from '../tenant-scope';
+import { setTestBranchUserRole } from '../test-helpers';
 import { BranchRepository } from './branches';
 import {
   MESSAGE_CONTENT_OMITTED,
@@ -191,7 +192,7 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         permission_source: 'override',
         others_can: 'none',
       });
-      await branches.addOwner(visibleBranch.branch_id, viewerId);
+      await setTestBranchUserRole(scoped, visibleBranch.branch_id, viewerId as UserID, 'manager');
       const sessions = new SessionRepository(scoped);
       const visibleSession = await sessions.create({
         branch_id: visibleBranch.branch_id,

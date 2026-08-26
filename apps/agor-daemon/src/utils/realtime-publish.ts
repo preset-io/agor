@@ -1038,11 +1038,10 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         }
         if (!loadedBoard) return filterToServiceConnections(tenantScoped);
         const currentBoard = loadedBoard;
-        if (currentBoard.access_mode === 'shared') return tenantScoped;
 
-        // For a current private board, evaluate the same repository predicate
-        // as boards.get for each connected user at publication time; a room
-        // join, payload field, or stale client cache is never authorization.
+        // Evaluate the board's normalized policy for every connected user at
+        // publication time. A branch, payload field, or legacy access_mode is
+        // never board authority.
         const visibleUserIds = new Set<string>();
         await Promise.all(
           uniqueUserIds(tenantScoped).map(async (userId) => {

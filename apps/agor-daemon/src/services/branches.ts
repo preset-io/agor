@@ -53,7 +53,6 @@ import {
 } from '@agor/core/feathers';
 import type {
   AuthenticatedParams,
-  Board,
   BoardID,
   Branch,
   BranchArchiveOrDeleteOptions,
@@ -714,17 +713,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // New branches always start aligned with their board. Branch-specific
     // overrides are an explicit post-create action in the Branch modal.
     withDefaults.permission_source = 'board';
-
-    if (withDefaults.permission_source === 'board' && withDefaults.board_id) {
-      const board = (await this.boardRepo.findById(withDefaults.board_id)) as Board | null;
-      if (board) {
-        withDefaults.others_can = board.default_others_can ?? 'session';
-        withDefaults.others_fs_access = board.default_others_fs_access ?? 'read';
-        withDefaults.dangerously_allow_session_sharing =
-          board.default_dangerously_allow_session_sharing ?? false;
-      }
-      return withDefaults;
-    }
+    withDefaults.permission_binding = 'inherit';
 
     return withDefaults;
   }
@@ -1068,13 +1057,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const newBoardId = data.board_id;
     const boardChanged = boardIdProvided && oldBoardId !== newBoardId;
 
-    if (
-      boardChanged &&
-      currentBranch.permission_source === 'board' &&
-      data.permission_source !== 'override'
-    ) {
+    if (boardChanged && currentBranch.permission_binding === 'inherit') {
       throw new BadRequest(
-        'This branch is aligned with board permissions. Switch to "Override board-level permissions" before moving it to another board.'
+        'Switch this branch to an explicit permission override before moving it to another board.'
       );
     }
 
@@ -1148,11 +1133,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     this.assertTeammateKindIsStable(currentBranch, data);
     if (
       currentBranch.board_id !== data.board_id &&
-      currentBranch.permission_source === 'board' &&
-      data.permission_source !== 'override'
+      currentBranch.permission_binding === 'inherit'
     ) {
       throw new BadRequest(
-        'This branch is aligned with board permissions. Switch to "Override board-level permissions" before moving it to another board.'
+        'Switch this branch to an explicit permission override before moving it to another board.'
       );
     }
     return super.update(id, data, params) as Promise<Branch>;

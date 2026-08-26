@@ -1407,6 +1407,16 @@ describe('substituteTemplateVariables', () => {
     );
   });
 
+  it('substitutes the actor branch filesystem projection for external launchers', async () => {
+    const { substituteTemplateVariables } = await import('./spawn-executor');
+
+    expect(
+      substituteTemplateVariables('launch --branch-access {branch_fs_access}', {
+        branch_fs_access: 'read',
+      })
+    ).toBe('launch --branch-access read');
+  });
+
   it('refuses a path-shaped {user_id}', async () => {
     const { substituteTemplateVariables } = await import('./spawn-executor');
     expect(() =>

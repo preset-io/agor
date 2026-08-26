@@ -21,6 +21,7 @@ import {
   AppstoreOutlined,
   BranchesOutlined,
   CloseOutlined,
+  ControlOutlined,
   CreditCardOutlined,
   ExperimentOutlined,
   FolderOutlined,
@@ -65,6 +66,7 @@ import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
 import { TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
+import { WorkspacePreferencesTab } from './WorkspacePreferencesTab';
 
 const { Sider, Content } = Layout;
 
@@ -322,6 +324,15 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             label: 'Artifacts',
             icon: <ExperimentOutlined />,
           },
+          ...(isAdmin
+            ? [
+                {
+                  key: 'workspace-preferences',
+                  label: 'Preferences',
+                  icon: <ControlOutlined />,
+                },
+              ]
+            : []),
         ],
       },
       {
@@ -409,6 +420,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       { label: 'Workspace · Teammates', value: 'teammates' },
       { label: 'Workspace · Cards (Beta)', value: 'cards' },
       { label: 'Workspace · Artifacts', value: 'artifacts' },
+      ...(isAdmin ? [{ label: 'Workspace · Preferences', value: 'workspace-preferences' }] : []),
       { label: 'Integrations · MCP Servers', value: 'mcp' },
       ...(canSeeSection('agentic-tools')
         ? [{ label: 'Integrations · Agentic Tools', value: 'agentic-tools' }]
@@ -437,6 +449,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             boardById={boardById}
             sessionsByBranch={sessionsByBranch}
             branchById={branchById}
+            currentUser={currentUser}
             onCreate={onCreateBoard}
             onUpdate={onUpdateBoard}
             onDelete={onDeleteBoard}
@@ -509,6 +522,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             onClose={onClose}
           />
         );
+      case 'workspace-preferences':
+        return <WorkspacePreferencesTab client={client} currentUser={currentUser} />;
       case 'mcp':
         return (
           <MCPServersTable

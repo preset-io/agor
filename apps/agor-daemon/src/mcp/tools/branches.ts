@@ -1,4 +1,4 @@
-import { BranchRepository, shortId } from '@agor/core/db';
+import { BranchRepository, CapabilityPolicyRepository, shortId } from '@agor/core/db';
 import type {
   Board,
   BoardID,
@@ -11,7 +11,7 @@ import type {
   UUID,
   ZoneBoardObject,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS, getTeammateConfig, isTeammate } from '@agor/core/types';
+import { getTeammateConfig, isTeammate } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer } from '@modelcontextprotocol/server';
@@ -26,6 +26,7 @@ import { issueExecutorCommandToken } from '../../services/session-token-service.
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
+import { branchCapabilityPolicySchema } from '../capability-policy-schema.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -190,7 +191,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const branch = await ctx.app
         .service('branches')
         .get(args.branchId, branchParams as Parameters<BranchesServiceImpl['get']>[1]);
-      return textResult(branch);
+      const permissions = await ctx.app
+        .service('branches/:id/permissions')
+        .find({ ...ctx.baseServiceParams, route: { id: branch.branch_id } });
+      return textResult({ ...branch, permissions });
     }
   );
 
@@ -295,7 +299,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         excludePrivate: z
           .boolean()
           .optional()
-          .describe('Exclude branches with others_can="none" (private to owners). Default: true.'),
+          .describe('Exclude branches whose effective policy is Private. Default: true.'),
         pathExists: z
           .boolean()
           .optional()
@@ -339,6 +343,17 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       } = await findAllArchivedBranchesForCleanup(ctx, query);
 
       const repoIds = [...new Set(branches.map((branch) => branch.repo_id))];
+      const sharingModes = await runWithMcpTenantDatabaseScope<Map<BranchID, 'private' | 'shared'>>(
+        ctx,
+        (db) =>
+          (
+            new CapabilityPolicyRepository(db) as CapabilityPolicyRepository & {
+              getBranchSharingModes(
+                branchIds: readonly BranchID[]
+              ): Promise<Map<BranchID, 'private' | 'shared'>>;
+            }
+          ).getBranchSharingModes(branches.map((branch) => branch.branch_id))
+      );
       const reposById = new Map<string, Repo>();
       await Promise.all(
         repoIds.map(async (repoId) => {
@@ -417,7 +432,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             return false;
           }
           if (excludeTeammates && isTeammate(branch)) return false;
-          if (excludePrivate && branch.others_can === 'none') return false;
+          if (excludePrivate && sharingModes.get(branch.branch_id) === 'private') return false;
           if (args.pathExists !== undefined && pathExists !== args.pathExists) return false;
           return true;
         });
@@ -441,7 +456,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         issue_url: branch.issue_url ?? null,
         notes_preview: notesPreview(branch.notes),
         is_teammate: isTeammate(branch),
-        is_private: branch.others_can === 'none',
+        is_private: sharingModes.get(branch.branch_id) === 'private',
       }));
 
       return textResult({
@@ -887,7 +902,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_update',
     {
       description:
-        'Update metadata for an existing branch (issue/PR URLs, notes, board placement, attention state, custom context, RBAC permissions, owners)',
+        'Update metadata for an existing branch (issue/PR URLs, notes, board placement, attention state, and custom context). Use agor_branches_permissions_update for access.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         branchId: mcpOptionalId(
@@ -940,46 +955,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe(
             'Branch/card attention highlight state. Pass true to mark the branch as needing attention, or false to clear it.'
-          ),
-        // RBAC fields (optional, safe to ignore for single-user setups)
-        othersCan: z
-          .enum(BRANCH_PERMISSION_LEVELS)
-          .optional()
-          .describe(
-            'App-layer permission for non-owner users. ' +
-              '"none" = no access, "view" = read-only, "session" = can create & prompt own sessions, ' +
-              '"prompt" = can prompt ANY session (including other users\'), "all" = full access. ' +
-              'Always effective regardless of Unix isolation mode. Single-user setups can ignore this.'
-          ),
-        permissionSource: z
-          .enum(['board', 'override'])
-          .optional()
-          .describe(
-            'Choose whether effective non-owner access is inherited from the board or read from this branch override. Set "override" with othersCan="none" for an explicit private fallback.'
-          ),
-        othersFsAccess: z
-          .enum(['none', 'read', 'write'])
-          .optional()
-          .describe(
-            'OS-level filesystem permission for non-owner users. ' +
-              '"none" = no filesystem access, "read" = read-only, "write" = read-write. ' +
-              'Only effective when Unix isolation (AGOR_UNIX_MODE) is configured. ' +
-              'Has no effect in simple mode. Single-user setups can ignore this.'
-          ),
-        addOwnerIds: z
-          .array(mcpRequiredId('addOwnerIds[]', 'User', 'User ID'))
-          .optional()
-          .describe(
-            'User IDs to ADD as owners of this branch. ' +
-              'Owners have full access regardless of othersCan/othersFsAccess settings. ' +
-              'Idempotent — adding an existing owner is a no-op.'
-          ),
-        removeOwnerIds: z
-          .array(mcpRequiredId('removeOwnerIds[]', 'User', 'User ID'))
-          .optional()
-          .describe(
-            'User IDs to REMOVE as owners of this branch. ' +
-              'Idempotent — removing a non-owner is a no-op.'
           ),
       }),
     },
@@ -1049,87 +1024,41 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         fieldsProvided++;
         updates.needs_attention = args.needsAttention;
       }
-      if (args.othersCan !== undefined) {
-        fieldsProvided++;
-        updates.others_can = args.othersCan;
-      }
-      if (args.permissionSource !== undefined) {
-        fieldsProvided++;
-        updates.permission_source = args.permissionSource;
-      }
-      if (args.othersFsAccess !== undefined) {
-        fieldsProvided++;
-        updates.others_fs_access = args.othersFsAccess;
-      }
-      const hasOwnerChanges =
-        (args.addOwnerIds && args.addOwnerIds.length > 0) ||
-        (args.removeOwnerIds && args.removeOwnerIds.length > 0);
-      if (hasOwnerChanges) fieldsProvided++;
-
       if (fieldsProvided === 0) throw new Error('provide at least one field to update');
 
-      // Patch branch fields (skip if only owner changes)
-      let branch: Branch;
-      if (Object.keys(updates).length > 0) {
-        branch = (await ctx.app
-          .service('branches')
-          .patch(
-            resolvedBranchId as string,
-            updates as unknown as Partial<Branch>,
-            ctx.baseServiceParams
-          )) as Branch;
-      } else {
-        branch = (await ctx.app
-          .service('branches')
-          .get(resolvedBranchId as string, ctx.baseServiceParams)) as Branch;
-      }
-
-      // Handle owner additions/removals via the owners service (includes unix sync hooks)
-      const ownerErrors: string[] = [];
-      if (hasOwnerChanges) {
-        if (ctx.app.get('config').execution?.branch_rbac !== true) {
-          ownerErrors.push(
-            'Owner changes ignored: branch RBAC is not enabled. Enable branch_rbac in config to manage owners.'
-          );
-        } else {
-          const branchOwnersService = ctx.app.service('branches/:id/owners');
-          // Use full UUID from resolved branch (not the potentially-short input ID)
-          const routeParams = {
-            ...ctx.baseServiceParams,
-            route: { id: branch.branch_id },
-          };
-
-          if (args.addOwnerIds) {
-            for (const ownerId of args.addOwnerIds) {
-              try {
-                await branchOwnersService.create({ user_id: ownerId }, routeParams);
-              } catch (error) {
-                ownerErrors.push(
-                  `Failed to add owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
-                );
-              }
-            }
-          }
-
-          if (args.removeOwnerIds) {
-            for (const ownerId of args.removeOwnerIds) {
-              try {
-                await branchOwnersService.remove(ownerId, routeParams);
-              } catch (error) {
-                ownerErrors.push(
-                  `Failed to remove owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
-                );
-              }
-            }
-          }
-        }
-      }
+      const branch = (await ctx.app
+        .service('branches')
+        .patch(
+          resolvedBranchId,
+          updates as unknown as Partial<Branch>,
+          ctx.baseServiceParams
+        )) as Branch;
 
       return textResult({
         branch,
         note: 'Branch metadata updated successfully.',
-        ...(ownerErrors.length > 0 ? { ownerWarnings: ownerErrors } : {}),
       });
+    }
+  );
+
+  server.registerTool(
+    'agor_branches_permissions_update',
+    {
+      description:
+        'Replace a branch permission package, including its inherit/override binding and personal session sharing rules. ' +
+        'Read the current revision with agor_branches_get first. Primary ownership is immutable.',
+      annotations: { idempotentHint: true },
+      inputSchema: z.object({
+        branchId: mcpRequiredId('branchId', 'Branch'),
+        permissions: branchCapabilityPolicySchema,
+      }),
+    },
+    async (args) => {
+      const branchId = coerceString(args.branchId)!;
+      const permissions = await ctx.app
+        .service('branches/:id/permissions')
+        .patch(null, args.permissions, { ...ctx.baseServiceParams, route: { id: branchId } });
+      return textResult(permissions);
     }
   );
 

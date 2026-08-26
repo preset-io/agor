@@ -4,8 +4,9 @@
  * Concrete widget type: agent renders an inline form asking the user for one
  * or more env vars (e.g. `HUBSPOT_API_KEY`). The values flow browser → daemon
  * via `POST /widgets/:widget_id/submit` (NOT through the agent context) and
- * land in the session creator's `users.data.env_vars` via the existing users
- * service — encryption + blocklist + validation all reused.
+ * land in the submitting prompt actor's `users.data.env_vars` via the existing
+ * users service — encryption + blocklist + validation all reused. A shared
+ * Session never lends or mutates its owner's credential environment.
  *
  * See §4 + §7 Part 2 of `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
  */
@@ -239,13 +240,13 @@ async function applyEnvVarsSubmit(
   };
 
   if (useExistingNames.length > 0) {
-    const creator = await usersService.get(ctx.sessionCreatorUserId, {
+    const submitter = await usersService.get(ctx.submitterUserId, {
       user: { user_id: ctx.submitterUserId, role: ctx.submitterRole },
       authenticated: true,
     });
     const fieldErrors: Record<string, string> = {};
     for (const name of useExistingNames) {
-      const meta = creator.env_vars?.[name];
+      const meta = submitter.env_vars?.[name];
       if (!meta?.set) {
         fieldErrors[name] = 'No saved value is set for this env var';
       } else if (meta.scope !== 'global') {
@@ -264,15 +265,9 @@ async function applyEnvVarsSubmit(
     env_var_scopes[name] = submit.scope;
   }
 
-  // The widget submit endpoint already authorized the caller via
-  // `canResolveWidget` (session-creator OR prompt-tier branch RBAC). The
-  // in-process purpose marker permits only env_vars/env_var_scopes and the
-  // users service still compares the submitter's fresh role with the session
-  // creator's current role. A lower-authority collaborator therefore cannot
-  // use a widget to mutate a higher-authority user's credential environment.
-  //
-  // submitter identity is still threaded through for audit; the widget
-  // submit handler records it separately as `metadata.widget.submitted_by`.
+  // The widget submit endpoint authorized this caller through canonical
+  // prompt authority. Persist only to that same user's environment; personal
+  // Session sharing must never mutate the Session owner's credentials.
   //
   // Grep for: markTrustedUserMutation — to audit every trusted mutation site.
   if (submittedNames.length > 0) {
@@ -285,7 +280,7 @@ async function applyEnvVarsSubmit(
     } as unknown as Params;
     markTrustedUserMutation(mutationParams, 'env-vars-widget');
     await usersService.patch(
-      ctx.sessionCreatorUserId,
+      ctx.submitterUserId,
       { env_vars: orderedValues, env_var_scopes },
       mutationParams
     );

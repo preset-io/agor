@@ -59,11 +59,7 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
-import {
-  filterMCPServersForSession,
-  isMCPServerUsableInSession,
-  MCPServerNotUsableError,
-} from '@agor/core/mcp';
+import { isMCPServerUsableBy, MCPServerNotUsableError } from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   BoardComment,
@@ -1907,30 +1903,22 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const access = await runWithTenantDatabaseScope(db, promptTenantId, async () => {
             const wt = await branchRepository.findById(promptBranchId);
             if (!wt) return null;
-            const isOwner = await branchRepository.isOwner(wt.branch_id, promptUserId);
-            const branchPermission = await branchRepository.resolveUserPermission(wt, promptUserId);
-            return { branchPermission, isOwner, wt };
+            return { wt };
           });
           if (!access) {
             throw new NotFound(`Branch ${promptBranchId} not found`);
           }
-          const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+          const { allowed } = await resolveSessionPromptAccess({
+            branchRepository,
             branch: access.wt,
             session,
             userId: promptUserId,
-            isOwner: access.isOwner,
-            userRole: params.user?.role,
-            allowSuperadmin: superadminOpts.allowSuperadmin,
-            branchPermission: access.branchPermission,
           });
           if (!allowed) {
             throw new Forbidden(
-              effectiveLevel === 'session'
-                ? `You have 'session' permission — you can only prompt sessions you created. ` +
-                    `This session was created by another user. Ask a branch owner to upgrade ` +
-                    `your access to 'prompt' if you need to prompt other users' sessions.`
-                : `You need 'prompt' permission to prompt this session. You have ` +
-                    `'${effectiveLevel}' permission.`
+              session.created_by === promptUserId
+                ? `Collaborator access is required to prompt this session.`
+                : `The session owner has not shared their sessions with you.`
             );
           }
         }
@@ -2197,21 +2185,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             if (!wt) {
               throw new NotFound(`Branch ${session.branch_id} not found`);
             }
-            const isOwner = await branchRepository.isOwner(wt.branch_id, userId);
-            const branchPermission = await branchRepository.resolveUserPermission(wt, userId);
-            const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+            const { allowed, effectiveLevel } = await resolveSessionPromptAccess({
+              branchRepository,
               branch: wt,
               session,
               userId,
-              isOwner,
-              userRole: params.user?.role,
-              allowSuperadmin: superadminOpts.allowSuperadmin,
-              branchPermission,
             });
             if (!allowed) {
               throw new Forbidden(
                 `You have '${effectiveLevel}' permission on this branch, which does not ` +
-                  `allow running tasks. Need 'prompt' or 'all' (or 'session' for own sessions).`
+                  `allow running tasks. Collaborator access is required, and foreign ` +
+                  `sessions must be shared by their owner.`
               );
             }
           }
@@ -2591,22 +2575,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const access = await runWithTenantDatabaseScope(db, params.tenant?.tenant_id, async () => {
           const wt = await branchRepo.findById(session.branch_id);
           if (!wt) return null;
-          const isOwner = await branchRepo.isOwner(wt.branch_id, userId);
-          const branchPermission = await branchRepo.resolveUserPermission(wt, userId);
-          return { branchPermission, isOwner, wt };
+          return { wt };
         });
         if (!access) {
           return res.status(404).json({ error: 'Branch not found' });
         }
-        const { branchPermission, isOwner, wt } = access;
-        const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+        const { wt } = access;
+        const { allowed, effectiveLevel } = await resolveSessionPromptAccess({
+          branchRepository: branchRepo,
           branch: wt,
           session,
           userId,
-          isOwner,
-          userRole: params.user?.role,
-          allowSuperadmin: superadminOpts.allowSuperadmin,
-          branchPermission,
         });
 
         if (!allowed) {
@@ -3002,11 +2981,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           app.service('sessions').get(id, params)
         );
 
-        // Stop is process control and must use the same authorization policy as
-        // prompting the target session. A session-tier collaborator may view a
-        // teammate's session but must not stop an executor running with that
-        // teammate's identity and credentials. Force-fail deliberately skips
-        // this check and applies its narrower owner-or-admin policy below.
+        // Stop is session lifecycle control. Managers may stop any session on
+        // the branch without gaining prompt authority over its owner's home;
+        // collaborators may stop a foreign session only when that owner has
+        // explicitly shared it with them. Force-fail deliberately skips this
+        // check and applies its narrower owner-or-admin policy below.
         if (
           body.force_unverified !== true &&
           branchRbacEnabled &&
@@ -3023,33 +3002,26 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const access = await inCurrentTenantDatabaseScope(async () => {
             const branch = await branchRepository.findById(session.branch_id);
             if (!branch) return null;
-            const isOwner = await branchRepository.isOwner(branch.branch_id, stopUserId);
-            const branchPermission = await branchRepository.resolveUserPermission(
-              branch,
-              stopUserId
-            );
-            return { branch, branchPermission, isOwner };
+            const branchAccess = await branchRepository.resolveUserAccess(branch, stopUserId);
+            return { branch, branchAccess };
           });
           if (!access) {
             throw new NotFound(`Branch ${session.branch_id} not found`);
           }
-          const { allowed, effectiveLevel } = resolveSessionPromptAccess({
+          const { allowed: hasPromptAuthority } = await resolveSessionPromptAccess({
+            branchRepository,
             branch: access.branch,
             session,
             userId: stopUserId,
-            isOwner: access.isOwner,
-            userRole: params.user?.role,
-            allowSuperadmin: superadminOpts.allowSuperadmin,
-            branchPermission: access.branchPermission,
           });
-          if (!allowed) {
+          const isManager = access.branchAccess.can === 'all';
+          const isGlobalSuperadmin =
+            superadminOpts.allowSuperadmin && hasMinimumRole(params.user?.role, ROLES.SUPERADMIN);
+          if (!hasPromptAuthority && !isManager && !isGlobalSuperadmin) {
             throw new Forbidden(
-              effectiveLevel === 'session'
-                ? `You have 'session' permission — you can only stop sessions you created. ` +
-                    `This session was created by another user. Ask a branch owner to upgrade ` +
-                    `your access to 'prompt' if you need to stop other users' sessions.`
-                : `You need 'prompt' permission to stop this session. You have ` +
-                    `'${effectiveLevel}' permission.`
+              session.created_by === stopUserId
+                ? `Collaborator access is required to stop this session.`
+                : `Manager access or permission from the session owner is required to stop this session.`
             );
           }
         }
@@ -3432,10 +3404,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         method: 'patch',
         id: payload.widget_id as string,
       }),
-    isBranchOwner: async (branchId: string, userId: UUID) =>
-      widgetResolutionBranches.isOwner(branchId as import('@agor/core/types').BranchID, userId),
-    resolveBranchPermission: async (branch: import('@agor/core/types').Branch, userId: UUID) =>
-      widgetResolutionBranches.resolveUserPermission(branch, userId),
+    resolveSessionPromptAuthority: async (
+      branchId: string,
+      callerUserId: UUID,
+      sessionOwnerUserId: UUID
+    ) =>
+      widgetResolutionBranches.resolveSessionPromptAuthority(
+        branchId as import('@agor/core/types').BranchID,
+        callerUserId,
+        sessionOwnerUserId
+      ),
   };
 
   registerLongAuthenticatedRoute(
@@ -4279,10 +4257,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     checkSessionOwnerOrAdmin(user, session, superadminOpts);
   };
 
-  // Same authorization, but returns the session. MCP routes need its
-  // `created_by`: that identity, not the caller's, decides which private
-  // servers the session may see, so it has to be loaded for service-account
-  // callers too rather than short-circuited.
+  // Same authorization, but returns the session for attachment validation and
+  // for a safe owner fallback when an internal call has no prompt actor.
   const authorizeAndLoadSessionForMcpConfig = async (
     sessionId: string,
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
@@ -4442,6 +4418,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           isServiceAccount: routeUser?._isServiceAccount,
           callerUserId: params.user?.user_id,
         });
+        // Personal session sharing preserves the Session owner/home but runs
+        // each prompt with the Task creator's Agor credentials. A private MCP
+        // server owned by the Session owner must therefore disappear when a
+        // different prompt actor executes the turn.
+        const credentialUserId = userId ?? session.created_by;
         const rawLookupParams = {
           ...params,
           provider: undefined,
@@ -4526,12 +4507,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           scope: 'global',
           ...(enabledOnly ? { enabled: true } : {}),
           ...(userId ? { forUserId: userId } : {}),
-          // Global scope means "every session of everyone who may use it", not
-          // "every session in the tenant": a private server belongs to its
-          // owner's sessions only. Keyed on the session's creator rather than
-          // the caller or the query's `forUserId`, neither of which is the
-          // identity the session runs as.
-          usableByUserId: session.created_by,
+          // Private global servers belong to the current prompt actor. Shared
+          // rows remain available and resolve per-user OAuth for this same ID.
+          usableByUserId: credentialUserId,
           $limit: 1000,
         };
         const globalResult = includeGlobal
@@ -4542,7 +4520,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             })
           : [];
         const globalServers = Array.isArray(globalResult) ? globalResult : globalResult.data;
-        const servers = filterMCPServersForSession(
+        const servers = (
           includeGlobal
             ? [
                 ...new Map(
@@ -4552,9 +4530,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   ])
                 ).values(),
               ]
-            : sessionServers,
-          session
-        );
+            : sessionServers
+        ).filter((server) => isMCPServerUsableBy(server, credentialUserId));
         return shouldExposeMCPServerSecrets(params, {
           allowSessionToken: true,
           sessionId: id,

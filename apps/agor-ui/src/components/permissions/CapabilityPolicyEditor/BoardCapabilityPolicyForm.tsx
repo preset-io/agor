@@ -7,17 +7,19 @@ import { BranchesOutlined, LayoutOutlined } from '@ant-design/icons';
 import { Divider, Flex, Tabs, Typography, theme } from 'antd';
 import { BranchPermissionConfigEditor } from './BranchPermissionConfigEditor';
 import { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
+import type { EffectiveAccessSubject } from './effectiveAccessPreviewModel';
 import { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
 import { BOARD_ACCESS_EDITOR_CONTEXT } from './policyEditorModel';
-import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
 interface BoardCapabilityPolicyFormProps {
   value: BoardCapabilityPoliciesDraft;
   onChange: (value: BoardCapabilityPoliciesDraft) => void;
   principals: CapabilityPolicyPrincipalDescriptor[];
-  subjects: PrototypeAccessSubject[];
+  subjects: EffectiveAccessSubject[];
   sampleBranchOwnerUserId: UserID;
   currentUserId: UserID;
+  personalSessionSharingWorkspaceEnabled?: boolean;
+  canManageAccess?: boolean;
 }
 
 function findUserDescriptor(
@@ -37,6 +39,8 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
   subjects,
   sampleBranchOwnerUserId,
   currentUserId,
+  personalSessionSharingWorkspaceEnabled = true,
+  canManageAccess = true,
 }) => {
   const { token } = theme.useToken();
   const owner = findUserDescriptor(principals, value.primary_owner_user_id);
@@ -71,6 +75,7 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
                 primaryOwnerUserId={value.primary_owner_user_id}
                 principals={principals}
                 subjects={subjects}
+                readOnly={!canManageAccess}
               />
             ),
           },
@@ -93,6 +98,8 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
                 principals={principals}
                 subjects={subjects}
                 sharingScope="board_defaults"
+                personalSessionSharingWorkspaceEnabled={personalSessionSharingWorkspaceEnabled}
+                accessReadOnly={!canManageAccess}
               />
             ),
           },

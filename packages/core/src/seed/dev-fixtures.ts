@@ -188,9 +188,6 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
       'branch' // refType
     );
 
-    // Add user as owner of the branch
-    await branchRepo.addOwner(branch.branch_id, userId);
-
     console.log(`   ✓ Created branch: ${branch.name} (${branch.branch_id})`);
 
     // STEP 4: Create board object to position branch on board

@@ -138,6 +138,8 @@ export interface ExecutorTemplateVariables {
   branch_id?: string;
   /** Trusted Agor user UUID used by external launchers for identity-scoped storage. */
   user_id?: string;
+  /** RBAC-resolved branch filesystem projection for the current actor. */
+  branch_fs_access?: 'none' | 'read' | 'write';
   log_level?: string;
   executor_type?: string;
   /**
@@ -289,6 +291,7 @@ export function substituteTemplateVariables(
     session_id: variables.session_id,
     branch_id: variables.branch_id,
     user_id: variables.user_id,
+    branch_fs_access: variables.branch_fs_access,
     log_level: variables.log_level,
     executor_type: variables.executor_type,
     tenant_id: variables.tenant_id,
