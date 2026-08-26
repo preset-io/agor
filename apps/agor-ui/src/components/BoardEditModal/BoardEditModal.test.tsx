@@ -15,14 +15,21 @@ vi.mock('../JSONEditor', () => ({
 vi.mock('../forms/BoardFormFields', () => ({
   BoardFormFields: ({
     capabilityPolicyPrototype,
+    allGroups,
   }: {
     capabilityPolicyPrototype?: React.ReactNode;
+    allGroups?: Array<{ name: string }>;
   }) => (
     <>
       <Form.Item name="name" label="Name" rules={[{ required: true }]}>
         <Input />
       </Form.Item>
-      {capabilityPolicyPrototype && <div data-testid="board-modal-policy-prototype" />}
+      {capabilityPolicyPrototype && (
+        <div
+          data-testid="board-modal-policy-prototype"
+          data-group-names={allGroups?.map((group) => group.name).join(',')}
+        />
+      )}
     </>
   ),
   extractBoardFormValues: (form: { getFieldValue: (name: string) => unknown }) => ({
@@ -83,6 +90,45 @@ describe('BoardEditModal', () => {
       expect(onUpdate).toHaveBeenCalledWith(listedBoard.board_id, { name: 'Renamed' })
     );
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('keeps selectable groups when legacy board grants are unavailable', async () => {
+    const get = vi.fn().mockResolvedValue(freshBoard);
+    const client = {
+      service: (name: string) => {
+        if (name === 'boards') return { get };
+        if (name === 'users') return { findAll: vi.fn().mockResolvedValue([]) };
+        if (name === 'groups') {
+          return {
+            findAll: vi
+              .fn()
+              .mockResolvedValue([{ group_id: 'group-design', name: 'Product Design' }]),
+          };
+        }
+        if (name === 'boards/:id/owners') {
+          return { find: vi.fn().mockResolvedValue([]) };
+        }
+        if (name === 'boards/:id/group-grants') {
+          return { find: vi.fn().mockRejectedValue({ code: 404, message: 'not found' }) };
+        }
+        throw new Error(`Unexpected service: ${name}`);
+      },
+    } as unknown as AgorClient;
+
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByTestId('board-modal-policy-prototype')).toHaveAttribute(
+      'data-group-names',
+      'Product Design'
+    );
   });
 
   it('surfaces non-404 metadata failures and prevents saving stale settings', async () => {

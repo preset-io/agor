@@ -34,12 +34,17 @@ describe('modal capability-policy prototype adapters', () => {
 
     expect(draft.primary_owner_user_id).toBe(owner.user_id);
     expect(draft.board_access).toMatchObject({ sharing_mode: 'private', entries: [] });
-    expect(draft.branch_template.sharing_mode).toBe('shared');
-    expect(draft.branch_template.others).toMatchObject({
+    expect(draft.branch_template.access.sharing_mode).toBe('shared');
+    expect(draft.branch_template.access.others).toMatchObject({
       preset: 'collaborator',
       fs_access: 'write',
     });
-    expect(draft.branch_template.others.capabilities).not.toContain('sessions.manage_others');
+    expect(draft.branch_template.access.others.capabilities).not.toContain(
+      'sessions.manage_others'
+    );
+    expect(draft.branch_template.session_sharing.owner_rules).toEqual([
+      { session_owner_user_id: owner.user_id, enabled: false, grantees: [] },
+    ]);
   });
 
   it('narrows legacy prompt and all while refusing to synthesize personal consent', () => {
@@ -68,8 +73,8 @@ describe('modal capability-policy prototype adapters', () => {
       sessions,
     });
 
-    expect(draft.override_policy?.others.preset).toBe('collaborator');
-    expect(draft.override_policy?.entries).toEqual(
+    expect(draft.override_config?.access.others.preset).toBe('collaborator');
+    expect(draft.override_config?.access.entries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           principal: { principal_type: 'user', user_id: manager.user_id },
@@ -81,7 +86,7 @@ describe('modal capability-policy prototype adapters', () => {
         }),
       ])
     );
-    expect(draft.session_sharing.owner_rules).toEqual(
+    expect(draft.override_config?.session_sharing.owner_rules).toEqual(
       expect.arrayContaining([
         { session_owner_user_id: member.user_id, enabled: false, grantees: [] },
         { session_owner_user_id: manager.user_id, enabled: false, grantees: [] },

@@ -162,10 +162,43 @@ const privatePolicy = (
   others: closedOthers(),
 });
 
+const emptySessionSharingFixture = () => ({
+  owner_rules: [
+    {
+      session_owner_user_id: PROTOTYPE_USERS.kasia,
+      enabled: false,
+      grantees: [],
+    },
+  ],
+});
+
+const sessionSharingFixture = () => ({
+  owner_rules: [
+    {
+      session_owner_user_id: PROTOTYPE_USERS.kasia,
+      enabled: false,
+      grantees: [],
+    },
+    {
+      session_owner_user_id: PROTOTYPE_USERS.seb,
+      enabled: true,
+      grantees: [
+        {
+          grant_id: entryId('50'),
+          principal: { principal_type: 'group' as const, group_id: PROTOTYPE_GROUPS.gtm },
+        },
+      ],
+    },
+  ],
+});
+
 export const PRIVATE_BOARD_FIXTURE: BoardCapabilityPoliciesDraft = {
   primary_owner_user_id: PROTOTYPE_USERS.max,
   board_access: privatePolicy('board_access'),
-  branch_template: privatePolicy('branch_access'),
+  branch_template: {
+    access: privatePolicy('branch_access'),
+    session_sharing: emptySessionSharingFixture(),
+  },
 };
 
 export const SHARED_BOARD_FIXTURE: BoardCapabilityPoliciesDraft = {
@@ -207,137 +240,130 @@ export const SHARED_BOARD_FIXTURE: BoardCapabilityPoliciesDraft = {
     others: { preset: 'viewer', capabilities: ['board.view'], fs_access: 'none' },
   },
   branch_template: {
-    schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
-    policy_kind: 'branch_access',
-    sharing_mode: 'shared',
-    entries: [
-      {
-        entry_id: entryId('5'),
-        principal: { principal_type: 'group', group_id: PROTOTYPE_GROUPS.design },
-        preset: 'viewer',
-        capabilities: ['branch.view'],
-        fs_access: 'read',
-      },
-      {
-        entry_id: entryId('6'),
-        principal: { principal_type: 'group', group_id: PROTOTYPE_GROUPS.release },
-        preset: 'collaborator',
-        capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own', 'terminal.open'],
-        fs_access: 'read',
-      },
-      {
-        entry_id: entryId('7'),
-        principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.kasia },
-        preset: 'manager',
-        capabilities: [
-          'branch.view',
-          'sessions.manage_others',
-          'branch.manage',
-          'environment.control',
-          'branch.policy.manage',
-        ],
-        fs_access: 'write',
-      },
-      {
-        entry_id: entryId('8'),
-        principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.mia },
-        preset: 'manager',
-        capabilities: [
-          'branch.view',
-          'sessions.manage_others',
-          'branch.manage',
-          'environment.control',
-          'branch.policy.manage',
-        ],
-        fs_access: 'write',
-      },
-      {
-        entry_id: entryId('9'),
-        principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.deleted },
-        preset: 'viewer',
-        capabilities: ['branch.view'],
-        fs_access: 'read',
-      },
-    ],
-    others: { preset: 'viewer', capabilities: ['branch.view'], fs_access: 'none' },
-  },
-};
-
-const sessionSharingFixture = () => ({
-  owner_rules: [
-    {
-      session_owner_user_id: PROTOTYPE_USERS.kasia,
-      enabled: false,
-      grantees: [],
-    },
-    {
-      session_owner_user_id: PROTOTYPE_USERS.seb,
-      enabled: true,
-      grantees: [
+    access: {
+      schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
+      policy_kind: 'branch_access',
+      sharing_mode: 'shared',
+      entries: [
         {
-          grant_id: entryId('50'),
-          principal: { principal_type: 'group' as const, group_id: PROTOTYPE_GROUPS.gtm },
+          entry_id: entryId('5'),
+          principal: { principal_type: 'group', group_id: PROTOTYPE_GROUPS.design },
+          preset: 'viewer',
+          capabilities: ['branch.view'],
+          fs_access: 'read',
+        },
+        {
+          entry_id: entryId('6'),
+          principal: { principal_type: 'group', group_id: PROTOTYPE_GROUPS.release },
+          preset: 'collaborator',
+          capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own', 'terminal.open'],
+          fs_access: 'read',
+        },
+        {
+          entry_id: entryId('7'),
+          principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.kasia },
+          preset: 'manager',
+          capabilities: [
+            'branch.view',
+            'sessions.create',
+            'sessions.prompt_own',
+            'sessions.manage_others',
+            'branch.manage',
+            'environment.control',
+            'terminal.open',
+            'branch.policy.manage',
+          ],
+          fs_access: 'write',
+        },
+        {
+          entry_id: entryId('8'),
+          principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.mia },
+          preset: 'manager',
+          capabilities: [
+            'branch.view',
+            'sessions.create',
+            'sessions.prompt_own',
+            'sessions.manage_others',
+            'branch.manage',
+            'environment.control',
+            'terminal.open',
+            'branch.policy.manage',
+          ],
+          fs_access: 'write',
+        },
+        {
+          entry_id: entryId('9'),
+          principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.deleted },
+          preset: 'viewer',
+          capabilities: ['branch.view'],
+          fs_access: 'read',
         },
       ],
+      others: { preset: 'viewer', capabilities: ['branch.view'], fs_access: 'none' },
     },
-  ],
-});
+    session_sharing: sessionSharingFixture(),
+  },
+};
 
 export const INHERITED_BRANCH_FIXTURE: BranchCapabilityPolicyDraft = {
   primary_owner_user_id: PROTOTYPE_USERS.leo,
   binding_mode: 'inherit',
   inherited_from_board_id: '40000000-0000-0000-0000-000000000001' as BoardID,
-  inherited_policy: structuredClone(SHARED_BOARD_FIXTURE.branch_template),
-  session_sharing: sessionSharingFixture(),
+  inherited_config: structuredClone(SHARED_BOARD_FIXTURE.branch_template),
 };
 
 export const OVERRIDDEN_BRANCH_FIXTURE: BranchCapabilityPolicyDraft = {
   primary_owner_user_id: PROTOTYPE_USERS.leo,
   binding_mode: 'override',
   inherited_from_board_id: '40000000-0000-0000-0000-000000000001' as BoardID,
-  inherited_policy: structuredClone(SHARED_BOARD_FIXTURE.branch_template),
-  session_sharing: sessionSharingFixture(),
-  override_policy: {
-    schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
-    policy_kind: 'branch_access',
-    sharing_mode: 'shared',
-    entries: [
-      {
-        entry_id: entryId('10'),
-        principal: { principal_type: 'group', group_id: PROTOTYPE_GROUPS.security },
-        preset: 'manager',
-        capabilities: [
-          'branch.view',
-          'sessions.manage_others',
-          'branch.manage',
-          'environment.control',
-          'branch.policy.manage',
-        ],
-        fs_access: 'write',
-      },
-      {
-        entry_id: entryId('11'),
-        principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.kasia },
-        preset: 'collaborator',
-        capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own', 'terminal.open'],
-        fs_access: 'read',
-      },
-      {
-        entry_id: entryId('12'),
-        principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.mia },
-        preset: 'viewer',
-        capabilities: ['branch.view'],
-        fs_access: 'read',
-      },
-      {
-        entry_id: entryId('13'),
-        principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.deleted },
-        preset: 'viewer',
-        capabilities: ['branch.view'],
-        fs_access: 'read',
-      },
-    ],
-    others: closedOthers(),
+  inherited_config: structuredClone(SHARED_BOARD_FIXTURE.branch_template),
+  override_config: {
+    access: {
+      schema_version: CAPABILITY_POLICY_SCHEMA_VERSION,
+      policy_kind: 'branch_access',
+      sharing_mode: 'shared',
+      entries: [
+        {
+          entry_id: entryId('10'),
+          principal: { principal_type: 'group', group_id: PROTOTYPE_GROUPS.security },
+          preset: 'manager',
+          capabilities: [
+            'branch.view',
+            'sessions.create',
+            'sessions.prompt_own',
+            'sessions.manage_others',
+            'branch.manage',
+            'environment.control',
+            'terminal.open',
+            'branch.policy.manage',
+          ],
+          fs_access: 'write',
+        },
+        {
+          entry_id: entryId('11'),
+          principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.kasia },
+          preset: 'collaborator',
+          capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own', 'terminal.open'],
+          fs_access: 'read',
+        },
+        {
+          entry_id: entryId('12'),
+          principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.mia },
+          preset: 'viewer',
+          capabilities: ['branch.view'],
+          fs_access: 'read',
+        },
+        {
+          entry_id: entryId('13'),
+          principal: { principal_type: 'user', user_id: PROTOTYPE_USERS.deleted },
+          preset: 'viewer',
+          capabilities: ['branch.view'],
+          fs_access: 'read',
+        },
+      ],
+      others: closedOthers(),
+    },
+    session_sharing: sessionSharingFixture(),
   },
 };
 
@@ -366,8 +392,7 @@ export const BRANCH_PROTOTYPE_FIXTURES: Record<
 > = {
   'inherited-branch': {
     label: 'Inherited branch',
-    description:
-      'Uses board defaults while personal session-sharing rules remain branch-local and owner-authored.',
+    description: 'Uses the board’s access and personal session-sharing defaults.',
     value: INHERITED_BRANCH_FIXTURE,
   },
   'overridden-branch': {

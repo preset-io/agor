@@ -86,17 +86,16 @@ export interface ProtectedResourceCapabilityPolicyDraft {
 export interface BoardCapabilityPoliciesDraft {
   primary_owner_user_id: UserID;
   board_access: CapabilityPolicyDraft;
-  /** Live defaults inherited by aligned branches; each branch keeps its own owner. */
-  branch_template: CapabilityPolicyDraft;
+  /** Live access and personal-sharing defaults inherited by aligned branches. */
+  branch_template: BranchPermissionConfigDraft;
 }
 
 /**
  * One existing person or group allowed to prompt sessions owned by one user.
  *
- * This is intentionally separate from the reusable branch policy. It is a
- * personal, owner-authored exception that can cross an execution-home
- * boundary; it must never be inherited from a board or edited by a branch
- * manager on the session owner's behalf.
+ * This is a personal, owner-authored exception that can cross an
+ * execution-home boundary. A rule may be part of a board's branch defaults,
+ * but nobody may edit another session owner's rule on their behalf.
  */
 export interface BranchSessionSharingGrantDraft {
   grant_id: UUID;
@@ -111,6 +110,18 @@ export interface BranchSessionSharingOwnerRuleDraft {
 
 export interface BranchSessionSharingDraft {
   owner_rules: BranchSessionSharingOwnerRuleDraft[];
+}
+
+/**
+ * The complete configuration shared by board branch defaults and branch
+ * overrides. Binding is deliberately outside this object: a branch either
+ * inherits or replaces this entire value. Aggregate transport does not imply
+ * aggregate mutation authority: each session owner may change only their own
+ * sharing rule.
+ */
+export interface BranchPermissionConfigDraft {
+  access: CapabilityPolicyDraft;
+  session_sharing: BranchSessionSharingDraft;
 }
 
 /**
@@ -136,10 +147,8 @@ export interface BranchCapabilityPolicyDraft {
   primary_owner_user_id: UserID;
   binding_mode: CapabilityPolicyBindingMode;
   inherited_from_board_id?: BoardID;
-  inherited_policy?: CapabilityPolicyDraft;
-  override_policy?: CapabilityPolicyDraft;
-  /** Per-session-owner dangerous sharing exceptions; never board-inherited. */
-  session_sharing: BranchSessionSharingDraft;
+  inherited_config?: BranchPermissionConfigDraft;
+  override_config?: BranchPermissionConfigDraft;
 }
 
 /** Hydrated principal read model for selectors, warnings, and access explanations. */

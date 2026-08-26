@@ -1,21 +1,41 @@
 import type {
   CapabilityPolicyDraft,
   CapabilityPolicyEntryDraft,
+  CapabilityPolicyOthersDraft,
   CapabilityPolicyPrincipalDescriptor,
   UserID,
 } from '@agor/core/types';
 import { capabilityPolicyPrincipalKey, validateCapabilityPolicyDraft } from '@agor/core/types';
-import { EyeOutlined, GlobalOutlined } from '@ant-design/icons';
-import { Alert, Button, Card, Collapse, Flex, Grid, Segmented, Typography, theme } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import {
+  CloseOutlined,
+  DeleteOutlined,
+  EyeOutlined,
+  GlobalOutlined,
+  InfoCircleOutlined,
+  PlusOutlined,
+} from '@ant-design/icons';
+import type { TableColumnsType } from 'antd';
+import {
+  Alert,
+  Button,
+  Card,
+  Flex,
+  Grid,
+  Popconfirm,
+  Segmented,
+  Table,
+  Tooltip,
+  Typography,
+  theme,
+} from 'antd';
+import { useMemo, useState } from 'react';
 import { Tag } from '@/components/Tag';
+import { AccessGrantControls } from './AccessGrantControls';
 import { EffectiveAccessPreview } from './EffectiveAccessPreview';
-import { OthersFallbackCard } from './OthersFallbackCard';
-import { PolicyEntryCard } from './PolicyEntryCard';
 import { PrincipalEntryPicker } from './PrincipalEntryPicker';
 import { PrincipalIdentity } from './PrincipalIdentity';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
-import { fsAccessLabel, makePrivatePolicy, makeSharedClosedPolicy } from './policyEditorModel';
+import { makePrivatePolicy, makeSharedClosedPolicy } from './policyEditorModel';
 import { makePrototypeDraftId } from './prototypeDraftId';
 import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
@@ -31,7 +51,10 @@ interface CapabilityPolicyEditorProps {
   readOnly?: boolean;
 }
 
-const OTHERS_ENTRY_KEY = 'others';
+type AccessListRow =
+  | { key: string; kind: 'entry'; entry: CapabilityPolicyEntryDraft; index: number }
+  | { key: 'new-entry'; kind: 'new' }
+  | { key: 'others'; kind: 'others' };
 
 export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
   title,
@@ -47,7 +70,8 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
   const { token } = theme.useToken();
   const screens = Grid.useBreakpoint();
   const [confirmPrivate, setConfirmPrivate] = useState(false);
-  const [selectedEntryKey, setSelectedEntryKey] = useState<string>(OTHERS_ENTRY_KEY);
+  const [addingEntry, setAddingEntry] = useState(false);
+  const [showEffectiveAccess, setShowEffectiveAccess] = useState(false);
   const issues = validateCapabilityPolicyDraft(value);
   const descriptorByKey = useMemo(
     () =>
@@ -73,22 +97,19 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
     }
     return !usedKeys.has(capabilityPolicyPrincipalKey(principal.principal));
   });
-  const selectedEntryIndex = value.entries.findIndex(
-    (entry) => entry.entry_id === selectedEntryKey
+  const rows = useMemo<AccessListRow[]>(
+    () => [
+      ...value.entries.map((entry, index) => ({
+        key: entry.entry_id,
+        kind: 'entry' as const,
+        entry,
+        index,
+      })),
+      ...(addingEntry ? [{ key: 'new-entry' as const, kind: 'new' as const }] : []),
+      { key: 'others', kind: 'others' as const },
+    ],
+    [addingEntry, value.entries]
   );
-  const selectedEntry = value.entries[selectedEntryIndex];
-
-  useEffect(() => {
-    if (
-      selectedEntryKey !== OTHERS_ENTRY_KEY &&
-      !value.entries.some((entry) => entry.entry_id === selectedEntryKey)
-    ) {
-      setSelectedEntryKey(OTHERS_ENTRY_KEY);
-    }
-  }, [selectedEntryKey, value.entries]);
-
-  const presetLabel = (entry: CapabilityPolicyEntryDraft) =>
-    context.presets.find((preset) => preset.id === entry.preset)?.label ?? 'Custom';
 
   const setSharingMode = (mode: 'private' | 'shared') => {
     if (mode === value.sharing_mode) return;
@@ -101,6 +122,7 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
       setConfirmPrivate(true);
       return;
     }
+    setAddingEntry(false);
     onChange(mode === 'private' ? makePrivatePolicy(value) : makeSharedClosedPolicy(value));
   };
 
@@ -115,7 +137,7 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
       fs_access: 'none',
     };
     onChange({ ...value, entries: [...value.entries, entry] });
-    setSelectedEntryKey(entry.entry_id);
+    setAddingEntry(false);
   };
 
   const updateEntry = (index: number, entry: CapabilityPolicyEntryDraft) => {
@@ -126,6 +148,179 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
       ),
     });
   };
+
+  const rowDescriptor = (row: AccessListRow) =>
+    row.kind === 'entry'
+      ? descriptorByKey.get(capabilityPolicyPrincipalKey(row.entry.principal))
+      : undefined;
+
+  const rowLabel = (row: AccessListRow) =>
+    rowDescriptor(row)?.display_name ??
+    (row.kind === 'entry'
+      ? 'Unavailable principal'
+      : row.kind === 'new'
+        ? 'New access entry'
+        : 'Others fallback');
+
+  const renderPrincipal = (row: AccessListRow) => {
+    const descriptor = rowDescriptor(row);
+    if (row.kind === 'entry') return <PrincipalIdentity descriptor={descriptor} compact />;
+    if (row.kind === 'new') {
+      return (
+        <PrincipalEntryPicker
+          principals={availablePrincipals}
+          onAdd={addPrincipal}
+          ariaLabel={`Select one person or group for ${title}`}
+          placeholder="Select user or group"
+          autoFocus
+          showPrefix={false}
+        />
+      );
+    }
+    return (
+      <Flex vertical gap={token.paddingXXS}>
+        <Flex align="center" gap={token.paddingXS} wrap>
+          <GlobalOutlined aria-hidden />
+          <Typography.Text strong>Others</Typography.Text>
+          <Tag color="gold">Fallback</Tag>
+          <Tooltip title="Used only when no person or group entry matches. Active workspace members only.">
+            <InfoCircleOutlined aria-label="Others fallback details" />
+          </Tooltip>
+        </Flex>
+        <Typography.Text type="secondary">Unmatched active members</Typography.Text>
+      </Flex>
+    );
+  };
+
+  const renderControls = (
+    row: AccessListRow,
+    compact: boolean,
+    field: 'all' | 'role' | 'filesystem' = 'all'
+  ) => {
+    if (row.kind === 'new') {
+      if (field === 'filesystem') return <Typography.Text type="secondary">—</Typography.Text>;
+      if (field === 'all') return null;
+      return <Typography.Text type="secondary">Choose a user or group</Typography.Text>;
+    }
+    const entry = row.kind === 'entry' ? row.entry : undefined;
+    const descriptor = rowDescriptor(row);
+    return (
+      <AccessGrantControls
+        value={entry ?? value.others}
+        context={context}
+        compact={compact}
+        field={field}
+        disabled={readOnly || (entry ? descriptor?.status !== 'active' : false)}
+        label={rowLabel(row)}
+        onChange={(grant) => {
+          if (entry) updateEntry(row.index, grant as CapabilityPolicyEntryDraft);
+          else
+            onChange({
+              ...value,
+              others: grant as CapabilityPolicyOthersDraft,
+            });
+        }}
+      />
+    );
+  };
+
+  const renderRemove = (row: AccessListRow) => {
+    if (readOnly || row.kind === 'others') return null;
+    if (row.kind === 'new') {
+      return (
+        <Button
+          type="text"
+          icon={<CloseOutlined />}
+          aria-label="Cancel new access entry"
+          onClick={() => setAddingEntry(false)}
+        />
+      );
+    }
+    const label = rowLabel(row);
+    return (
+      <Popconfirm
+        title={`Remove ${label}?`}
+        okText="Remove entry"
+        okButtonProps={{ danger: true }}
+        onConfirm={() =>
+          onChange({
+            ...value,
+            entries: value.entries.filter((_, candidateIndex) => candidateIndex !== row.index),
+          })
+        }
+      >
+        <Button
+          danger
+          type="text"
+          icon={<DeleteOutlined />}
+          aria-label={`Remove access entry for ${label}`}
+        />
+      </Popconfirm>
+    );
+  };
+
+  const roleHeader = (
+    <Flex align="center" gap={token.paddingXXS}>
+      <Typography.Text strong>Role</Typography.Text>
+      <Tooltip title="Roles are cumulative. Open a role menu for details.">
+        <InfoCircleOutlined aria-label="Role column details" />
+      </Tooltip>
+    </Flex>
+  );
+
+  const filesystemHeader = (
+    <Flex align="center" gap={token.paddingXXS}>
+      <Typography.Text strong>File access</Typography.Text>
+      <Tooltip title="Controls branch file mounts. Terminal access also requires Collaborator or Manager.">
+        <InfoCircleOutlined aria-label="File access column details" />
+      </Tooltip>
+    </Flex>
+  );
+
+  const columns: TableColumnsType<AccessListRow> = screens.md
+    ? [
+        {
+          key: 'principal',
+          title: 'Person or group',
+          width: 230,
+          render: (_, row) => (
+            <Flex align="center" justify="space-between" gap={token.paddingXS}>
+              <div style={{ flex: 1, minWidth: 0 }}>{renderPrincipal(row)}</div>
+              {renderRemove(row)}
+            </Flex>
+          ),
+        },
+        {
+          key: 'role',
+          title: roleHeader,
+          width: context.supportsFilesystem ? 230 : undefined,
+          render: (_, row) => renderControls(row, true, 'role'),
+        },
+        ...(context.supportsFilesystem
+          ? [
+              {
+                key: 'filesystem',
+                title: filesystemHeader,
+                width: 150,
+                render: (_: unknown, row: AccessListRow) => renderControls(row, true, 'filesystem'),
+              },
+            ]
+          : []),
+      ]
+    : [
+        {
+          key: 'entry',
+          render: (_, row) => (
+            <Flex vertical gap={token.paddingSM}>
+              <Flex align="center" justify="space-between" gap={token.paddingSM}>
+                <div style={{ flex: 1, minWidth: 0 }}>{renderPrincipal(row)}</div>
+                {renderRemove(row)}
+              </Flex>
+              {renderControls(row, false)}
+            </Flex>
+          ),
+        },
+      ];
 
   return (
     <Flex vertical gap={token.paddingMD}>
@@ -174,8 +369,8 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
                 type="primary"
                 onClick={() => {
                   onChange(makePrivatePolicy(value));
-                  setSelectedEntryKey(OTHERS_ENTRY_KEY);
                   setConfirmPrivate(false);
+                  setAddingEntry(false);
                 }}
               >
                 Make private
@@ -203,135 +398,51 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
 
       {context.kind === 'branch_access' && (
         <Typography.Text type="secondary">
-          Roles have fixed permissions. File access is separate; a terminal requires Collaborator
-          and file access.
+          Terminal requires Collaborator or Manager with file access.
         </Typography.Text>
       )}
 
       {value.sharing_mode === 'shared' ? (
-        <Flex vertical={!screens.md} gap={token.paddingSM} align="stretch">
-          <Card
-            size="small"
-            title="Access entries"
-            extra={<Tag>{value.entries.length} entries</Tag>}
-            style={{ flex: screens.md ? '0 0 280px' : undefined, minWidth: 0 }}
-            styles={{ body: { padding: token.paddingSM } }}
-          >
-            <Flex vertical gap={token.paddingSM}>
-              {!readOnly && (
-                <Flex vertical gap={token.paddingXXS}>
-                  <PrincipalEntryPicker
-                    principals={availablePrincipals}
-                    onAdd={addPrincipal}
-                    ariaLabel={`Add one person or group to ${title}`}
-                  />
-                  <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                    One person or group per entry. Groups are managed separately.
-                  </Typography.Text>
-                </Flex>
-              )}
-
-              {value.entries.length === 0 && (
-                <Typography.Text type="secondary">No named entries.</Typography.Text>
-              )}
-
-              {value.entries.map((entry) => {
-                const descriptor = descriptorByKey.get(
-                  capabilityPolicyPrincipalKey(entry.principal)
-                );
-                const label = descriptor?.display_name ?? 'Unavailable principal';
-                const selected = selectedEntryKey === entry.entry_id;
-                return (
-                  <Button
-                    key={entry.entry_id}
-                    block
-                    type={selected ? 'default' : 'text'}
-                    aria-label={`Edit access for ${label}`}
-                    aria-pressed={selected}
-                    onClick={() => setSelectedEntryKey(entry.entry_id)}
-                    style={{ height: 'auto', padding: token.paddingXS, textAlign: 'start' }}
-                  >
-                    <Flex vertical gap={token.paddingXXS} style={{ width: '100%', minWidth: 0 }}>
-                      <PrincipalIdentity descriptor={descriptor} compact />
-                      <Flex gap={token.paddingXXS} wrap>
-                        <Tag color="blue">{presetLabel(entry)}</Tag>
-                        {context.supportsFilesystem && <Tag>{fsAccessLabel[entry.fs_access]}</Tag>}
-                      </Flex>
-                    </Flex>
-                  </Button>
-                );
-              })}
-
+        <Flex vertical gap={token.paddingSM}>
+          <Flex justify="space-between" align="center" gap={token.paddingSM} wrap>
+            <Typography.Text strong>Access entries</Typography.Text>
+            {!readOnly && (
               <Button
-                block
-                type={selectedEntryKey === OTHERS_ENTRY_KEY ? 'default' : 'text'}
-                aria-label="Edit Others fallback"
-                aria-pressed={selectedEntryKey === OTHERS_ENTRY_KEY}
-                onClick={() => setSelectedEntryKey(OTHERS_ENTRY_KEY)}
-                style={{ height: 'auto', padding: token.paddingXS, textAlign: 'start' }}
+                icon={<PlusOutlined aria-hidden />}
+                disabled={addingEntry || availablePrincipals.length === 0}
+                onClick={() => setAddingEntry(true)}
               >
-                <Flex vertical gap={token.paddingXXS} style={{ width: '100%', minWidth: 0 }}>
-                  <Flex align="center" gap={token.paddingXS}>
-                    <GlobalOutlined aria-hidden />
-                    <Typography.Text strong>Others</Typography.Text>
-                    <Tag color="gold">Fallback</Tag>
-                  </Flex>
-                  <Typography.Text type="secondary">Unmatched active members</Typography.Text>
-                </Flex>
+                Add user/group
               </Button>
-            </Flex>
-          </Card>
-
-          <Card
-            size="small"
-            title={selectedEntry ? 'Named access' : 'Fallback access'}
-            style={{ flex: 1, minWidth: 0 }}
-            styles={{ body: { padding: token.paddingSM } }}
-          >
-            {selectedEntry ? (
-              <PolicyEntryCard
-                value={selectedEntry}
-                descriptor={descriptorByKey.get(
-                  capabilityPolicyPrincipalKey(selectedEntry.principal)
-                )}
-                context={context}
-                onChange={(nextEntry) => updateEntry(selectedEntryIndex, nextEntry)}
-                onRemove={() => {
-                  onChange({
-                    ...value,
-                    entries: value.entries.filter(
-                      (_, candidateIndex) => candidateIndex !== selectedEntryIndex
-                    ),
-                  });
-                  setSelectedEntryKey(OTHERS_ENTRY_KEY);
-                }}
-                disabled={readOnly}
-              />
-            ) : (
-              <OthersFallbackCard
-                value={value.others}
-                context={context}
-                disabled={readOnly}
-                onChange={(others) => onChange({ ...value, others })}
-              />
             )}
-          </Card>
+          </Flex>
+          <Table<AccessListRow>
+            size="small"
+            bordered
+            rowKey="key"
+            dataSource={rows}
+            columns={columns}
+            pagination={false}
+            showHeader={!!screens.md}
+            tableLayout="fixed"
+          />
         </Flex>
       ) : null}
 
-      <Collapse
-        size="small"
-        items={[
-          {
-            key: 'effective-preview',
-            label: (
-              <Flex align="center" gap={token.paddingXS} wrap>
-                <EyeOutlined aria-hidden />
-                <Typography.Text strong>Effective access</Typography.Text>
-                <Tag color="purple">Read only</Tag>
-              </Flex>
-            ),
-            children: (
+      {subjects.length > 0 && (
+        <Flex vertical align="flex-start" gap={token.paddingXS}>
+          <Button
+            type="link"
+            size="small"
+            icon={<EyeOutlined aria-hidden />}
+            style={{ paddingInline: 0 }}
+            aria-expanded={showEffectiveAccess}
+            onClick={() => setShowEffectiveAccess((visible) => !visible)}
+          >
+            {showEffectiveAccess ? 'Hide effective access' : 'Check effective access'}
+          </Button>
+          {showEffectiveAccess && (
+            <Card size="small" style={{ width: '100%' }}>
               <EffectiveAccessPreview
                 policy={value}
                 primaryOwnerUserId={primaryOwnerUserId}
@@ -339,10 +450,10 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
                 subjects={subjects}
                 context={context}
               />
-            ),
-          },
-        ]}
-      />
+            </Card>
+          )}
+        </Flex>
+      )}
     </Flex>
   );
 };

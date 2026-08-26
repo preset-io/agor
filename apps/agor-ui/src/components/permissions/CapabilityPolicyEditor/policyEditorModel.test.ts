@@ -26,21 +26,21 @@ describe('capability policy editor model', () => {
     });
   });
 
-  it('keeps Manager independent from prompt and execution capabilities', () => {
+  it('makes Manager cumulative with Collaborator without foreign-session authority', () => {
     const manager = applyCapabilityPreset(grant, BRANCH_ACCESS_EDITOR_CONTEXT, 'manager');
 
     expect(manager.capabilities).toEqual(
       expect.arrayContaining([
         'branch.view',
+        'sessions.create',
+        'sessions.prompt_own',
         'sessions.manage_others',
         'branch.manage',
         'environment.control',
         'branch.policy.manage',
       ])
     );
-    expect(manager.capabilities).not.toEqual(
-      expect.arrayContaining(['sessions.create', 'sessions.prompt_own', 'terminal.open'])
-    );
+    expect(manager.capabilities).not.toContain('terminal.open');
   });
 
   it('keeps the selected role stable when file access changes independently', () => {
@@ -75,7 +75,7 @@ describe('capability policy editor model', () => {
     expect(collaborator.preset).toBe('collaborator');
   });
 
-  it('derives terminal from own-session work plus files, never files alone', () => {
+  it('derives terminal from a cumulative work role plus files, never files alone', () => {
     const collaborator = applyCapabilityPreset(
       { ...grant, fs_access: 'read' as const },
       BRANCH_ACCESS_EDITOR_CONTEXT,
@@ -87,6 +87,11 @@ describe('capability policy editor model', () => {
       BRANCH_ACCESS_EDITOR_CONTEXT,
       'manager'
     );
+    const viewer = applyCapabilityPreset(
+      { ...grant, fs_access: 'write' as const },
+      BRANCH_ACCESS_EDITOR_CONTEXT,
+      'viewer'
+    );
 
     expect(withoutFiles.capabilities).not.toContain('terminal.open');
     expect(withoutFiles.capabilities).toEqual([
@@ -95,6 +100,7 @@ describe('capability policy editor model', () => {
       'sessions.prompt_own',
     ]);
     expect(manager.fs_access).toBe('write');
-    expect(manager.capabilities).not.toContain('terminal.open');
+    expect(manager.capabilities).toContain('terminal.open');
+    expect(viewer.capabilities).not.toContain('terminal.open');
   });
 });

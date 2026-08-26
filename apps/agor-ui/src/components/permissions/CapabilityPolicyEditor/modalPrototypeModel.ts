@@ -166,12 +166,23 @@ function boardBranchTemplate(
   );
 }
 
+function emptySessionSharing(sessionOwnerUserIds: Iterable<UserID>) {
+  return {
+    owner_rules: [...new Set(sessionOwnerUserIds)].map((sessionOwnerUserId) => ({
+      session_owner_user_id: sessionOwnerUserId,
+      enabled: false,
+      grantees: [],
+    })),
+  };
+}
+
 export function buildBoardModalPrototypeDraft(options: {
   board: Board;
   owners: readonly User[];
   groupGrants: readonly LegacyCapabilityPolicyGroupGrant[];
+  currentUserId?: UserID;
 }): BoardCapabilityPoliciesDraft {
-  const { board, owners, groupGrants } = options;
+  const { board, owners, groupGrants, currentUserId } = options;
   const primaryOwnerUserId = asUserId(board.created_by || owners[0]?.user_id);
   const boardAccess =
     board.access_mode === 'private'
@@ -198,7 +209,11 @@ export function buildBoardModalPrototypeDraft(options: {
     board_access: boardAccess,
     // Board visibility and the live branch template are deliberately separate.
     // A private board can still display what its branches would inherit.
-    branch_template: boardBranchTemplate(board, groupGrants),
+    branch_template: {
+      access: boardBranchTemplate(board, groupGrants),
+      // The broad legacy default is never converted into personal consent.
+      session_sharing: emptySessionSharing([currentUserId ?? primaryOwnerUserId]),
+    },
   };
 }
 
@@ -213,8 +228,8 @@ export function buildBranchModalPrototypeDraft(options: {
 }): BranchCapabilityPolicyDraft {
   const { branch, board, owners, groupGrants, boardGroupGrants, currentUserId, sessions } = options;
   const primaryOwnerUserId = asUserId(branch.created_by || owners[0]?.user_id);
-  const inheritedPolicy = boardBranchTemplate(board, boardGroupGrants);
-  const overridePolicy = sharedPolicy(
+  const inheritedAccess = boardBranchTemplate(board, boardGroupGrants);
+  const overrideAccess = sharedPolicy(
     'branch_access',
     branchEntriesFromLegacy(groupGrants, owners, primaryOwnerUserId),
     grantValue(
@@ -232,17 +247,19 @@ export function buildBranchModalPrototypeDraft(options: {
     primary_owner_user_id: primaryOwnerUserId,
     binding_mode: branch.permission_source === 'board' ? 'inherit' : 'override',
     inherited_from_board_id: board?.board_id,
-    inherited_policy: inheritedPolicy,
-    override_policy: branch.permission_source === 'board' ? undefined : overridePolicy,
-    // The broad legacy dangerous flag is intentionally never converted into
-    // personal consent. Every owner begins with an empty, disabled rule.
-    session_sharing: {
-      owner_rules: [...sessionOwnerIds].map((sessionOwnerUserId) => ({
-        session_owner_user_id: sessionOwnerUserId,
-        enabled: false,
-        grantees: [],
-      })),
+    inherited_config: {
+      access: inheritedAccess,
+      session_sharing: emptySessionSharing([currentUserId]),
     },
+    override_config:
+      branch.permission_source === 'board'
+        ? undefined
+        : {
+            access: overrideAccess,
+            // The broad legacy dangerous flag is intentionally never converted
+            // into personal consent. Every owner begins empty and disabled.
+            session_sharing: emptySessionSharing(sessionOwnerIds),
+          },
   };
 }
 

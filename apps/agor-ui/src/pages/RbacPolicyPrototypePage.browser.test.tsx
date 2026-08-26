@@ -21,23 +21,23 @@ describe('RBAC policy prototype responsive layout (real browser)', () => {
     const root = screen.getByTestId('rbac-policy-prototype');
     expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
     expect(screen.getByText('Who can see and manage this board')).toBeVisible();
-    expect(
-      screen.getByLabelText('Add one person or group to Who can see and manage this board')
-    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Add user/group' })).toBeVisible();
     expect(screen.getByRole('button', { name: /Apply preview/ })).toBeVisible();
   });
 
   it('adds one existing group as one independently editable entry', async () => {
     renderPrototype();
+    await act(async () => userEvent.click(screen.getByRole('button', { name: 'Add user/group' })));
     const picker = screen.getByLabelText(
-      'Add one person or group to Who can see and manage this board'
+      'Select one person or group for Who can see and manage this board'
     );
 
     await act(async () => userEvent.click(picker));
     const securityOption = await screen.findByText('Security', { exact: true });
     await act(async () => userEvent.click(securityOption));
 
-    expect(screen.getByRole('button', { name: 'Edit access for Security' })).toBeVisible();
+    expect(screen.getByRole('combobox', { name: 'Security role' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Remove access entry for Security' })).toBeVisible();
     expect(
       screen.queryByRole('button', { name: 'Add selected access entry' })
     ).not.toBeInTheDocument();

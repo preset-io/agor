@@ -1,5 +1,6 @@
 import type {
   BranchCapabilityPolicyDraft,
+  BranchPermissionConfigDraft,
   CapabilityPolicyDraft,
   CapabilityPolicyPrincipalDescriptor,
   UserID,
@@ -8,10 +9,8 @@ import { CAPABILITY_POLICY_SCHEMA_VERSION } from '@agor/core/types';
 import { ApartmentOutlined } from '@ant-design/icons';
 import { Alert, Button, Descriptions, Divider, Flex, Segmented, Typography, theme } from 'antd';
 import { useState } from 'react';
-import { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
+import { BranchPermissionConfigEditor } from './BranchPermissionConfigEditor';
 import { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
-import { PersonalSessionSharingSection } from './PersonalSessionSharingSection';
-import { BRANCH_ACCESS_EDITOR_CONTEXT } from './policyEditorModel';
 import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
 interface BranchCapabilityPolicyFormProps {
@@ -41,6 +40,19 @@ const privateBranchPolicy = (): CapabilityPolicyDraft => ({
   others: { preset: 'none', capabilities: [], fs_access: 'none' },
 });
 
+const privateBranchConfig = (currentUserId: UserID): BranchPermissionConfigDraft => ({
+  access: privateBranchPolicy(),
+  session_sharing: {
+    owner_rules: [
+      {
+        session_owner_user_id: currentUserId,
+        enabled: false,
+        grantees: [],
+      },
+    ],
+  },
+});
+
 export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProps> = ({
   value,
   onChange,
@@ -52,22 +64,22 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
   const { token } = theme.useToken();
   const [confirmInherit, setConfirmInherit] = useState(false);
   const owner = findUserDescriptor(principals, value.primary_owner_user_id);
-  const inheritedPolicy = value.inherited_policy ?? privateBranchPolicy();
-  const effectivePolicy =
+  const inheritedConfig = value.inherited_config ?? privateBranchConfig(currentUserId);
+  const effectiveConfig =
     value.binding_mode === 'override'
-      ? (value.override_policy ?? structuredClone(inheritedPolicy))
-      : inheritedPolicy;
+      ? (value.override_config ?? structuredClone(inheritedConfig))
+      : inheritedConfig;
 
   const setBinding = (binding: 'inherit' | 'override') => {
     if (binding === value.binding_mode) return;
-    if (binding === 'inherit' && value.override_policy) {
+    if (binding === 'inherit' && value.override_config) {
       setConfirmInherit(true);
       return;
     }
     onChange({
       ...value,
       binding_mode: 'override',
-      override_policy: structuredClone(inheritedPolicy),
+      override_config: structuredClone(inheritedConfig),
     });
   };
 
@@ -114,7 +126,7 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
                 danger
                 type="primary"
                 onClick={() => {
-                  onChange({ ...value, binding_mode: 'inherit', override_policy: undefined });
+                  onChange({ ...value, binding_mode: 'inherit', override_config: undefined });
                   setConfirmInherit(false);
                 }}
               >
@@ -140,33 +152,36 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
                 {
                   key: 'mode',
                   label: 'Sharing',
-                  children: inheritedPolicy.sharing_mode === 'private' ? 'Private' : 'Shared',
+                  children:
+                    inheritedConfig.access.sharing_mode === 'private' ? 'Private' : 'Shared',
                 },
                 {
                   key: 'entries',
                   label: 'Named entries',
-                  children: inheritedPolicy.entries.length,
+                  children: inheritedConfig.access.entries.length,
                 },
                 {
                   key: 'others',
                   label: 'Others',
                   children:
-                    inheritedPolicy.others.preset === 'none'
+                    inheritedConfig.access.others.preset === 'none'
                       ? 'No access'
-                      : inheritedPolicy.others.preset,
+                      : inheritedConfig.access.others.preset,
                 },
               ]}
             />
           </Flex>
-          <CapabilityPolicyEditor
-            title="Inherited board template"
-            value={inheritedPolicy}
+          <BranchPermissionConfigEditor
+            accessTitle="Inherited board template"
+            value={inheritedConfig}
             onChange={() => undefined}
             readOnly
-            context={BRANCH_ACCESS_EDITOR_CONTEXT}
             primaryOwnerUserId={value.primary_owner_user_id}
+            currentUserId={currentUserId}
             principals={principals}
             subjects={subjects}
+            sharingScope="branch"
+            personalSessionSharingWorkspaceEnabled={personalSessionSharingWorkspaceEnabled}
           />
         </Flex>
       ) : (
@@ -176,26 +191,19 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
             showIcon
             description="This policy replaces the board defaults. Board access remains separate."
           />
-          <CapabilityPolicyEditor
-            title="Branch access"
-            value={effectivePolicy}
-            onChange={(overridePolicy) => onChange({ ...value, override_policy: overridePolicy })}
-            context={BRANCH_ACCESS_EDITOR_CONTEXT}
+          <BranchPermissionConfigEditor
+            accessTitle="Branch access"
+            value={effectiveConfig}
+            onChange={(overrideConfig) => onChange({ ...value, override_config: overrideConfig })}
             primaryOwnerUserId={value.primary_owner_user_id}
+            currentUserId={currentUserId}
             principals={principals}
             subjects={subjects}
+            sharingScope="branch"
+            personalSessionSharingWorkspaceEnabled={personalSessionSharingWorkspaceEnabled}
           />
         </Flex>
       )}
-
-      <Divider style={{ marginBlock: 0 }} />
-      <PersonalSessionSharingSection
-        value={value.session_sharing}
-        onChange={(sessionSharing) => onChange({ ...value, session_sharing: sessionSharing })}
-        currentUserId={currentUserId}
-        principals={principals}
-        workspaceEnabled={personalSessionSharingWorkspaceEnabled}
-      />
     </Flex>
   );
 };

@@ -32,6 +32,8 @@ export interface StubClientOptions {
   groupGrants404?: boolean;
   groupGrants?: unknown[];
   groupGrantsPromise?: Promise<unknown[]>;
+  groups?: unknown[];
+  groups404?: boolean;
   failBranchPatch?: boolean;
   /** Throw a 500-style error on the initial owners.find load. */
   failOwnersFind?: boolean;
@@ -96,6 +98,12 @@ export function makeStubClient(opts: StubClientOptions = {}): {
         async findAll(args: unknown) {
           calls.push({ service: path, method: 'findAll', args: [args] });
           if (path === 'users') return users;
+          if (path === 'groups' && opts.groups404) {
+            const err = new Error('groups not found') as Error & { code?: number };
+            err.code = 404;
+            throw err;
+          }
+          if (path === 'groups') return opts.groups ?? [];
           return [];
         },
         async create(body: unknown, params?: unknown) {

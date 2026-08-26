@@ -7,18 +7,7 @@ import type {
 } from '@agor/core/types';
 import { capabilityPolicyPrincipalKey, validateBranchSessionSharingDraft } from '@agor/core/types';
 import { DeleteOutlined, SafetyCertificateOutlined, WarningOutlined } from '@ant-design/icons';
-import {
-  Alert,
-  Button,
-  Card,
-  Divider,
-  Empty,
-  Flex,
-  Popconfirm,
-  Switch,
-  Typography,
-  theme,
-} from 'antd';
+import { Alert, Button, Card, Divider, Flex, Popconfirm, Switch, Typography, theme } from 'antd';
 import { Tag } from '@/components/Tag';
 import { PrincipalEntryPicker } from './PrincipalEntryPicker';
 import { PrincipalIdentity } from './PrincipalIdentity';
@@ -30,6 +19,8 @@ interface PersonalSessionSharingSectionProps {
   currentUserId: UserID;
   principals: CapabilityPolicyPrincipalDescriptor[];
   workspaceEnabled?: boolean;
+  readOnly?: boolean;
+  scope: 'board_defaults' | 'branch';
 }
 
 const principalDescriptor = (principals: CapabilityPolicyPrincipalDescriptor[], userId: UserID) =>
@@ -51,6 +42,8 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
   currentUserId,
   principals,
   workspaceEnabled = true,
+  readOnly,
+  scope,
 }) => {
   const { token } = theme.useToken();
   const descriptorByKey = new Map(
@@ -85,6 +78,11 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
     (grant) => grant.principal.principal_type === 'group'
   );
   const issues = validateBranchSessionSharingDraft(value);
+  const scopeDescription = readOnly
+    ? 'Inherited from board defaults.'
+    : scope === 'board_defaults'
+      ? 'Applies to your sessions in branches using these defaults.'
+      : 'Applies to your sessions in this branch.';
 
   const updateCurrentRule = (nextRule: BranchSessionSharingOwnerRuleDraft) => {
     const existingIndex = value.owner_rules.findIndex(
@@ -135,13 +133,11 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
         <Flex justify="space-between" align="center" gap={token.paddingMD} wrap>
           <Flex vertical gap={token.paddingXXS} style={{ flex: 1, minWidth: 240 }}>
             <Typography.Text strong>Allow others to use my sessions</Typography.Text>
-            <Typography.Text type="secondary">
-              Only {currentUser?.display_name ?? 'you'} can change this rule.
-            </Typography.Text>
+            <Typography.Text type="secondary">{scopeDescription}</Typography.Text>
           </Flex>
           <Switch
             checked={currentRule.enabled}
-            disabled={!workspaceEnabled}
+            disabled={!workspaceEnabled || readOnly}
             aria-label={`Allow others to use sessions owned by ${currentUser?.display_name ?? 'me'}`}
             onChange={(enabled) =>
               updateCurrentRule({
@@ -162,29 +158,28 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
               description="Listed people can run prompts as you, using your agent-tool home and credentials. Because session data is stored there, they may access files from your other sessions. This does not grant terminal access."
             />
 
-            <Flex vertical gap={token.paddingXXS}>
-              <Typography.Text strong>Who may use my sessions</Typography.Text>
-              <PrincipalEntryPicker
-                principals={availablePrincipals}
-                ariaLabel="Add one person or group to my session sharing"
-                placeholder="Add one trusted person or group"
-                onAdd={(principal) =>
-                  updateCurrentRule({
-                    ...currentRule,
-                    grantees: [...currentRule.grantees, makeGrant(principal)],
-                  })
-                }
-              />
-              <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
-                They must also have branch access.
-              </Typography.Text>
-            </Flex>
+            {!readOnly && (
+              <Flex vertical gap={token.paddingXXS}>
+                <Typography.Text strong>Who may use my sessions</Typography.Text>
+                <PrincipalEntryPicker
+                  principals={availablePrincipals}
+                  ariaLabel="Add one person or group to my session sharing"
+                  placeholder="Add one trusted person or group"
+                  onAdd={(principal) =>
+                    updateCurrentRule({
+                      ...currentRule,
+                      grantees: [...currentRule.grantees, makeGrant(principal)],
+                    })
+                  }
+                />
+                <Typography.Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+                  They must also have branch access.
+                </Typography.Text>
+              </Flex>
+            )}
 
             {currentRule.grantees.length === 0 ? (
-              <Empty
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-                description="Sharing is on, but nobody is allowed yet."
-              />
+              <Typography.Text type="secondary">No one added yet.</Typography.Text>
             ) : (
               <Flex vertical gap={token.paddingXS}>
                 {currentRule.grantees.map((grant) => {
@@ -207,26 +202,28 @@ export const PersonalSessionSharingSection: React.FC<PersonalSessionSharingSecti
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <PrincipalIdentity descriptor={descriptor} compact />
                       </div>
-                      <Popconfirm
-                        title={`Stop sharing with ${label}?`}
-                        okText="Remove sharing"
-                        okButtonProps={{ danger: true }}
-                        onConfirm={() =>
-                          updateCurrentRule({
-                            ...currentRule,
-                            grantees: currentRule.grantees.filter(
-                              (candidate) => candidate.grant_id !== grant.grant_id
-                            ),
-                          })
-                        }
-                      >
-                        <Button
-                          danger
-                          type="text"
-                          icon={<DeleteOutlined />}
-                          aria-label={`Stop sharing my sessions with ${label}`}
-                        />
-                      </Popconfirm>
+                      {!readOnly && (
+                        <Popconfirm
+                          title={`Stop sharing with ${label}?`}
+                          okText="Remove sharing"
+                          okButtonProps={{ danger: true }}
+                          onConfirm={() =>
+                            updateCurrentRule({
+                              ...currentRule,
+                              grantees: currentRule.grantees.filter(
+                                (candidate) => candidate.grant_id !== grant.grant_id
+                              ),
+                            })
+                          }
+                        >
+                          <Button
+                            danger
+                            type="text"
+                            icon={<DeleteOutlined />}
+                            aria-label={`Stop sharing my sessions with ${label}`}
+                          />
+                        </Popconfirm>
+                      )}
                     </Flex>
                   );
                 })}

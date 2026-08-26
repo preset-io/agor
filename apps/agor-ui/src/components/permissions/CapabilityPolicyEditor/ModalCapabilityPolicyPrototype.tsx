@@ -139,27 +139,36 @@ interface BoardCapabilityPolicyModalPrototypeProps {
   groupGrants: BoardGroupGrantWithGroup[];
   users: User[];
   groups: Group[];
+  currentUser?: User | null;
 }
 
 export const BoardCapabilityPolicyModalPrototype: React.FC<
   BoardCapabilityPolicyModalPrototypeProps
-> = ({ board, client, owners, groupGrants, users, groups }) => {
+> = ({ board, client, owners, groupGrants, users, groups, currentUser }) => {
   const { memberships, available } = usePrototypeMemberships(client);
+  const currentUserId = (currentUser?.user_id || board.created_by || owners[0]?.user_id) as UserID;
   const initialDraft = useMemo(
-    () => buildBoardModalPrototypeDraft({ board, owners, groupGrants }),
-    [board, owners, groupGrants]
+    () => buildBoardModalPrototypeDraft({ board, owners, groupGrants, currentUserId }),
+    [board, owners, groupGrants, currentUserId]
   );
   const { draft, setDraft, applied, setApplied } = useLocalPrototypeDraft(initialDraft);
-  const knownUsers = useMemo(() => mergeKnownUsers(users, owners), [users, owners]);
+  const knownUsers = useMemo(
+    () => mergeKnownUsers(users, owners, currentUser ? [currentUser] : []),
+    [users, owners, currentUser]
+  );
   const directory = useMemo(
     () =>
       buildModalPrototypeDirectory({
         users: knownUsers,
         groups,
         memberships,
-        requiredUserIds: [draft.primary_owner_user_id, ...owners.map((owner) => owner.user_id)],
+        requiredUserIds: [
+          draft.primary_owner_user_id,
+          currentUserId,
+          ...owners.map((owner) => owner.user_id),
+        ],
       }),
-    [knownUsers, groups, memberships, draft.primary_owner_user_id, owners]
+    [knownUsers, groups, memberships, draft.primary_owner_user_id, currentUserId, owners]
   );
 
   return (
@@ -181,6 +190,7 @@ export const BoardCapabilityPolicyModalPrototype: React.FC<
         principals={directory.principals}
         subjects={directory.subjects}
         sampleBranchOwnerUserId={draft.primary_owner_user_id}
+        currentUserId={currentUserId}
       />
     </PrototypeFrame>
   );

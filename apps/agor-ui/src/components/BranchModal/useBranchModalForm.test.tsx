@@ -458,6 +458,26 @@ describe('useBranchModalForm — unified save', () => {
     expect(result.current.groupGrantsError?.message).toBe('not found');
   });
 
+  it('keeps the group directory when legacy branch grants are unavailable', async () => {
+    const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
+    const branch = makeBranch();
+    const productDesign = { group_id: 'group-design', name: 'Product Design' };
+    const { client } = makeStubClient({
+      owners: [alice],
+      users: [alice],
+      groups: [productDesign],
+      groupGrants404: true,
+    });
+
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: alice, open: true }),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.groupGrantsStatus).toBe('unavailable'));
+    expect(result.current.allGroups).toEqual([productDesign]);
+  });
+
   it('allows admins to view but not edit permissions when owner rows are incomplete', async () => {
     const alice = makeUser({ user_id: 'user-1', email: 'alice@example.com', role: 'admin' });
     const branch = makeBranch();

@@ -174,6 +174,7 @@ export const RbacPolicyPrototypePage: React.FC = () => {
                   principals={PROTOTYPE_PRINCIPALS}
                   subjects={PROTOTYPE_SUBJECTS}
                   sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
+                  currentUserId={PROTOTYPE_USERS.kasia}
                 />
               ) : (
                 <BranchCapabilityPolicyForm

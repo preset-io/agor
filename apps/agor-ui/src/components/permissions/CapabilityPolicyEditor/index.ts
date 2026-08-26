@@ -1,5 +1,6 @@
 export { BoardCapabilityPolicyForm } from './BoardCapabilityPolicyForm';
 export { BranchCapabilityPolicyForm } from './BranchCapabilityPolicyForm';
+export { BranchPermissionConfigEditor } from './BranchPermissionConfigEditor';
 export { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
 export { EffectiveAccessPreview } from './EffectiveAccessPreview';
 export { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';

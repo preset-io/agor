@@ -80,7 +80,7 @@ const BRANCH_CONTROL_GROUPS: readonly CapabilityControlGroup[] = [
   {
     id: 'manage',
     label: 'Manage branch',
-    summary: 'Manage settings, access, environment, and session lifecycle without executing.',
+    summary: 'Manage settings, access, environment, and session lifecycle.',
     capabilities: [
       'sessions.manage_others',
       'branch.manage',
@@ -139,9 +139,11 @@ const BRANCH_PRESETS: readonly CapabilityPresetDefinition[] = [
   {
     id: 'manager',
     label: 'Manager',
-    summary: 'Can manage the branch and session lifecycle, but cannot prompt or execute.',
+    summary: 'Can work in their own sessions and manage the branch, environment, and access.',
     capabilities: [
       'branch.view',
+      'sessions.create',
+      'sessions.prompt_own',
       'sessions.manage_others',
       'branch.manage',
       'environment.control',
@@ -221,7 +223,7 @@ export function applyCapabilityPreset<
  *
  * Terminal is intentionally not its own form switch. It is available only
  * when a person may work in their own sessions *and* has a filesystem
- * projection. Filesystem access alone (for example a non-executing Manager)
+ * projection. Filesystem access alone (for example a Viewer with read access)
  * never grants a shell.
  */
 export function synchronizeProductCapabilities(

@@ -10,6 +10,8 @@ interface PrincipalEntryPickerProps {
   ariaLabel: string;
   placeholder?: string;
   emptyDescription?: string;
+  autoFocus?: boolean;
+  showPrefix?: boolean;
 }
 
 /**
@@ -23,6 +25,8 @@ export const PrincipalEntryPicker: React.FC<PrincipalEntryPickerProps> = ({
   ariaLabel,
   placeholder = 'Add one person or group',
   emptyDescription = 'No active people or groups available',
+  autoFocus = false,
+  showPrefix = true,
 }) => {
   const descriptorByKey = new Map(
     principals.map((principal) => [capabilityPolicyPrincipalKey(principal.principal), principal])
@@ -31,9 +35,10 @@ export const PrincipalEntryPicker: React.FC<PrincipalEntryPickerProps> = ({
   return (
     <Select<string>
       showSearch
+      autoFocus={autoFocus}
       aria-label={ariaLabel}
       placeholder={placeholder}
-      prefix={<PlusOutlined aria-hidden />}
+      prefix={showPrefix ? <PlusOutlined aria-hidden /> : undefined}
       value={null}
       onSelect={(key) => {
         const descriptor = descriptorByKey.get(key);

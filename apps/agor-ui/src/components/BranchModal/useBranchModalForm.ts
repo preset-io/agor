@@ -326,21 +326,29 @@ export function useBranchModalForm({
           }
         }
 
-        // Owners/users gate owner and branch-level editability. Group grants
-        // are optional auxiliary metadata with their own status; keep loading
-        // them independently so a slow/missing group-grants endpoint does not
-        // hold owner/branch-level controls disabled.
+        // Owners/users gate owner and branch-level editability. The group
+        // directory and this branch's grants are independent inputs: losing a
+        // legacy grant endpoint must not remove otherwise-selectable groups
+        // from the new permissions editor.
         if (!cancelled) {
           setLoadingOwners(false);
         }
 
-        try {
-          const [groups, grantsResponse] = await Promise.all([
-            client.service('groups').findAll({ query: { archived: false } }),
-            client.service('branches/:id/group-grants').find({ route: { id: branchId } }),
-          ]);
-          if (cancelled) return;
-          setAllGroups(groups as Group[]);
+        const [groupsResult, grantsResult] = await Promise.allSettled([
+          client.service('groups').findAll({ query: { archived: false } }),
+          client.service('branches/:id/group-grants').find({ route: { id: branchId } }),
+        ]);
+        if (cancelled) return;
+
+        if (groupsResult.status === 'fulfilled') {
+          setAllGroups(groupsResult.value as Group[]);
+        } else {
+          setAllGroups([]);
+          console.warn('Failed to load groups for branch permissions:', groupsResult.reason);
+        }
+
+        if (grantsResult.status === 'fulfilled') {
+          const grantsResponse = grantsResult.value;
           const grants = (grantsResponse as BranchGroupGrantWithGroup[]).map((grant) => ({
             group_id: grant.group_id,
             can: grant.can,
@@ -351,13 +359,11 @@ export function useBranchModalForm({
           if (!permissionsTouchedRef.current) {
             setPermissionsState((prev) => ({ ...prev, groupGrants: grants }));
           }
-        } catch (error) {
-          if (!cancelled) {
-            setAllGroups([]);
-            setGroupGrantsStatus('unavailable');
-            setGroupGrantsError(error instanceof Error ? error : new Error(String(error)));
-            console.warn('Failed to load branch group permissions:', error);
-          }
+        } else {
+          const error = grantsResult.reason;
+          setGroupGrantsStatus('unavailable');
+          setGroupGrantsError(error instanceof Error ? error : new Error(String(error)));
+          console.warn('Failed to load branch group permissions:', error);
         }
         // biome-ignore lint/suspicious/noExplicitAny: error from feathers client is loosely typed
       } catch (error: any) {

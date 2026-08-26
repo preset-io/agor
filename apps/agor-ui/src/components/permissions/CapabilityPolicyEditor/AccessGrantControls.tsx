@@ -4,8 +4,8 @@ import type {
   CapabilityPolicyOthersDraft,
   CapabilityPolicyPresetId,
 } from '@agor/core/types';
-import { LockOutlined } from '@ant-design/icons';
-import { Alert, Flex, Segmented, Select, Typography, theme } from 'antd';
+import { InfoCircleOutlined } from '@ant-design/icons';
+import { Alert, Button, Flex, Select, Tooltip, Typography, theme } from 'antd';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
 import {
   applyCapabilityPreset,
@@ -22,6 +22,8 @@ interface AccessGrantControlsProps<T extends GrantValue> {
   onChange: (value: T) => void;
   disabled?: boolean;
   label: string;
+  compact?: boolean;
+  field?: 'all' | 'role' | 'filesystem';
 }
 
 const fsOptions: Array<{ value: CapabilityPolicyFsAccess; label: string }> = [
@@ -36,88 +38,103 @@ export function AccessGrantControls<T extends GrantValue>({
   onChange,
   disabled,
   label,
+  compact,
+  field = 'all',
 }: AccessGrantControlsProps<T>) {
   const { token } = theme.useToken();
-  const isManager = value.preset === 'manager';
-  const isCollaborator = value.preset === 'collaborator';
   const role = getCapabilityPreset(context, value.preset);
-  const hasTerminal = isCollaborator && value.fs_access !== 'none';
+  const showLabels = !compact;
+  const showRole = field === 'all' || field === 'role';
+  const showFilesystem = context.supportsFilesystem && (field === 'all' || field === 'filesystem');
 
   return (
-    <Flex vertical gap={token.paddingSM}>
-      <Flex gap={token.paddingSM} align="flex-start" wrap>
-        <Flex vertical gap={token.paddingXXS} style={{ flex: '1 1 220px', minWidth: 0 }}>
-          <Typography.Text strong>Role</Typography.Text>
-          <Select<CapabilityPolicyPresetId>
-            aria-label={`${label} role`}
-            value={value.preset}
-            disabled={disabled}
-            style={{ width: '100%' }}
-            onChange={(preset) => onChange(applyCapabilityPreset(value, context, preset))}
-            options={[
-              ...context.presets.map((preset) => ({
-                value: preset.id,
-                label: preset.label,
-                title: preset.summary,
-                summary: preset.summary,
-              })),
-              ...(value.preset === 'custom'
-                ? [
-                    {
-                      value: 'custom' as const,
-                      label: 'Custom — needs mapping',
-                      title: 'This imported combination must be mapped to one role.',
-                      summary: 'This imported combination must be mapped to one role.',
-                      disabled: true,
-                    },
-                  ]
-                : []),
-            ]}
-            optionRender={(option) => (
-              <Flex vertical gap={2} style={{ paddingBlock: token.paddingXXS }}>
-                <Typography.Text strong>{option.label}</Typography.Text>
-                <Typography.Text type="secondary" style={{ whiteSpace: 'normal' }}>
-                  {option.data.summary}
-                </Typography.Text>
+    <Flex vertical gap={token.paddingXS} style={{ flex: 1, minWidth: 0 }}>
+      <Flex gap={token.paddingSM} align={compact ? 'center' : 'flex-start'} wrap={!compact}>
+        {showRole && (
+          <Flex
+            vertical
+            gap={token.paddingXXS}
+            style={{
+              flex: showFilesystem ? '1 1 180px' : '1 1 240px',
+              minWidth: 0,
+            }}
+          >
+            {showLabels && <Typography.Text strong>Role</Typography.Text>}
+            <Flex align="center" gap={token.paddingXXS}>
+              <Select<CapabilityPolicyPresetId>
+                aria-label={`${label} role`}
+                value={value.preset}
+                disabled={disabled}
+                style={{ flex: 1, minWidth: 0 }}
+                onChange={(preset) => onChange(applyCapabilityPreset(value, context, preset))}
+                options={[
+                  ...context.presets.map((preset) => ({
+                    value: preset.id,
+                    label: preset.label,
+                    title: preset.summary,
+                    summary: preset.summary,
+                  })),
+                  ...(value.preset === 'custom'
+                    ? [
+                        {
+                          value: 'custom' as const,
+                          label: 'Custom — needs mapping',
+                          title: 'This imported combination must be mapped to one role.',
+                          summary: 'This imported combination must be mapped to one role.',
+                          disabled: true,
+                        },
+                      ]
+                    : []),
+                ]}
+                optionRender={(option) => (
+                  <Flex vertical gap={2} style={{ paddingBlock: token.paddingXXS }}>
+                    <Typography.Text strong>{option.label}</Typography.Text>
+                    <Typography.Text type="secondary" style={{ whiteSpace: 'normal' }}>
+                      {option.data.summary}
+                    </Typography.Text>
+                  </Flex>
+                )}
+              />
+              <Tooltip title={role?.summary ?? 'Choose a supported role.'}>
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<InfoCircleOutlined />}
+                  aria-label={`${label} role details`}
+                />
+              </Tooltip>
+            </Flex>
+          </Flex>
+        )}
+
+        {showFilesystem && (
+          <Flex vertical gap={token.paddingXXS} style={{ flex: '1 1 240px', minWidth: 0 }}>
+            {showLabels && (
+              <Flex align="center" gap={token.paddingXXS}>
+                <Typography.Text strong>File access</Typography.Text>
+                <Tooltip title="Controls branch file mounts. Terminal access also requires Collaborator or Manager.">
+                  <InfoCircleOutlined aria-label="File access details" />
+                </Tooltip>
               </Flex>
             )}
-          />
-          <Typography.Text type="secondary">{role?.summary}</Typography.Text>
-        </Flex>
-
-        {context.supportsFilesystem && (
-          <Flex vertical gap={token.paddingXXS} style={{ flex: '1 1 280px', minWidth: 0 }}>
-            <Typography.Text strong>File access</Typography.Text>
-            <Segmented<CapabilityPolicyFsAccess>
+            <Select<CapabilityPolicyFsAccess>
               aria-label={`${label} file access`}
-              block
               value={value.fs_access}
               disabled={disabled || value.preset === 'none'}
               options={fsOptions}
+              style={{ width: '100%' }}
               onChange={(fsAccess) => onChange(updateFilesystemAccess(value, context, fsAccess))}
             />
           </Flex>
         )}
       </Flex>
 
-      {value.preset === 'custom' && (
+      {showRole && value.preset === 'custom' && (
         <Alert
           type="warning"
           showIcon
           description="Choose a supported role for this imported permission."
         />
-      )}
-
-      {context.kind === 'branch_access' && isManager && (
-        <Typography.Text type="secondary">
-          <LockOutlined aria-hidden /> Manager cannot prompt, execute, or open a terminal. Session
-          sharing is separate.
-        </Typography.Text>
-      )}
-      {context.kind === 'branch_access' && isCollaborator && (
-        <Typography.Text type="secondary">
-          {hasTerminal ? 'Terminal available.' : 'Terminal requires file access.'}
-        </Typography.Text>
       )}
     </Flex>
   );

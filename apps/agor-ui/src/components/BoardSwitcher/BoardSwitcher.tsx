@@ -360,6 +360,7 @@ export const BoardSwitcher: React.FC<BoardSwitcherProps> = ({
         open={editing && Boolean(currentBoard)}
         onClose={() => setEditing(false)}
         onUpdate={onUpdateBoard}
+        currentUser={currentUser}
       />
     </>
   );

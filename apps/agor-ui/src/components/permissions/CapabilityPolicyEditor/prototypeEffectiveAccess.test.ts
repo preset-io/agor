@@ -17,7 +17,7 @@ const subject = (userId: string) => {
 describe('prototype effective-access explanation', () => {
   it('uses a direct user entry as a complete override of matching groups', () => {
     const result = resolvePrototypeEffectiveAccess({
-      policy: SHARED_BOARD_FIXTURE.branch_template,
+      policy: SHARED_BOARD_FIXTURE.branch_template.access,
       primaryOwnerUserId: PROTOTYPE_USERS.leo,
       subject: subject(PROTOTYPE_USERS.kasia),
       principals: PROTOTYPE_PRINCIPALS,
@@ -26,15 +26,18 @@ describe('prototype effective-access explanation', () => {
     expect(result.sources.map((source) => source.label)).toEqual(['Kasia D.']);
     expect(result.fsAccess).toBe('write');
     expect(result.capabilities).toEqual(
-      expect.arrayContaining(['branch.policy.manage', 'sessions.manage_others'])
-    );
-    expect(result.capabilities).not.toEqual(
-      expect.arrayContaining(['sessions.create', 'sessions.prompt_own', 'terminal.open'])
+      expect.arrayContaining([
+        'sessions.create',
+        'sessions.prompt_own',
+        'sessions.manage_others',
+        'terminal.open',
+        'branch.policy.manage',
+      ])
     );
   });
 
   it('unions every matching group when no direct user entry exists', () => {
-    const policy = structuredClone(SHARED_BOARD_FIXTURE.branch_template);
+    const policy = structuredClone(SHARED_BOARD_FIXTURE.branch_template.access);
     policy.entries = policy.entries.filter(
       (entry) =>
         entry.principal.principal_type !== 'user' ||
@@ -58,7 +61,7 @@ describe('prototype effective-access explanation', () => {
 
   it('uses Others only for an unmatched active same-tenant fixture member', () => {
     const result = resolvePrototypeEffectiveAccess({
-      policy: SHARED_BOARD_FIXTURE.branch_template,
+      policy: SHARED_BOARD_FIXTURE.branch_template.access,
       primaryOwnerUserId: PROTOTYPE_USERS.leo,
       subject: subject(PROTOTYPE_USERS.omar),
       principals: PROTOTYPE_PRINCIPALS,
@@ -69,25 +72,29 @@ describe('prototype effective-access explanation', () => {
     expect(result.capabilities).toEqual(['branch.view']);
   });
 
-  it('keeps a Manager-only group match free of prompt and execution authority', () => {
+  it('makes a Manager-only group match cumulative with own-session work', () => {
     const result = resolvePrototypeEffectiveAccess({
-      policy: OVERRIDDEN_BRANCH_FIXTURE.override_policy!,
+      policy: OVERRIDDEN_BRANCH_FIXTURE.override_config!.access,
       primaryOwnerUserId: PROTOTYPE_USERS.leo,
       subject: subject(PROTOTYPE_USERS.nina),
       principals: PROTOTYPE_PRINCIPALS,
     });
 
     expect(result.sources.map((source) => source.label)).toEqual(['Security']);
-    expect(result.capabilities).toEqual(expect.arrayContaining(['branch.policy.manage']));
-    expect(result.capabilities).not.toEqual(
-      expect.arrayContaining(['sessions.create', 'sessions.prompt_own', 'terminal.open'])
+    expect(result.capabilities).toEqual(
+      expect.arrayContaining([
+        'sessions.create',
+        'sessions.prompt_own',
+        'terminal.open',
+        'branch.policy.manage',
+      ])
     );
   });
 
   it('denies inactive and deleted fixture identities before fallback evaluation', () => {
     for (const userId of [PROTOTYPE_USERS.mia, PROTOTYPE_USERS.deleted]) {
       const result = resolvePrototypeEffectiveAccess({
-        policy: SHARED_BOARD_FIXTURE.branch_template,
+        policy: SHARED_BOARD_FIXTURE.branch_template.access,
         primaryOwnerUserId: PROTOTYPE_USERS.leo,
         subject: subject(userId),
         principals: PROTOTYPE_PRINCIPALS,

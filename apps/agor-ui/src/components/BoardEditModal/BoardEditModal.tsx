@@ -23,10 +23,18 @@ export interface BoardEditModalProps {
   open: boolean;
   onClose: () => void;
   onUpdate?: (boardId: string, updates: Partial<Board>) => unknown;
+  currentUser?: User | null;
 }
 
 /** The single board-settings editor used by Settings and the navbar shortcut. */
-export function BoardEditModal({ board, client, open, onClose, onUpdate }: BoardEditModalProps) {
+export function BoardEditModal({
+  board,
+  client,
+  open,
+  onClose,
+  onUpdate,
+  currentUser,
+}: BoardEditModalProps) {
   const userById = useAgorStore(selectUserById);
   const [form] = Form.useForm();
   const { showError } = useThemedMessage();
@@ -62,35 +70,57 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
         let ownerIds: string[] = [];
         let grants: Array<{ group_id: string; can: string; fs_access?: string }> = [];
         if (client) {
-          try {
-            const [users, groups, owners, groupGrants] = await Promise.all([
+          const [usersResult, groupsResult, ownersResult, groupGrantsResult] =
+            await Promise.allSettled([
               client.service('users').findAll({}),
               client.service('groups').findAll({ query: { archived: false } }),
               client.service('boards/:id/owners').find({ route: { id: board.board_id } }),
               client.service('boards/:id/group-grants').find({ route: { id: board.board_id } }),
             ]);
-            if (cancelled) return;
+          if (cancelled) return;
+
+          if (usersResult.status === 'fulfilled') {
+            setAllUsers(usersResult.value as User[]);
+          } else {
+            setAllUsers([]);
+            console.warn('Failed to load users for board permissions:', usersResult.reason);
+          }
+          if (groupsResult.status === 'fulfilled') {
+            setAllGroups(groupsResult.value as Group[]);
+          } else {
+            setAllGroups([]);
+            console.warn('Failed to load groups for board permissions:', groupsResult.reason);
+          }
+
+          if (ownersResult.status === 'fulfilled') {
             setRbacEnabled(true);
-            setAllUsers(users as User[]);
-            setAllGroups(groups as Group[]);
-            const loadedOwners = owners as User[];
-            const loadedGroupGrants = groupGrants as BoardGroupGrantWithGroup[];
+            const loadedOwners = ownersResult.value as User[];
             setBoardOwners(loadedOwners);
-            setBoardGroupGrants(loadedGroupGrants);
             ownerIds = loadedOwners.map((user) => user.user_id);
+          } else if ((ownersResult.reason as { code?: number })?.code === 404) {
+            // Owner routes intentionally do not exist when legacy RBAC is disabled.
+            setRbacEnabled(false);
+            setBoardOwners([]);
+          } else {
+            throw ownersResult.reason;
+          }
+
+          if (groupGrantsResult.status === 'fulfilled') {
+            const loadedGroupGrants = groupGrantsResult.value as BoardGroupGrantWithGroup[];
+            setBoardGroupGrants(loadedGroupGrants);
             grants = loadedGroupGrants.map((grant) => ({
               group_id: grant.group_id,
               can: grant.can,
               fs_access: grant.fs_access,
             }));
-          } catch (error) {
-            if ((error as { code?: number })?.code !== 404) throw error;
-            // Owner/group routes intentionally do not exist when RBAC is disabled.
-            setRbacEnabled(false);
-            setAllUsers([]);
-            setAllGroups([]);
-            setBoardOwners([]);
+          } else {
             setBoardGroupGrants([]);
+            if ((groupGrantsResult.reason as { code?: number })?.code !== 404) {
+              console.warn(
+                'Failed to load group grants for board permissions:',
+                groupGrantsResult.reason
+              );
+            }
           }
         }
         if (cancelled) return;
@@ -230,6 +260,7 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
                   groupGrants={boardGroupGrants}
                   users={prototypeUsers}
                   groups={allGroups}
+                  currentUser={currentUser}
                 />
               ) : undefined
             }

@@ -4,10 +4,11 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { BranchesOutlined, LayoutOutlined } from '@ant-design/icons';
-import { Alert, Divider, Flex, Tabs, Typography, theme } from 'antd';
+import { Divider, Flex, Tabs, Typography, theme } from 'antd';
+import { BranchPermissionConfigEditor } from './BranchPermissionConfigEditor';
 import { CapabilityPolicyEditor } from './CapabilityPolicyEditor';
 import { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
-import { BOARD_ACCESS_EDITOR_CONTEXT, BRANCH_ACCESS_EDITOR_CONTEXT } from './policyEditorModel';
+import { BOARD_ACCESS_EDITOR_CONTEXT } from './policyEditorModel';
 import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
 interface BoardCapabilityPolicyFormProps {
@@ -16,6 +17,7 @@ interface BoardCapabilityPolicyFormProps {
   principals: CapabilityPolicyPrincipalDescriptor[];
   subjects: PrototypeAccessSubject[];
   sampleBranchOwnerUserId: UserID;
+  currentUserId: UserID;
 }
 
 function findUserDescriptor(
@@ -34,6 +36,7 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
   principals,
   subjects,
   sampleBranchOwnerUserId,
+  currentUserId,
 }) => {
   const { token } = theme.useToken();
   const owner = findUserDescriptor(principals, value.primary_owner_user_id);
@@ -79,24 +82,18 @@ export const BoardCapabilityPolicyForm: React.FC<BoardCapabilityPolicyFormProps>
               </span>
             ),
             children: (
-              <Flex vertical gap={token.paddingMD}>
-                <Alert
-                  type="info"
-                  showIcon
-                  description="Inherited branches use these defaults. Board access and personal session sharing remain separate."
-                />
-                <CapabilityPolicyEditor
-                  title="Defaults inherited by this board’s branches"
-                  value={value.branch_template}
-                  onChange={(branchTemplate) =>
-                    onChange({ ...value, branch_template: branchTemplate })
-                  }
-                  context={BRANCH_ACCESS_EDITOR_CONTEXT}
-                  primaryOwnerUserId={sampleBranchOwnerUserId}
-                  principals={principals}
-                  subjects={subjects}
-                />
-              </Flex>
+              <BranchPermissionConfigEditor
+                accessTitle="Defaults inherited by this board’s branches"
+                value={value.branch_template}
+                onChange={(branchTemplate) =>
+                  onChange({ ...value, branch_template: branchTemplate })
+                }
+                primaryOwnerUserId={sampleBranchOwnerUserId}
+                currentUserId={currentUserId}
+                principals={principals}
+                subjects={subjects}
+                sharingScope="board_defaults"
+              />
             ),
           },
         ]}
