@@ -27,8 +27,12 @@ describe('capability policy editor model', () => {
   });
 
   it('makes Manager cumulative with Collaborator without foreign-session authority', () => {
+    const managerDefinition = BRANCH_ACCESS_EDITOR_CONTEXT.presets.find(
+      (preset) => preset.id === 'manager'
+    );
     const manager = applyCapabilityPreset(grant, BRANCH_ACCESS_EDITOR_CONTEXT, 'manager');
 
+    expect(managerDefinition?.summary).toContain('Allows terminal access with file access.');
     expect(manager.capabilities).toEqual(
       expect.arrayContaining([
         'branch.view',
@@ -55,6 +59,9 @@ describe('capability policy editor model', () => {
   });
 
   it('maps Collaborator to own-session work and derives terminal only with files', () => {
+    const collaboratorDefinition = BRANCH_ACCESS_EDITOR_CONTEXT.presets.find(
+      (preset) => preset.id === 'collaborator'
+    );
     const collaboratorWithoutFiles = applyCapabilityPreset(
       grant,
       BRANCH_ACCESS_EDITOR_CONTEXT,
@@ -66,6 +73,7 @@ describe('capability policy editor model', () => {
       'read'
     );
 
+    expect(collaboratorDefinition?.summary).toContain('Allows terminal access with file access.');
     expect(collaborator.capabilities).toEqual([
       'branch.view',
       'sessions.create',

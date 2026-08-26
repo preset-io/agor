@@ -271,7 +271,7 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
   const filesystemHeader = (
     <Flex align="center" gap={token.paddingXXS}>
       <Typography.Text strong>File access</Typography.Text>
-      <Tooltip title="Controls branch file mounts. Terminal access also requires Collaborator or Manager.">
+      <Tooltip title="Controls branch file mounts.">
         <InfoCircleOutlined aria-label="File access column details" />
       </Tooltip>
     </Flex>
@@ -394,12 +394,6 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
             </ul>
           }
         />
-      )}
-
-      {context.kind === 'branch_access' && (
-        <Typography.Text type="secondary">
-          Terminal requires Collaborator or Manager with file access.
-        </Typography.Text>
       )}
 
       {value.sharing_mode === 'shared' ? (

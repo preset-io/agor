@@ -112,7 +112,7 @@ export function AccessGrantControls<T extends GrantValue>({
             {showLabels && (
               <Flex align="center" gap={token.paddingXXS}>
                 <Typography.Text strong>File access</Typography.Text>
-                <Tooltip title="Controls branch file mounts. Terminal access also requires Collaborator or Manager.">
+                <Tooltip title="Controls branch file mounts.">
                   <InfoCircleOutlined aria-label="File access details" />
                 </Tooltip>
               </Flex>

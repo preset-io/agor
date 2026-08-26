@@ -133,13 +133,14 @@ const BRANCH_PRESETS: readonly CapabilityPresetDefinition[] = [
   {
     id: 'collaborator',
     label: 'Collaborator',
-    summary: 'Can create and prompt their own sessions.',
+    summary: 'Can create and prompt their own sessions. Allows terminal access with file access.',
     capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own'],
   },
   {
     id: 'manager',
     label: 'Manager',
-    summary: 'Can work in their own sessions and manage the branch, environment, and access.',
+    summary:
+      'Can work in their own sessions and manage the branch, environment, and access. Allows terminal access with file access.',
     capabilities: [
       'branch.view',
       'sessions.create',
