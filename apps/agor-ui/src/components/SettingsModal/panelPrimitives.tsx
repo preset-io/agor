@@ -4,6 +4,37 @@ import type { CSSProperties, ReactNode } from 'react';
 
 const { Title } = Typography;
 
+/**
+ * Shared field-width contract for every Settings drill-in form.
+ *
+ * Field width should roughly match the expected input length: a field far wider
+ * than what you'd type into it misleads the user about what's expected and makes
+ * it harder to eyeball-verify what they typed (NN/g "Website Forms Usability";
+ * Wroblewski, "Web Form Design"). Before this, width was decided ad hoc per
+ * field via ~5 different mechanisms, so the same "420px Select above a
+ * full-bleed API-key Input" contradiction recurred across the modal.
+ *
+ * Values are `maxWidth` (not `width`) so a field still shrinks on a narrow
+ * viewport but is capped on a wide one. `full` applies no cap — reserve it for
+ * genuinely long-form content (URLs, textareas, JSON/YAML/PEM, code editors).
+ *
+ * Use via `FieldRow`'s `width` prop, or spread directly onto a raw control's
+ * `style` for the many fields that don't go through `FieldRow`
+ * (e.g. `style={{ ...FIELD_WIDTHS.short }}`).
+ */
+export const FIELD_WIDTHS = {
+  /** ~short numeric fields: ports, durations, poll intervals, small counts. */
+  tiny: { maxWidth: 160 },
+  /** Fixed-format short strings: API keys, tokens, slugs, names, small enum Selects. */
+  short: { maxWidth: 420 },
+  /** Emails, medium identifiers, multi-select tag pickers. */
+  medium: { maxWidth: 560 },
+  /** No cap — long-form content only (URLs, descriptions, JSON/YAML/PEM, code). */
+  full: {},
+} as const satisfies Record<string, CSSProperties>;
+
+export type FieldWidth = keyof typeof FIELD_WIDTHS;
+
 export interface ListPanelHeaderProps {
   /** Persistent panel title — always shown, even though the nav highlights it. */
   title: ReactNode;
@@ -95,6 +126,12 @@ export interface FieldRowProps {
   name?: FormItemProps['name'];
   rules?: FormItemProps['rules'];
   valuePropName?: FormItemProps['valuePropName'];
+  /**
+   * Caps the field width to a shared tier (see `FIELD_WIDTHS`) so it matches the
+   * expected input length. Omit for the default (no cap). An explicit `style`
+   * maxWidth still wins.
+   */
+  width?: FieldWidth;
   style?: CSSProperties;
   children: ReactNode;
 }
@@ -109,6 +146,7 @@ export const FieldRow: React.FC<FieldRowProps> = ({
   name,
   rules,
   valuePropName,
+  width,
   style,
   children,
 }) => (
@@ -119,7 +157,7 @@ export const FieldRow: React.FC<FieldRowProps> = ({
     valuePropName={valuePropName}
     tooltip={tooltip}
     help={help}
-    style={style}
+    style={{ ...(width ? FIELD_WIDTHS[width] : undefined), ...style }}
     label={
       badge != null ? (
         <Space size={4}>
