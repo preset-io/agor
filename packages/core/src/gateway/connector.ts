@@ -176,6 +176,19 @@ export interface GatewayConnector {
   }): Promise<GatewaySendResult>;
 
   /**
+   * Best-effort reconciliation for an ambiguous at-least-once post. Providers
+   * that expose durable message metadata may return the matching message id;
+   * absence is not proof that a previous post did not land.
+   */
+  findMessageByMetadata?(req: {
+    threadId: string;
+    eventType: string;
+    payloadKey: string;
+    payloadValue: string;
+    limit?: number;
+  }): Promise<string | undefined>;
+
+  /**
    * Optional bounded history read used by mention catch-up. The returned
    * interval is provider-neutral, ordered oldest-first, and remains in memory
    * until the daemon formats the single admitted Task prompt.

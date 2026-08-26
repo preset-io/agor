@@ -148,6 +148,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         mcpServerId: bound.serverId,
         oauthMode: 'per_user',
         configFingerprint: 'a'.repeat(64),
+        slackRecovery: {
+          notice_id: 'notice-peer-callback',
+          task_id: 'task-peer-callback',
+          session_id: 'session-peer-callback',
+          mcp_server_id: bound.serverId,
+          recovery_generation: 7,
+          recovery_request_id: 'request-peer-callback',
+        },
       } satisfies DurableMCPOAuthFlowCreate);
 
       const stored = await runWithTenantDatabaseScope(dbB, bound.tenantId, async (scoped) => {
@@ -171,6 +179,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         throw new Error('Expected a supported grant binding version');
       }
       const opened = authorityB.openClaim(claimed.flow, context.state);
+      expect(opened.slackRecovery).toEqual({
+        notice_id: 'notice-peer-callback',
+        task_id: 'task-peer-callback',
+        session_id: 'session-peer-callback',
+        mcp_server_id: bound.serverId,
+        recovery_generation: 7,
+        recovery_request_id: 'request-peer-callback',
+      });
       await runWithTenantDatabaseScope(dbB, bound.tenantId, async (scoped) => {
         await new UserMCPOAuthTokenRepository(scoped, masterSecret).saveToken(
           bound.userId,

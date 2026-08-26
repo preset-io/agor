@@ -1,6 +1,9 @@
 import type { Task } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { redactMcpRecoveryTopology } from './mcp-recovery-redaction.js';
+import {
+  redactMcpRecoveryTopology,
+  stripMcpSlackRecoveryNotice,
+} from './mcp-recovery-redaction.js';
 
 describe('redactMcpRecoveryTopology', () => {
   it('retains the action while removing server ids and names', () => {
@@ -42,5 +45,36 @@ describe('redactMcpRecoveryTopology', () => {
     expect(redacted.metadata?.mcp_recovery?.server_states).toBeUndefined();
     expect(JSON.stringify(redacted)).not.toContain('Private CRM');
     expect(JSON.stringify(redacted)).not.toContain('server-secret-topology');
+  });
+});
+
+describe('stripMcpSlackRecoveryNotice', () => {
+  it('never exposes the signed action identity or Slack routing topology', () => {
+    const task = {
+      task_id: 'task-1',
+      metadata: {
+        mcp_slack_recovery_notice: {
+          notice_id: 'notice-secret',
+          token_jti: 'jti-secret',
+          slack_thread_id: 'C1-1.1',
+          slack_user_id: 'U1',
+        },
+        gateway_task_source: {
+          gateway_channel_id: 'gateway-secret',
+          channel_type: 'slack',
+          thread_id: 'C1-1.1',
+          provider_user_id: 'U1',
+        },
+        caller_metadata: { safe: true },
+      },
+    } as unknown as Task;
+
+    const stripped = stripMcpSlackRecoveryNotice(task);
+    expect(stripped.metadata?.mcp_slack_recovery_notice).toBeUndefined();
+    expect(stripped.metadata?.caller_metadata).toEqual({ safe: true });
+    expect(stripped.metadata?.gateway_task_source).toBeUndefined();
+    expect(JSON.stringify(stripped)).not.toMatch(
+      /notice-secret|jti-secret|gateway-secret|C1-1\.1|U1/
+    );
   });
 });

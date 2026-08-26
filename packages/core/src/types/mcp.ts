@@ -206,6 +206,8 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   /** Whether RFC 9207 says this AS will return `iss` on the callback. */
   authorizationResponseIssuerParameterSupported?: boolean;
   allowLocalhostHttp: boolean;
+  /** Non-secret durable routing back to an exact Slack recovery notice. */
+  slackRecovery?: MCPSlackOAuthRecoveryContext;
 }
 
 /**
@@ -799,6 +801,112 @@ export interface MCPRuntimeRecovery {
   refresh_deadline_at?: string;
   /** Whether the rejected provider hop is proven unstarted or may have started. */
   provider_dispatch: 'not_started' | 'ambiguous';
+}
+
+/**
+ * Durable Slack presentation for one exact structured MCP runtime recovery.
+ *
+ * This is deliberately not a second recovery authority: `mcp_recovery` and
+ * its reprojection tombstones remain authoritative.  The notice only fences a
+ * one-use browser entry and an idempotent Slack message that projects that
+ * state. It is internal task metadata and is stripped from API/realtime DTOs.
+ */
+export interface MCPSlackRecoveryNotice {
+  notice_id: string;
+  token_jti: string;
+  token_consumed_at?: string;
+  issued_at: string;
+  expires_at: string;
+  principal_user_id: UserID;
+  credential_user_id: UserID;
+  slack_user_id: string;
+  slack_team_id: string;
+  gateway_channel_id: string;
+  gateway_config_generation: number;
+  slack_channel_id: string;
+  slack_thread_id: string;
+  session_id: SessionID;
+  task_id: string;
+  mcp_server_id: MCPServerID;
+  mcp_server_config_version: number;
+  recovery_generation: number;
+  recovery_request_id?: string;
+  provider_dispatch: 'not_started' | 'ambiguous';
+  oauth_attempt_id?: MCPOAuthAttemptID;
+  /** Short lease between one-use consumption and canonical flow creation. */
+  oauth_start_claimed_at?: string;
+  oauth_start_claim_expires_at?: string;
+  oauth_started_at?: string;
+  oauth_succeeded_at?: string;
+  /** OAuth completed, but the exact Task/config authority was no longer current. */
+  oauth_superseded_at?: string;
+  oauth_failed_at?: string;
+  /** Rollout disabled after issuance; keeps the stale action fail-closed. */
+  recovery_disabled_at?: string;
+  /** A bound channel/principal/server authority changed after issuance. */
+  binding_invalidated_at?: string;
+  /** Stable metadata identity used to reconcile an ambiguous Slack post when history permits. */
+  delivery_id: string;
+  slack_message_ts?: string;
+  delivery_claim?: {
+    claim_id: string;
+    claimed_at: string;
+    expires_at: string;
+  };
+  /** Last provider-neutral rendering successfully acknowledged by Slack. */
+  rendered_state?: MCPSlackRecoveryRenderedState;
+  rendered_at?: string;
+  /** Bounded at-least-once delivery retry state, independent of browser-token expiry. */
+  delivery_attempt_count?: number;
+  delivery_last_failed_at?: string;
+  delivery_next_retry_at?: string;
+  delivery_retry_until?: string;
+  /** Indexed durable backstop used by startup and periodic bounded repair. */
+  next_repair_at?: string;
+}
+
+export type MCPSlackRecoveryRenderedState =
+  | 'reconnect_required'
+  | 'sign_in_pending'
+  | 'recovered'
+  | 'expired_or_superseded'
+  | 'failed'
+  | 'manual_next_turn';
+
+/** Authenticated, encrypted browser-entry claims; every field is compared durably. */
+export interface MCPSlackRecoveryTokenClaims {
+  type: 'mcp-slack-recovery';
+  tid: string;
+  sub: UserID;
+  credential_user_id: UserID;
+  slack_user_id: string;
+  slack_team_id: string;
+  gateway_channel_id: string;
+  gateway_config_generation: number;
+  slack_channel_id: string;
+  slack_thread_id: string;
+  task_id: string;
+  session_id: SessionID;
+  mcp_server_id: MCPServerID;
+  mcp_server_config_version: number;
+  recovery_generation: number;
+  recovery_request_id?: string;
+  notice_id: string;
+  jti: string;
+  iat: number;
+  exp: number;
+  aud: 'agor:mcp-slack-recovery';
+  iss: 'agor';
+}
+
+/** Optional context sealed into the canonical OAuth pending flow. */
+export interface MCPSlackOAuthRecoveryContext {
+  notice_id: string;
+  task_id: string;
+  session_id: SessionID;
+  mcp_server_id: MCPServerID;
+  recovery_generation: number;
+  recovery_request_id?: string;
 }
 
 // ============================================================================
