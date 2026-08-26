@@ -1,5 +1,12 @@
 import type { CapabilityPolicyPrincipalDescriptor } from '@agor/core/types';
-import type { Group, GroupID, GroupMembership, User, UserID } from '@agor-live/client';
+import {
+  type Group,
+  type GroupID,
+  type GroupMembership,
+  shortId,
+  type User,
+  type UserID,
+} from '@agor-live/client';
 import type { EffectiveAccessSubject } from './effectiveAccessPreviewModel';
 
 const asUserId = (value: string): UserID => value as UserID;
@@ -34,7 +41,7 @@ export function buildCapabilityPolicyDirectory(options: {
     const user = userById.get(userId);
     return {
       principal: { principal_type: 'user', user_id: userId },
-      display_name: user?.name || user?.email || `Unavailable user · ${userId.slice(0, 8)}`,
+      display_name: user?.name || user?.email || `Unavailable user · ${shortId(userId)}`,
       secondary_label: user?.email ?? 'Identity is not present in the active directory',
       status: user ? 'active' : 'deleted',
     };
