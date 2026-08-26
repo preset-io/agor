@@ -3,6 +3,7 @@ import { getTeammateConfig } from '@agor-live/client';
 import { RobotOutlined } from '@ant-design/icons';
 import { Descriptions, Form, Input, Space, Typography } from 'antd';
 import { EmojiPickerInput } from '../../EmojiPickerInput/EmojiPickerInput';
+import { FIELD_WIDTHS } from '../../SettingsModal/panelPrimitives';
 import { Tag } from '../../Tag';
 import type { TeammateFormState } from '../useBranchModalForm';
 
@@ -33,7 +34,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({ branch, canEdit, state
 
         {/* Editable fields */}
         <Form layout="vertical" colon={false}>
-          <Form.Item label="Display Name">
+          <Form.Item label="Display Name" style={FIELD_WIDTHS.short}>
             <Input
               value={state.displayName}
               onChange={(e) => setField('displayName', e.target.value)}

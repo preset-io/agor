@@ -16,6 +16,7 @@ import { ArchiveActionButton } from '../../ArchiveButton';
 import { ArchiveDeleteBranchModal } from '../../ArchiveDeleteBranchModal';
 import { boardSelectOptions } from '../../BoardTile';
 import { MCPServerSelect } from '../../MCPServerSelect';
+import { FIELD_WIDTHS } from '../../SettingsModal/panelPrimitives';
 import { Tag } from '../../Tag';
 import type { GeneralFormState } from '../useBranchModalForm';
 
@@ -117,7 +118,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             Work Context
           </Typography.Text>
           <Form layout="vertical" colon={false}>
-            <Form.Item label="Board">
+            <Form.Item label="Board" style={FIELD_WIDTHS.short}>
               <Select
                 value={state.boardId}
                 onChange={(value) => setField('boardId', value)}
@@ -128,7 +129,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            <Form.Item label="Issue">
+            <Form.Item label="Issue" style={FIELD_WIDTHS.medium}>
               <Input
                 value={state.issueUrl}
                 onChange={(e) => setField('issueUrl', e.target.value)}
@@ -138,7 +139,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
               />
             </Form.Item>
 
-            <Form.Item label="Pull Request">
+            <Form.Item label="Pull Request" style={FIELD_WIDTHS.medium}>
               <Input
                 value={state.prUrl}
                 onChange={(e) => setField('prUrl', e.target.value)}
@@ -183,6 +184,7 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             <Form.Item
               label="MCP Servers"
               tooltip="Default MCP servers for new sessions in this branch"
+              style={FIELD_WIDTHS.medium}
             >
               <MCPServerSelect
                 mcpServers={mcpServers}
