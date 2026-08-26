@@ -1601,8 +1601,8 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }}
         >
           {/* Left group */}
-          <Space size={4} style={{ display: simple ? 'none' : undefined }}>
-            {pinnedItems.includes('upload') && (
+          <Space size={4}>
+            {!simple && pinnedItems.includes('upload') && (
               <Tooltip
                 title={
                   composerAttachmentUploading
@@ -1624,7 +1624,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            {pinnedItems.includes('advanced-upload') && (
+            {!simple && pinnedItems.includes('advanced-upload') && (
               <Tooltip
                 title={
                   composerAttachmentUploading
@@ -1645,7 +1645,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                 />
               </Tooltip>
             )}
-            {pinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
+            {!simple && pinnedItems.includes('fork') && toolCaps?.supportsSessionFork !== false && (
               <Tooltip title={connectionDisabled ? 'Disconnected from daemon' : 'Fork Session'}>
                 <Button
                   size="small"
@@ -1659,20 +1659,22 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
               </Tooltip>
             )}
             {/* Dynamically pinned items */}
-            {pinnedItems.includes('btw-fork') && toolCaps?.supportsSessionFork !== false && (
-              <Tooltip title="BTW fork">
-                <Button
-                  size="small"
-                  type="text"
-                  aria-label="Ask side question via BTW fork"
-                  icon={<QuestionCircleOutlined />}
-                  onClick={onBtwSend}
-                  disabled={btwForkDisabled}
-                  data-testid="btw-fork-bar-btn"
-                />
-              </Tooltip>
-            )}
-            {pinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
+            {!simple &&
+              pinnedItems.includes('btw-fork') &&
+              toolCaps?.supportsSessionFork !== false && (
+                <Tooltip title="BTW fork">
+                  <Button
+                    size="small"
+                    type="text"
+                    aria-label="Ask side question via BTW fork"
+                    icon={<QuestionCircleOutlined />}
+                    onClick={onBtwSend}
+                    disabled={btwForkDisabled}
+                    data-testid="btw-fork-bar-btn"
+                  />
+                </Tooltip>
+              )}
+            {!simple && pinnedItems.includes('spawn') && toolCaps?.supportsChildSpawn !== false && (
               <Tooltip title="Spawn subsession">
                 <Button
                   size="small"

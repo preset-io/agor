@@ -131,7 +131,7 @@ describe('SessionFooter', () => {
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
   });
 
-  it('simple mode keeps only the prompt and primary run controls', () => {
+  it('simple mode keeps primary controls and the session action menu accessible', async () => {
     render(
       <SessionFooter {...baseProps} simple hasInput isRunning sessionMcpServerIds={['server-1']} />,
       { wrapper: Wrapper }
@@ -141,8 +141,13 @@ describe('SessionFooter', () => {
     expect(screen.getByRole('button', { name: /queue/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /mcp servers/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /more options/i })).not.toBeInTheDocument();
+    const moreOptions = screen.getByRole('button', { name: /more options/i });
+    expect(moreOptions).toBeVisible();
     expect(screen.queryByRole('button', { name: /attach files/i })).not.toBeInTheDocument();
+
+    fireEvent.click(moreOptions);
+    expect(await screen.findByText('Attach files')).toBeInTheDocument();
+    expect(screen.getByText('Advanced upload')).toBeInTheDocument();
   });
 
   it('shows stopping feedback immediately while the Stop request is in flight', () => {
