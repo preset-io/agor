@@ -1956,15 +1956,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       </Typography.Text>
     </Space>
   ) : (
-    // Icon + label mirrors Workspace Settings' header so the two surfaces read
-    // as a matched pair — a person glyph for the personal surface, an org glyph
-    // for the workspace one — recognizable at a glance without reading the text.
-    <Space size={8} align="center">
-      <UserOutlined style={{ fontSize: token.fontSizeLG, color: token.colorText }} />
-      <Typography.Text strong style={{ fontSize: token.fontSizeLG }}>
-        User Settings
-      </Typography.Text>
-    </Space>
+    // Text-only label, matching Workspace Settings' header (whose leading icon
+    // was dropped because at the Sider width the icon + text wrapped to two
+    // lines). The distinct wording — "User Settings" vs "Workspace Settings" —
+    // is what marks the two surfaces as a matched pair now.
+    <Typography.Text strong style={{ fontSize: token.fontSizeLG }}>
+      User Settings
+    </Typography.Text>
   );
 
   const footer = isInlineSavePanel
