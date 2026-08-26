@@ -1,7 +1,7 @@
 import type { MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { MarketplacePage } from './MarketplacePage';
 
@@ -80,11 +80,20 @@ function makeClient(options: { holdRevalidation?: boolean } = {}) {
 }
 
 const Location = () => <output data-testid="route">{useLocation().pathname}</output>;
+const HistoryBack = () => {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate(-1)}>
+      Browser back
+    </button>
+  );
+};
 
 function renderPage(path: string, client = makeClient()) {
   render(
     <MemoryRouter initialEntries={[path]}>
       <Location />
+      <HistoryBack />
       <MarketplacePage
         client={client}
         connected
@@ -96,25 +105,42 @@ function renderPage(path: string, client = makeClient()) {
   );
 }
 
-describe('Marketplace cold direct routes and stale-while-refresh UI', () => {
-  it('opens the Marketplace server drawer from a cold credentials bookmark', async () => {
-    renderPage('/marketplace/credentials');
+describe('Catalog cold direct routes and stale-while-refresh UI', () => {
+  it('does not claim a cold Credentials route is empty before its first overview read', () => {
+    render(
+      <MemoryRouter initialEntries={['/catalog/credentials']}>
+        <MarketplacePage
+          client={null}
+          connected={false}
+          connecting={false}
+          authGeneration={0}
+          currentUser={null}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.queryByText('No saved Catalog credentials')).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('table', { name: 'Saved MCP credential metadata' })
+    ).toBeInTheDocument();
+  });
+
+  it('opens the Catalog server drawer from a cold credentials bookmark', async () => {
+    renderPage('/catalog/credentials');
 
     const manage = await screen.findByRole('button', {
       name: 'Settings OAuth connection for GitHub',
     });
     fireEvent.click(manage);
 
-    await waitFor(() =>
-      expect(screen.getByTestId('route')).toHaveTextContent('/marketplace/servers')
-    );
+    await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('/catalog/servers'));
     const drawer = await screen.findByRole('dialog');
     expect(drawer).toHaveTextContent('Server settings');
     expect(drawer).toHaveTextContent('OAuth · Connected');
   });
 
   it('restores keyboard focus to the matching Servers settings action after handoff close', async () => {
-    renderPage('/marketplace/credentials');
+    renderPage('/catalog/credentials');
     const manage = await screen.findByRole('button', {
       name: 'Settings OAuth connection for GitHub',
     });
@@ -127,8 +153,32 @@ describe('Marketplace cold direct routes and stale-while-refresh UI', () => {
     await waitFor(() => expect(settings).toHaveFocus());
   });
 
+  it('closes a handoff drawer when browser Back returns to Credentials', async () => {
+    renderPage('/catalog/credentials');
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Settings OAuth connection for GitHub' })
+    );
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('button', { name: 'Browser back' }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('route')).toHaveTextContent('/catalog/credentials')
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('closes an open server drawer when a different tab is selected', async () => {
+    renderPage('/catalog/servers');
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings for GitHub' }));
+    await screen.findByRole('dialog');
+    fireEvent.click(screen.getByRole('tab', { name: /Sessions/ }));
+
+    await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('/catalog/sessions'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
   it('retains an open settings drawer and removal confirmation during focus revalidation', async () => {
-    renderPage('/marketplace/servers', makeClient({ holdRevalidation: true }));
+    renderPage('/catalog/servers', makeClient({ holdRevalidation: true }));
     fireEvent.click(await screen.findByRole('button', { name: 'Settings for GitHub' }));
     const remove = await screen.findByRole('button', { name: 'Remove GitHub server' });
     await waitFor(() => expect(remove).toBeEnabled());
@@ -143,7 +193,7 @@ describe('Marketplace cold direct routes and stale-while-refresh UI', () => {
   });
 
   it('retains a detach confirmation during visibility revalidation', async () => {
-    renderPage('/marketplace/sessions', makeClient({ holdRevalidation: true }));
+    renderPage('/catalog/sessions', makeClient({ holdRevalidation: true }));
     const detach = await screen.findByRole('button', {
       name: 'Detach GitHub from session Triage issues',
     });

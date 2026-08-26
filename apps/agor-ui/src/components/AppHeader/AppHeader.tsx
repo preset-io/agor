@@ -148,7 +148,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
   const { token } = theme.useToken();
   const navigate = useNavigate();
   const knowledgeHref = useHref('/knowledge');
-  const marketplaceHref = useHref('/marketplace');
+  const catalogHref = useHref('/catalog');
   const { themeMode, setThemeMode } = useTheme();
 
   // Entity state via narrow store subscriptions rather than props. Each
@@ -336,7 +336,7 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           />
         </Tooltip>
-        {/* A marketplace is a surface people are meant to come back to, so it
+        {/* Catalog is a surface people are meant to come back to, so it
             gets promoted chrome next to the gear rather than a line inside the
             gear's menu. Ungated by role: the catalog read is authenticated-only
             (`mcp-catalog` takes `requireAuth` and nothing more), so everyone who
@@ -344,16 +344,16 @@ const AppHeaderInner: React.FC<AppHeaderProps> = ({
             CatalogDetailDrawer asks the MCP member policy before offering it —
             without that this entry would send a viewer to a Connect button that
             403s, which is why the two changed together. */}
-        <Tooltip title="Marketplace">
+        <Tooltip title="Catalog">
           <Button
             type="text"
             icon={<ShopOutlined style={{ fontSize: token.fontSizeLG }} />}
-            href={marketplaceHref}
-            aria-label="Marketplace"
+            href={catalogHref}
+            aria-label="Catalog"
             onClick={(event) => {
               if (isPlainLeftClick(event)) {
                 event.preventDefault();
-                navigate('/marketplace');
+                navigate('/catalog');
               }
             }}
             style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}

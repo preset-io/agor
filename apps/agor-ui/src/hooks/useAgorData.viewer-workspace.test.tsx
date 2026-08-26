@@ -1,7 +1,7 @@
 /**
  * Viewer workspace bootstrap integration.
  *
- * The Marketplace link is only useful if the real workspace bootstrap reaches
+ * The Catalog link is only useful if the real workspace bootstrap reaches
  * AppHeader. This mounts useAgorData in front of the actual header while the
  * daemon seam enforces the MEMBER floor on users.findAll and board-objects;
  * a direct AppHeader render would miss the full-screen failure this guards.
@@ -120,7 +120,7 @@ function renderWorkspace(client: AgorClient, user: User) {
 }
 
 describe('viewer-safe workspace bootstrap', () => {
-  it('reaches the real workspace header and Marketplace without member-only bootstrap calls', async () => {
+  it('reaches the real workspace header and Catalog without member-only bootstrap calls', async () => {
     const { client, usersFindAll, boardObjectsFindAll } = makeWorkspaceClient([
       'users',
       'board-objects',
@@ -128,9 +128,9 @@ describe('viewer-safe workspace bootstrap', () => {
 
     renderWorkspace(client, VIEWER);
 
-    expect(await screen.findByRole('link', { name: 'Marketplace' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Catalog' })).toHaveAttribute(
       'href',
-      '/ui/marketplace'
+      '/ui/catalog'
     );
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(usersFindAll).not.toHaveBeenCalled();
@@ -144,7 +144,7 @@ describe('viewer-safe workspace bootstrap', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('member role required');
     expect(usersFindAll).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('link', { name: 'Marketplace' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Catalog' })).not.toBeInTheDocument();
   });
 
   it('keeps the privileged directory bootstrap for admins', async () => {
@@ -152,7 +152,7 @@ describe('viewer-safe workspace bootstrap', () => {
 
     renderWorkspace(client, { ...VIEWER, user_id: 'admin-1', role: 'admin' } as User);
 
-    expect(await screen.findByRole('link', { name: 'Marketplace' })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'Catalog' })).toBeInTheDocument();
     expect(usersFindAll).toHaveBeenCalledTimes(1);
   });
 
@@ -162,7 +162,7 @@ describe('viewer-safe workspace bootstrap', () => {
     renderWorkspace(client, VIEWER);
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('boards'));
-    expect(screen.queryByRole('link', { name: 'Marketplace' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Catalog' })).not.toBeInTheDocument();
   });
 });
 

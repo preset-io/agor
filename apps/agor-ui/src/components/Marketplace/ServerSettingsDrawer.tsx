@@ -15,6 +15,7 @@ import {
   Flex,
   Popconfirm,
   Space,
+  Spin,
   Switch,
   Tag,
   Typography,
@@ -23,24 +24,20 @@ import {
 import { useEffect, useState } from 'react';
 import { MARKETPLACE_SERVER_DRAWER_WIDTH } from './marketplaceLayout';
 import {
+  type MarketplaceCredentialPresentation,
   marketplaceCredentialActionLabel,
   marketplaceCredentialMethodLabel,
   marketplaceCredentialNeedsRecovery,
   marketplaceServerTitle,
+  marketplaceSessionTitle,
 } from './marketplacePresentation';
 
 const { Text, Title } = Typography;
 
-export interface ServerConnectionPresentation {
-  label: string;
-  status: 'default' | 'success' | 'error' | 'warning' | 'processing';
-  detail: string;
-}
-
 export interface ServerSettingsDrawerProps {
   server: MCPMarketplaceServer | null;
   credential?: MCPMarketplaceCredential;
-  connection: ServerConnectionPresentation;
+  connection: MarketplaceCredentialPresentation;
   attachments: MCPMarketplaceAttachment[];
   cursorAttached: boolean;
   canRefresh: boolean;
@@ -48,11 +45,14 @@ export interface ServerSettingsDrawerProps {
   canReconnect: boolean;
   canRemove: boolean;
   busy: ReadonlySet<string>;
+  toolDiscoveryError?: string;
   onClose: () => void;
   onAfterOpenChange: (open: boolean) => void;
   reconnectingOAuth?: boolean;
+  disconnectingOAuth?: boolean;
   editingCredential?: boolean;
   onReconnectOAuth?: () => void;
+  onDisconnectOAuth?: () => void;
   onEditCredential?: () => void;
   onRefreshTools: (server: MCPMarketplaceServer) => void;
   onToggleTool: (
@@ -74,11 +74,14 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
   canReconnect,
   canRemove,
   busy,
+  toolDiscoveryError,
   onClose,
   onAfterOpenChange,
   reconnectingOAuth = false,
+  disconnectingOAuth = false,
   editingCredential = false,
   onReconnectOAuth,
+  onDisconnectOAuth,
   onEditCredential,
   onRefreshTools,
   onToggleTool,
@@ -89,6 +92,11 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
   useEffect(() => {
     if (!server || !canRemove) setRemoveConfirm(false);
   }, [canRemove, server]);
+  const discoveringTools = Boolean(server && busy.has(`discover:${server.mcp_server_id}`));
+  const toolMutationActive = Boolean(
+    server && Array.from(busy).some((key) => key.startsWith(`tool:${server.mcp_server_id}:`))
+  );
+  const toolWorkActive = discoveringTools || toolMutationActive;
 
   return (
     <Drawer
@@ -122,12 +130,12 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
               {
                 key: 'connection',
                 label: 'Authentication',
-                children: <Badge status={connection.status} text={connection.label} />,
+                children: <Badge status={connection.badge} text={connection.label} />,
               },
               {
                 key: 'source',
                 label: 'Installed from',
-                children: server.source === 'catalog' ? 'Marketplace catalog' : 'Manual setup',
+                children: server.source === 'catalog' ? 'Catalog' : 'Manual setup',
               },
               { key: 'sessions', label: 'Session attachments', children: server.session_count },
             ]}
@@ -145,32 +153,56 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
                     {marketplaceCredentialMethodLabel(credential.method)} · {connection.label}
                   </Text>
                 </Space>
-                {marketplaceCredentialNeedsRecovery(credential, server.enabled) &&
-                onReconnectOAuth ? (
-                  <Button
-                    disabled={!canReconnect}
-                    loading={reconnectingOAuth}
-                    onClick={onReconnectOAuth}
-                    title={`${marketplaceCredentialActionLabel(credential, server.enabled)} ${marketplaceServerTitle(server)}`}
-                    aria-label={`${marketplaceCredentialActionLabel(credential, server.enabled)} ${marketplaceServerTitle(server)} account`}
-                  >
-                    {marketplaceCredentialActionLabel(credential, server.enabled)}
-                  </Button>
-                ) : credential.method !== 'oauth' && onEditCredential ? (
-                  <Button
-                    disabled={!canChangeTools}
-                    loading={editingCredential}
-                    onClick={onEditCredential}
-                    title={`Edit ${marketplaceServerTitle(server)} credential securely`}
-                    aria-label={`Edit ${marketplaceServerTitle(server)} credential`}
-                  >
-                    Edit credential
-                  </Button>
-                ) : null}
+                <Space wrap>
+                  {marketplaceCredentialNeedsRecovery(credential, server.enabled) &&
+                    onReconnectOAuth && (
+                      <Button
+                        disabled={!canReconnect || toolWorkActive}
+                        loading={reconnectingOAuth}
+                        onClick={onReconnectOAuth}
+                        title={`${marketplaceCredentialActionLabel(credential, server.enabled)} ${marketplaceServerTitle(server)}`}
+                        aria-label={`${marketplaceCredentialActionLabel(credential, server.enabled)} ${marketplaceServerTitle(server)} account`}
+                      >
+                        {marketplaceCredentialActionLabel(credential, server.enabled)}
+                      </Button>
+                    )}
+                  {credential.method !== 'oauth' && onEditCredential && (
+                    <Button
+                      disabled={!canChangeTools || toolWorkActive}
+                      loading={editingCredential}
+                      onClick={onEditCredential}
+                      title={`Edit ${marketplaceServerTitle(server)} credential securely`}
+                      aria-label={`Edit ${marketplaceServerTitle(server)} credential`}
+                    >
+                      Edit credential
+                    </Button>
+                  )}
+                  {credential.method === 'oauth' && onDisconnectOAuth && (
+                    <Popconfirm
+                      title={`Disconnect ${marketplaceServerTitle(server)}?`}
+                      description="This removes the saved OAuth connection from Agor. Provider-side access may remain until you revoke it with the provider."
+                      okText="Disconnect"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={onDisconnectOAuth}
+                    >
+                      <Button
+                        danger
+                        disabled={!canChangeTools || toolWorkActive}
+                        loading={disconnectingOAuth}
+                        aria-label={`Disconnect ${marketplaceServerTitle(server)} OAuth connection`}
+                      >
+                        Disconnect OAuth
+                      </Button>
+                    </Popconfirm>
+                  )}
+                </Space>
               </Flex>
             ) : (
               <Text type="secondary">No account is needed for this connection.</Text>
             )}
+            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              {connection.detail}
+            </Text>
             <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
               Credential values are never displayed here. OAuth recovery uses the existing secure
               provider flow; API keys and JWT credentials open the existing secure editor.
@@ -185,13 +217,17 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
               <Button
                 aria-label="Refresh tools"
                 icon={<ReloadOutlined />}
-                disabled={!canRefresh}
-                loading={busy.has(`discover:${server.mcp_server_id}`)}
+                disabled={!canRefresh || toolMutationActive}
+                loading={discoveringTools}
                 onClick={() => onRefreshTools(server)}
               >
                 Refresh tools
               </Button>
             </Flex>
+            <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
+              Default follows the server policy. Ask requires approval for each use; turning an Ask
+              tool off and back on restores Default.
+            </Text>
             {cursorAttached && (
               <Alert
                 type="warning"
@@ -200,40 +236,69 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
                 description="When any tool is Off or Ask, Agor withholds this entire server from Cursor."
               />
             )}
+            {discoveringTools && (
+              <Alert
+                type="info"
+                showIcon
+                role="status"
+                title="Discovering tools…"
+                description="Checking the server for its current tool list. Existing settings stay available while this finishes."
+              />
+            )}
+            {toolDiscoveryError && (
+              <Alert
+                type="error"
+                showIcon
+                title="Could not discover tools"
+                description={toolDiscoveryError}
+              />
+            )}
             {server.tools.length ? (
-              <Flex vertical role="list" aria-label={`${marketplaceServerTitle(server)} tools`}>
-                {server.tools.map((tool) => (
-                  <Flex
-                    key={tool.name}
-                    role="listitem"
-                    justify="space-between"
-                    align="center"
-                    gap={token.marginSM}
-                    style={{
-                      paddingBlock: token.paddingSM,
-                      borderBottomWidth: token.lineWidth,
-                      borderBottomStyle: 'solid',
-                      borderBottomColor: token.colorBorderSecondary,
-                    }}
-                  >
-                    <Flex vertical style={{ minWidth: 0 }}>
-                      <Text strong>{tool.name}</Text>
-                      {tool.description && <Text type="secondary">{tool.description}</Text>}
+              <Flex
+                vertical
+                role="list"
+                aria-label={`${marketplaceServerTitle(server)} tools`}
+                aria-busy={toolWorkActive}
+              >
+                {server.tools.map((tool) => {
+                  const changing = busy.has(`tool:${server.mcp_server_id}:${tool.name}`);
+                  return (
+                    <Flex
+                      key={tool.name}
+                      role="listitem"
+                      justify="space-between"
+                      align="center"
+                      gap={token.marginSM}
+                      style={{
+                        paddingBlock: token.paddingSM,
+                        borderBottomWidth: token.lineWidth,
+                        borderBottomStyle: 'solid',
+                        borderBottomColor: token.colorBorderSecondary,
+                      }}
+                    >
+                      <Flex vertical style={{ minWidth: 0 }}>
+                        <Text strong>{tool.name}</Text>
+                        {tool.description && <Text type="secondary">{tool.description}</Text>}
+                      </Flex>
+                      <Space>
+                        {tool.permission === 'ask' && <Tag color="gold">Ask</Tag>}
+                        {changing && (
+                          <Spin size="small" aria-label={`Saving ${tool.name} permission`} />
+                        )}
+                        <Switch
+                          aria-label={`${marketplaceServerTitle(server)}: ${tool.name} ${tool.permission === 'deny' ? 'off' : 'on'}`}
+                          checked={tool.permission !== 'deny'}
+                          disabled={!canChangeTools}
+                          aria-disabled={!canChangeTools || toolWorkActive}
+                          aria-busy={changing || discoveringTools}
+                          onChange={(checked) => onToggleTool(server, tool, checked)}
+                        />
+                      </Space>
                     </Flex>
-                    <Space>
-                      {tool.permission === 'ask' && <Tag color="gold">Ask</Tag>}
-                      <Switch
-                        aria-label={`${marketplaceServerTitle(server)}: ${tool.name} ${tool.permission === 'deny' ? 'off' : 'on'}`}
-                        checked={tool.permission !== 'deny'}
-                        disabled={!canChangeTools}
-                        loading={busy.has(`tool:${server.mcp_server_id}:${tool.name}`)}
-                        onChange={(checked) => onToggleTool(server, tool, checked)}
-                      />
-                    </Space>
-                  </Flex>
-                ))}
+                  );
+                })}
               </Flex>
-            ) : (
+            ) : discoveringTools ? null : (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No tools discovered yet" />
             )}
           </Flex>
@@ -249,7 +314,7 @@ export const ServerSettingsDrawer: React.FC<ServerSettingsDrawerProps> = ({
                     key={attachment.session_id}
                     color={attachment.enabled ? undefined : 'default'}
                   >
-                    {attachment.session_title ?? attachment.branch_name}
+                    {marketplaceSessionTitle(attachment)}
                     {!attachment.enabled && ' · Disabled'}
                   </Tag>
                 ))}

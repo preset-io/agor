@@ -44,7 +44,7 @@ describe('Marketplace presentation vocabulary', () => {
     }
   });
 
-  it('presents disabled state separately without revoking a healthy OAuth grant', () => {
+  it('states that disabling an OAuth server removes the saved grant', () => {
     const credential: MCPMarketplaceCredential = {
       mcp_server_id: 'server-1',
       server_name: 'server',
@@ -54,8 +54,24 @@ describe('Marketplace presentation vocabulary', () => {
     expect(marketplaceCredentialPresentation(credential, false)).toMatchObject({
       label: 'Disabled',
       badge: 'default',
+      detail: expect.stringMatching(/removes its saved OAuth connection/i),
     });
     expect(marketplaceCredentialActionLabel(credential, false)).toBe('Settings');
+  });
+
+  it('qualifies a stored bearer credential without claiming provider verification', () => {
+    const credential: MCPMarketplaceCredential = {
+      mcp_server_id: 'server-1',
+      server_name: 'server',
+      method: 'bearer',
+      status: 'configured',
+    };
+    expect(marketplaceCredentialPresentation(credential)).toEqual({
+      label: 'Credential stored',
+      badge: 'default',
+      detail:
+        'Your credential is stored securely. The remote provider verifies it when this server is used.',
+    });
   });
 
   it('returns a safe dash for absent or invalid dates', () => {

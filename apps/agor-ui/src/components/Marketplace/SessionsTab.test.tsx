@@ -77,7 +77,7 @@ describe('Marketplace session attachments', () => {
         <SessionsTab {...props} loading={false} error="Overview read failed" />
       </MemoryRouter>
     );
-    expect(screen.getByText('Could not load Marketplace sessions')).toBeInTheDocument();
+    expect(screen.getByText('Could not load Catalog sessions')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(refresh).toHaveBeenCalledOnce();
   });

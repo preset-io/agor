@@ -100,6 +100,8 @@ const CatalogGrid = memo<{
 ));
 
 export interface CatalogTabProps {
+  /** Whether this tab is the active route; inactive drawers must not portal over another tab. */
+  active?: boolean;
   client: AgorClient | null;
   /** The socket has connected and authenticated, so reads will be answered. */
   connected: boolean;
@@ -114,6 +116,7 @@ export interface CatalogTabProps {
 }
 
 const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
+  active = true,
   client,
   connected,
   connecting: connectionPending,
@@ -161,6 +164,18 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
     null
   );
   const showDisconnected = useSettledFlag(!connected, DISCONNECT_NOTICE_DELAY_MS);
+
+  useEffect(() => {
+    if (active) return;
+    drawerOpen.current = false;
+    drawerTrigger.current = null;
+    setSelected(null);
+    setConnecting(false);
+    setConnectError(null);
+    setConnectSuccess(null);
+    setKeyRequirement(null);
+    surpriseOAuthResultRef.current = null;
+  }, [active]);
 
   const { entries, status, matchCount, catalogSize, error, retry } = useCatalogSearch(
     client,
@@ -372,6 +387,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
 
   const restoreDrawerFocus = useCallback((trigger: HTMLElement | null) => {
     if (drawerOpen.current || !trigger?.isConnected || drawerTrigger.current !== trigger) return;
+    drawerTrigger.current = null;
     trigger.focus();
   }, []);
 
@@ -647,7 +663,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         <Alert
           type="warning"
           showIcon
-          message="Not connected to the Agor daemon"
+          title="Not connected to the Agor daemon"
           description="The catalog will load as soon as the connection is back."
         />
       )}
@@ -658,7 +674,7 @@ const CatalogTabForIdentity: React.FC<CatalogTabProps> = ({
         <Alert
           type="error"
           showIcon
-          message="Could not load the catalog"
+          title="Could not load the catalog"
           description={error}
           action={
             <Button size="small" onClick={retry}>

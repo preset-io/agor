@@ -301,12 +301,13 @@ import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
-import { emitMarketplaceInvalidation } from './utils/marketplace-invalidation.js';
+import { emitMarketplaceChanged } from './utils/marketplace-invalidation.js';
 import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
 import {
   bindMCPDiscoveryOAuthGrant,
   bindMCPDiscoveryResolvedConfiguration,
   captureMCPDiscoveryAuthority,
+  type DiscoveredMCPCapabilities,
   type MCPDiscoveryAuthoritySnapshot,
   persistDiscoveredMCPCapabilities,
 } from './utils/mcp-discovered-capabilities.js';
@@ -3598,20 +3599,20 @@ export async function registerMCPServices(
   app.use(
     '/mcp-marketplace/remove-unattached',
     new MCPMarketplaceRemoveServerService(db, (userIds, params) =>
-      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
+      emitMarketplaceChanged(app, params.tenant?.tenant_id, userIds)
     ),
     { methods: ['create'] }
   );
   app.use(
     '/mcp-marketplace/tool-permission',
     new MCPMarketplaceToolPermissionService(db, (userIds, params) =>
-      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
+      emitMarketplaceChanged(app, params.tenant?.tenant_id, userIds)
     ),
     { methods: ['create'] }
   );
   // Action replies are private acknowledgements. These services mutate through
   // repository transactions, so they explicitly emit the user-targeted empty
-  // Marketplace invalidation rather than pretending the ordinary MCP CRUD
+  // Marketplace freshness hint rather than pretending the ordinary MCP CRUD
   // service emitted a lifecycle event.
   for (const path of [
     'mcp-marketplace/remove-unattached',
@@ -5838,7 +5839,7 @@ export async function registerMCPServices(
             listTimeout,
           ])) as PromptsResult;
 
-          const discovered = {
+          const discovered: DiscoveredMCPCapabilities = {
             tools: toolsResult.tools.map((t) => ({
               name: t.name,
               description: t.description,

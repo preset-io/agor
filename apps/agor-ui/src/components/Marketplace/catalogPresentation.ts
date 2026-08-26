@@ -224,10 +224,11 @@ const CONNECT_STATUSES = {
     detail:
       'Agor has not checked this endpoint, so it may ask for an account. Connecting checks it — and stops there if it does.',
   },
-  ready: {
-    readiness: 'ready',
-    label: 'No account needed',
-    detail: 'This server needs no account, so connecting it takes one step.',
+  declaredOpen: {
+    readiness: 'unchecked',
+    label: 'Catalog says no account',
+    detail:
+      'Catalog metadata says this server needs no account. Agor checks the live endpoint before connecting.',
   },
 } as const satisfies Record<string, ConnectStatus>;
 
@@ -264,7 +265,7 @@ export function connectStatus(entry: MCPCatalogEntry): ConnectStatus {
   if (entry.auth_type === 'credentials') return CONNECT_STATUSES.needsKey;
   if (entry.auth_type === 'oauth') return CONNECT_STATUSES.signIn;
   if (entry.auth_type !== 'none') return CONNECT_STATUSES.unchecked;
-  return CONNECT_STATUSES.ready;
+  return CONNECT_STATUSES.declaredOpen;
 }
 
 /** Whether the "connectable now" filter would keep this entry. */

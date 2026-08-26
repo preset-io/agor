@@ -10,6 +10,7 @@ import {
   entryTitle,
   isConnectable,
 } from './catalogPresentation';
+import { MARKETPLACE_OAUTH_POLL_DELAYS_MS } from './marketplaceLayout';
 
 function entry(overrides: Partial<MCPCatalogEntry> = {}): MCPCatalogEntry {
   return {
@@ -26,6 +27,15 @@ function entry(overrides: Partial<MCPCatalogEntry> = {}): MCPCatalogEntry {
     ...overrides,
   };
 }
+
+describe('OAuth pending convergence budget', () => {
+  it('keeps durable polling bounded while allowing a realistic provider callback window', () => {
+    const total = MARKETPLACE_OAUTH_POLL_DELAYS_MS.reduce((sum, delay) => sum + delay, 0);
+    expect(total).toBeGreaterThanOrEqual(60_000);
+    expect(total).toBeLessThanOrEqual(90_000);
+    expect(Math.max(...MARKETPLACE_OAUTH_POLL_DELAYS_MS)).toBeLessThanOrEqual(30_000);
+  });
+});
 
 describe('entryTitle', () => {
   it('prefers a real title when one exists', () => {
@@ -101,8 +111,11 @@ describe('connectStatus', () => {
     expect(connectBlockedReason(entry({ auth_type: 'unknown' }))).toBeUndefined();
   });
 
-  it('says outright when no account is needed', () => {
-    expect(connectStatus(entry()).readiness).toBe('ready');
+  it('qualifies catalog-declared no-auth until the live endpoint is checked', () => {
+    expect(connectStatus(entry())).toMatchObject({
+      readiness: 'unchecked',
+      label: 'Catalog says no account',
+    });
   });
 
   it('carries a card-sized label for every blocked reason', () => {

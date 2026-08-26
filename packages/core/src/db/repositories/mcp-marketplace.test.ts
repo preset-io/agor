@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { insert, update } from '../database-wrapper';
+import { insert, runDatabaseTransaction, update } from '../database-wrapper';
 import { sessionMcpServers, userMcpOauthTokens } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
@@ -86,6 +86,16 @@ describe('MCPMarketplaceRepository', () => {
         tools: [{ name: 'write_task', description: 'Writes a task', input_schema: {} }],
         tool_permissions: { write_task: 'ask' },
       });
+      await runDatabaseTransaction(db, (tx) =>
+        new MCPServerRepository(tx).setDiscoveredCapabilitiesInCurrentTransaction(
+          aliceServer.mcp_server_id,
+          {
+            tools: [{ name: 'write_task', description: 'Writes a task', input_schema: {} }],
+            resources: [],
+            prompts: [],
+          }
+        )
+      );
       const bobServer = await servers.create({
         name: 'bob-private',
         transport: 'http',
@@ -145,6 +155,9 @@ describe('MCPMarketplaceRepository', () => {
         },
       ]);
       expect(result.servers[0].tools).toMatchObject([{ name: 'write_task', permission: 'ask' }]);
+      expect(result.servers[0].capabilities_discovered_at).toMatch(
+        /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/
+      );
 
       const forbiddenKeys =
         /^(auth|token|secret|headers?|env|url|endpoint|client_id|resource|issuer)$/i;
@@ -196,6 +209,13 @@ describe('MCPMarketplaceRepository', () => {
         credentials: [{ method: 'oauth', status: 'refreshable' }],
       });
 
+      const failedAuthorityRead = new MCPMarketplaceRepository(db, async () => {
+        throw new Error('grant authority read failed');
+      });
+      await expect(
+        failedAuthorityRead.overviewForUser(user.user_id, Date.parse('2026-01-02T00:00:00.000Z'))
+      ).rejects.toThrow('grant authority read failed');
+
       await update(db, userMcpOauthTokens)
         .set({ refresh_status: 'refreshing' })
         .where(eq(userMcpOauthTokens.mcp_server_id, server.mcp_server_id))
@@ -239,7 +259,7 @@ describe('MCPMarketplaceRepository', () => {
   );
 
   dbTest(
-    'projects shared grants, excludes another user per-user grant, and keeps authority when disabled',
+    'projects shared grants, excludes another user grant, and keeps enabled separate in a stale repository row',
     async ({ db }) => {
       const users = new UsersRepository(db);
       const alice = await users.create({ email: 'shared-alice@example.test', name: 'Alice' });

@@ -78,7 +78,7 @@ export function useMarketplaceOverview(input: {
       }
       setLoadedError({
         authority,
-        value: cause instanceof Error ? cause.message : 'Could not load Marketplace data',
+        value: cause instanceof Error ? cause.message : 'Could not load Catalog data',
       });
       return null;
     } finally {
@@ -137,6 +137,7 @@ export function useMarketplaceOverview(input: {
     }
     client.io.on('oauth:completed', schedule);
     client.io.on('oauth:disconnected', schedule);
+    client.io.on('marketplace:changed', schedule);
     client.io.on('marketplace:invalidated', invalidate);
     const onFocus = schedule;
     const onVisibility = () => document.visibilityState === 'visible' && schedule();
@@ -149,6 +150,7 @@ export function useMarketplaceOverview(input: {
       }
       client.io.off('oauth:completed', schedule);
       client.io.off('oauth:disconnected', schedule);
+      client.io.off('marketplace:changed', schedule);
       client.io.off('marketplace:invalidated', invalidate);
       window.removeEventListener('focus', onFocus);
       document.removeEventListener('visibilitychange', onVisibility);
@@ -157,7 +159,11 @@ export function useMarketplaceOverview(input: {
 
   return {
     overview,
-    loading: ready && loaded.authority !== authority ? true : loading,
+    // A cold standalone route can render while socket authentication is still
+    // in progress. Do not turn that transient state into a confident empty
+    // inventory before the first caller-scoped read is even possible.
+    loading:
+      error === null && (!ready || loaded.authority !== authority || !loaded.successful || loading),
     error,
     refresh,
   };

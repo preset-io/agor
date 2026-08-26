@@ -40,6 +40,7 @@ type SafeServerRow = {
   display_name: unknown;
   description: unknown;
   tools_json: unknown;
+  capabilities_discovered_at: unknown;
   permissions_json: unknown;
   auth_type: unknown;
   credential_configured: unknown;
@@ -203,6 +204,11 @@ export class MCPMarketplaceRepository {
       const displayName = jsonExtract(this.db, mcpServers.data, 'display_name');
       const description = jsonExtract(this.db, mcpServers.data, 'description');
       const tools = jsonExtract(this.db, mcpServers.data, 'tools');
+      const capabilitiesDiscoveredAt = jsonExtract(
+        this.db,
+        mcpServers.data,
+        'capabilities_discovered_at'
+      );
       const permissions = jsonExtract(this.db, mcpServers.data, 'tool_permissions');
       const authType = jsonExtract(this.db, mcpServers.data, 'auth.type');
       const oauthMode = jsonExtract(this.db, mcpServers.data, 'auth.oauth_mode');
@@ -227,6 +233,7 @@ export class MCPMarketplaceRepository {
         display_name: displayName,
         description,
         tools_json: tools,
+        capabilities_discovered_at: capabilitiesDiscoveredAt,
         permissions_json: permissions,
         auth_type: authType,
         credential_configured: credentialConfigured,
@@ -322,6 +329,13 @@ export class MCPMarketplaceRepository {
           ...(row.catalog_entry_name ? { catalog_entry_name: row.catalog_entry_name } : {}),
           enabled: Boolean(row.enabled),
           tools: readTools(row.tools_json, row.permissions_json),
+          ...(iso(row.capabilities_discovered_at as string | number | Date | null)
+            ? {
+                capabilities_discovered_at: iso(
+                  row.capabilities_discovered_at as string | number | Date
+                ),
+              }
+            : {}),
           session_count: countByServer.get(row.mcp_server_id) ?? 0,
           created_at: createdAt,
           updated_at: iso(row.updated_at) ?? createdAt,
@@ -333,10 +347,15 @@ export class MCPMarketplaceRepository {
         .map((row) => row.mcp_server_id as MCPServerID);
       // One closed batch crosses into the daemon's canonical authority
       // resolver. The overview never fans out repository/HMAC work per row.
+      if (oauthServerIds.length > 0 && !this.isOAuthGrantAuthorized) {
+        throw new Error('OAuth grant authority resolver is unavailable');
+      }
+      // An authority-read failure is not evidence that every saved grant was
+      // revoked. Let the overview fail so clients retain their last good
+      // projection during stale-while-refresh instead of showing a definite
+      // reconnect requirement.
       const oauthAuthority = this.isOAuthGrantAuthorized
-        ? await this.isOAuthGrantAuthorized(userId, oauthServerIds).catch(
-            () => new Map<MCPServerID, boolean>()
-          )
+        ? await this.isOAuthGrantAuthorized(userId, oauthServerIds)
         : new Map<MCPServerID, boolean>();
       const credentials = serverRows
         .map((row) => credentialFrom(row, now, oauthAuthority))

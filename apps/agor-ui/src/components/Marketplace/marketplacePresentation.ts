@@ -23,7 +23,10 @@ export function marketplaceCredentialPresentation(
     return {
       label: 'Disabled',
       badge: 'default',
-      detail: 'This server is disabled. Disabling it does not revoke a saved connection.',
+      detail:
+        credential?.method === 'oauth'
+          ? 'This server is disabled. Disabling removes its saved OAuth connection from Agor, so re-enabling requires a new sign-in.'
+          : 'This server is disabled.',
     };
   }
 
@@ -44,9 +47,10 @@ export function marketplaceCredentialPresentation(
       };
     case 'configured':
       return {
-        label: 'Connected',
-        badge: 'success',
-        detail: 'Your credential is securely configured.',
+        label: 'Credential stored',
+        badge: 'default',
+        detail:
+          'Your credential is stored securely. The remote provider verifies it when this server is used.',
       };
     case 'refreshable':
       return {
