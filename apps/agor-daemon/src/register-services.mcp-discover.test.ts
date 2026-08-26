@@ -73,14 +73,20 @@ describe('register-services /mcp-servers/discover wiring', () => {
     expect(discoverBlock.slice(persist, persist + 180)).toContain('discoveryAuthority');
   });
 
-  it('emits the user-targeted Marketplace invalidation after durable persistence', () => {
+  it('emits the user-targeted Marketplace freshness hint after durable persistence', () => {
     const persist = discoverBlock.indexOf('persistDiscoveredMCPCapabilities(');
-    const invalidate = discoverBlock.indexOf('emitMarketplaceInvalidation(');
+    const invalidate = discoverBlock.indexOf('emitMarketplaceChanged(');
     expect(persist).toBeGreaterThan(-1);
     expect(invalidate).toBeGreaterThan(persist);
     expect(discoverBlock.slice(invalidate, invalidate + 260)).toContain(
       'authoritativeServer?.owner_user_id'
     );
+  });
+
+  it('returns the same canonical capability list that persistence accepted', () => {
+    expect(discoverBlock).toContain('responseCapabilities = await runWithinOAuthAuthority(');
+    expect(discoverBlock).toContain('tools: responseCapabilities.tools.map(');
+    expect(discoverBlock).toContain('tools: responseCapabilities.tools.length');
   });
 
   it('calls resolveProbeServerTemplates before resolveMCPAuthHeaders', () => {

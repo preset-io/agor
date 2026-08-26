@@ -261,7 +261,7 @@ describe('CatalogDetailDrawer connected state', () => {
     expect(liveRegion).toHaveTextContent('Connection status: Connected and ready.');
   });
 
-  it('retains server context and exposes one truthful next step', () => {
+  it('retains server context and focuses the truthful next step', async () => {
     const openSession = vi.fn();
     render(
       <CatalogDetailDrawer
@@ -294,7 +294,9 @@ describe('CatalogDetailDrawer connected state', () => {
     expect(screen.getByText(DEEPWIKI.benefit)).toBeInTheDocument();
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Open session' }));
+    const open = screen.getByRole('button', { name: 'Open session' });
+    await waitFor(() => expect(open).toHaveFocus());
+    fireEvent.click(open);
     expect(openSession).toHaveBeenCalledWith('session-1');
   });
 });
@@ -596,6 +598,18 @@ function renderWithConnect(entry: MCPCatalogEntry) {
 const keyField = () => screen.queryByPlaceholderText(/Paste your .* bearer access token/);
 
 describe('CatalogDetailDrawer API key', () => {
+  it('presents advisory no-account readiness without claiming a live check', () => {
+    renderWithConnect(DEEPWIKI);
+
+    expect(
+      screen.getByText(
+        'Catalog and saved connection data indicate no account is needed. Agor checks the endpoint when you connect.'
+      )
+    ).toBeVisible();
+    expect(screen.getByRole('alert')).toHaveClass('ant-alert-info');
+    expect(connectButton()).toHaveTextContent('Check & connect');
+  });
+
   it('erases same-entry consent and the pasted key on same-role identity replacement', () => {
     const { onConnect, replaceIdentity } = renderWithConnect(DATADOG);
     fireEvent.click(screen.getByRole('checkbox'));

@@ -30,6 +30,8 @@ export interface MCPMarketplaceServer {
   catalog_entry_name?: string;
   enabled: boolean;
   tools: MCPMarketplaceTool[];
+  /** Last successful daemon capability discovery; absent means never discovered. */
+  capabilities_discovered_at?: string;
   /** Counted from the same visible attachment rows returned in `attachments`. */
   session_count: number;
   created_at: string;

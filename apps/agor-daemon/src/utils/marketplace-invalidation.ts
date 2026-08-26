@@ -9,6 +9,26 @@ type RealtimeApplication = Application & {
   };
 };
 
+type MarketplaceProjectionEvent = 'marketplace:changed' | 'marketplace:invalidated';
+
+function emitMarketplaceProjectionEvent(
+  app: RealtimeApplication,
+  tenantId: string | undefined,
+  userIds: Iterable<UserID | string>,
+  event: MarketplaceProjectionEvent
+): void {
+  if (!tenantId || !app.io) return;
+  const targets = [...new Set([...userIds].filter((value) => typeof value === 'string' && value))];
+  if (targets.length === 0) return;
+
+  const emit = () => {
+    for (const userId of targets) {
+      emitHaNativeSocketEvent(app.io!.to(tenantUserChannelName(tenantId, userId)), event, {});
+    }
+  };
+  if (!enqueueAfterTenantDatabaseCommit(emit)) emit();
+}
+
 export const MARKETPLACE_INVALIDATION_TARGETS_PARAM = '_agorMarketplaceInvalidationTargets';
 
 /** Capture the pre-write tenant audience so a removed principal is retained. */
@@ -57,18 +77,18 @@ export function emitMarketplaceInvalidation(
   tenantId: string | undefined,
   userIds: Iterable<UserID | string>
 ): void {
-  if (!tenantId || !app.io) return;
-  const targets = [...new Set([...userIds].filter((value) => typeof value === 'string' && value))];
-  if (targets.length === 0) return;
+  emitMarketplaceProjectionEvent(app, tenantId, userIds, 'marketplace:invalidated');
+}
 
-  const emit = () => {
-    for (const userId of targets) {
-      emitHaNativeSocketEvent(
-        app.io!.to(tenantUserChannelName(tenantId, userId)),
-        'marketplace:invalidated',
-        {}
-      );
-    }
-  };
-  if (!enqueueAfterTenantDatabaseCommit(emit)) emit();
+/**
+ * Tell affected Marketplace views to revalidate without discarding their last
+ * good caller-scoped projection. Ordinary server/tool mutations use this;
+ * `marketplace:invalidated` remains reserved for visibility revocation.
+ */
+export function emitMarketplaceChanged(
+  app: RealtimeApplication,
+  tenantId: string | undefined,
+  userIds: Iterable<UserID | string>
+): void {
+  emitMarketplaceProjectionEvent(app, tenantId, userIds, 'marketplace:changed');
 }

@@ -159,6 +159,8 @@ interface HaNativeSocketPayloads {
    * signal must not disclose which branch/server/credential changed.
    */
   'marketplace:invalidated': Record<string, never>;
+  /** Caller-private Marketplace freshness hint; recipients retain stale data while re-reading. */
+  'marketplace:changed': Record<string, never>;
 }
 
 /** Native Socket.IO packets intentionally permitted to cross the HA Redis adapter. */
@@ -168,6 +170,7 @@ export const HA_NATIVE_SOCKET_EVENT_INVENTORY = [
   'oauth:completed',
   'oauth:disconnected',
   'marketplace:invalidated',
+  'marketplace:changed',
 ] as const satisfies readonly (keyof HaNativeSocketPayloads)[];
 
 type NativeSocketTarget = {

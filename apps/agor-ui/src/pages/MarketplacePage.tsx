@@ -1,5 +1,5 @@
 /**
- * Marketplace surface: browse the MCP catalog and connect a server.
+ * Catalog surface: browse reviewed MCP servers and connect one.
  *
  * A standalone surface rather than a workspace route — it reads the checked-in
  * curated catalog and does not need the tenant's boards, sessions or canvas,
@@ -69,7 +69,8 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
     ? requestedTab
     : 'catalog';
   useEffect(() => {
-    if (requestedTab !== activeTab) navigate(`/marketplace/${activeTab}`, { replace: true });
+    if (requestedTab === undefined || requestedTab === activeTab) return;
+    navigate(activeTab === 'catalog' ? '/catalog' : `/catalog/${activeTab}`, { replace: true });
   }, [activeTab, navigate, requestedTab]);
 
   const overview = useMarketplaceOverview({
@@ -116,7 +117,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
             style={{ display: 'inline-flex', alignItems: 'center', gap: token.sizeUnit }}
           >
             <ShopOutlined style={{ color: token.colorTextSecondary }} />
-            Marketplace
+            Catalog
           </Text>
         </Space>
         <GlobalUserMenu
@@ -135,20 +136,21 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
       >
         <div style={{ maxWidth: 1400, margin: '0 auto' }}>
           <Title level={3} style={{ marginTop: 0, marginBottom: token.marginXXS }}>
-            Marketplace
+            Catalog
           </Title>
           <Paragraph type="secondary" style={{ marginBottom: token.margin }}>
             Attach tools to your agents — browse, review permissions, connect.
           </Paragraph>
           <Tabs
             activeKey={activeTab}
-            onChange={(key) => navigate(`/marketplace/${key}`)}
+            onChange={(key) => navigate(key === 'catalog' ? '/catalog' : `/catalog/${key}`)}
             items={[
               {
                 key: 'catalog',
                 label: 'Catalog',
                 children: (
                   <CatalogTab
+                    active={activeTab === 'catalog'}
                     client={client}
                     connected={connected}
                     connecting={connecting}
@@ -163,13 +165,14 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
                 label: `My Servers${overview.overview.servers.length ? ` (${overview.overview.servers.length})` : ''}`,
                 children: (
                   <MyServersTab
+                    active={activeTab === 'servers'}
                     client={client}
                     connected={connected}
                     connecting={connecting}
                     authGeneration={authGeneration}
                     currentUser={currentUser}
                     {...overview}
-                    onBrowseCatalog={() => navigate('/marketplace/catalog')}
+                    onBrowseCatalog={() => navigate('/catalog')}
                     requestedServerId={requestedServerId}
                     onRequestedServerOpened={() => setRequestedServerId(null)}
                   />
@@ -183,7 +186,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
                     client={client}
                     authorityKey={authorityKey}
                     {...overview}
-                    onBrowseCatalog={() => navigate('/marketplace/catalog')}
+                    onBrowseCatalog={() => navigate('/catalog')}
                   />
                 ),
               },
@@ -196,9 +199,9 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
                     canManageCredentials={authorityKey !== null}
                     onOpenServerSettings={(serverId) => {
                       setRequestedServerId(serverId);
-                      navigate('/marketplace/servers');
+                      navigate('/catalog/servers');
                     }}
-                    onBrowseCatalog={() => navigate('/marketplace/catalog')}
+                    onBrowseCatalog={() => navigate('/catalog')}
                   />
                 ),
               },

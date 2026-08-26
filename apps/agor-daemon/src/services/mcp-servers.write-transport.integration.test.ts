@@ -865,6 +865,34 @@ describe('MCP server real REST and Socket.IO write contract', () => {
     expect(trusted).toMatchObject({ source: 'catalog', catalog_entry_name: 'io.example.mcp' });
   });
 
+  it('deletes the caller-scoped OAuth grant when an enabled server is disabled', async () => {
+    const probe: CoordinatorProbe = {
+      pendingServerIds: new Set(),
+      invalidatedServerIds: [],
+      lockServerIds: [],
+    };
+    const harness = await createHarness(AUTH_TOKEN, probe);
+    harnesses.push(harness);
+    const created = await harness.repository.create({
+      ...createInput({ type: 'oauth', oauth_mode: 'per_user' }),
+      name: 'disable-removes-oauth',
+    });
+    await harness.grants.saveToken(null, created.mcp_server_id, {
+      accessToken: 'saved-access-token',
+      refreshToken: 'saved-refresh-token',
+    });
+    probe.pendingServerIds.add(created.mcp_server_id);
+
+    const patched = (await harness.client
+      .service('mcp-servers')
+      .patch(created.mcp_server_id, { enabled: false })) as MCPServer;
+
+    expect(patched.enabled).toBe(false);
+    await expect(harness.grants.getToken(null, created.mcp_server_id)).resolves.toBeNull();
+    expect(probe.invalidatedServerIds).toEqual([created.mcp_server_id]);
+    expect(probe.lockServerIds).toEqual([created.mcp_server_id]);
+  });
+
   it.each(['rest-patch', 'socket-put'] as const)(
     'canonicalizes a short ID for configuration, grant, pending-flow, and lock work over %s',
     async (transportCase) => {

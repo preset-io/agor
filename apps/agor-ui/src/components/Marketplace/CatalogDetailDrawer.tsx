@@ -2,8 +2,8 @@
  * Detail view for one catalog entry, and the only place a connect starts.
  *
  * The access disclosure is the first expanded details section and the connect
- * control stays disabled until it is acknowledged. AntD Collapse keeps the
- * disclosure keyboard-operable without weakening the server-side text match.
+ * control stays disabled until it is acknowledged. The disclosure controls
+ * remain keyboard-operable without weakening the server-side text match.
  */
 
 import type {
@@ -16,6 +16,7 @@ import type {
 } from '@agor/core/types';
 import {
   ArrowRightOutlined,
+  RightOutlined,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
 } from '@ant-design/icons';
@@ -24,7 +25,6 @@ import {
   Avatar,
   Button,
   Checkbox,
-  Collapse,
   Descriptions,
   Drawer,
   Flex,
@@ -36,7 +36,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '../../utils/accessibility';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import {
@@ -64,6 +64,53 @@ const AGENT_OPTIONS = AVAILABLE_AGENTS.map((agent) => ({
 
 const FALLBACK_DISCLOSURE =
   'This server has published no access statement. Anything it exposes becomes available to the agent in the session you connect it to.';
+
+const CatalogDetailSection: React.FC<{
+  label: ReactNode;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}> = ({ label, defaultOpen = false, children }) => {
+  const { token } = theme.useToken();
+  const contentId = useId();
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div
+      style={{
+        borderWidth: token.lineWidth,
+        borderStyle: 'solid',
+        borderColor: token.colorBorder,
+        borderRadius: token.borderRadiusLG,
+        overflow: 'hidden',
+      }}
+    >
+      <Button
+        type="text"
+        block
+        aria-expanded={open}
+        aria-controls={contentId}
+        onClick={() => setOpen((current) => !current)}
+        style={{ height: 'auto', justifyContent: 'flex-start', padding: token.paddingSM }}
+      >
+        <RightOutlined rotate={open ? 90 : 0} />
+        {label}
+      </Button>
+      {open && (
+        <div
+          id={contentId}
+          style={{
+            borderTopWidth: token.lineWidth,
+            borderTopStyle: 'solid',
+            borderTopColor: token.colorBorderSecondary,
+            padding: token.padding,
+          }}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  );
+};
 
 export interface CatalogDetailDrawerProps {
   /** Authenticated identity that owns consent, selections, and pasted credentials. */
@@ -156,6 +203,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
   onConnect,
 }) => {
   const { token } = theme.useToken();
+  const successActionRef = useRef<HTMLButtonElement | null>(null);
   const [branchId, setBranchId] = useState<string | undefined>();
   const [agenticTool, setAgenticTool] = useState<AgenticToolName>(DEFAULT_AGENT);
 
@@ -179,15 +227,25 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
     setBranchId(preferred);
   }, [branchOptions, defaultBranchId, branchId]);
 
+  useEffect(() => {
+    if (!open || !success) return;
+    // The Connect button is removed when the success panel replaces the form.
+    // Defer until that commit and rc-drawer's own focus bookkeeping settle, so
+    // focus lands on the truthful next step instead of falling back to body.
+    const timer = window.setTimeout(() => successActionRef.current?.focus(), 0);
+    return () => window.clearTimeout(timer);
+  }, [open, success]);
+
   const title = entry ? entryTitle(entry) : '';
   const connect = entry ? connectStatus(entry) : undefined;
   const readinessPresentation = (() => {
     switch (readiness?.state) {
       case 'no_auth':
         return {
-          readiness: 'ready' as const,
-          label: 'No account needed',
-          detail: 'Connect in one step and try the starter prompt.',
+          readiness: 'unchecked' as const,
+          label: 'No account expected',
+          detail:
+            'Catalog and saved connection data indicate no account is needed. Agor checks the endpoint when you connect.',
         };
       case 'bearer_required':
         return {
@@ -244,7 +302,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
           readiness: 'blocked',
           label: 'Credential scheme not supported',
           detail:
-            'This endpoint requires credentials, but Marketplace has no reviewed prescription for how to send them.',
+            'This endpoint requires credentials, but Catalog has no reviewed prescription for how to send them.',
         } as const;
       default:
         return advisoryStatus;
@@ -447,6 +505,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                   success.authentication === 'action_required' ? (
                     <Flex gap={token.marginXS} wrap>
                       <Button
+                        ref={successActionRef}
                         type="primary"
                         loading={connecting}
                         disabled={!onContinueOAuth}
@@ -474,6 +533,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
                     </Flex>
                   ) : (
                     <Button
+                      ref={successActionRef}
                       type="primary"
                       aria-label="Open session"
                       icon={<ArrowRightOutlined />}
@@ -522,74 +582,67 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
             />
           )}
 
-          <Collapse
-            defaultActiveKey={['access']}
-            items={[
-              {
-                key: 'access',
-                label: (
-                  <Space size={token.marginXS}>
-                    <SafetyCertificateOutlined />
-                    <Text strong>What this can access</Text>
-                  </Space>
-                ),
-                children: (
-                  <Flex vertical gap={token.marginSM}>
-                    <Text>{disclosure}</Text>
-                    {!blockedReason && !success && (
-                      <Checkbox
-                        checked={acknowledged}
-                        onChange={(event) =>
-                          setConsent(
-                            event.target.checked && entryId !== undefined
-                              ? { entryId, disclosure }
-                              : null
-                          )
-                        }
-                      >
-                        I understand what this server can access
-                      </Checkbox>
-                    )}
-                  </Flex>
-                ),
-              },
-              {
-                key: 'technical',
-                label: <Text strong>Technical details</Text>,
-                children: (
-                  <Descriptions
-                    size="small"
-                    column={1}
-                    items={[
-                      {
-                        key: 'identity',
-                        label: 'Catalog ID',
-                        children: <Text copyable>{entry.name}</Text>,
-                      },
-                      {
-                        key: 'transport',
-                        label: 'Transport',
-                        children: entry.transport ?? 'Not stated',
-                      },
-                      {
-                        key: 'authentication',
-                        label: 'Authentication',
-                        children: catalogAuthenticationDetail(
-                          entry.auth_type,
-                          credentialRequirement
-                        ),
-                      },
-                      {
-                        key: 'tools',
-                        label: 'Tools',
-                        children: 'Discovered from the server after connection',
-                      },
-                    ]}
-                  />
-                ),
-              },
-            ]}
-          />
+          <Flex vertical gap={token.marginXS}>
+            <CatalogDetailSection
+              key={`${entryId}:access`}
+              defaultOpen
+              label={
+                <Space size={token.marginXS}>
+                  <SafetyCertificateOutlined />
+                  <Text strong>What this can access</Text>
+                </Space>
+              }
+            >
+              <Flex vertical gap={token.marginSM}>
+                <Text>{disclosure}</Text>
+                {!blockedReason && !success && (
+                  <Checkbox
+                    checked={acknowledged}
+                    onChange={(event) =>
+                      setConsent(
+                        event.target.checked && entryId !== undefined
+                          ? { entryId, disclosure }
+                          : null
+                      )
+                    }
+                  >
+                    I understand what this server can access
+                  </Checkbox>
+                )}
+              </Flex>
+            </CatalogDetailSection>
+            <CatalogDetailSection
+              key={`${entryId}:technical`}
+              label={<Text strong>Technical details</Text>}
+            >
+              <Descriptions
+                size="small"
+                column={1}
+                items={[
+                  {
+                    key: 'identity',
+                    label: 'Catalog ID',
+                    children: <Text copyable>{entry.name}</Text>,
+                  },
+                  {
+                    key: 'transport',
+                    label: 'Transport',
+                    children: entry.transport ?? 'Not stated',
+                  },
+                  {
+                    key: 'authentication',
+                    label: 'Authentication',
+                    children: catalogAuthenticationDetail(entry.auth_type, credentialRequirement),
+                  },
+                  {
+                    key: 'tools',
+                    label: 'Tools',
+                    children: 'Discovered from the server after connection',
+                  },
+                ]}
+              />
+            </CatalogDetailSection>
+          </Flex>
 
           {success ? null : blockedReason ? (
             <Alert type="info" showIcon title={blockedReason} />

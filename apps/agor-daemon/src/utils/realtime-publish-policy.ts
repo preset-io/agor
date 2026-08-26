@@ -308,11 +308,11 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'mcp-marketplace/remove-unattached': {
     audience: 'none',
-    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every owner device.',
+    why: 'Caller-private acknowledgement; an explicit empty user-room freshness hint refreshes every owner device.',
   },
   'mcp-marketplace/tool-permission': {
     audience: 'none',
-    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every affected owner/admin device.',
+    why: 'Caller-private acknowledgement; an explicit empty user-room freshness hint refreshes every affected owner/admin device.',
   },
   'mcp-member-policy': { audience: 'none', why: 'Policy read for the caller.' },
   'mcp-egress/status': {

@@ -339,6 +339,9 @@ export class MCPServerRepository
       tools: row.data.tools,
       resources: row.data.resources,
       prompts: row.data.prompts,
+      capabilities_discovered_at: row.data.capabilities_discovered_at
+        ? new Date(row.data.capabilities_discovered_at)
+        : undefined,
 
       // Tool permissions
       tool_permissions: row.data.tool_permissions,
@@ -417,6 +420,12 @@ export class MCPServerRepository
         tools: 'tools' in data ? data.tools : undefined,
         resources: 'resources' in data ? data.resources : undefined,
         prompts: 'prompts' in data ? data.prompts : undefined,
+        capabilities_discovered_at:
+          options.preserveDaemonRevisions &&
+          'capabilities_discovered_at' in data &&
+          data.capabilities_discovered_at
+            ? new Date(data.capabilities_discovered_at).toISOString()
+            : undefined,
         tool_permissions: 'tool_permissions' in data ? data.tool_permissions : undefined,
       },
     };
@@ -1069,9 +1078,10 @@ export class MCPServerRepository
     const toolsJson = JSON.stringify(capabilities.tools ?? []);
     const resourcesJson = JSON.stringify(capabilities.resources ?? []);
     const promptsJson = JSON.stringify(capabilities.prompts ?? []);
+    const discoveredAt = new Date().toISOString();
     const nextData = isPostgresDatabase(this.db)
-      ? sql`jsonb_set(jsonb_set(jsonb_set(${mcpServers.data}, '{tools}'::text[], ${toolsJson}::jsonb, true), '{resources}'::text[], ${resourcesJson}::jsonb, true), '{prompts}'::text[], ${promptsJson}::jsonb, true)`
-      : sql`json_set(${mcpServers.data}, '$.tools', json(${toolsJson}), '$.resources', json(${resourcesJson}), '$.prompts', json(${promptsJson}))`;
+      ? sql`jsonb_set(jsonb_set(jsonb_set(jsonb_set(${mcpServers.data}, '{tools}'::text[], ${toolsJson}::jsonb, true), '{resources}'::text[], ${resourcesJson}::jsonb, true), '{prompts}'::text[], ${promptsJson}::jsonb, true), '{capabilities_discovered_at}'::text[], to_jsonb(${discoveredAt}::text), true)`
+      : sql`json_set(${mcpServers.data}, '$.tools', json(${toolsJson}), '$.resources', json(${resourcesJson}), '$.prompts', json(${promptsJson}), '$.capabilities_discovered_at', ${discoveredAt})`;
     const result = await update(this.db, mcpServers)
       .set({ data: nextData, updated_at: new Date() })
       .where(where)

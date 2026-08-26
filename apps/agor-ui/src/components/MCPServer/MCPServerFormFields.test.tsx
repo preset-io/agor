@@ -270,11 +270,11 @@ describe('MCPServerFormFields OAuth start', () => {
     render(<Harness />);
 
     fireEvent.click(screen.getByText('Advanced — OAuth settings'));
-    expect(await screen.findByText('Marketplace compatibility (catalog managed)')).toBeVisible();
+    expect(await screen.findByText('Catalog compatibility (managed)')).toBeVisible();
     const compatibility = screen.getByLabelText('OAuth Compatibility');
     expect(compatibility).toBeDisabled();
     expect(
-      screen.getByText(/current Marketplace catalog manages this server's interoperability/i)
+      screen.getByText(/current Catalog entry manages this server's interoperability/i)
     ).toBeVisible();
   });
 });

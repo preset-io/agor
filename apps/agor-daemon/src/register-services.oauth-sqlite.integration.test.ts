@@ -2493,18 +2493,21 @@ describe('SQLite saved-row OAuth authority', () => {
     // worker contention. Freeze issuance so this quota contract tests its
     // own explicit expiry transition rather than ambient wall-clock speed.
     const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt);
+    let reservationExpiresAt: number | null = null;
 
-    const reserve = (tenant: number, user: number, socket: number) => {
+    const reserve = async (tenant: number, user: number, socket: number) => {
       const params = addLiveAuthority(
         harness,
         `tenant-${tenant}`,
         `tenant-${tenant}-user-${user}`,
         `tenant-${tenant}-user-${user}-socket-${socket}`
       );
-      return service.create(
+      const reservation = (await service.create(
         { operation: 'discover', mcp_server_id: harness.server.mcp_server_id },
         params
-      );
+      )) as MCPOAuthBrowserReservation;
+      reservationExpiresAt ??= reservation.expires_at;
+      return reservation;
     };
 
     try {
@@ -2553,7 +2556,8 @@ describe('SQLite saved-row OAuth authority', () => {
       }
       await expect(reserve(9, 1, 1)).rejects.toThrow(/pending OAuth browser reservations$/i);
 
-      clock.mockReturnValue(issuedAt + 60_001);
+      expect(reservationExpiresAt).not.toBeNull();
+      clock.mockReturnValue(reservationExpiresAt! + 1);
       await expect(reserve(9, 1, 1)).resolves.toMatchObject({
         reservation_token: expect.any(String),
       });

@@ -85,8 +85,8 @@ import { SharedUserSettingsModal } from './surfaces/SharedUserSettingsModal';
 import type { RouteSurfaceId } from './surfaces/surfaceRegistry';
 import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
+  CATALOG_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
-  MARKETPLACE_ROUTE_PATHS,
   RBAC_POLICY_PROTOTYPE_ROUTE_PATH,
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
@@ -205,7 +205,7 @@ const loadKnowledgePage = cacheRouteLoader(
   (module) => ({ default: module.KnowledgePage })
 );
 const loadMarketplacePage = cacheRouteLoader(
-  'marketplace',
+  'catalog',
   () => import('./pages/MarketplacePage'),
   (module) => ({ default: module.MarketplacePage })
 );
@@ -252,7 +252,7 @@ const StreamdownDemoPage = lazy(loadStreamdownDemoPage);
 const routeModuleLoaders = {
   workspace: loadAgorApp,
   knowledge: loadKnowledgePage,
-  marketplace: loadMarketplacePage,
+  catalog: loadMarketplacePage,
   'artifact-fullscreen': loadArtifactFullscreenPage,
   demo: loadStreamdownDemoPage,
   mobile: loadMobileApp,
@@ -2375,10 +2375,10 @@ function AppContent() {
             <Route key={path} path={path} element={knowledgePageElement} />
           ))}
 
-          {/* MCP marketplace: browse the catalog and connect a server. Its own
+          {/* MCP Catalog: browse reviewed servers and connect one. Its own
                 surface because it reads the checked-in curated catalog, not
                 the tenant's board/session store. */}
-          {MARKETPLACE_ROUTE_PATHS.map((path) => (
+          {CATALOG_ROUTE_PATHS.map((path) => (
             <Route key={path} path={path} element={marketplacePageElement} />
           ))}
 

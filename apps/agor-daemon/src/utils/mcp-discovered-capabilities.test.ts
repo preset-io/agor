@@ -111,6 +111,7 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
         tools: capabilities.tools,
         resources: capabilities.resources,
         prompts: capabilities.prompts,
+        capabilities_discovered_at: expect.any(Date),
         tool_permissions: { remembered: 'ask' },
       }
     );
@@ -135,7 +136,35 @@ describe('discovery authority/configuration CAS (SQLite)', () => {
     );
     await expect(
       new MCPServerRepository(db).update(server.mcp_server_id, { display_name: 'Still editable' })
-    ).resolves.toMatchObject({ display_name: 'Still editable', ...legal });
+    ).resolves.toMatchObject({
+      display_name: 'Still editable',
+      ...legal,
+      capabilities_discovered_at: expect.any(Date),
+    });
+  });
+
+  it('persists and returns one deterministic tool per provider-reported name', async () => {
+    const snapshot = await captureSnapshot();
+    const duplicateTools = {
+      tools: [
+        { name: 'search', description: 'First provider description' },
+        { name: 'lookup', description: 'Lookup' },
+        { name: 'search', description: 'Conflicting later description' },
+      ],
+      resources: [],
+      prompts: [],
+    };
+    const canonical = await runWithTenantDatabaseTransaction(db, undefined, (scopedDb) =>
+      persistDiscoveredMCPCapabilities(scopedDb, undefined, snapshot, duplicateTools, masterSecret)
+    );
+
+    expect(canonical.tools).toEqual([
+      { name: 'search', description: 'First provider description' },
+      { name: 'lookup', description: 'Lookup' },
+    ]);
+    await expect(new MCPServerRepository(db).findById(server.mcp_server_id)).resolves.toMatchObject(
+      { tools: canonical.tools }
+    );
   });
 
   it('fails closed on oversized or malicious provider discovery before persistence', async () => {

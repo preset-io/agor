@@ -64,7 +64,7 @@ describe('Marketplace credential metadata', () => {
   it('renders every credential status with production copy and semantic color', () => {
     const statuses = [
       ['active', 'Connected', 'success', 'Settings'],
-      ['configured', 'Connected', 'success', 'Settings'],
+      ['configured', 'Credential stored', 'default', 'Settings'],
       ['refreshable', 'Connected', 'success', 'Settings'],
       ['refreshing', 'Refreshing', 'processing', 'Settings'],
       ['reauthentication_required', 'Reconnect required', 'error', 'Reconnect'],
@@ -100,7 +100,7 @@ describe('Marketplace credential metadata', () => {
     }
   });
 
-  it('shows disabled separately and never offers reconnect for a healthy OAuth grant', () => {
+  it('shows disabled separately and never invents a reconnect action from stale projection data', () => {
     const value = overview([
       {
         mcp_server_id: 'server-disabled',
@@ -172,14 +172,14 @@ describe('Marketplace credential metadata', () => {
     const refresh = vi.fn(async () => undefined);
     const props = { overview: overview([]), error: null, refresh };
     const view = render(<CredentialsTab {...props} loading />);
-    expect(screen.queryByText('No saved Marketplace credentials')).not.toBeInTheDocument();
+    expect(screen.queryByText('No saved Catalog credentials')).not.toBeInTheDocument();
 
     view.rerender(<CredentialsTab {...props} loading={false} />);
-    expect(screen.getByText('No saved Marketplace credentials')).toBeVisible();
+    expect(screen.getByText('No saved Catalog credentials')).toBeVisible();
 
     view.rerender(<CredentialsTab {...props} loading={false} error="Overview read failed" />);
     expect(screen.getByText('Could not load credential metadata')).toBeVisible();
-    expect(screen.queryByText('No saved Marketplace credentials')).not.toBeInTheDocument();
+    expect(screen.queryByText('No saved Catalog credentials')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(refresh).toHaveBeenCalledOnce();
   });
@@ -208,8 +208,8 @@ describe('Marketplace credential metadata', () => {
     ).toBeDisabled();
   });
 
-  it('keeps the credential table horizontally scrollable', () => {
-    const { container } = render(
+  it('keeps the complete credential metadata columns on the desktop table', () => {
+    render(
       <CredentialsTab
         overview={overview([
           {
@@ -225,6 +225,8 @@ describe('Marketplace credential metadata', () => {
       />
     );
 
-    expect(container.querySelector('.ant-table-content')).toHaveStyle({ overflowX: 'auto' });
+    expect(screen.getByRole('columnheader', { name: 'Server' })).toBeVisible();
+    expect(screen.getByRole('columnheader', { name: 'Expires' })).toBeVisible();
+    expect(screen.getByRole('columnheader', { name: 'Last changed' })).toBeVisible();
   });
 });
