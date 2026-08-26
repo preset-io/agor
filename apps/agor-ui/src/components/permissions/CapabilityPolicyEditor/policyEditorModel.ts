@@ -309,6 +309,14 @@ export function makeSharedClosedPolicy(policy: CapabilityPolicyDraft): Capabilit
   };
 }
 
+export function capabilityPolicyHasAudience(policy: CapabilityPolicyDraft): boolean {
+  return (
+    policy.entries.length > 0 ||
+    policy.others.capabilities.length > 0 ||
+    policy.others.fs_access !== 'none'
+  );
+}
+
 export const fsAccessLabel: Readonly<Record<CapabilityPolicyFsAccess, string>> = {
   none: 'None',
   read: 'Read',

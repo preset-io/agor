@@ -47,12 +47,12 @@ describe('RBAC policy prototype responsive layout (real browser)', () => {
     renderPrototype();
     fireEvent.click(screen.getByText('Branch', { selector: '.ant-segmented-item-label' }));
 
-    await screen.findByText('Inherited summary');
+    await screen.findByRole('radio', { name: 'Board defaults' });
     const root = screen.getByTestId('rbac-policy-prototype');
     expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
 
-    fireEvent.click(screen.getByRole('radio', { name: 'This branch' }));
-    await waitFor(() => expect(screen.getByText('Branch access')).toBeVisible());
+    fireEvent.click(screen.getByRole('radio', { name: 'Shared' }));
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Shared' })).toBeChecked());
     expect(root.scrollWidth).toBeLessThanOrEqual(root.clientWidth + 1);
   });
 

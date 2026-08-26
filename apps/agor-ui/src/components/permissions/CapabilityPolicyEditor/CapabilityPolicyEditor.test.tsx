@@ -69,12 +69,16 @@ describe('shared capability policy forms', () => {
 
   it('switches an inherited branch to an editable complete override', async () => {
     const initial = cloneBranchPrototypeFixture('inherited-branch');
+    let latestValue = initial;
     const Harness = () => {
       const [value, setValue] = useState(initial);
       return (
         <BranchCapabilityPolicyForm
           value={value}
-          onChange={setValue}
+          onChange={(nextValue) => {
+            latestValue = nextValue;
+            setValue(nextValue);
+          }}
           principals={PROTOTYPE_PRINCIPALS}
           subjects={PROTOTYPE_SUBJECTS}
           currentUserId={PROTOTYPE_USERS.kasia}
@@ -83,24 +87,61 @@ describe('shared capability policy forms', () => {
     };
     renderWithTheme(<Harness />);
 
-    expect(screen.getByText('Inherited summary')).toBeInTheDocument();
-    expect(screen.getByText('Switch to This branch to edit.')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Board defaults' })).toBeChecked();
+    expect(screen.getByText('Branch access')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Branch access sharing mode')).not.toBeInTheDocument();
     expect(
       screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
     ).toBeDisabled();
-    fireEvent.click(screen.getByRole('radio', { name: 'This branch' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Shared' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Branch access')).toBeInTheDocument();
-      expect(
-        screen.getByText(/Access, files, and session sharing are configured for this branch/)
-      ).toBeInTheDocument();
+      expect(screen.getByRole('radio', { name: 'Shared' })).toBeChecked();
     });
+    expect(latestValue.binding_mode).toBe('override');
+    expect(latestValue.override_config).toEqual(initial.inherited_config);
     expect(screen.getByRole('button', { name: 'Add user/group' })).toBeEnabled();
     expect(
       screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
     ).toBeEnabled();
     expect(screen.getByText('Seb V. shares with')).toBeInTheDocument();
+  });
+
+  it('warns before replacing a shared inherited package with a private override', async () => {
+    const initial = cloneBranchPrototypeFixture('inherited-branch');
+    let latestValue = initial;
+    const Harness = () => {
+      const [value, setValue] = useState(initial);
+      return (
+        <BranchCapabilityPolicyForm
+          value={value}
+          onChange={(nextValue) => {
+            latestValue = nextValue;
+            setValue(nextValue);
+          }}
+          principals={PROTOTYPE_PRINCIPALS}
+          subjects={PROTOTYPE_SUBJECTS}
+          currentUserId={PROTOTYPE_USERS.kasia}
+        />
+      );
+    };
+    renderWithTheme(<Harness />);
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Private' }));
+    expect(await screen.findByText(/Make this owner-only/)).toBeInTheDocument();
+    expect(latestValue.binding_mode).toBe('inherit');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Make private' }));
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Private' })).toBeChecked());
+    expect(latestValue.binding_mode).toBe('override');
+    expect(latestValue.override_config?.access).toMatchObject({
+      sharing_mode: 'private',
+      entries: [],
+      others: { preset: 'none', capabilities: [], fs_access: 'none' },
+    });
+    expect(latestValue.override_config?.session_sharing).toEqual(
+      initial.inherited_config?.session_sharing
+    );
   });
 
   it('warns before making a shared policy private without rendering an empty-state panel', async () => {

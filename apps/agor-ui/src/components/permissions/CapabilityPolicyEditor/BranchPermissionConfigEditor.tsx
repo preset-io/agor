@@ -19,6 +19,7 @@ interface BranchPermissionConfigEditorProps {
   principals: CapabilityPolicyPrincipalDescriptor[];
   subjects: PrototypeAccessSubject[];
   readOnly?: boolean;
+  showModeSelector?: boolean;
   sharingScope: 'board_defaults' | 'branch';
   personalSessionSharingWorkspaceEnabled?: boolean;
 }
@@ -38,6 +39,7 @@ export const BranchPermissionConfigEditor: React.FC<BranchPermissionConfigEditor
   principals,
   subjects,
   readOnly,
+  showModeSelector = true,
   sharingScope,
   personalSessionSharingWorkspaceEnabled = true,
 }) => {
@@ -51,6 +53,7 @@ export const BranchPermissionConfigEditor: React.FC<BranchPermissionConfigEditor
         value={value.access}
         onChange={(access) => onChange({ ...value, access })}
         readOnly={readOnly}
+        showModeSelector={showModeSelector}
         context={BRANCH_ACCESS_EDITOR_CONTEXT}
         primaryOwnerUserId={primaryOwnerUserId}
         principals={principals}

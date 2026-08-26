@@ -6,11 +6,16 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { CAPABILITY_POLICY_SCHEMA_VERSION } from '@agor/core/types';
-import { ApartmentOutlined } from '@ant-design/icons';
-import { Alert, Button, Descriptions, Divider, Flex, Segmented, Typography, theme } from 'antd';
+import { Alert, Button, Divider, Flex, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { BranchPermissionConfigEditor } from './BranchPermissionConfigEditor';
 import { ImmutablePrimaryOwner } from './ImmutablePrimaryOwner';
+import { PolicyModeSelector, type PolicyModeSelectorValue } from './PolicyModeSelector';
+import {
+  capabilityPolicyHasAudience,
+  makePrivatePolicy,
+  makeSharedClosedPolicy,
+} from './policyEditorModel';
 import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
 interface BranchCapabilityPolicyFormProps {
@@ -63,24 +68,56 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
 }) => {
   const { token } = theme.useToken();
   const [confirmInherit, setConfirmInherit] = useState(false);
+  const [confirmPrivate, setConfirmPrivate] = useState(false);
   const owner = findUserDescriptor(principals, value.primary_owner_user_id);
   const inheritedConfig = value.inherited_config ?? privateBranchConfig(currentUserId);
   const effectiveConfig =
     value.binding_mode === 'override'
       ? (value.override_config ?? structuredClone(inheritedConfig))
       : inheritedConfig;
+  const selectedMode: PolicyModeSelectorValue =
+    value.binding_mode === 'inherit' ? 'inherit' : effectiveConfig.access.sharing_mode;
 
-  const setBinding = (binding: 'inherit' | 'override') => {
-    if (binding === value.binding_mode) return;
-    if (binding === 'inherit' && value.override_config) {
-      setConfirmInherit(true);
-      return;
+  const applyOverrideMode = (mode: 'private' | 'shared') => {
+    const nextConfig = structuredClone(effectiveConfig);
+    if (nextConfig.access.sharing_mode !== mode) {
+      nextConfig.access =
+        mode === 'private'
+          ? makePrivatePolicy(nextConfig.access)
+          : makeSharedClosedPolicy(nextConfig.access);
     }
     onChange({
       ...value,
       binding_mode: 'override',
-      override_config: structuredClone(inheritedConfig),
+      override_config: nextConfig,
     });
+    setConfirmInherit(false);
+    setConfirmPrivate(false);
+  };
+
+  const setMode = (mode: PolicyModeSelectorValue) => {
+    if (mode === selectedMode) return;
+    setConfirmInherit(false);
+    setConfirmPrivate(false);
+
+    if (mode === 'inherit') {
+      if (!value.override_config) {
+        onChange({ ...value, binding_mode: 'inherit', override_config: undefined });
+        return;
+      }
+      setConfirmInherit(true);
+      return;
+    }
+
+    if (
+      mode === 'private' &&
+      effectiveConfig.access.sharing_mode !== 'private' &&
+      capabilityPolicyHasAudience(effectiveConfig.access)
+    ) {
+      setConfirmPrivate(true);
+      return;
+    }
+    applyOverrideMode(mode);
   };
 
   return (
@@ -93,24 +130,18 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
       <ImmutablePrimaryOwner owner={owner} resourceLabel="branch" />
       <Divider style={{ marginBlock: 0 }} />
 
-      <Flex vertical gap={token.paddingXXS}>
-        <Typography.Text strong>Use settings from</Typography.Text>
-        <Segmented<'inherit' | 'override'>
-          aria-label="Branch policy binding"
-          block
-          value={value.binding_mode}
-          onChange={setBinding}
-          options={[
-            { value: 'inherit', label: 'Board defaults' },
-            { value: 'override', label: 'This branch' },
-          ]}
-        />
-        <Typography.Text type="secondary">
-          {value.binding_mode === 'inherit'
-            ? 'Access, files, and session sharing update with the board defaults.'
-            : 'Access, files, and session sharing are configured for this branch.'}
-        </Typography.Text>
-      </Flex>
+      <PolicyModeSelector
+        mode="inheritable"
+        title="Access"
+        ariaLabel="Branch permission mode"
+        value={selectedMode}
+        onChange={setMode}
+        descriptions={{
+          inherit: 'Uses board defaults for access, files, and session sharing.',
+          private: 'Only the primary owner can access this branch.',
+          shared: 'Configure access for this branch.',
+        }}
+      />
       {confirmInherit && (
         <Alert
           type="warning"
@@ -137,68 +168,42 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
         />
       )}
 
-      {value.binding_mode === 'inherit' ? (
-        <Flex vertical gap={token.paddingMD}>
-          <Flex vertical gap={token.paddingXS}>
-            <Typography.Text strong>
-              <ApartmentOutlined aria-hidden /> Inherited summary
-            </Typography.Text>
-            <Descriptions
-              size="small"
-              bordered
-              column={{ xs: 1, sm: 2 }}
-              items={[
-                { key: 'source', label: 'Source', children: 'Board live branch defaults' },
-                {
-                  key: 'mode',
-                  label: 'Sharing',
-                  children:
-                    inheritedConfig.access.sharing_mode === 'private' ? 'Private' : 'Shared',
-                },
-                {
-                  key: 'entries',
-                  label: 'Named entries',
-                  children: inheritedConfig.access.entries.length,
-                },
-                {
-                  key: 'others',
-                  label: 'Others',
-                  children:
-                    inheritedConfig.access.others.preset === 'none'
-                      ? 'No access'
-                      : inheritedConfig.access.others.preset,
-                },
-              ]}
-            />
-          </Flex>
-          <BranchPermissionConfigEditor
-            accessTitle="Inherited board template"
-            value={inheritedConfig}
-            onChange={() => undefined}
-            readOnly
-            primaryOwnerUserId={value.primary_owner_user_id}
-            currentUserId={currentUserId}
-            principals={principals}
-            subjects={subjects}
-            sharingScope="branch"
-            personalSessionSharingWorkspaceEnabled={personalSessionSharingWorkspaceEnabled}
-          />
-        </Flex>
-      ) : (
-        <Flex vertical gap={token.paddingMD}>
-          <BranchPermissionConfigEditor
-            accessTitle="Branch access"
-            value={effectiveConfig}
-            onChange={(overrideConfig) => onChange({ ...value, override_config: overrideConfig })}
-            primaryOwnerUserId={value.primary_owner_user_id}
-            currentUserId={currentUserId}
-            principals={principals}
-            subjects={subjects}
-            sharingScope="branch"
-            personalSessionSharingWorkspaceEnabled={personalSessionSharingWorkspaceEnabled}
-          />
-        </Flex>
+      {confirmPrivate && (
+        <Alert
+          type="warning"
+          showIcon
+          description="Make this owner-only? Named entries and Others will be removed."
+          action={
+            <Flex gap={token.paddingXS} wrap>
+              <Button size="small" onClick={() => setConfirmPrivate(false)}>
+                Keep shared
+              </Button>
+              <Button
+                size="small"
+                danger
+                type="primary"
+                onClick={() => applyOverrideMode('private')}
+              >
+                Make private
+              </Button>
+            </Flex>
+          }
+        />
       )}
+
+      <BranchPermissionConfigEditor
+        accessTitle="Branch access"
+        value={effectiveConfig}
+        onChange={(overrideConfig) => onChange({ ...value, override_config: overrideConfig })}
+        readOnly={value.binding_mode === 'inherit'}
+        showModeSelector={false}
+        primaryOwnerUserId={value.primary_owner_user_id}
+        currentUserId={currentUserId}
+        principals={principals}
+        subjects={subjects}
+        sharingScope="branch"
+        personalSessionSharingWorkspaceEnabled={personalSessionSharingWorkspaceEnabled}
+      />
     </Flex>
   );
 };

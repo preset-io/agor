@@ -8,6 +8,7 @@ export {
   BoardCapabilityPolicyModalPrototype,
   BranchCapabilityPolicyModalPrototype,
 } from './ModalCapabilityPolicyPrototype';
+export { PolicyModeSelector } from './PolicyModeSelector';
 export {
   BOARD_ACCESS_EDITOR_CONTEXT,
   BRANCH_ACCESS_EDITOR_CONTEXT,

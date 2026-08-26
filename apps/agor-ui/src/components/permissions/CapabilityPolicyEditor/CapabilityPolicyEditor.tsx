@@ -22,7 +22,6 @@ import {
   Flex,
   Grid,
   Popconfirm,
-  Segmented,
   Table,
   Tooltip,
   Typography,
@@ -32,10 +31,15 @@ import { useMemo, useState } from 'react';
 import { Tag } from '@/components/Tag';
 import { AccessGrantControls } from './AccessGrantControls';
 import { EffectiveAccessPreview } from './EffectiveAccessPreview';
+import { PolicyModeSelector } from './PolicyModeSelector';
 import { PrincipalEntryPicker } from './PrincipalEntryPicker';
 import { PrincipalIdentity } from './PrincipalIdentity';
 import type { CapabilityPolicyEditorContext } from './policyEditorModel';
-import { makePrivatePolicy, makeSharedClosedPolicy } from './policyEditorModel';
+import {
+  capabilityPolicyHasAudience,
+  makePrivatePolicy,
+  makeSharedClosedPolicy,
+} from './policyEditorModel';
 import { makePrototypeDraftId } from './prototypeDraftId';
 import type { PrototypeAccessSubject } from './prototypeEffectiveAccess';
 
@@ -49,6 +53,7 @@ interface CapabilityPolicyEditorProps {
   principals: CapabilityPolicyPrincipalDescriptor[];
   subjects: PrototypeAccessSubject[];
   readOnly?: boolean;
+  showModeSelector?: boolean;
 }
 
 type AccessListRow =
@@ -66,6 +71,7 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
   principals,
   subjects,
   readOnly,
+  showModeSelector = true,
 }) => {
   const { token } = theme.useToken();
   const screens = Grid.useBreakpoint();
@@ -113,12 +119,7 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
 
   const setSharingMode = (mode: 'private' | 'shared') => {
     if (mode === value.sharing_mode) return;
-    if (
-      mode === 'private' &&
-      (value.entries.length > 0 ||
-        value.others.capabilities.length > 0 ||
-        value.others.fs_access !== 'none')
-    ) {
+    if (mode === 'private' && capabilityPolicyHasAudience(value)) {
       setConfirmPrivate(true);
       return;
     }
@@ -331,27 +332,22 @@ export const CapabilityPolicyEditor: React.FC<CapabilityPolicyEditorProps> = ({
         {description && <Typography.Text type="secondary">{description}</Typography.Text>}
       </Flex>
 
-      <Flex vertical gap={token.paddingXXS}>
-        <Typography.Text strong>Sharing</Typography.Text>
-        <Segmented<'private' | 'shared'>
-          aria-label={`${title} sharing mode`}
-          block
+      {showModeSelector && (
+        <PolicyModeSelector
+          mode="direct"
+          title="Sharing"
+          ariaLabel={`${title} sharing mode`}
           value={value.sharing_mode}
           disabled={readOnly}
-          onChange={setSharingMode}
-          options={[
-            { value: 'private', label: 'Private' },
-            { value: 'shared', label: 'Shared' },
-          ]}
+          descriptions={{
+            private: context.privateDescription,
+            shared: context.sharedDescription,
+          }}
+          onChange={(mode) => {
+            if (mode !== 'inherit') setSharingMode(mode);
+          }}
         />
-        <Typography.Text type="secondary">
-          {value.sharing_mode === 'private'
-            ? context.privateDescription
-            : context.sharedDescription}
-        </Typography.Text>
-      </Flex>
-
-      {readOnly && <Alert type="info" showIcon description="Switch to This branch to edit." />}
+      )}
 
       {confirmPrivate && (
         <Alert
