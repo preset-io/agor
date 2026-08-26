@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
 const srcDir = fileURLToPath(new URL('./src', import.meta.url));
+const gitSrcDir = fileURLToPath(new URL('../git/src', import.meta.url));
 
 // pnpm does not self-link a workspace package into its own node_modules, so
 // `@agor/core/*` imports from within this package can't go through the
@@ -20,8 +21,25 @@ const selfImportResolver = {
   },
 };
 
+// The compatibility exports in core's git folder target the sibling
+// workspace package. Resolve that package to source too: Vitest externalizes
+// workspace imports before Vite's export conditions can help when the sibling
+// has not been built yet.
+const gitWorkspaceResolver = {
+  name: 'git-workspace-source-resolver',
+  resolveId(id: string) {
+    if (id === '@agor/git') return path.join(gitSrcDir, 'index.ts');
+    if (id === '@agor/git/pure') return path.join(gitSrcDir, 'pure.ts');
+    return null;
+  },
+};
+
 export default defineConfig({
-  plugins: [selfImportResolver],
+  plugins: [selfImportResolver, gitWorkspaceResolver],
+  // Workspace dependencies expose their TypeScript implementation through
+  // the `source` condition. Tests must not depend on prebuilt sibling dist
+  // directories being present in a fresh worktree.
+  resolve: { conditions: ['source'] },
   test: {
     globals: true,
     environment: 'node',

@@ -15,18 +15,23 @@ import { createContext, useContext } from 'react';
 interface ConnectionContextValue {
   connected: boolean;
   connecting: boolean;
+  /** Successful socket-auth generation; changes even when the client does not. */
+  authGeneration: number;
   outOfSync: boolean;
   capturedSha: string | null;
   currentSha: string | null;
 }
 
-const ConnectionContext = createContext<ConnectionContextValue>({
+const DEFAULT_CONNECTION_CONTEXT: ConnectionContextValue = {
   connected: false,
   connecting: false,
+  authGeneration: 0,
   outOfSync: false,
   capturedSha: null,
   currentSha: null,
-});
+};
+
+const ConnectionContext = createContext<ConnectionContextValue | null>(null);
 
 export const ConnectionProvider = ConnectionContext.Provider;
 
@@ -47,6 +52,11 @@ export function useConnectionDisabled(): boolean {
  * Hook to get full connection state
  */
 export function useConnectionState(): ConnectionContextValue {
+  return useContext(ConnectionContext) ?? DEFAULT_CONNECTION_CONTEXT;
+}
+
+/** Null only for independently-mounted/tested leaf surfaces without App's provider. */
+export function useOptionalConnectionState(): ConnectionContextValue | null {
   return useContext(ConnectionContext);
 }
 
@@ -70,7 +80,8 @@ export interface MutationGate {
  * `useConnectionDisabled()`, which now delegates here.
  */
 export function useMutationGate(): MutationGate {
-  const { connected, connecting, outOfSync } = useContext(ConnectionContext);
+  const { connected, connecting, outOfSync } =
+    useContext(ConnectionContext) ?? DEFAULT_CONNECTION_CONTEXT;
 
   if (outOfSync) {
     return {

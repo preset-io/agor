@@ -1,7 +1,11 @@
 import type { AgenticToolPreset, AgorClient, TenantAgenticToolName } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons';
 import { Button, Empty, Form, Input, List, Popconfirm, Space, Switch, Tag, Typography } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import {
+  type AuthorityOperation,
+  useAuthorityOperationGuard,
+} from '../../hooks/useAuthorityOperationGuard';
 import {
   AgenticToolConfigForm,
   buildConfigFromFormValues,
@@ -14,29 +18,63 @@ interface Props {
   client: AgorClient;
   tool: TenantAgenticToolName;
   onError(message: string): void;
+  identityKey: string | null;
+  operationScope: readonly unknown[] | null;
 }
 
-export const AgenticToolPresetsManager: React.FC<Props> = ({ client, tool, onError }) => {
+export const AgenticToolPresetsManager: React.FC<Props> = ({
+  client,
+  tool,
+  onError,
+  identityKey,
+  operationScope,
+}) => {
   const [form] = Form.useForm();
   const [presets, setPresets] = useState<AgenticToolPreset[]>([]);
   const [editing, setEditing] = useState<AgenticToolPreset | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const operationGuard = useAuthorityOperationGuard(operationScope);
 
-  const load = useCallback(async () => {
-    try {
-      const result = await client.service('agentic-tool-presets').find({ query: { tool } });
-      setPresets(Array.isArray(result) ? result : result.data);
-    } catch (error) {
-      onError(error instanceof Error ? error.message : 'Failed to load presets');
-    }
-  }, [client, onError, tool]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey intentionally erases the replacement caller's modal/form state
+  useLayoutEffect(() => {
+    form.resetFields();
+    setPresets([]);
+    setEditing(null);
+    setModalOpen(false);
+    setSaving(false);
+  }, [form, identityKey]);
+
+  // A same-user reconnect/auth-generation change cancels the old save. Keep
+  // their open form and draft, but release the generation-owned spinner even
+  // though the stale promise's finally block is correctly forbidden to write.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationGuard identity is the semantic authority-epoch key
+  useLayoutEffect(() => {
+    setSaving(false);
+  }, [operationGuard]);
+
+  const load = useCallback(
+    async (parentOperation?: AuthorityOperation) => {
+      const operation = parentOperation ?? operationGuard.begin();
+      if (!operation.isCurrent()) return;
+      try {
+        const result = await client.service('agentic-tool-presets').find({ query: { tool } });
+        if (!operation.isCurrent()) return;
+        setPresets(Array.isArray(result) ? result : result.data);
+      } catch (error) {
+        if (!operation.isCurrent()) return;
+        onError(error instanceof Error ? error.message : 'Failed to load presets');
+      }
+    },
+    [client, onError, operationGuard, tool]
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
 
   const open = (preset?: AgenticToolPreset) => {
+    if (!operationGuard.isCurrent()) return;
     setEditing(preset ?? null);
     form.setFieldsValue({
       name: preset?.name,
@@ -48,9 +86,12 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({ client, tool, onErr
   };
 
   const save = async () => {
-    const values = await form.validateFields();
-    setSaving(true);
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     try {
+      const values = await form.validateFields();
+      if (!operation.isCurrent()) return;
+      setSaving(true);
       const data = {
         name: values.name.trim(),
         description: values.description?.trim() || undefined,
@@ -59,12 +100,14 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({ client, tool, onErr
       };
       if (editing) await client.service('agentic-tool-presets').patch(editing.preset_id, data);
       else await client.service('agentic-tool-presets').create({ ...data, tool });
+      if (!operation.isCurrent()) return;
       setModalOpen(false);
-      await load();
+      await load(operation);
     } catch (error) {
+      if (!operation.isCurrent()) return;
       onError(error instanceof Error ? error.message : 'Failed to save preset');
     } finally {
-      setSaving(false);
+      if (operation.isCurrent()) setSaving(false);
     }
   };
 
@@ -102,10 +145,14 @@ export const AgenticToolPresetsManager: React.FC<Props> = ({ client, tool, onErr
                   title="Delete this preset?"
                   description="Referenced presets cannot be deleted."
                   onConfirm={async () => {
+                    const operation = operationGuard.begin();
+                    if (!operation.isCurrent()) return;
                     try {
                       await client.service('agentic-tool-presets').remove(preset.preset_id);
-                      await load();
+                      if (!operation.isCurrent()) return;
+                      await load(operation);
                     } catch (error) {
+                      if (!operation.isCurrent()) return;
                       onError(error instanceof Error ? error.message : 'Failed to delete preset');
                     }
                   }}

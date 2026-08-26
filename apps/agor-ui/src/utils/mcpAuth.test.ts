@@ -29,10 +29,24 @@ describe('mcpServerNeedsAuth', () => {
     expect(mcpServerNeedsAuth(undefined, new Set())).toBe(false);
   });
 
-  it('returns false for non-OAuth server', () => {
+  it('returns false for a configured bearer server', () => {
     const server = makeOAuthServer();
     (server.auth as { type: string }).type = 'bearer';
+    server.auth!.token = 'saved-token';
     expect(mcpServerNeedsAuth(server, new Set())).toBe(false);
+  });
+
+  it('reports explicitly cleared bearer and JWT credentials as needs-auth', () => {
+    const bearer = makeOAuthServer();
+    bearer.auth = { type: 'bearer' };
+    expect(mcpServerNeedsAuth(bearer, new Set())).toBe(true);
+
+    const jwt = makeOAuthServer();
+    jwt.auth = { type: 'jwt', api_url: 'https://auth.example.test/token' };
+    expect(mcpServerNeedsAuth(jwt, new Set())).toBe(true);
+    jwt.auth.api_token = 'saved-token';
+    jwt.auth.api_secret = 'saved-secret';
+    expect(mcpServerNeedsAuth(jwt, new Set())).toBe(false);
   });
 
   it('returns false when token present and no expiry', () => {

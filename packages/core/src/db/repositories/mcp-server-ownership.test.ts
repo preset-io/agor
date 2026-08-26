@@ -219,7 +219,7 @@ describe('private MCP server ownership', () => {
       transport: 'http',
       url: 'https://mcp.linear.app/mcp',
       scope: 'session',
-      source: 'user',
+      source: 'catalog',
       owner_user_id: BOB,
       catalog_entry_name: 'com.linear/linear',
     });

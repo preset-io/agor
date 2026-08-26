@@ -64,7 +64,7 @@ import {
   selectFirstBoardId,
   selectSessionById,
 } from '../../store/selectors';
-import type { AgenticToolOption } from '../../types';
+import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
 import { resolveQuickStartMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
@@ -167,7 +167,7 @@ export interface AppProps {
   openUserSettings?: boolean; // Open user settings modal directly (e.g., from onboarding)
   initialUserSettingsTab?: string; // Deep-link target tab when opening user settings
   onUserSettingsClose?: () => void; // Called when user settings modal closes
-  onRestartOnboarding?: () => void | Promise<void>;
+  onRestartOnboarding?: (shouldApply?: () => boolean) => void | Promise<void>;
   openNewBranchModal?: boolean; // Open new branch modal
   onNewBranchModalClose?: () => void; // Called when new branch modal closes
   suppressLeftPanel?: boolean; // Temporarily hide the teammate/comments panel behind modal-first flows
@@ -192,10 +192,13 @@ export interface AppProps {
   onDeleteBoard?: (boardId: string) => void;
   onArchiveBoard?: (boardId: string) => void;
   onUnarchiveBoard?: (boardId: string) => void;
-  onCreateRepo?: (data: CreateRepoRequest) => unknown;
-  onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
-  onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
-  onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
+  onCreateRepo?: (data: CreateRepoRequest, options?: CreateRepoOptions) => unknown;
+  onCreateLocalRepo?: (
+    data: CreateLocalRepoRequest,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onUpdateRepo?: (repoId: string, updates: Partial<Repo>, shouldApply?: () => boolean) => void;
+  onDeleteRepo?: (repoId: string, cleanup: boolean, shouldApply?: () => boolean) => void;
   onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void | Promise<void>;
@@ -223,14 +226,25 @@ export interface AppProps {
   onStopEnvironment?: (branchId: string) => void;
   onNukeEnvironment?: (branchId: string) => void;
   onExecuteScheduleNow?: (branchId: string) => Promise<void>;
-  onCreateUser?: (data: CreateUserInput) => Promise<void>;
-  onUpdateUser?: (userId: string, updates: UpdateUserInput) => Promise<void>;
-  onDeleteUser?: (userId: string) => void;
-  onCreateMCPServer?: (data: CreateMCPServerInput) => void;
-  onDeleteMCPServer?: (mcpServerId: string) => void;
+  onCreateUser?: (data: CreateUserInput, shouldApply?: () => boolean) => void | Promise<void>;
+  onUpdateUser?: (
+    userId: string,
+    updates: UpdateUserInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDeleteUser?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
+  onCreateMCPServer?: (
+    data: CreateMCPServerInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDeleteMCPServer?: (mcpServerId: string, shouldApply?: () => boolean) => void | Promise<void>;
   onCreateGatewayChannel?: (data: GatewayChannelCreateData) => void;
-  onUpdateGatewayChannel?: (channelId: string, updates: GatewayChannelPatchData) => void;
-  onDeleteGatewayChannel?: (channelId: string) => void;
+  onUpdateGatewayChannel?: (
+    channelId: string,
+    updates: GatewayChannelPatchData,
+    shouldApply?: () => boolean
+  ) => void;
+  onDeleteGatewayChannel?: (channelId: string, shouldApply?: () => boolean) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
   onUpdateSessionMcpServers?: (sessionId: string, mcpServerIds: string[]) => void;
@@ -1791,7 +1805,7 @@ export const App: React.FC<AppProps> = ({
           onDeleteBoard={onDeleteBoard}
           onArchiveBoard={onArchiveBoard}
           onUnarchiveBoard={onUnarchiveBoard}
-          onCreateRepo={onCreateRepo}
+          onCreateRepo={(data, shouldApply) => onCreateRepo?.(data, { shouldApply })}
           onCreateLocalRepo={onCreateLocalRepo}
           onUpdateRepo={onUpdateRepo}
           onDeleteRepo={onDeleteRepo}
@@ -1903,11 +1917,13 @@ export const App: React.FC<AppProps> = ({
           currentUser={user || null}
           client={client}
           onUpdate={onUpdateUser}
-          onRestartOnboarding={async () => {
+          onRestartOnboarding={async (shouldApply) => {
+            if (shouldApply && !shouldApply()) return;
+            await onRestartOnboarding?.(shouldApply);
+            if (shouldApply && !shouldApply()) return;
             setUserSettingsOpen(false);
             setUserSettingsInitialTool(undefined);
             onUserSettingsClose?.();
-            await onRestartOnboarding?.();
           }}
         />
       </Layout>

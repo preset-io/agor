@@ -1,7 +1,11 @@
 import type { AgorClient } from '@agor-live/client';
 import { CopyOutlined, DeleteOutlined, KeyOutlined, PlusOutlined } from '@ant-design/icons';
 import { Alert, Button, Input, Popconfirm, Space, Table, Typography, theme } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import {
+  type AuthorityOperation,
+  useAuthorityOperationGuard,
+} from '../../hooks/useAuthorityOperationGuard';
 import { copyToClipboard } from '../../utils/clipboard';
 import { useThemedMessage } from '../../utils/message';
 import { filterBySettingsSearch } from '../../utils/settingsSearch';
@@ -19,9 +23,15 @@ interface ApiKeyEntry {
 
 interface PersonalApiKeysTabProps {
   client: AgorClient | null;
+  identityKey: string | null;
+  operationScope: readonly unknown[] | null;
 }
 
-export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }) => {
+export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({
+  client,
+  identityKey,
+  operationScope,
+}) => {
   const [keys, setKeys] = useState<ApiKeyEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -32,57 +42,93 @@ export const PersonalApiKeysTab: React.FC<PersonalApiKeysTabProps> = ({ client }
   const [searchTerm, setSearchTerm] = useState('');
   const { token } = theme.useToken();
   const { showSuccess, showError } = useThemedMessage();
+  const operationGuard = useAuthorityOperationGuard(operationScope);
 
-  const fetchKeys = useCallback(async () => {
-    if (!client) return;
-    setLoading(true);
-    try {
-      const result = await client.service('api/v1/user/api-keys').findAll({});
-      setKeys(result as ApiKeyEntry[]);
-    } catch (err) {
-      console.error('Failed to fetch API keys:', err);
-    } finally {
-      setLoading(false);
-    }
-  }, [client]);
+  // A full key is caller-private and is intentionally erased in layout, rather
+  // than waiting for passive cleanup, when Settings changes identity in place.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases the displayed raw key
+  useLayoutEffect(() => {
+    setKeys([]);
+    setNewKeyName('');
+    setShowCreateModal(false);
+    setNewlyCreatedKey(null);
+    setDeletingId(null);
+  }, [identityKey]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
+  useLayoutEffect(() => {
+    setLoading(false);
+    setCreating(false);
+    setDeletingId(null);
+  }, [operationScope]);
+
+  const fetchKeys = useCallback(
+    async (operation?: AuthorityOperation) => {
+      const request = operation ?? operationGuard.begin();
+      if (!client || !request.isCurrent()) return;
+      setLoading(true);
+      try {
+        const result = await client.service('api/v1/user/api-keys').findAll({});
+        if (!request.isCurrent()) return;
+        setKeys(result as ApiKeyEntry[]);
+      } catch (err) {
+        if (!request.isCurrent()) return;
+        console.error('Failed to fetch API keys:', err);
+      } finally {
+        if (request.isCurrent()) setLoading(false);
+      }
+    },
+    [client, operationGuard]
+  );
 
   useEffect(() => {
     fetchKeys();
   }, [fetchKeys]);
 
   const handleCreate = async () => {
-    if (!client || !newKeyName.trim()) return;
+    const operation = operationGuard.begin();
+    if (!client || !newKeyName.trim() || !operation.isCurrent()) return;
+    const name = newKeyName.trim();
     setCreating(true);
     try {
-      const result = (await client
-        .service('api/v1/user/api-keys')
-        .create({ name: newKeyName.trim() })) as { rawKey: string; key: ApiKeyEntry };
+      const result = (await client.service('api/v1/user/api-keys').create({ name })) as {
+        rawKey: string;
+        key: ApiKeyEntry;
+      };
+      if (!operation.isCurrent()) return;
       setNewlyCreatedKey(result.rawKey);
       setNewKeyName('');
-      await fetchKeys();
+      await fetchKeys(operation);
     } catch (err: unknown) {
+      if (!operation.isCurrent()) return;
       showError((err as Error)?.message || 'Failed to create API key');
     } finally {
-      setCreating(false);
+      if (operation.isCurrent()) setCreating(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (!client) return;
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent()) return;
     setDeletingId(id);
     try {
       await client.service('api/v1/user/api-keys').remove(id);
+      if (!operation.isCurrent()) return;
       showSuccess('API key revoked');
-      await fetchKeys();
+      await fetchKeys(operation);
     } catch (err: unknown) {
+      if (!operation.isCurrent()) return;
       showError((err as Error)?.message || 'Failed to delete API key');
     } finally {
-      setDeletingId(null);
+      if (operation.isCurrent()) setDeletingId(null);
     }
   };
 
   const handleCopy = async (text: string) => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     const ok = await copyToClipboard(text);
+    if (!operation.isCurrent()) return;
     if (ok) {
       showSuccess('Copied to clipboard');
     } else {

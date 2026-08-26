@@ -16,7 +16,11 @@
  */
 
 import { AGOR_USER_ENV_KEYS_VAR } from '@agor/core/config';
-import { buildMCPTemplateContextFromEnv, resolveMcpServerTemplates } from '@agor/core/mcp';
+import {
+  buildMCPTemplateContextFromEnv,
+  hasTemplateMarker,
+  resolveMcpServerTemplates,
+} from '@agor/core/mcp';
 import type { MCPAuth, MCPServer, MCPServerID, MCPTransport } from '@agor/core/types';
 
 export interface ProbeServerConfig {
@@ -99,7 +103,7 @@ export function resolveProbeServerTemplates(
     ] as const;
     for (const field of oauthTemplatedFields) {
       const original = serverConfig.auth[field];
-      if (original?.includes('{{') && !result.server.auth?.[field]) {
+      if (hasTemplateMarker(original) && !result.server.auth?.[field]) {
         unresolvedAuth.push(`auth.${field}`);
       }
     }

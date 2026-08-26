@@ -91,30 +91,58 @@ describe('AppHeader navigation entries', () => {
     mockNavigate.mockClear();
   });
 
-  it('advertises exactly these surfaces', () => {
+  it('advertises exactly these surfaces, in order', () => {
     renderHeader();
 
     // The whole set, so adding or removing an entry has to be a deliberate
-    // edit here rather than something that slips in. Marketplace is absent on
-    // purpose: the surface answers at /marketplace but is not advertised while
-    // the feature is incomplete, so re-adding the link should fail this and
-    // make whoever does it confirm that decision has been reversed.
+    // edit here rather than something that slips in. Order matters: Marketplace
+    // is last of the two because it sits immediately left of the gear.
     const linkNames = screen
       .getAllByRole('link')
       .map((link) => link.getAttribute('aria-label') ?? link.textContent?.trim());
 
-    expect(linkNames).toEqual(['Knowledge Base']);
+    expect(linkNames).toEqual(['Knowledge Base', 'Marketplace']);
   });
 
-  it('does not link to the marketplace from anywhere in the header', () => {
+  it('renders the Marketplace entry as a real link to /marketplace', () => {
     renderHeader();
 
-    const marketplaceLinks = screen
-      .getAllByRole('link')
-      .filter((link) => (link.getAttribute('href') ?? '').includes('marketplace'));
+    // The href is what makes middle-click and cmd-click open a tab, so assert
+    // the resolved basename-aware path rather than merely that a button exists.
+    expect(screen.getByRole('link', { name: 'Marketplace' })).toHaveAttribute(
+      'href',
+      '/ui/marketplace'
+    );
+  });
 
-    expect(marketplaceLinks).toEqual([]);
+  it('navigates to /marketplace via SPA navigation on plain click', () => {
+    renderHeader();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Marketplace' }));
+
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith('/marketplace');
+  });
+
+  it('promotes Marketplace to the header rather than the gear dropdown', async () => {
+    renderHeader();
+
+    // Option A from the spec: a marketplace is a surface people revisit, so
+    // burying it in the settings menu is the failure this guards against.
+    fireEvent.click(screen.getByRole('button', { name: 'Settings menu' }));
+    await screen.findByText('Settings');
+
+    // The header entry is an icon button carrying its name on aria-label, so a
+    // rendered "Marketplace" text node could only be a dropdown menu item.
     expect(screen.queryByText('Marketplace')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Marketplace' })).toBeInTheDocument();
+  });
+
+  it('shows the Marketplace entry to a viewer', () => {
+    // Browsing the catalog is authenticated-only on the daemon, so no role is
+    // filtered out of the entry. Connect is gated separately, in the surface.
+    renderHeader({ user: { user_id: 'u1', email: 'v@agor.live', role: 'viewer' } as never });
+
+    expect(screen.getByRole('link', { name: 'Marketplace' })).toBeInTheDocument();
   });
 
   it('bounds the always-visible board switcher slot', () => {

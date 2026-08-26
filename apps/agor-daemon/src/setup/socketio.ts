@@ -61,6 +61,10 @@ import {
   joinExecutorTaskChannel,
   leaveAllExecutorTaskChannels,
 } from '../utils/realtime-publish.js';
+import {
+  AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT,
+  installSocketAuthorityId,
+} from '../utils/socket-request-authority.js';
 import type { BuildInfo } from './build-info.js';
 import type { CorsOrigin } from './cors.js';
 
@@ -448,6 +452,13 @@ export function createSocketIOConfig(
     // must never remove another valid operation's membership.
     const terminalJoinQueues = new WeakMap<Socket, Map<string, Promise<void>>>();
 
+    const bindServerSocketAuthority = (socket: FeathersSocket): object => {
+      const connection = socket.feathers ?? {};
+      socket.feathers = connection;
+      installSocketAuthorityId(connection as Record<PropertyKey, unknown>, socket.id);
+      return connection;
+    };
+
     const invalidateTerminalRequestJoin = (socket: FeathersSocket): void => {
       terminalAuthGenerations.set(socket, (terminalAuthGenerations.get(socket) ?? 0) + 1);
       const connection = socket.feathers as TerminalRequestConnection | undefined;
@@ -610,6 +621,7 @@ export function createSocketIOConfig(
     io.use(async (socket, next) => {
       const fs = socket as FeathersSocket;
       try {
+        const connection = bindServerSocketAuthority(fs);
         const authToken =
           typeof socket.handshake.auth?.token === 'string'
             ? socket.handshake.auth.token
@@ -623,9 +635,6 @@ export function createSocketIOConfig(
         if (!token) {
           throw new Error('Authentication required');
         }
-
-        const connection = fs.feathers;
-        if (!connection) throw new Error('Feathers connection is unavailable');
 
         const authentication = app.service('authentication') as unknown as {
           authenticate(
@@ -808,6 +817,7 @@ export function createSocketIOConfig(
     // Configure Socket.io for cursor presence events
     io.on('connection', (socket) => {
       const feathersSocket = socket as FeathersSocket;
+      bindServerSocketAuthority(feathersSocket);
       const authority = getAuthenticatedConnectionAuthority(feathersSocket.feathers);
       if (
         authority &&
@@ -1478,6 +1488,8 @@ export function createSocketIOConfig(
 
       // Track disconnections
       socket.on('disconnect', (reason) => {
+        // Server-internal lifecycle signal for socket-bound one-shot state.
+        app.emit(AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT, socket.id);
         activeConnections--;
         clearAuthorityExpiry(socket);
         invalidateTerminalRequestJoin(socket as FeathersSocket);

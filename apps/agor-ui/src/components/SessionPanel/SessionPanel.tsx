@@ -52,7 +52,8 @@ import React from 'react';
 import { getDaemonUrl } from '../../config/daemon';
 import { useAppActions } from '../../contexts/AppActionsContext';
 import { useRecenterMap } from '../../contexts/CanvasNavigationContext';
-import { useConnectionDisabled } from '../../contexts/ConnectionContext';
+import { useConnectionDisabled, useConnectionState } from '../../contexts/ConnectionContext';
+import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
 import { useSessionActions } from '../../hooks/useSessionActions';
 import { useSessionSearch } from '../../hooks/useSessionSearch';
 import { useSharedReactiveSession } from '../../hooks/useSharedReactiveSession';
@@ -63,6 +64,16 @@ import {
   selectUserById,
 } from '../../store/selectors';
 import { getContextWindowGradient } from '../../utils/contextWindow';
+import {
+  claimMarketplaceOAuthPrompt,
+  consumeMarketplacePromptSuggestionState,
+  discardMarketplaceOAuthAuthorityState,
+  discardMarketplacePromptSuggestion,
+  getMarketplacePromptStateRevision,
+  isMarketplacePromptSuggestionCurrent,
+  type MarketplacePromptSuggestionState,
+  subscribeMarketplacePromptState,
+} from '../../utils/marketplaceOAuthPrompt';
 import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
 import { useThemedMessage } from '../../utils/message';
 import { deletePromptDraft, getPromptDraft, savePromptDraft } from '../../utils/promptDrafts';
@@ -81,6 +92,8 @@ import {
   getLatestComposerPromptText,
   isBlockingComposerAttachment,
 } from './composerAttachments';
+import { appendComposerText } from './composerText';
+import { MarketplacePromptSuggestion } from './MarketplacePromptSuggestion';
 import type { SessionAttachmentItem } from './SessionAttachmentsDropdown';
 import { SessionAttachmentsDropdown } from './SessionAttachmentsDropdown';
 import { SessionAttachmentTray } from './SessionAttachmentTray';
@@ -196,9 +209,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         },
         insertText: (text: string) => {
           setValue((prev) => {
-            const trimmed = prev.trim();
-            const separator = trimmed ? ' ' : '';
-            const nextValue = `${trimmed}${separator}${text}`;
+            const nextValue = appendComposerText(prev, text);
             valueRef.current = nextValue;
             inputValueRef.current = nextValue;
             return nextValue;
@@ -308,6 +319,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const { modal } = App.useApp();
   const { showSuccess, showInfo, showError } = useThemedMessage();
   const connectionDisabled = useConnectionDisabled();
+  const { connected, connecting, authGeneration } = useConnectionState();
   const recenterMap = useRecenterMap();
 
   // Subscribe only to the entity families this panel needs via narrow store
@@ -318,6 +330,12 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const userById = useAgorStore(selectUserById);
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
+  const currentRole = currentUserId ? userById.get(currentUserId)?.role : undefined;
+  const marketplaceHandoffGuard = useAuthorityOperationGuard(
+    client && connected && !connecting && currentUserId && currentRole
+      ? [client, currentUserId, currentRole, authGeneration]
+      : null
+  );
 
   // Get actions from context
   const {
@@ -426,6 +444,140 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const inputValueRef = React.useRef(session ? getDraft(session.session_id) : '');
   const [hasInput, setHasInput] = React.useState(() => !!inputValueRef.current.trim());
   const handleHasInputChange = React.useCallback((v: boolean) => setHasInput(v), []);
+  const [marketplacePromptSuggestion, setMarketplacePromptSuggestion] =
+    React.useState<MarketplacePromptSuggestionState | null>(null);
+  const marketplaceSuggestionSessionId = session?.session_id;
+  const marketplaceHandoffAuthorityRef = React.useRef({
+    sessionId: marketplaceSuggestionSessionId,
+    userId: currentUserId,
+    role: currentRole,
+    authGeneration,
+  });
+  marketplaceHandoffAuthorityRef.current = {
+    sessionId: marketplaceSuggestionSessionId,
+    userId: currentUserId,
+    role: currentRole,
+    authGeneration,
+  };
+  React.useSyncExternalStore(
+    subscribeMarketplacePromptState,
+    getMarketplacePromptStateRevision,
+    getMarketplacePromptStateRevision
+  );
+
+  // Suggestions are tab-local presentation state, intentionally separate from
+  // the cross-tab composer draft. Reading one can never write or clear text.
+  React.useEffect(() => {
+    if (!marketplaceSuggestionSessionId || !currentUserId || !currentRole) {
+      setMarketplacePromptSuggestion(null);
+      return;
+    }
+    setMarketplacePromptSuggestion(
+      consumeMarketplacePromptSuggestionState(marketplaceSuggestionSessionId, {
+        userId: currentUserId,
+        role: currentRole,
+        authGeneration,
+      })
+    );
+  }, [authGeneration, currentRole, currentUserId, marketplaceSuggestionSessionId]);
+
+  React.useLayoutEffect(() => {
+    if (marketplaceSuggestionSessionId && (!currentUserId || !currentRole)) {
+      discardMarketplaceOAuthAuthorityState(marketplaceSuggestionSessionId);
+      setMarketplacePromptSuggestion(null);
+    }
+  }, [currentRole, currentUserId, marketplaceSuggestionSessionId]);
+
+  const visibleMarketplaceSuggestion =
+    marketplacePromptSuggestion &&
+    marketplacePromptSuggestion.sessionId === marketplaceSuggestionSessionId &&
+    marketplacePromptSuggestion.userId === currentUserId &&
+    marketplacePromptSuggestion.role === currentRole &&
+    marketplacePromptSuggestion.authGeneration === authGeneration &&
+    isMarketplacePromptSuggestionCurrent(marketplacePromptSuggestion)
+      ? marketplacePromptSuggestion
+      : null;
+
+  // Marketplace OAuth presents its starter prompt only after the durable grant
+  // has been observed by the same authoritative store this panel uses. It is
+  // never inserted into the shared draft: another tab's typed text therefore
+  // wins without relying on a nonexistent localStorage compare-and-set.
+  React.useEffect(() => {
+    const operation = marketplaceHandoffGuard.begin();
+    if (
+      !marketplaceSuggestionSessionId ||
+      !client ||
+      !currentUserId ||
+      !currentRole ||
+      !operation.isCurrent()
+    )
+      return;
+    const capturedAuthority = {
+      sessionId: marketplaceSuggestionSessionId,
+      userId: currentUserId,
+      role: currentRole,
+      authGeneration,
+    };
+    void claimMarketplaceOAuthPrompt({
+      client,
+      sessionId: marketplaceSuggestionSessionId,
+      authenticatedServerIds: userAuthenticatedMcpServerIds,
+      authority: { userId: currentUserId, role: currentRole, authGeneration },
+      isCurrent: operation.isCurrent,
+      isAuthorityCurrent: () => {
+        const current = marketplaceHandoffAuthorityRef.current;
+        return (
+          current.sessionId === capturedAuthority.sessionId &&
+          current.userId === capturedAuthority.userId &&
+          current.role === capturedAuthority.role &&
+          current.authGeneration === capturedAuthority.authGeneration
+        );
+      },
+    }).then((suggestion) => {
+      if (operation.isCurrent()) {
+        const staged = consumeMarketplacePromptSuggestionState(marketplaceSuggestionSessionId, {
+          userId: currentUserId,
+          role: currentRole,
+          authGeneration,
+        });
+        if (!staged && !suggestion) return;
+        setMarketplacePromptSuggestion(staged ?? suggestion);
+      }
+    });
+    return operation.cancel;
+  }, [
+    authGeneration,
+    client,
+    currentRole,
+    currentUserId,
+    marketplaceHandoffGuard,
+    marketplaceSuggestionSessionId,
+    userAuthenticatedMcpServerIds,
+  ]);
+
+  const dismissMarketplacePromptSuggestion = React.useCallback(() => {
+    if (marketplaceSuggestionSessionId) {
+      discardMarketplacePromptSuggestion(
+        marketplaceSuggestionSessionId,
+        undefined,
+        marketplacePromptSuggestion?.attemptId
+      );
+    }
+    setMarketplacePromptSuggestion(null);
+  }, [marketplacePromptSuggestion?.attemptId, marketplaceSuggestionSessionId]);
+
+  const insertMarketplacePromptSuggestion = React.useCallback(() => {
+    if (
+      !visibleMarketplaceSuggestion ||
+      !isMarketplacePromptSuggestionCurrent(visibleMarketplaceSuggestion) ||
+      !promptRef.current
+    )
+      return;
+    // PromptInput.insertText appends to (and never replaces) the current
+    // composer value. This mutation occurs only from this explicit click.
+    promptRef.current.insertText(visibleMarketplaceSuggestion.prompt);
+    dismissMarketplacePromptSuggestion();
+  }, [dismissMarketplacePromptSuggestion, visibleMarketplaceSuggestion]);
 
   // getDefaultPermissionMode imported from @agor-live/client — canonical
   // per-tool defaults live in core's `getDefaultPermissionMode`. The local
@@ -835,69 +987,86 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const promptInputSlot = React.useMemo(() => {
     if (!session) return null;
     return (
-      <SessionComposerDropZone
-        disabled={composerAttachmentUploading}
-        onDragActiveChange={setComposerDropActive}
-        onFilesDrop={addComposerAttachments}
-      >
-        {composerAttachmentValidationError && (
-          <Alert
-            type="error"
-            showIcon
-            message={composerAttachmentValidationError}
-            style={{ marginBottom: 0, borderRadius: token.borderRadius }}
+      <>
+        {visibleMarketplaceSuggestion && (
+          <MarketplacePromptSuggestion
+            prompt={visibleMarketplaceSuggestion.prompt}
+            isCurrent={() =>
+              isMarketplacePromptSuggestionCurrent(visibleMarketplaceSuggestion) &&
+              visibleMarketplaceSuggestion.sessionId === marketplaceSuggestionSessionId &&
+              visibleMarketplaceSuggestion.userId === currentUserId &&
+              visibleMarketplaceSuggestion.role === currentRole &&
+              visibleMarketplaceSuggestion.authGeneration === authGeneration
+            }
+            onInsert={insertMarketplacePromptSuggestion}
+            onDismiss={dismissMarketplacePromptSuggestion}
+            style={{ marginBottom: token.marginXS, borderRadius: token.borderRadius }}
           />
         )}
-        <SessionAttachmentTray
-          attachments={composerAttachments}
+        <SessionComposerDropZone
           disabled={composerAttachmentUploading}
-          onRemove={removeComposerAttachment}
-        />
-        <PromptInput
-          key={composerIdentityKey}
-          ref={promptRef}
-          sessionId={session.session_id}
-          getDraft={getDraft}
-          saveDraft={saveDraft}
-          deleteDraft={deleteDraft}
-          onHasInputChange={handleHasInputChange}
-          inputValueRef={inputValueRef}
-          onSubmit={stableFooterHandlers.onSendPrompt}
-          hasExternalInput={hasComposerAttachments}
-          placeholder={
-            isRunning
-              ? 'Queue here… @ for mentions, : for emoji'
-              : 'Prompt here… @ for mentions, : for emoji'
-          }
-          autoSize={{ minRows: 1, maxRows: 10 }}
-          client={client}
-          userById={userById}
+          onDragActiveChange={setComposerDropActive}
           onFilesDrop={addComposerAttachments}
-          filesDropDisabled={composerAttachmentUploading}
-          showFilesDropOverlay={false}
-          suppressEmptyHighlight={composerDropActive}
-          slashCommands={
-            Array.isArray(sessionCustomContext?.slash_commands)
-              ? sessionCustomContext.slash_commands
-              : undefined
-          }
-          skills={
-            Array.isArray(sessionCustomContext?.skills) ? sessionCustomContext.skills : undefined
-          }
-        />
-        <input
-          ref={attachmentInputRef}
-          type="file"
-          accept={getComposerUploadAccept()}
-          multiple
-          disabled={composerAttachmentUploading}
-          style={{ display: 'none' }}
-          onChange={(event) => {
-            addComposerAttachments(Array.from(event.target.files ?? []));
-            event.target.value = '';
-          }}
-        />
-      </SessionComposerDropZone>
+        >
+          {composerAttachmentValidationError && (
+            <Alert
+              type="error"
+              showIcon
+              message={composerAttachmentValidationError}
+              style={{ marginBottom: 0, borderRadius: token.borderRadius }}
+            />
+          )}
+          <SessionAttachmentTray
+            attachments={composerAttachments}
+            disabled={composerAttachmentUploading}
+            onRemove={removeComposerAttachment}
+          />
+          <PromptInput
+            key={composerIdentityKey}
+            ref={promptRef}
+            sessionId={session.session_id}
+            getDraft={getDraft}
+            saveDraft={saveDraft}
+            deleteDraft={deleteDraft}
+            onHasInputChange={handleHasInputChange}
+            inputValueRef={inputValueRef}
+            onSubmit={stableFooterHandlers.onSendPrompt}
+            hasExternalInput={hasComposerAttachments}
+            placeholder={
+              isRunning
+                ? 'Queue here… @ for mentions, : for emoji'
+                : 'Prompt here… @ for mentions, : for emoji'
+            }
+            autoSize={{ minRows: 1, maxRows: 10 }}
+            client={client}
+            userById={userById}
+            onFilesDrop={addComposerAttachments}
+            filesDropDisabled={composerAttachmentUploading}
+            showFilesDropOverlay={false}
+            suppressEmptyHighlight={composerDropActive}
+            slashCommands={
+              Array.isArray(sessionCustomContext?.slash_commands)
+                ? sessionCustomContext.slash_commands
+                : undefined
+            }
+            skills={
+              Array.isArray(sessionCustomContext?.skills) ? sessionCustomContext.skills : undefined
+            }
+          />
+          <input
+            ref={attachmentInputRef}
+            type="file"
+            accept={getComposerUploadAccept()}
+            multiple
+            disabled={composerAttachmentUploading}
+            style={{ display: 'none' }}
+            onChange={(event) => {
+              addComposerAttachments(Array.from(event.target.files ?? []));
+              event.target.value = '';
+            }}
+          />
+        </SessionComposerDropZone>
+      </>
     );
   }, [
     session,
@@ -919,6 +1088,14 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     handleHasInputChange,
     stableFooterHandlers,
     token.borderRadius,
+    token.marginXS,
+    visibleMarketplaceSuggestion,
+    marketplaceSuggestionSessionId,
+    currentUserId,
+    currentRole,
+    authGeneration,
+    dismissMarketplacePromptSuggestion,
+    insertMarketplacePromptSuggestion,
   ]);
 
   // When there's no session, render nothing (panel is collapsed to zero).

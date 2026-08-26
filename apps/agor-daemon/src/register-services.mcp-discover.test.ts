@@ -46,7 +46,7 @@ describe('register-services /mcp-servers/discover wiring', () => {
     expect(discoverBlock).toContain('loadMcpServerForCaller');
   });
 
-  it('persists capabilities through the helper that opens a tenant unit of work', () => {
+  it('captures and persists only inside explicit tenant database boundaries', () => {
     // Discover is a tenant-identity-only service (see
     // TENANT_IDENTITY_ONLY_SERVICE_PATHS): it performs network I/O, so it
     // never inherits a request-long tenant transaction and each database
@@ -54,11 +54,33 @@ describe('register-services /mcp-servers/discover wiring', () => {
     // scope-requiring handle, which this endpoint's try/catch would report as
     // a discovery failure — after the outbound probe already ran.
     //
-    // `persistDiscoveredMCPCapabilities` opens that scope and is where the
-    // reason this write bypasses `mcp-servers` configuration CRUD is
-    // documented. Reaching a repository directly from here would skip both.
+    // The authority helper accepts only a TenantScopedDatabase and the
+    // persistence helper additionally rejects a non-transactional scope.
+    // Reaching a repository directly from here would skip both boundaries.
     expect(discoverBlock).toContain('persistDiscoveredMCPCapabilities(');
+    expect(discoverBlock).toContain('runWithTenantDatabaseScope(');
+    expect(discoverBlock).toContain('runWithTenantDatabaseTransaction(');
     expect(discoverBlock).not.toMatch(/\bMCPServerRepository\s*\(/);
+  });
+
+  it('captures saved-row authority before provider I/O and presents that stamp at persistence', () => {
+    const capture = discoverBlock.indexOf('captureMCPDiscoveryAuthority(');
+    const firstOutbound = discoverBlock.indexOf('resolveMCPAuthHeaders(');
+    const persist = discoverBlock.indexOf('persistDiscoveredMCPCapabilities(');
+    expect(capture).toBeGreaterThan(-1);
+    expect(capture).toBeLessThan(firstOutbound);
+    expect(persist).toBeGreaterThan(firstOutbound);
+    expect(discoverBlock.slice(persist, persist + 180)).toContain('discoveryAuthority');
+  });
+
+  it('emits the user-targeted Marketplace invalidation after durable persistence', () => {
+    const persist = discoverBlock.indexOf('persistDiscoveredMCPCapabilities(');
+    const invalidate = discoverBlock.indexOf('emitMarketplaceInvalidation(');
+    expect(persist).toBeGreaterThan(-1);
+    expect(invalidate).toBeGreaterThan(persist);
+    expect(discoverBlock.slice(invalidate, invalidate + 260)).toContain(
+      'authoritativeServer?.owner_user_id'
+    );
   });
 
   it('calls resolveProbeServerTemplates before resolveMCPAuthHeaders', () => {
@@ -75,7 +97,7 @@ describe('register-services /mcp-servers/discover wiring', () => {
   });
 
   it('routes JWT and OAuth credentials through hosted-safe outbound/cache options', () => {
-    expect(discoverBlock).toContain('allowLocalhostHttp: !durableOAuthFlows');
+    expect(discoverBlock).toContain('allowLocalhostHttp: !postgresOAuthDeployment');
     expect(discoverBlock).toContain('cacheNamespace:');
     expect(discoverBlock).toContain('disableProcessTokenCache: !!durableOAuthFlows');
   });

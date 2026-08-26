@@ -62,7 +62,10 @@ export function buildMcpServerOptions(
       options.push({
         label: `Unavailable MCP server (${shortId(id)})`,
         value: id,
-        disabled: true,
+        // This option exists only while selected. Keep it enabled so AntD
+        // renders the tag's remove affordance; once detached it disappears
+        // and cannot be selected again.
+        disabled: false,
       });
     }
   }

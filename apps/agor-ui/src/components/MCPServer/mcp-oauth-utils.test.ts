@@ -366,3 +366,61 @@ describe('validateHeadersJSON', () => {
     );
   });
 });
+
+describe('buildAuthFromValues PATCH semantics', () => {
+  it('uses null to clear auth explicitly', () => {
+    expect(buildAuthFromValues({ auth_type: 'none' }, { forPatch: true })).toBeNull();
+  });
+
+  it('preserves redacted secrets and treats a blank secret as non-destructive', () => {
+    const auth = buildAuthFromValues(
+      {
+        auth_type: 'oauth',
+        oauth_client_id: '••••••••',
+        oauth_client_secret: '',
+        oauth_scope: 'calendar.events',
+      },
+      { forPatch: true }
+    );
+    expect(auth).toMatchObject({
+      type: 'oauth',
+      oauth_client_id: '••••••••',
+      oauth_scope: 'calendar.events',
+    });
+    expect(auth).not.toHaveProperty('oauth_client_secret');
+  });
+
+  it('clears a saved secret only through the explicit clear affordance', () => {
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'oauth',
+          oauth_client_secret: '',
+          oauth_client_secret_clear: true,
+        },
+        { forPatch: true }
+      )
+    ).toMatchObject({ type: 'oauth', oauth_client_secret: null });
+  });
+
+  it('supports explicit clear for bearer and JWT secrets', () => {
+    expect(
+      buildAuthFromValues(
+        { auth_type: 'bearer', auth_token: '', auth_token_clear: true },
+        { forPatch: true }
+      )
+    ).toEqual({ type: 'bearer', token: null });
+    expect(
+      buildAuthFromValues(
+        {
+          auth_type: 'jwt',
+          jwt_api_token: '',
+          jwt_api_token_clear: true,
+          jwt_api_secret: '',
+          jwt_api_secret_clear: true,
+        },
+        { forPatch: true }
+      )
+    ).toMatchObject({ type: 'jwt', api_token: null, api_secret: null });
+  });
+});

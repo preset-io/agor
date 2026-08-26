@@ -6,6 +6,7 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { randomUUID } from 'node:crypto';
 import { Transform } from 'node:stream';
 import type { SessionInitializationRequest } from '@agor/core/api';
 import {
@@ -29,11 +30,15 @@ import {
   bindRepositoryToTenantUnitOfWork,
   generateId,
   getCurrentTenantId,
+  getMCPEgressGatewayMode,
+  MCPCatalogCandidateRepository,
+  MCPServerRepository,
   MessagesRepository,
   resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
   ScheduleRepository,
   type SessionRepository,
+  setMCPEgressGatewayMode,
   setMcpMemberPolicy,
   shortId,
   TaskRepository,
@@ -67,6 +72,7 @@ import type {
   HookContext,
   MCPMemberPolicy,
   MCPMemberPolicySetting,
+  MCPServer,
   MCPServerID,
   Message,
   MessageID,
@@ -89,6 +95,7 @@ import {
   isBranchArchiveOrDeleteOptions,
   isTaskPendingDispatch,
   MCP_MEMBER_POLICIES,
+  MCP_MEMBER_POLICY_CHANGED_EVENT,
   MessageRole,
   ROLES,
   SessionStatus,
@@ -137,6 +144,21 @@ import {
   publicHealthDb,
 } from './health/payload.js';
 import { registerHealthProbeRoutes } from './health/routes.js';
+import { issueMCPEgressCapability } from './mcp-egress/capability.js';
+import {
+  coordinateMCPEgressRolloutChange,
+  coordinateSessionMCPRevocation,
+} from './mcp-egress/coordination.js';
+import {
+  MCPEgressGateway,
+  mcpEgressEligibility,
+  mcpEgressMaterialHash,
+  mcpOAuthGrantIdentity,
+  projectMCPServerForExecutor,
+  resolveMCPEgressEnvironment,
+} from './mcp-egress/gateway.js';
+import { createMCPEgressHttpHandler } from './mcp-egress/http-handler.js';
+import { validateMCPEgressRolloutChange } from './mcp-egress/rollout.js';
 import { createFeathersMetricsHook } from './metrics/feathers.js';
 import { getDaemonMetrics } from './metrics/index.js';
 import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
@@ -147,6 +169,7 @@ import {
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
+import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
 import {
   ScheduleBusyError,
   ScheduleNotReadyError,
@@ -540,14 +563,33 @@ export function createRegisteredMCPCatalogConnectService(
   db: TenantScopeAwareDatabase
 ) {
   return createMCPCatalogConnectService(app, {
-    async readGrantResourceUri(serverId, params) {
-      const userId = params.user?.user_id as UserID | undefined;
-      if (!userId) return undefined;
+    async listCandidates(userId, params) {
       const tenantId =
         (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
-      const read = async () =>
-        (await new UserMCPOAuthTokenRepository(db).getToken(userId, serverId))
-          ?.oauth_resource_uri ?? undefined;
+      const read = async () => new MCPCatalogCandidateRepository(db).listForUser(userId);
+      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+    },
+    async getCandidate(userId, serverId, params) {
+      const tenantId =
+        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
+      const read = async () => new MCPCatalogCandidateRepository(db).getForUser(userId, serverId);
+      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+    },
+    async isGrantAuthorized(candidate, params) {
+      const userId = params.user?.user_id as UserID | undefined;
+      if (!userId) return false;
+      const tenantId =
+        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
+      const read = async () => {
+        const grant = await new UserMCPOAuthTokenRepository(db).getCatalogGrantAuthority(
+          userId,
+          candidate.server.mcp_server_id
+        );
+        return Boolean(
+          grant?.has_access_token &&
+            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
+        );
+      };
       return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
     },
   });
@@ -712,6 +754,42 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   const usersService = app.service('users');
   const tasksService = app.service('tasks') as unknown as TasksServiceImpl;
   const reposService = app.service('repos') as unknown as ReposServiceImpl;
+  const mcpEgressGateway = new MCPEgressGateway({
+    db,
+    app,
+    jwtSecret,
+    branchRbacEnabled,
+  });
+  // Internal composition seam used by MCP mutation hooks. It is never exposed
+  // as a Feathers service and carries no serializable credential material.
+  (app as unknown as { mcpEgressGateway?: MCPEgressGateway }).mcpEgressGateway = mcpEgressGateway;
+
+  const mcpEgressHttpHandler = createMCPEgressHttpHandler(mcpEgressGateway);
+  // @ts-expect-error FeathersJS app extends Express.
+  app.post('/mcp-egress/:serverId', mcpEgressHttpHandler);
+  // @ts-expect-error FeathersJS app extends Express.
+  app.delete('/mcp-egress/:serverId', mcpEgressHttpHandler);
+  // Streamable HTTP GET opens a server-stream channel. This phase cannot
+  // mediate it without unbounded buffering, so reject before capability or DNS work.
+  // @ts-expect-error FeathersJS app extends Express.
+  app.all('/mcp-egress/:serverId', (req: Request, res: Response) => {
+    const safeServerId = String(req.params.serverId ?? '').replace(/[^A-Za-z0-9_-]/g, '_');
+    console.warn(
+      `[MCP Egress] event=request_rejected server_id=${safeServerId || '<invalid>'} code=method_not_mediated`
+    );
+    res
+      .status(405)
+      .setHeader('allow', 'POST, DELETE')
+      .json({
+        jsonrpc: '2.0',
+        id: null,
+        error: {
+          code: -32003,
+          message: 'This MCP gateway phase mediates only bounded POST and DELETE requests',
+          data: { code: 'method_not_mediated' },
+        },
+      });
+  });
   const tenantIdentityAround = createTenantDatabaseScopeAroundHook({
     db,
     config,
@@ -4220,9 +4298,124 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     return session;
   };
 
-  // ============================================================================
-  // Session MCP servers routes
-  // ============================================================================
+  const projectMcpServersForExecutor = async (
+    servers: MCPServer[],
+    session: Session,
+    params: RouteParams
+  ): Promise<MCPServer[]> => {
+    const payload = (
+      params as RouteParams & {
+        authentication?: {
+          payload?: { type?: unknown; task_id?: unknown; sub?: unknown; tenant_id?: unknown };
+        };
+      }
+    ).authentication?.payload;
+    const tenantId =
+      (params as RouteParams & { tenant?: { tenant_id?: string } }).tenant?.tenant_id ??
+      getCurrentTenantId();
+    if (!tenantId) throw new NotAuthenticated('MCP gateway projection requires tenant identity');
+    const mode = await getMCPEgressGatewayMode(db);
+    if (payload?.type !== 'executor-session' || typeof payload.task_id !== 'string') {
+      if (mode === 'compatibility' || mode === 'enforced') {
+        throw new Forbidden(
+          'MCP credentials are available only through a live task-scoped daemon capability'
+        );
+      }
+      return servers;
+    }
+    if (mode === 'off') return servers;
+    if (mode === 'observe') {
+      for (const server of servers) {
+        console.info(
+          `[MCP Egress] event=direct_client_observed transport=${server.transport} server_id=${server.mcp_server_id}`
+        );
+      }
+      return servers;
+    }
+    const gatewayBaseUrl =
+      config.daemon?.public_url ?? config.daemon?.base_url ?? `http://localhost:${_DAEMON_PORT}`;
+    return runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+      const task = await new TaskRepository(tenantDb).findById(payload.task_id as string);
+      if (!task || task.session_id !== session.session_id) {
+        throw new Forbidden('Executor task scope is no longer current');
+      }
+      const resolvedEnv = await resolveMCPEgressEnvironment(tenantDb, session.created_by, session);
+      const projected: MCPServer[] = [];
+      for (const server of servers) {
+        const eligibility = mcpEgressEligibility(server);
+        if (!eligibility.eligible) {
+          console.info(
+            `[MCP Egress] event=projection_excluded reason=${eligibility.reason} transport=${server.transport} server_id=${server.mcp_server_id}`
+          );
+          continue;
+        }
+        let grantIdentity: string | undefined;
+        if (server.auth?.type === 'oauth') {
+          const tokenUserId =
+            (server.auth.oauth_mode ?? 'per_user') === 'shared'
+              ? null
+              : (session.created_by as import('@agor/core/types').UserID);
+          const grant = await new UserMCPOAuthTokenRepository(tenantDb).getToken(
+            tokenUserId,
+            server.mcp_server_id
+          );
+          grantIdentity = mcpOAuthGrantIdentity(grant);
+          if (!grantIdentity) {
+            console.info(
+              `[MCP Egress] event=projection_excluded reason=oauth_reauth_required server_id=${server.mcp_server_id}`
+            );
+            continue;
+          }
+        }
+        const capability = issueMCPEgressCapability(
+          {
+            tid: tenantId,
+            task_id: task.task_id,
+            session_id: session.session_id,
+            principal_user_id: task.created_by,
+            credential_user_id: session.created_by,
+            mcp_server_id: server.mcp_server_id,
+            config_version: server.config_version ?? 1,
+            material_hash: mcpEgressMaterialHash(server, resolvedEnv, jwtSecret),
+            grant_identity: grantIdentity,
+            rollout_mode: mode,
+            jti: randomUUID(),
+          },
+          jwtSecret
+        );
+        projected.push(
+          projectMCPServerForExecutor(
+            server,
+            new URL(
+              `/mcp-egress/${encodeURIComponent(server.mcp_server_id)}`,
+              gatewayBaseUrl
+            ).toString(),
+            capability
+          )
+        );
+      }
+      return projected;
+    });
+  };
+
+  // Relationship mutation is authoritative in its existing transaction. New
+  // calls re-check attachment state in PostgreSQL/SQLite. Local cancellation is
+  // an availability accelerator only; already-admitted calls may complete.
+  const coordinateSessionMcpRevocation = async <T>(
+    _sessionId: string,
+    serverIds: string[],
+    params: RouteParams,
+    mutate: () => Promise<T>
+  ): Promise<T> => {
+    const tenantId = (params as AuthenticatedParams).tenant?.tenant_id ?? getCurrentTenantId();
+    return coordinateSessionMCPRevocation({
+      db,
+      gateway: mcpEgressGateway,
+      tenantId,
+      serverIds,
+      mutate,
+    });
+  };
 
   registerAuthenticatedRoute(
     app,
@@ -4288,15 +4481,32 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               (entry): entry is Exclude<(typeof withMetadata)[number], null> => entry !== null
             )
             .filter((entry) => isMCPServerUsableInSession(entry.server, session));
-          return shouldExposeMCPServerSecrets(params, {
-            allowSessionToken: true,
-            sessionId: id,
-          })
-            ? entries
-            : entries.map((entry) => ({
-                ...entry,
-                server: redactMCPServerSecrets(entry.server),
-              }));
+          if (
+            shouldExposeMCPServerSecrets(params, {
+              allowSessionToken: true,
+              sessionId: id,
+            })
+          ) {
+            // Project the full set once: mode/task/environment authority is
+            // shared by this response, and omitted servers must not leave
+            // protocol-incomplete `{ server: undefined }` list entries.
+            const projectedServers = await projectMcpServersForExecutor(
+              entries.map((entry) => entry.server),
+              session,
+              params
+            );
+            const projectedById = new Map(
+              projectedServers.map((server) => [server.mcp_server_id, server])
+            );
+            return entries.flatMap((entry) => {
+              const server = projectedById.get(entry.server.mcp_server_id);
+              return server ? [{ ...entry, server }] : [];
+            });
+          }
+          return entries.map((entry) => ({
+            ...entry,
+            server: redactMCPServerSecrets(entry.server),
+          }));
         }
         const sessionServerRefs = await sessionMCPServersService.listServers(
           id as import('@agor/core/types').SessionID,
@@ -4349,7 +4559,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           allowSessionToken: true,
           sessionId: id,
         })
-          ? servers
+          ? projectMcpServersForExecutor(servers, session, params)
           : servers.map(redactMCPServerSecrets);
       },
       async create(data: { mcpServerId: string }, params: RouteParams) {
@@ -4402,11 +4612,21 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const serverIds = [...new Set(data.mcpServerIds)] as Array<
           import('@agor/core/types').MCPServerID
         >;
+        const existing = await sessionMCPServersService.listServers(
+          id as import('@agor/core/types').SessionID,
+          false,
+          params
+        );
+        const removedServerIds = existing
+          .map((item) => item.mcp_server_id)
+          .filter((serverId) => !serverIds.includes(serverId));
         try {
-          await sessionMCPServersService.setServers(
-            id as import('@agor/core/types').SessionID,
-            serverIds,
-            params
+          await coordinateSessionMcpRevocation(id, removedServerIds, params, () =>
+            sessionMCPServersService.setServers(
+              id as import('@agor/core/types').SessionID,
+              serverIds,
+              params
+            )
           );
         } catch (error) {
           if (error instanceof MCPServerNotUsableError) {
@@ -4433,10 +4653,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!mcpId) throw new Error('MCP Server ID required');
         await requireSessionScopedConfigOwnerOrAdmin(id, params);
 
-        await sessionMCPServersService.removeServer(
-          id as import('@agor/core/types').SessionID,
-          mcpId as import('@agor/core/types').MCPServerID,
-          params
+        await coordinateSessionMcpRevocation(id, [mcpId], params, () =>
+          sessionMCPServersService.removeServer(
+            id as import('@agor/core/types').SessionID,
+            mcpId as import('@agor/core/types').MCPServerID,
+            params
+          )
         );
 
         const relationship = {
@@ -4458,12 +4680,16 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         if (!mcpId) throw new Error('MCP Server ID required');
         if (typeof data.enabled !== 'boolean') throw new Error('enabled field required');
         await requireSessionScopedConfigOwnerOrAdmin(id, params);
-        return sessionMCPServersService.toggleServer(
-          id as import('@agor/core/types').SessionID,
-          mcpId as import('@agor/core/types').MCPServerID,
-          data.enabled,
-          params
-        );
+        const toggle = () =>
+          sessionMCPServersService.toggleServer(
+            id as import('@agor/core/types').SessionID,
+            mcpId as import('@agor/core/types').MCPServerID,
+            data.enabled,
+            params
+          );
+        return data.enabled
+          ? toggle()
+          : coordinateSessionMcpRevocation(id, [mcpId], params, toggle);
       },
       // biome-ignore lint/suspicious/noExplicitAny: Service type not compatible with Express
     } as any,
@@ -4509,6 +4735,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           throw new BadRequest(`policy must be one of: ${MCP_MEMBER_POLICIES.join(', ')}`);
         }
         await setMcpMemberPolicy(db, data.policy, getCurrentTenantId(), params.user?.user_id);
+        // Do not publish the caller-shaped endpoint response: `can_configure`
+        // differs by role. An empty tenant-scoped invalidation makes every
+        // connected browser refetch its own authoritative answer. The event is
+        // queued until the tenant DB unit of work commits by emitServiceEvent.
+        emitServiceEvent(app, {
+          path: 'mcp-servers',
+          event: MCP_MEMBER_POLICY_CHANGED_EVENT,
+          data: {},
+          params,
+          method: 'patch',
+        });
         return {
           policy: data.policy,
           can_configure: canConfigureMcpServers(params.user?.role, data.policy),
@@ -4525,6 +4762,144 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       // fails instead of a reason it is off.
       find: { role: ROLES.VIEWER, action: 'read the MCP member policy' },
       patch: { role: ROLES.ADMIN, action: 'change the MCP member policy' },
+    },
+    requireAuth
+  );
+
+  registerAuthenticatedRoute(
+    app,
+    '/mcp-egress/status',
+    {
+      async find(params: RouteParams) {
+        const tenantId = (params as AuthenticatedParams).tenant?.tenant_id ?? getCurrentTenantId();
+        if (!tenantId) throw new NotAuthenticated('MCP gateway status requires tenant identity');
+        const mode = await getMCPEgressGatewayMode(db);
+        const runtime = mcpEgressGateway.status(tenantId);
+        const mediated = mode === 'compatibility' || mode === 'enforced';
+        const visibleServerPage = params.user?.user_id
+          ? await new MCPServerRepository(db).findAll({
+              enabled: true,
+              usableByUserId: params.user.user_id,
+              limit: 101,
+            })
+          : [];
+        const excludedServersTruncated = visibleServerPage.length > 100;
+        const visibleServers = visibleServerPage.slice(0, 100);
+        const excludedServers = (
+          await Promise.all(
+            visibleServers.map(async (server) => {
+              const eligibility = mcpEgressEligibility(server);
+              if (!eligibility.eligible) {
+                return {
+                  mcp_server_id: server.mcp_server_id,
+                  name: server.display_name ?? server.name,
+                  reason: eligibility.reason,
+                  recovery:
+                    eligibility.reason === 'approval_not_mediated'
+                      ? 'Change ask rules to allow/deny, or wait for task-bound approval receipts.'
+                      : eligibility.reason === 'template_configuration'
+                        ? 'Use only static user.env.KEY references with balanced supported helpers; relative, lookup, and scoped templates are excluded.'
+                        : 'Configure bounded Streamable HTTP; stdio, legacy SSE, and WebSocket are unavailable in mediated modes.',
+                };
+              }
+              if (server.auth?.type === 'oauth') {
+                const tokenUserId =
+                  (server.auth.oauth_mode ?? 'per_user') === 'shared'
+                    ? null
+                    : (params.user!.user_id as import('@agor/core/types').UserID);
+                const grant = await new UserMCPOAuthTokenRepository(db).getToken(
+                  tokenUserId,
+                  server.mcp_server_id
+                );
+                if (!mcpOAuthGrantIdentity(grant)) {
+                  return {
+                    mcp_server_id: server.mcp_server_id,
+                    name: server.display_name ?? server.name,
+                    reason: 'oauth_reauth_required' as const,
+                    recovery: 'Reconnect this MCP server to create a current OAuth grant.',
+                  };
+                }
+              }
+              return undefined;
+            })
+          )
+        ).filter((entry) => entry !== undefined);
+        return {
+          mode,
+          supported_transports: mediated ? ['streamable-http-buffered'] : [],
+          unsupported_transports: [
+            'stdio',
+            'legacy-sse-endpoint-handoff',
+            'websocket',
+            'unbounded-streaming-response',
+            'servers-requiring-ask-approval',
+          ],
+          in_flight_requests: runtime.activeRequests,
+          provider_in_flight_requests: runtime.providerInFlightRequests,
+          reserved_requests: runtime.reservedRequests,
+          oldest_request_ms: runtime.oldestRequestMs,
+          excluded_servers: excludedServers,
+          excluded_servers_truncated: excludedServersTruncated,
+          // The status read proves this database request succeeded; it is not
+          // an independent admission-path availability probe.
+          admission_available: null,
+          operator: hasMinimumRole(params.user?.role, ROLES.ADMIN),
+          guarantee: mediated
+            ? 'No request hop is admitted after a committed config, grant, task, attachment, role, or rollout change. Requests admitted before that commit may complete.'
+            : 'Direct mode has no gateway admission or revocation guarantee.',
+        };
+      },
+      async patch(
+        _id: unknown,
+        data: {
+          mode?: unknown;
+          acknowledge_raw_secret_downgrade?: unknown;
+          verified_legacy_executors_fenced?: unknown;
+        },
+        params: RouteParams
+      ) {
+        if (!['off', 'observe', 'compatibility', 'enforced'].includes(String(data?.mode))) {
+          throw new BadRequest('mode must be off, observe, compatibility, or enforced');
+        }
+        const nextMode = data.mode as import('@agor/core/types').MCPEgressGatewayMode;
+        const currentMode = await getMCPEgressGatewayMode(db);
+        if (currentMode === nextMode) return { mode: nextMode };
+        const violation = validateMCPEgressRolloutChange({
+          currentMode,
+          nextMode,
+          acknowledgeRawSecretDowngrade: data.acknowledge_raw_secret_downgrade === true,
+          verifiedLegacyExecutorsFenced: data.verified_legacy_executors_fenced === true,
+        });
+        // Emergency rollback remains available even with active calls. It is an
+        // explicit restoration of direct credential projection, not revocation.
+        if (violation === 'raw_secret_downgrade_acknowledgement_required') {
+          throw new BadRequest(
+            'acknowledge_raw_secret_downgrade must be true because rollback restores direct credential egress'
+          );
+        }
+        if (violation === 'legacy_executor_fence_attestation_required') {
+          throw new BadRequest(
+            'verified_legacy_executors_fenced must be true after pre-gateway executors are terminated'
+          );
+        }
+        const tenantId = (params as AuthenticatedParams).tenant?.tenant_id ?? getCurrentTenantId();
+        await coordinateMCPEgressRolloutChange({
+          gateway: mcpEgressGateway,
+          tenantId,
+          mutate: async () => {
+            await setMCPEgressGatewayMode(db, nextMode, params.user?.user_id);
+            console.warn(
+              `[SECURITY] event=mcp_egress_rollout_changed tenant_id=${(params as AuthenticatedParams).tenant?.tenant_id ?? '<unknown>'} actor_user_id=${params.user?.user_id ?? '<unknown>'} previous_mode=${currentMode} next_mode=${nextMode} raw_secret_downgrade_acknowledged=${data.acknowledge_raw_secret_downgrade === true}`
+            );
+          },
+        });
+        return { mode: nextMode };
+      },
+      // biome-ignore lint/suspicious/noExplicitAny: custom Feathers route method shape
+    } as any,
+    {
+      find: { role: ROLES.MEMBER, action: 'view MCP gateway status' },
+      patch: { role: ROLES.ADMIN, action: 'configure MCP gateway rollout' },
     },
     requireAuth
   );
@@ -4901,6 +5276,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         // user, matching the existing `database`/`execution` fields below —
         // not admin-only).
         const migrations = await probePendingMigrations(db);
+        const mcpEgressMode = await getMCPEgressGatewayMode(db);
+        const healthTenantId =
+          (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
+        const mcpEgressRuntime = healthTenantId
+          ? mcpEgressGateway.status(healthTenantId)
+          : {
+              inFlightRequests: 0,
+              activeRequests: 0,
+              providerInFlightRequests: 0,
+              reservedRequests: 0,
+              oldestRequestMs: 0,
+            };
 
         return {
           ...publicResponse,
@@ -4920,6 +5307,20 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           },
           mcp: {
             enabled: config.daemon?.mcpEnabled !== false,
+            egress: {
+              mode: mcpEgressMode,
+              // A health read cannot prove the next admission. Keep this
+              // explicitly unknown rather than turning DB reachability into a
+              // false 99.99% gateway availability claim.
+              admissionAvailable: null,
+              // Backward-compatible name; this is the same truthful total as
+              // activeRequests, not provider-only transport work.
+              inFlightRequests: mcpEgressRuntime.inFlightRequests,
+              activeRequests: mcpEgressRuntime.activeRequests,
+              providerInFlightRequests: mcpEgressRuntime.providerInFlightRequests,
+              reservedRequests: mcpEgressRuntime.reservedRequests,
+              oldestRequestMs: mcpEgressRuntime.oldestRequestMs,
+            },
           },
           // Execution mode surfaced so admins can confirm which security tier
           // the daemon booted under. Docker env overrides (AGOR_SET_RBAC_FLAG,

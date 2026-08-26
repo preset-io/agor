@@ -49,6 +49,10 @@ const checks = [
       'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 2,
       'apps/agor-daemon/src/services/repos.ts': 1,
+      // Real REST + Socket.IO contract harness: the one authenticated test
+      // connection is joined to a local-only channel so transport-level
+      // response and realtime secret redaction can be asserted end to end.
+      'apps/agor-daemon/src/services/mcp-servers.write-transport.integration.test.ts': 2,
       // Socket/browser integration harness explicitly joins one authenticated
       // connection to its verified tenant before asserting hard-delete
       // publication containment.
@@ -191,6 +195,11 @@ const checks = [
       // capabilities use a second transaction path so their RLS GUC is local
       // to one pooled connection checkout and cannot leak after discovery.
       'packages/core/src/db/tenant-scope.ts': 2,
+      // Test-only security harness deliberately invokes every direct libsql
+      // and Drizzle transaction surface to prove the literal-memory client
+      // coordinator cannot be bypassed. No application database access lives
+      // in this file.
+      'packages/core/src/db/in-memory-sqlite-coordinator.test.ts': 10,
       'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
       'packages/core/src/db/repositories/repos.ts': 3,

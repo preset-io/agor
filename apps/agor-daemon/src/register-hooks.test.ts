@@ -39,6 +39,7 @@ import {
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
+  projectExecutorTaskSdkResponse,
   protectExternalTaskCreate,
   protectFilesystemHomeWrite,
   protectServerManagedTaskWrites,
@@ -478,6 +479,118 @@ describe('protectServerManagedTaskWrites', () => {
     context.params.provider = undefined;
 
     await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+  });
+});
+
+describe('projectExecutorTaskSdkResponse', () => {
+  it('closes a normalized-only executor patch without touching extension getters', async () => {
+    const sentinel = 'SENTINEL_NORMALIZED_ONLY_DAEMON_41a8';
+    const getter = vi.fn(() => {
+      throw new Error(sentinel);
+    });
+    const tokenUsage = Object.create({ provider_secret: sentinel }) as Record<string, unknown>;
+    Object.assign(tokenUsage, { inputTokens: 4, outputTokens: 2, totalTokens: 6 });
+    Object.defineProperty(tokenUsage, 'futureProviderField', { get: getter });
+    const context = {
+      path: 'tasks',
+      method: 'patch',
+      id: 'task-1',
+      data: {
+        normalized_sdk_response: {
+          tokenUsage,
+          contextWindowLimit: 100,
+          contextUsageSnapshot: {
+            totalTokens: 6,
+            maxTokens: 100,
+            percentage: 6,
+            memoryFiles: [{ path: sentinel }],
+          },
+          extension: { secret: sentinel },
+        },
+      },
+      params: { provider: 'socketio' },
+    } as unknown as HookContext;
+    const tasks = { findById: vi.fn() };
+    const sessions = { findById: vi.fn() };
+
+    await expect(projectExecutorTaskSdkResponse(tasks, sessions)(context)).resolves.toBe(context);
+
+    expect(context.data).toEqual({
+      normalized_sdk_response: {
+        tokenUsage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+        contextWindowLimit: 100,
+        contextUsageSnapshot: { totalTokens: 6, maxTokens: 100, percentage: 6 },
+      },
+    });
+    expect(getter).not.toHaveBeenCalled();
+    expect(JSON.stringify(context.data)).not.toContain(sentinel);
+    expect(tasks.findById).not.toHaveBeenCalled();
+    expect(sessions.findById).not.toHaveBeenCalled();
+  });
+
+  it('re-closes Claude result data before persistence and realtime publication', async () => {
+    const sentinel = 'SENTINEL_DAEMON_RAW_CLAUDE_RESULT_6d31';
+    const context = {
+      path: 'tasks',
+      method: 'patch',
+      id: 'task-1',
+      data: {
+        raw_sdk_response: {
+          type: 'result',
+          subtype: 'success',
+          result: sentinel,
+          errors: [sentinel],
+          duration_ms: 7,
+          duration_api_ms: Number.POSITIVE_INFINITY,
+          num_turns: 0,
+          is_error: false,
+          usage: { input_tokens: 3, provider_secret: sentinel },
+          modelUsage: { [sentinel]: { inputTokens: 3 } },
+        },
+      },
+      params: { provider: 'rest' },
+    } as unknown as HookContext;
+    const hook = projectExecutorTaskSdkResponse(
+      { findById: vi.fn().mockResolvedValue({ task_id: 'task-1', session_id: 'session-1' }) },
+      {
+        findById: vi
+          .fn()
+          .mockResolvedValue({ session_id: 'session-1', agentic_tool: 'claude-code' }),
+      }
+    );
+
+    await expect(hook(context)).resolves.toBe(context);
+    expect(context.data).toEqual({
+      raw_sdk_response: {
+        type: 'result',
+        subtype: 'success',
+        duration_ms: 7,
+        is_error: false,
+        num_turns: 0,
+        usage: {
+          input_tokens: 3,
+        },
+      },
+    });
+    expect(JSON.stringify(context.data)).not.toContain(sentinel);
+  });
+
+  it('does not alter another agentic tool raw response', async () => {
+    const raw = { type: 'turn.completed', usage: { input_tokens: 1 } };
+    const context = {
+      id: 'task-1',
+      data: { raw_sdk_response: raw },
+      params: { provider: 'socketio' },
+    } as unknown as HookContext;
+    const hook = projectExecutorTaskSdkResponse(
+      { findById: vi.fn().mockResolvedValue({ task_id: 'task-1', session_id: 'session-1' }) },
+      {
+        findById: vi.fn().mockResolvedValue({ session_id: 'session-1', agentic_tool: 'codex' }),
+      }
+    );
+
+    await hook(context);
+    expect((context.data as { raw_sdk_response: unknown }).raw_sdk_response).toBe(raw);
   });
 });
 

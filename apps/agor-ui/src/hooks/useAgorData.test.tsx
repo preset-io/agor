@@ -25,6 +25,8 @@ import { agorStore } from '../store/agorStore';
 import { flushRealtimeNow } from '../store/realtimeBatch';
 import { useAgorData } from './useAgorData';
 
+const STANDALONE_AUTHORITY_SCOPE = '__standalone__:__standalone__:0';
+
 /**
  * Minimal AgorClient stand-in. Implements just enough of the service /
  * socket surface the hook touches:
@@ -329,7 +331,7 @@ describe('useAgorData — socket-event bailouts', () => {
 
     act(() => {
       emit('sessions', 'patched', { ...session, status: 'running' });
-      flushRealtimeNow();
+      flushRealtimeNow(STANDALONE_AUTHORITY_SCOPE);
     });
 
     expect(agorStore.getState().sessionById).not.toBe(beforeSessions);
@@ -348,7 +350,7 @@ describe('useAgorData — socket-event bailouts', () => {
         status: 'idle',
         ready_for_prompt: true,
       });
-      flushRealtimeNow();
+      flushRealtimeNow(STANDALONE_AUTHORITY_SCOPE);
     });
 
     expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({
@@ -476,7 +478,7 @@ describe('useAgorData — socket-event bailouts', () => {
 
     act(() => {
       emit('sessions', 'patched', { ...session, branch_id: 'b-2' });
-      flushRealtimeNow();
+      flushRealtimeNow(STANDALONE_AUTHORITY_SCOPE);
     });
 
     // Old branch bucket is cleaned up; new branch bucket holds the session.

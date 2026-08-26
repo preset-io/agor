@@ -1,4 +1,4 @@
-import { generateId } from '@agor/core';
+import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import type { Message, MessageID, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -213,6 +213,12 @@ describe('createSystemMessage', () => {
       is_provider_failure_result: true,
       model: 'claude-sonnet-4-6',
     });
+    expect(result.content).toEqual([
+      { type: 'text', text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE },
+    ]);
+    expect(JSON.stringify(vi.mocked(messagesService.create).mock.calls)).not.toContain(
+      'Credit balance is too low'
+    );
   });
 
   it('returns the daemon-confirmed system message after message hooks transform it', async () => {

@@ -34,9 +34,8 @@
 
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { assertPublicMCPOAuthCompatibilityMode } from '@agor/core/types';
 import { sql } from 'drizzle-orm';
-import { findDuplicateMCPCustomHeaderName } from '../tools/mcp/http-headers';
+import { assertValidArchivedMCPServerRow } from '../tools/mcp/server-validation';
 import type { Database } from './client';
 import { executeRaw, isPostgresDatabase } from './database-wrapper';
 import { isDatabaseUniqueConstraintError } from './sanitize-error';
@@ -113,26 +112,12 @@ export async function validateArchivedMCPCompatibilityModes(
   if (!table || table.rowCount === 0) return;
   const lines = splitTenantJsonlLines(await readTableJsonl(archivePath, table.name));
   for (const line of lines) {
-    const row = JSON.parse(line) as { data?: unknown };
-    const data = row.data;
-    const publicData = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
-    const auth = publicData.auth;
     try {
-      assertPublicMCPOAuthCompatibilityMode(auth);
-      const headers = publicData.headers;
-      const duplicate =
-        headers && typeof headers === 'object' && !Array.isArray(headers)
-          ? findDuplicateMCPCustomHeaderName(headers as Record<string, unknown>)
-          : undefined;
-      if (duplicate) {
-        throw new Error(
-          `Duplicate custom HTTP header names are not allowed: ${duplicate.first} and ${duplicate.duplicate}`
-        );
-      }
+      assertValidArchivedMCPServerRow(JSON.parse(line));
     } catch (error) {
       throw new MalformedArchiveError(
         `Refusing to import mcp_servers: ${
-          error instanceof Error ? error.message : 'invalid OAuth compatibility policy'
+          error instanceof Error ? error.message : 'invalid MCP server row'
         }`
       );
     }

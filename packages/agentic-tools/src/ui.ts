@@ -11,6 +11,8 @@ export interface AgenticToolModelSelection {
 export interface AgenticToolModelSelectorProps {
   value?: AgenticToolModelSelection;
   onChange?: (config: AgenticToolModelSelection | undefined) => void;
+  /** Fired only when the user finishes selecting a provider/model pair. */
+  onCommit?: (config: AgenticToolModelSelection) => void;
   client?: AgorClient | null;
   branchId?: string;
   catalogEnabled?: boolean;

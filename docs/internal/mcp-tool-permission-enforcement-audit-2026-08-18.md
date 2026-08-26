@@ -256,9 +256,9 @@ Roughly in order of value:
    list, so it cannot be mechanically turned into permissions. Making the
    disclosure enforceable would mean adding a structured field to
    `curated.yaml` — e.g. `default_denied_tools` — and seeding from it at connect
-   time. That is a curation cost across 48 entries and a change to the connect
-   path; worth it only if the product intends the disclosure to be a contract
-   rather than a description.
+   time. That is a curation cost across every catalog entry and a change to the
+   connect path; worth it only if the product intends the disclosure to be a
+   contract rather than a description.
 
 Until at least (1) lands, the disclosure remains a description of what a
 connected server may do, and the enforcement machinery stays a correct engine

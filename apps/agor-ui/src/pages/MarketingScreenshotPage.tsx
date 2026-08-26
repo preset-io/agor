@@ -67,6 +67,7 @@ export const MarketingScreenshotPage = () => {
           value={{
             connected: true,
             connecting: false,
+            authGeneration: 1,
             outOfSync: false,
             capturedSha: null,
             currentSha: null,

@@ -68,10 +68,10 @@ describe('buildMcpServerOptions', () => {
     expect(buildMcpServerOptions([server({})])[0]?.label).not.toContain('Not signed in');
   });
 
-  it('shows a clear short fallback for a selected server missing from hydration', () => {
+  it('keeps a selected server missing from hydration labelled and removable', () => {
     const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     expect(buildMcpServerOptions([], [id])).toEqual([
-      { label: 'Unavailable MCP server (aaaaaaaabbbbccccddddeeee)', value: id, disabled: true },
+      { label: 'Unavailable MCP server (aaaaaaaabbbbccccddddeeee)', value: id, disabled: false },
     ]);
   });
 });

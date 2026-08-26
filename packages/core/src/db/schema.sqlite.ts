@@ -1399,6 +1399,9 @@ export const mcpServers = sqliteTable(
         // that outlives the entry row.
         catalog_entry_name?: string;
 
+        // Daemon-owned optimistic-concurrency revision for public edits.
+        config_version?: number;
+
         // Transport config
         command?: string;
         args?: string[];
@@ -1434,20 +1437,21 @@ export const mcpServers = sqliteTable(
         // Discovered capabilities
         tools?: Array<{
           name: string;
-          description: string;
+          description?: string;
           input_schema?: Record<string, unknown>; // Optional - not all MCP servers provide schemas
         }>;
         resources?: Array<{
           uri: string;
           name: string;
+          description?: string;
           mimeType?: string;
         }>;
         prompts?: Array<{
           name: string;
-          description: string;
+          description?: string;
           arguments?: Array<{
             name: string;
-            description: string;
+            description?: string;
             required?: boolean;
           }>;
         }>;

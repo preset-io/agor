@@ -6,7 +6,8 @@ import {
   InfoCircleOutlined,
 } from '@ant-design/icons';
 import { Button, Input, Space, Tooltip, Typography, theme } from 'antd';
-import { useState } from 'react';
+import { useLayoutEffect, useState } from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { ClaudeSubscriptionTokenInstructions } from './ClaudeSubscriptionTokenInstructions';
 import { Tag } from './Tag';
 
@@ -169,6 +170,10 @@ export interface ApiKeyFieldsProps {
    * where the exact path matters.
    */
   publicValues?: Partial<Record<AgenticToolConfigField, string>>;
+  /** Erases raw drafts only when the caller identity/role changes. */
+  identityKey: string | null;
+  /** Cancels async continuations on reconnect/token/authority changes. */
+  operationScope: readonly unknown[] | null;
 }
 
 export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
@@ -180,20 +185,37 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
   disabled = false,
   fields,
   publicValues,
+  identityKey,
+  operationScope,
 }) => {
   const { token } = theme.useToken();
   const [inputValues, setInputValues] = useState<Partial<Record<AgenticToolConfigField, string>>>(
     {}
   );
+  const operationGuard = useAuthorityOperationGuard(operationScope);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey is the caller-private draft lifecycle key
+  useLayoutEffect(() => {
+    setInputValues({});
+  }, [identityKey]);
 
   const configs = fields ?? TOOL_FIELD_CONFIGS[tool] ?? [];
 
   const handleSave = async (field: AgenticToolConfigField) => {
+    const operation = operationGuard.begin();
     const value = inputValues[field]?.trim();
-    if (!value) return;
+    if (!value || !operation.isCurrent()) return;
 
     await onSave(field, value);
+    if (!operation.isCurrent()) return;
     setInputValues((prev) => ({ ...prev, [field]: '' }));
+  };
+
+  const handleClear = async (field: AgenticToolConfigField) => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    await onClear(field);
+    if (!operation.isCurrent()) return;
   };
 
   const renderField = (config: AgenticToolFieldConfig) => {
@@ -247,7 +269,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
               <Button
                 danger
                 icon={<DeleteOutlined />}
-                onClick={() => onClear(field)}
+                onClick={() => void handleClear(field)}
                 loading={saving[field]}
                 disabled={disabled}
               >

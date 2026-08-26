@@ -5,6 +5,7 @@ import {
   type CustomRendererProps,
   StreamdownContext,
 } from 'streamdown';
+import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { isCodeCopyEnabled } from './streamdownControls';
 import { VegaLiteActivationBudgetContext } from './vegaLiteActivationBudget';
 import { loadVegaRenderer } from './vegaRendererLoader';
@@ -129,7 +130,7 @@ function VegaLiteCodeFallback({
     <CodeBlock code={code} isIncomplete={isIncomplete} language={language} lineNumbers={false}>
       {showCopy ? <CodeBlockCopyButton code={code} /> : null}
       {status ? (
-        <span aria-live="polite" className="sr-only">
+        <span aria-live="polite" style={VISUALLY_HIDDEN_STYLE}>
           {status}
         </span>
       ) : null}

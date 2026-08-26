@@ -8,7 +8,9 @@
 import type { User } from '@agor-live/client';
 import { LockOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Form, Input, Modal, Typography, theme } from 'antd';
-import { useState } from 'react';
+import { useLayoutEffect, useMemo, useState } from 'react';
+import { useConnectionState } from '@/contexts/ConnectionContext';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useAuthConfig } from '../../hooks/useAuthConfig';
 import {
   passwordPolicyHelp,
@@ -21,7 +23,12 @@ const { Text } = Typography;
 interface ForcePasswordChangeModalProps {
   open: boolean;
   user: User | null;
-  onChangePassword: (userId: string, newPassword: string) => Promise<void>;
+  onChangePassword: (
+    userId: string,
+    newPassword: string,
+    shouldApply: () => boolean,
+    isSameIdentity: () => boolean
+  ) => Promise<void>;
   onLogout: () => void;
 }
 
@@ -37,27 +44,60 @@ export function ForcePasswordChangeModal({
   const { token } = theme.useToken();
   const { config: authConfig } = useAuthConfig();
   const passwordRequirements = passwordPolicyRequirements(authConfig?.passwordPolicy);
+  const { connected, connecting, authGeneration } = useConnectionState();
+  const identityKey = user ? `${user.user_id}:${user.role}` : null;
+  const authorityScope = useMemo(
+    () => (identityKey && connected && !connecting ? [identityKey, authGeneration] : null),
+    [authGeneration, connected, connecting, identityKey]
+  );
+  const operationGuard = useAuthorityOperationGuard(authorityScope);
+  const identityGuard = useAuthorityOperationGuard(identityKey ? [identityKey] : null);
+
+  // Password drafts are identity-private. A reconnect cancels the operation
+  // via authorityScope but deliberately does not erase a same-user draft.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: identityKey intentionally resets the Ant form for a replacement caller
+  useLayoutEffect(() => {
+    form.resetFields();
+    setLoading(false);
+    setError(null);
+  }, [form, identityKey]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authorityScope intentionally releases stale generation-owned UI locks
+  useLayoutEffect(() => {
+    setLoading(false);
+  }, [authorityScope]);
 
   const handleSubmit = async () => {
     if (!user) return;
+    const operation = operationGuard.begin();
+    const identityOperation = identityGuard.begin();
+    if (!operation.isCurrent() || !identityOperation.isCurrent()) return;
 
     try {
       const values = await form.validateFields();
+      if (!operation.isCurrent()) return;
       setLoading(true);
       setError(null);
 
-      await onChangePassword(user.user_id, values.newPassword);
+      await onChangePassword(
+        user.user_id,
+        values.newPassword,
+        operation.isCurrent,
+        identityOperation.isCurrent
+      );
+      if (!operation.isCurrent()) return;
 
       // Success - modal will close when user.must_change_password becomes false
       form.resetFields();
     } catch (err) {
+      if (!operation.isCurrent()) return;
       if (err instanceof Error) {
         setError(err.message);
       } else {
         // Form validation error, ignore
       }
     } finally {
-      setLoading(false);
+      if (operation.isCurrent()) setLoading(false);
     }
   };
 
@@ -73,7 +113,9 @@ export function ForcePasswordChangeModal({
       onOk={handleSubmit}
       okText="Change Password"
       cancelText="Logout"
-      onCancel={onLogout}
+      onCancel={() => {
+        if (operationGuard.isCurrent()) onLogout();
+      }}
       confirmLoading={loading}
       closable={false}
       mask={{ closable: false }}
@@ -98,7 +140,7 @@ export function ForcePasswordChangeModal({
         />
       )}
 
-      <Form form={form} layout="vertical">
+      <Form key={identityKey ?? 'no-user'} form={form} layout="vertical">
         <Form.Item
           name="newPassword"
           label="New Password"

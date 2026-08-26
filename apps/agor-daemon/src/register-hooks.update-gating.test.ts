@@ -14,8 +14,15 @@ import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { type RegisterHooksContext, registerHooks } from './register-hooks';
 import { ARTIFACTS_SERVICE_TRANSPORT_METHODS } from './services/artifacts';
+import { BOARD_OWNERS_SERVICE_TRANSPORT_METHODS } from './services/board-owners';
+import { BRANCH_OWNERS_SERVICE_TRANSPORT_METHODS } from './services/branch-owners';
 import { GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS } from './services/gateway-channels';
-import { GROUPS_SERVICE_TRANSPORT_METHODS } from './services/groups';
+import {
+  BOARD_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
+  BRANCH_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
+  GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
+  GROUPS_SERVICE_TRANSPORT_METHODS,
+} from './services/groups';
 import { KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS } from './services/knowledge-graph';
 import { SCHEDULES_SERVICE_TRANSPORT_METHODS } from './services/schedules';
 import { TASKS_SERVICE_TRANSPORT_METHODS } from './services/tasks';
@@ -23,7 +30,10 @@ import { USERS_SERVICE_TRANSPORT_METHODS } from './services/users';
 import { BRANCH_REMOVAL_VISIBILITY_PARAM } from './utils/realtime-publish';
 
 type RegisteredHook = (context: HookContext) => unknown;
-type CapturedHooks = { before: Record<string, RegisteredHook[]> };
+type CapturedHooks = {
+  before: Record<string, RegisteredHook[]>;
+  after: Record<string, RegisteredHook[]>;
+};
 
 /**
  * Run `registerHooks` against a recording stand-in for the Feathers app and
@@ -45,11 +55,17 @@ const captureRegisteredHooks = (
   const app = {
     service(path: string) {
       return {
-        hooks(hooks: { before?: Record<string, RegisteredHook[]> }) {
+        hooks(hooks: {
+          before?: Record<string, RegisteredHook[]>;
+          after?: Record<string, RegisteredHook[]>;
+        }) {
           const key = path.replace(/^\//, '');
-          const entry = captured.get(key) ?? { before: {} };
+          const entry = captured.get(key) ?? { before: {}, after: {} };
           for (const [method, chain] of Object.entries(hooks?.before ?? {})) {
             entry.before[method] = [...(entry.before[method] ?? []), ...(chain ?? [])];
+          }
+          for (const [method, chain] of Object.entries(hooks?.after ?? {})) {
+            entry.after[method] = [...(entry.after[method] ?? []), ...(chain ?? [])];
           }
           captured.set(key, entry);
         },
@@ -57,6 +73,7 @@ const captureRegisteredHooks = (
     },
     use() {},
     publish() {},
+    io: { to: () => ({ emit() {} }) },
   };
 
   registerHooks({
@@ -83,7 +100,9 @@ const captureRegisteredHooks = (
         isOwner: async () => false,
         resolveUserPermission: async () => 'view',
       } as unknown as RegisterHooksContext['branchRepository']),
-    usersRepository: {} as RegisterHooksContext['usersRepository'],
+    usersRepository: {
+      listUserIds: async () => ['00000000-0000-7000-8000-0000000000ff'],
+    } as unknown as RegisterHooksContext['usersRepository'],
     sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
   });
 
@@ -208,14 +227,18 @@ const runCapturedHooks = async (
   captured: Map<string, CapturedHooks>,
   path: string,
   method: string,
-  role: string
+  role: string,
+  data?: Record<string, unknown>
 ): Promise<HookContext> => {
   const hooks = captured.get(path)?.before;
   if (!hooks) throw new Error(`${path} registers no before hooks`);
   const context = {
     path,
     method,
-    id: method === 'get' ? '00000000-0000-7000-8000-000000000001' : undefined,
+    id: ['get', 'update', 'patch', 'remove'].includes(method)
+      ? '00000000-0000-7000-8000-000000000001'
+      : undefined,
+    data,
     params: {
       provider: 'rest',
       query: {},
@@ -325,7 +348,12 @@ const UPDATE_NOT_ROUTED: Record<string, string | readonly string[]> = {
     'no update method — custom route exposes create only',
   'artifacts/:id/sandpack-error': 'no update method — custom route exposes create only',
   'artifacts/:id/trust': 'no update method — custom route exposes create only',
+  'boards/:id/group-grants': BOARD_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
+  'boards/:id/owners': BOARD_OWNERS_SERVICE_TRANSPORT_METHODS,
+  'branches/:id/group-grants': BRANCH_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
+  'branches/:id/owners': BRANCH_OWNERS_SERVICE_TRANSPORT_METHODS,
   'gateway-channels': GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS,
+  'group-memberships': GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
   groups: GROUPS_SERVICE_TRANSPORT_METHODS,
   'kb/graph': KNOWLEDGE_GRAPH_SERVICE_TRANSPORT_METHODS,
   'me/artifact-trust-grants': 'no update method — custom route exposes find and remove only',
@@ -385,6 +413,67 @@ describe.each(RBAC_MODES)('update-verb hook gating ($name)', ({ branchRbacEnable
 
     expect(findUngated(tampered)).toEqual(['boards (gates create/patch/remove)']);
   });
+});
+
+describe('branch and board visibility authority write symmetry', () => {
+  it.each(RBAC_MODES)('keeps branch update structurally aligned with patch ($name)', (mode) => {
+    const hooks = captureRegisteredHooks(mode.branchRbacEnabled).get('branches');
+    expect(hooks?.before.update).toEqual(hooks?.before.patch);
+    expect(hooks?.after.update).toEqual(hooks?.after.patch);
+  });
+
+  it.each(RBAC_MODES)(
+    'keeps board update on the same authority prefix and invalidation chain as patch ($name)',
+    (mode) => {
+      const hooks = captureRegisteredHooks(mode.branchRbacEnabled).get('boards');
+      if (!hooks?.before.update) throw new Error('boards registers no before-update hooks');
+      expect(hooks.before.update).toEqual(hooks.before.patch?.slice(0, hooks.before.update.length));
+      expect(hooks.after.update).toEqual(hooks.after.patch);
+    }
+  );
+
+  it('requires branch-specific all permission for PUT when RBAC is enabled', async () => {
+    await expect(
+      runCapturedHooks(captureRegisteredHooks(true), 'branches', 'update', 'member', {
+        others_can: 'none',
+      })
+    ).rejects.toBeInstanceOf(Forbidden);
+    const ownerRepository = {
+      findById: async () => ({
+        branch_id: '00000000-0000-7000-8000-000000000001',
+        others_can: 'view',
+      }),
+      isOwner: async () => true,
+      resolveUserPermission: async () => 'all',
+    } as unknown as RegisterHooksContext['branchRepository'];
+    await expect(
+      runCapturedHooks(
+        captureRegisteredHooks(true, ownerRepository),
+        'branches',
+        'update',
+        'member',
+        {
+          others_can: 'none',
+        }
+      )
+    ).resolves.toBeDefined();
+  });
+
+  it.each(['patch', 'update'])(
+    'captures a tenant-user invalidation for board authority %s',
+    async (method) => {
+      const context = await runCapturedHooks(
+        captureRegisteredHooks(false),
+        'boards',
+        method,
+        'admin',
+        { access_mode: 'private', default_others_can: 'none' }
+      );
+      expect(
+        (context.params as Record<string, unknown>)._agorMarketplaceInvalidationTargets
+      ).toEqual(['00000000-0000-7000-8000-0000000000ff']);
+    }
+  );
 });
 
 describe.each(RBAC_MODES)(
@@ -485,7 +574,12 @@ describe('pinned methods list', () => {
     // nothing while still reading as green.
     expect(pinned.map(([path]) => path)).toEqual([
       'artifacts',
+      'boards/:id/group-grants',
+      'boards/:id/owners',
+      'branches/:id/group-grants',
+      'branches/:id/owners',
       'gateway-channels',
+      'group-memberships',
       'groups',
       'kb/graph',
       'schedules',

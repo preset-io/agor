@@ -11,6 +11,7 @@ import { MCP_HEADER_REDACTED_SENTINEL } from '@agor/core/tools/mcp/http-headers'
 import type { MCPServerID, UserID } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mcpEgressMaterialHash } from '../../mcp-egress/gateway.js';
 import { type RegisterHooksContext, registerHooks } from '../../register-hooks.js';
 import {
   fingerprintMCPOAuthGrantConfiguration,
@@ -216,6 +217,23 @@ describe('MCP OAuth status through Feathers response hooks', () => {
     expect(projected.auth?.oauth_access_token).toBe(MCP_HEADER_REDACTED_SENTINEL);
     expect(JSON.stringify(projected)).not.toContain('configured-client-secret');
     expect(JSON.stringify(projected)).not.toContain('durable-grant-access');
+
+    // Exercise the production after-hook projection used by an in-process
+    // executor lookup. Runtime token and expiry enrichment must not change the
+    // durable gateway material identity used by first admission.
+    const executorProjected = await app.service('mcp-servers').get(server.mcp_server_id, {
+      authenticated: true,
+      provider: undefined,
+      query: { forUserId: user.user_id },
+      user: { ...user, role: 'service', _isServiceAccount: true },
+      authentication: { payload: { type: 'internal' } },
+      tenant: { tenant_id: 'default', source: 'static' },
+    } as never);
+    expect(executorProjected.auth?.oauth_access_token).toBe('durable-grant-access');
+    expect(executorProjected.auth?.oauth_token_expires_at).toEqual(expect.any(Number));
+    expect(mcpEgressMaterialHash(executorProjected, {}, 'projection-hash-key')).toBe(
+      mcpEgressMaterialHash(savedServer!, {}, 'projection-hash-key')
+    );
 
     const handlers = new Map<string, ToolHandler>();
     const mcp = {

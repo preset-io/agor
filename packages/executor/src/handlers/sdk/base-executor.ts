@@ -5,6 +5,7 @@
  * Claude, Codex, Gemini, and OpenCode executors.
  */
 
+import { projectContextUsageSnapshot, projectNormalizedSdkResponse } from '@agor/core';
 import {
   AGOR_USER_ENV_KEYS_VAR,
   type ApiKeyName,
@@ -133,7 +134,7 @@ export interface BaseTool {
     /** Raw SDK response for token accounting - stored and normalized */
     rawSdkResponse?: unknown;
     /**
-     * Authoritative context-window snapshot captured during the turn.
+     * Closed authoritative context-window snapshot captured during the turn.
      * - Claude: from the Agent SDK's `getContextUsage()` response.
      * - Codex: from the CLI's `event_msg/token_count.last_token_usage` payload.
      * When present, base-executor uses it as the source of truth for
@@ -609,9 +610,11 @@ export async function executeToolTask(params: {
       patchData.raw_sdk_response = result.rawSdkResponse;
       // `modelHint` refines context-window lookup for tools whose SDK
       // event omits the model; never used as primaryModel.
-      const normalized = normalizeRawSdkResponse(toolName, result.rawSdkResponse, {
-        modelHint: result.model,
-      });
+      const normalized = projectNormalizedSdkResponse(
+        normalizeRawSdkResponse(toolName, result.rawSdkResponse, {
+          modelHint: result.model,
+        })
+      );
       if (normalized) {
         patchData.normalized_sdk_response = normalized;
       }
@@ -631,16 +634,17 @@ export async function executeToolTask(params: {
     // The `maxTokens > 0` guard (vs `totalTokens > 0`) preserves the snapshot
     // even at the moment of auto-compaction, when `totalTokens` can legitimately
     // be near zero.
-    if (result.rawContextUsage && result.rawContextUsage.maxTokens > 0) {
-      patchData.computed_context_window = result.rawContextUsage.totalTokens;
+    const contextUsageSnapshot = projectContextUsageSnapshot(result.rawContextUsage);
+    if (contextUsageSnapshot && contextUsageSnapshot.maxTokens > 0) {
+      patchData.computed_context_window = contextUsageSnapshot.totalTokens;
 
       // Override contextWindowLimit in the normalized response with the
       // authoritative maxTokens so the UI computes percentage against the
       // model's actual reported window, and attach the snapshot itself so
       // UI consumers can prefer the agent's own displayed percentage.
       if (patchData.normalized_sdk_response) {
-        patchData.normalized_sdk_response.contextWindowLimit = result.rawContextUsage.maxTokens;
-        patchData.normalized_sdk_response.contextUsageSnapshot = result.rawContextUsage;
+        patchData.normalized_sdk_response.contextWindowLimit = contextUsageSnapshot.maxTokens;
+        patchData.normalized_sdk_response.contextUsageSnapshot = contextUsageSnapshot;
       }
     } else {
       // No authoritative event_msg/token_count snapshot was captured during the
@@ -664,6 +668,15 @@ export async function executeToolTask(params: {
           // Continue without context window - not critical
         }
       }
+    }
+
+    // Final executor-side close after every derived override. The daemon
+    // repeats this projection because old/compromised executors can bypass
+    // this process and patch normalized data directly.
+    if (patchData.normalized_sdk_response) {
+      patchData.normalized_sdk_response = projectNormalizedSdkResponse(
+        patchData.normalized_sdk_response
+      );
     }
 
     // Update task status to completed/stopped with git SHA and SDK responses
