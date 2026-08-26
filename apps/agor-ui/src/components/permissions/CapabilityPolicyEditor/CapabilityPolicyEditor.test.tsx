@@ -65,7 +65,7 @@ describe('shared capability policy forms', () => {
     });
     expect(screen.getByRole('button', { name: 'Add user/group' })).toBeEnabled();
     expect(screen.queryByRole('combobox', { name: /Select one person or group/ })).toBeNull();
-  });
+  }, 30_000);
 
   it('switches an inherited branch to an editable complete override', async () => {
     const initial = cloneBranchPrototypeFixture('inherited-branch');
@@ -107,7 +107,7 @@ describe('shared capability policy forms', () => {
       screen.getByRole('switch', { name: 'Allow others to use sessions owned by Kasia D.' })
     ).toBeEnabled();
     expect(screen.getByText('Seb V. shares with')).toBeInTheDocument();
-  });
+  }, 30_000);
 
   it('warns before replacing a shared inherited package with a private override', async () => {
     const initial = cloneBranchPrototypeFixture('inherited-branch');

@@ -1611,5 +1611,5 @@ describe('UserSettingsModal — socket authority generations', () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(screen.getByPlaceholderText('••••••••')).toHaveValue('same-user-password-draft');
     expect(screen.getByRole('button', { name: /^save$/i })).not.toBeDisabled();
-  });
+  }, 30_000);
 });

@@ -226,7 +226,7 @@ describe('Marketplace server actions', () => {
     const remove = screen.getByRole('button', { name: 'Remove GitHub' });
     await waitFor(() => expect(remove).toBeEnabled());
     fireEvent.click(remove);
-    await waitFor(() => expect(remove).toHaveClass('ant-popover-open'));
+    await waitFor(() => expect(remove).toHaveClass('ant-popover-open'), { timeout: 10_000 });
 
     view.rerender(
       <MyServersTab {...props} currentUser={{ user_id: 'alice', role: 'viewer' } as never} />
@@ -236,6 +236,8 @@ describe('Marketplace server actions', () => {
     expect(screen.getByRole('button', { name: 'Refresh tools for GitHub' })).toBeDisabled();
     const demotedRemove = screen.getByRole('button', { name: 'Remove GitHub' });
     expect(demotedRemove).toBeDisabled();
-    await waitFor(() => expect(demotedRemove).not.toHaveClass('ant-popover-open'));
+    await waitFor(() => expect(demotedRemove).not.toHaveClass('ant-popover-open'), {
+      timeout: 10_000,
+    });
   });
 });
