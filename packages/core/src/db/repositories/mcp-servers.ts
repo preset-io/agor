@@ -16,7 +16,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import type { AnyColumn, SQL } from 'drizzle-orm';
-import { and, asc, desc, eq, isNull, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, like, or, sql } from 'drizzle-orm';
 import { PAGINATION } from '../../config/constants';
 import { generateId } from '../../lib/ids';
 import {
@@ -287,6 +287,7 @@ export class MCPServerRepository
   constructor(private db: Database) {}
 
   private static readonly CATALOG_CONNECT_GENERATION_NAMESPACE = 'mcp-catalog-connect-generation';
+  private static readonly AUTHORITY_READ_BATCH_SIZE = 500;
 
   static catalogConnectGenerationKey(ownerUserId: string, catalogEntryName: string): string {
     return JSON.stringify([ownerUserId, catalogEntryName]);
@@ -563,6 +564,42 @@ export class MCPServerRepository
       if (error instanceof AmbiguousIdError) throw error;
       throw new RepositoryError(
         `Failed to find MCP server: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Read an explicitly bounded set of caller-owned rows for a batch authority
+   * decision. Ownerless and other-user rows are excluded in SQL.
+   */
+  async findOwnedByIds(userId: UserID, ids: readonly MCPServerID[]): Promise<MCPServer[]> {
+    try {
+      const uniqueIds = [...new Set(ids)];
+      const rows: MCPServerRow[] = [];
+      for (
+        let offset = 0;
+        offset < uniqueIds.length;
+        offset += MCPServerRepository.AUTHORITY_READ_BATCH_SIZE
+      ) {
+        const batch = uniqueIds.slice(
+          offset,
+          offset + MCPServerRepository.AUTHORITY_READ_BATCH_SIZE
+        );
+        if (batch.length === 0) continue;
+        rows.push(
+          ...(await select(this.db)
+            .from(mcpServers)
+            .where(
+              and(eq(mcpServers.owner_user_id, userId), inArray(mcpServers.mcp_server_id, batch))
+            )
+            .all())
+        );
+      }
+      return rows.map((row) => this.rowToMCPServer(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find owned MCP servers: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

@@ -244,6 +244,7 @@ import {
 import {
   isCurrentMCPOAuthGrantAuthorized,
   isMCPOAuthGrantAuthorizedForServer,
+  resolveMCPMarketplaceOAuthGrantAuthority,
 } from './services/mcp-oauth-grant-authority.js';
 import {
   fingerprintMCPOAuthGrantConfiguration,
@@ -3526,9 +3527,26 @@ export async function registerMCPServices(
     }),
     { methods: ['get'] }
   );
-  app.use('/mcp-marketplace', new MCPMarketplaceService(new MCPMarketplaceRepository(db)), {
-    methods: ['find'],
-  });
+  const marketplaceServerRepository = new MCPServerRepository(db);
+  const marketplaceTokenRepository = new UserMCPOAuthTokenRepository(db);
+  app.use(
+    '/mcp-marketplace',
+    new MCPMarketplaceService(
+      new MCPMarketplaceRepository(db, async (userId, serverIds) => {
+        // Marketplace receives only this closed boolean map. The daemon reuses the same
+        // mode/binding authority as execution and refresh; no token, client,
+        // issuer, resource, or binding material crosses the service boundary.
+        return resolveMCPMarketplaceOAuthGrantAuthority({
+          db,
+          userId,
+          serverIds,
+          serverRepository: marketplaceServerRepository,
+          tokenRepository: marketplaceTokenRepository,
+        });
+      })
+    ),
+    { methods: ['find'] }
+  );
   app.use(
     '/mcp-marketplace/remove-unattached',
     new MCPMarketplaceRemoveServerService(db, (userIds, params) =>

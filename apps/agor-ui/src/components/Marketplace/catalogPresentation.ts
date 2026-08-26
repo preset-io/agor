@@ -9,6 +9,7 @@
 import type {
   MCPCatalogAuthType,
   MCPCatalogCategory,
+  MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
   MCPCatalogSort,
 } from '@agor/core/types';
@@ -113,6 +114,38 @@ export const DEFAULT_SORT: MCPCatalogSort = 'popularity';
  * is this server called" is how the agent ended up seeing `mcp__mcp__<tool>`.
  */
 export const entryTitle = catalogDisplayName;
+
+/**
+ * Technical authentication copy follows the live endpoint verdict whenever
+ * Connect has one. Catalog metadata is explicitly labelled as an unchecked
+ * fallback so stale curation cannot contradict the primary status panel.
+ */
+export function catalogAuthenticationDetail(
+  catalogAuthType: MCPCatalogAuthType,
+  liveRequirement?: MCPCatalogCredentialRequirement | null
+): string {
+  switch (liveRequirement) {
+    case 'required':
+      return 'Bearer credential · Live endpoint check';
+    case 'oauth':
+      return 'OAuth · Live endpoint check';
+    case 'not_accepted':
+      return 'No credential accepted · Live endpoint check';
+    case 'unsupported':
+      return 'Unsupported credential scheme · Live endpoint check';
+    default:
+      switch (catalogAuthType) {
+        case 'none':
+          return 'Catalog metadata: no account stated · Live endpoint not checked yet';
+        case 'oauth':
+          return 'Catalog metadata: OAuth · Live endpoint not checked yet';
+        case 'credentials':
+          return 'Catalog metadata: bearer credential · Live endpoint not checked yet';
+        default:
+          return 'Unknown · Checked live when you connect';
+      }
+  }
+}
 
 /**
  * What a user would find out by pressing Connect, said before they press it.

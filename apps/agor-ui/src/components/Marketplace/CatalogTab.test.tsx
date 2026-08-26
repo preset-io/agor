@@ -65,6 +65,14 @@ let connectImpl: (data: Record<string, unknown>) => Promise<unknown>;
 let oauthStartCalls: Array<Record<string, unknown>>;
 let oauthStartImpl: (data: Record<string, unknown>) => Promise<unknown>;
 let catalogFindError: Error | null;
+let marketplaceCredentials: Array<Record<string, unknown>>;
+let oauthAttemptStatus: { status: string; mcp_server_id?: string };
+type OAuthCompletedListener = (event: {
+  attempt_id: string;
+  mcp_server_id: string;
+  success: boolean;
+}) => void;
+let oauthCompletedListeners: Set<OAuthCompletedListener>;
 let memberPolicyAnswer: {
   policy: 'use_existing_only' | 'allow_private_only' | 'allow_crud';
   can_configure: boolean;
@@ -124,12 +132,38 @@ function makeClient(): AgorClient {
         },
       };
     }
+    if (path === 'mcp-servers/oauth-attempt-status') {
+      return { get: async () => oauthAttemptStatus };
+    }
+    if (path === 'mcp-marketplace') {
+      return {
+        find: async () => ({
+          servers: marketplaceCredentials.map((credential) => ({
+            mcp_server_id: credential.mcp_server_id,
+            enabled: true,
+          })),
+          attachments: [],
+          credentials: marketplaceCredentials,
+          generated_at: new Date().toISOString(),
+        }),
+      };
+    }
     if (path === 'mcp-servers') {
       return { on: vi.fn(), off: vi.fn(), removeListener: vi.fn() };
     }
     throw new Error(`unexpected service: ${path}`);
   };
-  return { service, io: { on: vi.fn(), off: vi.fn() } } as unknown as AgorClient;
+  return {
+    service,
+    io: {
+      on: vi.fn((event: string, listener: OAuthCompletedListener) => {
+        if (event === 'oauth:completed') oauthCompletedListeners.add(listener);
+      }),
+      off: vi.fn((event: string, listener: OAuthCompletedListener) => {
+        if (event === 'oauth:completed') oauthCompletedListeners.delete(listener);
+      }),
+    },
+  } as unknown as AgorClient;
 }
 
 function renderTab({
@@ -202,6 +236,9 @@ beforeEach(() => {
   catalogFindError = null;
   connectCalls = [];
   oauthStartCalls = [];
+  marketplaceCredentials = [];
+  oauthAttemptStatus = { status: 'pending', mcp_server_id: 'server-1' };
+  oauthCompletedListeners = new Set();
   memberPolicyAnswer = { policy: 'allow_crud', can_configure: true };
   connectImpl = async () => ({
     mcp_server: { mcp_server_id: 'server-1' },
@@ -626,7 +663,7 @@ describe('connect', () => {
   // the AntD Form and its Selects twice; the drawer takes the entry as a prop
   // and states the same invariant in one mount.
 
-  it('connects by catalog key alone and lands with a tab-local prompt suggestion', async () => {
+  it('connects by catalog key alone, retains drawer context, and stages the prompt', async () => {
     const drawer = await openDrawer();
     const connect = drawer.getByRole('button', { name: /Connect/ });
     fireEvent.click(drawer.getByRole('checkbox'));
@@ -644,9 +681,8 @@ describe('connect', () => {
       acknowledged_disclosure: DEEPWIKI.permission_disclosure,
     });
 
-    await waitFor(() =>
-      expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID))
-    );
+    expect(await drawer.findByText('Connected and ready')).toBeInTheDocument();
+    expect(mockNavigate).not.toHaveBeenCalled();
     expect(localStorage.getItem(`agor-draft-${SESSION_ID}`)).toBeNull();
     expect(
       consumeMarketplacePromptSuggestion(SESSION_ID, {
@@ -658,6 +694,8 @@ describe('connect', () => {
     expect(localStorage.getItem(`agor-marketplace-branch:${DEFAULT_ADMIN.user_id}`)).toBe(
       'branch-1'
     );
+    fireEvent.click(drawer.getByRole('button', { name: 'Open session' }));
+    expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID));
   });
 
   /**
@@ -681,10 +719,134 @@ describe('connect', () => {
     fireEvent.click(drawer.getByRole('checkbox'));
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
-    await waitFor(() =>
-      expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID))
-    );
+    await drawer.findByRole('button', { name: 'Open session' });
+    fireEvent.click(drawer.getByRole('button', { name: 'Open session' }));
+    expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID));
   }
+
+  async function connectOAuth() {
+    connectImpl = async () => ({
+      mcp_server: { mcp_server_id: 'server-1', auth: { type: 'oauth' } },
+      session: { session_id: SESSION_ID, title: 'Try Linear' },
+      starter_prompt: LINEAR.starter_prompt,
+      reused_existing_server: false,
+    });
+    renderTab();
+    fireEvent.click(await findCard('Linear'));
+    const drawer = await findDrawer();
+    fireEvent.click(drawer.getByRole('checkbox'));
+    const connect = drawer.getByRole('button', { name: /Connect with Linear/ });
+    await waitFor(() => expect(connect).toBeEnabled());
+    fireEvent.click(connect);
+    expect(await drawer.findByText('Sign-in pending')).toBeInTheDocument();
+    return drawer;
+  }
+
+  it('keeps OAuth pending when popup navigation is the only observed signal', async () => {
+    const drawer = await connectOAuth();
+
+    expect(oauthStartCalls).toEqual([{ mcp_server_id: 'server-1' }]);
+    expect(drawer.queryByText('Connected and ready')).not.toBeInTheDocument();
+  });
+
+  it('requires a fresh user gesture when the live probe surprises no-auth readiness with OAuth', async () => {
+    connectImpl = async () => ({
+      mcp_server: { mcp_server_id: 'server-1', auth: { type: 'oauth' } },
+      session: { session_id: SESSION_ID, title: 'Try DeepWiki' },
+      starter_prompt: DEEPWIKI.starter_prompt,
+      reused_existing_server: false,
+    });
+    const drawer = await openDrawer();
+    await drawer.findByText('No account needed');
+    const connect = drawer.getByText('Connect & try it').closest('button');
+    const checkbox = drawer
+      .getByText('I understand what this server can access')
+      .closest('label')
+      ?.querySelector('input');
+    if (!connect || !checkbox) throw new Error('Connect consent controls not found');
+    fireEvent.click(checkbox);
+    await waitFor(() => expect(connect).not.toBeDisabled());
+    vi.mocked(window.open).mockClear();
+
+    fireEvent.click(connect);
+    expect(await drawer.findByText('Sign in to continue')).toBeInTheDocument();
+    expect(drawer.getByText(/no sign-in is pending yet/i)).toBeInTheDocument();
+    expect(drawer.queryByText('Sign-in pending')).not.toBeInTheDocument();
+    expect(oauthStartCalls).toHaveLength(0);
+    expect(window.open).not.toHaveBeenCalled();
+
+    const continueButton = drawer.getByText('Continue to provider').closest('button');
+    if (!continueButton) throw new Error('Continue to provider button not found');
+    fireEvent.click(continueButton);
+    expect(await drawer.findByText('Sign-in pending')).toBeInTheDocument();
+    expect(window.open).toHaveBeenCalledTimes(1);
+    expect(oauthStartCalls).toEqual([{ mcp_server_id: 'server-1' }]);
+  });
+
+  it('keeps OAuth pending after a success hint until the durable grant is visible', async () => {
+    const drawer = await connectOAuth();
+
+    await act(async () => {
+      oauthCompletedListeners.forEach((listener) => {
+        listener({
+          attempt_id: 'attempt-1',
+          mcp_server_id: 'server-1',
+          success: true,
+        });
+      });
+      await Promise.resolve();
+    });
+    expect(drawer.getByText('Sign-in pending')).toBeInTheDocument();
+  });
+
+  it('shows OAuth success only after completion and a durable credential read agree', async () => {
+    const drawer = await connectOAuth();
+    marketplaceCredentials = [
+      {
+        mcp_server_id: 'server-1',
+        server_name: 'linear',
+        method: 'oauth',
+        status: 'active',
+      },
+    ];
+
+    await act(async () => {
+      oauthCompletedListeners.forEach((listener) => {
+        listener({
+          attempt_id: 'attempt-1',
+          mcp_server_id: 'server-1',
+          success: true,
+        });
+      });
+    });
+    expect(await drawer.findByText('Connected and ready')).toBeInTheDocument();
+  });
+
+  it('shows an authoritative OAuth failure without claiming the session was removed', async () => {
+    const drawer = await connectOAuth();
+    oauthAttemptStatus = { status: 'failed', mcp_server_id: 'server-1' };
+
+    act(() =>
+      oauthCompletedListeners.forEach((listener) => {
+        listener({
+          attempt_id: 'attempt-1',
+          mcp_server_id: 'server-1',
+          success: false,
+        });
+      })
+    );
+    expect(await drawer.findByText('Sign-in not completed')).toBeInTheDocument();
+    expect(drawer.getByRole('button', { name: 'Open session' })).toBeEnabled();
+  });
+
+  it('renders an ambiguous durable OAuth result as needing verification', async () => {
+    const drawer = await connectOAuth();
+    oauthAttemptStatus = { status: 'ambiguous', mcp_server_id: 'server-1' };
+
+    expect(await drawer.findByText('Sign-in needs verification')).toBeInTheDocument();
+    expect(drawer.queryByText('Sign-in not completed')).not.toBeInTheDocument();
+    expect(drawer.getByRole('button', { name: 'Open session' })).toBeEnabled();
+  });
 
   it('does not arm the composer when the install still needs signing in', async () => {
     await connectAndLand({ mcp_server_id: 'server-1', auth: { type: 'oauth' } });

@@ -24,21 +24,21 @@ export async function launchMarketplaceOAuth(
     authority: { userId: string; role: string; authGeneration: number };
     isCurrent: () => boolean;
   }
-): Promise<boolean> {
+): Promise<{ attemptId: string } | null> {
   if (!options.isCurrent()) {
     popup.close();
-    return false;
+    return null;
   }
   const started = (await client.service('mcp-servers/oauth-start').create({
     mcp_server_id: result.mcp_server.mcp_server_id,
   })) as { success: true; authorizationUrl: string; attempt_id: string } | MCPOAuthStartFailure;
   if (!options.isCurrent()) {
     popup.close();
-    return false;
+    return null;
   }
   if (!started.success || !started.authorizationUrl || !started.attempt_id) {
     popup.close();
-    return false;
+    return null;
   }
   // Record every newer Marketplace attempt, even when this catalog entry has
   // no starter prompt. The attempt marker synchronously fences any suggestion
@@ -57,7 +57,9 @@ export async function launchMarketplaceOAuth(
   // Guard once more inside the launch helper immediately before handing the
   // third-party URL to the pre-opened window.
   try {
-    if (popup.navigate(started.authorizationUrl, options.isCurrent)) return true;
+    if (popup.navigate(started.authorizationUrl, options.isCurrent)) {
+      return { attemptId: started.attempt_id };
+    }
   } catch {
     // Fall through to exact-attempt cleanup. The durable server, session, and
     // OAuth attempt remain recoverable from the session UI.

@@ -9,7 +9,12 @@
  * rather than through a close/reopen that only approximates it.
  */
 
-import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
+import type {
+  Branch,
+  MCPCatalogCredentialRequirement,
+  MCPCatalogEntry,
+  SessionID,
+} from '@agor/core/types';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
@@ -200,7 +205,97 @@ describe('CatalogDetailDrawer branch destination', () => {
       defaultBranchId: 'branch-1',
     });
 
-    expect(document.querySelector('.ant-drawer-content-wrapper')).toHaveStyle({ width: '480px' });
+    expect(document.querySelector('.ant-drawer-content-wrapper')).toHaveStyle({ width: '520px' });
+  });
+
+  it('keeps the catalog ID copyable inside collapsed technical details', async () => {
+    renderBranchDrawer({ branches: TWO_BRANCHES, defaultBranchId: 'branch-1' });
+
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(await screen.findByRole('button', { name: 'Copy' })).toBeInTheDocument();
+  });
+});
+
+describe('CatalogDetailDrawer connected state', () => {
+  it('keeps one persistent live region and mutates its truthful OAuth state', () => {
+    const base = {
+      identityKey: 'user-admin',
+      entry: OAUTH_LINEAR,
+      open: true,
+      onClose: vi.fn(),
+      branches: BRANCHES,
+      branchesLoading: false,
+      branchesError: null,
+      defaultBranchId: 'branch-1',
+      connecting: false,
+      connectError: null,
+      connectCapability: ALLOWED,
+      policyPending: false,
+      policyPendingHint: POLICY_LOADING_HINT,
+      onConnect: vi.fn(),
+    };
+    const view = render(
+      <CatalogDetailDrawer
+        {...base}
+        success={{
+          sessionId: 'session-1' as SessionID,
+          authentication: 'pending',
+          reusedExistingServer: false,
+        }}
+      />
+    );
+    const liveRegion = screen.getByRole('status');
+    expect(liveRegion).toHaveTextContent('Connection status: Sign-in pending.');
+
+    view.rerender(
+      <CatalogDetailDrawer
+        {...base}
+        success={{
+          sessionId: 'session-1' as SessionID,
+          authentication: 'ready',
+          reusedExistingServer: false,
+        }}
+      />
+    );
+    expect(screen.getByRole('status')).toBe(liveRegion);
+    expect(liveRegion).toHaveTextContent('Connection status: Connected and ready.');
+  });
+
+  it('retains server context and exposes one truthful next step', () => {
+    const openSession = vi.fn();
+    render(
+      <CatalogDetailDrawer
+        identityKey="user-admin"
+        entry={DEEPWIKI}
+        open
+        onClose={vi.fn()}
+        branches={BRANCHES}
+        branchesLoading={false}
+        branchesError={null}
+        defaultBranchId="branch-1"
+        connecting={false}
+        connectError={null}
+        connectCapability={ALLOWED}
+        policyPending={false}
+        policyPendingHint={POLICY_LOADING_HINT}
+        success={{
+          sessionId: 'session-1',
+          sessionTitle: 'Try DeepWiki',
+          branchName: 'mkt-slice',
+          authentication: 'ready',
+          reusedExistingServer: false,
+        }}
+        onOpenSession={openSession}
+        onConnect={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Connected and ready')).toBeInTheDocument();
+    expect(screen.getByText(DEEPWIKI.benefit)).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Connect/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Open session' }));
+    expect(openSession).toHaveBeenCalledWith('session-1');
   });
 });
 
@@ -482,6 +577,17 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     /** What `CatalogTab` does after a refusal that named a requirement. */
     answerFromEndpoint: (requirement: MCPCatalogCredentialRequirement) =>
       view.rerender(<CatalogDetailDrawer {...props(entry, true, requirement)} />),
+    succeed: () =>
+      view.rerender(
+        <CatalogDetailDrawer
+          {...props(entry)}
+          success={{
+            sessionId: '019fd25a-7065-75f8-b6e6-f1963f9817d6' as SessionID,
+            authentication: 'ready',
+            reusedExistingServer: false,
+          }}
+        />
+      ),
     replaceIdentity: (identityKey: string) =>
       view.rerender(<CatalogDetailDrawer {...props(entry, true, null, identityKey)} />),
   };
@@ -586,6 +692,21 @@ describe('CatalogDetailDrawer API key', () => {
     expect(connectButton()).toBeEnabled();
   });
 
+  it('discards the pasted key while the successful next step remains on screen', () => {
+    const { succeed, answerFromEndpoint } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-datadog-key' } });
+
+    succeed();
+    expect(screen.getByText('Connected and ready')).toBeInTheDocument();
+    expect(keyField()).toBeNull();
+
+    // If the view returns to a credential form, the discarded value must not
+    // come back from React state.
+    answerFromEndpoint('required');
+    expect(keyField()).toHaveValue('');
+  });
+
   it('points at the vendor’s own page for where to get a key', () => {
     // "API key" is ambiguous on a page that also mentions Agor, and without a
     // pointer the answer is a search engine.
@@ -633,6 +754,29 @@ describe('CatalogDetailDrawer API key', () => {
 
     expect(keyField()).toBeNull();
     expect(connectButton()).toBeEnabled();
+  });
+
+  it('updates technical authentication from the live endpoint instead of stale metadata', async () => {
+    const { answerFromEndpoint } = renderWithConnect(DATADOG);
+    answerFromEndpoint('not_accepted');
+
+    fireEvent.click(screen.getByText('Technical details'));
+    expect(await screen.findByText('No credential accepted · Live endpoint check')).toBeVisible();
+    expect(screen.queryByText('Bearer credential')).not.toBeInTheDocument();
+  });
+
+  it('does not open a stale catalog OAuth popup after the endpoint confirms no account', () => {
+    const open = vi.spyOn(window, 'open');
+    const { answerFromEndpoint, onConnect } = renderWithConnect(OAUTH_LINEAR);
+    answerFromEndpoint('not_accepted');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(connectButton());
+
+    expect(open).not.toHaveBeenCalled();
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.not.objectContaining({ oauthPopup: expect.anything() })
+    );
+    open.mockRestore();
   });
 
   it('does not send — or keep — a key the endpoint refused to take', () => {
