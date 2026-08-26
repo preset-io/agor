@@ -205,19 +205,26 @@ async function runCase(binary, mode) {
   }
 }
 
-const binary = await pinnedClaudeBinary();
-for (const mode of ['wrong-file', 'masked', 'absent']) await runCase(binary, mode);
-const bwrapAvailable =
-  process.platform === 'linux' &&
-  spawnSync('bwrap', ['--unshare-user', '--ro-bind', '/', '/', '--', '/bin/true'], {
-    stdio: 'ignore',
-  }).status === 0;
-if (bwrapAvailable) {
-  await runCase(binary, 'nodev-mask');
-  console.log('Claude env-auth precedence passed with the canonical file masked on nodev.');
+if (process.platform !== 'linux') {
+  // The reviewed containment contract is implemented by the pinned Linux CLI
+  // plus bubblewrap. macOS/Windows developers still run the portable unit
+  // suite, but must not fail merely because pnpm did not install a Linux-only
+  // optional package for this empirical smoke arm.
+  console.log('Skipping Claude containment smoke: the pinned runtime contract is Linux-only.');
 } else {
-  console.log('bubblewrap unavailable; skipping the live nodev mask arm.');
+  const binary = await pinnedClaudeBinary();
+  for (const mode of ['wrong-file', 'masked', 'absent']) await runCase(binary, mode);
+  const bwrapAvailable =
+    spawnSync('bwrap', ['--unshare-user', '--ro-bind', '/', '/', '--', '/bin/true'], {
+      stdio: 'ignore',
+    }).status === 0;
+  if (bwrapAvailable) {
+    await runCase(binary, 'nodev-mask');
+    console.log('Claude env-auth precedence passed with the canonical file masked on nodev.');
+  } else {
+    console.log('bubblewrap unavailable; skipping the live nodev mask arm.');
+  }
+  console.log(
+    'Claude env-auth precedence passed: wrong canonical file unchanged; masked/absent paths work.'
+  );
 }
-console.log(
-  'Claude env-auth precedence passed: wrong canonical file unchanged; masked/absent paths work.'
-);

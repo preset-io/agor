@@ -169,13 +169,14 @@ export function buildSandboxWrap(params: {
     canonicalHomeDir: canonicalizeExistingPath(home),
     dataHome,
     canonicalDataHome: canonicalizeExistingPath(dataHome),
-    protectedDataRoots: runtimePaths.protectedDataRoots.flatMap((root) => [
-      root,
-      canonicalizeExistingPath(root),
-    ]),
+    protectedDataRoots: [...new Set(runtimePaths.protectedDataRoots.map(canonicalizeExistingPath))],
     worktreesRoot: worktreesRoot ?? runtimePaths.worktreesRoot,
     baseRepoPath,
     ownerHomeStore: perUser ? ownerHomeStore : undefined,
+    canonicalOwnerHomeStore: perUser
+      ? canonicalizeExistingPath(ownerHomeStore as string)
+      : undefined,
+    canonicalExtraAllowWritePaths: (sandbox.extra_allow_write ?? []).map(canonicalizeExistingPath),
     agenticToolsPath: perUser ? runtimePaths.agenticToolsPath : undefined,
     agorConfigPath: runtimePaths.agorConfigPath,
     agorDbPath: runtimePaths.agorDbPath,
@@ -191,7 +192,13 @@ export function buildSandboxWrap(params: {
       '.credentials.json',
       ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES,
     ] as const;
-    const authorityDirectories = [join(home, '.claude'), join(ownerHomeStore as string, '.claude')];
+    const authorityDirectories = [
+      join(home, '.claude'),
+      join(ownerHomeStore as string, '.claude'),
+      ...(ctx.canonicalOwnerHomeStore && ctx.canonicalOwnerHomeStore !== ownerHomeStore
+        ? [join(ctx.canonicalOwnerHomeStore, '.claude')]
+        : []),
+    ];
     if (sandbox.preserve_canonical_home_alias === true && ctx.canonicalHomeDir) {
       authorityDirectories.push(join(ctx.canonicalHomeDir, '.claude'));
     }

@@ -302,6 +302,112 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     }
   });
 
+  it('re-masks the physical Claude alias after an extra writable ancestor re-exposes it', () => {
+    const hiddenStore = `${PER_USER_CTX.dataHome}/tenants/default/homes/owner-123`;
+    const args = resolveBwrapArgs(
+      {
+        home_mode: 'per_user',
+        extra_allow_write: [PER_USER_CTX.dataHome!],
+      },
+      { ...PER_USER_CTX, ownerHomeStore: hiddenStore }
+    );
+    const writableAncestor = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' &&
+        args[index + 1] === PER_USER_CTX.dataHome &&
+        args[index + 2] === PER_USER_CTX.dataHome
+    );
+    const physicalParent = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' &&
+        args[index + 1] === `${hiddenStore}/.claude` &&
+        args[index + 2] === `${hiddenStore}/.claude`
+    );
+    expect(writableAncestor).toBeGreaterThanOrEqual(0);
+    expect(physicalParent).toBeGreaterThan(writableAncestor);
+    for (const filename of ['.credentials.json', ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
+      expect(hasTriple(args, '--ro-bind', '/dev/null', `${hiddenStore}/.claude/${filename}`)).toBe(
+        true
+      );
+    }
+  });
+
+  it.each(['.claude', '.claude/.credentials.json'])(
+    're-masks the physical Claude alias after an extra writable %s descendant re-exposes it',
+    (relativeWritablePath) => {
+      const hiddenStore = `${PER_USER_CTX.dataHome}/tenants/default/homes/owner-123`;
+      const writableDescendant = `${hiddenStore}/${relativeWritablePath}`;
+      const args = resolveBwrapArgs(
+        {
+          home_mode: 'per_user',
+          extra_allow_write: [writableDescendant],
+        },
+        { ...PER_USER_CTX, ownerHomeStore: hiddenStore }
+      );
+      const writableDescendantIndex = args.findIndex(
+        (arg, index) =>
+          arg === '--bind' &&
+          args[index + 1] === writableDescendant &&
+          args[index + 2] === writableDescendant
+      );
+      const physicalParent = args.findIndex(
+        (arg, index) =>
+          index > writableDescendantIndex &&
+          arg === '--bind' &&
+          args[index + 1] === `${hiddenStore}/.claude` &&
+          args[index + 2] === `${hiddenStore}/.claude`
+      );
+      expect(writableDescendantIndex).toBeGreaterThanOrEqual(0);
+      expect(physicalParent).toBeGreaterThan(writableDescendantIndex);
+      for (const filename of ['.credentials.json', ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
+        const leafMask = args.findIndex(
+          (arg, index) =>
+            arg === '--ro-bind' &&
+            args[index + 1] === '/dev/null' &&
+            args[index + 2] === `${hiddenStore}/.claude/${filename}`
+        );
+        expect(leafMask).toBeGreaterThan(physicalParent);
+      }
+    }
+  );
+
+  it('re-masks the canonical physical Claude alias exposed through a symlinked data root', () => {
+    const rawData = '/srv/agor/data-link';
+    const canonicalData = '/mnt/agor-data';
+    const rawStore = `${rawData}/tenants/default/homes/owner-123`;
+    const canonicalStore = `${canonicalData}/tenants/default/homes/owner-123`;
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user', extra_allow_write: [canonicalData] },
+      {
+        ...PER_USER_CTX,
+        dataHome: rawData,
+        canonicalDataHome: canonicalData,
+        protectedDataRoots: [rawData, canonicalData],
+        ownerHomeStore: rawStore,
+        canonicalOwnerHomeStore: canonicalStore,
+        canonicalExtraAllowWritePaths: [canonicalData],
+      }
+    );
+    const writableCanonicalRoot = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' && args[index + 1] === canonicalData && args[index + 2] === canonicalData
+    );
+    const canonicalParent = args.findIndex(
+      (arg, index) =>
+        index > writableCanonicalRoot &&
+        arg === '--bind' &&
+        args[index + 1] === `${rawStore}/.claude` &&
+        args[index + 2] === `${canonicalStore}/.claude`
+    );
+    expect(writableCanonicalRoot).toBeGreaterThanOrEqual(0);
+    expect(canonicalParent).toBeGreaterThan(writableCanonicalRoot);
+    for (const filename of ['.credentials.json', ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
+      expect(
+        hasTriple(args, '--ro-bind', '/dev/null', `${canonicalStore}/.claude/${filename}`)
+      ).toBe(true);
+    }
+  });
+
   it('emits only the outermost mask for nested data roots', () => {
     const dataHome = '/var/lib/agor';
     const tenantsBase = `${dataHome}/tenants`;

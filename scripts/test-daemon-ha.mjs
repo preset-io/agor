@@ -101,8 +101,32 @@ import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { buildSandboxWrap } from '/opt/agor-runtime/lib/node_modules/agor-live/dist/daemon/utils/sandbox-wrap.js';
 import { ensureCredentialAuthorityLayout } from '/opt/agor-runtime/lib/node_modules/agor-live/node_modules/@agor/core/codex/credential-file.js';
+import { hasContainedClaudeRuntimeCredentials } from '/opt/agor-runtime/lib/node_modules/agor-live/node_modules/@agor/core/config/index.js';
 
 const [ownerHomeStore, ready, proceed] = process.argv.slice(2);
+const containedConfig = {
+  execution: {
+    unix_user_mode: 'sandbox',
+    executor_storage: { user_home: 'persistent-per-user' },
+    sandbox: { enabled: true, home_mode: 'per_user' },
+  },
+};
+if (!hasContainedClaudeRuntimeCredentials(containedConfig)) {
+  throw new Error('HA containment probe rejected the exact contained topology');
+}
+if (
+  hasContainedClaudeRuntimeCredentials({
+    execution: {
+      ...containedConfig.execution,
+      sandbox: {
+        ...containedConfig.execution.sandbox,
+        extra_allow_write: [ownerHomeStore],
+      },
+    },
+  })
+) {
+  throw new Error('HA containment probe admitted an extra writable physical-store escape');
+}
 const claudeDir = join(ownerHomeStore, '.claude');
 const branch = join('/home/agor/.agor/worktrees', 'ha-containment', ${JSON.stringify(probeName)});
 await mkdir(branch, { recursive: true });
@@ -124,6 +148,11 @@ const options = {
     preserve_canonical_home_alias: true,
     fail_if_unavailable: true,
     include: { tmp: false },
+    // Synthetic hostile topology: re-expose the initially hidden shared data
+    // root. Managed Claude admission must reject it, while the sandbox's
+    // unconditional masks must still protect an existing/dormant grant from
+    // other provider tasks and terminals.
+    extra_allow_write: ['/home/agor/.agor'],
   },
   branchPath: branch,
   ownerHomeStore,
@@ -1134,7 +1163,7 @@ try {
   assert(!claudeAuthLogs.includes(dummyClaudeAccess), 'Claude access token appeared in HA logs');
   assert(!claudeAuthLogs.includes(dummyClaudeRefresh), 'Claude refresh token appeared in HA logs');
   console.log(
-    'ok - Claude attempts start/replace across replicas; live every-alias parent/sidecar attacks cannot escape; replica-B source fencing, route cleanup, and logout retain authority inodes and cross-replica ordering'
+    'ok - Claude attempts start/replace across replicas; live every-alias parent/sidecar attacks cannot escape; extra writable-store topology fails closed; replica-B source fencing, route cleanup, and logout retain authority inodes and cross-replica ordering'
   );
 
   const ingressInstances = new Set();

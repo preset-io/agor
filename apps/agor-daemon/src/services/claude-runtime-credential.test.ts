@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const configMocks = vi.hoisted(() => ({
-  contained: true,
+  contained: true as boolean | undefined,
   resolveProviderConnection: vi.fn(async () => ({
     source: 'user',
     useNativeAuth: true,
@@ -19,11 +19,19 @@ const routeMocks = vi.hoisted(() => ({
 }));
 const dbMocks = vi.hoisted(() => ({ depth: 0, tenants: [] as string[] }));
 
-vi.mock('@agor/core/config', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@agor/core/config')>()),
-  hasContainedClaudeRuntimeCredentials: () => configMocks.contained,
-  resolveProviderConnection: configMocks.resolveProviderConnection,
-}));
+vi.mock('@agor/core/config', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/config')>();
+  return {
+    ...actual,
+    hasContainedClaudeRuntimeCredentials: (
+      config: Parameters<typeof actual.hasContainedClaudeRuntimeCredentials>[0]
+    ) =>
+      configMocks.contained === undefined
+        ? actual.hasContainedClaudeRuntimeCredentials(config)
+        : configMocks.contained,
+    resolveProviderConnection: configMocks.resolveProviderConnection,
+  };
+});
 vi.mock('@agor/core/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@agor/core/db')>()),
   runWithTenantDatabaseScope: async (
@@ -115,6 +123,32 @@ describe('ClaudeRuntimeCredentialResolver', () => {
       useNativeAuth: true,
       connection: {},
     });
+  });
+
+  it('rejects a re-exposed writable store before resolving or reading managed credentials', async () => {
+    configMocks.contained = undefined;
+    const read = vi.fn(async () => credential('sk-ant-oat01-hidden', NOW + 2 * 60 * 60 * 1000));
+    const subject = resolver({
+      read,
+      config: {
+        execution: {
+          unix_user_mode: 'sandbox',
+          executor_storage: { user_home: 'persistent-per-user' },
+          sandbox: {
+            enabled: true,
+            home_mode: 'per_user',
+            extra_allow_write: ['/home/agor/.agor'],
+          },
+        },
+      },
+    });
+
+    await expect(subject.instance.resolve('tenant-1', USER)).rejects.toThrow(
+      /requires a contained per-user sandbox/
+    );
+    expect(routeMocks.resolve).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(subject.refresh).not.toHaveBeenCalled();
   });
 
   it('takes the fresh fast path without network or credential authority', async () => {

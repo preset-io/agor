@@ -242,6 +242,192 @@ test "$(cat "$HOME/.codex/auth.json")" = codex-visible
     );
   });
 
+  it.each(['ancestor', 'claude-directory', 'credential-leaf'] as const)(
+    're-masks a hidden physical owner store after an extra writable %s re-exposes it',
+    async (writableOverlap) => {
+      const dataHome = runtimePaths.dataHome as string;
+      const hiddenStore = join(dataHome, 'tenants', 'acme', 'homes', 'hidden-owner');
+      const physicalClaude = join(hiddenStore, '.claude');
+      const credentialPath = join(physicalClaude, '.credentials.json');
+      const writablePath =
+        writableOverlap === 'ancestor'
+          ? dataHome
+          : writableOverlap === 'claude-directory'
+            ? physicalClaude
+            : credentialPath;
+      await mkdir(physicalClaude, { recursive: true });
+      await ensureCredentialAuthorityLayout(credentialPath);
+      await Promise.all([
+        writeFile(credentialPath, 'hidden-refresh-secret'),
+        writeFile(join(physicalClaude, CREDENTIAL_AUTHORITY_GENERATION_FILENAME), '77\n'),
+        writeFile(join(physicalClaude, CREDENTIAL_AUTHORITY_LOCK_FILENAME), 'hidden-lock'),
+      ]);
+      const before = await Promise.all(
+        AUTHORITY_FILENAMES.map(async (filename) => {
+          const path = join(physicalClaude, filename);
+          return { bytes: await readFile(path), inode: (await stat(path)).ino };
+        })
+      );
+
+      const script = String.raw`
+set -eu
+must_fail() {
+  if "$@" >/dev/null 2>&1; then
+    echo "unexpected success: $*" >&2
+    exit 70
+  fi
+}
+claude_dir="$1"
+replacement="$HOME/extra-write-replacement"
+rm -rf "$replacement"
+mkdir -p "$replacement"
+must_fail mv "$claude_dir" "$claude_dir.renamed"
+must_fail rmdir "$claude_dir"
+must_fail mv -T "$replacement" "$claude_dir"
+for leaf in .credentials.json .agor-auth-generation .agor-auth-mutation.lock; do
+  must_fail cat "$claude_dir/$leaf"
+  must_fail sh -c 'printf attacker > "$1"' sh "$claude_dir/$leaf"
+  must_fail unlink "$claude_dir/$leaf"
+done
+`;
+      const wrapped = buildSandboxWrap({
+        sandbox: {
+          enabled: true,
+          home_mode: 'per_user',
+          preserve_canonical_home_alias: true,
+          fail_if_unavailable: true,
+          include: { tmp: false },
+          extra_allow_write: [writablePath],
+        },
+        branchPath: branch,
+        cmd: '/bin/bash',
+        args: ['-c', script, 'bash', physicalClaude],
+        ownerHomeStore: hiddenStore,
+        runtimePaths,
+      });
+      expect(wrapped).not.toBeNull();
+      const args = wrapped?.args ?? [];
+      const writableOverlapIndex = args.findIndex(
+        (arg, index) =>
+          arg === '--bind' && args[index + 1] === writablePath && args[index + 2] === writablePath
+      );
+      const physicalParent = args.findIndex(
+        (arg, index) =>
+          index > writableOverlapIndex &&
+          arg === '--bind' &&
+          args[index + 1] === physicalClaude &&
+          args[index + 2] === physicalClaude
+      );
+      expect(writableOverlapIndex).toBeGreaterThanOrEqual(0);
+      expect(physicalParent).toBeGreaterThan(writableOverlapIndex);
+      for (const filename of AUTHORITY_FILENAMES) {
+        expect(
+          args.some(
+            (arg, index) =>
+              arg === '--ro-bind' &&
+              args[index + 1] === '/dev/null' &&
+              args[index + 2] === join(physicalClaude, filename)
+          )
+        ).toBe(true);
+      }
+
+      const result = spawnSync(wrapped?.cmd ?? 'false', args, {
+        encoding: 'utf8',
+        env: { PATH: process.env.PATH },
+      });
+      expect(result.status, `${JSON.stringify(args)}\n${result.stdout}\n${result.stderr}`).toBe(0);
+      expect(
+        await Promise.all(
+          AUTHORITY_FILENAMES.map(async (filename) => {
+            const path = join(physicalClaude, filename);
+            return { bytes: await readFile(path), inode: (await stat(path)).ino };
+          })
+        )
+      ).toEqual(before);
+    }
+  );
+
+  it('re-masks the canonical physical alias when a symlinked data root is re-exposed', async () => {
+    const canonicalData = join(root, 'canonical-data');
+    const linkedData = join(root, 'linked-data');
+    await mkdir(canonicalData, { recursive: true });
+    await symlink(canonicalData, linkedData);
+    const rawStore = join(linkedData, 'tenants', 'acme', 'homes', 'symlink-owner');
+    const canonicalStore = join(canonicalData, 'tenants', 'acme', 'homes', 'symlink-owner');
+    const canonicalClaude = join(canonicalStore, '.claude');
+    const credentialPath = join(canonicalClaude, '.credentials.json');
+    await mkdir(canonicalClaude, { recursive: true });
+    await ensureCredentialAuthorityLayout(credentialPath);
+    await Promise.all([
+      writeFile(credentialPath, 'symlink-refresh-secret'),
+      writeFile(join(canonicalClaude, CREDENTIAL_AUTHORITY_GENERATION_FILENAME), '91\n'),
+      writeFile(join(canonicalClaude, CREDENTIAL_AUTHORITY_LOCK_FILENAME), 'symlink-lock'),
+    ]);
+    const before = await Promise.all(
+      AUTHORITY_FILENAMES.map(async (filename) => {
+        const path = join(canonicalClaude, filename);
+        return { bytes: await readFile(path), inode: (await stat(path)).ino };
+      })
+    );
+
+    const script = `
+set -eu
+must_fail() {
+  if "$@" >/dev/null 2>&1; then exit 70; fi
+}
+claude_dir="$1"
+must_fail cat "$claude_dir/.credentials.json"
+must_fail sh -c 'printf attacker > "$1"' sh "$claude_dir/.credentials.json"
+must_fail unlink "$claude_dir/.agor-auth-generation"
+must_fail mv "$claude_dir" "$claude_dir.renamed"
+`;
+    const linkedRuntimePaths: SandboxRuntimePaths = {
+      ...runtimePaths,
+      dataHome: linkedData,
+      protectedDataRoots: [linkedData],
+    };
+    const wrapped = buildSandboxWrap({
+      sandbox: {
+        enabled: true,
+        home_mode: 'per_user',
+        fail_if_unavailable: true,
+        include: { tmp: false },
+        extra_allow_write: [canonicalData],
+      },
+      branchPath: branch,
+      cmd: '/bin/bash',
+      args: ['-c', script, 'bash', canonicalClaude],
+      ownerHomeStore: rawStore,
+      runtimePaths: linkedRuntimePaths,
+    });
+    const args = wrapped?.args ?? [];
+    const writableCanonicalRoot = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' && args[index + 1] === canonicalData && args[index + 2] === canonicalData
+    );
+    const correctiveParent = args.findIndex(
+      (arg, index) =>
+        index > writableCanonicalRoot &&
+        arg === '--bind' &&
+        args[index + 1] === join(rawStore, '.claude') &&
+        args[index + 2] === canonicalClaude
+    );
+    expect(correctiveParent).toBeGreaterThan(writableCanonicalRoot);
+    const result = spawnSync(wrapped?.cmd ?? 'false', args, {
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH },
+    });
+    expect(result.status, `${JSON.stringify(args)}\n${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(
+      await Promise.all(
+        AUTHORITY_FILENAMES.map(async (filename) => {
+          const path = join(canonicalClaude, filename);
+          return { bytes: await readFile(path), inode: (await stat(path)).ino };
+        })
+      )
+    ).toEqual(before);
+  });
+
   it('uses pre-created empty authority leaves without breaking env-token auth on nodev', async () => {
     const target = join(ownerStore, '.claude', '.credentials.json');
     await unlink(target);

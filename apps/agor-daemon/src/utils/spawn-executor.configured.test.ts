@@ -191,46 +191,49 @@ describe('configured executor spawning', () => {
     );
   });
 
-  it('prepares the real Claude authority layout synchronously before a per-user sandbox spawn', async () => {
-    const installed = installMockExecutor('agor-executor-authority-layout-');
-    const root = mkdtempSync(path.join(tmpdir(), 'agor-sandbox-runtime-'));
-    const ownerStore = path.join(root, 'owner');
-    const branch = path.join(root, 'branch');
-    const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
-    configureExecutor(
-      { sandbox: { enabled: true, home_mode: 'per_user' } },
-      {
-        ...LOCAL_RESPONSE_OPTIONS,
-        sandboxRuntimePaths: {
-          homeDir: path.join(root, 'home'),
-          dataHome: path.join(root, 'data'),
-          protectedDataRoots: [path.join(root, 'data')],
-          worktreesRoot: path.join(root, 'worktrees'),
-          agenticToolsPath: path.join(root, 'agentic-tools'),
-          agorConfigPath: path.join(root, 'config.yaml'),
-        },
-      }
-    );
+  it.runIf(process.platform === 'linux')(
+    'prepares the real Claude authority layout synchronously before a per-user sandbox spawn',
+    async () => {
+      const installed = installMockExecutor('agor-executor-authority-layout-');
+      const root = mkdtempSync(path.join(tmpdir(), 'agor-sandbox-runtime-'));
+      const ownerStore = path.join(root, 'owner');
+      const branch = path.join(root, 'branch');
+      const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+      configureExecutor(
+        { sandbox: { enabled: true, home_mode: 'per_user' } },
+        {
+          ...LOCAL_RESPONSE_OPTIONS,
+          sandboxRuntimePaths: {
+            homeDir: path.join(root, 'home'),
+            dataHome: path.join(root, 'data'),
+            protectedDataRoots: [path.join(root, 'data')],
+            worktreesRoot: path.join(root, 'worktrees'),
+            agenticToolsPath: path.join(root, 'agentic-tools'),
+            agorConfigPath: path.join(root, 'config.yaml'),
+          },
+        }
+      );
 
-    spawnExecutor({
-      command: 'prompt',
-      params: { cwd: branch, sandboxHomeStore: ownerStore },
-    });
+      spawnExecutor({
+        command: 'prompt',
+        params: { cwd: branch, sandboxHomeStore: ownerStore },
+      });
 
-    expect(spawnMock).toHaveBeenCalledOnce();
-    expect(ensureAuthorityMock).toHaveBeenCalledWith(
-      path.join(ownerStore, '.claude', '.credentials.json')
-    );
-    expect(ensureAuthorityMock.mock.invocationCallOrder[0]).toBeLessThan(
-      buildSandboxWrapMock.mock.invocationCallOrder[0] as number
-    );
-    expect(buildSandboxWrapMock).toHaveBeenCalledWith(
-      expect.objectContaining({ ownerHomeStore: ownerStore, branchPath: branch })
-    );
+      expect(spawnMock).toHaveBeenCalledOnce();
+      expect(ensureAuthorityMock).toHaveBeenCalledWith(
+        path.join(ownerStore, '.claude', '.credentials.json')
+      );
+      expect(ensureAuthorityMock.mock.invocationCallOrder[0]).toBeLessThan(
+        buildSandboxWrapMock.mock.invocationCallOrder[0] as number
+      );
+      expect(buildSandboxWrapMock).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerHomeStore: ownerStore, branchPath: branch })
+      );
 
-    installed.restore();
-    rmSync(root, { recursive: true, force: true });
-  });
+      installed.restore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  );
 
   it('uses execution.executor_command_template configured at startup', async () => {
     const proc = createMockProcess();

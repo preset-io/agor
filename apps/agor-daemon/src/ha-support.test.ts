@@ -208,6 +208,21 @@ describe('constrained HA support profile', () => {
     expect(hasClaudeSubscriptionOAuthCapability(authorizedContained, standalone)).toBe(true);
     expect(hasClaudeSubscriptionOAuthCapability(authorizedContained, ha)).toBe(true);
     expect(hasClaudeSubscriptionOAuthCapability({}, ha)).toBe(false);
+    const writableEscape = {
+      ...authorizedContained,
+      execution: {
+        ...authorizedContained.execution,
+        sandbox: {
+          ...authorizedContained.execution.sandbox,
+          extra_allow_write: ['/home/agor/.agor'],
+        },
+      },
+    };
+    // An extra writable bind can re-expose an initially hidden physical owner
+    // store after alias analysis. Reject every such topology rather than
+    // advertising a containment guarantee that depends on path coincidence.
+    expect(hasClaudeSubscriptionOAuthCapability(writableEscape, standalone)).toBe(false);
+    expect(hasClaudeSubscriptionOAuthCapability(writableEscape, ha)).toBe(false);
     expect(
       hasClaudeSubscriptionOAuthCapability(authorizedContained, {
         ...ha,

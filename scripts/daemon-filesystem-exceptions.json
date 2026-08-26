@@ -1512,6 +1512,34 @@
     "reviewDate": null
   },
   {
+    "id": "DAEMON-FS-CAP-236",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/sandbox-context.ts",
+    "import": "node:fs",
+    "symbol": "existsSync",
+    "local": "existsSync",
+    "operation": "call:existsSync@canonicalizeProspectivePath#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Finds the deepest existing trusted deployment-root ancestor before deriving a canonical per-owner credential home.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-237",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/sandbox-context.ts",
+    "import": "node:fs",
+    "symbol": "realpathSync",
+    "local": "realpathSync",
+    "operation": "call:realpathSync@canonicalizeProspectivePath#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Canonicalizes the trusted existing deployment-root ancestor so symlinked data roots resolve to one credential authority.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
     "id": "DAEMON-FS-CAP-200",
     "class": "A",
     "file": "packages/core/src/config/config-manager.ts",

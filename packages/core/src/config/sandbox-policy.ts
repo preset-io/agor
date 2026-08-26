@@ -124,6 +124,10 @@ export interface SandboxPathContext {
    * the daemon guarantees it exists before spawn.
    */
   ownerHomeStore?: string;
+  /** Canonical target of {@link ownerHomeStore}, when it differs through symlinks. */
+  canonicalOwnerHomeStore?: string;
+  /** Canonical targets used only to analyze final `extra_allow_write` aliases. */
+  canonicalExtraAllowWritePaths?: string[];
   /**
    * Managed agentic-tools dir (`~/.agor/agentic-tools`) re-exposed read-only in
    * `per_user` mode (the overlay would otherwise hide it). Ignored in shared
@@ -230,9 +234,12 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     // files visible. Mask that root, then re-expose only the authorized paths
     // below. Bubblewrap resolves bind sources before applying these mounts, so
     // owner stores/branches beneath the masked root remain valid sources.
+    // Prefer the canonical deployment root when the configured data home is a
+    // symlink. Mounting a tmpfs on both the symlink and its target is not only
+    // redundant (the target mask closes both routes), but bwrap cannot mount a
+    // filesystem on a symlink destination reliably.
     const dataHomes = [
-      ctx.dataHome,
-      ctx.canonicalDataHome,
+      ctx.canonicalDataHome ?? ctx.dataHome,
       ...(ctx.protectedDataRoots ?? []),
     ].filter((path): path is string => !!path);
     for (const dataHome of dataHomes) {
@@ -333,13 +340,42 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     // downgrade. A custom filesystem_home outside all hidden deployment roots
     // remains reachable through its physical source path, so bind/mask it too.
     const ownerClaudeDirectory = join(ctx.ownerHomeStore as string, '.claude');
+    // A canonical target closes both its own route and every symlink route to
+    // it. Do not also mount the symlink destination: after the canonical data
+    // root is hidden, bwrap cannot create parents through that symlink.
+    const ownerClaudeDirectories = new Set([
+      join(ctx.canonicalOwnerHomeStore ?? (ctx.ownerHomeStore as string), '.claude'),
+    ]);
     const claudeDirectoryAliases = new Set(
       homeAliasPaths(join(ctx.homeDir, '.claude'), ctx, preserveCanonicalHomeAlias)
     );
-    const physicalStoreIsReachable =
-      ![...hiddenRoots].some((root) => isPathWithin(ctx.ownerHomeStore as string, root)) &&
-      !homeDirs.some((homeDir) => isPathWithin(ctx.ownerHomeStore as string, homeDir));
-    if (physicalStoreIsReachable) claudeDirectoryAliases.add(ownerClaudeDirectory);
+    const writableAliases = new Set([
+      ...(sandbox.extra_allow_write ?? []),
+      ...(ctx.canonicalExtraAllowWritePaths ?? []),
+    ]);
+    // `extra_allow_write` is applied after the hidden-root overlays above. A
+    // bind that overlaps the authority tree makes the physical `.claude`
+    // reachable again even though the initial namespace analysis classified
+    // its owner store as hidden. This includes both an ancestor (for example
+    // the deployment data root) and a direct descendant (including an exact
+    // `.claude` or authority-leaf bind). Treat that final mount graph as
+    // authoritative and re-apply the immutable parent + leaf masks at the
+    // physical alias. This containment is unconditional: an API-key/Codex task
+    // must not gain an old Claude refresh grant merely because new managed
+    // Claude OAuth admission is disabled for escape-hatch configurations.
+    for (const physicalClaudeDirectory of ownerClaudeDirectories) {
+      const physicalStore = dirname(physicalClaudeDirectory);
+      const physicalStoreIsReachableInitially =
+        ![...hiddenRoots].some((root) => isPathWithin(physicalStore, root)) &&
+        !homeDirs.some((homeDir) => isPathWithin(physicalStore, homeDir));
+      const physicalStoreReexposedByWritableBind = [...writableAliases].some(
+        (path) =>
+          isPathWithin(physicalClaudeDirectory, path) || isPathWithin(path, physicalClaudeDirectory)
+      );
+      if (physicalStoreIsReachableInitially || physicalStoreReexposedByWritableBind) {
+        claudeDirectoryAliases.add(physicalClaudeDirectory);
+      }
+    }
     for (const destination of claudeDirectoryAliases) {
       args.push('--bind', ownerClaudeDirectory, destination);
     }

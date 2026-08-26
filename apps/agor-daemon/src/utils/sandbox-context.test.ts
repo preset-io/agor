@@ -93,4 +93,44 @@ describe('resolveOwnerHomeStore', () => {
       })
     ).toBe('/mnt/tenants/tenant-a/homes/u1');
   });
+
+  it('canonicalizes a symlinked data root before returning a prospective owner store', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agor-owner-home-'));
+    try {
+      const canonicalData = join(root, 'canonical-data');
+      const linkedData = join(root, 'linked-data');
+      mkdirSync(canonicalData, { recursive: true });
+      symlinkSync(canonicalData, linkedData);
+      expect(
+        resolveOwnerHomeStore({
+          config: { paths: { data_home: linkedData } },
+          tenantId: 'tenant-a',
+          ownerUserId: 'user-a',
+        })
+      ).toBe(join(canonicalData, 'tenants', 'tenant-a', 'homes', 'user-a'));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not follow an existing per-user store symlink while canonicalizing trusted roots', () => {
+    const root = mkdtempSync(join(tmpdir(), 'agor-owner-home-link-'));
+    try {
+      const data = join(root, 'data');
+      const homes = join(data, 'tenants', 'tenant-a', 'homes');
+      const outside = join(root, 'outside');
+      mkdirSync(homes, { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      symlinkSync(outside, join(homes, 'user-a'));
+      expect(
+        resolveOwnerHomeStore({
+          config: { paths: { data_home: data } },
+          tenantId: 'tenant-a',
+          ownerUserId: 'user-a',
+        })
+      ).toBe(join(homes, 'user-a'));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

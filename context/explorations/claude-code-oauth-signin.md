@@ -398,7 +398,13 @@ file and persists `none`.
   hardened executor command), so 0600 ownership holds. New managed sign-ins and
   managed task resolution are admitted only for the contained local per-user
   sandbox profile without an executor command template or arbitrary
-  `extra_allow_write` escape hatch. HA additionally
+  `extra_allow_write` escape hatch. Every such entry fails closed: a final
+  writable re-bind can otherwise re-expose a physical owner store that was
+  hidden during the initial alias analysis. The sandbox resolves configured
+  symlink aliases and also re-applies the
+  parent/leaf containment at that newly reachable physical alias for all tasks,
+  protecting dormant/existing grants even though new managed launches are
+  rejected. HA additionally
   requires the `shared-local` topology, durable attempt ownership, and a proven
   cross-replica home lock. Delegated/template execution remains fail-closed
   until its substrate provides an equivalent reviewed containment and writer
