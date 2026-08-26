@@ -451,9 +451,12 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                     <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
                       {/* flex:1 + minWidth:0 keeps the name pinned to the same
                           left position whether or not the trailing tag renders,
-                          so the list never looks ragged; the name ellipsizes only
-                          as a last resort rather than wrapping. */}
+                          so the list never looks ragged. minWidth:0 is required
+                          for text-overflow to engage in a flex row; the name
+                          ellipsizes (with a title tooltip for the full name)
+                          rather than shrinking the tag or wrapping. */}
                       <span
+                        title={TOOL_LABELS[tool]}
                         style={{
                           flex: 1,
                           minWidth: 0,
@@ -465,19 +468,11 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                         {TOOL_LABELS[tool]}
                       </span>
                       {/* Shown only when enabled — an always-green dot read as
-                          "ready" when it only meant "not disabled" (Kasia). Kept
-                          compact so it fits beside long names in the 240px rail. */}
+                          "ready" when it only meant "not disabled" (Kasia).
+                          flexShrink:0 keeps the tag fully legible; the name gives
+                          way (ellipsis) when the row is tight, not the tag. */}
                       {enabled && (
-                        <Tag
-                          color="success"
-                          style={{
-                            flex: '0 0 auto',
-                            margin: 0,
-                            fontSize: 11,
-                            lineHeight: '16px',
-                            paddingInline: 5,
-                          }}
-                        >
+                        <Tag color="success" style={{ flexShrink: 0, margin: 0 }}>
                           Enabled
                         </Tag>
                       )}
