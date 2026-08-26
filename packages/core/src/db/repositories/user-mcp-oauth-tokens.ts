@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { MCPOAuthGrantBindingVersion, MCPServerID, UserID } from '@agor/core/types';
-import { and, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
 import type { Database } from '../client';
 import {
   deleteFrom,
@@ -60,6 +60,45 @@ export interface UserMCPOAuthToken {
   created_at: Date;
   updated_at?: Date;
 }
+
+/**
+ * Minimum daemon-internal material needed to verify a grant's configuration
+ * identity. This is deliberately not a Marketplace DTO: client registration
+ * material can participate in the binding HMAC, while access and refresh
+ * tokens must never be hydrated by an inventory/status read.
+ */
+export type MCPOAuthGrantAuthorityRecord = Pick<
+  UserMCPOAuthToken,
+  | 'user_id'
+  | 'mcp_server_id'
+  | 'oauth_client_id'
+  | 'oauth_client_secret'
+  | 'grant_binding_version'
+  | 'grant_binding_fingerprint'
+  | 'oauth_metadata_uri'
+  | 'oauth_resource_uri'
+  | 'oauth_issuer'
+  | 'oauth_authorization_endpoint'
+  | 'oauth_token_endpoint'
+  | 'oauth_redirect_uri'
+>;
+
+type MCPOAuthGrantAuthorityRow = Pick<
+  UserMCPOAuthTokenRow,
+  | 'user_id'
+  | 'mcp_server_id'
+  | 'oauth_client_id'
+  | 'oauth_client_secret'
+  | 'grant_generation'
+  | 'grant_binding_version'
+  | 'grant_binding_fingerprint'
+  | 'oauth_metadata_uri'
+  | 'oauth_resource_uri'
+  | 'oauth_issuer'
+  | 'oauth_authorization_endpoint'
+  | 'oauth_token_endpoint'
+  | 'oauth_redirect_uri'
+>;
 
 /** Input shape for `saveToken`. */
 export interface SaveTokenInput {
@@ -219,6 +258,7 @@ function matchKey(userId: UserID | null, serverId: MCPServerID) {
 }
 
 export class UserMCPOAuthTokenRepository {
+  private static readonly AUTHORITY_READ_BATCH_SIZE = 500;
   private readonly postgres: boolean;
   private readonly masterSecret?: string;
 
@@ -250,6 +290,49 @@ export class UserMCPOAuthTokenRepository {
       tenantId: this.tenantId(),
       masterSecret: this.masterSecret,
     });
+  }
+
+  private mapAuthorityRow(row: MCPOAuthGrantAuthorityRow): MCPOAuthGrantAuthorityRecord {
+    const userId = (row.user_id as UserID | null) ?? null;
+    const serverId = row.mcp_server_id as MCPServerID;
+    const generation = Number(row.grant_generation ?? 0);
+    const tenantId = this.tenantId();
+    const openClientMaterial = (
+      value: unknown,
+      purpose: 'client-id' | 'client-secret',
+      field: string
+    ): string | undefined => {
+      if (value == null || value === '') return undefined;
+      if (!this.postgres) return String(value);
+      if (!tenantId || !this.masterSecret) {
+        throw new RepositoryError('PostgreSQL MCP OAuth token decryption is not configured');
+      }
+      return openBoundSecret(
+        String(value),
+        this.masterSecret,
+        purpose,
+        grantSecretBinding(tenantId, userId, serverId, generation, field)
+      );
+    };
+    return {
+      user_id: userId,
+      mcp_server_id: serverId,
+      oauth_client_id: openClientMaterial(row.oauth_client_id, 'client-id', 'client-id'),
+      oauth_client_secret: openClientMaterial(
+        row.oauth_client_secret,
+        'client-secret',
+        'client-secret'
+      ),
+      grant_binding_version:
+        row.grant_binding_version == null ? undefined : Number(row.grant_binding_version),
+      grant_binding_fingerprint: stringValue(row.grant_binding_fingerprint),
+      oauth_metadata_uri: stringValue(row.oauth_metadata_uri),
+      oauth_resource_uri: stringValue(row.oauth_resource_uri),
+      oauth_issuer: stringValue(row.oauth_issuer),
+      oauth_authorization_endpoint: stringValue(row.oauth_authorization_endpoint),
+      oauth_token_endpoint: stringValue(row.oauth_token_endpoint),
+      oauth_redirect_uri: stringValue(row.oauth_redirect_uri),
+    };
   }
 
   /**
@@ -936,6 +1019,62 @@ export class UserMCPOAuthTokenRepository {
     } catch (error) {
       throw new RepositoryError(
         `Failed to list OAuth tokens for user: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Batch-read only the caller's grants plus tenant-visible shared grants for
+   * an explicit server set. Another user's per-user grant is never eligible.
+   */
+  async listAuthorityForUserAndSharedByServerIds(
+    userId: UserID,
+    serverIds: readonly MCPServerID[]
+  ): Promise<MCPOAuthGrantAuthorityRecord[]> {
+    try {
+      const uniqueIds = [...new Set(serverIds)];
+      const rows: MCPOAuthGrantAuthorityRow[] = [];
+      for (
+        let offset = 0;
+        offset < uniqueIds.length;
+        offset += UserMCPOAuthTokenRepository.AUTHORITY_READ_BATCH_SIZE
+      ) {
+        const batch = uniqueIds.slice(
+          offset,
+          offset + UserMCPOAuthTokenRepository.AUTHORITY_READ_BATCH_SIZE
+        );
+        if (batch.length === 0) continue;
+        rows.push(
+          ...(await select(this.db, {
+            user_id: userMcpOauthTokens.user_id,
+            mcp_server_id: userMcpOauthTokens.mcp_server_id,
+            oauth_client_id: userMcpOauthTokens.oauth_client_id,
+            oauth_client_secret: userMcpOauthTokens.oauth_client_secret,
+            grant_generation: userMcpOauthTokens.grant_generation,
+            grant_binding_version: userMcpOauthTokens.grant_binding_version,
+            grant_binding_fingerprint: userMcpOauthTokens.grant_binding_fingerprint,
+            oauth_metadata_uri: userMcpOauthTokens.oauth_metadata_uri,
+            oauth_resource_uri: userMcpOauthTokens.oauth_resource_uri,
+            oauth_issuer: userMcpOauthTokens.oauth_issuer,
+            oauth_authorization_endpoint: userMcpOauthTokens.oauth_authorization_endpoint,
+            oauth_token_endpoint: userMcpOauthTokens.oauth_token_endpoint,
+            oauth_redirect_uri: userMcpOauthTokens.oauth_redirect_uri,
+          })
+            .from(userMcpOauthTokens)
+            .where(
+              and(
+                inArray(userMcpOauthTokens.mcp_server_id, batch),
+                or(eq(userMcpOauthTokens.user_id, userId), isNull(userMcpOauthTokens.user_id))
+              )
+            )
+            .all())
+        );
+      }
+      return rows.map((row) => this.mapAuthorityRow(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to list OAuth grants for authority projection: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

@@ -459,14 +459,22 @@ overrides, custom headers, stale bindings, and mismatched resources are not
 eligible. This can reuse a user-configured peer without converting its
 provenance or lifecycle into a catalog install.
 
-Every successful Connect creates and attaches a new idle session, then the UI
-navigates there. Open, bearer-key, and already-authenticated OAuth results stage
-the entry's starter prompt. A fresh OAuth result with no reusable grant does
-not: the session instead shows the dismissible disconnected notice and warning
-MCP badge, and the user opens the badge and activates the server pill to sign
-in. The OAuth window is deliberately not auto-started after navigation because
-the navigation and async start request no longer have the transient user
-activation browsers require for a reliable popup.
+Every successful Connect creates and attaches a new idle session, while the
+Marketplace keeps the catalog drawer open with an explicit **Open session** next
+step. It does not navigate automatically. Open, bearer-key, and
+already-authenticated OAuth results stage the entry's starter prompt. For a new
+OAuth grant, Connect pre-opens the provider window while user activation is
+available and the drawer remains in **Sign-in pending** until a durable attempt
+and the caller-scoped credential projection confirm success. Popup navigation
+alone is never success. The session retains its disconnected notice and warning
+MCP badge as the recovery path when sign-in does not complete.
+
+The drawer's **What this can access** disclosure is expanded by default. Its
+checkbox stays inside that disclosure, before the destination fields and
+Connect action, and Connect sends the exact text shown as
+`acknowledged_disclosure`; collapsing the section never counts as consent.
+Technical details may remain collapsed because they are not the connect-time
+consent contract.
 
 Both probes go through `createPinnedFetch`
 (`packages/core/src/utils/pinned-fetch.ts`), which resolves the hostname,

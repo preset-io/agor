@@ -13,8 +13,8 @@ import type { User } from '@agor/core/types';
 import type { AgorClient } from '@agor-live/client';
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { ArrowLeftOutlined, ShopOutlined } from '@ant-design/icons';
-import { Button, Layout, Space, Tabs, Typography, theme } from 'antd';
-import { useEffect } from 'react';
+import { Button, Grid, Layout, Space, Tabs, Typography, theme } from 'antd';
+import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { BrandLogo } from '../components/BrandLogo';
 import { GlobalUserMenu } from '../components/GlobalUserMenu';
@@ -61,6 +61,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
   onLogout,
 }) => {
   const { token } = theme.useToken();
+  const screens = Grid.useBreakpoint();
   const navigate = useNavigate();
   const location = useLocation();
   const requestedTab = location.pathname.split('/')[2];
@@ -79,6 +80,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
     userId: currentUser?.user_id,
     role: currentUser?.role,
   });
+  const [requestedServerId, setRequestedServerId] = useState<string | null>(null);
   const authorityKey =
     client &&
     connected &&
@@ -128,7 +130,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
         style={{
           height: `calc(100vh - ${HEADER_HEIGHT}px)`,
           overflow: 'auto',
-          padding: token.paddingLG,
+          padding: screens.md ? token.paddingLG : token.paddingSM,
         }}
       >
         <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -152,6 +154,7 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
                     connecting={connecting}
                     authGeneration={authGeneration}
                     currentUser={currentUser}
+                    refreshMarketplaceOverview={overview.refresh}
                   />
                 ),
               },
@@ -166,18 +169,38 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
                     authGeneration={authGeneration}
                     currentUser={currentUser}
                     {...overview}
+                    onBrowseCatalog={() => navigate('/marketplace/catalog')}
+                    requestedServerId={requestedServerId}
+                    onRequestedServerOpened={() => setRequestedServerId(null)}
                   />
                 ),
               },
               {
                 key: 'sessions',
-                label: `Sessions${overview.overview.attachments.length ? ` (${overview.overview.attachments.length})` : ''}`,
-                children: <SessionsTab client={client} authorityKey={authorityKey} {...overview} />,
+                label: `Sessions${overview.overview.attachments.length ? ` (${new Set(overview.overview.attachments.map((item) => item.session_id)).size})` : ''}`,
+                children: (
+                  <SessionsTab
+                    client={client}
+                    authorityKey={authorityKey}
+                    {...overview}
+                    onBrowseCatalog={() => navigate('/marketplace/catalog')}
+                  />
+                ),
               },
               {
                 key: 'credentials',
-                label: 'Credentials',
-                children: <CredentialsTab {...overview} />,
+                label: `Credentials${overview.overview.credentials.length ? ` (${overview.overview.credentials.length})` : ''}`,
+                children: (
+                  <CredentialsTab
+                    {...overview}
+                    canManageCredentials={authorityKey !== null}
+                    onOpenServerSettings={(serverId) => {
+                      setRequestedServerId(serverId);
+                      navigate('/marketplace/servers');
+                    }}
+                    onBrowseCatalog={() => navigate('/marketplace/catalog')}
+                  />
+                ),
               },
             ]}
           />
