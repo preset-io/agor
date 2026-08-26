@@ -14,12 +14,9 @@ import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { type RegisterHooksContext, registerHooks } from './register-hooks';
 import { ARTIFACTS_SERVICE_TRANSPORT_METHODS } from './services/artifacts';
-import { BOARD_OWNERS_SERVICE_TRANSPORT_METHODS } from './services/board-owners';
-import { BRANCH_OWNERS_SERVICE_TRANSPORT_METHODS } from './services/branch-owners';
+import { CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS } from './services/capability-policies';
 import { GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS } from './services/gateway-channels';
 import {
-  BOARD_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
-  BRANCH_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
   GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
   GROUPS_SERVICE_TRANSPORT_METHODS,
 } from './services/groups';
@@ -348,10 +345,8 @@ const UPDATE_NOT_ROUTED: Record<string, string | readonly string[]> = {
     'no update method — custom route exposes create only',
   'artifacts/:id/sandpack-error': 'no update method — custom route exposes create only',
   'artifacts/:id/trust': 'no update method — custom route exposes create only',
-  'boards/:id/group-grants': BOARD_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
-  'boards/:id/owners': BOARD_OWNERS_SERVICE_TRANSPORT_METHODS,
-  'branches/:id/group-grants': BRANCH_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
-  'branches/:id/owners': BRANCH_OWNERS_SERVICE_TRANSPORT_METHODS,
+  'boards/:id/permissions': CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS,
+  'branches/:id/permissions': CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS,
   'gateway-channels': GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS,
   'group-memberships': GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
   groups: GROUPS_SERVICE_TRANSPORT_METHODS,
@@ -574,10 +569,8 @@ describe('pinned methods list', () => {
     // nothing while still reading as green.
     expect(pinned.map(([path]) => path)).toEqual([
       'artifacts',
-      'boards/:id/group-grants',
-      'boards/:id/owners',
-      'branches/:id/group-grants',
-      'branches/:id/owners',
+      'boards/:id/permissions',
+      'branches/:id/permissions',
       'gateway-channels',
       'group-memberships',
       'groups',

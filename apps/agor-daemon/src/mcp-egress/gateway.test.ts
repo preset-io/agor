@@ -3,7 +3,9 @@ import { rm } from 'node:fs/promises';
 import http from 'node:http';
 import {
   BranchRepository,
+  CapabilityPolicyRepository,
   createDatabaseAsync,
+  generateId,
   MCPServerRepository,
   RepoRepository,
   runMigrations,
@@ -19,6 +21,7 @@ import {
 import type { Application } from '@agor/core/feathers';
 import { refreshAndPersistToken } from '@agor/core/tools/mcp/oauth-refresh';
 import {
+  capabilityPolicyPresetCapabilities,
   type MCPServer,
   type MCPServerID,
   TaskStatus,
@@ -132,8 +135,44 @@ async function harness(options: HarnessOptions) {
     branch_unique_id: Date.now() % 1_000_000,
     path: `/tmp/${randomUUID()}`,
     created_by: user.user_id as UUID,
-    others_can: options.separatePrincipal ? 'prompt' : undefined,
   });
+  if (options.separatePrincipal) {
+    const policies = new CapabilityPolicyRepository(rawDb);
+    const current = await policies.getBranchPolicy(branch.branch_id);
+    const config = structuredClone(current.override_config!);
+    config.access.sharing_mode = 'shared';
+    config.access.entries = [
+      {
+        entry_id: generateId(),
+        principal: { principal_type: 'user', user_id: principal.user_id },
+        preset: 'collaborator',
+        capabilities:
+          capabilityPolicyPresetCapabilities('branch_access', 'collaborator', 'read') ?? [],
+        fs_access: 'read',
+      },
+    ];
+    config.session_sharing.owner_rules = [
+      {
+        session_owner_user_id: user.user_id,
+        enabled: true,
+        grantees: [
+          {
+            grant_id: generateId(),
+            principal: { principal_type: 'user', user_id: principal.user_id },
+          },
+        ],
+      },
+    ];
+    await policies.replaceBranchPolicy(
+      branch.branch_id,
+      { ...current, override_config: config },
+      user.user_id
+    );
+    await policies.setWorkspacePreferences(
+      { personal_session_sharing_enabled: true },
+      user.user_id
+    );
+  }
   const session = await new SessionRepository(rawDb).create({
     session_id: randomUUID(),
     branch_id: branch.branch_id,
@@ -1010,7 +1049,15 @@ describe('authoritative MCP gateway real transport', () => {
     });
     const pending = h.request('POST', initialize);
     await dnsObserved;
-    await new BranchRepository(h.rawDb).update(h.branch.branch_id, { others_can: 'view' });
+    const policies = new CapabilityPolicyRepository(h.rawDb);
+    const current = await policies.getBranchPolicy(h.branch.branch_id);
+    const config = structuredClone(current.override_config!);
+    config.session_sharing.owner_rules = [];
+    await policies.replaceBranchPolicy(
+      h.branch.branch_id,
+      { ...current, override_config: config },
+      h.user.user_id
+    );
     releaseDns();
 
     await expect(pending).rejects.toMatchObject({ code: 'branch_revoked' });

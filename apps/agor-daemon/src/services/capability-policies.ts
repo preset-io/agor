@@ -18,6 +18,8 @@ import type {
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { isSuperAdmin } from '../utils/branch-authorization.js';
 
+export const CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS = ['find', 'patch'] as const;
+
 function actor(params?: Params): { user_id: UserID; role?: string; service: boolean } | null {
   const user = (
     params as
@@ -163,7 +165,7 @@ export function setupCapabilityPolicyServices(
         }
       },
     },
-    { methods: ['find', 'patch'] }
+    { methods: CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS }
   );
 
   app.use(
@@ -251,7 +253,7 @@ export function setupCapabilityPolicyServices(
         }
       },
     },
-    { methods: ['find', 'patch'] }
+    { methods: CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS }
   );
 
   app.use(
@@ -278,6 +280,6 @@ export function setupCapabilityPolicyServices(
         return saved;
       },
     },
-    { methods: ['find', 'patch'] }
+    { methods: CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS }
   );
 }

@@ -409,7 +409,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         ],
       },
     ],
-    [canSeeSection, token]
+    [canSeeSection, isAdmin, token]
   );
 
   const mobileSectionOptions = useMemo(
@@ -432,7 +432,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       ...(canSeeSection('users') ? [{ label: 'Admin · Users', value: 'users' }] : []),
       { label: 'System · About', value: 'about' },
     ],
-    [canSeeSection]
+    [canSeeSection, isAdmin]
   );
 
   // Render content based on active section

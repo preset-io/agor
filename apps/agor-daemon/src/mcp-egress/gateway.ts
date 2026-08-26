@@ -654,20 +654,13 @@ export class MCPEgressGateway {
           const branchRepository = new BranchRepository(tenantDb);
           const branch = await branchRepository.findById(session.branch_id);
           if (!branch) throw new MCPEgressGatewayError(403, 'branch_revoked', 'Branch unavailable');
-          const access = await branchRepository.resolveUserAccess(
+          const promptAccess = await resolveSessionPromptAccess({
+            branchRepository,
             branch,
-            claims.principal_user_id as UserID
-          );
-          if (
-            !resolveSessionPromptAccess({
-              branch,
-              session,
-              userId: claims.principal_user_id as UserID,
-              isOwner: access.is_owner,
-              userRole: principal.role,
-              branchPermission: access.can,
-            }).allowed
-          ) {
+            session,
+            userId: claims.principal_user_id as UserID,
+          });
+          if (!promptAccess.allowed) {
             throw new MCPEgressGatewayError(403, 'branch_revoked', 'Branch permission changed');
           }
         }

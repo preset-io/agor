@@ -59,7 +59,11 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
-import { isMCPServerUsableBy, MCPServerNotUsableError } from '@agor/core/mcp';
+import {
+  isMCPServerUsableBy,
+  isMCPServerUsableInSession,
+  MCPServerNotUsableError,
+} from '@agor/core/mcp';
 import type {
   AuthenticatedParams,
   BoardComment,

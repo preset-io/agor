@@ -22,6 +22,7 @@ import type {
   EnvVarScope,
   GatewayChannel,
   MessageID,
+  Session,
   TaskID,
   User,
   WidgetMessageMetadata,

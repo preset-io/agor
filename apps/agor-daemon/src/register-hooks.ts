@@ -2188,9 +2188,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         bindPrimaryOwnerToCreatedBy(),
       ],
       update: [...branchUpdateAuthorization],
-      patch: [
-        ...branchUpdateAuthorization,
-      ],
+      patch: [...branchUpdateAuthorization],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete branches'),
         loadBranch(branchRepository),
