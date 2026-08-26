@@ -31,7 +31,7 @@ import {
   TeamOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
-import { Badge, Button, Layout, Menu, Modal, Space, Tag, theme } from 'antd';
+import { Button, Layout, Menu, Modal, Tag, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -82,8 +82,9 @@ const { Sider, Content } = Layout;
 const AGENTIC_NAV_PREFIX = 'agentic:';
 const AGENTIC_TOOLS = Object.keys(TOOL_LABELS) as TenantAgenticToolName[];
 
-// Visually-hidden text so a tool's availability is never conveyed by dot color
-// alone: assistive tech reads the label while sighted users see the dot.
+// Visually-hidden text carrying a tool's enabled/disabled state for assistive
+// tech: the sighted cue is a trailing "Enabled" tag shown only when enabled, so
+// the disabled state has no visual marker and this is its only announcement.
 const SR_ONLY_STYLE: React.CSSProperties = {
   position: 'absolute',
   width: 1,
@@ -447,11 +448,41 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
                   key: `${AGENTIC_NAV_PREFIX}${tool}`,
                   icon: <ToolIcon tool={tool} size={16} />,
                   label: (
-                    <Space size={8}>
-                      <Badge color={enabled ? token.colorSuccess : token.colorTextQuaternary} />
-                      <span>{TOOL_LABELS[tool]}</span>
-                      <span style={SR_ONLY_STYLE}>{enabled ? 'Available' : 'Disabled'}</span>
-                    </Space>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                      {/* flex:1 + minWidth:0 keeps the name pinned to the same
+                          left position whether or not the trailing tag renders,
+                          so the list never looks ragged; the name ellipsizes only
+                          as a last resort rather than wrapping. */}
+                      <span
+                        style={{
+                          flex: 1,
+                          minWidth: 0,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {TOOL_LABELS[tool]}
+                      </span>
+                      {/* Shown only when enabled — an always-green dot read as
+                          "ready" when it only meant "not disabled" (Kasia). Kept
+                          compact so it fits beside long names in the 240px rail. */}
+                      {enabled && (
+                        <Tag
+                          color="success"
+                          style={{
+                            flex: '0 0 auto',
+                            margin: 0,
+                            fontSize: 11,
+                            lineHeight: '16px',
+                            paddingInline: 5,
+                          }}
+                        >
+                          Enabled
+                        </Tag>
+                      )}
+                      <span style={SR_ONLY_STYLE}>{enabled ? 'Enabled' : 'Disabled'}</span>
+                    </span>
                   ),
                 };
               }),
