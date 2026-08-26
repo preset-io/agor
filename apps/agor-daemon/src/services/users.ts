@@ -32,6 +32,8 @@ import {
 } from '@agor/core/config';
 import {
   and,
+  boards,
+  branches,
   compare,
   decryptApiKey,
   deleteFrom,
@@ -1170,6 +1172,24 @@ export class UsersService {
       requesterId,
       shouldIncludeAuthMetadata(params)
     );
+
+    const [ownedBoard, ownedBranch] = await Promise.all([
+      select(this.db, { board_id: boards.board_id })
+        .from(boards)
+        .where(eq(boards.primary_owner_user_id, id))
+        .limit(1)
+        .one(),
+      select(this.db, { branch_id: branches.branch_id })
+        .from(branches)
+        .where(eq(branches.primary_owner_user_id, id))
+        .limit(1)
+        .one(),
+    ]);
+    if (ownedBoard || ownedBranch) {
+      throw new BadRequest(
+        'This user still owns boards or branches. Delete those resources before deleting the user.'
+      );
+    }
 
     const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
     const removed = await deleteFrom(this.db, users)

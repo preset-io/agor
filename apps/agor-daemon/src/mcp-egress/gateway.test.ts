@@ -195,7 +195,7 @@ async function harness(options: HarnessOptions) {
     scope: options.server.scope ?? 'global',
     source: 'user',
     enabled: true,
-    owner_user_id: user.user_id as UserID,
+    owner_user_id: principal.user_id as UserID,
   });
   if (server.scope === 'session') {
     await new SessionMCPServerRepository(rawDb).addServer(session.session_id, server.mcp_server_id);
@@ -206,7 +206,7 @@ async function harness(options: HarnessOptions) {
   const oauthTokenUserId =
     server.auth?.type === 'oauth' && (server.auth.oauth_mode ?? 'per_user') === 'shared'
       ? null
-      : (user.user_id as UserID);
+      : (principal.user_id as UserID);
   if (server.auth?.type === 'oauth') {
     await new UserMCPOAuthTokenRepository(rawDb).saveToken(oauthTokenUserId, server.mcp_server_id, {
       accessToken: options.oauthAccessToken ?? 'oauth-access-token-initial',
@@ -271,7 +271,7 @@ async function harness(options: HarnessOptions) {
       task_id: task.task_id,
       session_id: session.session_id,
       principal_user_id: principal.user_id,
-      credential_user_id: user.user_id,
+      credential_user_id: principal.user_id,
       mcp_server_id: server.mcp_server_id,
       config_version: server.config_version ?? 1,
       material_hash: mcpEgressMaterialHash(
@@ -417,6 +417,30 @@ describe('authoritative MCP gateway real transport', () => {
     expect(authorization).toBe(`Bearer ${secret}`);
     expect([...forwarded.response.headers.keys()]).not.toContain('x-private');
     expect(await forwarded.response.text()).not.toContain(secret);
+  });
+
+  it('uses the actual prompting principal OAuth grant for a shared session', async () => {
+    let authorization: string | undefined;
+    const url = await listen((request, response) => {
+      authorization = request.headers.authorization;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"jsonrpc":"2.0","id":1,"result":{}}');
+    });
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: `${url}/mcp`,
+        auth: { type: 'oauth', oauth_mode: 'per_user' },
+      },
+      separatePrincipal: true,
+      branchRbacEnabled: true,
+      oauthAccessToken: 'prompt-caller-oauth-token',
+    });
+
+    expect(h.oauthTokenUserId).toBe(h.principal.user_id);
+    expect(h.oauthTokenUserId).not.toBe(h.user.user_id);
+    await expect(h.request('POST', initialize)).resolves.toBeDefined();
+    expect(authorization).toBe('Bearer prompt-caller-oauth-token');
   });
 
   it('rejects GET before provider dispatch', async () => {

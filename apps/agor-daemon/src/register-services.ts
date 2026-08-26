@@ -61,6 +61,7 @@ import type { Application } from '@agor/core/feathers';
 import { BadRequest, Conflict, Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import {
   hasTemplateMarker,
+  isMCPServerUsableBy,
   type MCPExternalErrorStage,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
@@ -1261,12 +1262,14 @@ function createExecuteHandler(
         sessionId as SessionID,
         true
       );
+      if (!userId) throw new Error('Missing prompt actor for MCP credential scrubbing');
+      const usableAttached = attached.filter((server) => isMCPServerUsableBy(server, userId));
       const global = await new MCPServerRepository(tenantDb).findAll({
         scope: 'global',
         enabled: true,
-        usableByUserId: session.created_by,
+        usableByUserId: userId,
       });
-      scrubMCPSecretsFromExecutorEnv(executorEnv, [...attached, ...global]);
+      scrubMCPSecretsFromExecutorEnv(executorEnv, [...usableAttached, ...global]);
     });
 
     executorEnv.DAEMON_URL = daemonUrl;

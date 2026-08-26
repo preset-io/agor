@@ -108,39 +108,50 @@ function activeBranchGroupEntryExists(
   userId: UserIdExpression,
   capability?: string
 ): SQL {
-  return exists(
-    selectRaw(db)
-      .from(branchPermissionConfigs)
-      .innerJoin(
-        branchPermissionEntries,
-        eq(branchPermissionEntries.config_id, branchPermissionConfigs.config_id)
-      )
-      .innerJoin(
-        groupMemberships,
-        and(
-          eq(groupMemberships.group_id, branchPermissionEntries.group_id),
-          eq(groupMemberships.user_id, userId)
+  const matchingGroupEntryExists = (entryCondition?: SQL): SQL =>
+    exists(
+      selectRaw(db)
+        .from(branchPermissionConfigs)
+        .innerJoin(
+          branchPermissionEntries,
+          eq(branchPermissionEntries.config_id, branchPermissionConfigs.config_id)
         )
-      )
-      .innerJoin(
-        groups,
-        and(eq(groups.group_id, branchPermissionEntries.group_id), eq(groups.archived, false))
-      )
-      .where(
-        and(
-          effectiveConfigCondition(),
-          eq(branchPermissionConfigs.sharing_mode, 'shared'),
-          ...(capability
-            ? [
-                branchRoleGrantsCapability(
-                  branchPermissionEntries.role,
-                  branchPermissionEntries.fs_access,
-                  capability
-                ),
-              ]
-            : [])
+        .innerJoin(
+          groupMemberships,
+          and(
+            eq(groupMemberships.group_id, branchPermissionEntries.group_id),
+            eq(groupMemberships.user_id, userId)
+          )
         )
-      )
+        .innerJoin(
+          groups,
+          and(eq(groups.group_id, branchPermissionEntries.group_id), eq(groups.archived, false))
+        )
+        .where(
+          and(
+            effectiveConfigCondition(),
+            eq(branchPermissionConfigs.sharing_mode, 'shared'),
+            ...(entryCondition ? [entryCondition] : [])
+          )
+        )
+    );
+  if (!capability) return matchingGroupEntryExists();
+  if (capability === 'terminal.open') {
+    return (
+      and(
+        matchingGroupEntryExists(
+          roleGrantsCapability(branchPermissionEntries.role, 'branch', capability)
+        ),
+        matchingGroupEntryExists(inArray(branchPermissionEntries.fs_access, ['read', 'write']))
+      ) ?? sql`false`
+    );
+  }
+  return matchingGroupEntryExists(
+    branchRoleGrantsCapability(
+      branchPermissionEntries.role,
+      branchPermissionEntries.fs_access,
+      capability
+    )
   );
 }
 

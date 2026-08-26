@@ -28,7 +28,14 @@ import {
   validateCapabilityPolicyDraft,
 } from '../../types/capability-policy';
 import type { Database } from '../client';
-import { deleteFrom, insert, runDatabaseTransaction, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  insert,
+  lockRowForUpdate,
+  runDatabaseTransaction,
+  select,
+  update,
+} from '../database-wrapper';
 import {
   appVariables,
   boardAccessEntries,
@@ -558,13 +565,14 @@ export class CapabilityPolicyRepository {
     target: { board_id?: BoardID; branch_id?: BranchID },
     config: BranchPermissionConfig,
     actorId: UserID | null,
-    existingConfigId?: string
+    existingConfigId?: string,
+    expectedRevision?: number
   ): Promise<string> {
     assertConfig(config);
     const now = new Date();
     const configId = existingConfigId ?? generateId();
     if (existingConfigId) {
-      await update(tx, branchPermissionConfigs)
+      const updated = await update(tx, branchPermissionConfigs)
         .set({
           sharing_mode: config.access.sharing_mode,
           others_role: config.access.others.preset,
@@ -573,8 +581,18 @@ export class CapabilityPolicyRepository {
           updated_by: actorId,
           updated_at: now,
         })
-        .where(eq(branchPermissionConfigs.config_id, configId))
+        .where(
+          and(
+            eq(branchPermissionConfigs.config_id, configId),
+            expectedRevision === undefined
+              ? undefined
+              : eq(branchPermissionConfigs.revision, expectedRevision)
+          )
+        )
         .run();
+      if (expectedRevision !== undefined && updated.rowsAffected !== 1) {
+        throw new RepositoryError('Permission configuration changed; reload before saving');
+      }
       await deleteFrom(tx, branchPermissionEntries)
         .where(eq(branchPermissionEntries.config_id, configId))
         .run();
@@ -653,6 +671,7 @@ export class CapabilityPolicyRepository {
     await runDatabaseTransaction(
       this.db,
       async (tx) => {
+        await lockRowForUpdate(tx, this.db, boards, eq(boards.board_id, boardId));
         await assertPrincipalsExist(
           tx,
           [value.board_access, value.branch_template.access],
@@ -674,7 +693,7 @@ export class CapabilityPolicyRepository {
           if (!options.initialize && value.board_access_revision !== currentPolicy.revision) {
             throw new RepositoryError('Board access policy changed; reload before saving');
           }
-          await update(tx, boardAccessPolicies)
+          const updated = await update(tx, boardAccessPolicies)
             .set({
               sharing_mode: value.board_access.sharing_mode,
               others_role: value.board_access.others.preset,
@@ -682,8 +701,16 @@ export class CapabilityPolicyRepository {
               updated_by: actorId,
               updated_at: now,
             })
-            .where(eq(boardAccessPolicies.board_id, boardId))
+            .where(
+              and(
+                eq(boardAccessPolicies.board_id, boardId),
+                eq(boardAccessPolicies.revision, currentPolicy.revision)
+              )
+            )
             .run();
+          if (updated.rowsAffected !== 1) {
+            throw new RepositoryError('Board access policy changed; reload before saving');
+          }
           await deleteFrom(tx, boardAccessEntries)
             .where(eq(boardAccessEntries.board_id, boardId))
             .run();
@@ -731,7 +758,8 @@ export class CapabilityPolicyRepository {
           { board_id: boardId },
           value.branch_template,
           actorId,
-          currentTemplate?.config_id
+          currentTemplate?.config_id,
+          currentTemplate?.revision
         );
       },
       { sqliteImmediate: true }
@@ -748,6 +776,15 @@ export class CapabilityPolicyRepository {
     await runDatabaseTransaction(
       this.db,
       async (tx) => {
+        const initialBranch = await select(tx, { board_id: branches.board_id })
+          .from(branches)
+          .where(eq(branches.branch_id, branchId))
+          .one();
+        if (!initialBranch) throw new EntityNotFoundError('Branch', branchId);
+        if (initialBranch.board_id) {
+          await lockRowForUpdate(tx, this.db, boards, eq(boards.board_id, initialBranch.board_id));
+        }
+        await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, branchId));
         const submittedConfig =
           value.binding_mode === 'override' ? value.override_config : value.inherited_config;
         if (submittedConfig) {
@@ -766,6 +803,9 @@ export class CapabilityPolicyRepository {
           .where(eq(branches.branch_id, branchId))
           .one();
         if (!branch) throw new EntityNotFoundError('Branch', branchId);
+        if (branch.board_id !== initialBranch.board_id) {
+          throw new RepositoryError('Branch board changed; reload before saving permissions');
+        }
         if (branch.owner !== value.primary_owner_user_id)
           throw new RepositoryError('Primary ownership is immutable');
         if (value.binding_mode === 'inherit' && !branch.board_id) {
@@ -830,7 +870,8 @@ export class CapabilityPolicyRepository {
           { branch_id: branchId },
           config,
           actorId,
-          current?.config_id
+          current?.config_id,
+          current?.revision
         );
       },
       { sqliteImmediate: true }
@@ -853,19 +894,30 @@ export class CapabilityPolicyRepository {
     actorId: UserID | null = null
   ): Promise<number> {
     const scoped = new CapabilityPolicyRepository(tx);
+    await lockRowForUpdate(tx, this.db, boards, eq(boards.board_id, boardId));
     const template = await select(tx)
       .from(branchPermissionConfigs)
       .where(eq(branchPermissionConfigs.board_id, boardId))
       .one();
     if (!template) throw new RepositoryError(`Board ${boardId} has no branch template`);
     const config = await scoped.loadBranchConfig(template.config_id);
+    await lockRowForUpdate(
+      tx,
+      this.db,
+      branchPermissionConfigs,
+      eq(branchPermissionConfigs.config_id, template.config_id)
+    );
     const inherited = await select(tx, { branch_id: branches.branch_id })
       .from(branches)
       .where(and(eq(branches.board_id, boardId), eq(branches.permission_binding, 'inherit')))
       .all();
 
     for (const branch of inherited) {
-      const existing = await select(tx, { config_id: branchPermissionConfigs.config_id })
+      await lockRowForUpdate(tx, this.db, branches, eq(branches.branch_id, branch.branch_id));
+      const existing = await select(tx, {
+        config_id: branchPermissionConfigs.config_id,
+        revision: branchPermissionConfigs.revision,
+      })
         .from(branchPermissionConfigs)
         .where(eq(branchPermissionConfigs.branch_id, branch.branch_id))
         .one();
@@ -874,7 +926,8 @@ export class CapabilityPolicyRepository {
         { branch_id: branch.branch_id as BranchID },
         structuredClone(config),
         actorId,
-        existing?.config_id
+        existing?.config_id,
+        existing?.revision
       );
       await update(tx, branches)
         .set({ permission_binding: 'override', permission_source: 'override' })

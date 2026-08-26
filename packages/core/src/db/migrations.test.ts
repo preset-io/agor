@@ -312,11 +312,11 @@ describe('Board and branch capability-policy migration', () => {
         others_can text, others_fs_access text, data text NOT NULL
       );
       CREATE TABLE board_owners (
-        board_id text NOT NULL, user_id text NOT NULL, created_at integer NOT NULL,
+        board_id text NOT NULL, user_id text NOT NULL, created_at integer,
         PRIMARY KEY (board_id,user_id)
       );
       CREATE TABLE branch_owners (
-        branch_id text NOT NULL, user_id text NOT NULL, created_at integer NOT NULL,
+        branch_id text NOT NULL, user_id text NOT NULL, created_at integer,
         PRIMARY KEY (branch_id,user_id)
       );
       CREATE TABLE board_group_grants (
@@ -486,6 +486,94 @@ describe('Board and branch capability-policy migration', () => {
     }
   });
 
+  it('keeps private board fallbacks closed and prefers current owners in SQLite', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-rbac-private-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+    try {
+      await createLegacyTables(client);
+      await client.executeMultiple(`
+        INSERT INTO users VALUES ('owner'),('manager'),('removed-creator'),('unmatched');
+        INSERT INTO groups VALUES ('design');
+        INSERT INTO boards VALUES (
+          'private-board',1,2,'removed-creator',
+          '{"access_mode":"private","default_others_can":"session","default_others_fs_access":"write"}'
+        );
+        INSERT INTO board_owners VALUES
+          ('private-board','owner',1),('private-board','manager',2);
+        INSERT INTO board_group_grants VALUES
+          ('private-board','design','all','write',1,2);
+        INSERT INTO branches VALUES
+          ('inherited','private-board',1,2,'owner','board','session','write','{}'),
+          ('removed-creator',NULL,1,2,'removed-creator','override','none','none','{}'),
+          ('nullable-owner-order',NULL,1,2,'removed-creator','override','none','none','{}');
+        INSERT INTO branch_owners VALUES
+          ('inherited','owner',1),
+          ('removed-creator','manager',3),
+          ('nullable-owner-order','manager',NULL),
+          ('nullable-owner-order','owner',5);
+      `);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0098_board_branch_capability_policies.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const owners = await client.execute(
+        `SELECT 'board:'||board_id AS resource,primary_owner_user_id FROM boards
+         UNION ALL SELECT 'branch:'||branch_id,primary_owner_user_id FROM branches`
+      );
+      expect(
+        Object.fromEntries(owners.rows.map((row) => [row.resource, row.primary_owner_user_id]))
+      ).toMatchObject({
+        'board:private-board': 'owner',
+        'branch:inherited': 'owner',
+        'branch:removed-creator': 'manager',
+        'branch:nullable-owner-order': 'owner',
+      });
+
+      const template = await client.execute(
+        `SELECT sharing_mode,others_role,others_fs_access
+         FROM branch_permission_configs WHERE board_id='private-board'`
+      );
+      // Named current owners require a shared package, but private-board
+      // defaults must never turn into an unmatched-member fallback.
+      expect(template.rows[0]).toMatchObject({
+        sharing_mode: 'shared',
+        others_role: 'none',
+        others_fs_access: 'none',
+      });
+      const binding = await client.execute(
+        `SELECT permission_binding FROM branches WHERE branch_id='inherited'`
+      );
+      expect(binding.rows[0]).toMatchObject({ permission_binding: 'inherit' });
+      const ignoredGroup = await client.execute(
+        `SELECT count(*) AS count FROM branch_permission_entries e
+         JOIN branch_permission_configs c ON c.config_id=e.config_id
+         WHERE c.board_id='private-board' AND e.group_id='design'`
+      );
+      expect(Number(ignoredGroup.rows[0]?.count)).toBe(0);
+
+      await expect(
+        client.execute(
+          `UPDATE branches SET permission_binding='corrupt' WHERE branch_id='inherited'`
+        )
+      ).rejects.toThrow(/CHECK constraint failed/);
+      await expect(
+        client.execute(
+          `UPDATE branch_permission_configs SET others_fs_access='execute' WHERE board_id='private-board'`
+        )
+      ).rejects.toThrow(/CHECK constraint failed/);
+      await expect(client.execute(`DELETE FROM users WHERE user_id='owner'`)).rejects.toThrow(
+        /owns protected boards or branches/
+      );
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it('fails closed when SQLite cannot attribute a primary owner', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'agor-rbac-owner-preflight-'));
     const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
@@ -539,6 +627,13 @@ describe('Board and branch capability-policy migration', () => {
     expect(migration).toContain("string_agg(kind||':'||id");
     expect(migration).toContain('RBAC migration cannot attribute primary owners');
     expect(migration).toContain("SET LOCAL lock_timeout = '3s'");
+    expect(migration).toContain('ORDER BY bo.created_at NULLS LAST,bo.user_id');
+    expect(migration).toContain('CONSTRAINT "boards_tenant_primary_owner_fk"');
+    expect(migration).toContain('CONSTRAINT "branches_tenant_primary_owner_fk"');
+    expect(migration).toContain("CHECK (\"permission_binding\" IN ('inherit','override'))");
+    expect(migration).toContain("CHECK (\"sharing_mode\" IN ('private','shared'))");
+    expect(migration).toContain("CHECK (\"others_fs_access\" IN ('none','read','write'))");
+    expect(migration).toContain("CHECK (\"fs_access\" IN ('none','read','write'))");
     expect(migration).toContain('"others_role" text');
     expect(migration).toContain('"role" text');
     expect(migration).not.toContain('"capabilities" jsonb');

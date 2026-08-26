@@ -8,6 +8,7 @@ import {
   BoardObjectRepository,
   BoardRepository,
   BranchRepository,
+  CapabilityPolicyRepository,
   type Database,
   generateId,
   RepoRepository,
@@ -105,6 +106,9 @@ describe('BoardsService - Custom Methods', () => {
       name: 'Original Board',
       slug: 'original-board',
       icon: '🔷',
+      access_mode: 'shared',
+      default_others_can: 'all',
+      default_others_fs_access: 'write',
       created_by: TEST_USER,
     })) as Board;
 
@@ -120,6 +124,14 @@ describe('BoardsService - Custom Methods', () => {
     expect(imported.slug).toBe('imported-board');
     expect(imported.board_id).not.toBe(original.board_id);
     expect(imported.icon).toBe('🔷'); // Icon should be preserved
+    const importedPolicy = await new CapabilityPolicyRepository(db).getBoardPolicies(
+      imported.board_id
+    );
+    expect(importedPolicy.board_access.sharing_mode).toBe('shared');
+    expect(importedPolicy.branch_template.access.others).toMatchObject({
+      preset: 'manager',
+      fs_access: 'write',
+    });
   });
 
   dbTest('toYaml should export board to YAML string', async ({ db }) => {
@@ -176,6 +188,7 @@ describe('BoardsService - Custom Methods', () => {
       slug: 'original',
       description: 'To be cloned',
       icon: '🔵',
+      access_mode: 'private',
       created_by: TEST_USER,
     })) as Board;
 
@@ -186,6 +199,9 @@ describe('BoardsService - Custom Methods', () => {
     expect(cloned.board_id).not.toBe(original.board_id);
     expect(cloned.icon).toBe(original.icon);
     expect(cloned.description).toBe(original.description);
+    const clonedPolicy = await new CapabilityPolicyRepository(db).getBoardPolicies(cloned.board_id);
+    expect(clonedPolicy.board_access.sharing_mode).toBe('private');
+    expect(clonedPolicy.branch_template.access.sharing_mode).toBe('private');
   });
 
   dbTest('clone should accept slug identifiers', async ({ db }) => {

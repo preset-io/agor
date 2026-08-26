@@ -2,6 +2,7 @@ import {
   CapabilityPolicyRepository,
   EntityNotFoundError,
   RepositoryError,
+  runWithTenantDatabaseTransaction,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import { BadRequest, Conflict, Forbidden, NotAuthenticated, NotFound } from '@agor/core/feathers';
@@ -17,6 +18,7 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { isSuperAdmin } from '../utils/branch-authorization.js';
+import { lockUserAuthorityMutation } from './user-authority-lock.js';
 
 export const CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS = ['find', 'patch'] as const;
 
@@ -38,6 +40,10 @@ function routeId(params?: Params): string {
   const id = (params as { route?: { id?: string } } | undefined)?.route?.id;
   if (!id) throw new BadRequest('Resource ID is required');
   return id;
+}
+
+function routeTenantId(params?: Params): string | undefined {
+  return (params as { tenant?: { tenant_id?: string } } | undefined)?.tenant?.tenant_id;
 }
 
 function requireActor(params?: Params) {
@@ -117,52 +123,56 @@ export function setupCapabilityPolicyServices(
         return repository.getBoardPolicies(boardId);
       },
       async patch(_id: string | null, value: BoardCapabilityPolicies, params?: Params) {
-        const current = requireActor(params);
-        const boardId = routeId(params) as BoardID;
-        const existing = await repository.getBoardPolicies(boardId);
-        if (params?.provider && !current?.service) {
-          const access = await repository.resolveBoardAccess(boardId, current!.user_id);
-          const managesPolicy =
-            hasMinimumRole(current?.role, ROLES.ADMIN) ||
-            access.capabilities.includes('board.policy.manage');
-          assertForeignRulesUnchanged(
-            existing.branch_template.session_sharing.owner_rules,
-            value.branch_template.session_sharing.owner_rules,
-            current!.user_id
-          );
-          if (!managesPolicy) {
-            const onlyOwnSharingChanged =
-              stable(existing.board_access) === stable(value.board_access) &&
-              stable(existing.branch_template.access) === stable(value.branch_template.access);
-            if (!onlyOwnSharingChanged || !access.capabilities.includes('board.view')) {
-              throw new Forbidden('You cannot manage this board permission policy');
-            }
-          }
-          const preferences = await repository.getWorkspacePreferences();
-          if (
-            !preferences.personal_session_sharing_enabled &&
-            ownRuleWasEnabled(
+        return runWithTenantDatabaseTransaction(db, routeTenantId(params), async (operationDb) => {
+          const operationRepository = new CapabilityPolicyRepository(operationDb);
+          await lockUserAuthorityMutation(operationDb, params);
+          const current = requireActor(params);
+          const boardId = routeId(params) as BoardID;
+          const existing = await operationRepository.getBoardPolicies(boardId);
+          if (params?.provider && !current?.service) {
+            const access = await operationRepository.resolveBoardAccess(boardId, current!.user_id);
+            const managesPolicy =
+              hasMinimumRole(current?.role, ROLES.ADMIN) ||
+              access.capabilities.includes('board.policy.manage');
+            assertForeignRulesUnchanged(
               existing.branch_template.session_sharing.owner_rules,
               value.branch_template.session_sharing.owner_rules,
               current!.user_id
-            )
-          ) {
-            throw new Forbidden('Session sharing is disabled for this workspace');
+            );
+            if (!managesPolicy) {
+              const onlyOwnSharingChanged =
+                stable(existing.board_access) === stable(value.board_access) &&
+                stable(existing.branch_template.access) === stable(value.branch_template.access);
+              if (!onlyOwnSharingChanged || !access.capabilities.includes('board.view')) {
+                throw new Forbidden('You cannot manage this board permission policy');
+              }
+            }
+            const preferences = await operationRepository.getWorkspacePreferences();
+            if (
+              !preferences.personal_session_sharing_enabled &&
+              ownRuleWasEnabled(
+                existing.branch_template.session_sharing.owner_rules,
+                value.branch_template.session_sharing.owner_rules,
+                current!.user_id
+              )
+            ) {
+              throw new Forbidden('Session sharing is disabled for this workspace');
+            }
           }
-        }
-        try {
-          const saved = await repository.replaceBoardPolicies(
-            boardId,
-            value,
-            current?.user_id ?? existing.primary_owner_user_id
-          );
-          console.info(
-            `[rbac.policy] updated kind=board board_id=${boardId} access_revision=${saved.board_access_revision} template_revision=${saved.branch_template_revision} access_entries=${saved.board_access.entries.length} template_entries=${saved.branch_template.access.entries.length}`
-          );
-          return saved;
-        } catch (error) {
-          mapRepositoryError(error);
-        }
+          try {
+            const saved = await operationRepository.replaceBoardPolicies(
+              boardId,
+              value,
+              current?.user_id ?? existing.primary_owner_user_id
+            );
+            console.info(
+              `[rbac.policy] updated kind=board board_id=${boardId} access_revision=${saved.board_access_revision} template_revision=${saved.branch_template_revision} access_entries=${saved.board_access.entries.length} template_entries=${saved.branch_template.access.entries.length}`
+            );
+            return saved;
+          } catch (error) {
+            mapRepositoryError(error);
+          }
+        });
       },
     },
     { methods: CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS }
@@ -185,72 +195,79 @@ export function setupCapabilityPolicyServices(
         return repository.getBranchPolicy(branchId);
       },
       async patch(_id: string | null, value: BranchCapabilityPolicy, params?: Params) {
-        const current = requireActor(params);
-        const branchId = routeId(params) as BranchID;
-        const existing = await repository.getBranchPolicy(branchId);
-        if (params?.provider && !current?.service) {
-          const access = await repository.resolveBranchAccess(branchId, current!.user_id);
-          const managesPolicy =
-            isSuperAdmin(current?.role, options.allowSuperadmin ?? true) ||
-            access.capabilities.includes('branch.policy.manage');
-          const oldConfig =
-            existing.binding_mode === 'inherit'
-              ? existing.inherited_config
-              : existing.override_config;
-          const newConfig =
-            value.binding_mode === 'inherit' ? value.inherited_config : value.override_config;
-          if (!oldConfig || !newConfig)
-            throw new BadRequest('A complete permission configuration is required');
-          // Binding is monolithic, but changing it must not become an indirect
-          // way for a Manager to erase or rewrite another user's personal
-          // home-sharing decision. Equivalent rules may move between the
-          // board template and an override; semantic changes remain owner-only.
-          assertForeignRulesUnchanged(
-            oldConfig.session_sharing.owner_rules,
-            newConfig.session_sharing.owner_rules,
-            current!.user_id
-          );
-          if (value.binding_mode === 'inherit') {
-            const boardTemplate = existing.inherited_config;
-            if (!boardTemplate || stable(newConfig) !== stable(boardTemplate)) {
-              throw new BadRequest('Inherited permissions are read only');
-            }
-          }
-          if (!managesPolicy) {
-            const onlyOwnSharingChanged =
-              existing.binding_mode === value.binding_mode &&
-              stable(oldConfig.access) === stable(newConfig.access);
-            if (!onlyOwnSharingChanged || !access.capabilities.includes('branch.view')) {
-              throw new Forbidden('You cannot manage this branch permission policy');
-            }
-          }
-          const preferences = await repository.getWorkspacePreferences();
-          if (
-            !preferences.personal_session_sharing_enabled &&
-            ownRuleWasEnabled(
+        return runWithTenantDatabaseTransaction(db, routeTenantId(params), async (operationDb) => {
+          const operationRepository = new CapabilityPolicyRepository(operationDb);
+          await lockUserAuthorityMutation(operationDb, params);
+          const current = requireActor(params);
+          const branchId = routeId(params) as BranchID;
+          const existing = await operationRepository.getBranchPolicy(branchId);
+          if (params?.provider && !current?.service) {
+            const access = await operationRepository.resolveBranchAccess(
+              branchId,
+              current!.user_id
+            );
+            const managesPolicy =
+              isSuperAdmin(current?.role, options.allowSuperadmin ?? true) ||
+              access.capabilities.includes('branch.policy.manage');
+            const oldConfig =
+              existing.binding_mode === 'inherit'
+                ? existing.inherited_config
+                : existing.override_config;
+            const newConfig =
+              value.binding_mode === 'inherit' ? value.inherited_config : value.override_config;
+            if (!oldConfig || !newConfig)
+              throw new BadRequest('A complete permission configuration is required');
+            // Binding is monolithic, but changing it must not become an indirect
+            // way for a Manager to erase or rewrite another user's personal
+            // home-sharing decision. Equivalent rules may move between the
+            // board template and an override; semantic changes remain owner-only.
+            assertForeignRulesUnchanged(
               oldConfig.session_sharing.owner_rules,
               newConfig.session_sharing.owner_rules,
               current!.user_id
-            )
-          ) {
-            throw new Forbidden('Session sharing is disabled for this workspace');
+            );
+            if (value.binding_mode === 'inherit') {
+              const boardTemplate = existing.inherited_config;
+              if (!boardTemplate || stable(newConfig) !== stable(boardTemplate)) {
+                throw new BadRequest('Inherited permissions are read only');
+              }
+            }
+            if (!managesPolicy) {
+              const onlyOwnSharingChanged =
+                existing.binding_mode === value.binding_mode &&
+                stable(oldConfig.access) === stable(newConfig.access);
+              if (!onlyOwnSharingChanged || !access.capabilities.includes('branch.view')) {
+                throw new Forbidden('You cannot manage this branch permission policy');
+              }
+            }
+            const preferences = await operationRepository.getWorkspacePreferences();
+            if (
+              !preferences.personal_session_sharing_enabled &&
+              ownRuleWasEnabled(
+                oldConfig.session_sharing.owner_rules,
+                newConfig.session_sharing.owner_rules,
+                current!.user_id
+              )
+            ) {
+              throw new Forbidden('Session sharing is disabled for this workspace');
+            }
           }
-        }
-        try {
-          const saved = await repository.replaceBranchPolicy(
-            branchId,
-            value,
-            current?.user_id ?? existing.primary_owner_user_id
-          );
-          const config =
-            saved.binding_mode === 'inherit' ? saved.inherited_config : saved.override_config;
-          console.info(
-            `[rbac.policy] updated kind=branch branch_id=${branchId} binding=${saved.binding_mode} revision=${saved.revision} entries=${config?.access.entries.length ?? 0}`
-          );
-          return saved;
-        } catch (error) {
-          mapRepositoryError(error);
-        }
+          try {
+            const saved = await operationRepository.replaceBranchPolicy(
+              branchId,
+              value,
+              current?.user_id ?? existing.primary_owner_user_id
+            );
+            const config =
+              saved.binding_mode === 'inherit' ? saved.inherited_config : saved.override_config;
+            console.info(
+              `[rbac.policy] updated kind=branch branch_id=${branchId} binding=${saved.binding_mode} revision=${saved.revision} entries=${config?.access.entries.length ?? 0}`
+            );
+            return saved;
+          } catch (error) {
+            mapRepositoryError(error);
+          }
+        });
       },
     },
     { methods: CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS }

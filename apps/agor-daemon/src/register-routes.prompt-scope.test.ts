@@ -22,7 +22,7 @@ describe('prompt and widget transaction scopes', () => {
     );
   });
 
-  it('enforces branch prompt RBAC before admitting a Task (repository admission bypasses the tasks.create hook)', () => {
+  it('rechecks branch prompt RBAC inside the durable Task-admission transaction', () => {
     const promptStart = source.indexOf("'/sessions/:id/prompt'");
     const promptEnd = source.indexOf("'/tasks/:id/run'", promptStart);
     const prompt = source.slice(promptStart, promptEnd);
@@ -30,18 +30,22 @@ describe('prompt and widget transaction scopes', () => {
     // The check must run before the durable Task admission — otherwise a
     // 'session'-tier collaborator prompting another user's session would be
     // admitted (and run under the owner's identity/home) instead of 403'd.
-    const rbacCheck = prompt.indexOf('resolveSessionPromptAccess({');
-    const taskAdmission = prompt.indexOf('taskRepo.createPending(');
-    expect(rbacCheck).toBeGreaterThan(0);
+    const transaction = prompt.indexOf('runWithTenantDatabaseTransaction(');
+    const authorityLock = prompt.indexOf('lockUserAuthorityMutation(operationDb, params)');
+    const rbacCheck = prompt.lastIndexOf('assertCurrentPromptAuthority(');
+    const taskAdmission = prompt.indexOf('new TaskRepository(operationDb).createPending(');
+    expect(transaction).toBeGreaterThan(0);
+    expect(authorityLock).toBeGreaterThan(transaction);
+    expect(rbacCheck).toBeGreaterThan(authorityLock);
     expect(taskAdmission).toBeGreaterThan(0);
     expect(rbacCheck).toBeLessThan(taskAdmission);
 
-    // Internal/daemon callers (spawn-prompt forward, widgets, scheduler,
-    // gateway) and explicit daemon service accounts are exempt from the user-facing
-    // branch check.
-    expect(prompt).toContain('const isInternalPrompt = !params.provider;');
+    // Provider-less human actions still carry the real prompt actor and use
+    // the same authority boundary. Only explicit daemon service accounts are
+    // exempt from the user-facing check.
+    expect(prompt).not.toContain('const isInternalPrompt = !params.provider;');
     expect(prompt).toContain('_isServiceAccount');
-    expect(prompt).toContain('branchRbacEnabled && !isInternalPrompt');
+    expect(prompt).toContain('branchRbacEnabled && !isPromptServiceAccount');
   });
 
   it('does not keep a route-wide tenant transaction over widget external work', () => {

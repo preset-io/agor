@@ -5,18 +5,21 @@ ALTER TABLE "boards" ADD COLUMN "primary_owner_user_id" varchar(36);
 --> statement-breakpoint
 ALTER TABLE "branches" ADD COLUMN "primary_owner_user_id" varchar(36);
 --> statement-breakpoint
-ALTER TABLE "branches" ADD COLUMN "permission_binding" text DEFAULT 'override' NOT NULL;
+ALTER TABLE "branches" ADD COLUMN "permission_binding" text DEFAULT 'override' NOT NULL
+  CHECK ("permission_binding" IN ('inherit','override'));
 --> statement-breakpoint
 UPDATE "boards" b SET "primary_owner_user_id" = COALESCE(
-  (SELECT u.user_id FROM users u WHERE u.tenant_id=b.tenant_id AND u.user_id=b.created_by),
   (SELECT bo.user_id FROM board_owners bo JOIN users u ON u.tenant_id=bo.tenant_id AND u.user_id=bo.user_id
-   WHERE bo.tenant_id=b.tenant_id AND bo.board_id=b.board_id ORDER BY bo.created_at,bo.user_id LIMIT 1)
+   WHERE bo.tenant_id=b.tenant_id AND bo.board_id=b.board_id
+   ORDER BY bo.created_at NULLS LAST,bo.user_id LIMIT 1),
+  (SELECT u.user_id FROM users u WHERE u.tenant_id=b.tenant_id AND u.user_id=b.created_by)
 );
 --> statement-breakpoint
 UPDATE "branches" br SET "primary_owner_user_id" = COALESCE(
-  (SELECT u.user_id FROM users u WHERE u.tenant_id=br.tenant_id AND u.user_id=br.created_by),
   (SELECT bo.user_id FROM branch_owners bo JOIN users u ON u.tenant_id=bo.tenant_id AND u.user_id=bo.user_id
-   WHERE bo.tenant_id=br.tenant_id AND bo.branch_id=br.branch_id ORDER BY bo.created_at,bo.user_id LIMIT 1)
+   WHERE bo.tenant_id=br.tenant_id AND bo.branch_id=br.branch_id
+   ORDER BY bo.created_at NULLS LAST,bo.user_id LIMIT 1),
+  (SELECT u.user_id FROM users u WHERE u.tenant_id=br.tenant_id AND u.user_id=br.created_by)
 );
 --> statement-breakpoint
 DO $$
@@ -56,12 +59,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS "boards_tenant_board_id_unique" ON "boards" ("
 --> statement-breakpoint
 CREATE UNIQUE INDEX IF NOT EXISTS "branches_tenant_branch_id_unique" ON "branches" ("tenant_id","branch_id");
 --> statement-breakpoint
+ALTER TABLE "boards" ADD CONSTRAINT "boards_tenant_primary_owner_fk"
+  FOREIGN KEY ("tenant_id","primary_owner_user_id") REFERENCES "users"("tenant_id","user_id") ON DELETE RESTRICT;
+--> statement-breakpoint
+ALTER TABLE "branches" ADD CONSTRAINT "branches_tenant_primary_owner_fk"
+  FOREIGN KEY ("tenant_id","primary_owner_user_id") REFERENCES "users"("tenant_id","user_id") ON DELETE RESTRICT;
+--> statement-breakpoint
 
 CREATE TABLE "board_access_policies" (
   "tenant_id" text DEFAULT 'default' NOT NULL,
   "board_id" varchar(36) PRIMARY KEY NOT NULL,
   "schema_version" integer DEFAULT 1 NOT NULL,
-  "sharing_mode" text NOT NULL,
+  "sharing_mode" text NOT NULL CHECK ("sharing_mode" IN ('private','shared')),
   "others_role" text DEFAULT 'none' NOT NULL CHECK ("others_role" IN ('none','viewer','editor','manager')),
   "revision" integer DEFAULT 1 NOT NULL,
   "updated_by" varchar(36),
@@ -106,8 +115,8 @@ CREATE TABLE "branch_permission_configs" (
   "tenant_id" text DEFAULT 'default' NOT NULL,
   "config_id" varchar(36) PRIMARY KEY NOT NULL,
   "board_id" varchar(36), "branch_id" varchar(36), "schema_version" integer DEFAULT 1 NOT NULL,
-  "sharing_mode" text NOT NULL, "others_role" text DEFAULT 'none' NOT NULL CHECK ("others_role" IN ('none','viewer','collaborator','manager')),
-  "others_fs_access" text DEFAULT 'none' NOT NULL,
+  "sharing_mode" text NOT NULL CHECK ("sharing_mode" IN ('private','shared')), "others_role" text DEFAULT 'none' NOT NULL CHECK ("others_role" IN ('none','viewer','collaborator','manager')),
+  "others_fs_access" text DEFAULT 'none' NOT NULL CHECK ("others_fs_access" IN ('none','read','write')),
   "revision" integer DEFAULT 1 NOT NULL, "updated_by" varchar(36),
   "created_at" timestamp with time zone NOT NULL, "updated_at" timestamp with time zone NOT NULL,
   CHECK (("board_id" IS NOT NULL) <> ("branch_id" IS NOT NULL)),
@@ -130,7 +139,7 @@ CREATE TABLE "branch_permission_entries" (
   "tenant_id" text DEFAULT 'default' NOT NULL,
   "entry_id" varchar(36) PRIMARY KEY NOT NULL, "config_id" varchar(36) NOT NULL,
   "user_id" varchar(36), "group_id" varchar(36), "role" text NOT NULL CHECK ("role" IN ('none','viewer','collaborator','manager')),
-  "fs_access" text DEFAULT 'none' NOT NULL,
+  "fs_access" text DEFAULT 'none' NOT NULL CHECK ("fs_access" IN ('none','read','write')),
   "created_at" timestamp with time zone NOT NULL, "updated_at" timestamp with time zone NOT NULL,
   CHECK (("user_id" IS NOT NULL) <> ("group_id" IS NOT NULL)),
   CONSTRAINT "branch_permission_entries_tenant_config_fk" FOREIGN KEY ("tenant_id","config_id") REFERENCES "branch_permission_configs"("tenant_id","config_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
@@ -206,12 +215,15 @@ WHERE bg.can<>'none' AND COALESCE(b.data->>'access_mode','shared')='shared';
 
 INSERT INTO branch_permission_configs
 SELECT b.tenant_id,gen_random_uuid()::text,b.board_id,NULL,1,
- CASE WHEN COALESCE(b.data->>'default_others_can','session')<>'none'
+ CASE WHEN COALESCE(b.data->>'access_mode','shared')='shared'
+            AND (COALESCE(b.data->>'default_others_can','session')<>'none'
+                 OR EXISTS(SELECT 1 FROM board_group_grants bg WHERE bg.tenant_id=b.tenant_id AND bg.board_id=b.board_id AND bg.can<>'none'))
    OR EXISTS(SELECT 1 FROM board_owners bo WHERE bo.tenant_id=b.tenant_id AND bo.board_id=b.board_id AND bo.user_id<>b.primary_owner_user_id)
-   OR (COALESCE(b.data->>'access_mode','shared')='shared' AND EXISTS(SELECT 1 FROM board_group_grants bg WHERE bg.tenant_id=b.tenant_id AND bg.board_id=b.board_id AND bg.can<>'none'))
    THEN 'shared' ELSE 'private' END,
- CASE COALESCE(b.data->>'default_others_can','session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
- CASE WHEN COALESCE(b.data->>'default_others_can','session')='none' THEN 'none' ELSE COALESCE(b.data->>'default_others_fs_access','read') END,
+ CASE WHEN COALESCE(b.data->>'access_mode','shared')='private' THEN 'none'
+      ELSE CASE COALESCE(b.data->>'default_others_can','session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
+ CASE WHEN COALESCE(b.data->>'access_mode','shared')='private' OR COALESCE(b.data->>'default_others_can','session')='none'
+      THEN 'none' ELSE COALESCE(b.data->>'default_others_fs_access','read') END,
  1,b.primary_owner_user_id,COALESCE(b.created_at,now()),COALESCE(b.updated_at,b.created_at,now()) FROM boards b;
 --> statement-breakpoint
 INSERT INTO branch_permission_entries

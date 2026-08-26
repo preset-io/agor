@@ -24,6 +24,7 @@ import {
   type AnyPgColumn,
   bigint,
   boolean,
+  check,
   customType,
   foreignKey,
   index,
@@ -630,6 +631,11 @@ export const boards = pgTable(
     nameIdx: index('boards_name_idx').on(table.name),
     slugIdx: index('boards_slug_idx').on(table.slug),
     slugTenantUnique: uniqueIndex('boards_tenant_slug_unique').on(table.tenant_id, table.slug),
+    primaryOwnerFk: foreignKey({
+      columns: [table.tenant_id, table.primary_owner_user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+      name: 'boards_tenant_primary_owner_fk',
+    }).onDelete('restrict'),
   })
 );
 
@@ -899,6 +905,15 @@ export const branches = pgTable(
       ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
+    primaryOwnerFk: foreignKey({
+      columns: [table.tenant_id, table.primary_owner_user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+      name: 'branches_tenant_primary_owner_fk',
+    }).onDelete('restrict'),
+    permissionBindingCheck: check(
+      'branches_permission_binding_check',
+      sql`${table.permission_binding} IN ('inherit','override')`
+    ),
   })
 );
 
@@ -1318,6 +1333,10 @@ export const boardAccessPolicies = pgTable(
     ),
     tenantIdx: index('board_access_policies_tenant_id_idx').on(table.tenant_id),
     updatedIdx: index('board_access_policies_updated_idx').on(table.updated_at),
+    sharingModeCheck: check(
+      'board_access_policies_sharing_mode_check',
+      sql`${table.sharing_mode} IN ('private','shared')`
+    ),
   })
 );
 
@@ -1425,6 +1444,14 @@ export const branchPermissionConfigs = pgTable(
       table.branch_id
     ),
     updatedIdx: index('branch_permission_configs_updated_idx').on(table.updated_at),
+    sharingModeCheck: check(
+      'branch_permission_configs_sharing_mode_check',
+      sql`${table.sharing_mode} IN ('private','shared')`
+    ),
+    othersFsAccessCheck: check(
+      'branch_permission_configs_others_fs_access_check',
+      sql`${table.others_fs_access} IN ('none','read','write')`
+    ),
   })
 );
 
@@ -1481,6 +1508,10 @@ export const branchPermissionEntries = pgTable(
       table.tenant_id,
       table.config_id,
       table.group_id
+    ),
+    fsAccessCheck: check(
+      'branch_permission_entries_fs_access_check',
+      sql`${table.fs_access} IN ('none','read','write')`
     ),
   })
 );

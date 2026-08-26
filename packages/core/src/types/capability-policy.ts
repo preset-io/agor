@@ -578,6 +578,17 @@ export function resolveCapabilityPolicyAccess(input: {
       }
       if (entry.principal.principal_type === 'group') groupIds.push(entry.principal.group_id);
     }
+    // Group grants are additive by dimension. A work-capable role from one
+    // group plus filesystem access from another therefore derives Terminal in
+    // exactly the same way as a single stored role/filesystem pair.
+    if (
+      policy.policy_kind === 'branch_access' &&
+      fsAccess !== 'none' &&
+      capabilities.has('sessions.create') &&
+      capabilities.has('sessions.prompt_own')
+    ) {
+      capabilities.add('terminal.open');
+    }
     return {
       capabilities: normalizeCapabilityPolicyCapabilities(policy.policy_kind, [...capabilities]),
       fs_access: fsAccess,

@@ -23,6 +23,7 @@ import { relations, sql } from 'drizzle-orm';
 import {
   type AnySQLiteColumn,
   blob,
+  check,
   foreignKey,
   index,
   integer,
@@ -854,6 +855,10 @@ export const branches = sqliteTable(
     ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
+    permissionBindingCheck: check(
+      'branches_permission_binding_check',
+      sql`${table.permission_binding} IN ('inherit','override')`
+    ),
   })
 );
 
@@ -1237,7 +1242,13 @@ export const boardAccessPolicies = sqliteTable(
     created_at: t.timestamp('created_at').notNull(),
     updated_at: t.timestamp('updated_at').notNull(),
   },
-  (table) => ({ updatedIdx: index('board_access_policies_updated_idx').on(table.updated_at) })
+  (table) => ({
+    updatedIdx: index('board_access_policies_updated_idx').on(table.updated_at),
+    sharingModeCheck: check(
+      'board_access_policies_sharing_mode_check',
+      sql`${table.sharing_mode} IN ('private','shared')`
+    ),
+  })
 );
 
 /** One normalized user or group entry in a board policy. */
@@ -1305,6 +1316,14 @@ export const branchPermissionConfigs = sqliteTable(
     boardUnique: uniqueIndex('branch_permission_configs_board_unique').on(table.board_id),
     branchUnique: uniqueIndex('branch_permission_configs_branch_unique').on(table.branch_id),
     updatedIdx: index('branch_permission_configs_updated_idx').on(table.updated_at),
+    sharingModeCheck: check(
+      'branch_permission_configs_sharing_mode_check',
+      sql`${table.sharing_mode} IN ('private','shared')`
+    ),
+    othersFsAccessCheck: check(
+      'branch_permission_configs_others_fs_access_check',
+      sql`${table.others_fs_access} IN ('none','read','write')`
+    ),
   })
 );
 
@@ -1340,6 +1359,10 @@ export const branchPermissionEntries = sqliteTable(
     configGroupUnique: uniqueIndex('branch_permission_entries_config_group_unique').on(
       table.config_id,
       table.group_id
+    ),
+    fsAccessCheck: check(
+      'branch_permission_entries_fs_access_check',
+      sql`${table.fs_access} IN ('none','read','write')`
     ),
   })
 );

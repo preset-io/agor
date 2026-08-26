@@ -4,20 +4,29 @@ ALTER TABLE `boards` ADD COLUMN `primary_owner_user_id` text;
 --> statement-breakpoint
 ALTER TABLE `branches` ADD COLUMN `primary_owner_user_id` text;
 --> statement-breakpoint
-ALTER TABLE `branches` ADD COLUMN `permission_binding` text DEFAULT 'override' NOT NULL;
+ALTER TABLE `branches` ADD COLUMN `permission_binding` text DEFAULT 'override' NOT NULL
+  CHECK (`permission_binding` IN ('inherit','override'));
 --> statement-breakpoint
 UPDATE `boards`
 SET `primary_owner_user_id` = CASE
+  WHEN EXISTS (
+    SELECT 1 FROM `board_owners` bo JOIN `users` u ON u.`user_id` = bo.`user_id`
+    WHERE bo.`board_id` = `boards`.`board_id`
+  ) THEN (SELECT bo.`user_id` FROM `board_owners` bo JOIN `users` u ON u.`user_id` = bo.`user_id`
+          WHERE bo.`board_id` = `boards`.`board_id`
+          ORDER BY (bo.`created_at` IS NULL), bo.`created_at`, bo.`user_id` LIMIT 1)
   WHEN EXISTS (SELECT 1 FROM `users` WHERE `users`.`user_id` = `boards`.`created_by`) THEN `created_by`
-  ELSE (SELECT bo.`user_id` FROM `board_owners` bo JOIN `users` u ON u.`user_id` = bo.`user_id`
-        WHERE bo.`board_id` = `boards`.`board_id` ORDER BY bo.`created_at`, bo.`user_id` LIMIT 1)
 END;
 --> statement-breakpoint
 UPDATE `branches`
 SET `primary_owner_user_id` = CASE
+  WHEN EXISTS (
+    SELECT 1 FROM `branch_owners` bo JOIN `users` u ON u.`user_id` = bo.`user_id`
+    WHERE bo.`branch_id` = `branches`.`branch_id`
+  ) THEN (SELECT bo.`user_id` FROM `branch_owners` bo JOIN `users` u ON u.`user_id` = bo.`user_id`
+          WHERE bo.`branch_id` = `branches`.`branch_id`
+          ORDER BY (bo.`created_at` IS NULL), bo.`created_at`, bo.`user_id` LIMIT 1)
   WHEN EXISTS (SELECT 1 FROM `users` WHERE `users`.`user_id` = `branches`.`created_by`) THEN `created_by`
-  ELSE (SELECT bo.`user_id` FROM `branch_owners` bo JOIN `users` u ON u.`user_id` = bo.`user_id`
-        WHERE bo.`branch_id` = `branches`.`branch_id` ORDER BY bo.`created_at`, bo.`user_id` LIMIT 1)
 END;
 --> statement-breakpoint
 -- Fail closed instead of silently assigning an administrator when attribution is impossible.
@@ -45,7 +54,7 @@ UPDATE `branches` SET `permission_binding` = CASE
 CREATE TABLE `board_access_policies` (
   `board_id` text PRIMARY KEY NOT NULL REFERENCES `boards`(`board_id`) ON DELETE CASCADE,
   `schema_version` integer DEFAULT 1 NOT NULL,
-  `sharing_mode` text NOT NULL,
+  `sharing_mode` text NOT NULL CHECK (`sharing_mode` IN ('private','shared')),
   `others_role` text DEFAULT 'none' NOT NULL CHECK (`others_role` IN ('none','viewer','editor','manager')),
   `revision` integer DEFAULT 1 NOT NULL,
   `updated_by` text REFERENCES `users`(`user_id`) ON DELETE SET NULL,
@@ -82,9 +91,9 @@ CREATE TABLE `branch_permission_configs` (
   `board_id` text REFERENCES `boards`(`board_id`) ON DELETE CASCADE,
   `branch_id` text REFERENCES `branches`(`branch_id`) ON DELETE CASCADE,
   `schema_version` integer DEFAULT 1 NOT NULL,
-  `sharing_mode` text NOT NULL,
+  `sharing_mode` text NOT NULL CHECK (`sharing_mode` IN ('private','shared')),
   `others_role` text DEFAULT 'none' NOT NULL CHECK (`others_role` IN ('none','viewer','collaborator','manager')),
-  `others_fs_access` text DEFAULT 'none' NOT NULL,
+  `others_fs_access` text DEFAULT 'none' NOT NULL CHECK (`others_fs_access` IN ('none','read','write')),
   `revision` integer DEFAULT 1 NOT NULL,
   `updated_by` text REFERENCES `users`(`user_id`) ON DELETE SET NULL,
   `created_at` integer NOT NULL,
@@ -104,7 +113,7 @@ CREATE TABLE `branch_permission_entries` (
   `user_id` text REFERENCES `users`(`user_id`) ON DELETE CASCADE,
   `group_id` text REFERENCES `groups`(`group_id`) ON DELETE CASCADE,
   `role` text NOT NULL CHECK (`role` IN ('none','viewer','collaborator','manager')),
-  `fs_access` text DEFAULT 'none' NOT NULL,
+  `fs_access` text DEFAULT 'none' NOT NULL CHECK (`fs_access` IN ('none','read','write')),
   `created_at` integer NOT NULL,
   `updated_at` integer NOT NULL,
   CHECK ((`user_id` IS NOT NULL) <> (`group_id` IS NOT NULL))
@@ -183,13 +192,16 @@ WHERE bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'sh
 INSERT INTO `branch_permission_configs`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   b.`board_id`, NULL, 1,
-  CASE WHEN COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session')<>'none'
+  CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared'
+         AND (COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session')<>'none'
+              OR EXISTS (SELECT 1 FROM `board_group_grants` bg WHERE bg.`board_id`=b.`board_id` AND bg.`can`<>'none'))
          OR EXISTS (SELECT 1 FROM `board_owners` bo WHERE bo.`board_id`=b.`board_id` AND bo.`user_id`<>b.`primary_owner_user_id`)
-         OR (COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared'
-             AND EXISTS (SELECT 1 FROM `board_group_grants` bg WHERE bg.`board_id`=b.`board_id` AND bg.`can`<>'none'))
        THEN 'shared' ELSE 'private' END,
-  CASE COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
-  CASE WHEN COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session')='none' THEN 'none' ELSE COALESCE(json_extract(b.`data`, '$.default_others_fs_access'), 'read') END,
+  CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='private' THEN 'none'
+       ELSE CASE COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
+  CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='private'
+         OR COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session')='none'
+       THEN 'none' ELSE COALESCE(json_extract(b.`data`, '$.default_others_fs_access'), 'read') END,
   1, b.`primary_owner_user_id`, COALESCE(b.`created_at`, unixepoch()*1000), COALESCE(b.`updated_at`, b.`created_at`, unixepoch()*1000)
 FROM `boards` b;
 --> statement-breakpoint
@@ -312,3 +324,8 @@ BEGIN SELECT RAISE(ABORT, 'board primary owner is required'); END;
 CREATE TRIGGER `branches_primary_owner_required` BEFORE INSERT ON `branches`
 WHEN NEW.`primary_owner_user_id` IS NULL
 BEGIN SELECT RAISE(ABORT, 'branch primary owner is required'); END;
+--> statement-breakpoint
+CREATE TRIGGER `users_protected_owner_restrict` BEFORE DELETE ON `users`
+WHEN EXISTS (SELECT 1 FROM `boards` WHERE `primary_owner_user_id`=OLD.`user_id`)
+  OR EXISTS (SELECT 1 FROM `branches` WHERE `primary_owner_user_id`=OLD.`user_id`)
+BEGIN SELECT RAISE(ABORT, 'user owns protected boards or branches'); END;

@@ -178,7 +178,35 @@ describe('resolveCapabilityPolicyAccess', () => {
       source: 'group',
       fs_access: 'write',
       group_ids: [groupA, groupB],
+      capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own', 'terminal.open'],
+    });
+  });
+
+  it('derives terminal when role and filesystem access come from different groups', () => {
+    const splitDimensions = structuredClone(policy);
+    splitDimensions.entries[0] = {
+      ...splitDimensions.entries[0],
+      preset: 'viewer',
+      capabilities: ['branch.view'],
+      fs_access: 'read',
+    };
+    splitDimensions.entries[1] = {
+      ...splitDimensions.entries[1],
+      preset: 'collaborator',
       capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own'],
+      fs_access: 'none',
+    };
+    expect(
+      resolveCapabilityPolicyAccess({
+        policy: splitDimensions,
+        primary_owner_user_id: owner,
+        user_id: user,
+        active_group_ids: [groupA, groupB],
+      })
+    ).toMatchObject({
+      source: 'group',
+      fs_access: 'read',
+      capabilities: ['branch.view', 'sessions.create', 'sessions.prompt_own', 'terminal.open'],
     });
   });
 

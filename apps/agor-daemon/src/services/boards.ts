@@ -526,6 +526,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       custom_css: blob.custom_css,
       objects: blob.objects,
       custom_context: blob.custom_context,
+      access_mode: blob.access_mode,
+      default_others_can: blob.default_others_can,
+      default_others_fs_access: blob.default_others_fs_access,
+      default_dangerously_allow_session_sharing: blob.default_dangerously_allow_session_sharing,
       created_by: userId,
     };
   }
