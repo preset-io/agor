@@ -29,6 +29,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   createDatabaseAsync,
+  MCPCatalogCandidateRepository,
   MCPServerRepository,
   runMigrations,
   setMcpMemberPolicy,
@@ -236,13 +237,20 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
       authenticated: true,
       user: { user_id: caller.user_id, role },
     }) as unknown as AuthenticatedParams;
+  const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
+  const connectDeps = {
+    listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
+    getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
+      candidateRepo.getForUser(userId, serverId),
+    isGrantAuthorized: async () => false,
+  };
 
   return {
     addUser: (email: string, role: UserRole = 'member') =>
       users.create({ email, name: email, role }) as Promise<User>,
     paramsFor,
     connectAs: (caller: User, bearerToken?: string) =>
-      createMCPCatalogConnectService(app).create(
+      createMCPCatalogConnectService(app, connectDeps).create(
         { ...CONNECT_REQUEST, ...(bearerToken === undefined ? {} : { bearer_token: bearerToken }) },
         paramsFor(caller)
       ),

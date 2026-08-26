@@ -55,6 +55,8 @@ export interface CodexAuthSettingsProps {
    * false, only the API-key path is shown, and it still targets the edited user.
    */
   allowChatgptLogin?: boolean;
+  identityKey?: string | null;
+  operationScope?: readonly unknown[] | null;
 }
 
 /**
@@ -74,6 +76,8 @@ export function CodexAuthSettings({
   savingFields,
   publicValues,
   allowChatgptLogin = true,
+  identityKey,
+  operationScope,
 }: CodexAuthSettingsProps) {
   const { token } = useToken();
   const [view, setView] = useState<CodexMethodView>(() => viewForMethod(authMethod, 'chatgpt'));
@@ -100,14 +104,20 @@ export function CodexAuthSettings({
   //    the method to subscription (and persisting there if the re-probe then
   //    fails, since transport failures keep the last verdict). Clearing to null
   //    means the banner shows nothing until a verdict for the NEW method lands.
-  const { run } = useIdentityGuardedAsync([client, authMethod], () => {
-    setProbe(null);
-    setProbing(false);
-  });
+  const effectiveOperationScope =
+    operationScope === undefined ? ([client, authMethod] as const) : operationScope;
+  const operationAvailable = effectiveOperationScope !== null;
+  const { run } = useIdentityGuardedAsync(
+    [client, authMethod, ...(effectiveOperationScope ?? [null])],
+    () => {
+      setProbe(null);
+      setProbing(false);
+    }
+  );
   const runProbe = useCallback(async () => {
     // The probe checks the caller's own login; skip it entirely when the
     // caller-scoped controls are hidden (admin editing another user).
-    if (!client || !allowChatgptLogin) return;
+    if (!client || !allowChatgptLogin || !operationAvailable) return;
     setProbing(true);
     try {
       const result = await run(
@@ -124,7 +134,7 @@ export function CodexAuthSettings({
     } finally {
       setProbing(false);
     }
-  }, [client, run, allowChatgptLogin]);
+  }, [client, run, allowChatgptLogin, operationAvailable]);
 
   // API-key validation is cheap and stays local to the daemon/provider. Native
   // subscription validation may require scheduling a Cloud executor, so it is
@@ -153,11 +163,11 @@ export function CodexAuthSettings({
   // so the pane re-syncs to the disconnected state and re-probes on its own (no
   // local state to reset here).
   const handleRemoveLogin = useCallback(async () => {
-    if (!client) return;
+    if (!client || !operationAvailable) return;
     setRemoving(true);
     setRemoveError(null);
     try {
-      await client.service('codex-auth/logout').create({});
+      await run(() => client.service('codex-auth/logout').create({}));
     } catch (err) {
       setRemoveError(
         err instanceof Error && err.message
@@ -167,7 +177,7 @@ export function CodexAuthSettings({
     } finally {
       setRemoving(false);
     }
-  }, [client]);
+  }, [client, operationAvailable, run]);
 
   // Selecting a method is a pure view switch — it never persists the auth
   // method. Persisting on selection is destructive in BOTH directions: choosing
@@ -332,6 +342,8 @@ export function CodexAuthSettings({
 
         {(!allowChatgptLogin || view === 'api_key') && (
           <ApiKeyFields
+            identityKey={identityKey ?? 'standalone-codex'}
+            operationScope={effectiveOperationScope}
             tool="codex"
             fields={apiKeyFields}
             fieldStatus={fieldStatus}
@@ -349,6 +361,7 @@ export function CodexAuthSettings({
             </Text>
             <CodexDeviceSignIn
               client={client}
+              operationScope={effectiveOperationScope}
               onVerified={handleAuthenticated}
               onUseFallback={handleFallback}
               autoStart={false}
@@ -356,7 +369,12 @@ export function CodexAuthSettings({
           </div>
         )}
         {allowChatgptLogin && view === 'import' && (
-          <CodexImportAuthJson client={client} onImported={handleAuthenticated} />
+          <CodexImportAuthJson
+            client={client}
+            identityKey={identityKey}
+            operationScope={effectiveOperationScope}
+            onImported={handleAuthenticated}
+          />
         )}
       </Space>
     </Form>

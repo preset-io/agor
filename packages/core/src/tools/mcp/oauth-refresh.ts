@@ -9,7 +9,11 @@ import {
   UserMCPOAuthTokenRepository,
 } from '../../db/repositories';
 import type { MCPServerID, UserID } from '../../types';
-import { safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import {
+  type OutboundDnsLookup,
+  OutboundPreDispatchAuthorityError,
+  safeOutboundFetch,
+} from '../../utils/safe-outbound-fetch';
 import { assertMcpGrantSubjectEntitled } from './grant-entitlement';
 import { inferOAuthTokenUrl } from './oauth-auth';
 import { resolveTokenExpiry } from './oauth-token-expiry';
@@ -84,6 +88,16 @@ export class OAuthRefreshExchangeError extends Error {
   }
 }
 
+/** No refresh credential was dispatched because caller authority changed. */
+export class OAuthRefreshAuthorityCancelledError extends Error {
+  readonly code = 'oauth_refresh_authority_cancelled';
+
+  constructor(readonly authorityCause: unknown) {
+    super('OAuth refresh authority changed before dispatch');
+    this.name = 'OAuthRefreshAuthorityCancelledError';
+  }
+}
+
 export interface RefreshMCPTokenOptions {
   tokenEndpoint: string;
   refreshToken: string;
@@ -92,6 +106,9 @@ export interface RefreshMCPTokenOptions {
   resourceUri?: string;
   /** Exact loopback HTTP exception for standalone development/tests only. */
   allowLocalhostHttp?: boolean;
+  /** Task/session/rollout fence checked immediately before credential dispatch. */
+  assertCurrent?: () => void | Promise<void>;
+  resolveDns?: OutboundDnsLookup;
 }
 
 export interface RefreshMCPTokenResult {
@@ -139,8 +156,13 @@ export async function refreshMCPToken(
       redirect: 'error',
       timeoutMs: 15_000,
       allowLocalhostHttp: opts.allowLocalhostHttp,
+      assertCurrent: opts.assertCurrent,
+      resolveDns: opts.resolveDns,
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof OutboundPreDispatchAuthorityError) {
+      throw new OAuthRefreshAuthorityCancelledError(error.authorityCause);
+    }
     throw new OAuthRefreshExchangeError('transport_ambiguous', true);
   }
 
@@ -204,6 +226,9 @@ export interface RefreshAndPersistDeps {
   onInvalidGrant?: (info: { userId: UserID | null; mcpServerId: MCPServerID }) => void;
   /** Internal test/development seam; daemon PostgreSQL callers leave this false. */
   allowLocalhostHttpDevelopment?: boolean;
+  assertCurrent?: () => void | Promise<void>;
+  /** Deterministic DNS seam used by pre-dispatch authority race tests. */
+  resolveDns?: OutboundDnsLookup;
 }
 
 function exactGrantMatches(
@@ -378,6 +403,8 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       clientSecret: row.oauth_client_secret,
       resourceUri: row.oauth_resource_uri,
       allowLocalhostHttp: deps.allowLocalhostHttpDevelopment,
+      assertCurrent: deps.assertCurrent,
+      resolveDns: deps.resolveDns,
     });
     const expiry = resolveTokenExpiry(result, result.access_token);
     const committed = await tenantWork(deps, async (db) => {
@@ -413,6 +440,18 @@ async function refreshPostgres(deps: RefreshAndPersistDeps): Promise<string> {
       if (!deleted) return observeCommittedRefresh(deps, fence);
       console.warn('[MCP OAuth Refresh] refresh_failed category=invalid_grant');
       notifyInvalidGrant(deps);
+      throw error;
+    }
+    if (error instanceof OAuthRefreshAuthorityCancelledError) {
+      await tenantWork(deps, (db) =>
+        new UserMCPOAuthTokenRepository(db).finishRefreshClaim(
+          deps.userId,
+          deps.mcpServerId,
+          fence,
+          'idle'
+        )
+      );
+      console.warn('[MCP OAuth Refresh] refresh_cancelled category=authority_pre_dispatch');
       throw error;
     }
     const ambiguous = !(error instanceof OAuthRefreshExchangeError) || error.ambiguous;
@@ -489,6 +528,8 @@ async function refreshStandalone(
       clientSecret: row.oauth_client_secret ?? server?.auth?.oauth_client_secret,
       resourceUri: row.oauth_resource_uri,
       allowLocalhostHttp: true,
+      assertCurrent: deps.assertCurrent,
+      resolveDns: deps.resolveDns,
     });
     const expiry = resolveTokenExpiry(result, result.access_token);
     await assertGrantSubjectForRefresh(deps, deps.db);

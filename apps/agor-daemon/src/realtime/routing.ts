@@ -138,6 +138,12 @@ interface HaNativeSocketPayloads {
     oauth_mode: 'per_user' | 'shared';
   };
   'oauth:disconnected': { mcp_server_id: MCPServerID };
+  /**
+   * Caller-private Marketplace cache revocation. The empty payload is
+   * intentional: recipients re-read the authoritative projection, and the
+   * signal must not disclose which branch/server/credential changed.
+   */
+  'marketplace:invalidated': Record<string, never>;
 }
 
 /** Native Socket.IO packets intentionally permitted to cross the HA Redis adapter. */
@@ -148,6 +154,7 @@ export const HA_NATIVE_SOCKET_EVENT_INVENTORY = [
   'repo:cloneError',
   'oauth:completed',
   'oauth:disconnected',
+  'marketplace:invalidated',
 ] as const satisfies readonly (keyof HaNativeSocketPayloads)[];
 
 type NativeSocketTarget = {

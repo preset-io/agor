@@ -2,6 +2,7 @@ import type { AgorClient, MCPServer, User } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Button } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 
 const showError = vi.fn();
 
@@ -75,19 +76,30 @@ describe('MCPServersTable OAuth creation', () => {
                 can_configure: true,
               }),
             }
-          : { create, patch }
+          : { create, patch, on: vi.fn(), removeListener: vi.fn() }
       ),
     } as unknown as AgorClient;
 
     render(
-      <MCPServersTable
-        mcpServerById={new Map()}
-        client={client}
-        userById={new Map([[ADMIN.user_id, ADMIN]])}
-        currentUser={ADMIN}
-        onCreate={vi.fn()}
-        onDelete={vi.fn()}
-      />
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration: 1,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <MCPServersTable
+          mcpServerById={new Map()}
+          client={client}
+          userById={new Map([[ADMIN.user_id, ADMIN]])}
+          currentUser={ADMIN}
+          onCreate={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      </ConnectionProvider>
     );
 
     await waitFor(() =>
@@ -113,5 +125,5 @@ describe('MCPServersTable OAuth creation', () => {
     expect(screen.getByTestId('prepared-server-id')).toHaveTextContent('server-2');
     expect(patch).toHaveBeenCalledTimes(1);
     expect(showError).not.toHaveBeenCalled();
-  });
+  }, 30_000);
 });

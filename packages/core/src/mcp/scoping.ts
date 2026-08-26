@@ -23,6 +23,7 @@ import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../typ
 import { isMCPServerUsableBy } from './ownership';
 import {
   buildMCPTemplateContextFromEnv,
+  hasTemplateMarker,
   resolveMcpServerTemplates,
   TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
 } from './template-resolver';
@@ -229,14 +230,13 @@ export async function getMcpServersForSession(
     let templatesResolved = 0;
     let serversSkipped = 0;
 
-    const containsTemplate = (v: string | undefined) => v?.includes('{{') && v?.includes('}}');
-
     // Every auth field `resolveMcpServerTemplates` substitutes. Driven from the
     // canonical secret set plus the non-secret auth templates the resolver also
     // handles, so this trigger cannot drift from what resolution resolves.
     const AUTH_TEMPLATE_FIELDS = [
       ...TEMPLATE_RESOLVABLE_MCP_AUTH_SECRET_FIELDS,
       'api_url',
+      'oauth_authorization_url',
       'oauth_token_url',
       'oauth_client_id',
       'oauth_scope',
@@ -249,19 +249,26 @@ export async function getMcpServersForSession(
       // Check if any templatable field contains templates
       const envValues = Object.values(original.env ?? {}) as string[];
       const headerValues = Object.values(original.headers ?? {}) as string[];
-      const hasEnvTemplates = envValues.some(containsTemplate);
-      const hasHeaderTemplates = headerValues.some(containsTemplate);
-      const hasUrlTemplate = containsTemplate(original.url);
+      const hasEnvTemplates = envValues.some(hasTemplateMarker);
+      const hasHeaderTemplates = headerValues.some(hasTemplateMarker);
+      const hasUrlTemplate = hasTemplateMarker(original.url);
       const hasAuthTemplates = AUTH_TEMPLATE_FIELDS.some((field) =>
-        containsTemplate(original.auth?.[field] as string | undefined)
+        hasTemplateMarker(original.auth?.[field] as string | undefined)
       );
 
-      if (hasEnvTemplates || hasHeaderTemplates || hasUrlTemplate || hasAuthTemplates) {
+      // Resolve and validate every server, even when its stored row has no
+      // templates. This is the last common boundary before executor SDK config
+      // is built, and it prevents malformed legacy rows from being dispatched.
+      {
+        const hasTemplates =
+          hasEnvTemplates || hasHeaderTemplates || hasUrlTemplate || hasAuthTemplates;
         const result = resolveMcpServerTemplates(original, templateContext);
 
         if (!result.isValid) {
           // Remove server from list - required templates didn't resolve
-          console.warn(`   ⚠️  Skipping MCP server "${original.name}": ${result.errorMessage}`);
+          console.warn(
+            `[mcp-template] server_withheld server_id=${original.mcp_server_id} reason=invalid_configuration`
+          );
           servers.splice(i, 1);
           serversSkipped++;
         } else {
@@ -269,12 +276,12 @@ export async function getMcpServersForSession(
             ...servers[i],
             server: result.server,
           };
-          templatesResolved++;
+          if (hasTemplates) templatesResolved++;
 
           // Log warnings for non-critical unresolved fields
           if (result.unresolvedFields.length > 0) {
             console.warn(
-              `   ⚠️  MCP server "${original.name}" has unresolved optional templates: ${result.unresolvedFields.join(', ')}`
+              `[mcp-template] optional_fields_unresolved server_id=${original.mcp_server_id} fields=${result.unresolvedFields.join(',')}`
             );
           }
         }
@@ -352,12 +359,10 @@ export async function getMcpServersForSession(
             hydrated++;
           }
           mcpDebug(`   🔐 Hydrated OAuth auth headers for ${hydrated} MCP server(s)`);
-        } catch (error) {
-          console.warn(
-            `   ⚠️  Failed to hydrate OAuth MCP auth headers: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
+        } catch {
+          // Credential hydration failures may carry provider URLs or reflected
+          // headers. The caller receives structured recovery elsewhere.
+          console.warn('[mcp-auth] oauth_header_hydration_failed');
         }
       }
     }
@@ -375,10 +380,8 @@ export async function getMcpServersForSession(
         compareStrings(String(a.server.mcp_server_id), String(b.server.mcp_server_id))
       );
     });
-  } catch (error) {
-    console.warn(
-      `⚠️  Failed to resolve MCP servers: ${error instanceof Error ? error.message : String(error)}`
-    );
+  } catch {
+    console.warn('[mcp-runtime] server_resolution_failed');
     // Return empty array on error to avoid breaking session creation
     return [];
   }

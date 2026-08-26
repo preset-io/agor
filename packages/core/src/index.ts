@@ -13,6 +13,7 @@ export * from './design/board-backgrounds.js';
 export * from './environment/render-snapshot.js';
 export * from './knowledge/index.js';
 export * from './mcp/index.js';
+export * from './sdk-result-safety.js';
 export * from './search/index.js';
 export * from './sessions/index.js';
 export type { RepoCloneErrorCategory } from './types/index.js';

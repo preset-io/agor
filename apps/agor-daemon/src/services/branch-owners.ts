@@ -30,6 +30,9 @@ interface BranchOwnerParams {
   };
 }
 
+/** Public nested-owner surface; whole-row replacement is not a valid operation. */
+export const BRANCH_OWNERS_SERVICE_TRANSPORT_METHODS = ['find', 'create', 'remove'] as const;
+
 /**
  * Authorization hook - ensure user has 'view' permission to see owners
  */
@@ -215,7 +218,7 @@ export function setupBranchOwnersService(
       },
     },
     {
-      methods: ['find', 'create', 'remove'],
+      methods: [...BRANCH_OWNERS_SERVICE_TRANSPORT_METHODS],
     }
   );
 

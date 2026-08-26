@@ -21,6 +21,8 @@ import {
   type RawDatabase,
   runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
+  shortId,
   sql,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
@@ -411,7 +413,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(lockBAcquired).toBe(true);
     });
 
-    it('rolls back token persistence when the one-shot success fence is lost', async () => {
+    it('atomically rolls back the real token repository when pending authority loses its success fence', async () => {
       const bound = await seed('success-fence-rollback');
       const context = flowContext(crypto.randomUUID());
       await authorityA.create({
@@ -456,6 +458,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       await expect(
         runWithTenantDatabaseScope(dbA, bound.tenantId, (scoped) =>
+          new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(
+            bound.userId,
+            bound.serverId
+          )
+        )
+      ).resolves.toBeNull();
+      // Read from the second daemon/pool as well: this is the real PostgreSQL
+      // repository + pending-flow authority transaction contract, not the
+      // injected control-flow seam used by register-services SQLite tests.
+      await expect(
+        runWithTenantDatabaseScope(dbB, bound.tenantId, (scoped) =>
           new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(
             bound.userId,
             bound.serverId
@@ -655,6 +668,99 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         outcome: 'not_claimed',
         flow: { status: 'ambiguous' },
       });
+    });
+
+    it('rolls config, grant deletion, and pending invalidation back as one tenant transaction', async () => {
+      const bound = await seed('atomic-config-grant-flow');
+      const context = flowContext(crypto.randomUUID());
+      const fingerprint = 'c'.repeat(64);
+      const attemptId = await authorityA.create({
+        context,
+        ...bound,
+        mcpServerId: bound.serverId,
+        oauthMode: 'per_user',
+        configFingerprint: fingerprint,
+      });
+      const pending = await authorityA.getForUser(bound.tenantId, bound.userId, attemptId);
+      if (!pending) throw new Error('Expected pending-flow fixture');
+      await runWithTenantDatabaseScope(dbA, bound.tenantId, async (scoped) => {
+        await new UserMCPOAuthTokenRepository(scoped, masterSecret).saveToken(
+          bound.userId,
+          bound.serverId,
+          {
+            accessToken: 'atomic-access-token',
+            refreshToken: 'atomic-refresh-token',
+            clientId: context.clientId,
+            clientSecret: context.clientSecret,
+            grantBinding: {
+              generation: pending.grantGeneration,
+              version: pending.configFingerprintVersion,
+              fingerprint,
+              metadataUri: context.metadataUrl,
+              resourceUri: context.resourceUri,
+              issuer: context.issuer,
+              authorizationEndpoint: context.authorizationEndpoint,
+              tokenEndpoint: context.tokenEndpoint,
+              redirectUri: context.redirectUri,
+            },
+          }
+        );
+      });
+
+      await expect(
+        runWithTenantDatabaseTransaction(dbA, bound.tenantId, async (scoped) => {
+          await new MCPServerRepository(scoped).update(bound.serverId, {
+            auth: { oauth_mode: 'shared' },
+          });
+          await new UserMCPOAuthTokenRepository(scoped, masterSecret).deleteAllForServer(
+            bound.serverId
+          );
+          await authorityA.invalidateForServer(bound.tenantId, bound.serverId);
+          throw new Error('injected transaction failure');
+        })
+      ).rejects.toThrow('injected transaction failure');
+
+      await runWithTenantDatabaseScope(dbB, bound.tenantId, async (scoped) => {
+        await expect(
+          new MCPServerRepository(scoped).findById(bound.serverId)
+        ).resolves.toMatchObject({ auth: { oauth_mode: 'per_user' } });
+        await expect(
+          new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(
+            bound.userId,
+            bound.serverId
+          )
+        ).resolves.toMatchObject({ oauth_access_token: 'atomic-access-token' });
+      });
+      await expect(
+        authorityB.getForUser(bound.tenantId, bound.userId, attemptId)
+      ).resolves.toMatchObject({ status: 'pending', isCurrent: true });
+    });
+
+    it('maps short and full MCP IDs to the same PostgreSQL grant-configuration lock key', async () => {
+      const bound = await seed('canonical-lock-key');
+      const locked = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const first = runWithTenantDatabaseTransaction(dbA, bound.tenantId, async (scoped) => {
+        const canonical = await new MCPServerRepository(scoped).resolveCanonicalId(
+          shortId(bound.serverId)
+        );
+        expect(canonical).toBe(bound.serverId);
+        await lockMCPOAuthGrantConfiguration(scoped, bound.tenantId, canonical);
+        locked.resolve();
+        await release.promise;
+      });
+      await locked.promise;
+
+      let secondAcquired = false;
+      const second = runWithTenantDatabaseTransaction(dbB, bound.tenantId, async (scoped) => {
+        await lockMCPOAuthGrantConfiguration(scoped, bound.tenantId, bound.serverId);
+        secondAcquired = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(secondAcquired).toBe(false);
+      release.resolve();
+      await Promise.all([first, second]);
+      expect(secondAcquired).toBe(true);
     });
 
     it('expires pending attempts and never makes an expired state replayable', async () => {

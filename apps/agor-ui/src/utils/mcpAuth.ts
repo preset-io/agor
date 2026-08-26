@@ -24,13 +24,24 @@ import type { MCPServer } from '@agor-live/client';
  * surfaces a "happy" purple chip and suppresses the above-prompt-box auth
  * banner — leaving users to send doomed prompts.
  *
- * Non-OAuth servers always return false (no auth needed).
+ * Bearer/JWT rows can intentionally remain saved after an explicit secret
+ * clear. Their redacted sentinel counts as a configured saved value; absence
+ * means the server needs configuration before it can be dispatched.
  */
 export function mcpServerNeedsAuth(
   server: MCPServer | undefined,
   userAuthenticatedMcpServerIds: Set<string>
 ): boolean {
-  if (server?.auth?.type !== 'oauth') return false;
+  if (!server?.auth || server.auth.type === 'none') return false;
+  if (server.auth.type === 'bearer') return !server.auth.token?.trim();
+  if (server.auth.type === 'jwt') {
+    return !(
+      server.auth.api_url?.trim() &&
+      server.auth.api_token?.trim() &&
+      server.auth.api_secret?.trim()
+    );
+  }
+  if (server.auth.type !== 'oauth') return false;
 
   const expiresAt = server.auth.oauth_token_expires_at;
   // Use `<=` to match the daemon-side boundary: `oauth-status` treats

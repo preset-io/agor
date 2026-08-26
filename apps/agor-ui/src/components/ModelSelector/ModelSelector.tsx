@@ -13,7 +13,7 @@ import {
 } from '@agor-live/client';
 import { InfoCircleOutlined } from '@ant-design/icons';
 import { AutoComplete, Button, Flex, Select, Space, Tag, Tooltip, Typography, theme } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AdvisorModelSelect } from './AdvisorModelSelect';
 import {
   curateModelOptions,
@@ -36,6 +36,8 @@ export interface ModelConfig {
 export interface ModelSelectorProps {
   value?: ModelConfig;
   onChange?: (config: ModelConfig) => void;
+  /** Fired after an explicit user selection or completed exact-model edit. */
+  onCommit?: (config: ModelConfig) => void;
   agent?: AgenticToolName; // Kept as 'agent' for backwards compat in prop name
   agentic_tool?: AgenticToolName;
   /**
@@ -132,6 +134,7 @@ const PIN_PLACEHOLDERS: Record<string, string> = {
 export const ModelSelector: React.FC<ModelSelectorProps> = ({
   value,
   onChange,
+  onCommit,
   agent,
   agentic_tool,
   client,
@@ -274,9 +277,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // Pin mode reflects the stored config: an exact ID is an explicitly-pinned
   // version, anything else is a discovered alias selection.
   const [pinned, setPinned] = useState(value?.mode === 'exact');
+  const [pinnedModel, setPinnedModel] = useState(value?.model ?? '');
+  const pickerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setPinned(value?.mode === 'exact');
   }, [value?.mode]);
+  useEffect(() => {
+    setPinnedModel(value?.model ?? '');
+  }, [value?.model]);
 
   if (ToolModelSelector) {
     return (
@@ -302,6 +310,13 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             provider: selection.provider,
           });
         }}
+        onCommit={(selection) => {
+          onCommit?.({
+            mode: 'exact',
+            model: selection.model,
+            provider: selection.provider,
+          });
+        }}
       />
     );
   }
@@ -316,10 +331,26 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const currentModel = value?.model || fallbackModel;
 
   const selectAlias = (model: string) => {
-    onChange?.({ ...value, mode: 'alias', model });
+    const selection: ModelConfig = { ...value, mode: 'alias', model };
+    onChange?.(selection);
+    onCommit?.(selection);
   };
   const selectPinned = (model: string) => {
+    // Keep the text input responsive even when a controlled parent needs a
+    // render to persist each draft character.
+    setPinnedModel(model);
     onChange?.({ ...value, mode: 'exact', model });
+  };
+  const commitPinned = (draft = pinnedModel) => {
+    const model = draft.trim();
+    const selection: ModelConfig = { ...value, mode: 'exact', model };
+    // Keep the displayed value and submitted payload aligned when the user
+    // finishes an edit with surrounding whitespace (or whitespace only).
+    if (model !== draft) {
+      setPinnedModel(model);
+      onChange?.(selection);
+    }
+    if (model) onCommit?.(selection);
   };
   const handleAdvisorModelChange = (advisorModel: string | undefined) => {
     onChange?.({
@@ -331,11 +362,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   };
 
   const enablePin = () => {
+    setPinnedModel(currentModel);
     setPinned(true);
   };
   const disablePin = () => {
     setPinned(false);
-    selectAlias(curated.some((m) => m.id === currentModel) ? currentModel : fallbackModel);
+    const model = curated.some((candidate) => candidate.id === currentModel)
+      ? currentModel
+      : fallbackModel;
+    // This only switches editing modes. The user still needs to choose an
+    // alias before the picker reports a committed selection.
+    onChange?.({ ...value, mode: 'alias', model });
   };
 
   // Preserve the currently-selected alias even if it is absent from the latest
@@ -443,70 +480,82 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const pinOptions = normalizedList.map((m) => ({ value: m.id, label: m.displayName }));
 
   return (
-    <Space orientation="vertical" style={{ width: '100%' }} size={8}>
-      {!pinned ? (
-        <Select
-          showSearch
-          value={currentModel}
-          onChange={selectAlias}
-          optionLabelProp="label"
-          filterOption={(input, option) => (option?.searchText ?? '').includes(input.toLowerCase())}
-          style={{ width: '100%' }}
-          options={aliasOptions}
-          optionRender={(option) => renderAliasOption(String(option.value))}
-        />
-      ) : (
-        <AutoComplete
-          value={currentModel}
-          onChange={selectPinned}
-          options={pinOptions}
-          filterOption={(input, option) =>
-            `${option?.value ?? ''} ${option?.label ?? ''}`
-              .toLowerCase()
-              .includes(input.toLowerCase())
-          }
-          placeholder={PIN_PLACEHOLDERS[effectiveTool] ?? 'e.g., claude-opus-4-8-20251115'}
-          style={{ width: '100%' }}
-        />
-      )}
-
-      {!pinned ? (
-        <Button
-          type="link"
-          size="small"
-          onClick={enablePin}
-          style={{ height: 'auto', padding: 0, fontSize: token.fontSizeSM }}
-        >
-          Pin a specific version…
-        </Button>
-      ) : (
-        <Button
-          type="link"
-          size="small"
-          onClick={disablePin}
-          style={{ height: 'auto', padding: 0, fontSize: token.fontSizeSM }}
-        >
-          Use a recommended model
-        </Button>
-      )}
-
-      {isClaude && showAdvisor && (
-        <div>
-          <Space size={4}>
-            <span>Advisor model</span>
-            <Tooltip title="Optional Claude Code advisor-tool model. Leave off to use existing Claude settings.">
-              <InfoCircleOutlined />
-            </Tooltip>
-          </Space>
-          <AdvisorModelSelect
-            value={value?.advisorModel}
-            onChange={handleAdvisorModelChange}
-            options={claudeServerOptions ?? undefined}
-            client={client}
-            style={{ marginTop: 8 }}
+    <div
+      ref={pickerRef}
+      onBlur={(event) => {
+        const nextFocus = event.relatedTarget;
+        if (nextFocus && pickerRef.current?.contains(nextFocus as Node)) return;
+        if (pinned) commitPinned();
+      }}
+    >
+      <Space orientation="vertical" style={{ width: '100%' }} size={8}>
+        {!pinned ? (
+          <Select
+            showSearch
+            value={currentModel}
+            onChange={selectAlias}
+            optionLabelProp="label"
+            filterOption={(input, option) =>
+              (option?.searchText ?? '').includes(input.toLowerCase())
+            }
+            style={{ width: '100%' }}
+            options={aliasOptions}
+            optionRender={(option) => renderAliasOption(String(option.value))}
           />
-        </div>
-      )}
-    </Space>
+        ) : (
+          <AutoComplete
+            value={pinnedModel}
+            onChange={selectPinned}
+            onSelect={commitPinned}
+            options={pinOptions}
+            filterOption={(input, option) =>
+              `${option?.value ?? ''} ${option?.label ?? ''}`
+                .toLowerCase()
+                .includes(input.toLowerCase())
+            }
+            placeholder={PIN_PLACEHOLDERS[effectiveTool] ?? 'e.g., claude-opus-4-8-20251115'}
+            style={{ width: '100%' }}
+          />
+        )}
+
+        {!pinned ? (
+          <Button
+            type="link"
+            size="small"
+            onClick={enablePin}
+            style={{ height: 'auto', padding: 0, fontSize: token.fontSizeSM }}
+          >
+            Pin a specific version…
+          </Button>
+        ) : (
+          <Button
+            type="link"
+            size="small"
+            onClick={disablePin}
+            style={{ height: 'auto', padding: 0, fontSize: token.fontSizeSM }}
+          >
+            Use a recommended model
+          </Button>
+        )}
+
+        {isClaude && showAdvisor && (
+          <div>
+            <Space size={4}>
+              <span>Advisor model</span>
+              <Tooltip title="Optional Claude Code advisor-tool model. Leave off to use existing Claude settings.">
+                <InfoCircleOutlined />
+              </Tooltip>
+            </Space>
+            <AdvisorModelSelect
+              value={value?.advisorModel}
+              onChange={handleAdvisorModelChange}
+              options={claudeServerOptions ?? undefined}
+              client={client}
+              style={{ marginTop: 8 }}
+            />
+          </div>
+        )}
+      </Space>
+    </div>
   );
 };

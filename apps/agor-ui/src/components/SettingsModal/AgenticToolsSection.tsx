@@ -7,7 +7,8 @@ import type {
   TenantAgenticToolSettings,
 } from '@agor-live/client';
 import { Alert, Select, Space, Spin, Switch, Tabs, Typography, theme } from 'antd';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
+import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
 import { agorStore } from '../../store/agorStore';
 import {
   type AgenticToolFieldConfig,
@@ -20,6 +21,8 @@ import { AgenticToolPresetsManager } from './AgenticToolPresetsManager';
 
 export interface AgenticToolsSectionProps {
   client: AgorClient | null;
+  identityKey: string | null;
+  operationScope: readonly unknown[] | null;
 }
 
 const TOOL_LABELS: Record<TenantAgenticToolName, string> = {
@@ -69,7 +72,11 @@ const RESOLUTION_POLICIES: Array<{
   },
 ];
 
-export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client }) => {
+export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({
+  client,
+  identityKey,
+  operationScope,
+}) => {
   const { token } = theme.useToken();
   const [settings, setSettings] = useState<
     Partial<Record<TenantAgenticToolName, TenantAgenticToolSettings>>
@@ -77,13 +84,29 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<Partial<Record<AgenticToolConfigField, boolean>>>({});
+  const operationGuard = useAuthorityOperationGuard(operationScope);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases caller-private state
+  useLayoutEffect(() => {
+    setSettings({});
+    setError(null);
+    setSaving({});
+  }, [identityKey]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
+  useLayoutEffect(() => {
+    setLoading(false);
+    setSaving({});
+  }, [operationScope]);
 
   const load = useCallback(async () => {
-    if (!client) return;
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent()) return;
     setLoading(true);
     setError(null);
     try {
       const result = await client.service('agentic-tool-settings').find();
+      if (!operation.isCurrent()) return;
       const rows = Array.isArray(result) ? result : result.data;
       setSettings(
         Object.fromEntries(rows.map((row) => [row.tool, row])) as Partial<
@@ -91,11 +114,12 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
         >
       );
     } catch (loadError) {
+      if (!operation.isCurrent()) return;
       setError(loadError instanceof Error ? loadError.message : 'Failed to load agentic tools');
     } finally {
-      setLoading(false);
+      if (operation.isCurrent()) setLoading(false);
     }
-  }, [client]);
+  }, [client, operationGuard]);
 
   useEffect(() => {
     void load();
@@ -110,14 +134,17 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
       connection?: Partial<Record<AgenticToolConfigField, string | null>>;
     }
   ) => {
-    if (!client) return;
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent()) return;
     try {
       setError(null);
       const updated = await client.service('agentic-tool-settings').patch(tool, data);
+      if (!operation.isCurrent()) return;
       setSettings((current) => ({ ...current, [tool]: updated }));
       // Single-row admin edit: merge without touching the hydration gate.
       agorStore.getState().upsertAgenticToolSetting(updated);
     } catch (saveError) {
+      if (!operation.isCurrent()) return;
       setError(saveError instanceof Error ? saveError.message : 'Failed to save agentic tool');
     }
   };
@@ -238,23 +265,33 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                                 </Typography.Text>
                               </Space>
                               <ApiKeyFields
+                                identityKey={identityKey}
+                                operationScope={operationScope}
                                 tool={tool as AgenticToolName}
                                 fields={TENANT_TOOL_FIELDS[tool]}
                                 fieldStatus={fieldStatus}
                                 onSave={async (field, value) => {
+                                  const operation = operationGuard.begin();
+                                  if (!operation.isCurrent()) return;
                                   setSaving((state) => ({ ...state, [field]: true }));
                                   try {
                                     await patch(tool, { connection: { [field]: value } });
                                   } finally {
-                                    setSaving((state) => ({ ...state, [field]: false }));
+                                    if (operation.isCurrent()) {
+                                      setSaving((state) => ({ ...state, [field]: false }));
+                                    }
                                   }
                                 }}
                                 onClear={async (field) => {
+                                  const operation = operationGuard.begin();
+                                  if (!operation.isCurrent()) return;
                                   setSaving((state) => ({ ...state, [field]: true }));
                                   try {
                                     await patch(tool, { connection: { [field]: null } });
                                   } finally {
-                                    setSaving((state) => ({ ...state, [field]: false }));
+                                    if (operation.isCurrent()) {
+                                      setSaving((state) => ({ ...state, [field]: false }));
+                                    }
                                   }
                                 }}
                                 saving={saving}
@@ -295,6 +332,8 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                                 client={client}
                                 tool={tool}
                                 onError={setError}
+                                identityKey={identityKey}
+                                operationScope={operationScope}
                               />
                             )}
                           </Space>

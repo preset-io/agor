@@ -6,9 +6,12 @@ import {
   discardRealtimeNow,
   enqueueSessionPatch,
   flushRealtimeNow,
+  setRealtimeAuthorityScope,
   tombstoneSession,
   untombstoneSession,
 } from './realtimeBatch';
+
+const AUTHORITY = 'user-a:member:1';
 
 // The keyed session-patch queue writes through the real store, so these are
 // small integration tests: seed the store, drive the queue, assert the maps.
@@ -36,10 +39,12 @@ beforeEach(() => {
   agorStore.getState().reset();
   resetHydrationRevisions();
   discardRealtimeNow();
+  setRealtimeAuthorityScope(AUTHORITY);
 });
 
 afterEach(() => {
   vi.useRealTimers();
+  setRealtimeAuthorityScope(null);
   discardRealtimeNow();
   agorStore.getState().reset();
   resetHydrationRevisions();
@@ -50,11 +55,11 @@ describe('realtimeBatch — keyed session-patch queue', () => {
     seedSession(makeSession({ status: 'idle' }));
 
     bumpRevision('sessions');
-    enqueueSessionPatch(makeSession({ status: 'running' }));
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
     // Not applied synchronously.
     expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'idle' });
 
-    flushRealtimeNow();
+    flushRealtimeNow(AUTHORITY);
     expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'running' });
   });
 
@@ -67,15 +72,16 @@ describe('realtimeBatch — keyed session-patch queue', () => {
     });
 
     bumpRevision('sessions');
-    enqueueSessionPatch(makeSession({ status: 'running' }));
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
     bumpRevision('sessions');
-    enqueueSessionPatch(makeSession({ status: 'thinking' }));
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'thinking' }));
     bumpRevision('sessions');
     enqueueSessionPatch(
+      AUTHORITY,
       makeSession({ status: 'idle', ready_for_prompt: true } as Partial<Session>)
     );
 
-    flushRealtimeNow();
+    flushRealtimeNow(AUTHORITY);
     unsub();
 
     // Only the latest payload lands, and the whole frame is a single notify.
@@ -91,9 +97,9 @@ describe('realtimeBatch — keyed session-patch queue', () => {
 
     // patched arrives (queued), then removed applies synchronously.
     bumpRevision('sessions');
-    enqueueSessionPatch(makeSession({ status: 'running' }));
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
 
-    tombstoneSession('s-1');
+    tombstoneSession(AUTHORITY, 's-1');
     agorStore.getState().applyMaps((prev) => {
       const sessionById = new Map(prev.sessionById);
       sessionById.delete('s-1');
@@ -102,7 +108,7 @@ describe('realtimeBatch — keyed session-patch queue', () => {
       return { ...prev, sessionById, sessionsByBranch };
     });
 
-    flushRealtimeNow();
+    flushRealtimeNow(AUTHORITY);
 
     // The tombstoned id is skipped — no resurrection in either map.
     expect(agorStore.getState().sessionById.has('s-1')).toBe(false);
@@ -111,14 +117,14 @@ describe('realtimeBatch — keyed session-patch queue', () => {
 
   it('created clears a tombstone so a same-frame recreate+patch applies', () => {
     bumpRevision('sessions');
-    enqueueSessionPatch(makeSession({ status: 'running' }));
-    tombstoneSession('s-1'); // remove
-    untombstoneSession('s-1'); // create clears the tombstone
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
+    tombstoneSession(AUTHORITY, 's-1'); // remove
+    untombstoneSession(AUTHORITY, 's-1'); // create clears the tombstone
     seedSession(makeSession({ status: 'running' }));
     bumpRevision('sessions');
-    enqueueSessionPatch(makeSession({ status: 'thinking' }));
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'thinking' }));
 
-    flushRealtimeNow();
+    flushRealtimeNow(AUTHORITY);
 
     expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'thinking' });
   });
@@ -135,7 +141,7 @@ describe('realtimeBatch — keyed session-patch queue', () => {
       seedSession(makeSession({ status: 'idle' }));
 
       bumpRevision('sessions');
-      enqueueSessionPatch(makeSession({ status: 'running' }));
+      enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
       // rAF would pause in a hidden tab; nothing applied yet.
       expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'idle' });
 
@@ -151,13 +157,13 @@ describe('realtimeBatch — keyed session-patch queue', () => {
 
     // A patch is enqueued (stamped with the current revision)...
     bumpRevision('sessions');
-    enqueueSessionPatch(makeSession({ status: 'running' }));
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
 
     // ...then a hydration applies a fresher snapshot proven quiet at-or-after
     // that revision. The queued patch is now stale.
     recordHydrationApply(['sessions'], [1]);
 
-    flushRealtimeNow();
+    flushRealtimeNow(AUTHORITY);
 
     // The stale patch is dropped — the hydrated (idle) state stands.
     expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'idle' });
@@ -167,15 +173,41 @@ describe('realtimeBatch — keyed session-patch queue', () => {
     seedSession(makeSession({ status: 'idle' }));
 
     bumpRevision('sessions');
-    enqueueSessionPatch(makeSession({ status: 'running' }));
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
 
     discardRealtimeNow();
-    flushRealtimeNow(); // nothing left to apply
+    flushRealtimeNow(AUTHORITY); // nothing left to apply
 
     expect(agorStore.getState().sessionById.get('s-1')).toMatchObject({ status: 'idle' });
   });
 
   it('flushRealtimeNow is a no-op when the queue is empty', () => {
-    expect(() => flushRealtimeNow()).not.toThrow();
+    expect(() => flushRealtimeNow(AUTHORITY)).not.toThrow();
+  });
+
+  it('discards the previous authority queue and makes its delayed cleanup a no-op', () => {
+    seedSession(makeSession({ status: 'idle' }));
+    bumpRevision('sessions');
+    enqueueSessionPatch(AUTHORITY, makeSession({ status: 'running' }));
+
+    const replacementAuthority = 'user-b:admin:2';
+    setRealtimeAuthorityScope(replacementAuthority);
+    agorStore.getState().resetMaps();
+
+    // This is the old subscription's passive cleanup. It must neither apply A's
+    // payload nor cancel/flush any work that B queues before its own cleanup.
+    flushRealtimeNow(AUTHORITY);
+    bumpRevision('sessions');
+    enqueueSessionPatch(
+      replacementAuthority,
+      makeSession({ session_id: 's-b', status: 'thinking' })
+    );
+    flushRealtimeNow(AUTHORITY);
+
+    expect(agorStore.getState().sessionById.has('s-1')).toBe(false);
+    expect(agorStore.getState().sessionById.has('s-b')).toBe(false);
+
+    flushRealtimeNow(replacementAuthority);
+    expect(agorStore.getState().sessionById.get('s-b')).toMatchObject({ status: 'thinking' });
   });
 });

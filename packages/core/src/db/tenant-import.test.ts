@@ -11,6 +11,7 @@ import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { MCP_HEADER_REDACTED_SENTINEL } from '../tools/mcp/http-headers';
 import type { Database } from './client';
 import {
   computeContentFingerprint,
@@ -122,11 +123,30 @@ describe('importTenant pre-mutation validation ordering', () => {
 describe('importTenant MCP OAuth public policy boundary', () => {
   async function archivedMcpManifest(
     mode: unknown,
-    headers?: Record<string, string>
+    headers?: Record<string, string>,
+    mutate?: (row: Record<string, unknown>) => void
   ): Promise<TenantArchiveManifest> {
-    const line = `${JSON.stringify({
-      data: { auth: { type: 'oauth', oauth_compatibility_mode: mode }, headers },
-    })}\n`;
+    const row: Record<string, unknown> = {
+      tenant_id: 'acme',
+      mcp_server_id: '01900000-0000-7000-8000-000000000001',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+      name: 'archive-oauth',
+      transport: 'http',
+      scope: 'global',
+      enabled: true,
+      owner_user_id: null,
+      source: 'user',
+      catalog_entry_name: null,
+      data: {
+        config_version: 1,
+        url: 'https://mcp.example.test/mcp',
+        auth: { type: 'oauth', oauth_compatibility_mode: mode },
+        headers,
+      },
+    };
+    mutate?.(row);
+    const line = `${JSON.stringify(row)}\n`;
     await mkdir(databaseDir(scratch), { recursive: true });
     await writeFile(tableJsonlPath(scratch, 'mcp_servers'), line, 'utf8');
     return {
@@ -173,4 +193,107 @@ describe('importTenant MCP OAuth public policy boundary', () => {
       )
     ).rejects.toThrow(/Duplicate custom HTTP header names/);
   });
+
+  it.each([
+    {
+      label: 'unknown top-level secret',
+      mutate: (row: Record<string, unknown>) => Object.assign(row, { provider_secret: 'escape' }),
+      error: /Unknown archived mcp_servers field: provider_secret/,
+    },
+    {
+      label: 'unknown auth secret',
+      mutate: (row: Record<string, unknown>) => {
+        const data = row.data as Record<string, unknown>;
+        data.auth = { type: 'oauth', provider_secret: 'escape' };
+      },
+      error: /Unknown auth field: provider_secret/,
+    },
+    {
+      label: 'exhausted config revision',
+      mutate: (row: Record<string, unknown>) => {
+        (row.data as Record<string, unknown>).config_version = Number.MAX_SAFE_INTEGER;
+      },
+      error: /non-exhausted positive safe integer/,
+    },
+    {
+      label: 'redaction sentinel',
+      mutate: (row: Record<string, unknown>) => {
+        (row.data as Record<string, unknown>).auth = {
+          type: 'oauth',
+          oauth_client_secret: MCP_HEADER_REDACTED_SENTINEL,
+        };
+      },
+      error: /redaction sentinel/,
+    },
+    {
+      label: 'invalid transport combination',
+      mutate: (row: Record<string, unknown>) => {
+        row.transport = 'stdio';
+      },
+      error: /command is required|url does not apply/,
+    },
+    {
+      label: 'mode-mismatched auth',
+      mutate: (row: Record<string, unknown>) => {
+        (row.data as Record<string, unknown>).auth = { type: 'none', token: 'escape' };
+      },
+      error: /does not apply/,
+    },
+    {
+      label: 'forged catalog provenance',
+      mutate: (row: Record<string, unknown>) => {
+        row.source = 'catalog';
+      },
+      error: /requires catalog_entry_name evidence/,
+    },
+    {
+      label: 'catalog evidence on user provenance',
+      mutate: (row: Record<string, unknown>) => {
+        (row.data as Record<string, unknown>).catalog_entry_name = 'forged.catalog';
+      },
+      error: /catalog_entry_name only applies to catalog MCP servers|do not apply/,
+    },
+  ])('rejects archived MCP $label before import writes', async ({ mutate, error }) => {
+    await expect(
+      validateArchivedMCPCompatibilityModes(
+        scratch,
+        await archivedMcpManifest('strict', undefined, mutate)
+      )
+    ).rejects.toThrow(error);
+  });
+
+  it('accepts a bounded legacy imported row for revision reset during restore', async () => {
+    await expect(
+      validateArchivedMCPCompatibilityModes(
+        scratch,
+        await archivedMcpManifest('strict', undefined, (row) => {
+          row.source = 'imported';
+          (row.data as Record<string, unknown>).config_version = 42;
+        })
+      )
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    { type: 'bearer' as const },
+    { type: 'jwt' as const, api_url: 'https://auth.example.test/token' },
+  ])(
+    'accepts a legal 962f74fe-era incomplete $type row with optional capabilities',
+    async (auth) => {
+      await expect(
+        validateArchivedMCPCompatibilityModes(
+          scratch,
+          await archivedMcpManifest('strict', undefined, (row) => {
+            const data = row.data as Record<string, unknown>;
+            data.auth = auth;
+            data.tools = [{ name: 'legacy-tool' }];
+            data.resources = [{ uri: 'file:///legacy', name: 'legacy', description: 'optional' }];
+            data.prompts = [{ name: 'legacy-prompt', arguments: [{ name: 'subject' }] }];
+            // A legal base-version row may omit updated_at.
+            delete row.updated_at;
+          })
+        )
+      ).resolves.toBeUndefined();
+    }
+  );
 });

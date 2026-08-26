@@ -22,6 +22,7 @@ import type {
   CardWithType,
   CloneRepositoryResult,
   CreateAgenticToolPreset,
+  CreateMCPServerInput,
   CreateSessionInput,
   GatewayChannel,
   GatewayChannelCreateData,
@@ -40,6 +41,12 @@ import type {
   MCPCatalogConnectData,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
+  MCPCatalogReadiness,
+  MCPMarketplaceOverview,
+  MCPMarketplaceRemoveServerData,
+  MCPMarketplaceRemoveServerResult,
+  MCPMarketplaceToolPermissionData,
+  MCPMarketplaceToolPermissionResult,
   MCPMemberPolicySetting,
   MCPServer,
   Message,
@@ -67,6 +74,7 @@ import type {
   TemplateRenderResponse,
   TenantAgenticToolSettings,
   TenantAgenticToolSettingsPatch,
+  UpdateMCPServerInput,
   User,
   UserAvatarSettings,
   UserAvatarSyncRequest,
@@ -201,6 +209,24 @@ export interface TemplatesService {
   create(data: TemplateRenderRequest, params?: Params): Promise<TemplateRenderResponse>;
 }
 
+export interface MCPMarketplaceService {
+  find(params?: Params): Promise<MCPMarketplaceOverview>;
+}
+
+export interface MCPMarketplaceRemoveServerService {
+  create(
+    data: MCPMarketplaceRemoveServerData,
+    params?: Params
+  ): Promise<MCPMarketplaceRemoveServerResult>;
+}
+
+export interface MCPMarketplaceToolPermissionService {
+  create(
+    data: MCPMarketplaceToolPermissionData,
+    params?: Params
+  ): Promise<MCPMarketplaceToolPermissionResult>;
+}
+
 /**
  * Service interfaces for type safety
  */
@@ -218,6 +244,7 @@ export interface ServiceTypes {
   users: User;
   groups: Group;
   'group-memberships': GroupMembership;
+  'branches/:id/owners': User;
   'boards/:id/owners': User;
   'boards/:id/group-grants': BoardGroupGrantWithGroup;
   'branches/:id/group-grants': BranchGroupGrantWithGroup;
@@ -226,7 +253,11 @@ export interface ServiceTypes {
   artifacts: Artifact;
   'mcp-servers': MCPServer;
   'mcp-catalog': MCPCatalogEntry;
+  'mcp-catalog/readiness': MCPCatalogReadiness;
   'mcp-catalog/connect': MCPCatalogConnectResult;
+  'mcp-marketplace': MCPMarketplaceOverview;
+  'mcp-marketplace/remove-unattached': MCPMarketplaceRemoveServerResult;
+  'mcp-marketplace/tool-permission': MCPMarketplaceToolPermissionResult;
   'mcp-member-policy': MCPMemberPolicySetting;
   'kb/namespaces': KnowledgeNamespace;
   'kb/documents': KnowledgeDocument;
@@ -298,6 +329,14 @@ export interface GatewayChannelsService
     never,
     ClientInput<GatewayChannelPatchData> | null
   > {}
+
+/** MCP servers expose redacted entities but accept purpose-built auth patch DTOs. */
+export type MCPServersService = AgorService<
+  MCPServer,
+  ClientInput<CreateMCPServerInput>,
+  ClientInput<UpdateMCPServerInput>,
+  ClientInput<UpdateMCPServerInput> | null
+>;
 
 export type AgenticToolSettingsService = AgorService<
   TenantAgenticToolSettings,
@@ -771,9 +810,13 @@ export interface AgorClient
   service(path: 'cards'): AgorService<CardWithType>;
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;
-  service(path: 'mcp-servers'): AgorService<MCPServer>;
+  service(path: 'mcp-servers'): MCPServersService;
   service(path: 'mcp-catalog'): AgorService<MCPCatalogEntry>;
+  service(path: 'mcp-catalog/readiness'): AgorService<MCPCatalogReadiness>;
   service(path: 'mcp-catalog/connect'): MCPCatalogConnectService;
+  service(path: 'mcp-marketplace'): MCPMarketplaceService;
+  service(path: 'mcp-marketplace/remove-unattached'): MCPMarketplaceRemoveServerService;
+  service(path: 'mcp-marketplace/tool-permission'): MCPMarketplaceToolPermissionService;
   service(path: 'mcp-member-policy'): MCPMemberPolicyService;
   service(path: 'templates'): TemplatesService;
 
@@ -1525,7 +1568,7 @@ export function createClient(
     let attemptCount = 0;
     const maxAttempts = options?.reconnectionAttempts ?? (isBrowser ? Infinity : 2);
 
-    socket.on('connect_error', (error: Error) => {
+    socket.on('connect_error', () => {
       attemptCount++;
       if (attemptCount === 1) {
         console.error(`✗ Daemon not running at ${url}`);

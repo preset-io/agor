@@ -1,7 +1,7 @@
 import type { AgorClient, CodexAuthImportResult } from '@agor-live/client';
 import { Alert, Button, Input, Space, Typography, theme } from 'antd';
-import { memo, useCallback, useState } from 'react';
-import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
+import { memo, useCallback, useLayoutEffect, useState } from 'react';
+import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -17,6 +17,10 @@ export interface CodexImportAuthJsonProps {
   onImported: (result: CodexAuthImportResult) => void;
   /** Label for the submit action; surfaces frame it differently. */
   submitLabel?: string;
+  /** Identity-only key: changes erase the caller-private pasted credential. */
+  identityKey?: string | null;
+  /** Generation/connection scope: changes cancel work but preserve the draft. */
+  operationScope?: readonly unknown[] | null;
 }
 
 /**
@@ -29,46 +33,62 @@ export const CodexImportAuthJson = memo(function CodexImportAuthJson({
   client,
   onImported,
   submitLabel = 'Import login',
+  identityKey,
+  operationScope,
 }: CodexImportAuthJsonProps) {
   const { token } = useToken();
   const [authJson, setAuthJson] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // A client/identity swap (or unmount) must never carry a pasted secret across
-  // it, nor let an import in flight against the old client apply to — or lock —
-  // the replacement. The guard invalidates any in-flight submit synchronously on
-  // client change; the on-change reset drops the pasted secret and releases the
-  // submit lock so the new identity can import right away.
-  const { run } = useIdentityGuardedAsync([client], () => {
+  // Identity and operation lifetime are intentionally separate. Reconnecting
+  // the same caller invalidates an in-flight request but keeps their pasted
+  // draft; replacing the caller erases it synchronously during layout commit.
+  const effectiveOperationScope =
+    operationScope === undefined ? ([client] as const) : operationScope;
+  const operationAvailable = effectiveOperationScope !== null;
+  const operationGuard = useAuthorityOperationGuard(effectiveOperationScope);
+  const effectiveIdentityKey = identityKey === undefined ? client : identityKey;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: effectiveIdentityKey intentionally owns secret-draft erasure, independently of auth generation
+  useLayoutEffect(() => {
     setAuthJson('');
     setError(null);
     setSubmitting(false);
-  });
+  }, [effectiveIdentityKey]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new operation epoch releases the obsolete request's UI lock without erasing the same caller's draft
+  useLayoutEffect(() => {
+    setSubmitting(false);
+  }, [operationGuard]);
 
   const handleImport = useCallback(async () => {
-    if (!client || !authJson.trim() || submitting) return;
+    if (!client || !authJson.trim() || submitting || !operationAvailable) return;
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    const submittedAuthJson = authJson;
     setSubmitting(true);
     setError(null);
     try {
-      const result = await run(
-        () =>
-          client.service('codex-auth/import').create({ authJson }) as Promise<CodexAuthImportResult>
-      );
+      const result = (await client
+        .service('codex-auth/import')
+        .create({ authJson: submittedAuthJson })) as CodexAuthImportResult;
+      if (!operation.isCurrent()) return;
       // Drop the pasted token material as soon as the daemon has it — nothing
       // here needs it after a successful import.
       setAuthJson('');
       onImported(result);
     } catch (err) {
+      if (!operation.isCurrent()) return;
       setError(
         err instanceof Error && err.message
           ? err.message
           : 'Could not import the Codex login — try again.'
       );
     } finally {
-      setSubmitting(false);
+      if (operation.isCurrent()) setSubmitting(false);
     }
-  }, [authJson, client, onImported, submitting, run]);
+  }, [authJson, client, onImported, operationAvailable, operationGuard, submitting]);
 
   return (
     <Space direction="vertical" size="small" style={{ width: '100%' }}>
@@ -101,7 +121,7 @@ export const CodexImportAuthJson = memo(function CodexImportAuthJson({
       <Button
         type="primary"
         loading={submitting}
-        disabled={!client || !authJson.trim()}
+        disabled={!client || !authJson.trim() || !operationAvailable}
         onClick={handleImport}
       >
         {submitLabel}

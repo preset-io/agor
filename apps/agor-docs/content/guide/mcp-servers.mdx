@@ -13,11 +13,15 @@ Marketplace checks the live endpoint before installing it. An entry may be:
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers support services such as Datadog API/application-key pairs; Marketplace's Datadog entry instead asks for the bearer PAT/SAT described in Datadog's MCP setup guide.
 
-## Storage, reconnecting, and removal
+## Safe edits, storage, and removal
 
-Bearer tokens are stored in the installed MCP server's auth configuration. Catalog installs are private to their owner, access controls restrict the row, and API and UI reads redact the token. Do not assume application-level encryption from those protections; encryption at rest applies only when the deployment's documented database or storage configuration guarantees it. OAuth access and refresh tokens use Agor's per-user OAuth token store.
+Bearer tokens and other MCP auth/header/env secrets are stored in MCP server JSON according to the deployment's storage security. Catalog installs are private to their owner, access controls restrict the row, and API, realtime, and UI projections redact secrets. Redaction is an output-boundary control, not application-level encryption; encryption at rest applies only when the deployment's documented database or storage configuration guarantees it. OAuth access and refresh tokens use Agor's per-user OAuth token store.
 
-Connecting an entry again opens a new session but reuses the same owner-specific install. Supplying a new bearer token verifies and atomically rotates that install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token. Also revoke the token or OAuth grant at the provider when access should end immediately.
+Editing authentication is patch-safe: leaving a saved secret blank preserves it, while **Clear saved secret** explicitly removes it. Other omitted authentication fields are preserved; switching authentication type replaces the old mode. The edit form uses a configuration revision to detect another device's concurrent save. If that happens, **Reload latest** fetches the authoritative row and deliberately discards the local unsaved form before another save. OAuth shared/per-user mode changes remove credentials and grants that belong to the previous subject mode.
+
+Connecting an entry again opens a new session but reuses the same owner-specific install. Supplying a new bearer token verifies and atomically rotates that stored install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token.
+
+> **Revocation depends on gateway mode:** In `off` and `observe`, an active SDK may own a direct provider connection, so an edit is not a synchronous revocation boundary. In `compatibility` and `enforced`, eligible bounded Streamable HTTP servers use task-scoped daemon capabilities; all stdio, legacy SSE endpoint handoff, WebSocket, unbounded streaming, and servers requiring `ask` approval are omitted or fail closed. No new request hop is admitted after a relevant mutation commits, but a request admitted before that commit may complete. See [MCP egress operations](/guide/mcp-egress-gateway).
 
 ## Catalog curation for operators
 

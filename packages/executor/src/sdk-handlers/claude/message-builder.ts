@@ -5,7 +5,7 @@
  * Handles user messages, assistant messages, and token usage extraction.
  */
 
-import { generateId } from '@agor/core';
+import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import type { Message, MessageID, MessageSource, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import type { TokenUsage } from '../../types/token-usage.js';
@@ -179,8 +179,11 @@ export async function createAssistantMessage(
   tokenUsage?: TokenUsage,
   isZeroTurnResult?: boolean
 ): Promise<Message> {
+  const safeContent = isZeroTurnResult
+    ? [{ type: 'text', text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE }]
+    : content;
   // Extract text content for preview
-  const textBlocks = content.filter((b) => b.type === 'text').map((b) => b.text || '');
+  const textBlocks = safeContent.filter((b) => b.type === 'text').map((b) => b.text || '');
   const fullTextContent = textBlocks.join('');
   const contentPreview = fullTextContent.substring(0, 200);
 
@@ -192,7 +195,7 @@ export async function createAssistantMessage(
     index: nextIndex,
     timestamp: new Date().toISOString(),
     content_preview: contentPreview,
-    content: content as Message['content'],
+    content: safeContent as Message['content'],
     tool_uses: toolUses,
     task_id: taskId,
     parent_tool_use_id: parentToolUseId || undefined,
@@ -250,6 +253,9 @@ export async function createSystemMessage(
   messagesService: MessagesService,
   metadata?: Pick<NonNullable<Message['metadata']>, 'is_provider_failure_result'>
 ): Promise<Message> {
+  const safeContent = metadata?.is_provider_failure_result
+    ? [{ type: 'text', text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE }]
+    : content;
   const message: Message = {
     message_id: messageId,
     session_id: sessionId,
@@ -257,8 +263,8 @@ export async function createSystemMessage(
     role: MessageRole.SYSTEM,
     index: nextIndex,
     timestamp: new Date().toISOString(),
-    content_preview: extractContentPreview(content),
-    content: content as Message['content'],
+    content_preview: extractContentPreview(safeContent),
+    content: safeContent as Message['content'],
     task_id: taskId,
     metadata: {
       ...metadata,

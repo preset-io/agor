@@ -1,10 +1,12 @@
 /**
  * Before-create hook that reclassifies executor-scoped provider failures
  * without matching arbitrary provider stderr. It handles explicit credential
- * preflight failures and narrowly recognized zero-turn billing failures.
+ * preflight failures and provider-result messages whose credential state can
+ * be resolved authoritatively. Arbitrary provider prose is never classified.
  */
 
 import { TOOL_API_KEY_NAMES } from '@agor/agentic-tools';
+import { SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import { resolveApiKey } from '@agor/core/config';
 import type { SessionRepository, TaskRepository, TenantScopeAwareDatabase } from '@agor/core/db';
 import { Forbidden } from '@agor/core/feathers';
@@ -33,11 +35,7 @@ function fallbackContent(toolDisplayName: string): string {
   return `This session needs to be connected to ${toolDisplayName} before it can run.`;
 }
 
-function providerCreditContent(toolDisplayName: string): string {
-  return `This session's ${toolDisplayName} account needs available credit or quota before it can respond.`;
-}
-
-type ProviderFailureKind = 'missing_credential' | 'provider_credit_exhausted';
+type ProviderFailureKind = 'missing_credential';
 
 export type ProviderFailureMessageLoader = (messageId: MessageID) => Promise<Message | null>;
 
@@ -102,10 +100,7 @@ function classifyProviderFailure(
   toolDisplayName: string,
   errorKind: ProviderFailureKind
 ): Partial<Message> {
-  const content =
-    errorKind === 'missing_credential'
-      ? fallbackContent(toolDisplayName)
-      : providerCreditContent(toolDisplayName);
+  const content = fallbackContent(toolDisplayName);
 
   return {
     ...data,
@@ -119,43 +114,6 @@ function classifyProviderFailure(
       tool,
     },
   };
-}
-
-const PROVIDER_CREDIT_SIGNALS = [
-  'insufficient_quota',
-  'quota_exhausted',
-  'billing_hard_limit_reached',
-  'payment_required',
-] as const;
-const PROVIDER_CREDIT_SIGNAL_PATTERN = new RegExp(`\\b(?:${PROVIDER_CREDIT_SIGNALS.join('|')})\\b`);
-const PROVIDER_ERROR_SEARCH_WINDOW = 500;
-
-function textBlocks(content: Message['content'] | undefined): string[] {
-  if (typeof content === 'string') return [content];
-  if (!Array.isArray(content)) return [];
-
-  return content
-    .filter((block) => block.type === 'text' && typeof block.text === 'string')
-    .map((block) => block.text as string);
-}
-
-function isProviderCreditFailure(
-  tool: AgenticToolName,
-  content: Message['content'] | undefined
-): boolean {
-  const blocks = textBlocks(content);
-  if (blocks.length === 0) return false;
-
-  // Claude's executor preserves each sdkResult.errors[] entry as its own text
-  // block. Bound each actual block without splitting internal newlines; a
-  // zero-turn string remains one bounded entry.
-  return blocks.some((block) => {
-    const searchWindow = block.slice(0, PROVIDER_ERROR_SEARCH_WINDOW).toLowerCase();
-    const isAnthropicCreditFailure =
-      tool === 'claude-code' && /\bcredit balance is too low\b/.test(searchWindow);
-    const hasStableCreditSignal = PROVIDER_CREDIT_SIGNAL_PATTERN.test(searchWindow);
-    return isAnthropicCreditFailure || hasStableCreditSignal;
-  });
 }
 
 function hasResolvedCredential(
@@ -176,8 +134,10 @@ export function classifyMissingCredentialFailure(
   toolDisplayNames: Record<string, string>
 ) {
   return async (context: HookContext): Promise<HookContext> => {
-    const data = context.data as Partial<Message> | undefined;
+    let data = context.data as Partial<Message> | undefined;
     if (!data?.task_id || !data.session_id) return context;
+    const taskId = data.task_id as TaskID;
+    const sessionId = data.session_id;
     const executorScope = authenticatedTaskExecutorRuntimeScope(context.params);
     if (!executorScope) return context;
 
@@ -192,13 +152,26 @@ export function classifyMissingCredentialFailure(
       throw new Forbidden('Provider failure classification requires this task executor');
     }
 
+    // Provider result bodies are untrusted and this hook runs immediately
+    // before persistence/realtime publication. Close the body before any DB or
+    // credential lookup which can fail. Missing-credential classification may
+    // replace this fixed fallback below; no other provider prose is retained.
+    if (isZeroTurnResult || isProviderFailureResult) {
+      data = {
+        ...data,
+        content: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+        content_preview: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE.substring(0, 200),
+      };
+      context.data = data;
+    }
+
     try {
       const [task, session] = await Promise.all([
-        taskRepository.findById(data.task_id as TaskID),
-        sessionsRepository.findById(data.session_id),
+        taskRepository.findById(taskId),
+        sessionsRepository.findById(sessionId),
       ]);
       if (!task || !session) return context;
-      if (task.session_id !== data.session_id || session.session_id !== data.session_id) {
+      if (task.session_id !== sessionId || session.session_id !== sessionId) {
         return context;
       }
 
@@ -231,14 +204,10 @@ export function classifyMissingCredentialFailure(
           return context;
         }
 
-        if (!isProviderCreditFailure(tool, data.content)) return context;
-
-        context.data = classifyProviderFailure(
-          data,
-          tool,
-          toolDisplayNames[tool] ?? tool,
-          'provider_credit_exhausted'
-        );
+        // Claude/Codex provider result strings have no typed billing/auth
+        // discriminator. Parsing arbitrary prose here would both reintroduce a
+        // secret-reflection boundary and claim recovery state we cannot prove.
+        // Keep the fixed generic provider-result fallback.
         return context;
       }
 
@@ -249,8 +218,8 @@ export function classifyMissingCredentialFailure(
         toolDisplayNames[tool] ?? tool,
         'missing_credential'
       );
-    } catch (err) {
-      console.error('[classifyMissingCredentialFailure] classification failed:', err);
+    } catch {
+      console.error('[classifyMissingCredentialFailure] classification failed');
     }
 
     return context;

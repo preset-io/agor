@@ -3,7 +3,7 @@ import type {
   TenantAgenticToolName,
   TenantAgenticToolSettings,
 } from '@agor-live/client';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { AgenticToolsSection } from './AgenticToolsSection';
 
@@ -30,7 +30,13 @@ describe('AgenticToolsSection deployment availability', () => {
       service: vi.fn(() => ({ find: vi.fn().mockResolvedValue(settings) })),
     } as unknown as AgorClient;
 
-    render(<AgenticToolsSection client={client} />);
+    render(
+      <AgenticToolsSection
+        client={client}
+        identityKey="admin-a:admin"
+        operationScope={['admin-a:admin', client, 1]}
+      />
+    );
 
     expect(await screen.findByText('Not installed by this deployment')).toBeInTheDocument();
     expect(
@@ -42,5 +48,49 @@ describe('AgenticToolsSection deployment availability', () => {
     expect(screen.queryByRole('button', { name: /install/i })).not.toBeInTheDocument();
     expect(screen.queryByText('Credential resolution')).not.toBeInTheDocument();
     expect(screen.queryByText('Allow inline configuration')).not.toBeInTheDocument();
+  });
+
+  it('discards a credential/settings read from an older auth generation', async () => {
+    let resolve!: (value: TenantAgenticToolSettings[]) => void;
+    const oldRead = new Promise<TenantAgenticToolSettings[]>((done) => {
+      resolve = done;
+    });
+    const currentSettings: TenantAgenticToolSettings[] = tools.map((tool) => ({
+      tool,
+      deployment_available: true,
+      enabled: true,
+      resolution_policy: 'user_preferred',
+      inline_configuration_allowed: true,
+      connection: {},
+    }));
+    const find = vi
+      .fn()
+      .mockImplementationOnce(() => oldRead)
+      .mockResolvedValueOnce(currentSettings);
+    const client = { service: vi.fn(() => ({ find })) } as unknown as AgorClient;
+    const view = (generation: number) => (
+      <AgenticToolsSection
+        client={client}
+        identityKey="admin-a:admin"
+        operationScope={['admin-a:admin', client, generation]}
+      />
+    );
+    const rendered = render(view(1));
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(1));
+    rendered.rerender(view(2));
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Credential resolution')).toBeInTheDocument();
+
+    await act(async () => {
+      resolve(
+        currentSettings.map((setting) => ({
+          ...setting,
+          deployment_available: false,
+          enabled: false,
+        }))
+      );
+      await oldRead;
+    });
+    expect(screen.queryByText('Not installed by this deployment')).not.toBeInTheDocument();
   });
 });

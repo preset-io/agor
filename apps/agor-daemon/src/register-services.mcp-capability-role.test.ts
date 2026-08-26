@@ -125,6 +125,12 @@ describe('standalone pending flows expire when taken, not only when swept', () =
 describe('MCP caller floor wiring', () => {
   const source = codeOf(join(__dirname, 'register-services.ts'));
 
+  it('never publishes caller-private OAuth browser reservation tokens', () => {
+    expect(source).toContain(
+      "app.service('mcp-servers/oauth-browser-reservations').publish?.(() => []);"
+    );
+  });
+
   it('applies the floor from the shipped registration helper', () => {
     expect(source).toContain('registerMcpCapabilityRoleFloor(app)');
   });

@@ -1,8 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { generateId } from '../lib/ids';
 import type { MCPServer, MCPServerID } from '../types';
+import { isValidMCPHttpUrlTemplate } from './template-patterns';
 import {
   buildMCPTemplateContextFromEnv,
+  extractMCPTemplateDependencies,
   isUserEnvPlaceholder,
   resolveMcpServerEnv,
   resolveMcpServerTemplates,
@@ -39,6 +41,47 @@ describe('isUserEnvPlaceholder', () => {
     expect(isUserEnvPlaceholder('{{user.env.A}}{{user.env.B}}')).toBe(false);
     expect(isUserEnvPlaceholder('{{ outer {{ user.env.X }} }}')).toBe(false);
     expect(isUserEnvPlaceholder('plain-secret')).toBe(false);
+  });
+});
+
+describe('isValidMCPHttpUrlTemplate', () => {
+  it('accepts supported user URL templates and rejects arbitrary expressions or protocols', () => {
+    expect(isValidMCPHttpUrlTemplate('{{ user.env.MCP_URL }}/mcp')).toBe(true);
+    expect(isValidMCPHttpUrlTemplate('https://{{ user.env.TENANT }}.example.test/mcp')).toBe(true);
+    expect(isValidMCPHttpUrlTemplate('https://example.test/{{user.env.PATH}}')).toBe(true);
+    expect(isValidMCPHttpUrlTemplate('{{ lookup user.env "MCP_URL" }}')).toBe(false);
+    expect(isValidMCPHttpUrlTemplate('file://{{ user.env.PATH }}')).toBe(false);
+    expect(isValidMCPHttpUrlTemplate('https://{{ user.env.BROKEN }')).toBe(false);
+  });
+});
+
+describe('extractMCPTemplateDependencies', () => {
+  it('binds every absolute dependency in supported default/helper/nested expressions', () => {
+    const result = extractMCPTemplateDependencies(
+      createTestServer({
+        transport: 'http',
+        url: 'https://example.test/{{uppercase (default user.env.PRIMARY user.env.FALLBACK)}}',
+        headers: { 'X-Tenant': '{{replace user.env.TENANT "-" "_"}}' },
+      })
+    );
+    expect(result.valid).toBe(true);
+    expect([...result.keys].sort()).toEqual(['FALLBACK', 'PRIMARY', 'TENANT']);
+  });
+
+  it.each([
+    '{{@root.user.env.SECRET}}',
+    '{{this.user.env.SECRET}}',
+    '{{./user.env.SECRET}}',
+    '{{lookup user.env "SECRET"}}',
+    '{{lookup (lookup user "env") user.env.KEY}}',
+    '{{#with user}}{{env.SECRET}}{{/with}}',
+    '{{unknownHelper user.env.SECRET}}',
+  ])('rejects indeterminate gateway grammar: %s', (template) => {
+    expect(
+      extractMCPTemplateDependencies(
+        createTestServer({ transport: 'http', url: `https://example.test/${template}` })
+      )
+    ).toMatchObject({ valid: false, mightReferenceUserEnv: true });
   });
 });
 
@@ -216,8 +259,154 @@ describe('resolveMcpServerTemplates', () => {
 
     expect(result.isValid).toBe(false);
     expect(result.unresolvedFields).toContain('url');
-    expect(result.errorMessage).toContain('broken-server');
-    expect(result.errorMessage).toContain('unresolved required templates');
+    expect(result.errorMessage).not.toContain('broken-server');
+    expect(result.errorMessage).toContain('invalid or unresolved url');
+  });
+
+  it('never exposes malformed secret-bearing URL/header/env/auth templates in logs or errors', () => {
+    const sentinel = 'SENTINEL_MCP_TEMPLATE_SECRET_f31ba6';
+    const malformed = `${sentinel}{{#if user.env.MISSING_SECRET}}`;
+    const spies = [
+      vi.spyOn(console, 'log').mockImplementation(() => undefined),
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+      vi.spyOn(console, 'error').mockImplementation(() => undefined),
+      vi.spyOn(console, 'debug').mockImplementation(() => undefined),
+    ];
+    try {
+      const result = resolveMcpServerTemplates(
+        createTestServer({
+          name: 'secret-safe-template-test',
+          transport: 'http',
+          url: `https://mcp.example.test/${malformed}`,
+          headers: { Authorization: malformed },
+          env: { MCP_PRIVATE_VALUE: malformed },
+          auth: {
+            type: 'jwt',
+            api_url: `https://auth.example.test/${malformed}`,
+            api_token: malformed,
+            api_secret: malformed,
+          },
+        }),
+        context
+      );
+
+      expect(result.isValid).toBe(false);
+      expect(result.unresolvedFields).toEqual(
+        expect.arrayContaining(['url', 'headers.*', 'env.*', 'auth.api_token', 'auth.api_secret'])
+      );
+      expect(JSON.stringify(result)).not.toContain(sentinel);
+      expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(sentinel);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  const markerFamilyCases = [
+    {
+      family: 'url',
+      build: (value: string) =>
+        createTestServer({ transport: 'http', url: `https://mcp.example.test/${value}` }),
+    },
+    {
+      family: 'headers',
+      build: (value: string) =>
+        createTestServer({
+          transport: 'http',
+          url: 'https://mcp.example.test',
+          headers: { 'X-Private': value },
+        }),
+    },
+    {
+      family: 'env',
+      build: (value: string) =>
+        createTestServer({ transport: 'stdio', command: 'node', env: { PRIVATE: value } }),
+    },
+    {
+      family: 'bearer',
+      build: (value: string) =>
+        createTestServer({
+          transport: 'http',
+          url: 'https://mcp.example.test',
+          auth: { type: 'bearer', token: value },
+        }),
+    },
+    {
+      family: 'jwt',
+      build: (value: string) =>
+        createTestServer({
+          transport: 'http',
+          url: 'https://mcp.example.test',
+          auth: {
+            type: 'jwt',
+            api_url: 'https://auth.example.test/token',
+            api_token: 'configured',
+            api_secret: value,
+          },
+        }),
+    },
+    {
+      family: 'oauth',
+      build: (value: string) =>
+        createTestServer({
+          transport: 'http',
+          url: 'https://mcp.example.test',
+          auth: { type: 'oauth', oauth_client_secret: value },
+        }),
+    },
+  ] as const;
+
+  it.each(
+    markerFamilyCases.flatMap(({ family, build }) =>
+      (
+        [
+          ['unmatched opening marker', 'SENTINEL_DIRECT_OPEN_{{'],
+          ['unmatched closing marker', 'SENTINEL_DIRECT_CLOSE_}}'],
+        ] as const
+      ).map(([kind, value]) => ({ family, kind, value, build }))
+    )
+  )('rejects a directly stored $kind in $family without disclosure', ({ value, build }) => {
+    const spies = [
+      vi.spyOn(console, 'log').mockImplementation(() => undefined),
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+      vi.spyOn(console, 'error').mockImplementation(() => undefined),
+      vi.spyOn(console, 'debug').mockImplementation(() => undefined),
+    ];
+    try {
+      const result = resolveMcpServerTemplates(build(value), context);
+      expect(result.isValid).toBe(false);
+      expect(JSON.stringify(result)).not.toContain(value);
+      expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(value);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  it.each(
+    markerFamilyCases.flatMap(({ family, build }) =>
+      (
+        [
+          ['unmatched opening marker', 'SENTINEL_ENV_OPEN_{{'],
+          ['unmatched closing marker', 'SENTINEL_ENV_CLOSE_}}'],
+        ] as const
+      ).map(([kind, value]) => ({ family, kind, value, build }))
+    )
+  )('rejects a $kind introduced through user.env in $family', ({ value, build }) => {
+    const spies = [
+      vi.spyOn(console, 'log').mockImplementation(() => undefined),
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+      vi.spyOn(console, 'error').mockImplementation(() => undefined),
+      vi.spyOn(console, 'debug').mockImplementation(() => undefined),
+    ];
+    try {
+      const result = resolveMcpServerTemplates(build('{{ user.env.INJECTED }}'), {
+        user: { env: { INJECTED: value } },
+      });
+      expect(result.isValid).toBe(false);
+      expect(JSON.stringify(result)).not.toContain(value);
+      expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(value);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
   });
 
   it('should remain valid when optional env templates fail to resolve', () => {
@@ -236,7 +425,7 @@ describe('resolveMcpServerTemplates', () => {
 
     // stdio doesn't require url, so missing env vars don't make it invalid
     expect(result.isValid).toBe(true);
-    expect(result.unresolvedFields).toContain('env.OPTIONAL_VAR');
+    expect(result.unresolvedFields).toContain('env.*');
     expect(result.server.env).toEqual({
       GITHUB_TOKEN: 'gh_secret123',
     });
@@ -272,6 +461,36 @@ describe('resolveMcpServerTemplates', () => {
     const result = resolveMcpServerTemplates(server, context);
 
     expect(result.isValid).toBe(false);
-    expect(result.errorMessage).toContain('sse-server');
+    expect(result.errorMessage).not.toContain('sse-server');
+    expect(result.errorMessage).toContain('invalid or unresolved url');
+  });
+
+  it.each([
+    ['file protocol', 'file:///tmp/mcp'],
+    ['malformed value', 'not a URL'],
+    ['leftover template', 'https://{{still.secret}}/mcp'],
+    ['embedded credentials', 'https://user:password@example.test/mcp'],
+  ])('rejects a resolved URL with %s without echoing it', (_label, resolvedUrl) => {
+    const secret = 'password';
+    const result = resolveMcpServerTemplates(
+      createTestServer({ transport: 'http', url: resolvedUrl }),
+      context
+    );
+
+    expect(result.isValid).toBe(false);
+    expect(result.errorMessage).not.toContain(secret);
+    expect(result.errorMessage).not.toContain(resolvedUrl);
+  });
+
+  it('rejects a user-env URL that resolves to embedded credentials without logging the secret', () => {
+    const secretUrl = 'https://user:super-secret@example.test/mcp';
+    const result = resolveMcpServerTemplates(
+      createTestServer({ transport: 'http', url: '{{ user.env.MCP_URL }}' }),
+      { user: { env: { MCP_URL: secretUrl } } }
+    );
+
+    expect(result.isValid).toBe(false);
+    expect(result.errorMessage).not.toContain(secretUrl);
+    expect(result.errorMessage).not.toContain('super-secret');
   });
 });

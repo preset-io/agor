@@ -18,6 +18,8 @@ interface BoardOwnerParams {
   };
 }
 
+/** Public nested-owner surface; whole-row replacement is not a valid operation. */
+export const BOARD_OWNERS_SERVICE_TRANSPORT_METHODS = ['find', 'create', 'remove'] as const;
 export function setupBoardOwnersService(app: Application, boardRepo: BoardRepository) {
   app.use(
     'boards/:id/owners',
@@ -56,7 +58,7 @@ export function setupBoardOwnersService(app: Application, boardRepo: BoardReposi
         return user;
       },
     },
-    { methods: ['find', 'create', 'remove'] }
+    { methods: [...BOARD_OWNERS_SERVICE_TRANSPORT_METHODS] }
   );
 
   app.service('boards/:id/owners').hooks({

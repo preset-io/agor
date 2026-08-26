@@ -117,6 +117,7 @@ function renderTable(client: AgorClient) {
     user_id: 'user-1',
     name: 'Ada Lovelace',
     email: 'ada@example.com',
+    role: 'admin',
   } as unknown as User;
 
   return render(
@@ -128,6 +129,7 @@ function renderTable(client: AgorClient) {
           branchById={new Map([[branch.branch_id, branch]])}
           userById={new Map([[user.user_id, user]])}
           mcpServerById={new Map<string, MCPServer>()}
+          currentUser={user}
         />
       </AntdApp>
     </MemoryRouter>

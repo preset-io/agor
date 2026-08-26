@@ -67,4 +67,45 @@ describe('ClaudeOAuthSignIn', () => {
       { timeout: 2_000 }
     );
   });
+
+  it('destroys a pasted authorization code when caller authority changes', async () => {
+    const create = vi.fn();
+    const find = vi
+      .fn()
+      .mockResolvedValueOnce({
+        phase: 'awaiting_code',
+        attemptId: 'attempt-admin-a',
+        verificationUrl: 'https://claude.example/authorize',
+      })
+      .mockResolvedValueOnce({ phase: 'idle' });
+    const client = {
+      service: vi.fn(() => ({ create, find })),
+    } as never;
+
+    const { rerender } = render(
+      <ClaudeOAuthSignIn
+        client={client}
+        operationScope={['admin-a']}
+        onVerified={vi.fn()}
+        autoStart={false}
+      />
+    );
+
+    const input = await screen.findByLabelText('Claude authorization code');
+    fireEvent.change(input, { target: { value: 'SECRET-CODE#STATE' } });
+    expect(screen.getByDisplayValue('SECRET-CODE#STATE')).toBeInTheDocument();
+
+    rerender(
+      <ClaudeOAuthSignIn
+        client={client}
+        operationScope={['admin-b']}
+        onVerified={vi.fn()}
+        autoStart={false}
+      />
+    );
+
+    await screen.findByRole('button', { name: 'Sign in with Claude' });
+    expect(screen.queryByDisplayValue('SECRET-CODE#STATE')).not.toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
+  });
 });

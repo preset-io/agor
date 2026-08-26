@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UploadsTab } from './UploadsTab';
 
@@ -52,7 +52,7 @@ describe('UploadsTab', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<UploadsTab />);
+    render(<UploadsTab identityKey="user-a:member" operationScope={['user-a:member', 1]} />);
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith('http://daemon.test:3030/uploads', {
@@ -73,9 +73,57 @@ describe('UploadsTab', () => {
       vi.fn().mockResolvedValue(new Response('<!doctype html>', { status: 200 }))
     );
 
-    render(<UploadsTab />);
+    render(<UploadsTab identityKey="user-a:member" operationScope={['user-a:member', 1]} />);
 
     await waitFor(() => expect(showError).toHaveBeenCalledOnce());
     expect(showError.mock.calls[0]?.[0]).toMatch(/Unexpected token|JSON/);
+  });
+
+  it('discards an older generation response while allowing the reauthenticated reload', async () => {
+    let resolve!: (response: Response) => void;
+    const oldResponse = new Promise<Response>((done) => {
+      resolve = done;
+    });
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() => oldResponse)
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ uploads: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const view = (generation: number) => (
+      <UploadsTab identityKey="user-a:member" operationScope={['user-a:member', generation]} />
+    );
+    const rendered = render(view(1));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    rendered.rerender(view(2));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      resolve(
+        new Response(
+          JSON.stringify({
+            uploads: [
+              {
+                ref: 'old-private-ref',
+                displayName: 'old-private-file.txt',
+                mimeType: 'text/plain',
+                size: 4,
+                provenance: 'browser',
+                createdAt: '2026-08-20T00:00:00.000Z',
+                expiresAt: null,
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+      );
+      await oldResponse;
+    });
+    expect(screen.queryByText('old-private-file.txt')).not.toBeInTheDocument();
+    expect(showError).not.toHaveBeenCalled();
   });
 });

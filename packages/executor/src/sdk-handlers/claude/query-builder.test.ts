@@ -273,6 +273,38 @@ describe('setupQuery - Local Settings Support', () => {
     });
   });
 
+  it('does not log or dispatch secret-bearing MCP auth exceptions', async () => {
+    const sentinel = 'SENTINEL_CLAUDE_AUTH_EXCEPTION_7f1a';
+    const deps = createMockDeps();
+    deps.sessionMCPRepo = {} as any;
+    deps.mcpServerRepo = {} as any;
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      {
+        server: {
+          mcp_server_id: 'server-secret',
+          name: 'remote',
+          transport: 'http',
+          url: 'https://example.test/mcp',
+          auth: { type: 'jwt' },
+        },
+      } as any,
+    ]);
+    vi.mocked(resolveMCPAuthHeaders).mockRejectedValue(
+      new Error(`TLS provider reflected ${sentinel}`)
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await setupQuery('test-session' as SessionID, 'test prompt', deps);
+      const calls = vi.mocked(Claude.query).mock.calls;
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(sentinel);
+      expect(JSON.stringify(calls)).not.toContain(sentinel);
+      const mcpServers = calls[0][0].options.mcpServers as Record<string, Record<string, unknown>>;
+      expect(mcpServers.remote.headers).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('does not block gateway startup on unauthenticated OAuth servers with custom headers', async () => {
     const deps = createMockDeps();
     vi.mocked(deps.sessionsRepo.findById).mockResolvedValue({

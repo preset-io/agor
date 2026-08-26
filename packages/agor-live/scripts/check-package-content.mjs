@@ -5,11 +5,12 @@ import { join, resolve } from 'node:path';
 
 const limits = {
   files: 2600,
-  // Discord's durable delivery worker and connector support legitimately move
-  // the current release just beyond 95 MiB; keep a tight whole-MiB ceiling so
-  // the source-image/HA build remains an effective package-growth tripwire.
-  unpackedBytes: 96 * 1024 * 1024,
-  packedBytes: 23 * 1024 * 1024,
+  // Discord delivery, the MCP egress stack, and Claude's durable HA authority
+  // legitimately move the stacked release just beyond the previous budgets.
+  // Keep tight whole-MiB ceilings so source-image/HA builds remain an effective
+  // package-growth tripwire rather than disabling the check.
+  unpackedBytes: 97 * 1024 * 1024,
+  packedBytes: 24 * 1024 * 1024,
 };
 
 function measureDirectory(directory) {

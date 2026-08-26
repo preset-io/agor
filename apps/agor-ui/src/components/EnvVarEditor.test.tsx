@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ComponentProps } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -9,6 +9,8 @@ function renderEditor(envVars: ComponentProps<typeof EnvVarEditor>['envVars']) {
     envVars,
     onSave: vi.fn(async () => {}),
     onDelete: vi.fn(async () => {}),
+    identityKey: 'user-a:member',
+    operationScope: ['user-a:member', 1],
   };
 
   return render(
@@ -32,5 +34,45 @@ describe('EnvVarEditor', () => {
     const renderedKeys = screen.getAllByText(/_TOKEN$/).map((node) => node.textContent);
     expect(renderedKeys).toEqual(['alpha_TOKEN', 'BETA_TOKEN', 'Z_TOKEN']);
     expect(Object.keys(envVars)).toEqual(originalKeys);
+  });
+
+  it('preserves a same-user reconnect draft while invalidating the old save', async () => {
+    let resolve!: () => void;
+    const pending = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const onSave = vi.fn(() => pending);
+    const view = (identityKey: string, generation: number) => (
+      <AntApp>
+        <EnvVarEditor
+          envVars={{}}
+          onSave={onSave}
+          onDelete={vi.fn(async () => {})}
+          identityKey={identityKey}
+          operationScope={[identityKey, generation]}
+        />
+      </AntApp>
+    );
+    const rendered = render(view('member-a:member', 2));
+    fireEvent.change(screen.getByPlaceholderText(/variable name/i), {
+      target: { value: 'PRIVATE_TOKEN' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Value'), {
+      target: { value: 'member-a-secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /add/i }));
+    expect(onSave).toHaveBeenCalledWith('PRIVATE_TOKEN', 'member-a-secret', 'global');
+
+    rendered.rerender(view('member-a:member', 3));
+    await act(async () => {
+      resolve();
+      await pending;
+    });
+    expect(screen.getByPlaceholderText(/variable name/i)).toHaveValue('PRIVATE_TOKEN');
+    expect(screen.getByPlaceholderText('Value')).toHaveValue('member-a-secret');
+
+    rendered.rerender(view('member-b:member', 4));
+    expect(screen.getByPlaceholderText(/variable name/i)).toHaveValue('');
+    expect(screen.getByPlaceholderText('Value')).toHaveValue('');
   });
 });

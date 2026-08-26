@@ -1,14 +1,22 @@
 import type { AgorClient, UpdateUserInput, User } from '@agor-live/client';
 import { UserSettingsModal } from '../components/SettingsModal';
+import {
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from '../hooks/useAuthorityOperationGuard';
 
 export interface SharedUserSettingsModalProps {
   open: boolean;
   user: User | null;
   client: AgorClient | null;
   onClose: () => void;
-  onUpdateUser: (userId: string, updates: UpdateUserInput) => Promise<void>;
-  onRefreshCurrentUser: () => Promise<unknown>;
-  onRestartOnboarding?: () => void | Promise<void>;
+  onUpdateUser: (
+    userId: string,
+    updates: UpdateUserInput,
+    shouldApply?: () => boolean
+  ) => Promise<void>;
+  onRefreshCurrentUser: (shouldApply: () => boolean) => Promise<unknown>;
+  onRestartOnboarding?: (shouldApply?: () => boolean) => void | Promise<void>;
   initialTab?: string;
 }
 
@@ -30,18 +38,42 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
   onRefreshCurrentUser,
   onRestartOnboarding,
   initialTab,
-}) => (
-  <UserSettingsModal
-    open={open}
-    onClose={onClose}
-    user={user}
-    currentUser={user}
-    client={client}
-    onUpdate={async (userId, updates) => {
-      await onUpdateUser(userId, updates);
-      await onRefreshCurrentUser();
-    }}
-    onRestartOnboarding={onRestartOnboarding}
-    initialTab={initialTab}
-  />
-);
+}) => {
+  const authority = useAuthenticatedAuthorityScope(
+    client,
+    user ? `${user.user_id}:${user.role}` : null
+  );
+  const operationGuard = useAuthorityOperationGuard(authority.operationScope);
+  return (
+    <UserSettingsModal
+      open={open}
+      onClose={onClose}
+      user={user}
+      currentUser={user}
+      client={client}
+      onUpdate={async (userId, updates, childShouldApply) => {
+        const operation = operationGuard.begin();
+        const shouldApply = () =>
+          operation.isCurrent() && (childShouldApply ? childShouldApply() : true);
+        if (!shouldApply()) return;
+        await onUpdateUser(userId, updates, shouldApply);
+        if (!shouldApply()) return;
+        await onRefreshCurrentUser(shouldApply);
+        if (!shouldApply()) return;
+      }}
+      onRestartOnboarding={
+        onRestartOnboarding
+          ? async (childShouldApply) => {
+              const operation = operationGuard.begin();
+              const shouldApply = () =>
+                operation.isCurrent() && (childShouldApply ? childShouldApply() : true);
+              if (!shouldApply()) return;
+              await onRestartOnboarding(shouldApply);
+              if (!shouldApply()) return;
+            }
+          : undefined
+      }
+      initialTab={initialTab}
+    />
+  );
+};

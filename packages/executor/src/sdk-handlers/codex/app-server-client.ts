@@ -1,5 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { sanitizeMCPExternalError } from '@agor/core/mcp';
 
 interface JsonRpcResponse<T = unknown> {
   id: number;
@@ -104,7 +105,7 @@ export class CodexAppServerClient {
       };
 
       child.once('error', (error) => {
-        rejectStartup(new Error(`Failed to start Codex app-server: ${error.message}`));
+        rejectStartup(new Error(sanitizeMCPExternalError(error, { stage: 'runtime' }).message));
       });
 
       child.once('spawn', () => resolve());
@@ -185,11 +186,7 @@ export class CodexAppServerClient {
 
     if (response.error) {
       pending.reject(
-        new Error(
-          `Codex app-server request failed: ${
-            response.error.message ?? JSON.stringify(response.error)
-          }`
-        )
+        new Error(sanitizeMCPExternalError(response.error, { stage: 'runtime' }).message)
       );
       return;
     }

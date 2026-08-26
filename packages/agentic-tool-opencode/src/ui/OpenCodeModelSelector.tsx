@@ -22,6 +22,8 @@ export interface OpenCodeModelConfig {
 export interface OpenCodeModelSelectorProps {
   value?: OpenCodeModelConfig;
   onChange?: (config: OpenCodeModelConfig | undefined) => void;
+  /** Fired for an explicit catalog or exact-ID selection, never an automatic suggestion. */
+  onCommit?: (config: OpenCodeModelConfig) => void;
   client?: AgorClient | null;
   branchId?: string;
   /**
@@ -203,6 +205,7 @@ function CompactOpenCodeModelSelector({
 export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   value,
   onChange,
+  onCommit,
   client,
   branchId,
   catalogEnabled = true,
@@ -247,11 +250,13 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   }, [catalog, compact, storedCatalogState]);
 
   const selectPair = (nextProvider: string, nextModel: string) => {
+    const selection = { provider: nextProvider, model: nextModel };
     setProvider(nextProvider);
     setModel(nextModel);
     setManualOpen(false);
     setCompactManualOpen(false);
-    onChange?.({ provider: nextProvider, model: nextModel });
+    onChange?.(selection);
+    onCommit?.(selection);
   };
 
   useEffect(() => {

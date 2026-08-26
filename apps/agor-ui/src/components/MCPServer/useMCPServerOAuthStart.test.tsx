@@ -3,10 +3,15 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMCPServerOAuthStart } from './useMCPServerOAuthStart';
 
+const oauthAttempt = vi.hoisted(() => ({
+  refetch: vi.fn(),
+  wait: vi.fn(),
+}));
+
 vi.mock('@/utils/mcpOAuthAttempt', () => ({
   oauthAttemptFailureMessage: vi.fn(),
-  refetchMCPOAuthDurableState: vi.fn(),
-  waitForMCPOAuthAttempt: vi.fn(),
+  refetchMCPOAuthDurableState: oauthAttempt.refetch,
+  waitForMCPOAuthAttempt: oauthAttempt.wait,
 }));
 
 const showError = vi.fn();
@@ -41,6 +46,7 @@ describe('useMCPServerOAuthStart', () => {
     const { result } = renderHook(() =>
       useMCPServerOAuthStart({
         client,
+        authorityKey: 'user-a:admin:1',
         onPrepareOAuthStart,
         showError,
         showInfo,
@@ -74,6 +80,7 @@ describe('useMCPServerOAuthStart', () => {
     const { result, unmount } = renderHook(() =>
       useMCPServerOAuthStart({
         client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
         onPrepareOAuthStart,
         showError,
         showInfo,
@@ -112,6 +119,7 @@ describe('useMCPServerOAuthStart', () => {
     const { result, unmount } = renderHook(() =>
       useMCPServerOAuthStart({
         client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
         onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
         showError,
         showInfo,
@@ -142,13 +150,19 @@ describe('useMCPServerOAuthStart', () => {
   it('classifies DCR recovery and accepts the authoritative redirect URL', async () => {
     const startOAuth = vi.fn().mockResolvedValue({
       success: false,
-      error: 'Dynamic Client Registration failed',
-      diagnostic: { stage: 'dcr_registration', http_status: 404 },
+      error: 'The provider could not register an OAuth client automatically.',
+      recovery: {
+        category: 'client_registration_failed',
+        action: 'configure_client',
+        message: 'Configure an OAuth client.',
+        redirect_uri: 'https://agor.example.com/mcp-servers/oauth-callback',
+      },
       redirect_uri: 'https://agor.example.com/mcp-servers/oauth-callback',
     });
     const { result } = renderHook(() =>
       useMCPServerOAuthStart({
         client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
         onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
         showError,
         showInfo,
@@ -159,7 +173,10 @@ describe('useMCPServerOAuthStart', () => {
     await act(async () => result.current.handleStartOAuthFlow());
 
     expect(result.current.oauthFailure).toMatchObject({
-      diagnostic: { stage: 'dcr_registration', http_status: 404 },
+      recovery: expect.objectContaining({
+        category: 'client_registration_failed',
+        action: 'configure_client',
+      }),
       redirectUri: 'https://agor.example.com/mcp-servers/oauth-callback',
     });
   });
@@ -172,6 +189,7 @@ describe('useMCPServerOAuthStart', () => {
     const { result } = renderHook(() =>
       useMCPServerOAuthStart({
         client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
         onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
         showError,
         showInfo,
@@ -182,8 +200,155 @@ describe('useMCPServerOAuthStart', () => {
     await act(async () => result.current.handleStartOAuthFlow());
     expect(result.current.oauthFailure).toEqual({
       message: 'No public base URL configured',
-      diagnostic: undefined,
+      recovery: undefined,
       redirectUri: undefined,
     });
+  });
+
+  it('renders daemon-authored recovery from durable attempt polling', async () => {
+    oauthAttempt.wait.mockResolvedValue({
+      status: 'failed',
+      mcp_server_id: 'server-1',
+      recovery: {
+        category: 'permission_changed',
+        action: 'contact_admin',
+        message:
+          'Your MCP authorization permission changed. Ask an administrator to review access.',
+        mcp_server_id: 'server-1',
+      },
+    });
+    const startOAuth = vi.fn().mockResolvedValue({
+      success: true,
+      authorizationUrl: 'https://provider.example/authorize',
+      attempt_id: 'attempt-1',
+    });
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const { result } = renderHook(() =>
+      useMCPServerOAuthStart({
+        client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
+        onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
+        showError,
+        showInfo,
+        showSuccess,
+      })
+    );
+
+    await act(async () => result.current.handleStartOAuthFlow());
+    await waitFor(() =>
+      expect(result.current.oauthFailure?.recovery?.category).toBe('permission_changed')
+    );
+    expect(result.current.oauthFailure?.message).toMatch(/authorization permission changed/);
+    expect(showError).toHaveBeenCalledWith(
+      expect.stringMatching(/authorization permission changed/)
+    );
+    windowOpen.mockRestore();
+  });
+
+  it.each([
+    {
+      transition: 'demotion',
+      nextAuthorityKey: 'user-a:viewer:2',
+      nextAllowed: false,
+    },
+    { transition: 'disconnect', nextAuthorityKey: null, nextAllowed: false },
+    {
+      transition: 'identity replacement',
+      nextAuthorityKey: 'user-b:admin:2',
+      nextAllowed: true,
+    },
+    {
+      transition: 'policy downgrade',
+      nextAuthorityKey: 'user-a:admin:1',
+      nextAllowed: false,
+    },
+  ])(
+    'guards the durable completion apply across $transition during its reads',
+    async ({ nextAuthorityKey, nextAllowed }) => {
+      let releaseRefetch!: () => void;
+      const refetchPending = new Promise<void>((resolve) => {
+        releaseRefetch = resolve;
+      });
+      oauthAttempt.wait.mockResolvedValue({
+        status: 'succeeded',
+        mcp_server_id: 'server-1',
+      });
+      oauthAttempt.refetch.mockImplementation(async () => refetchPending);
+      const startOAuth = vi.fn().mockResolvedValue({
+        success: true,
+        authorizationUrl: 'https://provider.example/authorize',
+        attempt_id: 'attempt-1',
+      });
+      const client = oauthClient(startOAuth);
+      const onOAuthAttemptStarted = vi.fn();
+      const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+      const { result, rerender } = renderHook(
+        ({ authorityKey, startAllowed }: { authorityKey: string | null; startAllowed: boolean }) =>
+          useMCPServerOAuthStart({
+            client,
+            authorityKey,
+            onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
+            onOAuthAttemptStarted,
+            showError,
+            showInfo,
+            showSuccess,
+            startAllowed,
+          }),
+        { initialProps: { authorityKey: 'user-a:admin:1', startAllowed: true } }
+      );
+
+      await act(async () => result.current.handleStartOAuthFlow());
+      expect(onOAuthAttemptStarted).toHaveBeenCalledOnce();
+      expect(onOAuthAttemptStarted).toHaveBeenCalledWith('attempt-1', 'server-1');
+      await waitFor(() => expect(oauthAttempt.refetch).toHaveBeenCalledOnce());
+      const shouldApply = oauthAttempt.refetch.mock.calls[0]?.[2] as () => boolean;
+      expect(shouldApply()).toBe(true);
+
+      rerender({ authorityKey: nextAuthorityKey, startAllowed: nextAllowed });
+      expect(shouldApply()).toBe(false);
+
+      await act(async () => {
+        releaseRefetch();
+        await refetchPending;
+      });
+      expect(showSuccess).not.toHaveBeenCalled();
+      windowOpen.mockRestore();
+    }
+  );
+
+  it('guards the durable completion apply when the OAuth owner unmounts during its reads', async () => {
+    let releaseRefetch!: () => void;
+    const refetchPending = new Promise<void>((resolve) => {
+      releaseRefetch = resolve;
+    });
+    oauthAttempt.wait.mockResolvedValue({ status: 'succeeded', mcp_server_id: 'server-1' });
+    oauthAttempt.refetch.mockImplementation(async () => refetchPending);
+    const startOAuth = vi.fn().mockResolvedValue({
+      success: true,
+      authorizationUrl: 'https://provider.example/authorize',
+      attempt_id: 'attempt-1',
+    });
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
+    const { result, unmount } = renderHook(() =>
+      useMCPServerOAuthStart({
+        client: oauthClient(startOAuth),
+        authorityKey: 'user-a:admin:1',
+        onPrepareOAuthStart: vi.fn().mockResolvedValue('server-1'),
+        showError,
+        showInfo,
+        showSuccess,
+      })
+    );
+
+    await act(async () => result.current.handleStartOAuthFlow());
+    await waitFor(() => expect(oauthAttempt.refetch).toHaveBeenCalledOnce());
+    const shouldApply = oauthAttempt.refetch.mock.calls[0]?.[2] as () => boolean;
+    unmount();
+    expect(shouldApply()).toBe(false);
+
+    releaseRefetch();
+    await refetchPending;
+    expect(showSuccess).not.toHaveBeenCalled();
+    windowOpen.mockRestore();
   });
 });

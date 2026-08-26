@@ -162,9 +162,11 @@ async function seedNonPortableOAuthGrant(
         scope: 'global',
         enabled: true,
         source: 'catalog',
+        catalog_entry_name: 'com.example/portable-oauth',
         data: {
           url: 'https://mcp.example.test',
           catalog_entry_name: 'com.example/portable-oauth',
+          config_version: 42,
           auth: { type: 'oauth' },
         },
         created_at: new Date(),
@@ -792,9 +794,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
         .all();
       expect(servers).toHaveLength(1);
       expect(servers[0]?.source).toBe('imported');
+      expect(servers[0]?.catalog_entry_name).toBeNull();
       expect(
         (servers[0]?.data as { catalog_entry_name?: string } | undefined)?.catalog_entry_name
       ).toBeUndefined();
+      expect((servers[0]?.data as { config_version?: number } | undefined)?.config_version).toBe(1);
       await expect(
         new UserMCPOAuthTokenRepository(
           scoped,

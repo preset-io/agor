@@ -43,7 +43,13 @@ describe('surface route registry', () => {
     }
   );
 
-  it.each(['/marketplace'])('classifies %s as Marketplace', (path) => {
+  it.each([
+    '/marketplace',
+    '/marketplace/catalog',
+    '/marketplace/servers',
+    '/marketplace/sessions',
+    '/marketplace/credentials',
+  ])('classifies %s as Marketplace', (path) => {
     expect(getRouteSurface(path).id).toBe('marketplace');
     expect(isWorkspaceRoutePath(path)).toBe(false);
     // Browsing the catalog must not spin up the board/session store.

@@ -6,8 +6,13 @@
  * without spinning up the full daemon.
  */
 
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
-import { assertTenantWritable, runWithTenantDatabaseScope } from '@agor/core/db';
+import type { TenantScopeAwareDatabase, TenantScopedDatabase } from '@agor/core/db';
+import {
+  assertTenantWritable,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
+} from '@agor/core/db';
 
 /**
  * Runs `work` inside a tenant database scope when `tenantId` is provided.
@@ -42,6 +47,26 @@ export async function runInOAuthTenantWriteScope<T>(
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
     await assertTenantWritable(scoped, tenantId);
     return work();
+  });
+}
+
+/**
+ * Native all-dialect OAuth metadata transaction.
+ *
+ * Unlike the identity-only SQLite branch of `runInOAuthTenantWriteScope`, this
+ * uses BEGIN IMMEDIATE on SQLite and a tenant/RLS transaction on PostgreSQL.
+ * Keep provider I/O out of this boundary; it is for the small set of database
+ * changes that must either all commit or all roll back.
+ */
+export async function runInOAuthTenantWriteTransaction<T>(
+  db: TenantScopeAwareDatabase,
+  tenantId: string | undefined,
+  work: (scoped: TenantScopedDatabase) => Promise<T>
+): Promise<T> {
+  const effectiveTenantId = tenantId ?? getCurrentTenantId();
+  return runWithTenantDatabaseTransaction(db, effectiveTenantId, async (scoped) => {
+    if (effectiveTenantId) await assertTenantWritable(scoped, effectiveTenantId);
+    return work(scoped);
   });
 }
 

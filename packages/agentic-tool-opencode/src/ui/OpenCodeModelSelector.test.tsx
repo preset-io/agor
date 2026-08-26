@@ -59,9 +59,15 @@ function deferred<T>() {
 describe('OpenCodeModelSelector', () => {
   it('loads the authenticated known catalog and selects an exact pair', async () => {
     const onChange = vi.fn();
+    const onCommit = vi.fn();
     const { client, find } = clientWithCatalog();
     render(
-      <OpenCodeModelSelector client={client as never} branchId="branch-1" onChange={onChange} />
+      <OpenCodeModelSelector
+        client={client as never}
+        branchId="branch-1"
+        onChange={onChange}
+        onCommit={onCommit}
+      />
     );
 
     const providerSelect = await screen.findByLabelText('OpenCode provider');
@@ -75,6 +81,8 @@ describe('OpenCodeModelSelector', () => {
     fireEvent.click(await screen.findByText('GPT-5'));
     expect(onChange).toHaveBeenCalledOnce();
     expect(onChange).toHaveBeenLastCalledWith({ provider: 'openai', model: 'gpt-5' });
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(onCommit).toHaveBeenLastCalledWith({ provider: 'openai', model: 'gpt-5' });
   });
 
   it('keeps immediate catalog entries unselectable until availability resolves', async () => {
@@ -94,28 +102,32 @@ describe('OpenCodeModelSelector', () => {
 
   it('applies a safe catalog suggestion only while the selection is empty', async () => {
     const onChange = vi.fn();
+    const onCommit = vi.fn();
     const { client } = clientWithCatalog({
       ...catalog,
       suggestedSelection: { providerId: 'openai', modelId: 'gpt-5' },
     });
     const { rerender } = render(
-      <OpenCodeModelSelector client={client as never} onChange={onChange} />
+      <OpenCodeModelSelector client={client as never} onChange={onChange} onCommit={onCommit} />
     );
 
     await waitFor(() =>
       expect(onChange).toHaveBeenCalledWith({ provider: 'openai', model: 'gpt-5' })
     );
     expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onCommit).not.toHaveBeenCalled();
 
     rerender(
       <OpenCodeModelSelector
         value={{ provider: 'manual', model: 'stored' }}
         client={client as never}
         onChange={onChange}
+        onCommit={onCommit}
       />
     );
     await Promise.resolve();
     expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onCommit).not.toHaveBeenCalled();
   });
 
   it('omits unavailable providers and their models from normal selection', async () => {
