@@ -2209,6 +2209,8 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         ) : tool === 'claude-code' ? (
           <ClaudeAuthSettings
             client={client}
+            identityKey={callerIdentityKey}
+            operationScope={operationScope}
             authMethod={authMethod ?? 'api_key'}
             allowSubscriptionLogin={isSelf}
             allowOAuthSignIn={featuresConfig?.claudeSubscriptionOAuth === true}

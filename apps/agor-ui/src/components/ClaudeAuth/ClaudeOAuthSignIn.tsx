@@ -22,6 +22,8 @@ export interface ClaudeOAuthSignInProps {
    * only when autoStart is true (the wizard reflecting a verified state).
    */
   autoStart?: boolean;
+  /** Cancels caller-private OAuth continuations when socket authority changes. */
+  operationScope?: readonly unknown[] | null;
 }
 
 /**
@@ -36,6 +38,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   connected = false,
   onVerified,
   autoStart = true,
+  operationScope,
 }: ClaudeOAuthSignInProps) {
   const { token } = useToken();
   const [status, setStatus] = useState<ClaudeOAuthStatus>({ phase: 'idle' });
@@ -66,11 +69,14 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
         : null,
     [client]
   );
+  const effectiveOperationScope =
+    operationScope === undefined ? ([service] as const) : operationScope;
+  const operationAvailable = effectiveOperationScope !== null;
 
   // Guard every request against the service the pane currently talks to: an
   // in-flight call issued against a swapped-out client must not land its state
   // over the replacement's.
-  const { run } = useIdentityGuardedAsync([service], () => {
+  const { run } = useIdentityGuardedAsync([service, ...(effectiveOperationScope ?? [null])], () => {
     setStarting(false);
     setStatus({ phase: 'idle' });
     setCode('');
@@ -78,7 +84,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   });
 
   const requestLink = useCallback(async () => {
-    if (!service) return;
+    if (!service || !operationAvailable) return;
     setStarting(true);
     setSubmitError(null);
     setCode('');
@@ -96,12 +102,12 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
     } finally {
       setStarting(false);
     }
-  }, [service, run]);
+  }, [service, run, operationAvailable]);
 
   // On mount (and on client swap), adopt a still-live attempt instead of burning
   // a fresh link; otherwise request one when autoStart is set.
   useEffect(() => {
-    if (!service) return;
+    if (!service || !operationAvailable) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -123,14 +129,14 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
     return () => {
       cancelled = true;
     };
-  }, [service, requestLink, autoStart, run]);
+  }, [service, requestLink, autoStart, run, operationAvailable]);
 
   // A remounted pane can adopt an exchange whose create request is still owned
   // by the previous component/tab. No service event is published for this
   // caller-private control plane, so poll only while that adopted phase is
   // active and render the terminal result when the owner request completes.
   useEffect(() => {
-    if (!service || status.phase !== 'exchanging') return;
+    if (!service || !operationAvailable || status.phase !== 'exchanging') return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -150,10 +156,10 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [service, status.phase, run]);
+  }, [service, status.phase, run, operationAvailable]);
 
   const submitCode = useCallback(async () => {
-    if (!service || !code.trim()) return;
+    if (!service || !operationAvailable || !code.trim()) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
@@ -169,7 +175,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
     } finally {
       setSubmitting(false);
     }
-  }, [service, code, run]);
+  }, [service, code, run, operationAvailable]);
 
   useEffect(() => {
     if (status.phase === 'success') onVerified();
@@ -189,7 +195,7 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
   if (status.phase === 'idle') {
     return (
       <Flex align="center" gap={8} style={{ padding: '4px 0' }}>
-        <Button type="primary" disabled={!client} onClick={requestLink}>
+        <Button type="primary" disabled={!client || !operationAvailable} onClick={requestLink}>
           Sign in with Claude
         </Button>
         {!client && <Text type="secondary">Waiting for the server connection…</Text>}

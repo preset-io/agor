@@ -25,6 +25,7 @@ interface HarnessOptions {
   onClearField?: ReturnType<typeof vi.fn>;
   allowSubscriptionLogin?: boolean;
   allowOAuthSignIn?: boolean;
+  operationScope?: readonly unknown[] | null;
 }
 
 function Harness({
@@ -36,6 +37,7 @@ function Harness({
   onClearField,
   allowSubscriptionLogin = true,
   allowOAuthSignIn = true,
+  operationScope,
 }: HarnessOptions) {
   const services: Record<string, unknown> = {
     'check-auth': { create: checkAuth ?? vi.fn(async () => UNKNOWN) },
@@ -67,6 +69,7 @@ function Harness({
       savingFields={{}}
       allowSubscriptionLogin={allowSubscriptionLogin}
       allowOAuthSignIn={allowOAuthSignIn}
+      operationScope={operationScope}
     />
   );
 }
@@ -156,6 +159,28 @@ describe('ClaudeAuthSettings', () => {
     const afterOpen = screen.getAllByText('Disconnect').map((el) => el.closest('button'));
     fireEvent.click(afterOpen[afterOpen.length - 1] as HTMLButtonElement);
     await waitFor(() => expect(logoutCreate).toHaveBeenCalledWith({}));
+  });
+
+  it('fails closed for caller-bound probes and logout when authority is unavailable', async () => {
+    const checkAuth = vi.fn(async () => UNKNOWN);
+    const logoutCreate = vi.fn(async () => ({ status: 'removed' }));
+    render(
+      <Harness
+        initialMethod="subscription"
+        checkAuth={checkAuth}
+        logoutCreate={logoutCreate}
+        operationScope={null}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Recheck connection'));
+    expect(checkAuth).not.toHaveBeenCalled();
+
+    const triggers = screen.getAllByText('Disconnect').map((el) => el.closest('button'));
+    fireEvent.click(triggers[0] as HTMLButtonElement);
+    const afterOpen = await screen.findAllByText('Disconnect');
+    fireEvent.click(afterOpen[afterOpen.length - 1]?.closest('button') as HTMLButtonElement);
+    expect(logoutCreate).not.toHaveBeenCalled();
   });
 
   it('after disconnect stays on the sign-in view (no jump to API key) and drops Disconnect', async () => {

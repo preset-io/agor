@@ -53,6 +53,8 @@ export interface ClaudeAuthSettingsProps {
   allowSubscriptionLogin?: boolean;
   /** Deployment capability for daemon-driven Claude OAuth. Fail-closed by default. */
   allowOAuthSignIn?: boolean;
+  identityKey?: string | null;
+  operationScope?: readonly unknown[] | null;
 }
 
 /**
@@ -72,6 +74,8 @@ export function ClaudeAuthSettings({
   publicValues,
   allowSubscriptionLogin = true,
   allowOAuthSignIn = false,
+  identityKey,
+  operationScope,
 }: ClaudeAuthSettingsProps) {
   const { token } = useToken();
   const [view, setView] = useState<ClaudeMethodView>(() => viewForMethod(authMethod, 'oauth'));
@@ -109,12 +113,18 @@ export function ClaudeAuthSettings({
   // Invalidate an in-flight probe and clear the prior verdict whenever the client
   // OR the effective method changes (and on unmount) — a verdict captured under
   // the PREVIOUS method must not be re-interpreted under the new one.
-  const { run } = useIdentityGuardedAsync([client, authMethod], () => {
-    setProbe(null);
-    setProbing(false);
-  });
+  const effectiveOperationScope =
+    operationScope === undefined ? ([client, authMethod] as const) : operationScope;
+  const operationAvailable = effectiveOperationScope !== null;
+  const { run } = useIdentityGuardedAsync(
+    [client, authMethod, ...(effectiveOperationScope ?? [null])],
+    () => {
+      setProbe(null);
+      setProbing(false);
+    }
+  );
   const runProbe = useCallback(async () => {
-    if (!client || !allowSubscriptionLogin) return;
+    if (!client || !allowSubscriptionLogin || !operationAvailable) return;
     setProbing(true);
     try {
       const result = await run(
@@ -130,7 +140,7 @@ export function ClaudeAuthSettings({
     } finally {
       setProbing(false);
     }
-  }, [client, run, allowSubscriptionLogin]);
+  }, [client, run, allowSubscriptionLogin, operationAvailable]);
 
   // API-key validation is cheap; native subscription validation may schedule a
   // Cloud executor, so it runs only via Recheck or immediately after sign-in.
@@ -155,11 +165,11 @@ export function ClaudeAuthSettings({
   // which arrives as a user patch; the pane re-syncs to the disconnected state
   // and re-probes on its own.
   const handleRemoveLogin = useCallback(async () => {
-    if (!client) return;
+    if (!client || !operationAvailable) return;
     setRemoving(true);
     setRemoveError(null);
     try {
-      await client.service('claude-auth/logout').create({});
+      await run(() => client.service('claude-auth/logout').create({}));
     } catch (err) {
       setRemoveError(
         err instanceof Error && err.message
@@ -169,7 +179,7 @@ export function ClaudeAuthSettings({
     } finally {
       setRemoving(false);
     }
-  }, [client]);
+  }, [client, operationAvailable, run]);
 
   const handleSelect = useCallback((next: ClaudeMethodView) => {
     setView(next);
@@ -309,6 +319,8 @@ export function ClaudeAuthSettings({
 
         {visibleView === 'api_key' && (
           <ApiKeyFields
+            identityKey={identityKey ?? 'standalone-claude'}
+            operationScope={effectiveOperationScope}
             tool="claude-code"
             fields={apiKeyOnlyFields}
             fieldStatus={fieldStatus}
@@ -327,6 +339,7 @@ export function ClaudeAuthSettings({
             </Text>
             <ClaudeOAuthSignIn
               client={client}
+              operationScope={effectiveOperationScope}
               connected={authMethod === 'subscription'}
               onVerified={handleAuthenticated}
               autoStart={false}
@@ -335,6 +348,8 @@ export function ClaudeAuthSettings({
         )}
         {visibleView === 'token' && (
           <ApiKeyFields
+            identityKey={identityKey ?? 'standalone-claude'}
+            operationScope={effectiveOperationScope}
             tool="claude-code"
             fields={tokenFields}
             fieldStatus={fieldStatus}
