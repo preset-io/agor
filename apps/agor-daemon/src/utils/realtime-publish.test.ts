@@ -2530,6 +2530,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
     ['mcp-servers/discover', { tools: [] }],
     ['branches/logs', { logs: 'DATABASE_URL=postgres://user:pw@host/db' }],
     ['repos/clone', { url: 'https://token@github.com/org/repo' }],
+    ['session-env-selections', { session_id: 's1', env_var_name: 'PRIVATE_TOKEN' }],
     ['sessions/:id/fork', { session_id: 's1', branch_id: 'b1' }],
     ['terminals', { terminal_id: 't1' }],
   ])('publishes %s to nobody', async (path, data) => {
@@ -2590,7 +2591,6 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       ['tasks', { session_id: 's1' }],
       ['messages', { session_id: 's1' }],
       ['session-mcp-servers', { session_id: 's1' }],
-      ['session-env-selections', { session_id: 's1' }],
       ['branches', { branch_id: 'b1' }],
       ['schedules', { branch_id: 'b1' }],
       ['artifacts', { branch_id: 'b1' }],

@@ -195,6 +195,15 @@ describe('env-validation', () => {
       const errors = validateEnvVar('GITHUB_TOKEN', value);
       expect(errors).toHaveLength(0);
     });
+
+    it('should reject NUL characters that Node cannot pass to a child process', () => {
+      const errors = validateEnvVar('GITHUB_TOKEN', 'prefix\0suffix');
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ field: 'value', code: 'invalid_character' }),
+        ])
+      );
+    });
   });
 
   describe('validateEnvVar - combined validation', () => {

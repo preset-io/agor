@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import type { ResolvedExecutorHeartbeatConfig } from '@agor/core/config';
+import { buildAllowlistedEnv, type ResolvedExecutorHeartbeatConfig } from '@agor/core/config';
 import { shortId } from '@agor/core/db';
 
 export interface ExecutorHeartbeatCallbackPayload {
@@ -33,6 +33,9 @@ export class ExecutorHeartbeatCallbackRunner {
     this.runningByTask.add(payload.task_id);
     const timeoutMs = this.config.callback.timeout_ms;
     const child = spawn('sh', ['-c', command], {
+      // The callback consumes its bounded JSON payload on stdin. It has no
+      // reason to inherit database/JWT/master/provider secrets from the daemon.
+      env: buildAllowlistedEnv(),
       stdio: ['pipe', 'ignore', 'ignore'],
     });
 

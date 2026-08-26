@@ -50,6 +50,8 @@ execution:
 
 The external launcher is responsible for identity, credentials, storage, containment, cancellation, and tenant isolation. `{tenant_id}` and `{user_id}` are the preferred stable identity inputs. The compatibility `{unix_user}` value is an opaque home key, not a host account.
 
+The launcher command receives a curated, secret-free process environment. The authenticated executor payload (including the task's resolved user environment) is delivered over stdin, not argv. Give the launcher its own workload identity in the delegated substrate; do not depend on inheriting daemon database, JWT, master-key, or provider credentials.
+
 > `strict` and `insulated` were removed in 0.25. Upgrade through the latest 0.24.x release and migrate to `sandbox` before upgrading a legacy installation.
 
 ## Board and branch permissions (RBAC)
@@ -99,7 +101,7 @@ export AGOR_MASTER_SECRET="$(openssl rand -hex 32)"
 agor daemon start
 ```
 
-If unset, Agor falls back to plaintext storage and logs a warning. Never run a shared deployment without it.
+The daemon fails startup when no master secret can be resolved. First-run setup may generate one in the local config, but production operators should provision and back up a stable high-entropy value explicitly. Do not change or lose it: Agor does not currently provide an online master-key rotation or bulk re-encryption workflow, and ciphertext written under the old key cannot be opened with a replacement key.
 
 ### Web Terminal Trust Boundary
 
@@ -125,7 +127,7 @@ Mitigations: dedicated branches, restricted bot distribution, supervised permiss
 
 ### Per-User Secrets Still Live on the Daemon
 
-Per-user API keys and env vars are encrypted at rest and only decrypted when needed. **But the daemon hosts the secrets.** A malicious admin or compromised host can still recover them. Invite admins you'd trust with your tool credentials.
+Per-user API keys and env vars are encrypted at rest and only decrypted when needed. API reads expose names, scope, and presence metadata—not ciphertext or plaintext, including to admins. Admins can replace or delete another lower-role user's stored value where user-management policy permits, but there is no application-level "reveal" operation. **The daemon still hosts the secrets.** A malicious administrator with code/config/host control, or a compromised daemon account, can recover them. Invite administrators you trust with tool credentials.
 
 ### Admins Have Wide Reach
 
@@ -138,7 +140,7 @@ Users with the `admin` role can manage other users, configure MCP servers, view 
 - **Keep the daemon behind a firewall, VPN, or private network.** Pair with a reverse proxy if you need SSO or IP allowlists.
 - **Patch the host like any shared dev box.** Monitor logs, rotate credentials, audit users.
 - **Prefer scoped or temporary API credentials.** `OPENAI_API_KEY` for an artifact session shouldn't be your team's master key.
-- **Rotate the master secret periodically.** Re-encrypt at rest by triggering a settings update flow.
+- **Keep the deployment master secret stable and recoverable.** Online rotation/re-encryption is not implemented; rotate provider credentials independently after suspected exposure.
 - **Audit daemon and external-launcher logs.** Correlate tenant, user, session, task, and runtime identifiers.
 - **Pilot before scaling.** Run the first weeks of multi-user use with logs open.
 

@@ -20,3 +20,7 @@ process.env.USERPROFILE = testHome;
 
 delete process.env.AGOR_DATA_HOME;
 delete process.env.AGOR_OUTER_SANDBOX;
+
+// Match the daemon bootstrap invariant so service tests never rely on the
+// removed plaintext-at-rest fallback.
+process.env.AGOR_MASTER_SECRET = 'agor-daemon-test-master-secret-not-production';

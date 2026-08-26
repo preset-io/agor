@@ -1,6 +1,7 @@
 import {
   AgenticToolPresetRepository,
   BranchRepository,
+  decryptApiKey,
   eq,
   GatewayChannelRepository,
   gatewayChannels,
@@ -10,9 +11,10 @@ import {
   select,
   type TenantScopeAwareDatabase,
   UsersRepository,
+  update,
 } from '@agor/core/db';
 import type { BranchID, GatewayChannel, UUID } from '@agor/core/types';
-import { USER_DEFAULT_AGENTIC_CONFIGURATION } from '@agor/core/types';
+import { GATEWAY_REDACTED_SENTINEL, USER_DEFAULT_AGENTIC_CONFIGURATION } from '@agor/core/types';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { GatewayChannelsService } from './gateway-channels';
@@ -94,7 +96,113 @@ describe('GatewayChannelsService exact agentic configuration', () => {
     const stored = raw?.agentic_config as Record<string, unknown>;
     expect(raw?.agentic_tool_preset_id).toBeNull();
     expect(stored.presetId).toBe(USER_DEFAULT_AGENTIC_CONFIGURATION);
-    expect(isEncrypted((stored.envVars as Array<{ value: string }>)[0]?.value ?? '')).toBe(true);
+    const storedValue = (stored.envVars as Array<{ value: string }>)[0]?.value ?? '';
+    expect(isEncrypted(storedValue)).toBe(true);
+    expect(decryptApiKey(storedValue)).toBe('secret-value');
+  });
+
+  dbTest('rejects unsafe gateway environment maps at the service boundary', async ({ db }) => {
+    const { data, owner } = await channelData(db, true);
+    const service = new GatewayChannelsService(db);
+    const base = {
+      ...data,
+      agentic_config: {
+        agent: 'opencode' as const,
+        presetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+      },
+    };
+
+    await expect(
+      service.create(
+        {
+          ...base,
+          agentic_config: {
+            ...base.agentic_config,
+            envVars: [{ key: 'bad-key', value: 'secret', forceOverride: false }],
+          },
+        },
+        { user: owner } as never
+      )
+    ).rejects.toThrow(/invalid gateway environment variable/i);
+    await expect(
+      service.create(
+        {
+          ...base,
+          agentic_config: {
+            ...base.agentic_config,
+            envVars: [{ key: 'SAFE_KEY', value: 'bad\0value', forceOverride: false }],
+          },
+        },
+        { user: owner } as never
+      )
+    ).rejects.toThrow(/NUL character/i);
+    await expect(
+      service.create(
+        {
+          ...base,
+          agentic_config: {
+            ...base.agentic_config,
+            envVars: [
+              { key: 'DUPLICATE', value: 'one', forceOverride: false },
+              { key: 'DUPLICATE', value: 'two', forceOverride: true },
+            ],
+          },
+        },
+        { user: owner } as never
+      )
+    ).rejects.toThrow(/duplicate gateway environment variable/i);
+    await expect(
+      service.create(
+        {
+          ...base,
+          agentic_config: {
+            ...base.agentic_config,
+            envVars: [
+              {
+                key: 'SENTINEL',
+                value: GATEWAY_REDACTED_SENTINEL,
+                forceOverride: false,
+              },
+            ],
+          },
+        },
+        { user: owner } as never
+      )
+    ).rejects.toThrow(/unresolved redaction sentinel/i);
+
+    expect(await new GatewayChannelRepository(db).findAll()).toHaveLength(0);
+  });
+
+  dbTest('never turns an unreadable stored envelope into a runtime credential', async ({ db }) => {
+    const { data, owner } = await channelData(db, true);
+    const created = await new GatewayChannelsService(db).create(
+      {
+        ...data,
+        agentic_config: {
+          agent: 'opencode',
+          presetId: USER_DEFAULT_AGENTIC_CONFIGURATION,
+          envVars: [{ key: 'TOKEN', value: 'secret-value', forceOverride: false }],
+        },
+      },
+      { user: owner } as never
+    );
+    const raw = await select(db)
+      .from(gatewayChannels)
+      .where(eq(gatewayChannels.id, created.id))
+      .one();
+    const stored = structuredClone(raw?.agentic_config as Record<string, unknown>);
+    const envVars = stored.envVars as Array<{ key: string; value: string; forceOverride: boolean }>;
+    const envelope = envVars[0].value;
+    const [salt, iv, tag, ciphertext] = envelope.split(':');
+    envVars[0].value = `${salt}:${iv}:${tag.slice(0, -1)}${tag.at(-1) === '0' ? '1' : '0'}:${ciphertext}`;
+    await update(db, gatewayChannels)
+      .set({ agentic_config: stored })
+      .where(eq(gatewayChannels.id, created.id))
+      .run();
+
+    const reloaded = await new GatewayChannelRepository(db).findById(created.id);
+
+    expect(reloaded?.agentic_config?.envVars).toEqual([]);
   });
 
   dbTest('round-trips a stable-owner My default patch outside the preset FK', async ({ db }) => {

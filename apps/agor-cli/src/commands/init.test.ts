@@ -25,6 +25,7 @@ import {
   assertInitSupportsConfiguredDatabase,
   createInstallTelemetryConfig,
   isFreshInitState,
+  moveInstallToPrivateBackup,
   parseInitialAgenticTools,
   shouldDeferAdminSetup,
   validateInitAdminPassword,
@@ -289,6 +290,21 @@ describe('database support', () => {
 });
 
 describe('safe init state detection', () => {
+  it('forces a re-init backup root to owner-only permissions', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-init-backup-'));
+    temporaryDirectories.push(root);
+    const baseDir = join(root, '.agor');
+    await mkdir(baseDir, { mode: 0o755 });
+
+    const backupDir = await moveInstallToPrivateBackup(baseDir, {
+      date: new Date('2026-08-26T12:34:56.000Z'),
+    });
+
+    expect(backupDir).toBe(`${baseDir}.bkp.20260826-123456`);
+    expect((await stat(backupDir)).mode & 0o777).toBe(0o700);
+    await expect(access(baseDir)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('treats a pre-created empty .agor mount as fresh', () => {
     expect(
       isFreshInitState({
@@ -484,6 +500,7 @@ describe('initial agentic tool selection', () => {
       expect(reinitialized.output).toContain(`Moved ${join(home, '.agor')} to`);
       const backupDir = (await readdir(home)).find((entry) => entry.startsWith('.agor.bkp.'));
       expect(backupDir).toBeDefined();
+      expect((await stat(join(home, backupDir!))).mode & 0o777).toBe(0o700);
       await expect(access(join(home, backupDir!, 'agor.db-wal'))).resolves.toBeUndefined();
       await expect(access(join(home, backupDir!, 'agor.db-shm'))).resolves.toBeUndefined();
       const config = loadYaml(await readFile(join(home, '.agor', 'config.yaml'), 'utf8')) as {

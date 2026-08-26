@@ -11,6 +11,8 @@ import { Transform } from 'node:stream';
 import type { SessionInitializationRequest } from '@agor/core/api';
 import {
   type AgorConfig,
+  ENV_VAR_CONSTRAINTS,
+  isEnvVarAllowed,
   type ResolvedDeploymentConfig,
   type ResolvedExternalLaunchProvider,
   requireDeploymentId,
@@ -4377,19 +4379,42 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionId: string,
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
     params: any
-  ): Promise<void> => {
+  ): Promise<Session> => {
     const user = params?.user;
     if (!user) {
       throw new NotAuthenticated('Authentication required');
     }
-    // Fast-path for service accounts — skip the session lookup entirely.
-    if (user._isServiceAccount) return;
-
     const session = await sessionsService.get(sessionId, { provider: undefined });
     if (!session) {
       throw new NotFound(`Session not found: ${sessionId}`);
     }
-    checkSessionOwnerOrAdmin(user, session, superadminOpts);
+    if (!user._isServiceAccount) checkSessionOwnerOrAdmin(user, session, superadminOpts);
+    return session as Session;
+  };
+
+  /**
+   * A selection must name an existing session-scoped variable owned by this
+   * Session's creator. Keeping the check at the route boundary prevents an
+   * admin, provider-less caller, or malformed import from wiring arbitrary
+   * metadata that a later execution path might reinterpret as a secret grant.
+   */
+  const assertSelectableSessionEnvVarNames = async (
+    session: Session,
+    envVarNames: string[]
+  ): Promise<void> => {
+    const owner = (await usersService.get(session.created_by as UserID, {
+      provider: undefined,
+    })) as User;
+    for (const name of envVarNames) {
+      if (!ENV_VAR_CONSTRAINTS.NAME_PATTERN.test(name) || !isEnvVarAllowed(name)) {
+        throw new BadRequest(`Invalid session environment variable name: ${name}`);
+      }
+      if (owner.env_vars?.[name]?.scope !== 'session') {
+        throw new BadRequest(
+          `Environment variable ${name} is not a session-scoped variable owned by this session creator`
+        );
+      }
+    }
   };
 
   // Human/API reads retain the owner/admin rule. The sole exception is the
@@ -5135,7 +5160,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
         const name = data.envVarName.trim();
         if (!name) throw new BadRequest('envVarName must be non-empty');
-        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        const session = await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        await assertSelectableSessionEnvVarNames(session, [name]);
         await sessionEnvSelectionsService.add(id as SessionID, name, params);
         const relationship = {
           session_id: id,
@@ -5179,7 +5205,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const id = params.route?.id;
         if (!id) throw new BadRequest('Session ID required');
         const envVarNames = normalizeEnvVarNames(data?.envVarNames);
-        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        const session = await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        await assertSelectableSessionEnvVarNames(session, envVarNames);
         await sessionEnvSelectionsService.setAll(id as SessionID, envVarNames, params);
         try {
           emitServiceEvent(app, {
@@ -5274,7 +5301,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             }
           },
           setEnvVarNames: (envVarNames) =>
-            sessionEnvSelectionsService.setAll(session.session_id, envVarNames, params),
+            assertSelectableSessionEnvVarNames(session, envVarNames).then(() =>
+              sessionEnvSelectionsService.setAll(session.session_id, envVarNames, params)
+            ),
           publishMcpServersChanged: (serverIds) =>
             emitServiceEvent(app, {
               path: 'session-mcp-servers',

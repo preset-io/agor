@@ -2448,12 +2448,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     },
   });
 
-  // Top-level `/session-env-selections` exists mainly to surface WebSocket
-  // events emitted by the `/sessions/:id/env-selections` route handlers. Its
-  // `find()` must still be gated — without these hooks any authenticated
-  // user could read selection metadata for sessions they can't access,
-  // bypassing the creator/admin gate on the nested route. Mirror the
-  // `/session-mcp-servers` pattern exactly so the two stay consistent.
+  // Top-level `/session-env-selections` is an empty compatibility placeholder;
+  // nested routes own reads/writes and the realtime policy publishes no
+  // selection events. Keep even the empty service authenticated so a future
+  // method cannot accidentally become anonymous.
   safeService('session-env-selections')?.hooks({
     before: {
       all: [requireAuth],
@@ -2530,20 +2528,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         requireMinimumRole(ROLES.ADMIN, 'create gateway channels'),
         enforcePublicWriteFields('Gateway channel', GATEWAY_CHANNEL_WRITE_FIELDS),
         injectCreatedBy(),
-        // Encrypt env var values at rest (same pattern as user env vars / API keys)
-        async (context: HookContext) => {
-          const data = context.data as Record<string, unknown> | undefined;
-          const ac = data?.agentic_config as Record<string, unknown> | undefined;
-          if (!ac || !Array.isArray(ac.envVars)) return context;
-          const { encryptApiKey } = await import('@agor/core/db');
-          ac.envVars = (ac.envVars as { key: string; value: string; forceOverride: boolean }[]).map(
-            (v) => ({
-              ...v,
-              value: v.value ? encryptApiKey(v.value) : v.value,
-            })
-          );
-          return context;
-        },
+        // GatewayChannelRepository is the single encrypt-on-write boundary.
+        // Encrypting here as well used to create a double envelope on REST/
+        // Socket.IO creates and forced the prompt path to decrypt a second time.
         markWriteDataPrepared(),
       ],
       patch: [

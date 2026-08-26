@@ -129,10 +129,8 @@ async function validateNamespacedGitRef(
   // that validate refs before a repo exists. The non-`--branch` form is
   // pure syntactic validation and needs no git context.
   //
-  // Route through `createGit` so the unsafe-ops scanner is opt-in here too
-  // — otherwise a daemon env carrying `GIT_SSH_COMMAND` (or similar) would
-  // throw a confusing "not permitted without enabling allowUnsafeSshCommand"
-  // out of what is meant to be a pure syntactic check.
+  // Route through `createGit` so this pure syntactic check also uses the
+  // package's isolated process environment and scanner policy.
   const { git } = createGit();
   try {
     await git.raw(['check-ref-format', `refs/${namespace}/${ref}`]);
@@ -472,6 +470,111 @@ export function redactGitEnv(env: Record<string, string | undefined>): Record<st
 }
 
 /**
+ * Variables that can make Git execute an attacker-selected program, inject
+ * arbitrary config, or redirect a fixed repository operation to unrelated
+ * filesystem state. Generic user env is useful for credentials, proxies, TLS,
+ * identity, and LFS settings, but these process-control families are not part
+ * of that mapping and must not reach Agor's one-purpose git executors.
+ *
+ * Server-owned config variables are added after this filter. This function is
+ * deliberately scoped to the caller-provided map; trusted executor setup may
+ * still add a bounded `GIT_CONFIG_PARAMETERS`/`GIT_CONFIG_COUNT` envelope.
+ */
+const USER_GIT_PROCESS_CONTROL_PATTERNS: readonly RegExp[] = Object.freeze([
+  // Generic child-process injection controls. Normal daemon callers have
+  // already passed through @agor/core's canonical env blocklist, but @agor/git
+  // is also a public package boundary and must be safe for direct callers.
+  /^(?:LD_|DYLD_)/,
+  /^PYTHON(?!_AGOR_)/,
+  /^(?:PERL5LIB|PERL5OPT|RUBYOPT|RUBYLIB|GEM_PATH|BASH_ENV|ENV|NODE_OPTIONS)$/,
+  /^(?:PATH|SHELL|HOME|USER|LOGNAME|AGOR_MASTER_SECRET)$/,
+  /^GIT_CONFIG(?:_|$)/,
+  /^GIT_SSH(?:_|$)/,
+  /^GIT_ASKPASS(?:_|$)/,
+  /^SSH_ASKPASS(?:_|$)/,
+  /^GIT_(?:EXEC_PATH|TEMPLATE_DIR|EXTERNAL_DIFF|DIFF_OPTS)$/,
+  /^GIT_PROXY_COMMAND$/,
+  /^GIT_(?:EDITOR|SEQUENCE_EDITOR|PAGER)$/,
+  /^GIT_(?:DIR|WORK_TREE|COMMON_DIR|INDEX_FILE)$/,
+  /^GIT_(?:OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES)$/,
+  /^GIT_(?:CEILING_DIRECTORIES|ATTR_NOSYSTEM)$/,
+  /^GIT_TRACE/,
+  /^(?:PAGER|LESS|LV)$/,
+]);
+
+/**
+ * Minimal daemon/substrate process metadata a Git child may inherit.
+ *
+ * This is intentionally defined in the Git package rather than importing the
+ * broader agent-runtime allowlist from `@agor/core` (which depends on this
+ * package). In particular, no ambient `GIT_*`, SSH/GPG agent capability, or
+ * Agor deployment variable is copied. Callers may add a resolved user mapping;
+ * the process-control filter above constrains that mapping before use.
+ */
+const GIT_PROCESS_ENV_NAMES = new Set([
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'HOSTNAME',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  'LANG',
+  'LANGUAGE',
+  'TERM',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'ALL_PROXY',
+  'http_proxy',
+  'https_proxy',
+  'no_proxy',
+  'all_proxy',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+  'GIT_AUTHOR_NAME',
+  'GIT_AUTHOR_EMAIL',
+  'GIT_COMMITTER_NAME',
+  'GIT_COMMITTER_EMAIL',
+]);
+
+export function buildGitProcessEnvironment(
+  source: Record<string, string | undefined> = process.env
+): Record<string, string> {
+  const safe: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    if (GIT_PROCESS_ENV_NAMES.has(key) || key.startsWith('LC_') || key.startsWith('XDG_')) {
+      safe[key] = value;
+    }
+  }
+  return safe;
+}
+
+export function filterUserGitEnvironment(env: Record<string, string> | undefined): {
+  env: Record<string, string>;
+  rejected: string[];
+} {
+  const safe: Record<string, string> = {};
+  const rejected: string[] = [];
+  for (const [key, value] of Object.entries(env ?? {})) {
+    const upper = key.toUpperCase();
+    if (
+      !/^[A-Z_][A-Z0-9_]*$/.test(key) ||
+      value.includes('\0') ||
+      USER_GIT_PROCESS_CONTROL_PATTERNS.some((pattern) => pattern.test(upper))
+    ) {
+      rejected.push(key);
+      continue;
+    }
+    safe[key] = value;
+  }
+  return { env: safe, rejected };
+}
+
+/**
  * Create a configured simple-git instance.
  *
  * Substrate selection is handled upstream when spawning the executor;
@@ -492,11 +595,12 @@ export function redactGitEnv(env: Record<string, string | undefined>): Record<st
  * `/etc/gitconfig` is intentionally NOT killed — admin policy territory
  * (CA bundles, proxies, safe.directory).
  *
- * **env isolation**: `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_TERMINAL_PROMPT=0` are
- * only set when `env` is provided (or an auth token is found in it). Callers
- * that omit `env` (e.g. `createGit(branchPath)`) intentionally inherit the
- * daemon process environment so they can read `/etc/gitconfig`, `safe.directory`,
- * and other admin-policy config. They still get the `unsafe.*` scanner opt-ins.
+ * **env isolation**: every Git process gets only inert runtime/network/identity
+ * metadata from the daemon. `HOME` remains available, so trusted global config
+ * such as `safe.directory` still works, but deployment credentials and ambient
+ * Git/SSH/GPG controls never reach the child. When a resolved user `env` is
+ * provided, process-control families are removed and the global user gitconfig
+ * is disabled with `GIT_CONFIG_GLOBAL=/dev/null`.
  *
  * @param authHost - Host to scope the auth header to. When omitted, falls back
  *                   to github.com; callers should derive this via
@@ -508,6 +612,8 @@ export function createGit(
   authHost?: string
 ): { git: ReturnType<typeof simpleGit> } {
   const gitBinary = getGitBinary();
+  const { env: safeUserEnv } = filterUserGitEnvironment(env);
+  const safeProcessEnv = buildGitProcessEnvironment();
 
   // No `-c core.sshCommand=...` injection. PR #786 added one to skip the
   // first-time-host SSH prompt in Docker — but it silently overrode the
@@ -524,18 +630,17 @@ export function createGit(
 
   // Auth header config goes through env vars so the token never lands on
   // argv. buildAuthHeaderEnv returns [] when no usable token is supplied.
-  const rawToken = env?.GITHUB_TOKEN ?? env?.GH_TOKEN;
+  const rawToken = safeUserEnv.GITHUB_TOKEN ?? safeUserEnv.GH_TOKEN;
   const authConfigEntries = buildAuthHeaderEnv(rawToken, authHost ?? DEFAULT_AUTH_HEADER_HOST);
 
-  // Build git env vars. Always set the isolation knobs when we are passing a
-  // user env (i.e. doing per-user git work) — otherwise leave the daemon
-  // user's environment untouched so commands that don't need credentials
-  // (e.g. listGitWorktrees) keep working as before.
-  let spawnEnv: Record<string, string> | undefined;
+  // Build git env vars. Every invocation starts from the secret-free Git
+  // runtime map. Add the stronger user-config inheritance kill when a
+  // resolved user env is present.
+  let spawnEnv: Record<string, string> = safeProcessEnv;
   if (env || authConfigEntries.length > 0) {
     spawnEnv = {
-      ...process.env,
-      ...(env ?? {}),
+      ...safeProcessEnv,
+      ...safeUserEnv,
       // Inheritance kill (GLOBAL only): ignore the daemon user's
       // ~/.gitconfig. /etc/gitconfig is intentionally NOT killed — it is
       // admin-policy territory (CA bundles, proxies). See block comment.
@@ -573,9 +678,7 @@ export function createGit(
   // simple-git's constructor `spawnOptions` silently drops `env`; `git.env()`
   // is the supported path. It *replaces* the child's environment — we want
   // that, since the inheritance kill is the whole point.
-  if (spawnEnv) {
-    git.env(spawnEnv);
-  }
+  git.env(spawnEnv);
 
   return { git };
 }
@@ -757,9 +860,9 @@ export async function cloneRepo(options: CloneOptions): Promise<CloneResult> {
   }
 
   // Create git instance with user env vars. Auth headers are injected via
-  // http.extraheader; GIT_CONFIG_GLOBAL isolation is active only when env is
-  // provided (intentional — callers without env inherit the daemon process
-  // environment so they can read /etc/gitconfig, safe.directory, etc.).
+  // http.extraheader. Every child gets the secret-free process map; a caller
+  // env additionally disables daemon-user global config inheritance. System
+  // `/etc/gitconfig` remains available as trusted operator policy.
   // `createGitForRemote` derives the auth-header host from the clone URL so
   // GitHub Enterprise / self-hosted GitLab work without per-deployment config.
   // (Bitbucket Cloud needs a different username shape — see buildAuthHeaderEnv.)

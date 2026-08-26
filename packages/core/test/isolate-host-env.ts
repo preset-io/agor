@@ -28,3 +28,9 @@ process.env.USERPROFILE = testHome;
 
 delete process.env.AGOR_DATA_HOME;
 delete process.env.AGOR_OUTER_SANDBOX;
+
+// Production startup fails closed before repositories are constructed when
+// the deployment key is absent. Mirror that invariant for repository tests;
+// encryption-specific tests temporarily delete it when exercising fail-closed
+// behavior.
+process.env.AGOR_MASTER_SECRET = 'agor-core-test-master-secret-not-production';

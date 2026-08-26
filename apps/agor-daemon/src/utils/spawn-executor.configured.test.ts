@@ -209,6 +209,41 @@ describe('configured executor spawning', () => {
     });
   });
 
+  it('does not expose daemon or user secrets to the templated launcher environment', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousMasterSecret = process.env.AGOR_MASTER_SECRET;
+    process.env.DATABASE_URL = 'postgres://daemon-secret';
+    process.env.AGOR_MASTER_SECRET = 'deployment-secret';
+    try {
+      const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+      configureExecutor(
+        { executor_command_template: 'launch -- {command}' },
+        LOCAL_RESPONSE_OPTIONS
+      );
+
+      spawnExecutor(
+        { command: 'prompt', env: { USER_SECRET: 'payload-only' } },
+        { preparedEnv: { USER_SECRET: 'payload-only' } }
+      );
+
+      const launcherOptions = spawnMock.mock.calls[0][2] as {
+        env: Record<string, string>;
+      };
+      expect(launcherOptions.env.PATH).toBe(process.env.PATH);
+      expect(launcherOptions.env.DATABASE_URL).toBeUndefined();
+      expect(launcherOptions.env.AGOR_MASTER_SECRET).toBeUndefined();
+      expect(launcherOptions.env.USER_SECRET).toBeUndefined();
+      expect(JSON.parse(proc.written).env).toEqual({ USER_SECRET: 'payload-only' });
+    } finally {
+      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousDatabaseUrl;
+      if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
+      else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+    }
+  });
+
   it('lets explicit spawn options override configured defaults', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
@@ -824,6 +859,29 @@ describe('configured executor spawning', () => {
         }),
       })
     );
+  });
+
+  it('uses a secret-free default environment for local fixed-command executors', async () => {
+    const installed = installMockExecutor('agor-executor-env-');
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousMasterSecret = process.env.AGOR_MASTER_SECRET;
+    process.env.DATABASE_URL = 'postgres://daemon-secret';
+    process.env.AGOR_MASTER_SECRET = 'deployment-secret';
+    try {
+      const { spawnExecutor } = await import('./spawn-executor');
+      spawnExecutor({ command: 'branch.files.browse' });
+
+      const localOptions = spawnMock.mock.calls[0][2] as { env: Record<string, string> };
+      expect(localOptions.env.PATH).toBe(process.env.PATH);
+      expect(localOptions.env.DATABASE_URL).toBeUndefined();
+      expect(localOptions.env.AGOR_MASTER_SECRET).toBeUndefined();
+    } finally {
+      installed.restore();
+      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousDatabaseUrl;
+      if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
+      else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+    }
   });
 
   it('derives LOG_LEVEL for executor processes when only NODE_ENV is set', async () => {

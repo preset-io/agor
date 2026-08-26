@@ -81,6 +81,14 @@ export const BLOCKED_ENV_PATTERNS: readonly RegExp[] = Object.freeze([
 ]);
 
 /**
+ * Portable environment-variable name syntax admitted at every untrusted env
+ * ingress. Keeping this beside the runtime filter prevents a map that bypassed
+ * the settings validator (gateway data, an imported row, or an executor
+ * payload) from reaching Node's process-spawn boundary with an invalid key.
+ */
+export const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
+
+/**
  * Validate environment variable name against the blocklist.
  *
  * Case-insensitive: `path` and `PATH` both resolve to `false`.
@@ -152,7 +160,7 @@ export function filterEnv(
 
   for (const [key, value] of Object.entries(env)) {
     if (value === undefined) continue;
-    if (!isEnvVarAllowed(key)) {
+    if (!ENV_VAR_NAME_PATTERN.test(key) || !isEnvVarAllowed(key) || value.includes('\0')) {
       rejected.push(key);
       onReject?.(key);
       continue;

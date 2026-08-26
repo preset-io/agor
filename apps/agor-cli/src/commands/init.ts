@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { access, constants, mkdir, readdir, rename, rm } from 'node:fs/promises';
+import { access, chmod, constants, mkdir, readdir, rename, rm } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -95,6 +95,39 @@ export function validateInitAdminPassword(input: unknown, email?: string): true 
 
 export function formatInitBackupTimestamp(date = new Date()): string {
   return date.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+}
+
+export async function moveInstallToPrivateBackup(
+  baseDir: string,
+  options: {
+    date?: Date;
+    pathExists?: (path: string) => Promise<boolean>;
+  } = {}
+): Promise<string> {
+  const pathExists =
+    options.pathExists ??
+    (async (path: string) => {
+      try {
+        await access(path, constants.F_OK);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  const prefix = `${baseDir}.bkp.${formatInitBackupTimestamp(options.date)}`;
+  let backupDir = prefix;
+  for (let suffix = 2; await pathExists(backupDir); suffix += 1) {
+    backupDir = `${prefix}.${suffix}`;
+  }
+
+  // Re-init backups co-locate the encrypted database with config.yaml's
+  // deployment key and may also contain native agent credentials. Preserve
+  // neither a legacy permissive mode nor the caller's umask accident. Tighten
+  // before the atomic rename so there is no permissive backup-name window.
+  await chmod(baseDir, 0o700);
+  await rename(baseDir, backupDir);
+  await chmod(backupDir, 0o700);
+  return backupDir;
 }
 
 /** Parse only the fixed integration allowlist; `all` and `none` are explicit headless shorthands. */
@@ -528,15 +561,11 @@ export default class Init extends Command {
   }
 
   private async backupExistingInstall(baseDir: string): Promise<void> {
-    const prefix = `${baseDir}.bkp.${formatInitBackupTimestamp()}`;
-    let backupDir = prefix;
-    for (let suffix = 2; await this.pathExists(backupDir); suffix += 1) {
-      backupDir = `${prefix}.${suffix}`;
-    }
-
     this.log('');
     this.log('📦 Backing up existing installation...');
-    await rename(baseDir, backupDir);
+    const backupDir = await moveInstallToPrivateBackup(baseDir, {
+      pathExists: (path) => this.pathExists(path),
+    });
     this.log(`${chalk.green('   ✓')} Moved ${baseDir} to ${backupDir}`);
   }
 

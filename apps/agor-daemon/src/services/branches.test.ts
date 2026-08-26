@@ -700,6 +700,57 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
+  it('resolves lifecycle credentials for the authenticated actor, not the branch creator', async () => {
+    const { service } = createServiceHarness();
+    const app = (service as unknown as { app: Application }).app as unknown as {
+      sessionTokenService: { generateCommandToken: ReturnType<typeof vi.fn> };
+    };
+    const branch = {
+      branch_id: 'wt-actor-env' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-actor-env',
+      path: '/tmp/wt-actor-env',
+      created_by: 'branch-owner' as UUID,
+      branch_unique_id: 1,
+      logs_command: 'docker compose logs --tail=100',
+    };
+    const actorId = 'collaborating-actor' as UUID;
+    const params = {
+      provider: 'rest',
+      user: { user_id: actorId, role: 'member' },
+    } as never;
+
+    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
+      kind: 'shell',
+      command: branch.logs_command,
+    } as never);
+    const resolveContext = vi
+      .spyOn(service as never, 'resolveEnvironmentExecutorContext')
+      .mockResolvedValue({
+        env: { ACTOR_CANARY: 'present' },
+        delegatedHomeKey: undefined,
+      } as never);
+    mockedRequestExecutor.mockResolvedValue({
+      success: true,
+      data: { logs: 'ok', timestamp: '2026-08-26T00:00:00.000Z' },
+    });
+
+    await service.getLogs(branch.branch_id, params);
+
+    expect(resolveContext).toHaveBeenCalledWith(branch, actorId, params);
+    expect(app.sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
+      'environment-logs',
+      actorId,
+      branch.branch_id
+    );
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({ env: { ACTOR_CANARY: 'present' } }),
+      expect.anything()
+    );
+  });
+
   // The health monitor probes every running env every 5s. updateEnvironment
   // persists each observation timestamp, but broadcasts ONLY when a
   // health-relevant field actually changes. Otherwise every client rebuilds

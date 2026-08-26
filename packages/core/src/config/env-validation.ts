@@ -1,4 +1,4 @@
-import { getEnvVarBlockReason, isEnvVarAllowed } from './env-blocklist';
+import { ENV_VAR_NAME_PATTERN, getEnvVarBlockReason, isEnvVarAllowed } from './env-blocklist';
 
 /**
  * Validation constraints for environment variables
@@ -8,7 +8,7 @@ export const ENV_VAR_CONSTRAINTS = {
   MAX_VALUE_LENGTH: 10 * 1024, // 10KB
 
   /** Regex for valid variable names (uppercase, underscore, numbers) */
-  NAME_PATTERN: /^[A-Z_][A-Z0-9_]*$/,
+  NAME_PATTERN: ENV_VAR_NAME_PATTERN,
 };
 
 /**
@@ -16,7 +16,13 @@ export const ENV_VAR_CONSTRAINTS = {
  */
 export interface ValidationError {
   field: 'name' | 'value';
-  code: 'invalid_format' | 'blocked' | 'empty_value' | 'too_long' | 'missing_field';
+  code:
+    | 'invalid_format'
+    | 'invalid_character'
+    | 'blocked'
+    | 'empty_value'
+    | 'too_long'
+    | 'missing_field';
   message: string;
 }
 
@@ -72,6 +78,17 @@ export function validateEnvVar(name: string, value?: string): ValidationError[] 
         field: 'value',
         code: 'empty_value',
         message: 'Environment variable value cannot be empty',
+      });
+    }
+
+    // Node rejects NUL-containing environment values at spawn time. Reject at
+    // ingress as well as at the final executor boundary so one malformed value
+    // cannot turn every future task/lifecycle action into a deterministic DoS.
+    if (value.includes('\0')) {
+      errors.push({
+        field: 'value',
+        code: 'invalid_character',
+        message: 'Environment variable value cannot contain a NUL character',
       });
     }
 

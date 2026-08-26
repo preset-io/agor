@@ -54,13 +54,12 @@ export const ALLOWED_ENV_VARS = new Set([
   'DISPLAY',
   'WAYLAND_DISPLAY',
 
-  // SSH (for git operations)
-  'SSH_AUTH_SOCK',
-  'SSH_AGENT_PID',
-
-  // GPG (for git signing)
-  'GPG_AGENT_INFO',
-  'GPG_TTY',
+  // Host SSH/GPG agent sockets are intentionally not forwarded. They are
+  // credential capabilities, not inert process metadata; projecting the
+  // daemon account's socket into a user, sandbox, or delegated executor would
+  // let that executor authenticate as the daemon. Users may still configure
+  // their own explicit env mapping where the execution substrate provides a
+  // user-scoped agent.
 
   // Proxy / TLS (needed for corporate environments)
   'HTTP_PROXY',
@@ -85,7 +84,6 @@ export const ALLOWED_ENV_VARS = new Set([
   'GIT_AUTHOR_EMAIL',
   'GIT_COMMITTER_NAME',
   'GIT_COMMITTER_EMAIL',
-  'GIT_SSH_COMMAND',
 
   // Agor session context (safe for executor/sessions)
   'DAEMON_URL',
@@ -203,7 +201,7 @@ export async function resolveUserEnvironment(
       if (sessionId) {
         try {
           const selRepo = new SessionEnvSelectionRepository(db);
-          sessionSelections = await selRepo.asSet(sessionId);
+          sessionSelections = await selRepo.asSetForOwner(sessionId, userId);
         } catch (err) {
           console.error(`Failed to load session env selections for session ${sessionId}:`, err);
           sessionSelections = new Set();
@@ -305,7 +303,7 @@ function isAllowedEnvVar(key: string): boolean {
  * Build a minimal environment from process.env using the allowlist.
  * Only copies variables that are explicitly allowed.
  */
-function buildAllowlistedEnv(): Record<string, string> {
+export function buildAllowlistedEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined && isAllowedEnvVar(key)) {
@@ -380,9 +378,30 @@ export async function createUserProcessEnvironment(
   // Track user-defined env var keys (for MCP template scoping)
   const userEnvKeys: string[] = [];
 
+  // Gateway values are operator-configured, but they are still a persisted
+  // untrusted map at the process boundary (and old/imported rows may predate
+  // validation). Apply the same final filter as user and executor payload env.
+  const gatewayKeyCounts = new Map<string, number>();
+  for (const { key } of gatewayEnv ?? []) {
+    gatewayKeyCounts.set(key, (gatewayKeyCounts.get(key) ?? 0) + 1);
+  }
+  const duplicateGatewayKeys = new Set(
+    [...gatewayKeyCounts].filter(([, count]) => count > 1).map(([key]) => key)
+  );
+  const safeGatewayEnv = (gatewayEnv ?? []).filter(({ key, value }) => {
+    if (duplicateGatewayKeys.has(key)) return false;
+    return Object.hasOwn(filterEnv({ [key]: value }).env, key);
+  });
+  const rejectedGatewayCount = (gatewayEnv?.length ?? 0) - safeGatewayEnv.length;
+  if (rejectedGatewayCount > 0) {
+    console.warn(
+      `[createUserProcessEnvironment] Stripped ${rejectedGatewayCount} invalid or ambiguous gateway env entr${rejectedGatewayCount === 1 ? 'y' : 'ies'}`
+    );
+  }
+
   // Split gateway env vars by override mode
-  const gatewayFallback = gatewayEnv?.filter((v) => !v.forceOverride) ?? [];
-  const gatewayForceOverride = gatewayEnv?.filter((v) => v.forceOverride) ?? [];
+  const gatewayFallback = safeGatewayEnv.filter((v) => !v.forceOverride);
+  const gatewayForceOverride = safeGatewayEnv.filter((v) => v.forceOverride);
 
   // 1. Merge gateway fallback vars (low priority — user vars override these)
   for (const { key, value } of gatewayFallback) {
@@ -419,9 +438,16 @@ export async function createUserProcessEnvironment(
   }
 
   // 4. Merge additional environment variables (highest priority)
-  // Only override if values are non-empty
+  // These are trusted caller fields today, but keep the shared helper safe if
+  // a future service forwards request data into this slot.
   if (additionalEnv) {
-    for (const [key, value] of Object.entries(additionalEnv)) {
+    const { env: safeAdditionalEnv, rejected } = filterEnv(additionalEnv);
+    if (rejected.length > 0) {
+      console.warn(
+        `[createUserProcessEnvironment] Stripped ${rejected.length} invalid additional env key(s)`
+      );
+    }
+    for (const [key, value] of Object.entries(safeAdditionalEnv)) {
       if (value && value.trim() !== '') {
         env[key] = value;
       }

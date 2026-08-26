@@ -2539,10 +2539,16 @@ function grantsAreSubset(needs: AgorGrants, has: AgorGrants): boolean {
 }
 
 /** Escape a `.env` value: quote, escape backslashes/quotes/newlines. */
-function escapeEnvValue(value: string): string {
+export function escapeEnvValue(value: string): string {
   if (!value) return '';
-  // Always quote — covers spaces, `#`, `=` in the value, etc.
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+  // Always quote — covers spaces, `#`, `=` in the value, etc. Escape CR as
+  // well as LF: some dotenv readers treat a bare CR as a record boundary,
+  // which would let one managed value synthesize an attacker-selected key.
+  return `"${value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')}"`;
 }
 
 export function createArtifactsService(

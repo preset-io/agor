@@ -825,7 +825,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const sessionMCPServersService = createSessionMCPServersService(db);
   const sessionEnvSelectionsService = createSessionEnvSelectionsService(db);
-  // Top-level /session-env-selections — event channel ONLY.
+  // Top-level /session-env-selections — compatibility placeholder only.
   //
   // Unlike /session-mcp-servers, selection NAMES are a confidentiality
   // concern (they reveal which of the session creator's private env vars
@@ -835,11 +835,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   //
   // Reads go exclusively through `/sessions/:id/env-selections`, which
   // enforces session-creator / admin RBAC (see register-routes.ts). This
-  // service exists only so FeathersJS can emit `created` / `removed` /
-  // `patched` events to socket clients that need to refresh.
+  // service remains registered for API/client compatibility, but its
+  // realtime publisher audience is `none` until an owner-aware consumer and
+  // disclosure contract are added.
   app.use('/session-env-selections', {
-    // Empty find() — clients can still subscribe to events, but cannot
-    // query rows via this top-level service.
+    // Empty find() — clients cannot query rows via this top-level service.
     async find() {
       return [];
     },
@@ -1187,17 +1187,18 @@ function createExecuteHandler(
           gatewaySource.channel_id
         );
         if (channel?.agentic_config?.envVars) {
-          gatewayEnv = channel.agentic_config.envVars.map((v) => ({
-            ...v,
-            value: (() => {
-              if (!v.value || !isEncrypted(v.value)) return v.value;
-              try {
-                return decryptApiKey(v.value);
-              } catch {
-                return v.value;
-              }
-            })(),
-          }));
+          gatewayEnv = channel.agentic_config.envVars.flatMap((v) => {
+            if (!v.value || !isEncrypted(v.value)) return [v];
+            try {
+              // Compatibility for rows created through the historical
+              // double-encryption hook. New rows are decrypted once by the
+              // repository and never enter this branch.
+              return [{ ...v, value: decryptApiKey(v.value) }];
+            } catch {
+              console.error(`[gateway] Dropping unreadable gateway env var ${v.key}`);
+              return [];
+            }
+          });
         }
         // Merge connector-provided session credentials (e.g. Shortcut's API
         // token, which the media-intake skill uses to fetch ticket

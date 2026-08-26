@@ -1,5 +1,6 @@
 import { join } from 'node:path';
 import { mutateCredentialFile, writeVerifiedCodexAuthFile } from '@agor/core/codex/credential-file';
+import { buildAllowlistedEnv } from '@agor/core/config';
 import { requestExecutor } from './spawn-executor.js';
 
 export interface CodexAuthCredentialRouting {
@@ -32,10 +33,11 @@ const options = (routing: CodexAuthCredentialRouting) => ({
   },
   // Executor-routed operations resolve the auth file from CODEX_HOME. Point
   // them at the caller's per-user store `.codex` so they inspect the same file
-  // as the sandboxed session (with that store overlaid at ~). Merge OVER
-  // process.env because options.env replaces the spawn environment.
+  // as the sandboxed session (with that store overlaid at ~). The option env
+  // replaces the spawn environment, so seed it from the secret-free runtime
+  // allowlist rather than copying the daemon's deployment credential bag.
   ...(routing.codexHome
-    ? { env: { ...(process.env as Record<string, string>), CODEX_HOME: routing.codexHome } }
+    ? { env: { ...buildAllowlistedEnv(), CODEX_HOME: routing.codexHome } }
     : {}),
   sensitiveOutput: true,
   timeoutMs: 10_000,

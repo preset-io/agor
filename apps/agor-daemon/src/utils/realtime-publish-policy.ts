@@ -114,8 +114,8 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'useAgorData tracks per-session MCP attachment.',
   },
   'session-env-selections': {
-    audience: 'branch-or-session',
-    why: 'No browser subscriber today, but the row is session-scoped and was already scoped here; kept so a consumer can be added without a security decision.',
+    audience: 'none',
+    why: 'Selection names are credential metadata; there is no subscriber, and any future consumer needs an owner-aware disclosure decision.',
   },
 
   // ---------------------------------------------------------------------------
