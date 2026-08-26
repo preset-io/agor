@@ -19,9 +19,9 @@ export const HA_UNSUPPORTED_FEATURES = {
   codexDeviceAuth:
     'Codex device authentication without durable attempt ownership, exact per-user credential routing, and execution.executor_storage.user_home_locking: cross-replica-flock',
   claudeAuth:
-    'Claude credential mutation without cross-replica writer serialization and generation fencing',
+    'Claude credential mutation without exact per-user routing, cross-replica writer serialization, generation fencing, and concrete runtime credential containment',
   claudeOAuth:
-    'Claude subscription OAuth without durable attempt ownership and cross-replica credential mutation authority',
+    'Claude subscription OAuth without durable attempt ownership, exact per-user routing, cross-replica credential mutation authority, and concrete runtime credential containment',
   openCodeAuth: 'OpenCode OAuth/native authentication flows',
   artifactRuntime: 'synchronous artifact runtime introspection',
 } as const;

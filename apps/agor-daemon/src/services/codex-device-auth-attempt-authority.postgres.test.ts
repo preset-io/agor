@@ -253,15 +253,30 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     it('admits one poll owner, permits bounded takeover, and rejects the stale owner', async () => {
       const { record } = await pending('takeover');
       const [claimA, claimB] = await Promise.all([
-        authorityA.claimPoll(record, 100),
-        authorityB.claimPoll(record, 100),
+        authorityA.claimPoll(record, 25_000),
+        authorityB.claimPoll(record, 25_000),
       ]);
       const winner = claimA ?? claimB;
       expect([claimA, claimB].filter(Boolean)).toHaveLength(1);
       expect(winner).not.toBeNull();
 
-      await new Promise((resolve) => setTimeout(resolve, 140));
-      const takeover = await (claimA ? authorityB : authorityA).claimPoll(record, 500);
+      // Advance the durable lease boundary directly instead of assuming two
+      // independent pools will both finish inside a 100 ms wall-clock window.
+      // Under CI load the first UPDATE can legitimately return after that tiny
+      // test lease has expired, allowing the peer's otherwise-correct takeover
+      // before Promise.all observes either result.
+      await runWithTenantDatabaseScope(dbA, record.tenantId, (scoped) =>
+        executeRaw(
+          scoped,
+          sql`UPDATE codex_device_auth_attempts
+              SET poll_lease_expires_at = clock_timestamp() - INTERVAL '1 millisecond'
+              WHERE tenant_id = ${record.tenantId}
+                AND attempt_id = ${record.attemptId}
+                AND poll_claim_id = ${winner!.pollClaimId}
+                AND poll_claim_generation = ${winner!.pollClaimGeneration}`
+        ).then(() => undefined)
+      );
+      const takeover = await (claimA ? authorityB : authorityA).claimPoll(record, 25_000);
       expect(takeover).toMatchObject({
         attemptId: record.attemptId,
         pollClaimGeneration: winner!.pollClaimGeneration + 1,
