@@ -161,6 +161,27 @@ describe('constrained HA support profile', () => {
     ).toBe(true);
   });
 
+  it('does not mistake the immutable runtime authority layout for HA mutation ownership', () => {
+    expect(
+      hasClaudeSubscriptionOAuthCapability(
+        {
+          agentic_tools: { claude_subscription_oauth: true },
+          execution: {
+            unix_user_mode: 'sandbox',
+            executor_storage: {
+              user_home: 'persistent-per-user',
+              user_home_locking: 'cross-replica-flock',
+            },
+            sandbox: { enabled: true, home_mode: 'per_user' },
+          },
+        },
+        ha
+      )
+    ).toBe(false);
+    expect(isHaFeatureUnavailable(ha, 'claudeAuth')).toBe(true);
+    expect(isHaFeatureUnavailable(ha, 'claudeOAuth')).toBe(true);
+  });
+
   it('requires operator authorization and topology support for the Claude OAuth capability', () => {
     const standalone = { mode: 'standalone' as const };
     expect(hasClaudeSubscriptionOAuthCapability({}, standalone)).toBe(false);

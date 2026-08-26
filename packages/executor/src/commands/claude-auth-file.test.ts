@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -24,7 +24,7 @@ const credentials = `${JSON.stringify(
 )}\n`;
 
 describe('claude.auth-file executor boundary', () => {
-  it('atomically writes 0600, overwrites, and idempotently deletes in its own runtime home', async () => {
+  it('writes stable 0600 authority and idempotently tombstones in its runtime home', async () => {
     process.env.CLAUDE_CONFIG_DIR = await mkdtemp(join(tmpdir(), 'agor-claude-auth-'));
     const target = join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json');
 
@@ -38,21 +38,33 @@ describe('claude.auth-file executor boundary', () => {
 
     expect(await readFile(target, 'utf8')).toBe(credentials);
     expect((await stat(target)).mode & 0o777).toBe(0o600);
-    // No leftover temp files from the atomic write.
-    expect(await readdir(process.env.CLAUDE_CONFIG_DIR)).toEqual(['.credentials.json']);
+    expect((await readdir(process.env.CLAUDE_CONFIG_DIR)).sort()).toEqual([
+      '.agor-auth-mutation.lock',
+      '.credentials.json',
+    ]);
 
     await handleClaudeAuthFile({ ...base, params: { operation: 'delete' } }, {});
-    // Delete is idempotent — a second delete on an absent file still succeeds.
+    // Delete is an empty, inode-stable tombstone; repeating it still succeeds.
     expect(await handleClaudeAuthFile({ ...base, params: { operation: 'delete' } }, {})).toEqual({
       success: true,
       data: { status: 'deleted' },
     });
-    expect(await readdir(process.env.CLAUDE_CONFIG_DIR)).toEqual([]);
+    expect(await readFile(target, 'utf8')).toBe('');
+    expect((await readdir(process.env.CLAUDE_CONFIG_DIR)).sort()).toEqual([
+      '.agor-auth-mutation.lock',
+      '.credentials.json',
+    ]);
   });
 
   it('inspect reports found / not-found / malformed without echoing token bytes', async () => {
     process.env.CLAUDE_CONFIG_DIR = await mkdtemp(join(tmpdir(), 'agor-claude-auth-'));
 
+    expect(await handleClaudeAuthFile({ ...base, params: { operation: 'inspect' } }, {})).toEqual({
+      success: true,
+      data: { status: 'not-found' },
+    });
+
+    await writeFile(join(process.env.CLAUDE_CONFIG_DIR, '.credentials.json'), '');
     expect(await handleClaudeAuthFile({ ...base, params: { operation: 'inspect' } }, {})).toEqual({
       success: true,
       data: { status: 'not-found' },

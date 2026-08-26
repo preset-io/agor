@@ -24,6 +24,7 @@
 
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES } from '@agor/core/codex/credential-file';
 import {
   type AgorSandboxSettings,
   resolveBwrapArgs,
@@ -186,15 +187,18 @@ export function buildSandboxWrap(params: {
   // silently remove the Claude credential containment boundary.
   const materializedFileMasks = new Set<string>();
   if (perUser) {
-    const ownerClaudeCredentials = join(ownerHomeStore as string, '.claude', '.credentials.json');
-    materializedFileMasks.add(join(home, '.claude', '.credentials.json'));
-    materializedFileMasks.add(ownerClaudeCredentials);
-    if (
-      sandbox.preserve_canonical_home_alias === true &&
-      ctx.canonicalHomeDir &&
-      ctx.canonicalHomeDir !== home
-    ) {
-      materializedFileMasks.add(join(ctx.canonicalHomeDir, '.claude', '.credentials.json'));
+    const authorityFilenames = [
+      '.credentials.json',
+      ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES,
+    ] as const;
+    const authorityDirectories = [join(home, '.claude'), join(ownerHomeStore as string, '.claude')];
+    if (sandbox.preserve_canonical_home_alias === true && ctx.canonicalHomeDir) {
+      authorityDirectories.push(join(ctx.canonicalHomeDir, '.claude'));
+    }
+    for (const directory of authorityDirectories) {
+      for (const filename of authorityFilenames) {
+        materializedFileMasks.add(join(directory, filename));
+      }
     }
   }
   const bwrapArgs = dropMasksForMissingTargets(

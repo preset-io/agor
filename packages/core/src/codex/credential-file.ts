@@ -4,6 +4,17 @@ import { constants } from 'node:fs';
 import { type FileHandle, lstat, mkdir, open, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join, parse, resolve, sep } from 'node:path';
 import { parseCodexAuthJson } from './auth-file.js';
+import {
+  CREDENTIAL_AUTHORITY_GENERATION_FILENAME,
+  CREDENTIAL_AUTHORITY_LOCK_FILENAME,
+  CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES,
+} from './credential-authority.js';
+
+export {
+  CREDENTIAL_AUTHORITY_GENERATION_FILENAME,
+  CREDENTIAL_AUTHORITY_LOCK_FILENAME,
+  CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES,
+} from './credential-authority.js';
 
 const LOCK_WAIT_MS = 10_000;
 const FLOCK_EXECUTABLE = '/usr/bin/flock';
@@ -18,6 +29,8 @@ interface CredentialDirectoryTestOptions {
   afterDirectoryOpenForTest?: () => Promise<void>;
   /** Deterministic lock-contention test seam; production callers must omit. */
   afterLockAcquiredForTest?: () => Promise<void>;
+  /** Deterministic stable-inode reader/writer test seam; production callers must omit. */
+  afterStableTruncateForTest?: () => Promise<void>;
 }
 
 interface CredentialLock {
@@ -170,15 +183,69 @@ async function atomicWrite(
   }
 }
 
+/**
+ * Rewrite one pre-created authority leaf without replacing its inode.
+ *
+ * Bubblewrap file masks are attached to the destination dentry. An atomic
+ * rename from the host while a sandbox is alive would install a new dentry
+ * underneath the writable `.claude` parent and thereby escape that sandbox's
+ * existing leaf mask. Claude's contained authority therefore uses this narrow
+ * in-place arm after the real leaves have been materialized. The credential
+ * lock still serializes writers; a crash during the rewrite fails closed as an
+ * empty/malformed credential rather than publishing an unfenced replacement
+ * inode.
+ */
+async function stableInodeWrite(
+  directory: CredentialDirectory,
+  name: string,
+  content: string,
+  mode: number,
+  afterTruncateForTest?: () => Promise<void>
+): Promise<void> {
+  const handle = await openPath(
+    join(directory.path, name),
+    constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW,
+    mode
+  );
+  try {
+    const metadata = await handle.stat();
+    if (!metadata.isFile() || metadata.nlink !== 1) {
+      throw new Error('Credential authority path must be a singly-linked regular file');
+    }
+    await handle.truncate(0);
+    await afterTruncateForTest?.();
+    if (content.length > 0) await handle.writeFile(content, 'utf8');
+    await handle.chmod(mode);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  await syncDirectory(directory);
+}
+
+async function writeAuthorityLeaf(
+  directory: CredentialDirectory,
+  name: string,
+  content: string,
+  preserveInode: boolean,
+  afterTruncateForTest?: () => Promise<void>
+): Promise<void> {
+  if (preserveInode && process.platform === 'linux') {
+    await stableInodeWrite(directory, name, content, 0o600, afterTruncateForTest);
+  } else await atomicWrite(directory, name, content, 0o600);
+}
+
 async function acquireLinuxLock(directory: CredentialDirectory): Promise<CredentialLock> {
   const lockHandle = await openPath(
-    join(directory.path, '.agor-auth-mutation.lock'),
+    join(directory.path, CREDENTIAL_AUTHORITY_LOCK_FILENAME),
     constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
     0o600
   );
   try {
     const metadata = await lockHandle.stat();
-    if (!metadata.isFile()) throw new Error('Credential mutation lock is not a regular file');
+    if (!metadata.isFile() || metadata.nlink !== 1) {
+      throw new Error('Credential mutation lock must be a singly-linked regular file');
+    }
     await lockHandle.chmod(0o600);
     const child = spawnLockAcquirer(lockHandle);
     const outcome = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -207,7 +274,7 @@ async function acquireLinuxLock(directory: CredentialDirectory): Promise<Credent
 }
 
 async function acquirePortableLock(directory: CredentialDirectory): Promise<CredentialLock> {
-  const lockDir = join(directory.path, '.agor-auth-mutation.lock');
+  const lockDir = join(directory.path, CREDENTIAL_AUTHORITY_LOCK_FILENAME);
   try {
     await createDirectory(lockDir, { mode: 0o700 });
   } catch (error) {
@@ -244,6 +311,42 @@ async function currentGeneration(path: string): Promise<number> {
   }
 }
 
+/**
+ * Materialize the real files required by the credential authority and sandbox
+ * masks without truncating existing authority bytes.
+ *
+ * Linux walks the target directory through the same no-follow directory
+ * capability used by mutations. Each leaf is opened with O_NOFOLLOW and must
+ * be a regular file. This makes a pre-spawn preparation fail closed on a
+ * runtime-created directory/file symlink instead of following it into another
+ * home. The empty credential created for a signed-out user is intentionally a
+ * tombstone/mountpoint; inspectors must report it as not-found.
+ */
+export async function ensureCredentialAuthorityLayout(target: string): Promise<void> {
+  if (process.platform !== 'linux') {
+    throw new Error('Credential authority sandbox layout requires Linux');
+  }
+  const directory = await openCredentialDirectory(target, true);
+  try {
+    for (const name of [basename(resolve(target)), ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
+      const flags = constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW;
+      const handle = await openPath(join(directory.path, name), flags, 0o600);
+      try {
+        const metadata = await handle.stat();
+        if (!metadata.isFile() || metadata.nlink !== 1) {
+          throw new Error('Credential authority path must be a singly-linked regular file');
+        }
+        await handle.chmod(0o600);
+      } finally {
+        await handle.close();
+      }
+    }
+    await syncDirectory(directory);
+  } finally {
+    await directory.handle.close();
+  }
+}
+
 /** Read one credential file without following its directory or file symlinks. */
 export async function readCredentialFile(
   target: string,
@@ -258,16 +361,36 @@ export async function readCredentialFile(
   }
 }
 
+/** Coherent reader for stable-inode Claude authority files. */
+export async function readCredentialAuthorityFile(target: string): Promise<string> {
+  if (process.platform !== 'linux') return readCredentialFile(target);
+  const directory = await openCredentialDirectory(target, false);
+  try {
+    const lock = await acquireLock(directory);
+    try {
+      return await readNoFollow(join(directory.path, basename(resolve(target))));
+    } finally {
+      await lock.release();
+    }
+  } finally {
+    await directory.handle.close();
+  }
+}
+
 /**
- * Atomic credential mutation with a per-home generation fence. Linux callers
- * mutate through an opened directory capability, so path replacement cannot
- * redirect a daemon/helper into another user's home.
+ * Credential mutation with a per-home generation fence. Normal callers use
+ * atomic replacement; contained Claude authority uses a locked, stable-inode
+ * rewrite so live bwrap masks cannot detach. Linux callers mutate through an
+ * opened directory capability, so path replacement cannot redirect a
+ * daemon/helper into another user's home.
  */
 export async function mutateCredentialFile(
   options: {
     target: string;
     content?: string;
     generation?: number;
+    /** Keep Claude authority mountpoints attached across live sandboxes. */
+    preserveAuthorityInodes?: boolean;
   } & CredentialDirectoryTestOptions
 ): Promise<'applied' | 'stale'> {
   const directory = await openCredentialDirectory(options.target, true);
@@ -276,7 +399,21 @@ export async function mutateCredentialFile(
   try {
     await options.afterDirectoryOpenForTest?.();
     if (options.generation === undefined) {
-      if (options.content === undefined) await removePath(target);
+      if (options.preserveAuthorityInodes) {
+        const lock = await acquireLock(directory);
+        try {
+          await options.afterLockAcquiredForTest?.();
+          await writeAuthorityLeaf(
+            directory,
+            targetName,
+            options.content ?? '',
+            true,
+            options.afterStableTruncateForTest
+          );
+        } finally {
+          await lock.release();
+        }
+      } else if (options.content === undefined) await removePath(target);
       else await atomicWrite(directory, targetName, options.content, 0o600);
       return 'applied';
     }
@@ -287,10 +424,24 @@ export async function mutateCredentialFile(
     const lock = await acquireLock(directory);
     try {
       await options.afterLockAcquiredForTest?.();
-      const generationPath = join(directory.path, '.agor-auth-generation');
+      const generationPath = join(directory.path, CREDENTIAL_AUTHORITY_GENERATION_FILENAME);
       if (options.generation < (await currentGeneration(generationPath))) return 'stale';
-      await atomicWrite(directory, '.agor-auth-generation', `${options.generation}\n`, 0o600);
-      if (options.content === undefined) {
+      await writeAuthorityLeaf(
+        directory,
+        CREDENTIAL_AUTHORITY_GENERATION_FILENAME,
+        `${options.generation}\n`,
+        options.preserveAuthorityInodes === true,
+        options.afterStableTruncateForTest
+      );
+      if (options.preserveAuthorityInodes) {
+        await writeAuthorityLeaf(
+          directory,
+          targetName,
+          options.content ?? '',
+          true,
+          options.afterStableTruncateForTest
+        );
+      } else if (options.content === undefined) {
         await removePath(target);
         await syncDirectory(directory);
       } else {
@@ -324,6 +475,8 @@ export async function compareAndSwapCredentialFile(options: {
   expectedContent: string;
   content: string;
   generation: number;
+  /** Keep Claude authority mountpoints attached across live sandboxes. */
+  preserveAuthorityInodes?: boolean;
 }): Promise<CredentialFileCompareAndSwapResult> {
   if (!Number.isSafeInteger(options.generation) || options.generation <= 0) {
     throw new Error('Credential mutation generation is invalid');
@@ -346,12 +499,22 @@ export async function compareAndSwapCredentialFile(options: {
           : { outcome: 'changed', content: current };
       }
 
-      const generationPath = join(directory.path, '.agor-auth-generation');
+      const generationPath = join(directory.path, CREDENTIAL_AUTHORITY_GENERATION_FILENAME);
       if (options.generation < (await currentGeneration(generationPath))) {
         return { outcome: 'changed', content: current };
       }
-      await atomicWrite(directory, '.agor-auth-generation', `${options.generation}\n`, 0o600);
-      await atomicWrite(directory, targetName, options.content, 0o600);
+      await writeAuthorityLeaf(
+        directory,
+        CREDENTIAL_AUTHORITY_GENERATION_FILENAME,
+        `${options.generation}\n`,
+        options.preserveAuthorityInodes === true
+      );
+      await writeAuthorityLeaf(
+        directory,
+        targetName,
+        options.content,
+        options.preserveAuthorityInodes === true
+      );
       return { outcome: 'written' };
     } finally {
       await lock.release();

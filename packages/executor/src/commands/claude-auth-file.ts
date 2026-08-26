@@ -1,4 +1,7 @@
-import { mutateCredentialFile, readCredentialFile } from '@agor/core/codex/credential-file';
+import {
+  mutateCredentialFile,
+  readCredentialAuthorityFile,
+} from '@agor/core/codex/credential-file';
 import type { ClaudeAuthFilePayload, ExecutorResult } from '../payload-types.js';
 import { resolveClaudeCredentialsPath } from '../user-runtime-paths.js';
 import { writeCredentialFileAtomically } from './credential-file-io.js';
@@ -26,7 +29,7 @@ export async function handleClaudeAuthFile(
   if (operation === 'inspect') {
     let raw: string;
     try {
-      raw = await readCredentialFile(target);
+      raw = await readCredentialAuthorityFile(target);
     } catch (error) {
       return (error as NodeJS.ErrnoException).code === 'ENOENT'
         ? { success: true, data: { status: 'not-found' } }
@@ -38,6 +41,10 @@ export async function handleClaudeAuthFile(
             },
           };
     }
+    // The sandbox pre-creates a real empty credential leaf so required bwrap
+    // masks cannot materialize/truncate it implicitly. Empty is therefore the
+    // signed-out tombstone, not a malformed managed login.
+    if (raw.length === 0) return { success: true, data: { status: 'not-found' } };
     // A present file is not itself proof of a usable login. Confirm the complete
     // refreshable OAuth shape the SDK reads without returning any token bytes.
     try {
@@ -65,7 +72,11 @@ export async function handleClaudeAuthFile(
 
   if (operation === 'delete') {
     if (
-      (await mutateCredentialFile({ target, generation: payload.params.generation })) === 'stale'
+      (await mutateCredentialFile({
+        target,
+        generation: payload.params.generation,
+        preserveAuthorityInodes: true,
+      })) === 'stale'
     ) {
       return {
         success: false,
@@ -78,7 +89,8 @@ export async function handleClaudeAuthFile(
   const readBack = await writeCredentialFileAtomically(
     target,
     payload.params.content,
-    payload.params.generation
+    payload.params.generation,
+    { preserveAuthorityInodes: true }
   );
   if (readBack === null) {
     return {

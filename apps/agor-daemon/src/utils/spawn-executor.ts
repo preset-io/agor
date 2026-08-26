@@ -24,6 +24,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureCredentialAuthorityLayout } from '@agor/core/codex/credential-file';
 import {
   type AgorExecutionSettings,
   type ResolvedExecutorResponseConfig,
@@ -447,6 +448,52 @@ function sendExecutorPayload(
  * stdout/stderr are inherited so logs appear in daemon output.
  */
 function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
+  const params = payload.params as { cwd?: unknown; sandboxHomeStore?: unknown } | undefined;
+  const sandboxWorkdir =
+    typeof payload.cwd === 'string' && payload.cwd.length > 0
+      ? payload.cwd
+      : typeof params?.cwd === 'string' && params.cwd.length > 0
+        ? params.cwd
+        : undefined;
+  const sandboxHomeStore =
+    typeof params?.sandboxHomeStore === 'string' ? params.sandboxHomeStore : undefined;
+  const sandbox = configuredExecutorDefaults.sandbox;
+
+  if (
+    process.platform === 'linux' &&
+    sandboxWorkdir &&
+    sandboxHomeStore &&
+    sandbox?.enabled === true &&
+    sandbox.home_mode === 'per_user'
+  ) {
+    // Materialize the immutable-parent mount source and all authority leaves
+    // immediately before argument construction. The shared credential-file
+    // primitive walks directories without following symlinks and preserves
+    // existing bytes/inodes, so a malformed owner store fails before bwrap can
+    // create an empty mountpoint or follow a task-controlled `.claude` symlink.
+    void ensureCredentialAuthorityLayout(
+      path.join(sandboxHomeStore, '.claude', '.credentials.json')
+    )
+      .then(() => spawnExecutorLocalPrepared(payload, options))
+      .catch((error) => {
+        const logPrefix = options.logPrefix ?? '[Executor]';
+        console.error(
+          `${logPrefix} Sandbox credential authority preparation failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        observeExitCallback(options.onExit, 126, { mode: 'local' }, logPrefix);
+      });
+    return;
+  }
+
+  spawnExecutorLocalPrepared(payload, options);
+}
+
+function spawnExecutorLocalPrepared(
+  payload: Record<string, unknown>,
+  options: SpawnExecutorOptions
+): void {
   const location = resolveLocalExecutorLocation(options);
   const cwdFailure = resolveLocalExecutorCwdFailure(location);
   const logPrefix = options.logPrefix ?? '[Executor]';

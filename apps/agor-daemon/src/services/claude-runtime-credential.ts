@@ -1,7 +1,11 @@
 /** Daemon-owned task credential resolution for managed Claude OAuth grants. */
 
 import { join } from 'node:path';
-import { compareAndSwapCredentialFile, readCredentialFile } from '@agor/core/codex/credential-file';
+import {
+  compareAndSwapCredentialFile,
+  readCredentialAuthorityFile,
+  type readCredentialFile,
+} from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
   hasContainedClaudeRuntimeCredentials,
@@ -131,8 +135,10 @@ export class ClaudeRuntimeCredentialResolver {
   ) {
     this.now = dependencies.now ?? Date.now;
     this.refresh = dependencies.refresh ?? refreshClaudeTokens;
-    this.read = dependencies.read ?? readCredentialFile;
-    this.compareAndSwap = dependencies.compareAndSwap ?? compareAndSwapCredentialFile;
+    this.read = dependencies.read ?? readCredentialAuthorityFile;
+    this.compareAndSwap =
+      dependencies.compareAndSwap ??
+      ((options) => compareAndSwapCredentialFile({ ...options, preserveAuthorityInodes: true }));
   }
 
   async resolve(tenantId: string, userId: UserID): Promise<ReturnType<typeof runtimeConnection>> {

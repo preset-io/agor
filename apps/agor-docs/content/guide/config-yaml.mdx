@@ -73,9 +73,14 @@ local per-user sandbox profile shown above and does not expose Claude OAuth in
 HA, delegated, simple, shared-home, or disabled-sandbox execution. The daemon
 keeps the refreshable grant in the canonical per-user
 `~/.claude/.credentials.json`, refreshes it before task launch, and sends the
-runtime only the current access token. The sandbox masks that one canonical
-file from Claude while preserving the rest of `~/.claude` for settings and
-fork/resume state; Codex native auth is not masked by this change.
+runtime only the current access token. The sandbox required-binds the real
+`~/.claude` directory as a writable, immutable mountpoint at every reachable
+home alias, then masks the canonical credential plus its generation and lock
+sidecars. Daemon mutations keep those pre-created authority inodes stable so a
+live mask cannot be detached by host-side replacement; logout leaves an empty
+tombstone. Settings, plugins, projects, new files, and fork/resume state remain
+writable; Codex native auth is not masked by this change and requires separate
+parity work.
 
 For rollout, deploy/restart this version and confirm the per-user sandbox
 settings on every instance before enabling the default-off flag. For rollback,

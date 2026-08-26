@@ -16,7 +16,7 @@
     "test:runtime": "node scripts/runtime-smoke.mjs",
     "test:claude-auth-precedence": "node scripts/claude-auth-precedence-smoke.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run && pnpm test:runtime",
+    "test": "vitest run && pnpm test:runtime && pnpm test:claude-auth-precedence",
     "test:watch": "vitest"
   },
   "dependencies": {

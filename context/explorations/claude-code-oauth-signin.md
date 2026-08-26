@@ -219,10 +219,12 @@ real `.credentials.json` is still the canonical store:
    token and cannot rotate or clear the canonical store.
 2. **Identical to a real `/login`.** The daemon-written file is byte-compatible
    with what interactive `/login` produces, so downstream behavior is the same.
-3. **Avoids two writers.** A local per-user sandbox masks only the canonical
-   credential file from Claude Code while leaving the rest of `~/.claude`
-   unchanged. The daemon is therefore the sole refresh writer, and the runtime
-   has exactly one usable source: `CLAUDE_CODE_OAUTH_TOKEN`.
+3. **Avoids two writers.** A local per-user sandbox makes the real `~/.claude`
+   directory a writable but immutable mountpoint, then masks the canonical
+   credential plus its generation and lock sidecars while leaving ordinary
+   Claude state writable. The daemon is therefore the sole refresh/authority
+   writer, and the runtime has exactly one usable source:
+   `CLAUDE_CODE_OAUTH_TOKEN`.
 
 ---
 
@@ -255,9 +257,15 @@ Why this is correct and non-breaking:
 - **Pasted-token user** (`subscription_token`): fails the
   guard → falls through to the existing env-injection path, byte-for-byte
   unchanged. No regression.
-- The local per-user sandbox masks `.claude/.credentials.json` at all supported
-  home aliases, but does not redirect `CLAUDE_CONFIG_DIR`; settings and
-  path-keyed fork/resume transcripts keep working. Shared/simple, delegated,
+- Before spawn, Agor safely materializes the real `.claude` directory and the
+  credential/generation/lock leaves. The local per-user sandbox required-binds
+  that directory at every reachable home/physical alias, making the parent an
+  immutable mountpoint, then masks all three authority leaves. Claude authority
+  mutations retain those pre-created inodes under the cross-process lock (and
+  authority readers take the same lock), because host-side atomic replacement
+  would detach a live sandbox's leaf mounts. Deletion is an empty tombstone. It does not
+  redirect `CLAUDE_CONFIG_DIR`; settings, plugins, projects, and path-keyed
+  fork/resume transcripts keep working. Shared/simple, delegated,
   disabled-sandbox, and HA topologies fail closed before provider exchange.
 
 **One-source invariant:** a user who _both_ pasted a token earlier _and_ runs the
@@ -284,9 +292,10 @@ hold in sandbox/delegated modes:
   `CLAUDE_CONFIG_DIR`; inspect, write, and delete all target exactly
   `${CLAUDE_CONFIG_DIR || ~/.claude}/.credentials.json`.
 - Write/delete use `mutateCredentialFile`: locked directory capability,
-  `O_NOFOLLOW`, private temporary file, fsync + rename, parent-directory fsync,
-  and monotonic generation fencing. A delayed stale writer/deleter returns
-  `AUTH_FILE_STALE` rather than winning.
+  `O_NOFOLLOW`, fsynced stable-inode rewrites, an empty logout tombstone, and
+  monotonic generation fencing. Keeping the pre-created credential/generation
+  inodes is required so host mutations cannot detach a live sandbox mask. A
+  delayed stale writer/deleter returns `AUTH_FILE_STALE` rather than winning.
 - The daemon resolves the target unix identity from the **authenticated user**
   (never from request data) via `resolveCodexCredentialRoute` and invokes the
   executor with the resulting delegated home key and Claude config directory.
@@ -348,12 +357,13 @@ file and persists `none`.
   hardened executor command), so 0600 ownership holds. New managed sign-ins and
   managed task resolution are admitted only for the contained local per-user
   sandbox profile; delegated execution remains fail-closed.
-- Multi-tenancy: `.credentials.json` is a tenant-owned, per-user derived
-  resource. Identity resolution goes through `resolveCodexCredentialRoute`, which
-  fails closed without an **exact** per-user executor home plus the concrete
-  bubblewrap credential mask. Sandbox coverage proves distinct tenants/users
-  route to their owner home rather than the daemon's shared `~/.claude`, and
-  covers canonical-home aliases.
+- Multi-tenancy: `.credentials.json` and its generation/lock sidecars are
+  tenant-owned, per-user derived resources. Identity resolution goes through
+  `resolveCodexCredentialRoute`, which fails closed without an **exact**
+  per-user executor home plus the concrete bubblewrap parent/leaf boundary.
+  Sandbox coverage proves distinct tenants/users route to their owner home
+  rather than the daemon's shared `~/.claude`, and covers every reachable home
+  and physical-store alias.
 - Frozen tenants are rejected with 503 before executor/provider I/O. The
   credential control-plane services are non-realtime and denied from the Redis
   Feathers relay.
