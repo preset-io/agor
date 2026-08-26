@@ -95,7 +95,7 @@ import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
 import { HighlightMatch } from '../HighlightMatch';
 import { JSONEditor, validateJSON } from '../JSONEditor';
 import { BranchSelect } from './BranchSelect';
-import { ListPanelHeader } from './panelPrimitives';
+import { FIELD_WIDTHS, ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { useSettingsDrill } from './SettingsDrill';
 import { UserSelect } from './UserSelect';
@@ -1121,7 +1121,7 @@ const SlackSetupWizard: React.FC<{
                   <Select
                     mode="tags"
                     placeholder="C01ABC123XY"
-                    style={{ width: '100%' }}
+                    style={{ width: '100%', ...FIELD_WIDTHS.medium }}
                     tokenSeparators={[',', ' ']}
                   />
                 </Form.Item>
@@ -1964,7 +1964,11 @@ const ChannelFormFields: React.FC<{
                           initialValue={30}
                           tooltip="How frequently to poll the GitHub API for new mentions"
                         >
-                          <InputNumber min={10} max={300} style={{ width: '100%' }} />
+                          <InputNumber
+                            min={10}
+                            max={300}
+                            style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
+                          />
                         </Form.Item>
                       </>
                     ),
@@ -2201,7 +2205,11 @@ const ChannelFormFields: React.FC<{
                       initialValue={3978}
                       tooltip="Port for the Bot Framework HTTP endpoint"
                     >
-                      <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
+                      <InputNumber
+                        min={1024}
+                        max={65535}
+                        style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
+                      />
                     </Form.Item>
 
                     <Form.Item
@@ -2407,7 +2415,11 @@ const ChannelFormFields: React.FC<{
                       initialValue={15}
                       tooltip="How frequently to poll the Shortcut API for new mentions"
                     >
-                      <InputNumber min={5} max={300} style={{ width: '100%' }} />
+                      <InputNumber
+                        min={5}
+                        max={300}
+                        style={{ width: '100%', ...FIELD_WIDTHS.tiny }}
+                      />
                     </Form.Item>
                   </>
                 ),
@@ -2900,7 +2912,7 @@ const ChannelFormFields: React.FC<{
                       <Select
                         mode="tags"
                         placeholder="Add channel IDs... (e.g., C01ABC123XY)"
-                        style={{ width: '100%' }}
+                        style={{ width: '100%', ...FIELD_WIDTHS.medium }}
                         tokenSeparators={[',', ' ']}
                       />
                     </Form.Item>
