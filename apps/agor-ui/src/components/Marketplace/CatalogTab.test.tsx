@@ -167,11 +167,13 @@ function makeClient(): AgorClient {
 }
 
 function renderTab({
+  active = true,
   connected = true,
   connecting = false,
   authGeneration = 1,
   currentUser = DEFAULT_ADMIN,
 }: {
+  active?: boolean;
   connected?: boolean;
   connecting?: boolean;
   authGeneration?: number;
@@ -180,6 +182,7 @@ function renderTab({
   return render(
     <MemoryRouter>
       <CatalogTab
+        active={active}
         client={makeClient()}
         connected={connected}
         connecting={connecting}
@@ -209,12 +212,22 @@ const queryCard = (title: string) => screen.queryByLabelText(`Open ${title}`);
 
 /**
  * The open drawer. The disclosure is the one block it always renders, so it is
- * the cheap thing to wait on; the `dialog` role is then resolved once rather
- * than on every poll.
+ * the cheap thing to wait on and a stable anchor for the containing drawer.
+ * Drawer semantics have their own assertion; helpers avoid repeatedly walking
+ * the full portal and injected antd styles just to rediscover the same node.
  */
 async function findDrawer() {
-  await screen.findByText('What this can access');
-  return within(screen.getByRole('dialog'));
+  const disclosure = await screen.findByText('What this can access');
+  const drawer = disclosure.closest('[role="dialog"]');
+  if (!(drawer instanceof HTMLElement)) throw new Error('Catalog drawer not found');
+  return within(drawer);
+}
+
+async function findNoAuthConnect(drawer: Awaited<ReturnType<typeof findDrawer>>) {
+  await drawer.findByText('No account expected', undefined, { timeout: 5_000 });
+  const connect = drawer.getByText('Check & connect').closest('button');
+  if (!(connect instanceof HTMLButtonElement)) throw new Error('Catalog connect button not found');
+  return connect;
 }
 
 function chooseSelectOption(inputLabel: string, optionLabel: string): void {
@@ -287,7 +300,7 @@ describe('catalog browsing', () => {
   });
 
   it('reads nothing until the socket can answer, and never calls that an empty catalog', async () => {
-    // The cold path: `/marketplace` as the entry URL. `client` exists from the
+    // The cold path: `/catalog` as the entry URL. `client` exists from the
     // moment the socket is being built, so a surface that fetches on its
     // presence asks an unauthenticated socket and is refused.
     const { container } = renderTab({ connected: false });
@@ -559,13 +572,34 @@ describe('connect', () => {
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 
+  it('closes the catalog drawer when its route tab becomes inactive', async () => {
+    const view = renderTab();
+    fireEvent.click(await findCard('DeepWiki'));
+    await findDrawer();
+
+    view.rerender(
+      <MemoryRouter>
+        <CatalogTab
+          active={false}
+          client={makeClient()}
+          connected
+          connecting={false}
+          authGeneration={1}
+          currentUser={DEFAULT_ADMIN}
+        />
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
   it('shows the access disclosure expanded and blocks connect until it is acknowledged', async () => {
     const drawer = await openDrawer();
 
     expect(drawer.getByText('What this can access')).toBeVisible();
     expect(drawer.getByText(DEEPWIKI.permission_disclosure)).toBeVisible();
 
-    const connect = drawer.getByRole('button', { name: /Connect/ });
+    const connect = await findNoAuthConnect(drawer);
     expect(connect).toBeDisabled();
 
     fireEvent.click(drawer.getByRole('checkbox'));
@@ -589,7 +623,7 @@ describe('connect', () => {
     fireEvent.click(await findCard('DeepWiki'));
     let drawer = await findDrawer();
     fireEvent.click(drawer.getByRole('checkbox'));
-    const connect = drawer.getByRole('button', { name: /Connect/ });
+    const connect = await findNoAuthConnect(drawer);
     await waitFor(() => expect(connect).toBeEnabled());
     connectImpl = async () => {
       throw Object.assign(new Error('Endpoint now requires a bearer token'), {
@@ -609,7 +643,7 @@ describe('connect', () => {
     expect(drawer.getByRole('checkbox')).not.toBeChecked();
     expect(drawer.queryByPlaceholderText(/bearer access token/i)).not.toBeInTheDocument();
     expect(drawer.queryByText(/Endpoint now requires/)).not.toBeInTheDocument();
-    expect(drawer.getByRole('button', { name: /Connect/ })).toBeDisabled();
+    expect(await findNoAuthConnect(drawer)).toBeDisabled();
     expect(connectCalls).toHaveLength(1);
   });
 
@@ -641,7 +675,7 @@ describe('connect', () => {
     fireEvent.click(await findCard('DeepWiki'));
     const drawer = await findDrawer();
     fireEvent.click(drawer.getByRole('checkbox'));
-    const connect = drawer.getByRole('button', { name: /Connect/ });
+    const connect = await findNoAuthConnect(drawer);
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
     await waitFor(() => expect(connectCalls).toHaveLength(1));
@@ -665,7 +699,7 @@ describe('connect', () => {
 
   it('connects by catalog key alone, retains drawer context, and stages the prompt', async () => {
     const drawer = await openDrawer();
-    const connect = drawer.getByRole('button', { name: /Connect/ });
+    const connect = await findNoAuthConnect(drawer);
     fireEvent.click(drawer.getByRole('checkbox'));
     await waitFor(() => expect(connect).toBeEnabled());
 
@@ -694,7 +728,9 @@ describe('connect', () => {
     expect(localStorage.getItem(`agor-marketplace-branch:${DEFAULT_ADMIN.user_id}`)).toBe(
       'branch-1'
     );
-    fireEvent.click(drawer.getByRole('button', { name: 'Open session' }));
+    const openSession = drawer.getByRole('button', { name: 'Open session' });
+    await waitFor(() => expect(openSession).toHaveFocus());
+    fireEvent.click(openSession);
     expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID));
   });
 
@@ -715,12 +751,19 @@ describe('connect', () => {
       reused_existing_server: false,
     });
     const drawer = await openDrawer();
-    const connect = drawer.getByRole('button', { name: /Connect/ });
-    fireEvent.click(drawer.getByRole('checkbox'));
+    const connect = await findNoAuthConnect(drawer);
+    const checkbox = drawer
+      .getByText('I understand what this server can access')
+      .closest('label')
+      ?.querySelector('input');
+    if (!(checkbox instanceof HTMLInputElement)) throw new Error('Catalog consent not found');
+    fireEvent.click(checkbox);
     await waitFor(() => expect(connect).toBeEnabled());
     fireEvent.click(connect);
-    await drawer.findByRole('button', { name: 'Open session' });
-    fireEvent.click(drawer.getByRole('button', { name: 'Open session' }));
+    const openSession = (await drawer.findByText('Open session')).closest('button');
+    if (!(openSession instanceof HTMLButtonElement))
+      throw new Error('Open session button not found');
+    fireEvent.click(openSession);
     expect(mockNavigate).toHaveBeenCalledWith(sessionPath(SESSION_ID as SessionID));
   }
 
@@ -757,8 +800,8 @@ describe('connect', () => {
       reused_existing_server: false,
     });
     const drawer = await openDrawer();
-    await drawer.findByText('No account needed');
-    const connect = drawer.getByText('Connect & try it').closest('button');
+    await drawer.findByText('No account expected');
+    const connect = drawer.getByText('Check & connect').closest('button');
     const checkbox = drawer
       .getByText('I understand what this server can access')
       .closest('label')
@@ -909,7 +952,7 @@ describe('connect', () => {
       throw new Error('DeepWiki is temporarily unavailable');
     };
     const drawer = await openDrawer();
-    const connect = drawer.getByRole('button', { name: /Connect/ });
+    const connect = await findNoAuthConnect(drawer);
     fireEvent.click(drawer.getByRole('checkbox'));
     await waitFor(() => expect(connect).toBeEnabled());
 
@@ -959,8 +1002,9 @@ describe('connect capability reaches the drawer', () => {
     memberPolicyAnswer = { policy: 'allow_crud', can_configure: false };
 
     const drawer = await openAndAcknowledge(VIEWER);
+    const connect = await findNoAuthConnect(drawer);
 
-    await waitFor(() => expect(drawer.getByRole('button', { name: /Connect/ })).toBeDisabled());
+    expect(connect).toBeDisabled();
     expect(drawer.getByText(/read-only access/i)).toBeInTheDocument();
     expect(connectCalls).toHaveLength(0);
   });
@@ -969,8 +1013,9 @@ describe('connect capability reaches the drawer', () => {
     memberPolicyAnswer = { policy: 'use_existing_only', can_configure: false };
 
     const drawer = await openAndAcknowledge(MEMBER);
+    const connect = await findNoAuthConnect(drawer);
 
-    await waitFor(() => expect(drawer.getByRole('button', { name: /Connect/ })).toBeDisabled());
+    expect(connect).toBeDisabled();
     expect(drawer.getByText(/Use existing servers only/)).toBeInTheDocument();
     expect(connectCalls).toHaveLength(0);
   });
@@ -979,7 +1024,8 @@ describe('connect capability reaches the drawer', () => {
     memberPolicyAnswer = { policy: 'allow_private_only', can_configure: true };
 
     const drawer = await openAndAcknowledge(MEMBER);
+    const connect = await findNoAuthConnect(drawer);
 
-    await waitFor(() => expect(drawer.getByRole('button', { name: /Connect/ })).toBeEnabled());
+    expect(connect).toBeEnabled();
   });
 });

@@ -377,7 +377,7 @@ AGOR_CONFIG_PATH=/etc/agor/config.yaml agor daemon start
 
 Agor ships a browsable catalog of MCP servers. It is a reviewed file in the repository, parsed lazily
 on the daemon's first catalog read and then cached for the life of the process, so browsing the
-marketplace requires no external catalog service and there is nothing to configure.
+Catalog requires no external catalog service and there is nothing to configure.
 
 What the catalog offers is therefore a function of the deployed binary: rolling
 back to an older release withdraws entries added since, until you roll forward
@@ -391,7 +391,7 @@ user's connect generation so a slower, older reconnect cannot overwrite a newer 
 token against the catalog URL and writes the server/session only after the probe accepts it. A stale
 catalog auth label therefore does not silently install a connection that the live endpoint will reject.
 
-Marketplace OAuth uses a bounded compatibility profile for current, unmodified catalog installs. It
+Catalog OAuth uses a bounded compatibility profile for current, unmodified catalog installs. It
 accepts only reviewed discovery differences while retaining same-origin bounds on those fallbacks,
 resource and issuer binding, the exact MCP URL in authorization and token requests, PKCE S256, and
 callback issuer checks. This profile is derived by the daemon; it cannot be selected or persisted as a

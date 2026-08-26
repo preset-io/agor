@@ -379,9 +379,9 @@ Tunable from `~/.agor/config.yaml` under `security.*` — see
 
 ### MCP Catalog
 
-The MCP marketplace catalog is `packages/core/src/mcp-catalog/curated.yaml`,
+The MCP Catalog is `packages/core/src/mcp-catalog/curated.yaml`,
 checked into this repository and loaded into the daemon process on first read.
-There is no catalog table and no ingestion job: the marketplace offers exactly
+There is no catalog table and no ingestion job: Catalog offers exactly
 what that file names, so adding a server is a pull request and removing one
 takes it off the shelf on the next deploy.
 
@@ -396,7 +396,7 @@ written down, since parsing flattens the two.
 `catalog_entry_name`, so renaming an entry orphans every install of it.
 
 The read path is one endpoint. `find` takes no query and returns every entry
-at once; the Marketplace holds them and does its own searching, filtering,
+at once; the Catalog UI holds them and does its own searching, filtering,
 sorting and paging. So there is no server-side filter to add a case to —
 narrowing lives in `packages/core/src/mcp-catalog/query.ts`, which the browser
 imports directly as `@agor/core/mcp-catalog/query`. It is kept apart from
@@ -406,7 +406,7 @@ applying on only one side. `get(name)` still resolves a single entry — that is
 how connect turns a `catalog_key` into a URL and transport.
 
 Each entry states an `auth_type` (`none` / `oauth` / `credentials`), or omits it
-where nobody has established the answer. It decides what the marketplace tells a
+where nobody has established the answer. It decides what Catalog tells a
 user before they press Connect, and nothing else: `mcp-catalog-connect.ts`
 probes the endpoint on every connect, whatever the entry says. A valid JSON-RPC
 `initialize` result installs the server open. An OAuth challenge installs a
@@ -434,7 +434,7 @@ client-registration or issuer path; do not re-add one merely because its
 endpoint still challenges for OAuth.
 
 An endpoint the probe finds behind a non-OAuth challenge is installed with a key
-the user pastes into the marketplace drawer. The key never goes in
+the user pastes into the Catalog drawer. The key never goes in
 `curated.yaml` — that file is checked in, public, and byte-identical for every
 tenant. It arrives as `bearer_token` on the connect request, the only field on that
 request that is the caller's rather than the catalog's: URL, transport, and the
@@ -460,7 +460,7 @@ eligible. This can reuse a user-configured peer without converting its
 provenance or lifecycle into a catalog install.
 
 Every successful Connect creates and attaches a new idle session, while the
-Marketplace keeps the catalog drawer open with an explicit **Open session** next
+Catalog keeps the server drawer open with an explicit **Open session** next
 step. It does not navigate automatically. Open, bearer-key, and
 already-authenticated OAuth results stage the entry's starter prompt. For a new
 OAuth grant, Connect pre-opens the provider window while user activation is

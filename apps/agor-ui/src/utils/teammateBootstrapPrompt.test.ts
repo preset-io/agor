@@ -123,9 +123,9 @@ describe('buildTeammateBootstrapPrompt', () => {
     expect(prompt).not.toMatch(/admin-only MCP settings/i);
 
     expect(prompt).toContain('GitHub: use the repository already connected to Agor');
-    expect(prompt).toContain('Do not describe this as an MCP or Marketplace install');
+    expect(prompt).toContain('Do not describe this as an MCP or Catalog install');
 
-    expect(prompt).toContain('Sentry: use the reviewed Marketplace entry io.sentry/mcp');
+    expect(prompt).toContain('Sentry: use the reviewed Catalog entry io.sentry/mcp');
     expect(prompt).toMatch(/do not bypass the catalog by registering a guessed endpoint/i);
     expect(prompt).toContain(DOCS_HOOK);
   });

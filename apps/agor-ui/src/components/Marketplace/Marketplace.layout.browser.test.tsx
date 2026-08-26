@@ -1,5 +1,5 @@
 /**
- * Real-Chromium Marketplace layout smoke.
+ * Real-Chromium Catalog layout smoke.
  *
  * Component tests pin the responsive props and scroll contracts. These checks
  * cover the browser result at the desktop, phone, and short-landscape viewports
@@ -9,8 +9,11 @@ import type { MCPCatalogEntry, MCPMarketplaceOverview } from '@agor/core/types';
 import type { AgorClient, User } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ConfigProvider } from 'antd';
+import { useState } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
+import { CatalogDetailDrawer } from './CatalogDetailDrawer';
 import { CatalogTab } from './CatalogTab';
 import { CredentialsTab } from './CredentialsTab';
 import { MyServersTab } from './MyServersTab';
@@ -40,6 +43,25 @@ const USER = {
   email: 'admin@agor.live',
   role: 'admin',
 } as User;
+
+const ALLOWED: MCPServerCapabilityContext = {
+  connectionReady: true,
+  role: 'admin',
+  isAdmin: true,
+  policy: 'allow_crud',
+  userId: USER.user_id,
+  canConfigure: true,
+};
+
+function expectReachableInViewport(element: HTMLElement) {
+  const rect = element.getBoundingClientRect();
+  expect(rect.width).toBeGreaterThan(0);
+  expect(rect.height).toBeGreaterThan(0);
+  expect(rect.left).toBeGreaterThanOrEqual(-1);
+  expect(rect.right).toBeLessThanOrEqual(window.innerWidth + 1);
+  const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  expect(element.contains(hit) || hit === element).toBe(true);
+}
 
 function catalogClient(): AgorClient {
   const eventService = { on: vi.fn(), off: vi.fn(), removeListener: vi.fn() };
@@ -100,7 +122,130 @@ function renderCatalog() {
 
 afterEach(() => cleanup());
 
-describe('Marketplace responsive layout (real browser)', () => {
+describe('Catalog responsive layout (real browser)', () => {
+  it('keeps a tool switch focused while its local mutation is pending', async () => {
+    let resolveMutation!: (value: unknown) => void;
+    const mutation = new Promise((resolve) => {
+      resolveMutation = resolve;
+    });
+    const createToolPermission = vi.fn(() => mutation);
+    const service = vi.fn((path: string) => {
+      if (path === 'mcp-member-policy') {
+        return { find: vi.fn(async () => ({ policy: 'allow_crud', can_configure: true })) };
+      }
+      if (path === 'mcp-marketplace/tool-permission') return { create: createToolPermission };
+      return { on: vi.fn(), off: vi.fn(), removeListener: vi.fn() };
+    });
+    const timestamp = new Date().toISOString();
+    render(
+      <MyServersTab
+        client={{ service } as unknown as AgorClient}
+        connected
+        connecting={false}
+        authGeneration={1}
+        currentUser={USER}
+        overview={
+          {
+            servers: [
+              {
+                mcp_server_id: 'server-focus',
+                name: 'focus-server',
+                source: 'user',
+                transport: 'http',
+                enabled: true,
+                tools: [
+                  { name: 'read', description: 'Read data', permission: 'default' },
+                  { name: 'write', description: 'Write data', permission: 'default' },
+                ],
+                capabilities_discovered_at: timestamp,
+                session_count: 0,
+                created_at: timestamp,
+                updated_at: timestamp,
+              },
+            ],
+            attachments: [],
+            credentials: [],
+            generated_at: timestamp,
+          } as unknown as MCPMarketplaceOverview
+        }
+        loading={false}
+        error={null}
+        refresh={vi.fn(async () => undefined)}
+      />
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Settings for focus-server' }));
+    const control = await screen.findByRole('switch', { name: 'focus-server: read on' });
+    const sibling = screen.getByRole('switch', { name: 'focus-server: write on' });
+    await waitFor(() => expect(control).toBeEnabled());
+    control.focus();
+    fireEvent.click(control);
+
+    expect(control).not.toBeDisabled();
+    expect(control).toHaveFocus();
+    expect(control).toHaveAttribute('aria-disabled', 'true');
+    expect(control).toHaveAttribute('aria-busy', 'true');
+    expect(sibling).not.toBeDisabled();
+    expect(sibling).toHaveAttribute('aria-disabled', 'true');
+    sibling.focus();
+    fireEvent.click(sibling);
+    expect(createToolPermission).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      resolveMutation({
+        mcp_server_id: 'server-focus',
+        tool_name: 'read',
+        permission: 'deny',
+      });
+      await mutation;
+    });
+    await waitFor(() => expect(control).toHaveAttribute('aria-busy', 'false'));
+    expect(sibling).toHaveFocus();
+    expect(sibling).toHaveAttribute('aria-disabled', 'false');
+  });
+
+  it('focuses Open session after Connect is replaced by success', async () => {
+    const SuccessHarness = () => {
+      const [success, setSuccess] = useState<{
+        sessionId: string;
+        authentication: 'ready';
+        reusedExistingServer: false;
+      } | null>(null);
+      return (
+        <CatalogDetailDrawer
+          identityKey={USER.user_id}
+          entry={CATALOG_ENTRY}
+          open
+          onClose={vi.fn()}
+          branches={[{ branch_id: 'branch-1', name: 'Catalog QA' }] as never}
+          branchesLoading={false}
+          branchesError={null}
+          defaultBranchId="branch-1"
+          connecting={false}
+          connectError={null}
+          readiness={{ catalog_key: CATALOG_ENTRY.name, state: 'no_auth' }}
+          connectCapability={ALLOWED}
+          policyPending={false}
+          policyPendingHint={POLICY_LOADING_HINT}
+          success={success as never}
+          onConnect={() =>
+            setSuccess({
+              sessionId: 'session-1',
+              authentication: 'ready',
+              reusedExistingServer: false,
+            })
+          }
+        />
+      );
+    };
+    render(<SuccessHarness />);
+    fireEvent.click(screen.getByRole('checkbox'));
+    const connect = screen.getByRole('button', { name: /Check & connect$/ });
+    connect.focus();
+    fireEvent.click(connect);
+
+    const nextStep = await screen.findByRole('button', { name: 'Open session' });
+    await waitFor(() => expect(nextStep).toHaveFocus());
+  });
+
   it('lays out the catalog at its configured breakpoint and constrains the drawer', async () => {
     renderCatalog();
     const card = await screen.findByLabelText('Open DeepWiki 1');
@@ -115,7 +260,7 @@ describe('Marketplace responsive layout (real browser)', () => {
       1
     );
 
-    const status = screen.getAllByText('No account needed')[0];
+    const status = screen.getAllByText('Catalog says no account')[0];
     const tooltipTrigger = status.closest('.ant-space') as HTMLElement;
     await act(async () => {
       fireEvent.mouseEnter(tooltipTrigger);
@@ -126,7 +271,7 @@ describe('Marketplace responsive layout (real browser)', () => {
         (tooltip) => tooltip.getBoundingClientRect().width > 0
       );
       expect(visibleTooltip).toHaveTextContent(
-        'This server needs no account, so connecting it takes one step.'
+        'Catalog metadata says this server needs no account. Agor checks the live endpoint before connecting.'
       );
     });
     await act(async () => {
@@ -203,7 +348,7 @@ describe('Marketplace responsive layout (real browser)', () => {
     );
   });
 
-  it('provides real horizontal table overflow on the phone viewport', async () => {
+  it('keeps the primary Credentials action directly reachable on a phone', async () => {
     if (window.innerWidth > 480) return;
     const timestamp = '2026-08-21T12:34:56.000Z';
     render(
@@ -229,17 +374,17 @@ describe('Marketplace responsive layout (real browser)', () => {
         loading={false}
         error={null}
         refresh={vi.fn(async () => undefined)}
+        canManageCredentials
+        onOpenServerSettings={vi.fn()}
       />
     );
 
-    const scroller = document.querySelector('.ant-table-content') as HTMLElement | null;
-    expect(scroller, 'credential table scroller should render').toBeTruthy();
-    if (!scroller) return;
-    await waitFor(() => expect(scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth));
-    expect(getComputedStyle(scroller).overflowX).toBe('auto');
+    const manage = screen.getByRole('button', { name: /OAuth connection/ });
+    expect(document.querySelector('.ant-table-content')).toBeNull();
+    expectReachableInViewport(manage);
   });
 
-  it('keeps My Servers inventory usable with horizontal overflow on phone', async () => {
+  it('keeps the primary My Servers action directly reachable on a phone', async () => {
     if (window.innerWidth > 480) return;
     const overview = {
       servers: [
@@ -279,11 +424,8 @@ describe('Marketplace responsive layout (real browser)', () => {
       name: 'Settings for A deliberately long server display name',
     });
     expect(settings).toBeVisible();
-    const scroller = document.querySelector('.ant-table-content') as HTMLElement | null;
-    expect(scroller, 'server inventory scroller should render').toBeTruthy();
-    if (!scroller) return;
-    await waitFor(() => expect(scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth));
-    expect(getComputedStyle(scroller).overflowX).toBe('auto');
+    expect(document.querySelector('.ant-table-content')).toBeNull();
+    expectReachableInViewport(settings);
 
     fireEvent.click(settings);
     await screen.findByText('Server settings');

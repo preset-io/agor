@@ -1,17 +1,17 @@
-# External MCP servers and Marketplace
+# External MCP servers and Catalog
 
-Agor can attach external MCP servers to individual sessions. Use **Marketplace** for reviewed remote endpoints, or **Settings → MCP Servers** for configurations you manage yourself.
+Agor can attach external MCP servers to individual sessions. Use **Catalog** for reviewed remote endpoints, or **Settings → MCP Servers** for configurations you manage yourself.
 
 ## Authentication
 
-Marketplace checks the live endpoint before installing it. An entry may be:
+Catalog's pre-connect readiness is advisory from catalog and saved-connection data; it does not probe the endpoint. Agor checks the live endpoint only when you choose **Connect** and before installing it. An entry may be:
 
-- **Open:** Agor connects it and opens a session ready to use.
-- **OAuth:** Agor creates the server and session first. Complete **Sign in** in that session or in MCP Server settings before sending the starter prompt. OAuth grants are per user.
-- **Bearer token:** Marketplace accepts this only when the checked-in catalog explicitly prescribes the reviewed bearer scheme. The token is verified against the catalog endpoint before storage. A generic `401` or `403` is not proof that a bearer token will work.
+- **Open:** Agor creates and attaches a new idle session, stages the starter prompt, and keeps the Catalog drawer open so you can choose **Open session**.
+- **OAuth:** Agor creates the server and session and pre-opens the provider sign-in window. The Catalog drawer remains at **Sign-in pending** until the durable per-user grant is confirmed; the session notice and MCP badge remain the recovery path if sign-in is not completed.
+- **Bearer token:** Catalog accepts this only when the checked-in catalog explicitly prescribes the reviewed bearer scheme. The token is verified against the catalog endpoint before storage. A generic `401` or `403` is not proof that a bearer token will work.
 - **Unknown:** Agor checks the endpoint at connect time. If it has changed to OAuth or open access, the drawer updates. An unreviewed custom-header, Basic, multi-key, or signed scheme is refused.
 
-For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers support services such as Datadog API/application-key pairs; Marketplace's Datadog entry instead asks for the bearer PAT/SAT described in Datadog's MCP setup guide.
+For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers support services such as Datadog API/application-key pairs; Catalog's Datadog entry instead asks for the bearer PAT/SAT described in Datadog's MCP setup guide.
 
 ### Local stdio servers
 
@@ -31,6 +31,6 @@ Connecting an entry again opens a new session but reuses the same owner-specific
 
 ## Catalog curation for operators
 
-The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` is presentation policy, while live probing remains authoritative. Every `credentials` entry must include a reviewed `credentials` block with `scheme: bearer`, an accurate vendor `acquisition_url`, and an optional user-facing label. Never put a secret in the catalog.
+The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` is presentation policy, while the connect-time live probe remains authoritative. The readiness read itself is side-effect-free and does not probe. Every `credentials` entry must include a reviewed `credentials` block with `scheme: bearer`, an accurate vendor `acquisition_url`, and an optional user-facing label. Never put a secret in the catalog.
 
 Review the exact endpoint, redirect behavior, vendor authentication documentation, permission disclosure, and acquisition link. Do not classify a non-OAuth challenge as bearer support without that evidence. OAuth-specific compatibility fields are escape hatches and should be added only after reviewing the provider's discovery behavior.

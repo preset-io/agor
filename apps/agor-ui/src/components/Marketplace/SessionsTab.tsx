@@ -83,7 +83,7 @@ export const SessionsTab: React.FC<{
         <Alert
           type="error"
           showIcon
-          title="Could not load Marketplace sessions"
+          title="Could not load Catalog sessions"
           description={error}
           action={<Button onClick={() => void refresh()}>Retry</Button>}
         />

@@ -296,6 +296,12 @@ describe('MCP OAuth grant configuration binding', () => {
     expect(MCP_OAUTH_GRANT_BINDING_VERSION).toBe(4);
   });
 
+  it('treats disabling a server as an OAuth grant-invalidating configuration change', () => {
+    expect(
+      hasMCPOAuthRelevantServerConfigurationChanged(server, { ...server, enabled: false })
+    ).toBe(true);
+  });
+
   it('revalidates a stored grant and rejects a configuration change', () => {
     const fingerprint = fingerprintMCPOAuthGrantConfiguration(masterSecret, server, resolved);
     const grant = tokenFor(fingerprint);

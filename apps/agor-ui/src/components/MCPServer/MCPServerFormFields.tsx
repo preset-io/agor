@@ -11,6 +11,7 @@ import {
   Form,
   Input,
   Modal,
+  Popconfirm,
   Row,
   Select,
   Space,
@@ -439,7 +440,17 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
           </Form.Item>
         </Col>
         <Col span={12}>
-          <Form.Item label="Enabled" name="enabled" valuePropName="checked" initialValue={true}>
+          <Form.Item
+            label="Enabled"
+            name="enabled"
+            valuePropName="checked"
+            initialValue={true}
+            extra={
+              mode === 'edit' && authType === 'oauth'
+                ? 'Disabling removes the saved OAuth connection from Agor. Re-enabling requires a new sign-in.'
+                : undefined
+            }
+          >
             <Switch />
           </Form.Item>
         </Col>
@@ -653,15 +664,23 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                 </Button>
               ))}
             {authType === 'oauth' && serverId && !oauthBrowserFlowAvailable && (
-              <Button
-                type="default"
-                danger
-                loading={disconnectingOAuth}
+              <Popconfirm
+                title="Disconnect this OAuth connection?"
+                description="This removes the saved connection from Agor. Provider-side access may remain until you revoke it with the provider."
+                okText="Disconnect"
+                okButtonProps={{ danger: true }}
                 disabled={!mutationAllowed}
-                onClick={handleDisconnectOAuth}
+                onConfirm={handleDisconnectOAuth}
               >
-                Disconnect OAuth
-              </Button>
+                <Button
+                  type="default"
+                  danger
+                  loading={disconnectingOAuth}
+                  disabled={!mutationAllowed}
+                >
+                  Disconnect OAuth
+                </Button>
+              </Popconfirm>
             )}
             {isRemoteTransport && (
               <Button
@@ -823,7 +842,7 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                       <ul style={{ margin: 0, paddingLeft: 20, fontSize: 12 }}>
                         <li>
                           {managedOAuthCompatibilityMode
-                            ? `The current Marketplace catalog manages this server's ${managedOAuthCompatibilityMode === 'marketplace' ? 'interoperability' : 'strict'} discovery policy.`
+                            ? `The current Catalog entry manages this server's ${managedOAuthCompatibilityMode === 'marketplace' ? 'interoperability' : 'strict'} discovery policy.`
                             : 'Strict MCP OAuth discovery is enabled by default.'}{' '}
                           Protected-resource binding, PKCE S256, and issuer checks remain enabled.
                         </li>
@@ -873,14 +892,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                     initialValue="strict"
                     tooltip={
                       managedOAuthCompatibilityMode
-                        ? 'This effective policy is managed by the current curated Marketplace entry. Editing the endpoint or authentication configuration makes that catalog policy stop applying.'
+                        ? 'This effective policy is managed by the current curated Catalog entry. Editing the endpoint or authentication configuration makes that catalog policy stop applying.'
                         : 'Legacy mode narrowly permits older discovery and metadata deviations. It never relaxes outbound network protections.'
                     }
                   >
                     <Select disabled={!!managedOAuthCompatibilityMode}>
                       {managedOAuthCompatibilityMode === 'marketplace' && (
                         <Select.Option value="marketplace">
-                          Marketplace compatibility (catalog managed)
+                          Catalog compatibility (managed)
                         </Select.Option>
                       )}
                       <Select.Option value="strict">
