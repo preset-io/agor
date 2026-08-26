@@ -269,7 +269,7 @@ test "$(cat "$HOME/.codex/auth.json")" = codex-visible
         })
       );
 
-      const script = String.raw`
+      const script = `
 set -eu
 must_fail() {
   if "$@" >/dev/null 2>&1; then
@@ -289,6 +289,7 @@ for leaf in .credentials.json .agor-auth-generation .agor-auth-mutation.lock; do
   must_fail sh -c 'printf attacker > "$1"' sh "$claude_dir/$leaf"
   must_fail unlink "$claude_dir/$leaf"
 done
+printf physical-state > "$claude_dir/ordinary-state.json"
 `;
       const wrapped = buildSandboxWrap({
         sandbox: {
@@ -344,6 +345,9 @@ done
           })
         )
       ).toEqual(before);
+      await expect(readFile(join(physicalClaude, 'ordinary-state.json'), 'utf8')).resolves.toBe(
+        'physical-state'
+      );
     }
   );
 
@@ -480,7 +484,7 @@ must_fail mv "$claude_dir" "$claude_dir.renamed"
     const checked = join(ownerStore, '.claude', 'race-checked');
     const tombstoned = join(ownerStore, '.claude', 'race-tombstoned');
 
-    const script = String.raw`
+    const script = `
 set -eu
 must_fail() {
   if "$@" >/dev/null 2>&1; then

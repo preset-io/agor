@@ -26,6 +26,11 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+if (process.platform !== 'linux') {
+  console.log('Claude containment precedence smoke requires Linux; skipping on this platform.');
+  process.exit(0);
+}
+
 const ENV_TOKEN = 'sk-ant-oat01-agor-runtime-env-winner';
 const FILE_TOKEN = 'sk-ant-oat01-deliberately-wrong-file-token';
 const REFRESH_TOKEN = 'sk-ant-ort01-deliberately-wrong-file-token';
