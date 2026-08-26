@@ -17,6 +17,7 @@ import {
 } from '../ApiKeyFields';
 import { ToolIcon } from '../ToolIcon';
 import { AgenticToolPresetsManager } from './AgenticToolPresetsManager';
+import { FIELD_WIDTHS } from './panelPrimitives';
 
 export interface AgenticToolsSectionProps {
   client: AgorClient | null;
@@ -205,7 +206,7 @@ export const AgenticToolsSection: React.FC<AgenticToolsSectionProps> = ({ client
                       </Typography.Text>
                       <Select
                         value={current.resolution_policy}
-                        style={{ width: '100%', maxWidth: 420 }}
+                        style={{ width: '100%', ...FIELD_WIDTHS.short }}
                         options={RESOLUTION_POLICIES.map((policy) => ({
                           value: policy.value,
                           label: policy.label,

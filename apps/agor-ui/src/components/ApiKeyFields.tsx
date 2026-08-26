@@ -8,6 +8,7 @@ import {
 import { Button, Input, Space, Tooltip, Typography, theme } from 'antd';
 import { useState } from 'react';
 import { ClaudeSubscriptionTokenInstructions } from './ClaudeSubscriptionTokenInstructions';
+import { FIELD_WIDTHS } from './SettingsModal/panelPrimitives';
 import { Tag } from './Tag';
 
 const { Text, Link } = Typography;
@@ -200,6 +201,10 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
     const { field, label, description, placeholder, docUrl, helper, type = 'password' } = config;
     const isSet = !!fieldStatus[field];
     const InputComponent = type === 'password' ? Input.Password : Input;
+    // A key/token is a fixed-length string — cap it to `short` so the field
+    // matches what you type into it. Base URLs (`type: 'text'`) run longer, so
+    // they get `medium` instead of full-bleed.
+    const widthStyle = type === 'text' ? FIELD_WIDTHS.medium : FIELD_WIDTHS.short;
     // Non-secret fields (`type: 'text'`, e.g. base URLs) get their saved
     // value echoed back to the owner so they can verify the exact value
     // without clearing and retyping. Secret fields never show plaintext.
@@ -255,7 +260,7 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
               </Button>
             </Space>
           ) : (
-            <Space.Compact style={{ width: '100%' }}>
+            <Space.Compact style={{ width: '100%', ...widthStyle }}>
               <InputComponent
                 placeholder={placeholder}
                 value={inputValues[field] || ''}
