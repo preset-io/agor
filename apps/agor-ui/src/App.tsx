@@ -1036,6 +1036,21 @@ function AppContent() {
     );
     if (!isCurrentUser()) return;
 
+    // `currentUser` deliberately keeps login gates from the authenticated
+    // principal rather than accepting a possibly-stale directory row. Refresh
+    // that principal after this self-update before closing the wizard;
+    // otherwise its login-time `onboarding_completed: false` can immediately
+    // satisfy the auto-open effect again even though the durable patch above
+    // succeeded.
+    const refreshedCurrentUser = await refreshCurrentUserForAuthorityCycle(isCurrentUser);
+    if (!refreshedCurrentUser) {
+      if (!isCurrentUser()) return;
+      throw new Error(
+        'Setup was saved, but your account could not be refreshed. Reload to continue.'
+      );
+    }
+    if (!isCurrentUser()) return;
+
     // Always land the user on a board — never the homepage. Prefer the seeded
     // session, then the board the wizard created, then the user's main board,
     // then any existing board. The final wizard action always creates/resumes a

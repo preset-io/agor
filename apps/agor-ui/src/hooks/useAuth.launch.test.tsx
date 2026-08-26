@@ -586,6 +586,48 @@ describe('useAuth launch-code fallback', () => {
     expect(localStorage.getItem(ACCESS_TOKEN_KEY)).toBe('admin-b-access');
   });
 
+  it('refreshes a self-updated onboarding gate without replacing the authority generation', async () => {
+    window.history.replaceState({}, '', '/ui/');
+    localStorage.setItem(ACCESS_TOKEN_KEY, 'member-access');
+    localStorage.setItem(REFRESH_TOKEN_KEY, 'member-refresh');
+    authenticate.mockResolvedValueOnce({
+      accessToken: 'member-access',
+      user: {
+        user_id: 'member-a',
+        email: 'member-a@example.test',
+        role: 'member',
+        onboarding_completed: false,
+      },
+    });
+
+    const { result } = renderHook(() => useAuth());
+    await waitFor(() => expect(result.current.user?.user_id).toBe('member-a'));
+    const authenticationGeneration = result.current.authenticationGeneration;
+
+    authenticate.mockResolvedValueOnce({
+      accessToken: 'member-access',
+      user: {
+        user_id: 'member-a',
+        email: 'member-a@example.test',
+        role: 'member',
+        onboarding_completed: true,
+      },
+    });
+
+    await act(async () => {
+      await expect(result.current.refreshCurrentUserForAuthorityCycle(() => true)).resolves.toBe(
+        true
+      );
+    });
+
+    expect(result.current.user?.onboarding_completed).toBe(true);
+    expect(result.current.authenticationGeneration).toBe(authenticationGeneration);
+    expect(authenticate).toHaveBeenLastCalledWith({
+      strategy: 'jwt',
+      accessToken: 'member-access',
+    });
+  });
+
   it('preserves stored tokens when stored-session auth gets a non-auth transport response', async () => {
     window.history.replaceState({}, '', '/ui/');
     localStorage.setItem(ACCESS_TOKEN_KEY, 'stored-access');
