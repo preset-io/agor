@@ -22,7 +22,7 @@ import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
-import { ListPanelHeader } from './panelPrimitives';
+import { FIELD_WIDTHS, ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
@@ -239,7 +239,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             <Form.Item label="Members">
               <Select
                 mode="multiple"
-                style={{ width: '100%' }}
+                style={{ width: '100%', ...FIELD_WIDTHS.medium }}
                 value={editingMemberIds}
                 options={userOptions}
                 {...searchableSelectProps}
@@ -328,7 +328,7 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
               render: (_: unknown, group: Group) => (
                 <Select
                   mode="multiple"
-                  style={{ minWidth: 320 }}
+                  style={{ minWidth: 320, ...FIELD_WIDTHS.medium }}
                   value={membershipsByGroup.get(group.group_id) || []}
                   options={userOptions}
                   {...searchableSelectProps}
