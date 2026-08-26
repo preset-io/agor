@@ -29,7 +29,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type Key, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { normalizeBranchStorageMode } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
@@ -358,6 +358,18 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       key: 'env',
       width: 120,
       align: 'center' as const,
+      // Native funnel filter over the environment lifecycle states, plus a
+      // "Not started" bucket for branches that have never had an environment.
+      filters: [
+        { text: 'Running', value: 'running' },
+        { text: 'Starting', value: 'starting' },
+        { text: 'Stopping', value: 'stopping' },
+        { text: 'Stopped', value: 'stopped' },
+        { text: 'Error', value: 'error' },
+        { text: 'Not started', value: 'none' },
+      ],
+      onFilter: (value: Key | boolean, record: Branch) =>
+        (record.environment_instance?.status ?? 'none') === value,
       render: (_: unknown, record: Branch) => {
         const repo = repos.find((r: Repo) => r.repo_id === record.repo_id);
         return renderEnvCell(record, repo, token, { onStartEnvironment, onStopEnvironment });
@@ -367,6 +379,12 @@ export const BranchesTable: React.FC<BranchesTableProps> = ({
       title: 'Repo',
       dataIndex: 'repo_id',
       key: 'repo_id',
+      // One entry per repository present; complements the free-text search.
+      filters: repos
+        .slice()
+        .sort((a, b) => getRepoName(a.repo_id).localeCompare(getRepoName(b.repo_id)))
+        .map((r) => ({ text: getRepoName(r.repo_id), value: r.repo_id })),
+      onFilter: (value: Key | boolean, record: Branch) => record.repo_id === value,
       render: (repoId: string) => (
         <Space>
           <FolderOutlined />

@@ -25,7 +25,7 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type Key, useCallback, useEffect, useMemo, useState } from 'react';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
@@ -213,12 +213,22 @@ export const UsersTable: React.FC<UsersTableProps> = ({
       dataIndex: 'role',
       key: 'role',
       width: 120,
+      // Native funnel filter for the fixed role set, alongside the free-text search.
+      filters: ROLE_OPTIONS.map((opt) => ({ text: opt.label, value: opt.value })),
+      onFilter: (value: Key | boolean, user: User) => user.role === value,
       render: (role: User['role']) => <Tag color={getRoleColor(role)}>{role.toUpperCase()}</Tag>,
     },
     {
       title: 'Groups',
       key: 'groups',
       width: 280,
+      // One entry per group in the workspace; a user matches if they belong to it.
+      filters: groups
+        .slice()
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((group) => ({ text: group.name, value: group.group_id })),
+      onFilter: (value: Key | boolean, user: User) =>
+        (groupsByUser.get(user.user_id) || []).includes(value as Group['group_id']),
       render: (_: unknown, user: User) => {
         const userGroupIds = groupsByUser.get(user.user_id) || [];
         if (userGroupIds.length === 0) {

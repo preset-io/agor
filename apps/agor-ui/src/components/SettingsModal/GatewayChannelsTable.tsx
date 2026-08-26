@@ -78,7 +78,7 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type Key, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getDaemonUrl } from '@/config/daemon';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
@@ -3695,6 +3695,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       dataIndex: 'channel_type',
       key: 'channel_type',
       width: 120,
+      // Native funnel filter over the platform types that can actually exist
+      // (coming-soon types are excluded — no channel is of that type yet).
+      filters: CHANNEL_TYPE_OPTIONS.filter((opt) => !opt.comingSoon).map((opt) => ({
+        text: opt.label,
+        value: opt.value,
+      })),
+      onFilter: (value: Key | boolean, channel: GatewayChannel) => channel.channel_type === value,
       render: (type: ChannelType) => (
         <Tag icon={getChannelTypeIcon(type)} color={getChannelTypeColor(type)}>
           {type.charAt(0).toUpperCase() + type.slice(1)}
