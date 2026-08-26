@@ -160,6 +160,15 @@ still migrate automatically because no old worker can exist. Document the exact
 stop → migrate → start order in the user guide; the acknowledgement flag cannot
 itself prove that another host has stopped.
 
+Agor-managed standalone development variants are isolated by Compose project
+and explicitly set `AGOR_MIGRATION_OFFLINE_CUTOVER=true`. The development
+entrypoint translates that acknowledgement to `--offline-cutover`; arbitrary
+unseeded Compose invocations default it to false. For already-rendered managed
+environment commands, `SEED=true` is the development-only compatibility signal;
+those Compose projects own isolated database volumes. HA keeps using its
+dedicated one-shot migrator before either daemon replica starts. Never set this
+variable or `SEED=true` merely to make a shared or production database boot.
+
 ### Schemas drifting
 
 If you only update one schema, generation succeeds for that dialect and silently leaves the other one stale. Catch it before merge:

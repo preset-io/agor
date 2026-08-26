@@ -383,6 +383,30 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
       withFixtures(resolveVariant(env!, 'postgres')!.start)
     );
   });
+
+  it('explicitly acknowledges offline cutovers only for isolated managed dev variants', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    for (const name of [
+      'rich',
+      'full',
+      'sqlite',
+      'sandbox',
+      'sandbox-peruser',
+      'postgres',
+      'sqlite-demo',
+      'postgres-demo',
+    ]) {
+      expect(resolveVariant(env!, name)?.start, `${name}.start`).toContain(
+        'AGOR_MIGRATION_OFFLINE_CUTOVER=true'
+      );
+    }
+
+    // HA has its own one-shot migrator and must not leak this standalone
+    // development acknowledgement into daemon replicas.
+    expect(resolveVariant(env!, 'ha')?.start).not.toContain('AGOR_MIGRATION_OFFLINE_CUTOVER=true');
+  });
 });
 
 describe('writeAgorYml', () => {
