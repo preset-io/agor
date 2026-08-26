@@ -242,6 +242,106 @@ test "$(cat "$HOME/.codex/auth.json")" = codex-visible
     );
   });
 
+  it('masks a hidden physical owner store re-exposed by extra_allow_write', async () => {
+    const hiddenOwnerStore = join(runtimePaths.dataHome, 'tenants', 'default', 'homes', 'owner');
+    const hiddenClaudeDirectory = join(hiddenOwnerStore, '.claude');
+    const credentialPath = join(hiddenClaudeDirectory, '.credentials.json');
+    await ensureCredentialAuthorityLayout(credentialPath);
+    await Promise.all([
+      writeFile(credentialPath, 'hidden-refresh-secret'),
+      writeFile(join(hiddenClaudeDirectory, CREDENTIAL_AUTHORITY_GENERATION_FILENAME), '73\n'),
+      writeFile(
+        join(hiddenClaudeDirectory, CREDENTIAL_AUTHORITY_LOCK_FILENAME),
+        'hidden-lock-authority'
+      ),
+    ]);
+    const authorityPaths = AUTHORITY_FILENAMES.map((filename) =>
+      join(hiddenClaudeDirectory, filename)
+    );
+    const before = await Promise.all(
+      authorityPaths.map(async (path) => {
+        const metadata = await stat(path, { bigint: true });
+        return { bytes: await readFile(path), inode: metadata.ino, mtimeNs: metadata.mtimeNs };
+      })
+    );
+
+    const script = `
+set -eu
+must_fail() {
+  if "$@" >/dev/null 2>&1; then
+    echo "unexpected success: $*" >&2
+    exit 70
+  fi
+}
+claude_dir="$1"
+replacement="$HOME/physical-store-replacement"
+mkdir -p "$replacement"
+must_fail mv "$claude_dir" "$claude_dir.renamed"
+must_fail rmdir "$claude_dir"
+must_fail mv -T "$replacement" "$claude_dir"
+for leaf in .credentials.json .agor-auth-generation .agor-auth-mutation.lock; do
+  must_fail cat "$claude_dir/$leaf"
+  must_fail sh -c 'printf attacker > "$1"' sh "$claude_dir/$leaf"
+  must_fail unlink "$claude_dir/$leaf"
+done
+printf physical-state > "$claude_dir/ordinary-state.json"
+`;
+    const wrapped = buildSandboxWrap({
+      sandbox: {
+        enabled: true,
+        home_mode: 'per_user',
+        fail_if_unavailable: true,
+        include: { tmp: false },
+        extra_allow_write: [hiddenOwnerStore],
+      },
+      branchPath: branch,
+      cmd: '/bin/bash',
+      args: ['-c', script, 'bash', hiddenClaudeDirectory],
+      ownerHomeStore: hiddenOwnerStore,
+      runtimePaths,
+    });
+    expect(wrapped).not.toBeNull();
+    const args = wrapped?.args ?? [];
+    const extraWriteIndex = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' &&
+        args[index + 1] === hiddenOwnerStore &&
+        args[index + 2] === hiddenOwnerStore
+    );
+    const lockedParentIndex = args.findIndex(
+      (arg, index) =>
+        arg === '--bind' &&
+        args[index + 1] === hiddenClaudeDirectory &&
+        args[index + 2] === hiddenClaudeDirectory
+    );
+    expect(extraWriteIndex).toBeGreaterThanOrEqual(0);
+    expect(lockedParentIndex).toBeGreaterThan(extraWriteIndex);
+    for (const path of authorityPaths) {
+      expect(
+        args.some(
+          (arg, index) =>
+            arg === '--ro-bind' && args[index + 1] === '/dev/null' && args[index + 2] === path
+        )
+      ).toBe(true);
+    }
+
+    const result = spawnSync(wrapped?.cmd ?? 'false', args, {
+      encoding: 'utf8',
+      env: { PATH: process.env.PATH },
+    });
+    expect(result.status, `${JSON.stringify(args)}\n${result.stdout}\n${result.stderr}`).toBe(0);
+    const after = await Promise.all(
+      authorityPaths.map(async (path) => {
+        const metadata = await stat(path, { bigint: true });
+        return { bytes: await readFile(path), inode: metadata.ino, mtimeNs: metadata.mtimeNs };
+      })
+    );
+    expect(after).toEqual(before);
+    await expect(
+      readFile(join(hiddenClaudeDirectory, 'ordinary-state.json'), 'utf8')
+    ).resolves.toBe('physical-state');
+  });
+
   it('uses pre-created empty authority leaves without breaking env-token auth on nodev', async () => {
     const target = join(ownerStore, '.claude', '.credentials.json');
     await unlink(target);

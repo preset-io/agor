@@ -38,10 +38,11 @@ describe('claude.auth-file executor boundary', () => {
 
     expect(await readFile(target, 'utf8')).toBe(credentials);
     expect((await stat(target)).mode & 0o777).toBe(0o600);
-    expect((await readdir(process.env.CLAUDE_CONFIG_DIR)).sort()).toEqual([
-      '.agor-auth-mutation.lock',
-      '.credentials.json',
-    ]);
+    const expectedAuthorityFiles =
+      process.platform === 'linux'
+        ? ['.agor-auth-mutation.lock', '.credentials.json']
+        : ['.credentials.json'];
+    expect((await readdir(process.env.CLAUDE_CONFIG_DIR)).sort()).toEqual(expectedAuthorityFiles);
 
     await handleClaudeAuthFile({ ...base, params: { operation: 'delete' } }, {});
     // Delete is an empty, inode-stable tombstone; repeating it still succeeds.
@@ -50,10 +51,7 @@ describe('claude.auth-file executor boundary', () => {
       data: { status: 'deleted' },
     });
     expect(await readFile(target, 'utf8')).toBe('');
-    expect((await readdir(process.env.CLAUDE_CONFIG_DIR)).sort()).toEqual([
-      '.agor-auth-mutation.lock',
-      '.credentials.json',
-    ]);
+    expect((await readdir(process.env.CLAUDE_CONFIG_DIR)).sort()).toEqual(expectedAuthorityFiles);
   });
 
   it('inspect reports found / not-found / malformed without echoing token bytes', async () => {

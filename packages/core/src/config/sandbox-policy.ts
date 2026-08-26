@@ -333,12 +333,21 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     // downgrade. A custom filesystem_home outside all hidden deployment roots
     // remains reachable through its physical source path, so bind/mask it too.
     const ownerClaudeDirectory = join(ctx.ownerHomeStore as string, '.claude');
+    const authorityFilenames = [
+      '.credentials.json',
+      ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES,
+    ] as const;
     const claudeDirectoryAliases = new Set(
       homeAliasPaths(join(ctx.homeDir, '.claude'), ctx, preserveCanonicalHomeAlias)
     );
+    const extraWritableRoots = sandbox.extra_allow_write ?? [];
+    const extraWriteReexposesPhysicalParent = extraWritableRoots.some((root) =>
+      isPathWithin(ownerClaudeDirectory, root)
+    );
     const physicalStoreIsReachable =
-      ![...hiddenRoots].some((root) => isPathWithin(ctx.ownerHomeStore as string, root)) &&
-      !homeDirs.some((homeDir) => isPathWithin(ctx.ownerHomeStore as string, homeDir));
+      extraWriteReexposesPhysicalParent ||
+      (![...hiddenRoots].some((root) => isPathWithin(ctx.ownerHomeStore as string, root)) &&
+        !homeDirs.some((homeDir) => isPathWithin(ctx.ownerHomeStore as string, homeDir)));
     if (physicalStoreIsReachable) claudeDirectoryAliases.add(ownerClaudeDirectory);
     for (const destination of claudeDirectoryAliases) {
       args.push('--bind', ownerClaudeDirectory, destination);
@@ -352,13 +361,20 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     // may be unreadable when rebound onto a nodev store, which is an acceptable
     // stronger mask and is covered by the pinned runtime/live tests.
     // Do NOT mask .codex/auth.json: Codex containment remains separate work.
-    const authorityFilenames = [
-      '.credentials.json',
-      ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES,
-    ] as const;
     for (const directory of claudeDirectoryAliases) {
       for (const filename of authorityFilenames) {
         args.push('--ro-bind', '/dev/null', join(directory, filename));
+      }
+    }
+    // An escape hatch can also re-expose one authority leaf without exposing
+    // its parent. Analyze those final writable mounts too; parent analysis
+    // alone would miss an exact file bind beneath an otherwise hidden store.
+    if (!physicalStoreIsReachable) {
+      for (const filename of authorityFilenames) {
+        const authorityPath = join(ownerClaudeDirectory, filename);
+        if (extraWritableRoots.some((root) => isPathWithin(authorityPath, root))) {
+          args.push('--ro-bind', '/dev/null', authorityPath);
+        }
       }
     }
 

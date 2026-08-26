@@ -191,7 +191,7 @@ describe('configured executor spawning', () => {
     );
   });
 
-  it('prepares the real Claude authority layout before a per-user sandbox spawn', async () => {
+  it('prepares the real Claude authority layout before a per-user sandbox spawn on Linux', async () => {
     const installed = installMockExecutor('agor-executor-authority-layout-');
     const root = mkdtempSync(path.join(tmpdir(), 'agor-sandbox-runtime-'));
     const ownerStore = path.join(root, 'owner');
@@ -218,12 +218,16 @@ describe('configured executor spawning', () => {
     });
 
     await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
-    expect(ensureAuthorityMock).toHaveBeenCalledWith(
-      path.join(ownerStore, '.claude', '.credentials.json')
-    );
-    expect(ensureAuthorityMock.mock.invocationCallOrder[0]).toBeLessThan(
-      buildSandboxWrapMock.mock.invocationCallOrder[0] as number
-    );
+    if (process.platform === 'linux') {
+      expect(ensureAuthorityMock).toHaveBeenCalledWith(
+        path.join(ownerStore, '.claude', '.credentials.json')
+      );
+      expect(ensureAuthorityMock.mock.invocationCallOrder[0]).toBeLessThan(
+        buildSandboxWrapMock.mock.invocationCallOrder[0] as number
+      );
+    } else {
+      expect(ensureAuthorityMock).not.toHaveBeenCalled();
+    }
     expect(buildSandboxWrapMock).toHaveBeenCalledWith(
       expect.objectContaining({ ownerHomeStore: ownerStore, branchPath: branch })
     );

@@ -302,6 +302,28 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
     }
   });
 
+  it('masks a hidden physical owner store when extra_allow_write re-exposes it', () => {
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user', extra_allow_write: [STORE] },
+      PER_USER_CTX
+    );
+    expect(hasTriple(args, '--bind', STORE, STORE)).toBe(true);
+    expect(hasTriple(args, '--bind', `${STORE}/.claude`, `${STORE}/.claude`)).toBe(true);
+    for (const filename of ['.credentials.json', ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
+      expect(hasTriple(args, '--ro-bind', '/dev/null', `${STORE}/.claude/${filename}`)).toBe(true);
+    }
+  });
+
+  it('masks an exact physical authority leaf re-exposed by extra_allow_write', () => {
+    const credentialPath = `${STORE}/.claude/.credentials.json`;
+    const args = resolveBwrapArgs(
+      { home_mode: 'per_user', extra_allow_write: [credentialPath] },
+      PER_USER_CTX
+    );
+    expect(hasTriple(args, '--bind', credentialPath, credentialPath)).toBe(true);
+    expect(hasTriple(args, '--ro-bind', '/dev/null', credentialPath)).toBe(true);
+  });
+
   it('emits only the outermost mask for nested data roots', () => {
     const dataHome = '/var/lib/agor';
     const tenantsBase = `${dataHome}/tenants`;
