@@ -801,6 +801,32 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
                       <Select.Option value="legacy">Legacy provider compatibility</Select.Option>
                     </Select>
                   </Form.Item>
+                  {/* The two modes above default to strict on purpose; relaxing
+                      either weakens RFC 9207 issuer/discovery protections, so the
+                      tradeoff is surfaced rather than presented as neutral. */}
+                  <Form.Item
+                    noStyle
+                    shouldUpdate={(prev, cur) =>
+                      prev.oauth_dcr_mode !== cur.oauth_dcr_mode ||
+                      prev.oauth_compatibility_mode !== cur.oauth_compatibility_mode
+                    }
+                  >
+                    {({ getFieldValue }) => {
+                      const weakened =
+                        getFieldValue('oauth_dcr_mode') === 'fallback' ||
+                        getFieldValue('oauth_compatibility_mode') === 'legacy';
+                      if (!weakened) return null;
+                      return (
+                        <Alert
+                          title="Reduces OAuth security guarantees"
+                          description="Legacy /register fallback and legacy compatibility mode relax the strict issuer and discovery checks (RFC 9207 / PKCE) enabled by default. Only use them for a provider that doesn't support the modern MCP OAuth flow."
+                          type="warning"
+                          showIcon
+                          style={{ marginBottom: 16 }}
+                        />
+                      );
+                    }}
+                  </Form.Item>
                   <Form.Item
                     label="Client Secret"
                     name="oauth_client_secret"
