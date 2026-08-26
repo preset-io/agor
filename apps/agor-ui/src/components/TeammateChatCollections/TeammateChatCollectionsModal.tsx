@@ -1,22 +1,55 @@
 import type { ChatCollection, SessionID, UpdateUserInput, User } from '@agor-live/client';
-import { getTeammateConfig } from '@agor-live/client';
+import { getTeammateConfig, shortId } from '@agor-live/client';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
-import { Button, Card, Empty, Input, Select, Space, Typography } from 'antd';
+import { Button, Card, Checkbox, Empty, Flex, Input, Select, Space, Tag, Typography } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBranchById, selectSessionById } from '../../store/selectors';
 import { useThemedMessage } from '../../utils/message';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
+import { formatRelativeTimeSafe } from '../../utils/time';
 import { AdaptiveSettingsModal } from '../SettingsModal/AdaptiveSettingsModal';
 import {
   createTeammateChatCollection,
   MAX_SESSIONS_PER_TEAMMATE_CHAT_COLLECTION,
   MAX_TEAMMATE_CHAT_COLLECTIONS,
+  RECENT_TEAMMATE_CHAT_SESSION_LIMIT,
   readTeammateChatPreferences,
   withTeammateChatPreferences,
 } from './preferences';
 
 const { Text } = Typography;
+
+interface SessionChoice {
+  value: SessionID;
+  label: string;
+  context: string;
+  status: string;
+  updatedAt: string;
+  relativeUpdatedAt: string;
+  shortSessionId: string;
+  searchText: string;
+}
+
+export function filterSessionChoices<T extends { searchText: string }>(
+  choices: T[],
+  search: string,
+  limit = RECENT_TEAMMATE_CHAT_SESSION_LIMIT
+): T[] {
+  const query = search.trim().toLowerCase();
+  return query
+    ? choices.filter((choice) => choice.searchText.includes(query))
+    : choices.slice(0, limit);
+}
+
+function compareSessionChoicesByRecency(left: SessionChoice, right: SessionChoice): number {
+  const leftTimestamp = Date.parse(left.updatedAt);
+  const rightTimestamp = Date.parse(right.updatedAt);
+  return (
+    (Number.isNaN(rightTimestamp) ? 0 : rightTimestamp) -
+    (Number.isNaN(leftTimestamp) ? 0 : leftTimestamp)
+  );
+}
 
 function makeCollectionId(): string {
   const random = new Uint8Array(12);
@@ -54,8 +87,9 @@ export function TeammateChatCollectionsModal({
   const branchById = useAgorStore(selectBranchById);
   const [collections, setCollections] = useState<ChatCollection[]>([]);
   const [saving, setSaving] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState('');
 
-  const eligibleSessions = useMemo(
+  const eligibleSessions = useMemo<SessionChoice[]>(
     () =>
       Array.from(sessionById.values())
         .flatMap((session) => {
@@ -63,18 +97,25 @@ export function TeammateChatCollectionsModal({
           const branch = branchById.get(session.branch_id);
           if (!branch || branch.archived) return [];
           const teammate = getTeammateConfig(branch);
+          const title = getSessionDisplayTitle(session, { includeAgentFallback: true });
+          const context = teammate?.displayName
+            ? `${teammate.emoji || '💬'} ${teammate.displayName} · ${branch.name}`
+            : branch.name;
+          const shortSessionId = shortId(session.session_id);
           return [
             {
-              value: session.session_id,
-              label: `${teammate?.emoji || '💬'} ${
-                teammate?.displayName || branch.name
-              } · ${getSessionDisplayTitle(session, { includeAgentFallback: true })}`,
+              value: session.session_id as SessionID,
+              label: title,
+              context,
+              status: session.status,
               updatedAt: session.last_updated,
+              relativeUpdatedAt: formatRelativeTimeSafe(session.last_updated) ?? 'Unknown activity',
+              shortSessionId,
+              searchText: `${title} ${context} ${session.status} ${shortSessionId}`.toLowerCase(),
             },
           ];
         })
-        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
-        .map(({ value, label }) => ({ value, label })),
+        .sort(compareSessionChoicesByRecency),
     [branchById, sessionById]
   );
   const storedPreferences = useMemo(
@@ -82,18 +123,39 @@ export function TeammateChatCollectionsModal({
     [currentUser?.preferences]
   );
   const sessionOptions = useMemo(() => {
-    const options = [...eligibleSessions];
+    const options = filterSessionChoices(eligibleSessions, sessionSearch).map((option) => ({
+      ...option,
+    }));
     const known = new Set(options.map((option) => option.value));
-    for (const sessionId of storedPreferences.collections.flatMap(
-      (collection) => collection.session_ids
-    )) {
+    const requiredSessionIds = new Set([
+      ...storedPreferences.collections.flatMap((collection) => collection.session_ids),
+      ...collections.flatMap((collection) => collection.session_ids),
+    ]);
+    const eligibleById = new Map(eligibleSessions.map((option) => [option.value, option]));
+    for (const sessionId of requiredSessionIds) {
       if (!known.has(sessionId)) {
         known.add(sessionId);
-        options.push({ value: sessionId, label: 'Unavailable session' });
+        const eligible = eligibleById.get(sessionId);
+        options.push(
+          eligible ?? {
+            value: sessionId,
+            label: 'Unavailable session',
+            context: 'This session may be archived or inaccessible',
+            status: 'unavailable',
+            updatedAt: '',
+            relativeUpdatedAt: '',
+            shortSessionId: shortId(sessionId),
+            searchText: String(sessionId).toLowerCase(),
+          }
+        );
       }
     }
     return options;
-  }, [eligibleSessions, storedPreferences.collections]);
+  }, [collections, eligibleSessions, sessionSearch, storedPreferences.collections]);
+
+  const preselectedSession = preselectedSessionId
+    ? sessionById.get(preselectedSessionId)
+    : undefined;
 
   useEffect(() => {
     if (!open) return;
@@ -104,17 +166,42 @@ export function TeammateChatCollectionsModal({
       requestedSessionId && eligibleSessionIds.has(requestedSessionId)
         ? requestedSessionId
         : undefined;
-    if (preselected && !stored.some((collection) => collection.session_ids.includes(preselected))) {
-      if (stored.length > 0) {
-        stored[0] = { ...stored[0], session_ids: [...stored[0].session_ids, preselected] };
-      } else {
-        stored.push(
-          createTeammateChatCollection(makeCollectionId(), 'Pinned chats', [preselected])
-        );
-      }
+    if (preselected && stored.length === 0) {
+      stored.push(createTeammateChatCollection(makeCollectionId(), 'Pinned chats', [preselected]));
     }
     setCollections(stored);
+    setSessionSearch('');
   }, [eligibleSessions, open, preselectedSessionId, storedPreferences.collections]);
+
+  const preselectedCollectionIds = preselectedSessionId
+    ? collections
+        .filter((collection) => collection.session_ids.includes(preselectedSessionId as SessionID))
+        .map((collection) => collection.collection_id)
+    : [];
+  const preselectedWasStored = preselectedSessionId
+    ? storedPreferences.collections.some((collection) =>
+        collection.session_ids.includes(preselectedSessionId as SessionID)
+      )
+    : false;
+
+  const updatePreselectedCollections = (collectionIds: Array<string | number | boolean>) => {
+    if (!preselectedSessionId) return;
+    const selectedCollectionIds = new Set(collectionIds.map(String));
+    const selectedSessionId = preselectedSessionId as SessionID;
+    setCollections((current) =>
+      current.map((collection) => {
+        const withoutSession = collection.session_ids.filter((id) => id !== selectedSessionId);
+        return {
+          ...collection,
+          session_ids:
+            selectedCollectionIds.has(collection.collection_id) &&
+            withoutSession.length < MAX_SESSIONS_PER_TEAMMATE_CHAT_COLLECTION
+              ? [...withoutSession, selectedSessionId]
+              : withoutSession,
+        };
+      })
+    );
+  };
 
   const addCollection = () => {
     if (collections.length >= MAX_TEAMMATE_CHAT_COLLECTIONS) return;
@@ -129,6 +216,10 @@ export function TeammateChatCollectionsModal({
     const invalid = collections.find((collection) => !collection.name.trim());
     if (invalid) {
       showError('Every chat collection needs a name.');
+      return;
+    }
+    if (preselectedSessionId && !preselectedWasStored && preselectedCollectionIds.length === 0) {
+      showError('Choose at least one collection for this session.');
       return;
     }
     setSaving(true);
@@ -147,7 +238,7 @@ export function TeammateChatCollectionsModal({
 
   return (
     <AdaptiveSettingsModal
-      title={preselectedSessionId ? 'Pin session to Home' : 'Manage chat collections'}
+      title={preselectedSessionId ? 'Add session to chat collections' : 'Manage chat collections'}
       open={open}
       onCancel={onClose}
       onOk={save}
@@ -163,6 +254,36 @@ export function TeammateChatCollectionsModal({
           channels. Collections store references only; each conversation keeps its original history
           and permissions.
         </Text>
+
+        {preselectedSessionId && collections.length > 0 && (
+          <Card size="small" styles={{ body: { padding: 12 } }}>
+            <Flex vertical gap={8}>
+              <div>
+                <Text strong>
+                  {preselectedSession
+                    ? getSessionDisplayTitle(preselectedSession, { includeAgentFallback: true })
+                    : 'Selected session'}
+                </Text>
+                <br />
+                <Text type="secondary" style={{ fontSize: 12 }}>
+                  Saved by session ID, so renaming the conversation will not break this link.
+                </Text>
+              </div>
+              <Checkbox.Group
+                aria-label="Collections for selected session"
+                value={preselectedCollectionIds}
+                options={collections.map((collection) => ({
+                  label: collection.name,
+                  value: collection.collection_id,
+                  disabled:
+                    !collection.session_ids.includes(preselectedSessionId as SessionID) &&
+                    collection.session_ids.length >= MAX_SESSIONS_PER_TEAMMATE_CHAT_COLLECTION,
+                }))}
+                onChange={updatePreselectedCollections}
+              />
+            </Flex>
+          </Card>
+        )}
 
         {collections.length === 0 ? (
           <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No chat collections yet">
@@ -213,8 +334,36 @@ export function TeammateChatCollectionsModal({
                 value={collection.session_ids}
                 options={sessionOptions}
                 maxCount={MAX_SESSIONS_PER_TEAMMATE_CHAT_COLLECTION}
-                optionFilterProp="label"
+                filterOption={false}
                 showSearch
+                searchValue={sessionSearch}
+                onSearch={setSessionSearch}
+                onOpenChange={(isOpen) => {
+                  if (!isOpen) setSessionSearch('');
+                }}
+                notFoundContent={
+                  sessionSearch ? 'No sessions match your search' : 'No recent sessions available'
+                }
+                optionRender={(option) => (
+                  <Flex vertical gap={2} style={{ paddingBlock: 3 }}>
+                    <Flex justify="space-between" align="center" gap={8}>
+                      <Text ellipsis strong style={{ minWidth: 0 }}>
+                        {option.data.label}
+                      </Text>
+                      <Tag variant="filled" style={{ margin: 0, flexShrink: 0 }}>
+                        {option.data.status}
+                      </Tag>
+                    </Flex>
+                    <Flex justify="space-between" gap={8}>
+                      <Text type="secondary" ellipsis style={{ minWidth: 0, fontSize: 11 }}>
+                        {option.data.context}
+                      </Text>
+                      <Text type="secondary" style={{ flexShrink: 0, fontSize: 11 }}>
+                        {option.data.relativeUpdatedAt} · {option.data.shortSessionId}
+                      </Text>
+                    </Flex>
+                  </Flex>
+                )}
                 onChange={(sessionIds) =>
                   setCollections((current) =>
                     current.map((item) =>
@@ -225,6 +374,7 @@ export function TeammateChatCollectionsModal({
                   )
                 }
                 style={{ width: '100%' }}
+                popupMatchSelectWidth
               />
             </Card>
           ))

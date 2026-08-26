@@ -88,7 +88,16 @@ export const MobileApp: React.FC<MobileAppProps> = ({
   const branchById = useAgorStore(selectBranchById);
   const userById = useAgorStore(selectUserById);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [teammateChatsSessionId, setTeammateChatsSessionId] = useState<string>();
   const [teammateChatsOpen, setTeammateChatsOpen] = useState(false);
+  const openTeammateChats = (sessionId?: string) => {
+    setTeammateChatsSessionId(sessionId);
+    setTeammateChatsOpen(true);
+  };
+  const closeTeammateChats = () => {
+    setTeammateChatsOpen(false);
+    setTeammateChatsSessionId(undefined);
+  };
   const [branchEditor, setBranchEditor] = useState<{
     branchId: string;
     tab: BranchModalTab;
@@ -134,7 +143,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               sessionById={sessionById}
               onMenuClick={() => setDrawerOpen(true)}
               onOpenSettings={onOpenWorkspaceSettings}
-              onManageTeammateChats={() => setTeammateChatsOpen(true)}
+              onManageTeammateChats={() => openTeammateChats()}
             />
           }
         />
@@ -169,6 +178,7 @@ export const MobileApp: React.FC<MobileAppProps> = ({
               currentUser={user}
               onSendPrompt={onSendPrompt}
               onMenuClick={() => setDrawerOpen(true)}
+              onPinToChatCollection={openTeammateChats}
             />
           }
         />
@@ -225,7 +235,8 @@ export const MobileApp: React.FC<MobileAppProps> = ({
       <TeammateChatCollectionsModal
         open={teammateChatsOpen}
         currentUser={user}
-        onClose={() => setTeammateChatsOpen(false)}
+        preselectedSessionId={teammateChatsSessionId}
+        onClose={closeTeammateChats}
         onUpdateUser={onUpdateUser}
       />
     </Layout>

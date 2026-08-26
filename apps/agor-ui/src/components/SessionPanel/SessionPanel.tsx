@@ -22,8 +22,10 @@ import {
 } from '@agor-live/client';
 import {
   AimOutlined,
+  CheckOutlined,
   CloseOutlined,
   CodeOutlined,
+  CommentOutlined,
   DownOutlined,
   EditOutlined,
   EllipsisOutlined,
@@ -82,6 +84,7 @@ import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
 import { CreatedByTag } from '../metadata';
 import { getUrlDisplayLabel } from '../Pill/url-helpers';
+import { readTeammateChatPreferences } from '../TeammateChatCollections/preferences';
 import { ToolIcon } from '../ToolIcon';
 import {
   buildPromptWithAttachments,
@@ -299,6 +302,7 @@ export interface SessionPanelProps {
   open: boolean;
   onClose: () => void;
   onPinToChatCollection?: (sessionId: string) => void;
+  onOpenChatWorkspace?: (sessionId: string) => void;
   uploadPolicy?: import('@agor/core/types').UploadIngressPolicy;
 }
 
@@ -311,6 +315,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   open,
   onClose,
   onPinToChatCollection,
+  onOpenChatWorkspace,
   uploadPolicy,
 }) => {
   const { token } = theme.useToken();
@@ -944,6 +949,9 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const activeSession = isAgenticToolName(session.agentic_tool)
     ? (session as Session & { agentic_tool: AgenticToolName })
     : null;
+  const sessionInChatCollection = readTeammateChatPreferences(
+    currentUserId ? userById.get(currentUserId)?.preferences : undefined
+  ).collections.some((collection) => collection.session_ids.includes(session.session_id));
 
   const handleArchive = () => {
     if (!client || connectionDisabled) {
@@ -1027,8 +1035,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       ? [
           {
             key: 'add-to-teammate-chats',
-            icon: <UsergroupAddOutlined />,
-            label: 'Pin to chat collection…',
+            icon: sessionInChatCollection ? <CheckOutlined /> : <UsergroupAddOutlined />,
+            label: sessionInChatCollection ? 'Manage chat collections…' : 'Add to chat collection…',
             onClick: () => onPinToChatCollection(session.session_id),
           },
         ]
@@ -1571,6 +1579,32 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
             </div>
           </div>
           <Space size={4}>
+            {onPinToChatCollection && (
+              <Tooltip
+                title={
+                  sessionInChatCollection ? 'Manage chat collections' : 'Add to chat collection'
+                }
+              >
+                <Button
+                  type="text"
+                  aria-label={
+                    sessionInChatCollection ? 'Manage chat collections' : 'Add to chat collection'
+                  }
+                  icon={sessionInChatCollection ? <CheckOutlined /> : <UsergroupAddOutlined />}
+                  onClick={() => onPinToChatCollection(session.session_id)}
+                />
+              </Tooltip>
+            )}
+            {onOpenChatWorkspace && (
+              <Tooltip title="Open in chat workspace">
+                <Button
+                  type="text"
+                  aria-label="Open in chat workspace"
+                  icon={<CommentOutlined />}
+                  onClick={() => onOpenChatWorkspace(session.session_id)}
+                />
+              </Tooltip>
+            )}
             {simpleChat && (
               <Tooltip title="Show full session details">
                 <Button

@@ -1653,6 +1653,7 @@ export const App: React.FC<AppProps> = ({
                         onBranchClick={handleHomeBranchClick}
                         onSessionClick={handleSessionClick}
                         onChatWorkspaceSessionClick={handleChatWorkspaceSessionClick}
+                        onShowChatSessionOnBoard={handleSessionClick}
                         onManageTeammateChats={openTeammateChats}
                         chatWorkspace={isChatWorkspaceSurface}
                         activeSessionId={effectiveSelectedSessionId}
@@ -1745,6 +1746,9 @@ export const App: React.FC<AppProps> = ({
                               open={!!effectiveSelectedSessionId}
                               onClose={handleCloseSessionPanel}
                               onPinToChatCollection={openTeammateChats}
+                              onOpenChatWorkspace={
+                                isChatWorkspaceSurface ? undefined : handleChatWorkspaceSessionClick
+                              }
                               uploadPolicy={uploadPolicy}
                             />
                           </div>

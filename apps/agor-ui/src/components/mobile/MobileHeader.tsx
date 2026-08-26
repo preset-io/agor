@@ -1,6 +1,7 @@
 import type { User } from '@agor-live/client';
 import { UnorderedListOutlined } from '@ant-design/icons';
 import { Button, Layout, Space, Typography, theme } from 'antd';
+import type { ReactNode } from 'react';
 import { BrandMark } from '../BrandMark';
 import { UserIdentityAvatar } from '../UserIdentityAvatar';
 
@@ -12,6 +13,7 @@ interface MobileHeaderProps {
   showLogo?: boolean;
   title?: string;
   user?: User | null;
+  actions?: ReactNode;
   onMenuClick?: () => void;
   onLogout?: () => void;
 }
@@ -21,6 +23,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
   showLogo = false,
   title,
   user,
+  actions,
   onMenuClick,
   onLogout,
 }) => {
@@ -55,6 +58,7 @@ export const MobileHeader: React.FC<MobileHeaderProps> = ({
       </Space>
 
       <Space size={12} align="center">
+        {actions}
         {user && <UserIdentityAvatar user={user} size={28} fontSize="20px" />}
 
         {showMenu && (

@@ -109,13 +109,18 @@ export const HomeTeammateChatsSection: React.FC<
     () =>
       preferences.collections.map((collection) => ({
         ...collection,
-        sessions: collection.session_ids.flatMap((sessionId) => {
-          const session = sessionById.get(sessionId);
-          if (!session || session.archived) return [];
-          const branch = branchById.get(session.branch_id);
-          if (!branch || branch.archived) return [];
-          return [{ session, branch }];
-        }),
+        sessions: collection.session_ids
+          .flatMap((sessionId) => {
+            const session = sessionById.get(sessionId);
+            if (!session || session.archived) return [];
+            const branch = branchById.get(session.branch_id);
+            if (!branch || branch.archived) return [];
+            return [{ session, branch }];
+          })
+          .sort(
+            (left, right) =>
+              Date.parse(right.session.last_updated) - Date.parse(left.session.last_updated)
+          ),
       })),
     [branchById, preferences.collections, sessionById]
   );

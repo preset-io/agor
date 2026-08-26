@@ -66,19 +66,40 @@ describe('HomeChatWorkspaceNav', () => {
         onSessionClick={onSessionClick}
         onManage={vi.fn()}
         onExit={vi.fn()}
+        onShowOnBoard={vi.fn()}
       />
     );
 
     expect(screen.getByText('Support crew')).toBeInTheDocument();
-    expect(screen.getByText('Support triage').closest('.ant-tree-node-selected')).not.toBeNull();
+    expect(screen.getByText('Support triage').closest('button')).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
 
     fireEvent.click(screen.getByText('Release planning'));
 
     expect(onSessionClick).toHaveBeenCalledWith(alternateSession.session_id);
 
-    const collectionNode = screen.getByText('Support crew').closest('[role="treeitem"]');
+    const collectionNode = screen.getByText('Support crew').closest('button');
     expect(collectionNode).toHaveAttribute('aria-expanded', 'true');
-    fireEvent.click(collectionNode!.querySelector('.ant-tree-switcher')!);
+    fireEvent.click(collectionNode!);
     expect(collectionNode).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('opens the active chat back on its board', () => {
+    const onShowOnBoard = vi.fn();
+    render(
+      <HomeChatWorkspaceNav
+        currentUserId={user.user_id}
+        activeSessionId={session.session_id}
+        onSessionClick={vi.fn()}
+        onManage={vi.fn()}
+        onExit={vi.fn()}
+        onShowOnBoard={onShowOnBoard}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show active session on board' }));
+    expect(onShowOnBoard).toHaveBeenCalledWith(session.session_id);
   });
 });

@@ -6,7 +6,9 @@ import type {
 } from '@agor-live/client';
 
 export const MAX_TEAMMATE_CHAT_COLLECTIONS = 12;
-export const MAX_SESSIONS_PER_TEAMMATE_CHAT_COLLECTION = 24;
+export const MAX_SESSIONS_PER_TEAMMATE_CHAT_COLLECTION = 50;
+/** Keep the default picker useful on large instances without hiding search results. */
+export const RECENT_TEAMMATE_CHAT_SESSION_LIMIT = 50;
 
 function asNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;

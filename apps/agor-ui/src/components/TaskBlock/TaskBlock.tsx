@@ -17,6 +17,7 @@ import {
   type PermissionScope,
   PermissionStatus,
   type SessionID,
+  shortId,
   type Task,
   TaskStatus,
   type User,
@@ -499,6 +500,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
   }) => {
     const { token } = theme.useToken();
     const runtimeLive = shouldRenderLiveTaskProgress(task);
+    const isSimpleCallback = simple && task.metadata?.is_agor_callback === true;
 
     const [reactiveMessagesLoading, setReactiveMessagesLoading] = React.useState(false);
 
@@ -618,13 +620,21 @@ export const TaskBlock = React.memo<TaskBlockProps>(
           >
             <Typography.Text
               ellipsis
+              type={isSimpleCallback ? 'secondary' : undefined}
               style={{
                 marginBottom: token.sizeUnit,
                 display: 'block',
                 paddingRight: token.sizeUnit * 3,
+                fontSize: isSimpleCallback ? 12 : undefined,
               }}
             >
-              {task.full_prompt || 'User Prompt'}
+              {isSimpleCallback
+                ? `Child session update${
+                    task.metadata?.child_session_id
+                      ? ` · ${shortId(task.metadata.child_session_id)}`
+                      : ''
+                  }`
+                : task.full_prompt || 'User Prompt'}
             </Typography.Text>
           </CopyableContent>
 
@@ -724,6 +734,8 @@ export const TaskBlock = React.memo<TaskBlockProps>(
             margin: compact || simple ? '8px 0' : `${token.sizeUnit * 3}px 0`,
             borderRadius: compact || simple ? token.borderRadiusLG : undefined,
             overflow: 'hidden',
+            border: isSimpleCallback ? `1px solid ${token.colorBorderSecondary}` : undefined,
+            opacity: isSimpleCallback ? 0.84 : 1,
           }}
           items={[
             {
@@ -733,8 +745,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 header: {
                   padding: compact || simple ? '10px 8px' : token.sizeUnit * 2,
                   alignItems: 'flex-start',
-                  background:
-                    compact || simple
+                  background: isSimpleCallback
+                    ? token.colorFillQuaternary
+                    : compact || simple
                       ? token.colorBgContainer
                       : taskHeaderGradient || 'transparent',
                   borderRadius: isExpanded ? '8px 8px 0 0' : 8,
@@ -827,7 +840,7 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                               teammateEmoji={teammateEmoji}
                               client={client}
                               onOpenAgenticToolSettings={onOpenAgenticToolSettings}
-                              compact={compact}
+                              compact={compact || isSimpleCallback}
                             />
                           </div>
                         );

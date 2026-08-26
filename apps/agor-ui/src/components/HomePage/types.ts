@@ -10,6 +10,7 @@ export interface HomePageProps {
   onBranchClick: (branchId: string) => void;
   onSessionClick: (sessionId: string) => void;
   onChatWorkspaceSessionClick: (sessionId: string) => void;
+  onShowChatSessionOnBoard?: (sessionId: string) => void;
   onManageTeammateChats: () => void;
   chatWorkspace?: boolean;
   activeSessionId?: string | null;

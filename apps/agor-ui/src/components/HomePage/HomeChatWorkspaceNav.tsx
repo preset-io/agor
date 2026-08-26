@@ -1,21 +1,38 @@
+import type { Branch, Session } from '@agor-live/client';
 import { getTeammateConfig } from '@agor-live/client';
 import {
+  AimOutlined,
   ArrowLeftOutlined,
+  DownOutlined,
   FolderOpenOutlined,
   PlusOutlined,
+  RightOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
-import type { TreeDataNode } from 'antd';
-import { Button, Empty, Flex, Tree, Typography, theme } from 'antd';
-import type { Key } from 'react';
+import { Button, Empty, Flex, Typography, theme } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import { selectBranchById, selectSessionById, selectUserById } from '../../store/selectors';
 import { getSessionDisplayTitle } from '../../utils/sessionTitle';
+import { formatRelativeTimeSafe } from '../../utils/time';
 import { readTeammateChatPreferences } from '../TeammateChatCollections/preferences';
 import { StatusDot } from './StatusDot';
 
 const { Text, Title } = Typography;
+
+interface ChatSidebarBranch {
+  key: string;
+  branch: Branch;
+  sessions: Session[];
+}
+
+interface ChatSidebarCollection {
+  key: string;
+  collectionId: string;
+  name: string;
+  branches: ChatSidebarBranch[];
+  sessionCount: number;
+}
 
 export interface HomeChatWorkspaceNavProps {
   currentUserId?: string;
@@ -23,6 +40,7 @@ export interface HomeChatWorkspaceNavProps {
   onSessionClick: (sessionId: string) => void;
   onManage: () => void;
   onExit: () => void;
+  onShowOnBoard: (sessionId: string) => void;
 }
 
 export function HomeChatWorkspaceNav({
@@ -31,6 +49,7 @@ export function HomeChatWorkspaceNav({
   onSessionClick,
   onManage,
   onExit,
+  onShowOnBoard,
 }: HomeChatWorkspaceNavProps) {
   const { token } = theme.useToken();
   const userById = useAgorStore(selectUserById);
@@ -43,92 +62,78 @@ export function HomeChatWorkspaceNav({
     () => readTeammateChatPreferences(currentUserPreferences),
     [currentUserPreferences]
   );
-  const [expandedKeys, setExpandedKeys] = useState<Key[]>([]);
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
   const initializedExpansion = useRef(false);
 
-  const treeData = useMemo<TreeDataNode[]>(
+  const sidebarCollections = useMemo<ChatSidebarCollection[]>(
     () =>
       preferences.collections.map((collection) => {
-        const sessionsByBranch = new Map<string, TreeDataNode[]>();
-        for (const sessionId of collection.session_ids) {
-          const session = sessionById.get(sessionId);
-          if (!session || session.archived) continue;
+        const sessionsByBranch = new Map<string, Session[]>();
+        const recentSessions = collection.session_ids
+          .flatMap((sessionId) => {
+            const session = sessionById.get(sessionId);
+            return session ? [session] : [];
+          })
+          .sort((left, right) => Date.parse(right.last_updated) - Date.parse(left.last_updated));
+        for (const session of recentSessions) {
+          if (session.archived) continue;
           const branch = branchById.get(session.branch_id);
           if (!branch || branch.archived) continue;
           const children = sessionsByBranch.get(branch.branch_id) ?? [];
-          children.push({
-            key: `session:${collection.collection_id}:${session.session_id}`,
-            title: (
-              <span
-                style={{
-                  minWidth: 0,
-                  display: 'grid',
-                  gridTemplateColumns: 'auto minmax(0, 1fr)',
-                  alignItems: 'center',
-                  gap: 7,
-                }}
-              >
-                <StatusDot status={session.status} />
-                <Text ellipsis style={{ display: 'block', minWidth: 0, fontSize: 13 }}>
-                  {getSessionDisplayTitle(session, { includeAgentFallback: true })}
-                </Text>
-              </span>
-            ),
-            isLeaf: true,
-          });
+          children.push(session);
           sessionsByBranch.set(branch.branch_id, children);
         }
 
         return {
           key: `collection:${collection.collection_id}`,
-          icon: <FolderOpenOutlined />,
-          title: <Text strong>{collection.name}</Text>,
-          selectable: false,
-          children: Array.from(sessionsByBranch.entries()).map(([branchId, sessions]) => {
-            const branch = branchById.get(branchId)!;
-            const teammate = getTeammateConfig(branch);
-            return {
-              key: `branch:${collection.collection_id}:${branchId}`,
-              title: (
-                <Text ellipsis style={{ fontSize: 12 }}>
-                  {teammate?.emoji ? `${teammate.emoji} ` : ''}
-                  {teammate?.displayName || branch.name}
-                </Text>
-              ),
-              selectable: false,
-              children: sessions,
-            };
-          }),
+          collectionId: collection.collection_id,
+          name: collection.name,
+          sessionCount: Array.from(sessionsByBranch.values()).reduce(
+            (total, sessions) => total + sessions.length,
+            0
+          ),
+          branches: Array.from(sessionsByBranch.entries()).map(([branchId, sessions]) => ({
+            key: `branch:${collection.collection_id}:${branchId}`,
+            branch: branchById.get(branchId)!,
+            sessions,
+          })),
         };
       }),
     [branchById, preferences.collections, sessionById]
   );
   const initiallyExpandedKeys = useMemo(
     () =>
-      treeData.flatMap((collection) => [
+      sidebarCollections.flatMap((collection) => [
         collection.key,
-        ...(collection.children ?? []).map((branch) => branch.key),
+        ...collection.branches.map((branch) => branch.key),
       ]),
-    [treeData]
+    [sidebarCollections]
   );
   useEffect(() => {
-    if (treeData.length === 0) {
+    if (sidebarCollections.length === 0) {
       initializedExpansion.current = false;
-      setExpandedKeys([]);
+      setExpandedKeys(new Set());
     } else if (!initializedExpansion.current) {
       initializedExpansion.current = true;
-      setExpandedKeys(initiallyExpandedKeys);
+      setExpandedKeys(new Set(initiallyExpandedKeys));
     }
-  }, [initiallyExpandedKeys, treeData.length]);
-  const selectedKeys = activeSessionId
-    ? treeData.flatMap((collection) =>
-        (collection.children ?? []).flatMap((branch) =>
-          (branch.children ?? [])
-            .filter((session) => String(session.key).endsWith(`:${activeSessionId}`))
-            .map((session) => session.key)
-        )
-      )
-    : [];
+  }, [initiallyExpandedKeys, sidebarCollections.length]);
+
+  const toggleExpanded = (key: string) => {
+    setExpandedKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const disclosureIcon = (expanded: boolean) =>
+    expanded ? (
+      <DownOutlined style={{ fontSize: 9, color: token.colorTextTertiary }} />
+    ) : (
+      <RightOutlined style={{ fontSize: 9, color: token.colorTextTertiary }} />
+    );
 
   return (
     <div
@@ -136,7 +141,7 @@ export function HomeChatWorkspaceNav({
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        background: token.colorBgContainer,
+        background: token.colorBgLayout,
         borderRight: `1px solid ${token.colorBorderSecondary}`,
       }}
     >
@@ -159,32 +164,164 @@ export function HomeChatWorkspaceNav({
               Pinned sessions
             </Text>
           </div>
-          <Button
-            type="text"
-            aria-label="Manage chat collections"
-            icon={<SettingOutlined />}
-            onClick={onManage}
-          />
+          <Flex gap={2}>
+            {activeSessionId && (
+              <Button
+                type="text"
+                aria-label="Show active session on board"
+                title="Show on board"
+                icon={<AimOutlined />}
+                onClick={() => onShowOnBoard(activeSessionId)}
+              />
+            )}
+            <Button
+              type="text"
+              aria-label="Manage chat collections"
+              icon={<SettingOutlined />}
+              onClick={onManage}
+            />
+          </Flex>
         </Flex>
       </Flex>
 
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 8px 16px' }}>
-        {treeData.length > 0 ? (
-          <Tree
-            blockNode
-            showIcon
-            showLine={{ showLeafIcon: false }}
-            treeData={treeData}
-            expandedKeys={expandedKeys}
-            onExpand={setExpandedKeys}
-            selectedKeys={selectedKeys}
-            onSelect={(keys) => {
-              const key = String(keys[0] ?? '');
-              const sessionId = key.startsWith('session:') ? key.split(':').at(-1) : undefined;
-              if (sessionId) onSessionClick(sessionId);
-            }}
-            style={{ background: 'transparent' }}
-          />
+        {sidebarCollections.length > 0 ? (
+          <nav aria-label="Chat collections">
+            <Flex vertical gap={10}>
+              {sidebarCollections.map((collection) => {
+                const collectionExpanded = expandedKeys.has(collection.key);
+                return (
+                  <section key={collection.collectionId}>
+                    <button
+                      type="button"
+                      aria-expanded={collectionExpanded}
+                      onClick={() => toggleExpanded(collection.key)}
+                      style={{
+                        width: '100%',
+                        minHeight: 34,
+                        display: 'grid',
+                        gridTemplateColumns: '14px 20px minmax(0, 1fr) auto',
+                        alignItems: 'center',
+                        gap: 7,
+                        padding: '6px 8px',
+                        border: 0,
+                        borderRadius: token.borderRadiusLG,
+                        background: token.colorFillQuaternary,
+                        color: token.colorText,
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                      }}
+                    >
+                      {disclosureIcon(collectionExpanded)}
+                      <FolderOpenOutlined style={{ color: token.colorTextSecondary }} />
+                      <Text strong ellipsis style={{ minWidth: 0, fontSize: 13 }}>
+                        {collection.name}
+                      </Text>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {collection.sessionCount}
+                      </Text>
+                    </button>
+
+                    {collectionExpanded && (
+                      <Flex vertical gap={5} style={{ padding: '6px 0 0 8px' }}>
+                        {collection.branches.map(({ key, branch, sessions }) => {
+                          const branchExpanded = expandedKeys.has(key);
+                          const teammate = getTeammateConfig(branch);
+                          return (
+                            <div key={key}>
+                              <button
+                                type="button"
+                                aria-expanded={branchExpanded}
+                                onClick={() => toggleExpanded(key)}
+                                style={{
+                                  width: '100%',
+                                  minHeight: 30,
+                                  display: 'grid',
+                                  gridTemplateColumns: '14px 22px minmax(0, 1fr) auto',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  padding: '4px 8px',
+                                  border: 0,
+                                  borderRadius: token.borderRadius,
+                                  background: 'transparent',
+                                  color: token.colorText,
+                                  cursor: 'pointer',
+                                  textAlign: 'left',
+                                }}
+                              >
+                                {disclosureIcon(branchExpanded)}
+                                <span aria-hidden style={{ textAlign: 'center' }}>
+                                  {teammate?.emoji || '💬'}
+                                </span>
+                                <Text ellipsis style={{ minWidth: 0, fontSize: 12 }}>
+                                  {teammate?.displayName || branch.name}
+                                </Text>
+                                <Text type="secondary" style={{ fontSize: 10 }}>
+                                  {sessions.length}
+                                </Text>
+                              </button>
+
+                              {branchExpanded && (
+                                <Flex vertical gap={2} style={{ padding: '2px 0 2px 20px' }}>
+                                  {sessions.map((session) => {
+                                    const active = session.session_id === activeSessionId;
+                                    return (
+                                      <button
+                                        key={session.session_id}
+                                        type="button"
+                                        aria-current={active ? 'page' : undefined}
+                                        onClick={() => onSessionClick(session.session_id)}
+                                        style={{
+                                          width: '100%',
+                                          minHeight: 34,
+                                          display: 'grid',
+                                          gridTemplateColumns: 'auto minmax(0, 1fr) auto',
+                                          alignItems: 'center',
+                                          gap: 7,
+                                          padding: '6px 8px',
+                                          border: 0,
+                                          borderRadius: token.borderRadiusLG,
+                                          background: active ? token.colorPrimaryBg : 'transparent',
+                                          color: active ? token.colorPrimaryText : token.colorText,
+                                          cursor: 'pointer',
+                                          textAlign: 'left',
+                                        }}
+                                      >
+                                        <StatusDot status={session.status} />
+                                        <Text
+                                          ellipsis
+                                          strong={active}
+                                          style={{
+                                            minWidth: 0,
+                                            fontSize: 12,
+                                            color: 'inherit',
+                                          }}
+                                        >
+                                          {getSessionDisplayTitle(session, {
+                                            includeAgentFallback: true,
+                                          })}
+                                        </Text>
+                                        <Text
+                                          type="secondary"
+                                          style={{ fontSize: 10, whiteSpace: 'nowrap' }}
+                                        >
+                                          {formatRelativeTimeSafe(session.last_updated)}
+                                        </Text>
+                                      </button>
+                                    );
+                                  })}
+                                </Flex>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </Flex>
+                    )}
+                  </section>
+                );
+              })}
+            </Flex>
+          </nav>
         ) : (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}

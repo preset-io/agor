@@ -1,5 +1,5 @@
 import type { Branch, Session, User } from '@agor-live/client';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
@@ -68,6 +68,28 @@ describe('HomeTeammateChatsSection', () => {
         [regularSession.session_id, regularSession],
       ]),
     });
+  });
+
+  it('resolves the latest title from the canonical session id after a rename', () => {
+    render(
+      <HomeTeammateChatsSection
+        currentUserId={user.user_id}
+        onSessionClick={vi.fn()}
+        onManageTeammateChats={vi.fn()}
+      />
+    );
+
+    act(() => {
+      agorStore.setState((state) => ({
+        sessionById: new Map(state.sessionById).set(session.session_id, {
+          ...session,
+          title: 'Renamed daily planning',
+        }),
+      }));
+    });
+
+    expect(screen.getByText('Renamed daily planning')).toBeInTheDocument();
+    expect(screen.queryByText('Daily planning')).not.toBeInTheDocument();
   });
 
   it('opens saved teammate and regular worktree sessions', () => {
