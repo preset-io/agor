@@ -1,6 +1,8 @@
 import {
   type CreateMCPServerInput,
   hasMinimumRole,
+  MCP_SCOPES,
+  MCP_TRANSPORTS,
   type MCPScope,
   type MCPServer,
   type MCPTransport,
@@ -30,7 +32,7 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useCallback, useMemo, useState } from 'react';
+import { type Key, useCallback, useMemo, useState } from 'react';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
@@ -427,6 +429,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       dataIndex: 'transport',
       key: 'transport',
       width: 100,
+      // Native funnel filter complements the free-text search for the small
+      // fixed transport set; the effective transport falls back to url→http.
+      filters: MCP_TRANSPORTS.map((t) => ({ text: t.toUpperCase(), value: t })),
+      onFilter: (value: Key | boolean, server: MCPServer) =>
+        (server.transport || (server.url ? 'http' : 'stdio')) === value,
       render: (transport: string) => (
         <Tag color={transport === 'stdio' ? 'blue' : 'green'}>{transport.toUpperCase()}</Tag>
       ),
@@ -436,6 +443,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       dataIndex: 'scope',
       key: 'scope',
       width: 100,
+      filters: MCP_SCOPES.map((s) => ({ text: `${s[0].toUpperCase()}${s.slice(1)}`, value: s })),
+      onFilter: (value: Key | boolean, server: MCPServer) => server.scope === value,
       render: (scope: string) => {
         const colors: Record<string, string> = {
           global: 'purple',
@@ -450,6 +459,11 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       dataIndex: 'enabled',
       key: 'enabled',
       width: 80,
+      filters: [
+        { text: 'Enabled', value: true },
+        { text: 'Disabled', value: false },
+      ],
+      onFilter: (value: Key | boolean, server: MCPServer) => server.enabled === value,
       render: (enabled: boolean) =>
         enabled ? (
           <Badge status="success" text="Enabled" />
