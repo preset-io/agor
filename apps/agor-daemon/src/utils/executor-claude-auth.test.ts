@@ -46,21 +46,21 @@ describe('executor Claude auth dispatch', () => {
       userId: 'user-1' as const,
       claudeConfigDir: join(home, '.claude'),
     };
+    const credentialPath = join(route.claudeConfigDir, '.credentials.json');
+    const generationPath = join(route.claudeConfigDir, '.agor-auth-generation');
     await writeClaudeAuthViaExecutor('credential-a', route, 10);
     expect(requestExecutorMock).not.toHaveBeenCalled();
-    await expect(readFile(join(route.claudeConfigDir, '.credentials.json'), 'utf8')).resolves.toBe(
-      'credential-a'
-    );
+    await expect(readFile(credentialPath, 'utf8')).resolves.toBe('credential-a');
+    const credentialInode = (await stat(credentialPath)).ino;
+    const generationInode = (await stat(generationPath)).ino;
 
     await fenceClaudeAuthCredential(route, 11);
-    await expect(readFile(join(route.claudeConfigDir, '.credentials.json'), 'utf8')).resolves.toBe(
-      'credential-a'
-    );
+    await expect(readFile(credentialPath, 'utf8')).resolves.toBe('credential-a');
     await expect(writeClaudeAuthViaExecutor('stale', route, 10)).rejects.toThrow(/superseded/);
     await expect(deleteClaudeAuthViaExecutor(route, 12)).resolves.toBeUndefined();
-    await expect(stat(join(route.claudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
-      code: 'ENOENT',
-    });
+    expect(await stat(credentialPath)).toMatchObject({ ino: credentialInode, size: 0 });
+    expect(await stat(generationPath)).toMatchObject({ ino: generationInode });
+    await expect(readFile(generationPath, 'utf8')).resolves.toBe('12\n');
   });
 
   it('maps absent separately from unreadable without exposing executor errors', async () => {

@@ -374,9 +374,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         releaseFinalize();
         await expect(finalize).resolves.toEqual({ outcome: 'committed', value: true });
         await expect(logout).resolves.toBeUndefined();
-        await expect(stat(join(claudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
-          code: 'ENOENT',
-        });
+        await expect(readFile(join(claudeConfigDir, '.credentials.json'), 'utf8')).resolves.toBe(
+          ''
+        );
         const row = await authorityA.getForUser(seeded.tenantId, seeded.userId, attemptId);
         expect(row).toMatchObject({ status: 'succeeded', isCurrent: false });
         const tombstone = Number.parseInt(
@@ -496,7 +496,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         releaseRefresh();
         await refresh;
         await logout;
-        await expect(stat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(readFile(target, 'utf8')).resolves.toBe('');
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -566,7 +566,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         await refresh;
         await routeChange;
         expect(routeGeneration).toBeGreaterThan(refreshGeneration);
-        await expect(stat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(readFile(target, 'utf8')).resolves.toBe('');
         await expect(
           readFile(join(oldClaudeConfigDir, '.agor-auth-generation'), 'utf8')
         ).resolves.toBe(`${routeGeneration}\n`);
@@ -815,9 +815,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           }
         );
         expect(reupgradeGeneration).toBeGreaterThan(firstDurableGeneration);
-        await expect(stat(join(claudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
-          code: 'ENOENT',
-        });
+        await expect(readFile(join(claudeConfigDir, '.credentials.json'), 'utf8')).resolves.toBe(
+          ''
+        );
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -1008,9 +1008,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             new UsersRepository(scoped).findById(seeded.userId)
           )
         ).resolves.toMatchObject({ filesystem_home: overrideHome });
-        await expect(stat(join(claudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
-          code: 'ENOENT',
-        });
+        await expect(readFile(join(claudeConfigDir, '.credentials.json'), 'utf8')).resolves.toBe(
+          ''
+        );
         await expect(stat(join(codexHome, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' });
         await expect(
           runWithTenantDatabaseScope(dbB, seeded.tenantId, (scoped) =>
@@ -1168,9 +1168,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           )
         ).resolves.toEqual({ outcome: 'stale' });
         expect(staleWriterCalls).toBe(0);
-        await expect(stat(join(claudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
-          code: 'ENOENT',
-        });
+        await expect(readFile(join(claudeConfigDir, '.credentials.json'), 'utf8')).resolves.toBe(
+          ''
+        );
       } finally {
         await rm(root, { recursive: true, force: true });
       }
@@ -1273,9 +1273,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           user_id: seeded.userId,
           unix_username: reusedHomeKey,
         });
-        await expect(stat(join(oldClaudeConfigDir, '.credentials.json'))).rejects.toMatchObject({
-          code: 'ENOENT',
-        });
+        await expect(readFile(join(oldClaudeConfigDir, '.credentials.json'), 'utf8')).resolves.toBe(
+          ''
+        );
 
         const replacement = await runWithTenantDatabaseScope(dbB, seeded.tenantId, (scoped) =>
           new UsersRepository(scoped).create({

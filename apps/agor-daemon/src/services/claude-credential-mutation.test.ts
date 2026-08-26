@@ -3,6 +3,7 @@ import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
 import { deleteCodexAuthCredential } from '../utils/executor-codex-auth.js';
 import {
   CLAUDE_AUTH_TRUSTED_USER_MUTATION,
+  canManageClaudeCredentialRoute,
   createClaudeUserCredentialPatchCoordinator,
   needsUserCredentialRouteCoordinator,
 } from './claude-credential-mutation.js';
@@ -26,6 +27,49 @@ const deleteCodexAuthCredentialMock = vi.mocked(deleteCodexAuthCredential);
 const resolveCodexCredentialRouteMock = vi.mocked(resolveCodexCredentialRoute);
 
 describe('Claude user credential mutation boundary', () => {
+  it('retains safe local cleanup authority when runtime containment admission is disabled', () => {
+    const config = {
+      execution: {
+        unix_user_mode: 'sandbox',
+        executor_storage: {
+          user_home: 'persistent-per-user',
+          user_home_locking: 'cross-replica-flock',
+        },
+        sandbox: {
+          enabled: true,
+          home_mode: 'per_user',
+          extra_allow_write: ['/home/agor/.agor'],
+        },
+      },
+    } as never;
+    expect(
+      canManageClaudeCredentialRoute(
+        { mode: 'ha', topology: { execution: 'shared-local' } } as never,
+        config
+      )
+    ).toBe(true);
+    expect(
+      canManageClaudeCredentialRoute(
+        { mode: 'ha', topology: { execution: 'external' } } as never,
+        config
+      )
+    ).toBe(false);
+    expect(
+      canManageClaudeCredentialRoute(
+        { mode: 'ha', topology: { execution: 'shared-local' } } as never,
+        {
+          execution: {
+            ...config.execution,
+            executor_storage: {
+              ...config.execution.executor_storage,
+              user_home_locking: 'local-only',
+            },
+          },
+        } as never
+      )
+    ).toBe(false);
+  });
+
   it('coordinates a Codex-only HA credential-file profile without requiring Claude auth', () => {
     expect(
       needsUserCredentialRouteCoordinator({

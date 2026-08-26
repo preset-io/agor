@@ -385,7 +385,8 @@ export function resolveDeploymentConfig(
   const tenantSafeCredentialHome = hasTenantSafeExecutorCredentialHome(config);
   const exactUserCredentialHome = hasExactUserExecutorCredentialHome(config);
   const crossReplicaCredentialLock = hasCrossReplicaExecutorCredentialLock(config);
-  const containedClaudeRuntimeCredentials = hasContainedClaudeRuntimeCredentials(config);
+  const containedClaudeRuntimeCredentials =
+    executionTopology === 'shared-local' && hasContainedClaudeRuntimeCredentials(config);
   if (!tenantSafeCredentialHome) {
     throw new Error(
       'Config error: HA auth-resolved execution requires execution.executor_storage.user_home: persistent-per-user'

@@ -31,6 +31,25 @@ describe('hasContainedClaudeRuntimeCredentials', () => {
         execution: { ...contained.execution, sandbox: { enabled: false, home_mode: 'per_user' } },
       })
     ).toBe(false);
+    expect(
+      hasContainedClaudeRuntimeCredentials({
+        execution: {
+          ...contained.execution,
+          executor_command_template: 'remote-launcher -- {command}',
+        },
+      })
+    ).toBe(false);
+    expect(
+      hasContainedClaudeRuntimeCredentials({
+        execution: {
+          ...contained.execution,
+          sandbox: {
+            ...contained.execution.sandbox,
+            extra_allow_write: ['/home/agor/.agor'],
+          },
+        },
+      })
+    ).toBe(false);
   });
 });
 

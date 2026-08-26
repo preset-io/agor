@@ -70,14 +70,20 @@ the flag records the operator's clearance. When disabled, `/claude-auth/oauth`
 fails with `CLAUDE_SUBSCRIPTION_OAUTH_DISABLED` and the UI omits the OAuth tab.
 Topology gates still apply after authorization. This release requires the exact
 local per-user sandbox profile shown above and does not expose Claude OAuth in
-delegated, simple, shared-home, or disabled-sandbox execution. HA additionally
-requires durable attempts and cross-replica home locking; only the contained
-exact-user sandbox topology satisfies all three predicates. The daemon keeps
+delegated, templated, simple, shared-home, disabled-sandbox, or
+`sandbox.extra_allow_write` execution. HA additionally requires the
+`shared-local` topology, durable attempts, and cross-replica home locking; only
+the contained exact-user sandbox topology satisfies all predicates. The daemon keeps
 the refreshable grant in the canonical per-user
 `~/.claude/.credentials.json`, refreshes it before task launch, and sends the
-runtime only the current access token. The sandbox masks that one canonical
-file from Claude while preserving the rest of `~/.claude` for settings and
-fork/resume state; Codex native auth is not masked by this change.
+runtime only the current access token. The sandbox required-binds the real
+`~/.claude` directory as a writable, immutable mountpoint at every reachable
+home alias, then masks the canonical credential plus its generation and lock
+sidecars. Daemon mutations keep those pre-created authority inodes stable so a
+live mask cannot be detached by host-side replacement; logout leaves an empty
+tombstone. Settings, plugins, projects, new files, and fork/resume state remain
+writable; Codex native auth is not masked by this change and requires separate
+parity work.
 
 For rollout, deploy/restart this version and confirm the per-user sandbox
 settings on every instance before enabling the default-off flag. For rollback,

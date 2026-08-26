@@ -262,6 +262,43 @@ describe('resolveDeploymentConfig', () => {
     });
   });
 
+  it('never advertises Claude containment through an external sandbox-labelled template', () => {
+    const external = {
+      ...haConfig,
+      deployment: {
+        ...haConfig.deployment,
+        ha: {
+          support_profile: 'constrained-active-active',
+          execution_topology: 'external',
+          ingress_affinity: true,
+        },
+      },
+      execution: {
+        ...haConfig.execution,
+        unix_user_mode: 'sandbox',
+        executor_command_template: 'cell launch --tenant {tenant_id} -- {command}',
+        executor_storage: {
+          user_home: 'persistent-per-user',
+          user_home_locking: 'cross-replica-flock',
+          branch_workspace: 'persistent-per-branch',
+          base_repository: 'unavailable',
+        },
+        branch_storage: {
+          default_mode: 'clone',
+          allowed_modes: ['clone'],
+          allow_shallow_clones: false,
+        },
+        sandbox: { enabled: true, home_mode: 'per_user' },
+      },
+      daemon: { public_url: 'https://agor.internal.example' },
+    } as AgorConfig;
+
+    expect(resolveDeploymentConfig(external, secrets)).toMatchObject({
+      topology: { execution: 'external', sharedFilesystem: false },
+      capabilities: { claudeAuth: false, claudeOAuth: false },
+    });
+  });
+
   it('rejects an auth-resolved HA topology with a shared credential home', () => {
     expect(() =>
       resolveDeploymentConfig(
@@ -345,6 +382,34 @@ describe('resolveDeploymentConfig', () => {
     if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
     expect(deployment.capabilities.claudeAuth).toBe(true);
     expect(deployment.capabilities.claudeOAuth).toBe(true);
+  });
+
+  it('gates Claude HA when an extra writable path can re-expose the physical home store', () => {
+    const deployment = resolveDeploymentConfig(
+      {
+        ...haConfig,
+        execution: {
+          ...haConfig.execution,
+          unix_user_mode: 'sandbox',
+          executor_storage: {
+            user_home: 'persistent-per-user',
+            user_home_locking: 'cross-replica-flock',
+            branch_workspace: 'shared',
+            base_repository: 'shared',
+          },
+          sandbox: {
+            enabled: true,
+            home_mode: 'per_user',
+            extra_allow_write: ['/home/agor/.agor'],
+          },
+        },
+      },
+      secrets
+    );
+    expect(deployment.mode).toBe('ha');
+    if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
+    expect(deployment.capabilities.claudeAuth).toBe(false);
+    expect(deployment.capabilities.claudeOAuth).toBe(false);
   });
 
   it('gates HA Codex credential mutation without cross-replica flock', () => {

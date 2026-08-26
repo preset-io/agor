@@ -52,7 +52,8 @@ execution:
   unix_user_mode: sandbox
   sandbox:
     # These explicit values are also the concrete Claude runtime credential
-    # containment predicate: bubblewrap masks the canonical refreshable file.
+    # containment predicate: bubblewrap makes the real .claude parent an
+    # immutable mountpoint and masks the credential plus both authority sidecars.
     enabled: true
     home_mode: per_user
   # PTY transport is replica-local and ephemeral. Sticky Socket.IO keeps the

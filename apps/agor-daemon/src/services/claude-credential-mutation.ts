@@ -1,6 +1,11 @@
 /** Shared Claude credential/method mutation boundary for HA. */
 
-import type { ResolvedDeploymentConfig } from '@agor/core/config';
+import {
+  type AgorConfig,
+  hasCrossReplicaExecutorCredentialLock,
+  hasExactUserExecutorCredentialHome,
+  type ResolvedDeploymentConfig,
+} from '@agor/core/config';
 import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
@@ -50,6 +55,24 @@ export function needsUserCredentialRouteCoordinator(deployment: ResolvedDeployme
     deployment.capabilities.claudeOAuth ||
     deployment.capabilities.claudeAuth ||
     deployment.capabilities.codexCredentialFiles
+  );
+}
+
+/**
+ * Cleanup authority is narrower than OAuth/runtime admission but must survive
+ * a containment-policy downgrade. A local exact home with the shared kernel
+ * lock can safely tombstone credentials written by a prior contained config;
+ * external/delegated/unknown routes remain outside daemon filesystem authority.
+ */
+export function canManageClaudeCredentialRoute(
+  deployment: ResolvedDeploymentConfig,
+  config: AgorConfig
+): boolean {
+  return (
+    deployment.mode !== 'ha' ||
+    (deployment.topology.execution === 'shared-local' &&
+      hasExactUserExecutorCredentialHome(config) &&
+      hasCrossReplicaExecutorCredentialLock(config))
   );
 }
 

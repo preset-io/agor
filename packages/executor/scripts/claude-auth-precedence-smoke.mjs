@@ -8,7 +8,7 @@
  * is absent or masked by /dev/null.
  */
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   lstat,
   mkdir,
@@ -106,7 +106,7 @@ async function runCase(binary, mode) {
 
   let originalBytes;
   let originalMtimeNs;
-  if (mode === 'wrong-file') {
+  if (mode === 'wrong-file' || mode === 'nodev-mask') {
     originalBytes = `${JSON.stringify({ claudeAiOauth: { accessToken: FILE_TOKEN, refreshToken: REFRESH_TOKEN, expiresAt: Date.now() + 86_400_000, scopes: ['user:inference'] } }, null, 2)}\n`;
     await writeFile(credentialPath, originalBytes, { mode: 0o600 });
     await utimes(credentialPath, new Date(1_700_000_000_000), new Date(1_700_000_000_000));
@@ -135,31 +135,49 @@ async function runCase(binary, mode) {
   assert.ok(address && typeof address !== 'string');
 
   try {
-    const child = spawn(
-      binary,
-      [
-        '--print',
-        'reply ok',
-        '--output-format',
-        'stream-json',
-        '--verbose',
-        '--max-turns',
-        '1',
-        '--dangerously-skip-permissions',
-      ],
-      {
-        cwd: root,
-        stdio: ['ignore', 'ignore', 'pipe'],
-        env: {
-          PATH: process.env.PATH,
-          HOME: root,
-          CLAUDE_CONFIG_DIR: configDir,
-          CLAUDE_CODE_OAUTH_TOKEN: ENV_TOKEN,
-          ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
-          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-        },
-      }
-    );
+    const claudeArgs = [
+      '--print',
+      'reply ok',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      '--max-turns',
+      '1',
+      '--dangerously-skip-permissions',
+    ];
+    const command = mode === 'nodev-mask' ? 'bwrap' : binary;
+    const commandArgs =
+      mode === 'nodev-mask'
+        ? [
+            '--unshare-user',
+            '--ro-bind',
+            '/',
+            '/',
+            '--dev',
+            '/dev',
+            '--bind',
+            configDir,
+            configDir,
+            '--ro-bind',
+            '/dev/null',
+            credentialPath,
+            '--',
+            binary,
+            ...claudeArgs,
+          ]
+        : claudeArgs;
+    const child = spawn(command, commandArgs, {
+      cwd: root,
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        CLAUDE_CONFIG_DIR: configDir,
+        CLAUDE_CODE_OAUTH_TOKEN: ENV_TOKEN,
+        ANTHROPIC_BASE_URL: `http://127.0.0.1:${address.port}`,
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      },
+    });
     let stderr = '';
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk) => {
@@ -174,7 +192,7 @@ async function runCase(binary, mode) {
     assert.deepEqual(exit, { code: 0, signal: null }, `Claude CLI failed: ${stderr}`);
     assert.deepEqual(authorizations, [`Bearer ${ENV_TOKEN}`]);
 
-    if (mode === 'wrong-file') {
+    if (mode === 'wrong-file' || mode === 'nodev-mask') {
       assert.equal(await readFile(credentialPath, 'utf8'), originalBytes);
       assert.equal((await stat(credentialPath, { bigint: true })).mtimeNs, originalMtimeNs);
     } else if (mode === 'masked') {
@@ -189,6 +207,17 @@ async function runCase(binary, mode) {
 
 const binary = await pinnedClaudeBinary();
 for (const mode of ['wrong-file', 'masked', 'absent']) await runCase(binary, mode);
+const bwrapAvailable =
+  process.platform === 'linux' &&
+  spawnSync('bwrap', ['--unshare-user', '--ro-bind', '/', '/', '--', '/bin/true'], {
+    stdio: 'ignore',
+  }).status === 0;
+if (bwrapAvailable) {
+  await runCase(binary, 'nodev-mask');
+  console.log('Claude env-auth precedence passed with the canonical file masked on nodev.');
+} else {
+  console.log('bubblewrap unavailable; skipping the live nodev mask arm.');
+}
 console.log(
   'Claude env-auth precedence passed: wrong canonical file unchanged; masked/absent paths work.'
 );

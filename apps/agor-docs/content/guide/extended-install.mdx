@@ -332,8 +332,11 @@ manually pasted `claude setup-token` credentials without exposing the OAuth
 endpoint or tab. Managed sign-in additionally requires local sandbox execution
 with persistent per-user homes and `sandbox.home_mode: per_user`; other
 topologies fail closed. In that profile the daemon, not Claude Code, owns token
-refresh and the sandbox masks only `.claude/.credentials.json`, leaving Claude
-settings and fork/resume state at their canonical paths.
+refresh. Before each sandbox spawn Agor safely prepares the real `.claude`
+store; bubblewrap binds that writable directory as an immutable mountpoint and
+masks the credential, generation, and mutation-lock leaves. Claude settings,
+plugins, projects, and fork/resume state remain writable at their canonical
+paths.
 
 <a id="claude-max-pro" />
 

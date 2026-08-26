@@ -129,6 +129,7 @@ import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeAuthLogoutService } from './services/claude-auth-logout.js';
 import {
+  canManageClaudeCredentialRoute,
   createClaudeUserCredentialPatchCoordinator,
   needsUserCredentialRouteCoordinator,
 } from './services/claude-credential-mutation.js';
@@ -963,7 +964,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
         claudeOAuthStore,
         codexDeviceAttempts ?? standaloneCodexDeviceService,
         {
-          manageClaudeRoute: ctx.deployment.mode !== 'ha' || ctx.deployment.capabilities.claudeAuth,
+          manageClaudeRoute: canManageClaudeCredentialRoute(ctx.deployment, config),
         }
       )
     : undefined;

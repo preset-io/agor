@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import {
   advanceCredentialFileGeneration,
   mutateCredentialFile,
-  readCredentialFile,
+  readCredentialAuthorityFile,
 } from '@agor/core/codex/credential-file';
 import {
   credentialExecutorOptions,
@@ -52,13 +52,18 @@ export async function writeClaudeAuthViaExecutor(
 ): Promise<void> {
   if (generation !== undefined && routing.claudeConfigDir) {
     const target = join(routing.claudeConfigDir, '.credentials.json');
-    const outcome = await mutateCredentialFile({ target, content, generation });
+    const outcome = await mutateCredentialFile({
+      target,
+      content,
+      generation,
+      preserveAuthorityInodes: true,
+    });
     if (outcome === 'stale') throw new Error('Claude credential write was superseded');
     let readBack: string;
     try {
-      readBack = await readCredentialFile(target);
+      readBack = await readCredentialAuthorityFile(target);
     } catch {
-      readBack = await readCredentialFile(target);
+      readBack = await readCredentialAuthorityFile(target);
     }
     if (readBack !== content) throw new Error('Claude credential write verification failed');
     return;
@@ -85,6 +90,7 @@ export async function deleteClaudeAuthViaExecutor(
     const outcome = await mutateCredentialFile({
       target: join(routing.claudeConfigDir, '.credentials.json'),
       generation,
+      preserveAuthorityInodes: true,
     });
     if (outcome === 'stale') throw new Error('Claude credential delete was superseded');
     return;
@@ -110,6 +116,7 @@ export async function fenceClaudeAuthCredential(
   const outcome = await advanceCredentialFileGeneration({
     target: join(routing.claudeConfigDir, '.credentials.json'),
     generation,
+    preserveAuthorityInodes: true,
   });
   if (outcome === 'stale') throw new Error('Claude credential fence was superseded');
 }
