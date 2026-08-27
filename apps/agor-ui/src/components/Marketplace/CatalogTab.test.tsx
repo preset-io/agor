@@ -4,6 +4,7 @@ import { sessionPath } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agorStore } from '../../store/agorStore';
 import { consumeMarketplacePromptSuggestion } from '../../utils/marketplaceOAuthPrompt';
 import { getPromptDraft } from '../../utils/promptDrafts';
 import { CatalogTab } from './CatalogTab';
@@ -195,6 +196,7 @@ function chooseSelectOption(inputLabel: string, optionLabel: string): void {
 }
 
 beforeEach(() => {
+  agorStore.getState().reset();
   catalogReads = [];
   catalogRows = [DEEPWIKI, LINEAR];
   catalogFindError = null;
@@ -700,9 +702,14 @@ describe('connect', () => {
   });
 
   it('suggests the starter prompt when a reused install already holds a live token', async () => {
-    // A reused install comes back through `mcp-servers` find, where the daemon
-    // injects the caller's token — redacted to a sentinel, but present, which
-    // is all "is this finished" needs.
+    // The dedicated non-secret status resource, rather than a credential on
+    // the generic server read, is the UI's authentication authority.
+    act(() => {
+      agorStore.getState().applyMaps((prev) => ({
+        ...prev,
+        userAuthenticatedMcpServerIds: new Set(['server-1']),
+      }));
+    });
     await connectAndLand({
       mcp_server_id: 'server-1',
       auth: {
