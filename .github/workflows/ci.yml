@@ -35,6 +35,19 @@ jobs:
   ci:
     name: Lint, typecheck, build, test
     runs-on: ubuntu-latest
+    services:
+      # The daemon suite includes a real two-replica Socket.IO adapter test.
+      # Keep it in the required PR lane so HA authorization and eviction do
+      # not silently fall back to skipped coverage.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
 
@@ -74,6 +87,14 @@ jobs:
       # deps' build outputs exist). The `--filter='!@agor/docs'` excludes
       # the docs app, which has its own dedicated workflows.
       - run: pnpm turbo run build typecheck --filter='!@agor/docs'
+
+      # Exercise the real adapter before the broad Turbo fanout. Keep this an
+      # explicit step: Turbo's strict environment filtering would otherwise
+      # hide AGOR_TEST_REDIS_URL and silently skip the service-gated suite.
+      - name: Test two-replica Socket.IO Redis isolation
+        run: pnpm --filter @agor/daemon exec vitest run src/setup/socketio-ha-tenant-isolation.integration.test.ts --no-file-parallelism
+        env:
+          AGOR_TEST_REDIS_URL: redis://127.0.0.1:6379
 
       # Test runs against a narrower filter set than build/typecheck —
       # only the packages with real test suites worth gating on. Kept as

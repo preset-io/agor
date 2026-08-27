@@ -484,6 +484,12 @@ remediation rerun; the corresponding suites remained environment-gated and
 the new Redis authorization-cache/revocation scenarios were additionally
 covered by deterministic local transport tests.
 
+The secure board-presence follow-up subsequently provisioned disposable Redis
+in the required PR workflow and added an explicit two-replica test step with
+`AGOR_TEST_REDIS_URL`. Local runs may still skip the suite when Redis is absent,
+but CI no longer does: the real Socket.IO adapter tests are part of required
+head validation.
+
 ```bash
 pnpm --filter @agor/daemon exec vitest run \
   src/setup/socketio.test.ts \

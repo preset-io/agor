@@ -274,5 +274,9 @@ The focused unit and environment-gated integration suites cover:
 - real two-replica Redis delivery, cross-tenant non-delivery, cache clearing,
   revocation, reconnect, and fail-closed denial after revocation.
 
-The PostgreSQL and Redis suites remain explicitly environment-gated so the fast
-lane does not pretend to exercise an absent RLS role or Redis server.
+The PostgreSQL and Redis suites remain explicitly environment-gated for local
+runs so they do not pretend to exercise absent services. Required PR CI
+provisions disposable Redis and runs the two-replica file explicitly with
+`AGOR_TEST_REDIS_URL`, while the dedicated PostgreSQL/RLS workflow provisions
+its own database, so both real adapter paths are exercised on every relevant
+head.

@@ -1,14 +1,16 @@
 /**
  * Real two-replica Socket.IO/Redis tenant-isolation coverage.
  *
- * Run with AGOR_TEST_REDIS_URL pointed at a disposable Redis instance. The
- * normal fast lane skips this suite so unit tests do not depend on Redis.
+ * Run with AGOR_TEST_REDIS_URL pointed at a disposable Redis instance. Local
+ * unit runs may omit Redis and skip this suite; required PR CI provisions one
+ * and runs this file explicitly so the real adapter path remains gated.
  */
 
 import type { Server as HttpServer } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
 import { AuthenticationService, feathers, feathersExpress, socketio } from '@agor/core/feathers';
 import {
+  type AuthenticationUser,
   type Board,
   type BoardID,
   PRESENCE_SOCKET_EVENTS,
@@ -117,13 +119,23 @@ async function startReplica(adapterKey: string, instanceId: string): Promise<Rep
   });
   bindRealtimeAccessCacheInvalidation(app, accessCache);
   app.use('users', {
-    async get(id: UserID, params?: TestParams): Promise<User> {
+    async get(id: UserID, params?: TestParams): Promise<AuthenticationUser> {
       const tenantId = tenantFrom(params);
       if (id === USER_A && tenantId === TENANT_A) {
-        return { user_id: USER_A, email: 'a@example.test', role: 'member' } as User;
+        return {
+          user_id: USER_A,
+          email: 'a@example.test',
+          role: 'member',
+          credential_generation: 0,
+        } as AuthenticationUser;
       }
       if (id === USER_B && tenantId === TENANT_B) {
-        return { user_id: USER_B, email: 'b@example.test', role: 'member' } as User;
+        return {
+          user_id: USER_B,
+          email: 'b@example.test',
+          role: 'member',
+          credential_generation: 0,
+        } as AuthenticationUser;
       }
       throw new Error('User unavailable');
     },
