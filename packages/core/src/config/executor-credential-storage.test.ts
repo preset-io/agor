@@ -78,7 +78,7 @@ describe('hasExactUserExecutorCredentialHome', () => {
     ).toBe(false);
   });
 
-  it('accepts only the locally containable sandbox per-user route', () => {
+  it('accepts sandbox and delegated persistent per-user routes', () => {
     expect(
       hasExactUserExecutorCredentialHome({
         execution: {
@@ -94,6 +94,6 @@ describe('hasExactUserExecutorCredentialHome', () => {
           executor_storage: { user_home: 'persistent-per-user' },
         },
       })
-    ).toBe(false);
+    ).toBe(true);
   });
 });

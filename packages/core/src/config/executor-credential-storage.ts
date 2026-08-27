@@ -21,20 +21,16 @@ export function hasTenantSafeExecutorCredentialHome(
  * therefore is not sufficient for a device flow that changes credentials on
  * behalf of an individual browser user.
  *
- * Local isolation is concrete only in `sandbox` mode, where Agor selects the
- * tenant/user-keyed home store and points Codex at its `.codex` directory. HA
- * mutations run in the authority-owning daemon, so a daemon crash cannot leave
- * a detached stale writer; ambiguous outcomes remain user-retryable rather
- * than automatically replayed.
- * Delegated execution can declare an exact home but is outside this deliberately
- * local device-flow implementation, so the capability fails closed there. Merely declaring
- * `persistent-per-user` while running in `simple` mode does not change the
- * daemon process home either.
+ * In `sandbox` mode Agor selects the tenant/user-keyed home store directly. In
+ * `delegated` mode the external substrate receives the trusted tenant/user home
+ * key and this contract asserts that every helper and later Task is routed to
+ * that same durable home. Merely declaring `persistent-per-user` while running
+ * in `simple` mode does not change the daemon process home.
  */
 export function hasExactUserExecutorCredentialHome(config: Pick<AgorConfig, 'execution'>): boolean {
   if (config.execution?.executor_storage?.user_home !== 'persistent-per-user') return false;
   const mode = config.execution?.unix_user_mode ?? 'simple';
-  return mode === 'sandbox';
+  return mode === 'sandbox' || mode === 'delegated';
 }
 
 /**

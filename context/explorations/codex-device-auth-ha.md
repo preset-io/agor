@@ -122,19 +122,20 @@ disabled when that route is replica-local, shared between users, or merely
 declared `persistent-per-user` while `simple` execution would still use the
 daemon's home. It also requires the operator assertion
 `user_home_locking: cross-replica-flock`; shared paths with local-only locks
-(including NFS `local_lock`) are not admitted. Local HA admission therefore requires `sandbox`; HA Codex auth
+(including NFS `local_lock`) are not admitted. Local HA admission therefore
+requires `sandbox`; delegated admission requires the external substrate's
+`persistent-per-user` contract so the authenticated tenant/user home key
+selects the same durable home for auth helpers and later Tasks. HA Codex auth
 also rejects admin `filesystem_home` overrides because the schema does not
-prove those paths unique across users. Delegated device auth remains gated:
-this implementation intentionally supports only the local sandbox credential
-mutation and simple user-visible retry contract. The checked-in HA smoke
-profile uses sandbox per-user homes on its shared Agor volume.
+prove those paths unique across users. The checked-in HA smoke profile uses
+sandbox per-user homes on its shared Agor volume.
 
 Executor native-auth resolution uses the Task creator's saved auth method but
 the filesystem sandbox mounts the Session owner's home. The resolver now
 compares those concrete homes and fails closed when they differ, preventing a
 collaborator from borrowing an owner's `auth.json` or receiving a misleading
 native-auth result. Auth-resolved multi-tenancy admits Codex native auth only on
-the same exact-user sandbox route required by the device capability.
+the same exact-user sandbox or delegated route required by the device capability.
 
 Migration `0091_codex_device_auth_attempts` is an offline-cutover protocol
 migration. Mixed versions fail closed: the old cohort's HA device guard remains,
