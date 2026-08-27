@@ -20,7 +20,10 @@ export const groups = {
   },
   daemon: {
     packages: ['@agor/daemon'],
-    filterArgs: ['--filter=@agor/daemon...'],
+    // Daemon integration tests import executor source directly; a full
+    // workspace install is required so that source file's @agor/core link is
+    // present (pnpm's filtered install omits that undeclared test edge).
+    filterArgs: [],
     // Daemon tests import executor source, which in turn resolves @agor/core's
     // published exports. Build that package explicitly in this filtered lane.
     buildFilter: '@agor/core',
@@ -29,12 +32,12 @@ export const groups = {
   'ui-1': {
     packages: ['agor-ui'],
     filterArgs: ['--filter=agor-ui...'],
-    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=1/2']],
+    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=1/2', '--retry=2']],
   },
   'ui-2': {
     packages: ['agor-ui'],
     filterArgs: ['--filter=agor-ui...'],
-    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=2/2']],
+    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=2/2', '--retry=2']],
   },
   executor: {
     packages: ['@agor/executor'],

@@ -46,11 +46,12 @@ minutes), plus a short gate queue.
   preserves focused logs. `fail-fast: false` keeps all shards diagnosable. The
   Redis-backed tenant-isolation test is isolated in its own service job rather
   than provisioning Redis on every unit shard.
-- **Duplicated setup/install:** accepted. Unit jobs use filtered pnpm installs
-  (no docs/release tree); daemon/CLI lanes additionally build their workspace
-  dependency closure because those tests import published `dist` entrypoints.
-  The two full installs are lint/build. Hosted-runner minutes increase, but
-  wall time drops materially.
+- **Duplicated setup/install:** accepted. Most unit jobs use filtered pnpm
+  installs (no docs/release tree); daemon uses a full install because its
+  integration tests import executor source through an undeclared test edge.
+  Daemon/CLI lanes additionally build their workspace dependency closure
+  because those tests import published `dist` entrypoints. Hosted-runner
+  minutes increase, but wall time drops materially.
 - **Artifacts/build sharing:** not needed for source-resolving Vitest suites.
   The build lane owns the compiled executor unit/runtime checks. No untrusted
   build artifact crosses jobs.
