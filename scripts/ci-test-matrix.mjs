@@ -156,8 +156,10 @@ for (const [name, group] of Object.entries(groups)) {
   if (!group.run && group.lane !== 'build')
     throw new Error(`CI group ${name} must define runnable commands or a recognized owner lane`);
 }
-if (!workflowText.includes('@agor/executor test:runtime'))
-  throw new Error('Build-owned executor checks are missing from ci.yml');
+if (!workflowText.includes('pnpm --filter @agor/executor exec vitest run'))
+  throw new Error('Build-owned executor Vitest checks are missing from ci.yml');
+if (!workflowText.includes('pnpm --filter @agor/executor test:runtime'))
+  throw new Error('Build-owned executor runtime checks are missing from ci.yml');
 
 const browserTests = [];
 async function collectBrowserTests(directory) {
