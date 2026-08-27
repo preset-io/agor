@@ -21,6 +21,7 @@ export const groups = {
   daemon: {
     packages: ['@agor/daemon'],
     filterArgs: ['--filter=@agor/daemon...'],
+    buildFilter: '@agor/daemon...',
     run: [['--filter', '@agor/daemon', 'exec', 'vitest', 'run']],
   },
   'ui-1': {
@@ -44,6 +45,7 @@ export const groups = {
   cli: {
     packages: ['@agor/cli'],
     filterArgs: ['--filter=@agor/cli...'],
+    buildFilter: '@agor/cli...',
     run: [['--filter', '@agor/cli', 'test']],
   },
   support: {
@@ -141,7 +143,15 @@ if (command === 'install') {
     cwd: repoRoot,
     stdio: 'inherit',
   });
-  process.exit(result.status ?? 1);
+  if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
+  if (group.buildFilter) {
+    const build = spawnSync('pnpm', ['turbo', 'run', 'build', `--filter=${group.buildFilter}`], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+    });
+    process.exit(build.status ?? 1);
+  }
+  process.exit(0);
 }
 
 if (command === 'run') {
