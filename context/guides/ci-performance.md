@@ -88,6 +88,18 @@ context `CI / Lint, typecheck, build, test (pull_request)` needs no branch
 protection migration.
 
 If the matrix is reverted, restore the previous `ci.yml` and remove the two
-manifest scripts; no database or package format migration is involved. After
-the PR run, append cold/warm job p50/p90 and the measured aggregate wall time
-here before merging.
+manifest scripts; no database or package format migration is involved.
+
+## Observed PR run
+
+Run `33047235362` for PR #2572 (commit `561cbf6d`) completed successfully in
+**346 s (5 m 46 s wall-clock)** from the first runner start to the aggregate
+gate. This is a 72% reduction from the 1,238 s baseline p50. Lane durations
+from the Actions job API were: build/typecheck 210 s, UI shard 1 275 s, UI
+shard 2 340 s (critical path), daemon unit 253 s, core 196 s, CLI 155 s,
+support 87 s, browser 80 s, Redis HA 93 s, and lint 88 s. The gate itself took
+3 s. The run used warm setup-node pnpm caches (15–31 s setup; 15–46 s install
+or filtered install), while the build lane still had no reusable Turbo remote
+cache. A flaky UI popover assertion reproduced once on an earlier attempt and
+passed with Vitest's two-retry policy; failures still fail the shard after
+retries and retain the assertion output.
