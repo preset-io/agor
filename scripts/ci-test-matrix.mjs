@@ -21,7 +21,9 @@ export const groups = {
   daemon: {
     packages: ['@agor/daemon'],
     filterArgs: ['--filter=@agor/daemon...'],
-    buildFilter: '@agor/daemon...',
+    // Daemon tests import executor source, which in turn resolves @agor/core's
+    // published exports. Build that package explicitly in this filtered lane.
+    buildFilter: '@agor/core',
     run: [['--filter', '@agor/daemon', 'exec', 'vitest', 'run']],
   },
   'ui-1': {
