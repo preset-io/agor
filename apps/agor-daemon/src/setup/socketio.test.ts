@@ -1955,11 +1955,11 @@ describe('terminal:* handler authorization', () => {
     it('reserves in-flight cursor admissions inside the hard room bound', async () => {
       const { app, io } = buildHarness();
       const originalService = (app as any).service;
-      const releases: Array<() => void> = [];
+      let releaseAdmission: (() => void) | undefined;
       const getBoard = vi.fn(
         (id: string) =>
           new Promise((resolve) => {
-            releases.push(() => resolve({ board_id: id, archived: false }));
+            releaseAdmission = () => resolve({ board_id: id, archived: false });
           })
       );
       (app as any).service = (path: string) =>
@@ -1967,28 +1967,81 @@ describe('terminal:* handler authorization', () => {
       const socket = makeSocket('concurrent-cursor-watch', io);
       asUser(socket, ALICE);
       connect(io, socket);
+      socket.data.authorizedBoardIds = new Set(
+        Array.from(
+          { length: MAX_PRESENCE_BOARD_SUBSCRIPTIONS - 1 },
+          (_, index) => `granted-board-${index}`
+        )
+      );
 
-      const results = Array.from(
-        { length: MAX_PRESENCE_BOARD_SUBSCRIPTIONS + 1 },
-        (_, index) =>
+      const results = ['last-slot', 'over-bound'].map(
+        (requestedBoardId) =>
           new Promise<{ ok: boolean }>((resolve) => {
             void socket.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.(
-              `board-${index}`,
+              requestedBoardId,
               resolve
             );
           })
       );
-      await vi.waitFor(() => expect(getBoard).toHaveBeenCalled());
-      expect(getBoard.mock.calls.length).toBeLessThanOrEqual(MAX_PRESENCE_BOARD_SUBSCRIPTIONS);
-      releases.splice(0).forEach((release) => {
-        release();
-      });
+      await vi.waitFor(() => expect(getBoard).toHaveBeenCalledTimes(1));
+      releaseAdmission?.();
       const acknowledgements = await Promise.all(results);
 
+      expect(acknowledgements).toEqual([{ ok: true }, { ok: false }]);
+      expect(socket.data.authorizedBoardIds.size).toBe(MAX_PRESENCE_BOARD_SUBSCRIPTIONS);
+      expect(getBoard).toHaveBeenCalledWith(
+        'last-slot',
+        expect.objectContaining({
+          provider: 'socketio',
+          tenant: expect.objectContaining({ tenant_id: 'default' }),
+        })
+      );
+      expect(getBoard).not.toHaveBeenCalledWith('over-bound', expect.anything());
+      expect(socket.joined).toContain(boardPresenceRoomName('default', 'last-slot'));
+    });
+
+    it('invalidates a published board when a same-set synchronization is rate-limited', async () => {
+      const { io } = buildHarness();
+      const publisher = makeSocket('rate-limited-subscription-publisher', io);
+      const observer = makeSocket('rate-limited-subscription-observer', io);
+      asUser(publisher, ALICE);
+      asUser(observer, BOB);
+      connect(io, publisher);
+      connect(io, observer);
+      await expect(subscribeBoardAssociations(observer, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
+      await expect(subscribeBoardAssociations(publisher, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
+
+      // The initial publisher sync consumed one of five burst tokens. Consume
+      // the remaining four, re-establishing presence only after each grant.
+      for (let index = 0; index < 4; index++) {
+        await expect(subscribeBoardAssociations(publisher, ['board-1'])).resolves.toEqual({
+          ok: true,
+        });
+        publisher.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
+      }
+      observer.received.length = 0;
+
+      await expect(subscribeBoardAssociations(publisher, ['board-1'])).resolves.toEqual({
+        ok: false,
+      });
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
+
+      expect(observer.received).toContainEqual({
+        event: PRESENCE_SOCKET_EVENTS.left,
+        data: expect.objectContaining({ userId: ALICE, boardId: 'board-1' }),
+      });
       expect(
-        [...socket.joined].filter((room) => room.includes(':board-presence:')).length
-      ).toBeLessThanOrEqual(MAX_PRESENCE_BOARD_SUBSCRIPTIONS);
-      expect(acknowledgements).toContainEqual({ ok: false });
+        observer.received.filter(
+          (entry) =>
+            entry.event === PRESENCE_SOCKET_EVENTS.updated &&
+            (entry.data as { boardId?: string }).boardId === 'board-1'
+        )
+      ).toEqual([]);
     });
 
     it('coalesces association authorization to one in flight plus the latest desired set', async () => {
@@ -2009,7 +2062,7 @@ describe('terminal:* handler authorization', () => {
       connect(io, socket);
 
       const results = Array.from(
-        { length: 30 },
+        { length: 5 },
         (_, index) =>
           new Promise<{ ok: boolean }>((resolve) => {
             socket.handlers.get(PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations)?.(
@@ -2054,6 +2107,14 @@ describe('terminal:* handler authorization', () => {
       expect(
         io.emitted.filter((entry) => entry.event === PRESENCE_SOCKET_EVENTS.cursorMoved).length
       ).toBeLessThanOrEqual(31);
+
+      io.emitted.length = 0;
+      for (let index = 0; index < 100; index++) {
+        publisher.handlers.get(PRESENCE_SOCKET_EVENTS.cursorLeave)?.({ boardId: 'board-1' });
+      }
+      expect(
+        io.emitted.filter((entry) => entry.event === PRESENCE_SOCKET_EVENTS.cursorLeft)
+      ).toHaveLength(1);
 
       io.emitted.length = 0;
       for (let index = 0; index < 100; index++) {
@@ -2161,7 +2222,7 @@ describe('terminal:* handler authorization', () => {
       let releaseReplacement: (() => void) | undefined;
       const findBoards = vi.fn(async (params: { query?: { board_id?: { $in?: string[] } } }) => {
         const ids = params.query?.board_id?.$in ?? [];
-        if (ids.includes('board-2')) {
+        if (ids[0] === 'board-2') {
           await new Promise<void>((resolve) => {
             releaseReplacement = resolve;
           });
@@ -2176,7 +2237,7 @@ describe('terminal:* handler authorization', () => {
       asUser(observer, BOB);
       connect(io, publisher);
       connect(io, observer);
-      await expect(subscribeBoardAssociations(publisher, ['board-1'])).resolves.toEqual({
+      await expect(subscribeBoardAssociations(publisher, ['board-1', 'board-2'])).resolves.toEqual({
         ok: true,
       });
       await expect(subscribeBoardAssociations(observer, ['board-1'])).resolves.toEqual({
@@ -2187,7 +2248,7 @@ describe('terminal:* handler authorization', () => {
       const acknowledge = vi.fn();
 
       publisher.handlers.get(PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations)?.(
-        { boardIds: ['board-2'] },
+        { boardIds: ['board-2', 'board-1'] },
         acknowledge
       );
 

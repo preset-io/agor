@@ -53,22 +53,31 @@ export function useGlobalPresenceHeartbeat({
     if (!enabled || !client?.io) return;
     let active = true;
     let synchronizationGeneration = 0;
+    let authorizedGeneration = -1;
     let synchronizationInFlight = false;
     let synchronizationPending = false;
 
     const publishHeartbeat = () => {
       client.io.emit(PRESENCE_SOCKET_EVENTS.heartbeat, {
-        boardId: browserMayPublishBoardAssociation() ? currentBoardRef.current : null,
+        boardId:
+          browserMayPublishBoardAssociation() && authorizedGeneration === synchronizationGeneration
+            ? currentBoardRef.current
+            : null,
       });
     };
     const synchronize = () => {
       if (!active) return;
+      // A route/list/focus/reconnect generation is untrusted until its own
+      // acknowledgement succeeds. Retract the previous association now and
+      // keep periodic heartbeats boardless while authorization is pending.
+      synchronizationGeneration++;
+      publishHeartbeat();
       if (synchronizationInFlight) {
         synchronizationPending = true;
         return;
       }
       synchronizationInFlight = true;
-      const generation = ++synchronizationGeneration;
+      const generation = synchronizationGeneration;
       client.io
         .timeout(PRESENCE_CONFIG.SUBSCRIPTION_ACK_TIMEOUT_MS)
         .emit(
@@ -85,6 +94,7 @@ export function useGlobalPresenceHeartbeat({
               generation === synchronizationGeneration &&
               result?.ok
             ) {
+              authorizedGeneration = generation;
               publishHeartbeat();
             }
             if (active && rerun) synchronize();

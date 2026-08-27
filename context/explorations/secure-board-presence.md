@@ -17,7 +17,8 @@ some payload types, but they do not share subscription rooms or lifecycle.
 | `6d70cbbce1a86964a1bb97fa0b091ad8091dac62` ([#1299](https://github.com/preset-io/agor/pull/1299)) | 2026-05-30 | Isolated high-frequency cursor rendering from the global facepile and added explicit board cursor-room reconnect.                                                                                                             |
 | `e57798a47d54b50bccf19ae7386132688464af6e` ([#2520](https://github.com/preset-io/agor/pull/2520)) | 2026-08-23 | Fixed WebSocket tenant isolation. Finding WS-10 identified tenant-wide board identity as a private-board leak and intentionally removed `boardId` from `presence-updated`.                                                    |
 | `ed5b075a74e64c0c31f638f2c78c54d5915c7b2b`                                                        | 2026-08-26 | Branch base at investigation start. Facepile still showed tenant-online peers, but every remote peer was boardless; the current user was inserted locally with the route board. Cursors remained board-scoped and functional. |
-| `bb89f7cf1db21ce23bd35d0ff80b64d9a7f0f3b5`                                                        | 2026-08-26 | Exact latest `origin/main` used for final integration/review; the intervening MCP/auth changes do not alter the #2520 presence behavior.                                                                                      |
+| `bb89f7cf1db21ce23bd35d0ff80b64d9a7f0f3b5`                                                        | 2026-08-26 | Exact latest `origin/main` used for the initial integration/review; the intervening MCP/auth changes do not alter the #2520 presence behavior.                                                                                |
+| `0269325274e6bf7b7b31ef5c572122363cd9f1e3`                                                        | 2026-08-27 | Current `origin/main` used for the post-review rebase. Its #2569 package-budget change does not alter presence or cursor behavior.                                                                                            |
 
 The #2520 PR had no review comments or issue discussion that superseded its
 audit document. Its squash history contains the audit work and the explicit
@@ -108,9 +109,11 @@ delivering high-frequency coordinates to a low-frequency global consumer.
 2. It sends the full desired set with `presence:subscribe-boards` on mount,
    route/list change, successful Socket.IO reconnect, and Feathers
    reauthentication.
-3. Only after `{ok:true}` does it send `presence:heartbeat`. A visible, focused
-   tab requests its current board; a hidden/blurred tab requests `null` and
-   remains tenant-online without a board.
+3. Starting any route/list/focus/reconnect synchronization immediately sends a
+   boardless `presence:heartbeat`. Only after that exact latest generation
+   returns `{ok:true}` may a visible, focused tab request its current board. A
+   hidden/blurred tab always requests `null` and remains tenant-online without a
+   board.
 4. Heartbeats repeat every 15 seconds. Route/focus transitions run
    immediately. Unmount sends `presence:leave` and an empty full set.
 5. The cursor consumer independently watches only its rendered board and
@@ -119,9 +122,11 @@ delivering high-frequency coordinates to a low-frequency global consumer.
    publishes a navbar board association.
 
 The browser keeps at most one association acknowledgement outstanding and
-coalesces route/list/focus churn to the latest desired set. A five-second
-Socket.IO acknowledgement timeout releases the callback when an older daemon
-does not implement the event.
+coalesces route/list/focus churn to the latest desired set. It tracks the latest
+successfully acknowledged generation and keeps every periodic heartbeat
+boardless while a newer generation is pending, rejected, rate-limited, or timed
+out. A five-second Socket.IO acknowledgement timeout releases the callback when
+an older daemon does not implement the event.
 
 ### Daemon publication
 
@@ -139,11 +144,18 @@ board-bearing heartbeats, cursor admission, and non-empty association changes.
 Association synchronization retains only one authorization read plus the latest
 desired set, and in-flight cursor grants count against the room cap.
 
-Board transitions first emit board-scoped `presence-left`. Disconnect, logout,
-bounded impersonation-token expiry, explicit leave, or revocation emits a
-board removal and a tenant removal for that one `presenceId`. Full-set removal
-also retracts the prior board before its acknowledgement, so a client cannot
-leave a stale association by omitting the follow-up heartbeat.
+Every valid full-set generation immediately retracts the publisher's current
+board association and invalidates its prior publication grant, independently
+of whether the recipient room set changed. Only that generation's successful
+`boards.find` result restores board-bearing heartbeat authority. A slow,
+superseded, failed, or rate-limited generation therefore converges to boardless
+liveness rather than reusing an older grant.
+
+Every full-set synchronization first emits board-scoped `presence-left` for a
+published association. Disconnect, logout, bounded impersonation-token expiry,
+explicit leave, or revocation emits a board removal and a tenant removal for
+that one `presenceId`. A client therefore cannot retain a stale association by
+reordering the same visible boards or omitting the follow-up heartbeat.
 
 The daemon rate-limits unchanged low-frequency publication to once per ten
 seconds. All timestamps are server-generated. An ordinary user socket
@@ -198,6 +210,9 @@ This audit additionally hardens cursors by:
   with server time;
 - adding server-generated `presenceId` to move/leave packets so one tab cannot
   erase another tab's cursor;
+- making cursor leave edge-triggered: only the board of the last accepted,
+  rate-limited move can emit one leave, so repeated leave packets cannot amplify
+  Redis fanout;
 - bounding cursor-room grants and client cursor instances; and
 - retaining the existing five-second stale-cursor expiry and clearing all
   passive state on transport disconnect.

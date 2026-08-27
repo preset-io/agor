@@ -1259,8 +1259,11 @@ export function createSocketIOConfig(
             ),
         ]);
         presenceSocket.data.presenceAssociationBoardIds = authorized;
+        if (subscription.generation !== presenceSocket.data.presenceSubscriptionGeneration) {
+          return false;
+        }
         presenceSocket.data.hasPresenceAssociationSubscription = true;
-        return subscription.generation === presenceSocket.data.presenceSubscriptionGeneration;
+        return true;
       };
 
       const drainPresenceSubscriptions = async (): Promise<void> => {
@@ -1302,24 +1305,22 @@ export function createSocketIOConfig(
             return;
           }
           const requestedBoardIds = [...new Set(boardIds)];
-          if (
-            presenceSocket.data.presenceBoardId &&
-            !requestedBoardIds.includes(presenceSocket.data.presenceBoardId)
-          ) {
-            // A full desired-set change can safely retract immediately; do not
-            // keep advertising the previous route while authorization is slow
-            // or the replacement request is rate-limited.
-            publishAuthorizedBoardAssociation();
-          }
+          const generation = (presenceSocket.data.presenceSubscriptionGeneration ?? 0) + 1;
+          presenceSocket.data.presenceSubscriptionGeneration = generation;
+          // Every valid full-set generation invalidates publisher authority,
+          // even when the recipient room set is unchanged. A later heartbeat
+          // cannot reuse an older successful grant while this generation is
+          // slow, superseded, rate-limited, or rejected.
+          publishAuthorizedBoardAssociation();
+          delete presenceSocket.data.hasPresenceAssociationSubscription;
+          // Superseded pending work is acknowledged negatively immediately so
+          // neither the browser nor daemon retains an unbounded callback queue.
+          presenceSocket.data.pendingPresenceSubscription?.acknowledge?.({ ok: false });
+          delete presenceSocket.data.pendingPresenceSubscription;
           if (requestedBoardIds.length > 0 && !allowPresenceSubscription()) {
             acknowledge?.({ ok: false });
             return;
           }
-          const generation = (presenceSocket.data.presenceSubscriptionGeneration ?? 0) + 1;
-          presenceSocket.data.presenceSubscriptionGeneration = generation;
-          // Superseded pending work is acknowledged negatively immediately so
-          // neither the browser nor daemon retains an unbounded callback queue.
-          presenceSocket.data.pendingPresenceSubscription?.acknowledge?.({ ok: false });
           presenceSocket.data.pendingPresenceSubscription = {
             generation,
             boardIds: requestedBoardIds,
@@ -1412,8 +1413,13 @@ export function createSocketIOConfig(
         if (!isBoundedBoardId(data?.boardId) || !fs.data.authorizedBoardIds?.has(data.boardId)) {
           return;
         }
+        if (fs.data.currentBoardId !== data.boardId) return;
         const presenceId = fs.data.presenceId;
         if (!presenceId) return;
+        // Make leave edge-triggered before fanout. Repeated caller packets can
+        // no longer amplify one accepted, rate-limited cursor move into
+        // unbounded Redis traffic.
+        delete fs.data.currentBoardId;
 
         emitHaNativeSocketEvent(
           socket.broadcast.to(boardPresenceRoomName(tenantId, data.boardId)),
@@ -1425,10 +1431,6 @@ export function createSocketIOConfig(
             timestamp: Date.now(),
           }
         );
-
-        if (fs.data.currentBoardId === data.boardId) {
-          delete fs.data.currentBoardId;
-        }
       });
 
       // =========================================================================

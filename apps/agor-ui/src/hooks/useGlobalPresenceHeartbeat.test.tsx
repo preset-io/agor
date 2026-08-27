@@ -6,6 +6,7 @@ import {
 } from '@agor-live/client';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { PRESENCE_CONFIG } from '../config/presence';
 import { useGlobalPresenceHeartbeat } from './useGlobalPresenceHeartbeat';
 
 type Listener = () => void;
@@ -63,7 +64,10 @@ describe('useGlobalPresenceHeartbeat', () => {
     Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   });
 
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it('reauthorizes on route/reconnect and removes board identity when blurred or hidden', () => {
     const { client, emit, emitClient, emitIo } = makeMockClient();
@@ -157,9 +161,13 @@ describe('useGlobalPresenceHeartbeat', () => {
 
     act(() => acknowledge?.(null, { ok: true }));
 
-    expect(emit.mock.calls.filter(([event]) => event === PRESENCE_SOCKET_EVENTS.heartbeat)).toEqual(
-      []
-    );
+    expect(
+      emit.mock.calls.filter(
+        ([event, payload]) =>
+          event === PRESENCE_SOCKET_EVENTS.heartbeat &&
+          (payload as { boardId?: BoardID | null }).boardId !== null
+      )
+    ).toEqual([]);
   });
 
   it('keeps one acknowledgement in flight and retries only the latest mixed-version state', () => {
@@ -193,12 +201,56 @@ describe('useGlobalPresenceHeartbeat', () => {
 
     act(() => acknowledgements[0]?.(new Error('old daemon did not acknowledge')));
     expect(acknowledgements).toHaveLength(2);
-    expect(emit.mock.calls.filter(([event]) => event === PRESENCE_SOCKET_EVENTS.heartbeat)).toEqual(
-      []
-    );
+    expect(
+      emit.mock.calls
+        .filter(([event]) => event === PRESENCE_SOCKET_EVENTS.heartbeat)
+        .every(([, payload]) => (payload as { boardId?: BoardID | null }).boardId === null)
+    ).toBe(true);
 
     act(() => acknowledgements[1]?.(null, { ok: true }));
     expect(emit).toHaveBeenCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, {
+      boardId: boardId('board-b'),
+    });
+  });
+
+  it('keeps periodic heartbeats boardless after a failed latest route generation', () => {
+    vi.useFakeTimers();
+    const { client, emit } = makeMockClient();
+    const acknowledgements: Array<
+      (error: Error | null, result?: PresenceSubscriptionAcknowledgement) => void
+    > = [];
+    emit.mockImplementation((event, _payload, callback) => {
+      if (event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations && callback) {
+        acknowledgements.push(
+          callback as (error: Error | null, result?: PresenceSubscriptionAcknowledgement) => void
+        );
+      }
+    });
+    const { rerender } = renderHook(
+      ({ currentBoardId }: { currentBoardId: BoardID }) =>
+        useGlobalPresenceHeartbeat({
+          client,
+          currentBoardId,
+          visibleBoardIds: [boardId('board-a'), boardId('board-b')],
+        }),
+      { initialProps: { currentBoardId: boardId('board-a') } }
+    );
+    act(() => acknowledgements[0]?.(null, { ok: true }));
+    expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, {
+      boardId: boardId('board-a'),
+    });
+
+    rerender({ currentBoardId: boardId('board-b') });
+    expect(
+      emit.mock.calls.filter(([event]) => event === PRESENCE_SOCKET_EVENTS.heartbeat).at(-1)?.[1]
+    ).toEqual({ boardId: null });
+    act(() => acknowledgements[1]?.(new Error('authorization timed out')));
+    act(() => vi.advanceTimersByTime(PRESENCE_CONFIG.HEARTBEAT_INTERVAL_MS));
+    expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, { boardId: null });
+
+    act(() => window.dispatchEvent(new Event('focus')));
+    act(() => acknowledgements[2]?.(null, { ok: true }));
+    expect(emit).toHaveBeenLastCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, {
       boardId: boardId('board-b'),
     });
   });
