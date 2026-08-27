@@ -49,24 +49,8 @@ describe('mcpServerNeedsAuth', () => {
     expect(mcpServerNeedsAuth(jwt, new Set())).toBe(false);
   });
 
-  it('returns false when token present and no expiry', () => {
+  it('does not trust OAuth credentials projected onto an ordinary server read', () => {
     const server = makeOAuthServer({ oauth_access_token: 'tok-123' });
-    expect(mcpServerNeedsAuth(server, new Set())).toBe(false);
-  });
-
-  it('returns false when token present and expiry is in the future', () => {
-    const server = makeOAuthServer({
-      oauth_access_token: 'tok-123',
-      oauth_token_expires_at: Date.now() + 60_000,
-    });
-    expect(mcpServerNeedsAuth(server, new Set())).toBe(false);
-  });
-
-  it('returns true when token present but expired', () => {
-    const server = makeOAuthServer({
-      oauth_access_token: 'tok-123',
-      oauth_token_expires_at: Date.now() - 1000,
-    });
     expect(mcpServerNeedsAuth(server, new Set())).toBe(true);
   });
 
@@ -79,14 +63,6 @@ describe('mcpServerNeedsAuth', () => {
   it('returns true when no token and server is NOT in Set', () => {
     const server = makeOAuthServer();
     expect(mcpServerNeedsAuth(server, new Set())).toBe(true);
-  });
-
-  it('returns true when no token, server in Set, but expiry is in the past', () => {
-    const server = makeOAuthServer({
-      oauth_token_expires_at: Date.now() - 1000,
-    });
-    const set = new Set(['test-server-id']);
-    expect(mcpServerNeedsAuth(server, set)).toBe(true);
   });
 
   // This is the bug scenario: after disconnect, token was stripped but the

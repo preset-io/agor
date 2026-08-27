@@ -160,10 +160,11 @@ describe('getMcpServersForSession', () => {
       ENFORCING
     );
 
-    expect(findAll).toHaveBeenCalledWith(
-      { scope: 'global', enabled: true, usableByUserId: 'owner-a' },
-      'prompt-user'
-    );
+    expect(findAll).toHaveBeenCalledWith({
+      scope: 'global',
+      enabled: true,
+      usableByUserId: 'owner-a',
+    });
   });
 
   it('resolves an OAuth server whose only template is oauth_client_secret', async () => {

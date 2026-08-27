@@ -209,8 +209,8 @@ describe('MCP OAuth status through Feathers response hooks', () => {
       baseServiceParams,
     };
 
-    // Prove the actual Feathers boundary handed the tool an enriched/redacted
-    // projection which cannot itself reproduce the v4 fingerprint.
+    // Generic reads never hydrate the per-user grant. External reads retain
+    // the existing secret-redaction boundary.
     const projected = await app
       .service('mcp-servers')
       .get(server.mcp_server_id, baseServiceParams as never);
@@ -218,9 +218,6 @@ describe('MCP OAuth status through Feathers response hooks', () => {
     expect(JSON.stringify(projected)).not.toContain('configured-client-secret');
     expect(JSON.stringify(projected)).not.toContain('durable-grant-access');
 
-    // Exercise the production after-hook projection used by an in-process
-    // executor lookup. Runtime token and expiry enrichment must not change the
-    // durable gateway material identity used by first admission.
     const executorProjected = await app.service('mcp-servers').get(server.mcp_server_id, {
       authenticated: true,
       provider: undefined,
@@ -229,8 +226,13 @@ describe('MCP OAuth status through Feathers response hooks', () => {
       authentication: { payload: { type: 'internal' } },
       tenant: { tenant_id: 'default', source: 'static' },
     } as never);
-    expect(executorProjected.auth?.oauth_access_token).toBe('durable-grant-access');
-    expect(executorProjected.auth?.oauth_token_expires_at).toEqual(expect.any(Number));
+    // Trusted in-process reads retain their existing access to credentials
+    // stored on the server row, but must not receive the user's durable grant.
+    expect(executorProjected.auth?.oauth_access_token).toBe('configured-static-access');
+    expect(executorProjected.auth?.oauth_access_token).not.toBe('durable-grant-access');
+    expect(executorProjected.auth?.oauth_token_expires_at).toBe(
+      server.auth?.oauth_token_expires_at
+    );
     expect(mcpEgressMaterialHash(executorProjected, {}, 'projection-hash-key')).toBe(
       mcpEgressMaterialHash(savedServer!, {}, 'projection-hash-key')
     );

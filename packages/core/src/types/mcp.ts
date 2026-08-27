@@ -558,8 +558,19 @@ export interface MCPServerFilters {
   limit?: number;
   offset?: number;
   /** Validated Feathers sort pushed into the repository query. */
-  sort?: Partial<Record<keyof MCPServer, 1 | -1>>;
+  sort?: Partial<Record<MCPServerSortField, 1 | -1>>;
 }
+
+/** Persisted columns that repository-backed MCP server lists can sort by. */
+export type MCPServerSortField =
+  | 'mcp_server_id'
+  | 'name'
+  | 'transport'
+  | 'scope'
+  | 'enabled'
+  | 'source'
+  | 'created_at'
+  | 'updated_at';
 
 /**
  * Create MCP Server input

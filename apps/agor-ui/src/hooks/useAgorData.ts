@@ -36,6 +36,9 @@ import {
   ROLES,
 } from '@agor-live/client';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+
+const MCP_OAUTH_STATUS_POLL_INTERVAL_MS = 60_000;
+
 import {
   bumpFirstPaintMergeRevisions,
   bumpRevision,
@@ -1226,6 +1229,32 @@ export function useAgorData(
   // stops retrying and never applies a snapshot (or schedules another timer)
   // after teardown. Generation bump = cancellation; see `runHydration`.
   useEffect(() => () => cancelAllHydrations(), []);
+
+  // OAuth status is intentionally separate from generic MCP server reads so
+  // listing servers never loads credentials. Poll the non-secret status path
+  // as well as reacting to OAuth events; otherwise a grant that expires while
+  // a tab is idle could remain displayed as authenticated indefinitely.
+  useEffect(() => {
+    if (!client || !enabled || !authorityScopeKey) return;
+    const pollAuthorityScope = authorityScopeKey;
+    const interval = window.setInterval(() => {
+      void client
+        .service('mcp-servers/oauth-status')
+        .find()
+        .then((res) => {
+          if (authorityScopeKeyRef.current !== pollAuthorityScope) return;
+          const ids =
+            (res as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
+          agorStore
+            .getState()
+            .applyMaps((prev) => ({ ...prev, userAuthenticatedMcpServerIds: new Set(ids) }));
+        })
+        .catch(() => {
+          // Transient disconnects are handled by the next poll/realtime refetch.
+        });
+    }, MCP_OAUTH_STATUS_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [authorityScopeKey, client, enabled]);
 
   // If the user navigates to /s/<id>/ after the initial active-session fetch,
   // load that one session by ID as well. This keeps direct links to archived
