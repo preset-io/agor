@@ -23,6 +23,6 @@ assert.equal(
 const stderr = result.stderr.replace(/^<3>/gm, '');
 assert.match(
   stderr,
-  /^(?:<3>)?Usage: agor-executor \[OPTIONS\]$/m,
+  /^Usage: agor-executor \[OPTIONS\]$/m,
   `Executor CLI did not reach argument handling after Node loaded the compiled module graph.\n${result.stderr}`
 );
