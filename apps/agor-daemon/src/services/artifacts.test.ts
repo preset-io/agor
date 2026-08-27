@@ -54,6 +54,7 @@ function makeFakeApp(): Application {
 /** Create a board directly via the repository, since the artifacts service
  * doesn't own boards. */
 async function seedBoard(db: Database) {
+  await seedUser(db, 'user-owner');
   const repo = new BoardRepository(db);
   return repo.create({
     board_id: generateId() as BoardID,
@@ -102,6 +103,7 @@ async function seedSession(db: Database, branchId: BranchID, userId = 'user-owne
  */
 async function seedUser(db: Database, userId: string): Promise<void> {
   const repo = new UsersRepository(db);
+  if ((await repo.findAll()).some((user) => user.user_id === userId)) return;
   await repo.create({
     user_id: userId as never,
     email: `${userId}@test.local`,

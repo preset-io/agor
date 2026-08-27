@@ -30,7 +30,7 @@ dbTest(
       await branchRepository.create({
         branch_id: branchId,
         repo_id: repo.repo_id,
-        created_by: generateId() as UUID,
+        created_by: 'test-user' as UUID,
         name: `rollback-branch-${index}`,
         ref: `rollback-branch-${index}`,
         branch_unique_id: 8000 + index,

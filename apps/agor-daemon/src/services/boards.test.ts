@@ -24,6 +24,7 @@ const TEST_PARAMS = { user: { user_id: TEST_USER } } as never;
 
 async function ensureTestUser(db: Database) {
   const users = new UsersRepository(db);
+  if ((await users.findAll()).some((user) => user.user_id === TEST_USER)) return;
   await users.create({
     user_id: TEST_USER,
     email: 'test-user@example.com',
@@ -607,6 +608,12 @@ describe('BoardsService.find SQL pushdown', () => {
 
   dbTest('lean list still enforces board RBAC visibility', async ({ db }) => {
     const OTHER_USER = 'other-user' as UUID;
+    const users = new UsersRepository(db);
+    await users.create({
+      user_id: OTHER_USER,
+      email: 'other-user@example.com',
+      role: 'member',
+    });
     const service = new BoardsService(db);
 
     // Visible: a board the viewer created, carrying the heavy annotations the
