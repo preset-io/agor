@@ -2,6 +2,7 @@ import {
   type BoardID,
   MAX_PRESENCE_BOARD_SUBSCRIPTIONS,
   PRESENCE_SOCKET_EVENTS,
+  type PresenceSubscriptionAcknowledgement,
 } from '@agor-live/client';
 import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,14 +22,21 @@ function makeMockClient() {
     registry.get(event)?.delete(listener);
   };
   const emit = vi.fn(
-    (event: string, _payload?: unknown, acknowledge?: (value: unknown) => void) => {
-      if (event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations) acknowledge?.({ ok: true });
+    (
+      event: string,
+      _payload?: unknown,
+      acknowledge?: (error: Error | null, value?: unknown) => void
+    ) => {
+      if (event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations) {
+        acknowledge?.(null, { ok: true });
+      }
     }
   );
   return {
     client: {
       io: {
         emit,
+        timeout: vi.fn(() => ({ emit })),
         on: vi.fn((event: string, listener: Listener) => add(ioListeners, event, listener)),
         off: vi.fn((event: string, listener: Listener) => remove(ioListeners, event, listener)),
       },
@@ -129,13 +137,13 @@ describe('useGlobalPresenceHeartbeat', () => {
 
   it('does not reactivate presence from a subscription acknowledgement after unmount', () => {
     const { client, emit } = makeMockClient();
-    let acknowledge: ((result: { ok: boolean }) => void) | undefined;
+    let acknowledge: ((error: Error | null, result: { ok: boolean }) => void) | undefined;
     emit.mockImplementation((event, payload, callback) => {
       if (
         event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations &&
         (payload as { boardIds?: BoardID[] })?.boardIds?.length
       ) {
-        acknowledge = callback as (result: { ok: boolean }) => void;
+        acknowledge = callback as (error: Error | null, result: { ok: boolean }) => void;
       }
     });
     const { unmount } = renderHook(() =>
@@ -147,10 +155,51 @@ describe('useGlobalPresenceHeartbeat', () => {
     );
     unmount();
 
-    act(() => acknowledge?.({ ok: true }));
+    act(() => acknowledge?.(null, { ok: true }));
 
     expect(emit.mock.calls.filter(([event]) => event === PRESENCE_SOCKET_EVENTS.heartbeat)).toEqual(
       []
     );
+  });
+
+  it('keeps one acknowledgement in flight and retries only the latest mixed-version state', () => {
+    const { client, emit } = makeMockClient();
+    const acknowledgements: Array<
+      (error: Error | null, result?: PresenceSubscriptionAcknowledgement) => void
+    > = [];
+    emit.mockImplementation((event, _payload, callback) => {
+      if (event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations && callback) {
+        acknowledgements.push(
+          callback as (error: Error | null, result?: PresenceSubscriptionAcknowledgement) => void
+        );
+      }
+    });
+    const { rerender } = renderHook(
+      ({ currentBoardId }: { currentBoardId: BoardID }) =>
+        useGlobalPresenceHeartbeat({
+          client,
+          currentBoardId,
+          visibleBoardIds: [boardId('board-a'), boardId('board-b')],
+        }),
+      { initialProps: { currentBoardId: boardId('board-a') } }
+    );
+
+    rerender({ currentBoardId: boardId('board-b') });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+      window.dispatchEvent(new Event('focus'));
+    });
+    expect(acknowledgements).toHaveLength(1);
+
+    act(() => acknowledgements[0]?.(new Error('old daemon did not acknowledge')));
+    expect(acknowledgements).toHaveLength(2);
+    expect(emit.mock.calls.filter(([event]) => event === PRESENCE_SOCKET_EVENTS.heartbeat)).toEqual(
+      []
+    );
+
+    act(() => acknowledgements[1]?.(null, { ok: true }));
+    expect(emit).toHaveBeenCalledWith(PRESENCE_SOCKET_EVENTS.heartbeat, {
+      boardId: boardId('board-b'),
+    });
   });
 });

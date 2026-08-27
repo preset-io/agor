@@ -8,7 +8,14 @@
 import type { Server as HttpServer } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
 import { AuthenticationService, feathers, feathersExpress, socketio } from '@agor/core/feathers';
-import type { Board, BoardID, TenantContext, User, UserID } from '@agor/core/types';
+import {
+  type Board,
+  type BoardID,
+  PRESENCE_SOCKET_EVENTS,
+  type TenantContext,
+  type User,
+  type UserID,
+} from '@agor/core/types';
 import { createAdapter } from '@socket.io/redis-adapter';
 import Redis from 'ioredis';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -67,14 +74,16 @@ function waitForConnect(client: AgorClient): Promise<void> {
 }
 
 function watchBoard(client: AgorClient, boardId: BoardID): Promise<{ ok: boolean }> {
-  return client.io.timeout(2_000).emitWithAck('presence:watch-board', boardId);
+  return client.io.timeout(2_000).emitWithAck(PRESENCE_SOCKET_EVENTS.watchBoardCursors, boardId);
 }
 
 function subscribeBoardAssociations(
   client: AgorClient,
   boardIds: BoardID[]
 ): Promise<{ ok: boolean }> {
-  return client.io.timeout(2_000).emitWithAck('presence:subscribe-boards', { boardIds });
+  return client.io
+    .timeout(2_000)
+    .emitWithAck(PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations, { boardIds });
 }
 
 function delay(ms = 80): Promise<void> {
@@ -137,13 +146,17 @@ async function startReplica(adapterKey: string, instanceId: string): Promise<Rep
     },
     async find(params?: TestParams) {
       const requested = params?.query?.board_id?.$in ?? [];
+      const tenantId = tenantFrom(params);
+      const userId = params?.user?.user_id;
       const visible: Board[] = [];
       for (const boardId of requested) {
-        try {
-          visible.push(await app.service('boards').get(boardId, params as never));
-        } catch {
-          // Full-set board association subscriptions deliberately omit every
-          // unavailable ID rather than disclosing which check failed.
+        if (boardId === BOARD_A && tenantId === TENANT_A && userId) {
+          const visibility = await accessCache.getBranchVisibility('branch-a');
+          if (visibility?.mode === 'explicitUsers' && visibility.userIds.has(userId)) {
+            visible.push({ board_id: boardId } as Board);
+          }
+        } else if (boardId === BOARD_B && tenantId === TENANT_B) {
+          visible.push({ board_id: boardId } as Board);
         }
       }
       return visible;
@@ -296,7 +309,6 @@ describe.skipIf(!redisUrl)('Socket.IO tenant isolation (two replicas/Redis)', ()
     await expect(watchBoard(peerA, BOARD_A)).resolves.toEqual({ ok: true });
     await expect(watchBoard(observerB, BOARD_B)).resolves.toEqual({ ok: true });
     await expect(watchBoard(senderA, BOARD_B)).resolves.toEqual({ ok: false });
-    await expect(subscribeBoardAssociations(senderA, [BOARD_A])).resolves.toEqual({ ok: true });
     await expect(subscribeBoardAssociations(peerA, [BOARD_A])).resolves.toEqual({ ok: true });
     await expect(subscribeBoardAssociations(observerB, [BOARD_B])).resolves.toEqual({ ok: true });
 
@@ -304,23 +316,29 @@ describe.skipIf(!redisUrl)('Socket.IO tenant isolation (two replicas/Redis)', ()
     const foreignEvents: unknown[] = [];
     const peerPresence: Array<{ boardId?: BoardID }> = [];
     const foreignPresence: Array<{ boardId?: BoardID }> = [];
-    peerA.io.on('cursor-moved', (event) => peerEvents.push(event));
-    observerB.io.on('cursor-moved', (event) => foreignEvents.push(event));
-    peerA.io.on('presence-updated', (event) => peerPresence.push(event));
-    observerB.io.on('presence-updated', (event) => foreignPresence.push(event));
-    senderA.io.emit('cursor-move', {
+    peerA.io.on(PRESENCE_SOCKET_EVENTS.cursorMoved, (event) => peerEvents.push(event));
+    observerB.io.on(PRESENCE_SOCKET_EVENTS.cursorMoved, (event) => foreignEvents.push(event));
+    peerA.io.on(PRESENCE_SOCKET_EVENTS.updated, (event) => peerPresence.push(event));
+    observerB.io.on(PRESENCE_SOCKET_EVENTS.updated, (event) => foreignPresence.push(event));
+    senderA.io.emit(PRESENCE_SOCKET_EVENTS.cursorMove, {
       boardId: BOARD_A,
       x: 10,
       y: 20,
-      timestamp: Date.now(),
     });
     await delay(200);
 
     expect(peerEvents).toHaveLength(1);
     expect(foreignEvents).toEqual([]);
-    expect(peerPresence.filter((event) => event.boardId === BOARD_A)).toHaveLength(1);
+    // Cursor/get authorization is independent from navbar/find authorization:
+    // an old cursor-only client refreshes tenant liveness but publishes no board.
+    expect(peerPresence.filter((event) => event.boardId === BOARD_A)).toHaveLength(0);
     expect(peerPresence.some((event) => event.boardId === undefined)).toBe(true);
     expect(foreignPresence).toEqual([]);
+
+    await expect(subscribeBoardAssociations(senderA, [BOARD_A])).resolves.toEqual({ ok: true });
+    senderA.io.emit(PRESENCE_SOCKET_EVENTS.heartbeat, { boardId: BOARD_A });
+    await delay(120);
+    expect(peerPresence.filter((event) => event.boardId === BOARD_A)).toHaveLength(1);
 
     // Warm replica B's five-minute ACL cache before revocation. The shared
     // backing state then changes as though replica A committed an ACL delete.
@@ -347,11 +365,10 @@ describe.skipIf(!redisUrl)('Socket.IO tenant isolation (two replicas/Redis)', ()
     // Subscription acknowledgement is deliberately non-enumerating, but the
     // revoked board is omitted and a forged heartbeat cannot publish it.
     await expect(subscribeBoardAssociations(peerA, [BOARD_A])).resolves.toEqual({ ok: true });
-    peerA.io.emit('cursor-move', {
+    peerA.io.emit(PRESENCE_SOCKET_EVENTS.cursorMove, {
       boardId: BOARD_A,
       x: 30,
       y: 40,
-      timestamp: Date.now(),
     });
     await delay(120);
     expect(foreignEvents).toEqual([]);

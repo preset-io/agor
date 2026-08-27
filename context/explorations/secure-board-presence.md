@@ -114,7 +114,14 @@ delivering high-frequency coordinates to a low-frequency global consumer.
 4. Heartbeats repeat every 15 seconds. Route/focus transitions run
    immediately. Unmount sends `presence:leave` and an empty full set.
 5. The cursor consumer independently watches only its rendered board and
-   sends finite, bounded coordinates at at most ten samples per second.
+   sends finite, bounded coordinates at at most ten samples per second. Cursor
+   traffic can refresh tenant liveness for rolling compatibility, but it never
+   publishes a navbar board association.
+
+The browser keeps at most one association acknowledgement outstanding and
+coalesces route/list/focus churn to the latest desired set. A five-second
+Socket.IO acknowledgement timeout releases the callback when an older daemon
+does not implement the event.
 
 ### Daemon publication
 
@@ -123,6 +130,14 @@ For an accepted heartbeat, the daemon emits:
 - `presence-updated {userId,presenceId,timestamp}` to the tenant room; and
 - only when board publication is authorized,
   `presence-updated {...,boardId}` to the board-association room.
+
+These operations are structurally separate: cursor moves call only the
+tenant-liveness publisher, while a board-bearing heartbeat requires a completed
+`boards.find` subscription generation. Cursor/get authority is never accepted
+as fallback publisher authority. Per-socket token buckets bound cursor samples,
+board-bearing heartbeats, cursor admission, and non-empty association changes.
+Association synchronization retains only one authorization read plus the latest
+desired set, and in-flight cursor grants count against the room cap.
 
 Board transitions first emit board-scoped `presence-left`. Disconnect, logout,
 bounded impersonation-token expiry, explicit leave, or revocation emits a
@@ -196,10 +211,11 @@ authorized list.
 
 The change is additive under the existing versioned room namespace:
 
-- old #2520 UI + new daemon is secure but boardless because the old UI does not
-  subscribe to the association rooms;
+- old #2520 UI + new daemon is secure but boardless: its cursor traffic refreshes
+  tenant liveness only and cannot publish into association rooms;
 - new UI + old #2520 daemon is secure but boardless because subscription and
-  heartbeat events are ignored;
+  heartbeat events are ignored; bounded acknowledgement timeouts prevent the
+  old replica from retaining browser callbacks;
 - new publisher/subscriber pairs on upgraded replicas work through Redis;
 - `presenceId` has a client fallback for old boardless packets, but exact
   multi-tab leave semantics begin after reconnect to an upgraded daemon.

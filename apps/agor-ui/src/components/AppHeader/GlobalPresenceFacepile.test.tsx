@@ -14,9 +14,13 @@ function makeMockClient() {
   };
   const remove = (event: string, listener: Listener) => listeners.get(event)?.delete(listener);
   const outbound = vi.fn(
-    (event: string, _payload?: unknown, acknowledge?: (result: { ok: boolean }) => void) => {
+    (
+      event: string,
+      _payload?: unknown,
+      acknowledge?: (error: Error | null, result?: { ok: boolean }) => void
+    ) => {
       if (event === PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations) {
-        acknowledge?.({ ok: true });
+        acknowledge?.(null, { ok: true });
       }
     }
   );
@@ -24,6 +28,7 @@ function makeMockClient() {
     client: {
       io: {
         emit: outbound,
+        timeout: vi.fn(() => ({ emit: outbound })),
         on: vi.fn(add),
         off: vi.fn(remove),
       },

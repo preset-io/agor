@@ -76,7 +76,6 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
                 boardId,
                 x: latest.x,
                 y: latest.y,
-                timestamp: Date.now(),
               };
               client.io.volatile.emit(PRESENCE_SOCKET_EVENTS.cursorMove, event);
               lastEmitRef.current = Date.now();
@@ -91,7 +90,6 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
         boardId,
         x,
         y,
-        timestamp: now,
       };
 
       client.io.volatile.emit(PRESENCE_SOCKET_EVENTS.cursorMove, event);

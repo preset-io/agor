@@ -1087,7 +1087,7 @@ describe('Socket.IO handshake credential extraction', () => {
     );
     expect(error).toBeUndefined();
     connect(io, socket);
-    await socket.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+    await expect(subscribeBoardAssociations(socket, ['board-1'])).resolves.toEqual({ ok: true });
     socket.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
     expect(observer.received).toContainEqual({
       event: PRESENCE_SOCKET_EVENTS.updated,
@@ -1772,7 +1772,56 @@ describe('terminal:* handler authorization', () => {
       ).toHaveLength(2);
     });
 
-    it('publishes board identity only to separately authorized association subscribers', async () => {
+    it('never derives a navbar board association from cursor-only authorization', async () => {
+      const { io } = buildHarness();
+      const publisher = makeSocket('cursor-only-publisher', io);
+      const observer = makeSocket('association-observer', io);
+      asUser(publisher, ALICE);
+      asUser(observer, BOB);
+      connect(io, publisher);
+      connect(io, observer);
+      await publisher.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+      await expect(subscribeBoardAssociations(observer, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
+
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.cursorMove)?.({
+        boardId: 'board-1',
+        x: 10,
+        y: 20,
+      });
+
+      expect(observer.received).toContainEqual({
+        event: PRESENCE_SOCKET_EVENTS.updated,
+        data: expect.objectContaining({ userId: ALICE }),
+      });
+      expect(
+        observer.received.filter(
+          (entry) =>
+            entry.event === PRESENCE_SOCKET_EVENTS.updated &&
+            (entry.data as { boardId?: string }).boardId !== undefined
+        )
+      ).toEqual([]);
+    });
+
+    it('treats acknowledgement arguments as untrusted wire data', async () => {
+      const { io } = buildHarness();
+      const socket = makeSocket('invalid-ack', io);
+      asUser(socket, ALICE);
+      connect(io, socket);
+
+      expect(() =>
+        socket.handlers.get(PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations)?.(
+          { boardIds: 'not-an-array' },
+          {}
+        )
+      ).not.toThrow();
+      await expect(
+        socket.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('', {})
+      ).resolves.toBeUndefined();
+    });
+
+    it('publishes board identity only after separate publisher and subscriber authorization', async () => {
       const { io } = buildHarness();
       const publisher = makeSocket('publisher', io);
       const authorized = makeSocket('authorized', io);
@@ -1785,9 +1834,13 @@ describe('terminal:* handler authorization', () => {
       for (const socket of [publisher, authorized, tenantOnly, foreignTenant]) connect(io, socket);
 
       await publisher.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+      await expect(subscribeBoardAssociations(publisher, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
       await expect(subscribeBoardAssociations(authorized, ['board-1'])).resolves.toEqual({
         ok: true,
       });
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
       publisher.handlers.get(PRESENCE_SOCKET_EVENTS.cursorMove)?.({
         boardId: 'board-1',
         x: 10,
@@ -1883,9 +1936,138 @@ describe('terminal:* handler authorization', () => {
         acknowledge
       );
 
-      expect(io.emitted).toEqual([]);
+      expect(io.emitted).toContainEqual({
+        channel: tenantChannelName('default'),
+        event: PRESENCE_SOCKET_EVENTS.updated,
+        data: expect.not.objectContaining({ boardId: expect.anything() }),
+      });
+      expect(
+        io.emitted.filter(
+          (entry) =>
+            entry.event === PRESENCE_SOCKET_EVENTS.updated &&
+            (entry.data as { boardId?: string }).boardId !== undefined
+        )
+      ).toEqual([]);
       expect(acknowledge).toHaveBeenCalledWith({ ok: false });
       expect(socket.joined.size).toBe(2); // server-derived tenant + user rooms only
+    });
+
+    it('reserves in-flight cursor admissions inside the hard room bound', async () => {
+      const { app, io } = buildHarness();
+      const originalService = (app as any).service;
+      const releases: Array<() => void> = [];
+      const getBoard = vi.fn(
+        (id: string) =>
+          new Promise((resolve) => {
+            releases.push(() => resolve({ board_id: id, archived: false }));
+          })
+      );
+      (app as any).service = (path: string) =>
+        path === 'boards' ? { get: getBoard, find: vi.fn() } : originalService(path);
+      const socket = makeSocket('concurrent-cursor-watch', io);
+      asUser(socket, ALICE);
+      connect(io, socket);
+
+      const results = Array.from(
+        { length: MAX_PRESENCE_BOARD_SUBSCRIPTIONS + 1 },
+        (_, index) =>
+          new Promise<{ ok: boolean }>((resolve) => {
+            void socket.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.(
+              `board-${index}`,
+              resolve
+            );
+          })
+      );
+      await vi.waitFor(() => expect(getBoard).toHaveBeenCalled());
+      expect(getBoard.mock.calls.length).toBeLessThanOrEqual(MAX_PRESENCE_BOARD_SUBSCRIPTIONS);
+      releases.splice(0).forEach((release) => {
+        release();
+      });
+      const acknowledgements = await Promise.all(results);
+
+      expect(
+        [...socket.joined].filter((room) => room.includes(':board-presence:')).length
+      ).toBeLessThanOrEqual(MAX_PRESENCE_BOARD_SUBSCRIPTIONS);
+      expect(acknowledgements).toContainEqual({ ok: false });
+    });
+
+    it('coalesces association authorization to one in flight plus the latest desired set', async () => {
+      const { app, io } = buildHarness();
+      const originalService = (app as any).service;
+      const releases: Array<() => void> = [];
+      const findBoards = vi.fn(
+        (params: { query?: { board_id?: { $in?: string[] } } }) =>
+          new Promise((resolve) => {
+            const ids = params.query?.board_id?.$in ?? [];
+            releases.push(() => resolve(ids.map((board_id) => ({ board_id, archived: false }))));
+          })
+      );
+      (app as any).service = (path: string) =>
+        path === 'boards' ? { get: vi.fn(), find: findBoards } : originalService(path);
+      const socket = makeSocket('subscription-flood', io);
+      asUser(socket, ALICE);
+      connect(io, socket);
+
+      const results = Array.from(
+        { length: 30 },
+        (_, index) =>
+          new Promise<{ ok: boolean }>((resolve) => {
+            socket.handlers.get(PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations)?.(
+              { boardIds: [`board-${index}`] },
+              resolve
+            );
+          })
+      );
+      await vi.waitFor(() => expect(findBoards).toHaveBeenCalledTimes(1));
+      releases.shift()?.();
+      await vi.waitFor(() => expect(findBoards).toHaveBeenCalledTimes(2));
+      releases.shift()?.();
+      const acknowledgements = await Promise.all(results);
+
+      expect(findBoards).toHaveBeenCalledTimes(2);
+      expect(acknowledgements.filter(({ ok }) => ok)).toHaveLength(1);
+      expect(socket.joined).toContain(boardPresenceAssociationRoomName('default', 'board-4'));
+      for (const intermediate of ['board-0', 'board-1', 'board-2', 'board-3']) {
+        expect(socket.joined).not.toContain(
+          boardPresenceAssociationRoomName('default', intermediate)
+        );
+      }
+    });
+
+    it('rate-limits cursor samples and alternating board associations per socket', async () => {
+      const { io } = buildHarness();
+      const publisher = makeSocket('realtime-flood', io);
+      asUser(publisher, ALICE);
+      connect(io, publisher);
+      await publisher.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+      await expect(subscribeBoardAssociations(publisher, ['board-1', 'board-2'])).resolves.toEqual({
+        ok: true,
+      });
+
+      for (let index = 0; index < 200; index++) {
+        publisher.handlers.get(PRESENCE_SOCKET_EVENTS.cursorMove)?.({
+          boardId: 'board-1',
+          x: index,
+          y: index,
+        });
+      }
+      expect(
+        io.emitted.filter((entry) => entry.event === PRESENCE_SOCKET_EVENTS.cursorMoved).length
+      ).toBeLessThanOrEqual(31);
+
+      io.emitted.length = 0;
+      for (let index = 0; index < 100; index++) {
+        publisher.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({
+          boardId: index % 2 === 0 ? 'board-1' : 'board-2',
+        });
+      }
+      expect(
+        io.emitted.filter(
+          (entry) =>
+            entry.event === PRESENCE_SOCKET_EVENTS.updated &&
+            (entry.data as { boardId?: string }).boardId !== undefined
+        ).length
+      ).toBeLessThanOrEqual(10);
     });
 
     it('uses per-connection identities so one tab leaving cannot clear another tab', async () => {
@@ -1903,6 +2085,7 @@ describe('terminal:* handler authorization', () => {
       await observer.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
       for (const [index, tab] of [tabOne, tabTwo].entries()) {
         await tab.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+        await expect(subscribeBoardAssociations(tab, ['board-1'])).resolves.toEqual({ ok: true });
         tab.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
         tab.handlers.get(PRESENCE_SOCKET_EVENTS.cursorMove)?.({
           boardId: 'board-1',
@@ -1972,6 +2155,51 @@ describe('terminal:* handler authorization', () => {
       });
     });
 
+    it('retracts the previous route while replacement authorization is still in flight', async () => {
+      const { app, io } = buildHarness();
+      const originalService = (app as any).service;
+      let releaseReplacement: (() => void) | undefined;
+      const findBoards = vi.fn(async (params: { query?: { board_id?: { $in?: string[] } } }) => {
+        const ids = params.query?.board_id?.$in ?? [];
+        if (ids.includes('board-2')) {
+          await new Promise<void>((resolve) => {
+            releaseReplacement = resolve;
+          });
+        }
+        return ids.map((board_id) => ({ board_id, archived: false }));
+      });
+      (app as any).service = (path: string) =>
+        path === 'boards' ? { get: vi.fn(), find: findBoards } : originalService(path);
+      const publisher = makeSocket('route-transition-publisher', io);
+      const observer = makeSocket('route-transition-observer', io);
+      asUser(publisher, ALICE);
+      asUser(observer, BOB);
+      connect(io, publisher);
+      connect(io, observer);
+      await expect(subscribeBoardAssociations(publisher, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
+      await expect(subscribeBoardAssociations(observer, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
+      observer.received.length = 0;
+      const acknowledge = vi.fn();
+
+      publisher.handlers.get(PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations)?.(
+        { boardIds: ['board-2'] },
+        acknowledge
+      );
+
+      expect(observer.received).toContainEqual({
+        event: PRESENCE_SOCKET_EVENTS.left,
+        data: expect.objectContaining({ userId: ALICE, boardId: 'board-1' }),
+      });
+      expect(acknowledge).not.toHaveBeenCalled();
+      releaseReplacement?.();
+      await vi.waitFor(() => expect(acknowledge).toHaveBeenCalledWith({ ok: true }));
+    });
+
     it('disconnects explicit logouts and promptly retracts their board association', async () => {
       const { app, io } = buildHarness();
       const publisher = makeSocket('logout-publisher', io);
@@ -1983,7 +2211,9 @@ describe('terminal:* handler authorization', () => {
       await expect(subscribeBoardAssociations(observer, ['board-1'])).resolves.toEqual({
         ok: true,
       });
-      await publisher.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+      await expect(subscribeBoardAssociations(publisher, ['board-1'])).resolves.toEqual({
+        ok: true,
+      });
       publisher.handlers.get(PRESENCE_SOCKET_EVENTS.heartbeat)?.({ boardId: 'board-1' });
       const presenceId = (
         observer.received.find(

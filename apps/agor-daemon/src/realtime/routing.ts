@@ -1,11 +1,13 @@
-import type {
-  CursorLeftEvent,
-  CursorMovedEvent,
-  MCPOAuthAttemptID,
-  MCPServerID,
-  PresenceLeftEvent,
-  PresenceUpdatedEvent,
-  RepoCloneError,
+import {
+  type CursorLeftEvent,
+  type CursorMovedEvent,
+  type MCPOAuthAttemptID,
+  type MCPServerID,
+  PRESENCE_HA_SOCKET_EVENTS,
+  PRESENCE_SOCKET_EVENTS,
+  type PresenceLeftEvent,
+  type PresenceUpdatedEvent,
+  type RepoCloneError,
 } from '@agor/core/types';
 
 /**
@@ -133,10 +135,10 @@ export function isExecutorTaskRoomName(name: string): boolean {
 }
 
 interface HaNativeSocketPayloads {
-  'cursor-moved': CursorMovedEvent;
-  'cursor-left': CursorLeftEvent;
-  'presence-updated': PresenceUpdatedEvent;
-  'presence-left': PresenceLeftEvent;
+  [PRESENCE_SOCKET_EVENTS.cursorMoved]: CursorMovedEvent;
+  [PRESENCE_SOCKET_EVENTS.cursorLeft]: CursorLeftEvent;
+  [PRESENCE_SOCKET_EVENTS.updated]: PresenceUpdatedEvent;
+  [PRESENCE_SOCKET_EVENTS.left]: PresenceLeftEvent;
   'repo:cloneError': {
     slug: string;
     url: string;
@@ -161,10 +163,7 @@ interface HaNativeSocketPayloads {
 
 /** Native Socket.IO packets intentionally permitted to cross the HA Redis adapter. */
 export const HA_NATIVE_SOCKET_EVENT_INVENTORY = [
-  'cursor-moved',
-  'cursor-left',
-  'presence-updated',
-  'presence-left',
+  ...PRESENCE_HA_SOCKET_EVENTS,
   'repo:cloneError',
   'oauth:completed',
   'oauth:disconnected',

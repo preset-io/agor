@@ -17,6 +17,9 @@ export const PRESENCE_CONFIG = {
   /** Refresh server-derived online/board association state while the app is mounted. */
   HEARTBEAT_INTERVAL_MS: 15_000,
 
+  /** Release mixed-version Socket.IO acknowledgements when an old daemon ignores the event. */
+  SUBSCRIPTION_ACK_TIMEOUT_MS: 5_000,
+
   /** Hide cursor after 5 seconds of no movement */
   CURSOR_HIDE_AFTER_MS: 5000,
 

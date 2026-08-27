@@ -986,7 +986,7 @@ describe('registered external board-comment mutation boundary', () => {
 describe('registered board admin authority', () => {
   type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
   type RegisteredHooks = {
-    before?: Partial<Record<'patch', RegisteredHook[]>>;
+    before?: Partial<Record<'find' | 'patch', RegisteredHook[]>>;
   };
 
   const captureBoardHooks = (allowSuperadmin: boolean): RegisteredHooks[] => {
@@ -1047,6 +1047,55 @@ describe('registered board admin authority', () => {
     }
 
     expect(context).toBeDefined();
+  });
+
+  it.each([
+    ['member', false],
+    ['admin', false],
+    ['superadmin', false],
+  ] as const)(
+    'scopes registered boards.find for %s when allowSuperadmin=%s',
+    async (role, allowSuperadmin) => {
+      const context = {
+        path: 'boards',
+        method: 'find',
+        params: {
+          provider: 'socketio',
+          user: { user_id: `${role}-1`, role },
+          query: { board_id: { $in: ['visible', 'private'] } },
+        },
+      } as HookContext;
+
+      for (const registration of captureBoardHooks(allowSuperadmin)) {
+        for (const hook of registration.before?.find ?? []) await hook(context);
+      }
+
+      expect(
+        (context.params as HookContext['params'] & { _agorSqlBoardAccessUserId?: string })
+          ._agorSqlBoardAccessUserId
+      ).toBe(`${role}-1`);
+    }
+  );
+
+  it('allows only the explicitly configured superadmin boards.find bypass', async () => {
+    const context = {
+      path: 'boards',
+      method: 'find',
+      params: {
+        provider: 'socketio',
+        user: { user_id: 'super-1', role: 'superadmin' },
+        query: {},
+      },
+    } as HookContext;
+
+    for (const registration of captureBoardHooks(true)) {
+      for (const hook of registration.before?.find ?? []) await hook(context);
+    }
+
+    expect(
+      (context.params as HookContext['params'] & { _agorSqlBoardAccessUserId?: string })
+        ._agorSqlBoardAccessUserId
+    ).toBeUndefined();
   });
 });
 

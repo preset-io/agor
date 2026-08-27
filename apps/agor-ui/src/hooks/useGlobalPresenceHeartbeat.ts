@@ -53,6 +53,8 @@ export function useGlobalPresenceHeartbeat({
     if (!enabled || !client?.io) return;
     let active = true;
     let synchronizationGeneration = 0;
+    let synchronizationInFlight = false;
+    let synchronizationPending = false;
 
     const publishHeartbeat = () => {
       client.io.emit(PRESENCE_SOCKET_EVENTS.heartbeat, {
@@ -60,16 +62,34 @@ export function useGlobalPresenceHeartbeat({
       });
     };
     const synchronize = () => {
+      if (!active) return;
+      if (synchronizationInFlight) {
+        synchronizationPending = true;
+        return;
+      }
+      synchronizationInFlight = true;
       const generation = ++synchronizationGeneration;
-      client.io.emit(
-        PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations,
-        { boardIds: subscribedBoardIdsRef.current },
-        (result: PresenceSubscriptionAcknowledgement) => {
-          if (active && generation === synchronizationGeneration && result?.ok) {
-            publishHeartbeat();
+      client.io
+        .timeout(PRESENCE_CONFIG.SUBSCRIPTION_ACK_TIMEOUT_MS)
+        .emit(
+          PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations,
+          { boardIds: subscribedBoardIdsRef.current },
+          (error: Error | null, result: PresenceSubscriptionAcknowledgement) => {
+            synchronizationInFlight = false;
+            const rerun = synchronizationPending;
+            synchronizationPending = false;
+            if (
+              active &&
+              !rerun &&
+              !error &&
+              generation === synchronizationGeneration &&
+              result?.ok
+            ) {
+              publishHeartbeat();
+            }
+            if (active && rerun) synchronize();
           }
-        }
-      );
+        );
     };
     synchronizeRef.current = synchronize;
 

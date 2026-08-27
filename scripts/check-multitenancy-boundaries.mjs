@@ -83,9 +83,11 @@ const checks = [
       // replicas. Production room names and authorization still come from the
       // centralized routing/config code.
       'apps/agor-daemon/src/setup/socketio-tenant-isolation.postgres.test.ts': 6,
-      // The second cursor packet is deliberately sent after revoke/reconnect
-      // denial to prove a stale client cannot publish through its former room.
-      'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 2,
+      // The cursor packets are deliberately sent before and after revoke/
+      // reconnect denial, and the board heartbeat independently verifies the
+      // authorized association relay. These three test-only raw client emits
+      // exercise the real Redis adapter boundary through shared event names.
+      'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 3,
       // Real immutable-handshake coverage deliberately inspects the private
       // Feathers task channel through one test helper and injects both executor
       // control event names into its current connections. Pre-disconnect

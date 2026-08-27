@@ -22,6 +22,17 @@ export const PRESENCE_SOCKET_EVENTS = {
   left: 'presence-left',
 } as const;
 
+/** Complete presence protocol inventory for diagnostics and event classification. */
+export const PRESENCE_SOCKET_EVENT_NAMES = Object.values(PRESENCE_SOCKET_EVENTS);
+
+/** Server-to-client presence events explicitly eligible for HA adapter relay. */
+export const PRESENCE_HA_SOCKET_EVENTS = [
+  PRESENCE_SOCKET_EVENTS.cursorMoved,
+  PRESENCE_SOCKET_EVENTS.cursorLeft,
+  PRESENCE_SOCKET_EVENTS.updated,
+  PRESENCE_SOCKET_EVENTS.left,
+] as const;
+
 /** Bound per-socket board-room membership and client subscription payloads. */
 export const MAX_PRESENCE_BOARD_SUBSCRIPTIONS = 512;
 
@@ -32,7 +43,6 @@ export interface CursorMoveEvent {
   boardId: BoardID;
   x: number; // React Flow viewport coordinates
   y: number; // React Flow viewport coordinates
-  timestamp: number;
 }
 
 /**
