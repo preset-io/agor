@@ -35,6 +35,7 @@ import { useMemo, useRef, useState } from 'react';
 import { useAuth } from '@/hooks';
 import { useAgorStore } from '@/store/agorStore';
 import { useThemedMessage } from '@/utils/message';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { registerWidgetComponent, type WidgetComponentProps } from '../MessageBlock/WidgetBlock';
 
 const { Text } = Typography;
@@ -71,6 +72,17 @@ function presentationFor(channelType: string, field: string): FieldPresentation 
     ...getGatewayCredentialPresentation(channelType as ChannelType, field),
     textarea: field === 'private_key',
   };
+}
+
+/**
+ * Normalize a field's raw input before validating/submitting. Single-line
+ * opaque secrets (bot tokens, app passwords, signing secrets) can pick up
+ * a stray space or newline from a wrapped terminal/clipboard paste, so
+ * strip whitespace everywhere. PEM keys (`textarea: true`) have structurally
+ * meaningful newlines, so those only get outer whitespace trimmed.
+ */
+function normalizeFieldValue(channelType: string, field: string, value: string): string {
+  return presentationFor(channelType, field).textarea ? value.trim() : sanitizeSecretValue(value);
 }
 
 function readParams(widget: WidgetMessageMetadata): GatewayTokenParams {
@@ -259,7 +271,9 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
   const validate = (): Record<string, string> => {
     const errors: Record<string, string> = {};
     for (const field of fields) {
-      const value = values[field]?.trim() ?? '';
+      const value = values[field]
+        ? normalizeFieldValue(params.channelType, field, values[field])
+        : '';
       if (!value) {
         errors[field] = 'Enter a value.';
         continue;
@@ -292,7 +306,11 @@ const PendingForm: React.FC<PendingFormProps> = ({ widgetId, params, client }) =
     setValidationMessage(null);
     setFieldErrors({});
     const tokens: Record<string, string> = {};
-    for (const field of fields) tokens[field] = values[field]?.trim() ?? '';
+    for (const field of fields) {
+      tokens[field] = values[field]
+        ? normalizeFieldValue(params.channelType, field, values[field])
+        : '';
+    }
     try {
       await post('submit', { tokens });
       setLocalResolution('submitted');
