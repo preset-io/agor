@@ -131,8 +131,8 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     },
     // Fire an `io` event (e.g. `connect`) so tests can drive the reconnect
     // refetch path.
-    emitIo: (event: string) => {
-      for (const fn of ioListeners.get(event) ?? []) fn(undefined);
+    emitIo: (event: string, payload?: unknown) => {
+      for (const fn of ioListeners.get(event) ?? []) fn(payload);
     },
     // Register a synchronous side effect that runs every time `service(name)`'s
     // `method` is invoked (receives the 1-based call count). The hook fires

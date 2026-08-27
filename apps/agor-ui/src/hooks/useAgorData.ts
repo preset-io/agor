@@ -64,7 +64,7 @@ import {
   untombstoneSession,
 } from '../store/realtimeBatch';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
-import { refetchMCPOAuthDurableState } from '../utils/mcpOAuthAttempt';
+import { runLatestMCPOAuthStatusRequest } from '../utils/mcpOAuthAttempt';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import {
   resolveBoardFromUrlPure,
@@ -413,6 +413,44 @@ export function useAgorData(
   // physical reconnect or page refresh. We use a ref rather than state since
   // we only consume it in event handlers, never in render.
   const lastSilentFetchFailedRef = useRef(false);
+  const oauthStatusRequestGenerationRef = useRef(0);
+
+  /**
+   * One latest-request-wins coordinator for initial hydration, polling, and
+   * realtime OAuth hints. A later request invalidates every earlier response,
+   * preventing an old poll from overwriting a newer disconnect/re-auth result.
+   */
+  const refetchOAuthDurableState = useCallback(
+    async (requestAuthorityScope: string, mcpServerId?: string): Promise<boolean> => {
+      if (!client) return false;
+      return runLatestMCPOAuthStatusRequest(
+        oauthStatusRequestGenerationRef,
+        async () => {
+          const [status, freshServer] = await Promise.all([
+            client.service('mcp-servers/oauth-status').find(),
+            mcpServerId
+              ? client.service('mcp-servers').get(mcpServerId)
+              : Promise.resolve(undefined),
+          ]);
+          return { status, freshServer };
+        },
+        () => authorityScopeKeyRef.current === requestAuthorityScope,
+        ({ status, freshServer }) => {
+          const ids =
+            (status as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
+          agorStore.getState().applyMaps((prev) => {
+            if (!freshServer) {
+              return { ...prev, userAuthenticatedMcpServerIds: new Set(ids) };
+            }
+            const mcpServerById = new Map(prev.mcpServerById);
+            mcpServerById.set(freshServer.mcp_server_id, freshServer);
+            return { ...prev, userAuthenticatedMcpServerIds: new Set(ids), mcpServerById };
+          });
+        }
+      );
+    },
+    [client]
+  );
 
   // Fetch all data
   //
@@ -552,18 +590,7 @@ export function useAgorData(
               artifactById: buildById(list, 'artifact_id', prev.artifactById),
             }))
         );
-        void runAuthorityHydration(
-          'oauth-status',
-          ['oauth'],
-          () => client.service('mcp-servers/oauth-status').find(),
-          (res) => {
-            const ids =
-              (res as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, userAuthenticatedMcpServerIds: new Set(ids) }));
-          }
-        );
+        void refetchOAuthDurableState(fetchAuthorityScope);
 
         // ── Essential gated fetches — LIGHT batch ───────────────────────
         // Tiny global collections (boards / users / repos / card-types stay
@@ -1137,6 +1164,7 @@ export function useAgorData(
       client,
       directSessionId,
       enabled,
+      refetchOAuthDurableState,
     ]
   );
 
@@ -1238,23 +1266,12 @@ export function useAgorData(
     if (!client || !enabled || !authorityScopeKey) return;
     const pollAuthorityScope = authorityScopeKey;
     const interval = window.setInterval(() => {
-      void client
-        .service('mcp-servers/oauth-status')
-        .find()
-        .then((res) => {
-          if (authorityScopeKeyRef.current !== pollAuthorityScope) return;
-          const ids =
-            (res as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
-          agorStore
-            .getState()
-            .applyMaps((prev) => ({ ...prev, userAuthenticatedMcpServerIds: new Set(ids) }));
-        })
-        .catch(() => {
-          // Transient disconnects are handled by the next poll/realtime refetch.
-        });
+      void refetchOAuthDurableState(pollAuthorityScope).catch(() => {
+        // Transient disconnects are handled by the next poll/realtime refetch.
+      });
     }, MCP_OAUTH_STATUS_POLL_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [authorityScopeKey, client, enabled]);
+  }, [authorityScopeKey, client, enabled, refetchOAuthDurableState]);
 
   // If the user navigates to /s/<id>/ after the initial active-session fetch,
   // load that one session by ID as well. This keeps direct links to archived
@@ -1540,11 +1557,8 @@ export function useAgorData(
     }) => {
       if (!event.success || !event.mcp_server_id) return;
       try {
-        await refetchMCPOAuthDurableState(
-          client,
-          event.mcp_server_id,
-          () => authorityScopeKeyRef.current === authorityScopeKey
-        );
+        const applied = await refetchOAuthDurableState(authorityScopeKey, event.mcp_server_id);
+        if (!applied) return;
         if (authorityScopeKeyRef.current !== authorityScopeKey) return;
         bumpRevision('oauth');
         bumpRevision('mcpServers');
@@ -1559,11 +1573,8 @@ export function useAgorData(
     const handleOAuthDisconnected = async (event: { mcp_server_id: string }) => {
       if (!event.mcp_server_id) return;
       try {
-        await refetchMCPOAuthDurableState(
-          client,
-          event.mcp_server_id,
-          () => authorityScopeKeyRef.current === authorityScopeKey
-        );
+        const applied = await refetchOAuthDurableState(authorityScopeKey, event.mcp_server_id);
+        if (!applied) return;
         if (authorityScopeKeyRef.current !== authorityScopeKey) return;
         bumpRevision('oauth');
         bumpRevision('mcpServers');
@@ -1710,6 +1721,7 @@ export function useAgorData(
     enabled,
     fetchData,
     hasInitiallyFetched,
+    refetchOAuthDurableState,
   ]);
 
   // Derived render model for the loading checklist. Memoized so the array

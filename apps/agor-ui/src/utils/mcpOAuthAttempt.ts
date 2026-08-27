@@ -9,6 +9,21 @@ import { agorStore } from '@/store/agorStore';
 
 export type { MCPOAuthAttemptResult, MCPOAuthAttemptStatus, MCPOAuthRefreshResult };
 
+/** Run an OAuth-status read with latest-request-wins application semantics. */
+export async function runLatestMCPOAuthStatusRequest<T>(
+  generationRef: { current: number },
+  fetch: () => Promise<T>,
+  shouldApply: () => boolean,
+  apply: (value: T) => void
+): Promise<boolean> {
+  if (!shouldApply()) return false;
+  const generation = ++generationRef.current;
+  const value = await fetch();
+  if (!shouldApply() || generationRef.current !== generation) return false;
+  apply(value);
+  return true;
+}
+
 const sleep = (milliseconds: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {

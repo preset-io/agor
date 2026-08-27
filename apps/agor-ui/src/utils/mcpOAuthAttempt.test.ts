@@ -4,6 +4,7 @@ import {
   oauthAttemptFailureMessage,
   refetchMCPOAuthDurableState,
   refreshAndRefetchMCPOAuthGrant,
+  runLatestMCPOAuthStatusRequest,
   waitForMCPOAuthAttempt,
 } from './mcpOAuthAttempt';
 
@@ -18,6 +19,36 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+describe('runLatestMCPOAuthStatusRequest', () => {
+  it('discards an older response that completes after a newer request', async () => {
+    const generation = { current: 0 };
+    const older = deferred<string[]>();
+    let applied: string[] = [];
+    const apply = (ids: string[]) => {
+      applied = ids;
+    };
+
+    const olderRequest = runLatestMCPOAuthStatusRequest(
+      generation,
+      () => older.promise,
+      () => true,
+      apply
+    );
+    await expect(
+      runLatestMCPOAuthStatusRequest(
+        generation,
+        async () => [],
+        () => true,
+        apply
+      )
+    ).resolves.toBe(true);
+    older.resolve(['stale-server']);
+
+    await expect(olderRequest).resolves.toBe(false);
+    expect(applied).toEqual([]);
+  });
+});
 
 describe('waitForMCPOAuthAttempt', () => {
   it('uses repeated durable gets rather than a realtime event as completion proof', async () => {
