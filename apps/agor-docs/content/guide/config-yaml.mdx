@@ -288,3 +288,50 @@ signals.
 Older Agor versions reject the unknown top-level `metrics` key. During a
 mixed-version rollout, upgrade every daemon first, then add the block and
 restart the fleet.
+
+## Datadog APM (dd-trace) tracing
+
+When the daemon runs under a Datadog APM tracer — typically loaded process-wide
+by [single-step instrumentation](https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/single-step-apm/)
+via `NODE_OPTIONS` — HTTP, Express, Postgres, and Redis are auto-instrumented.
+FeathersJS is not: dd-trace ships no Feathers plugin, so service-method calls
+that ride socket.io are invisible to APM. This setting adds an app-level hook
+that wraps each service method in a `feathers.request` span whose **resource**
+name is `<service>.<method>` (for example `sessions.find`), nested under the
+active HTTP span so child Postgres queries appear beneath the method that
+issued them:
+
+```yaml
+metrics:
+  apm:
+    trace_services: off # off | entrypoint | full
+```
+
+- **`off`** (default) — the hook is not registered; zero overhead.
+- **`entrypoint`** — one span per top-level request; nested service-to-service
+  fan-out is suppressed. Cheap and bounded — safe to leave on in production.
+- **`full`** — a span per service-method invocation including nested calls, so
+  the full fan-out and its child queries are visible. Highest span volume (and
+  ingestion cost) — intended for active investigation, not steady state.
+
+`AGOR_APM_TRACE_SERVICES` (`off`, `entrypoint`, or `full`) overrides the YAML
+value so depth can be changed without editing config. Like all metrics
+settings, this is resolved into the daemon's immutable startup snapshot and
+takes effect on restart.
+
+The tracer is an **optional runtime dependency** that Agor never declares or
+bundles: the hook resolves `dd-trace-api` (Datadog's supported bridge for
+custom instrumentation under single-step) or `dd-trace` at runtime and no-ops
+if neither is installed. Note that single-step instrumentation does not
+necessarily make these packages resolvable from Agor's own module tree, so on
+deployments that enable `entrypoint`/`full` you may need to install one
+alongside `agor-live`:
+
+```bash
+npm install -g --ignore-scripts dd-trace-api
+```
+
+If `trace_services` is enabled but no tracer resolves, the daemon logs a
+one-time warning at startup and continues with Feathers tracing disabled — it
+never fails closed or blocks requests. This setting carries no credentials; span
+delivery is handled entirely by the ambient Datadog tracer/Agent.

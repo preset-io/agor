@@ -29,6 +29,12 @@ export interface FeathersTracingOptions extends FeathersInstrumentationOptions {
    * the process-wide dd-trace singleton. Intended for tests.
    */
   tracer?: DatadogTracer | null;
+  /**
+   * Override tracer resolution (defaults to {@link resolveTracerModule}). Lets
+   * tests exercise the enabled-but-unresolved warning path deterministically,
+   * independent of whether dd-trace happens to be installed in the workspace.
+   */
+  resolveTracer?: () => DatadogTracer | null;
 }
 
 /**
@@ -54,11 +60,13 @@ const requireFromDaemon = createRequire(import.meta.url);
  * same `tracer.trace()` surface. Treated like `hot-shots` for StatsD: present →
  * used, absent → no-op (loudly, at registration).
  */
-function loadTracer(): DatadogTracer | null {
+export function resolveTracerModule(
+  requireFn: (id: string) => unknown = requireFromDaemon
+): DatadogTracer | null {
   for (const moduleName of ['dd-trace-api', 'dd-trace']) {
     try {
-      const mod = requireFromDaemon(moduleName) as { default?: DatadogTracer } & DatadogTracer;
-      const tracer = mod.default ?? mod;
+      const mod = requireFn(moduleName) as { default?: DatadogTracer } & DatadogTracer;
+      const tracer = mod?.default ?? mod;
       if (tracer && typeof tracer.trace === 'function') return tracer;
     } catch {
       // Not installed under this name; try the next.
@@ -97,7 +105,10 @@ export function createFeathersTracingHook(
   const passthrough = async (_context: HookContext, next: AroundNext): Promise<void> => next();
   if (depth === 'off') return passthrough;
 
-  const tracer = options.tracer !== undefined ? options.tracer : loadTracer();
+  const tracer =
+    options.tracer !== undefined
+      ? options.tracer
+      : (options.resolveTracer ?? resolveTracerModule)();
   if (!tracer) {
     // Only warn when we attempted real resolution (options.tracer === undefined),
     // never for tests that explicitly inject `null`.
