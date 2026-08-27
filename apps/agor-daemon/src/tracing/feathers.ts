@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createRequire } from 'node:module';
 import type { ApmTraceServiceDepth } from '@agor/core/config';
+import { type DatadogTracer, resolveDatadogTracer } from '@agor/core/tracing/datadog';
 import type { HookContext } from '@agor/core/types';
 import {
   type FeathersInstrumentationOptions,
@@ -11,17 +12,7 @@ import {
 
 type AroundNext = () => Promise<void>;
 
-/** Minimal surface of the dd-trace singleton we depend on. */
-export interface DatadogTracer {
-  trace<T>(
-    name: string,
-    options: {
-      resource?: string;
-      tags?: Record<string, unknown>;
-    },
-    fn: () => Promise<T>
-  ): Promise<T>;
-}
+export type { DatadogTracer };
 
 export interface FeathersTracingOptions extends FeathersInstrumentationOptions {
   /**
@@ -63,16 +54,7 @@ const requireFromDaemon = createRequire(import.meta.url);
 export function resolveTracerModule(
   requireFn: (id: string) => unknown = requireFromDaemon
 ): DatadogTracer | null {
-  for (const moduleName of ['dd-trace-api', 'dd-trace']) {
-    try {
-      const mod = requireFn(moduleName) as { default?: DatadogTracer } & DatadogTracer;
-      const tracer = mod?.default ?? mod;
-      if (tracer && typeof tracer.trace === 'function') return tracer;
-    } catch {
-      // Not installed under this name; try the next.
-    }
-  }
-  return null;
+  return resolveDatadogTracer(requireFn);
 }
 
 /**

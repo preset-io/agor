@@ -1,4 +1,6 @@
-import { createRequire } from 'node:module';
+import type { DatadogTracer } from '../tracing/datadog';
+
+export type { DatadogTracer };
 
 /**
  * Datadog APM spans for PostgreSQL queries.
@@ -26,15 +28,6 @@ import { createRequire } from 'node:module';
  * change a query. Worst case is "no DB spans".
  */
 
-/** Minimal surface of the dd-trace singleton we depend on. */
-export interface DatadogTracer {
-  trace<T>(
-    name: string,
-    options: { resource?: string; type?: string; tags?: Record<string, unknown> },
-    fn: () => T
-  ): T;
-}
-
 /**
  * The methods on a Drizzle prepared query that actually run the SQL. `values`
  * is not present on every driver's prepared-query class (postgres.js currently
@@ -54,28 +47,6 @@ const PREPARED_EXECUTE_METHODS = ['execute', 'all', 'values'] as const;
  * option) intentionally no-ops.
  */
 const patchedSessionTargets = new WeakSet<object>();
-
-const requireFromCore = createRequire(import.meta.url);
-
-/**
- * Resolve the process-wide APM tracer without initializing it. Optional runtime
- * dependency (never declared/bundled): present → used, absent → no-op. Tries
- * `dd-trace-api` (Datadog's single-step bridge) then `dd-trace`.
- */
-export function resolvePostgresTracer(
-  requireFn: (id: string) => unknown = requireFromCore
-): DatadogTracer | null {
-  for (const moduleName of ['dd-trace-api', 'dd-trace']) {
-    try {
-      const mod = requireFn(moduleName) as { default?: DatadogTracer } & DatadogTracer;
-      const tracer = mod?.default ?? mod;
-      if (tracer && typeof tracer.trace === 'function') return tracer;
-    } catch {
-      // Not installed under this name; try the next.
-    }
-  }
-  return null;
-}
 
 /**
  * Collapse a Drizzle SQL string to a bounded span resource.
@@ -156,9 +127,14 @@ interface DrizzleSessionLike {
  * Patch a Drizzle postgres.js database so every query emits a `postgres.query`
  * span. Idempotent and best-effort — safe to call unconditionally.
  *
+ * The tracer must be INJECTED (see options). `@agor/core` never resolves
+ * dd-trace itself: the tracer is a runtime/daemon concern that may not be on
+ * core's module-resolution path under single-step instrumentation, so the
+ * daemon resolves it (via {@link resolveDatadogTracer} anchored in the daemon)
+ * and threads it in through database creation. A missing tracer is a no-op.
+ *
  * @param db      the Drizzle database returned by `drizzle-orm/postgres-js`
- * @param options.tracer  inject a tracer (or `null`) instead of resolving the
- *   dd-trace singleton — for tests and for callers that resolve it themselves.
+ * @param options.tracer  the resolved dd-trace tracer, or `null`/absent to no-op.
  * @returns `true` if instrumentation was installed, `false` otherwise.
  */
 export function instrumentDrizzlePostgresForTracing(
@@ -166,7 +142,7 @@ export function instrumentDrizzlePostgresForTracing(
   options: { tracer?: DatadogTracer | null } = {}
 ): boolean {
   try {
-    const tracer = options.tracer !== undefined ? options.tracer : resolvePostgresTracer();
+    const tracer = options.tracer ?? null;
     if (!tracer) return false;
 
     // The session is shared by prototype across the top-level db AND every

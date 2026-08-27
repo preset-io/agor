@@ -82,6 +82,12 @@
       "import": "./dist/telemetry/index.js",
       "require": "./dist/telemetry/index.cjs"
     },
+    "./tracing/datadog": {
+      "source": "./src/tracing/datadog.ts",
+      "types": "./dist/tracing/datadog.d.ts",
+      "import": "./dist/tracing/datadog.js",
+      "require": "./dist/tracing/datadog.cjs"
+    },
     "./config": {
       "source": "./src/config/index.ts",
       "types": "./dist/config/index.d.ts",

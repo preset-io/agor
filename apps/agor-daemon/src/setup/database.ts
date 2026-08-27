@@ -7,6 +7,7 @@
 
 import { constants } from 'node:fs';
 import { access, mkdir } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { ensureAgorHome, getAgorHome } from '@agor/core/config';
 import {
@@ -21,6 +22,7 @@ import {
   seedInitialData,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { resolveDatadogTracer } from '@agor/core/tracing/datadog';
 import type { TenantID } from '@agor/core/types';
 import { extractDbFilePath } from '@agor/core/utils/path';
 import { logFirstRunAdminBootstrap, runFirstRunAdminBootstrap } from './first-run-admin.js';
@@ -129,11 +131,19 @@ export async function initializeDatabase(
   // Ensure directory exists for SQLite
   await ensureDatabaseDirectory(dbPath);
 
+  // Resolve the APM tracer from the daemon (where single-step instrumentation
+  // makes dd-trace resolvable) and inject it so Postgres queries emit spans.
+  // @agor/core never resolves dd-trace itself. No-op when APM isn't loaded.
+  const tracer = resolveDatadogTracer(createRequire(import.meta.url));
+
   // Create database with foreign keys enabled
-  const db = await createDatabaseAsync({
-    url: dbPath,
-    ...(options.pool ? { pool: options.pool } : {}),
-  });
+  const db = await createDatabaseAsync(
+    {
+      url: dbPath,
+      ...(options.pool ? { pool: options.pool } : {}),
+    },
+    { tracer }
+  );
   const scopedDb = createTenantScopedDatabaseProxy(db, {
     requireScope: options.requireTenantScope === true,
     label: 'daemon database',

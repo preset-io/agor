@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  type DatadogTracer,
-  instrumentDrizzlePostgresForTracing,
-  resolvePostgresTracer,
-} from './postgres-tracing';
+import type { DatadogTracer } from '../tracing/datadog';
+import { instrumentDrizzlePostgresForTracing } from './postgres-tracing';
 
 interface TracedCall {
   name: string;
@@ -226,38 +223,5 @@ describe('instrumentDrizzlePostgresForTracing', () => {
     session.prepareQuery({ sql: 'x' }, 'fields', 'name', true);
     expect(session.lastArgs).toEqual([{ sql: 'x' }, 'fields', 'name', true]);
     expect(session.lastThis).toBe(session);
-  });
-});
-
-describe('resolvePostgresTracer', () => {
-  const validTracer = { trace: () => undefined };
-  const notFound = (id: string) => {
-    throw Object.assign(new Error(`Cannot find module '${id}'`), { code: 'MODULE_NOT_FOUND' });
-  };
-
-  it('prefers dd-trace-api, then falls back to dd-trace', () => {
-    const seen: string[] = [];
-    expect(
-      resolvePostgresTracer((id) => {
-        seen.push(id);
-        if (id === 'dd-trace-api') return validTracer;
-        throw new Error('unreached');
-      })
-    ).toBe(validTracer);
-    expect(seen).toEqual(['dd-trace-api']);
-
-    expect(resolvePostgresTracer((id) => (id === 'dd-trace' ? validTracer : notFound(id)))).toBe(
-      validTracer
-    );
-  });
-
-  it('unwraps a default export and returns null when neither resolves', () => {
-    expect(
-      resolvePostgresTracer((id) =>
-        id === 'dd-trace-api' ? { default: validTracer } : notFound(id)
-      )
-    ).toBe(validTracer);
-    expect(resolvePostgresTracer(notFound)).toBeNull();
-    expect(resolvePostgresTracer(() => ({}))).toBeNull(); // no callable .trace
   });
 });
