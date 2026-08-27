@@ -2,8 +2,9 @@ import { canConfigureMCPServers } from '@agor/core/mcp/member-policy';
 import type { AgorClient, MCPMemberPolicy, MCPServer, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { agorStore } from '../../store/agorStore';
 import { MCPServersTable } from './MCPServersTable';
 
 const ADMIN: User = {
@@ -149,6 +150,10 @@ const POLICY_UNREADABLE_HINT = /MCP policy could not be read/i;
 // form integration suites rather than weakening the workspace-wide timeout.
 const ANT_FORM_INTEGRATION_TIMEOUT = 60_000;
 const AUTHORITY_TRANSITION_TIMEOUT = 120_000;
+
+beforeEach(() => {
+  agorStore.getState().reset();
+});
 
 const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
 
@@ -879,19 +884,17 @@ describe('MCPServersTable unfinished installs', () => {
     expect(screen.queryByText('Not tested')).not.toBeInTheDocument();
   });
 
-  it('reports health normally once a live token is present', async () => {
+  it('reports health normally once oauth-status confirms authentication', async () => {
+    act(() => {
+      agorStore.getState().applyMaps((prev) => ({
+        ...prev,
+        userAuthenticatedMcpServerIds: new Set(['server-1']),
+      }));
+    });
     renderTable({
       policy: 'allow_crud',
       currentUser: ADMIN,
-      servers: [
-        oauthServer({
-          auth: {
-            type: 'oauth',
-            oauth_access_token: '••••••••',
-            oauth_token_expires_at: 4102444800000,
-          },
-        } as Partial<MCPServer>),
-      ],
+      servers: [oauthServer()],
     });
 
     expect(await screen.findByText('Not tested')).toBeVisible();
