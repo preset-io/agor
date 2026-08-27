@@ -1356,7 +1356,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     const query = findParams?.query as Record<string, unknown> | undefined;
-    if (!zoneId && shouldSqlPageBranchQuery(query)) {
+    if (shouldSqlPageBranchQuery(query)) {
       const branchFilter = query?.branch_id;
       const branchIds =
         typeof branchFilter === 'string'

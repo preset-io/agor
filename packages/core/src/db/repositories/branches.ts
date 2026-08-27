@@ -456,14 +456,18 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       name: branches.name,
       ref: branches.ref,
       created_at: branches.created_at,
-      updated_at: branches.updated_at,
     } as const;
-    const orderBy = Object.entries(opts.sort ?? {})
-      .map(([field, direction]) => {
-        const column = sortColumns[field as keyof typeof sortColumns];
-        return column ? (direction === -1 ? desc(column) : asc(column)) : undefined;
-      })
-      .filter((expression): expression is SQL => expression !== undefined);
+    const orderBy: SQL[] = [];
+    for (const [field, direction] of Object.entries(opts.sort ?? {})) {
+      if (field === 'updated_at') {
+        const logicalUpdatedAt = sql`COALESCE(${branches.updated_at}, ${branches.created_at})`;
+        orderBy.push(direction === -1 ? desc(logicalUpdatedAt) : asc(logicalUpdatedAt));
+        continue;
+      }
+      const column = sortColumns[field as keyof typeof sortColumns];
+      if (!column) continue;
+      orderBy.push(direction === -1 ? desc(column) : asc(column));
+    }
     if (orderBy.length === 0) orderBy.push(asc(branches.created_at));
     if (!Object.hasOwn(opts.sort ?? {}, 'branch_id')) orderBy.push(asc(branches.branch_id));
 

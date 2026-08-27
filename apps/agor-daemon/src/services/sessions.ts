@@ -177,9 +177,10 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
 
   const sort = query.$sort as Record<string, unknown> | undefined;
   const wantsRecency = !!sort && sort.updated_at !== undefined;
+  const wantsCreatedAt = !!sort && sort.created_at !== undefined;
   const wantsBoard = query.board_id !== undefined;
   const wantsBranch = query.branch_id !== undefined;
-  if (!wantsRecency && !wantsBoard && !wantsBranch && !forcePage) return false;
+  if (!wantsRecency && !wantsCreatedAt && !wantsBoard && !wantsBranch && !forcePage) return false;
 
   const allowedKeys = new Set(['archived', 'board_id', 'branch_id', '$sort', '$limit', '$skip']);
   for (const key of Object.keys(query)) {
@@ -187,11 +188,21 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
   }
   if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
   if (wantsBoard && typeof query.board_id !== 'string') return false;
-  if (wantsBranch && typeof query.branch_id !== 'string') return false;
+  if (wantsBranch) {
+    const branchFilter = query.branch_id;
+    const validExact = typeof branchFilter === 'string';
+    const validSet =
+      branchFilter !== null &&
+      typeof branchFilter === 'object' &&
+      Array.isArray((branchFilter as { $in?: unknown }).$in) &&
+      (branchFilter as { $in: unknown[] }).$in.every((id) => typeof id === 'string');
+    if (!validExact && !validSet) return false;
+  }
   if (sort) {
     const sortKeys = Object.keys(sort);
-    if (sortKeys.length !== 1 || sortKeys[0] !== 'updated_at') return false;
-    if (sort.updated_at !== 1 && sort.updated_at !== -1) return false;
+    if (sortKeys.length !== 1 || !['updated_at', 'created_at'].includes(sortKeys[0])) return false;
+    const direction = sort[sortKeys[0]];
+    if (direction !== 1 && direction !== -1) return false;
   }
   return true;
 }
@@ -1548,14 +1559,23 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // filter + recency sort + limit/offset in SQL instead.
     const query = params?.query as Record<string, unknown> | undefined;
     if (shouldSqlPageSessionQuery(query, !!params?._agorSqlSessionAccessUserId)) {
-      const sortSpec = query?.$sort as { updated_at?: 1 | -1 } | undefined;
+      const sortSpec = query?.$sort as { updated_at?: 1 | -1; created_at?: 1 | -1 } | undefined;
+      const branchFilter = query?.branch_id;
+      const branchIds =
+        branchFilter &&
+        typeof branchFilter === 'object' &&
+        Array.isArray((branchFilter as { $in?: unknown }).$in)
+          ? ((branchFilter as { $in: BranchID[] }).$in ?? [])
+          : undefined;
       const limit = (query?.$limit as number | undefined) ?? PAGINATION.DEFAULT_LIMIT;
       const skip = (query?.$skip as number | undefined) ?? 0;
       const { data, total } = await this.sessionRepo.findPage({
         boardId: query?.board_id as string | undefined,
-        branchId: query?.branch_id as BranchID | undefined,
+        branchId: typeof branchFilter === 'string' ? (branchFilter as BranchID) : undefined,
+        branchIds,
         archived: query?.archived as boolean | undefined,
         sortUpdatedAt: sortSpec?.updated_at,
+        sortCreatedAt: sortSpec?.created_at,
         limit,
         skip,
         visibleToUserId: params?._agorSqlSessionAccessUserId,

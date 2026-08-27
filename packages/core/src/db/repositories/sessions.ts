@@ -116,6 +116,19 @@ function isSessionTimestampNeutralPatch(updates: SessionUpdate): boolean {
   return keys.length === 1 && keys[0] === 'ready_for_prompt' && updates.ready_for_prompt === false;
 }
 
+/** Options for the SQL-backed session list page used by board/branch views. */
+export interface SessionPageOptions {
+  boardId?: string;
+  branchId?: BranchID;
+  branchIds?: BranchID[];
+  archived?: boolean;
+  sortUpdatedAt?: 1 | -1;
+  sortCreatedAt?: 1 | -1;
+  limit?: number;
+  skip?: number;
+  visibleToUserId?: UUID;
+}
+
 /**
  * Session repository implementation
  */
@@ -550,21 +563,16 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * @returns `{ data, total }` where `total` is the full match count (so Feathers
    *          pagination and the client `findAll` loop behave correctly).
    */
-  async findPage(opts: {
-    boardId?: string;
-    branchId?: BranchID;
-    archived?: boolean;
-    sortUpdatedAt?: 1 | -1;
-    limit?: number;
-    skip?: number;
-    visibleToUserId?: UUID;
-  }): Promise<{ data: Session[]; total: number }> {
+  async findPage(opts: SessionPageOptions): Promise<{ data: Session[]; total: number }> {
     try {
+      if (opts.branchIds?.length === 0) return { data: [], total: 0 };
       const baseUrl = await getBaseUrl();
 
       const conditions = [];
       if (opts.boardId !== undefined) conditions.push(eq(branches.board_id, opts.boardId));
       if (opts.branchId !== undefined) conditions.push(eq(sessions.branch_id, opts.branchId));
+      if (opts.branchIds !== undefined)
+        conditions.push(inArray(sessions.branch_id, opts.branchIds));
       if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
       if (opts.visibleToUserId) {
         conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
@@ -585,10 +593,23 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
       if (whereClause) dataQuery = dataQuery.where(whereClause);
+      const logicalUpdatedAt = sql`COALESCE(${sessions.updated_at}, ${sessions.created_at})`;
       if (opts.sortUpdatedAt !== undefined) {
         dataQuery = dataQuery.orderBy(
-          opts.sortUpdatedAt === -1 ? desc(sessions.updated_at) : sessions.updated_at
+          opts.sortUpdatedAt === -1 ? desc(logicalUpdatedAt) : asc(logicalUpdatedAt),
+          asc(sessions.session_id)
         );
+      } else if (opts.sortCreatedAt !== undefined) {
+        dataQuery = dataQuery.orderBy(
+          opts.sortCreatedAt === -1 ? desc(sessions.created_at) : asc(sessions.created_at),
+          asc(sessions.session_id)
+        );
+      } else {
+        // Always provide a stable order for offset pagination, even when the
+        // caller only scopes by board/branch. The ID tie-breaker prevents
+        // equal timestamps (and backend physical row order) from duplicating
+        // or omitting rows across continuation pages.
+        dataQuery = dataQuery.orderBy(asc(sessions.created_at), asc(sessions.session_id));
       }
       if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
       if (opts.skip) dataQuery = dataQuery.offset(opts.skip);

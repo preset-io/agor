@@ -585,6 +585,49 @@ describe('SessionRepository.findAll', () => {
   );
 });
 
+describe('SessionRepository.findPage ordering', () => {
+  dbTest('keeps offset pages deterministic when timestamps tie', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const createdAt = '2026-01-01T00:00:00.000Z';
+    const created = await Promise.all(
+      ['a', 'b', 'c'].map((suffix) =>
+        repo.create(
+          createSessionData({
+            session_id:
+              `00000000-0000-7000-8000-00000000000${suffix === 'a' ? '1' : suffix === 'b' ? '2' : '3'}` as UUID,
+            branch_id: branch.branch_id,
+            created_at: createdAt,
+            last_updated: createdAt,
+          })
+        )
+      )
+    );
+
+    const first = await repo.findPage({
+      branchId: branch.branch_id,
+      sortCreatedAt: 1,
+      limit: 2,
+      skip: 0,
+    });
+    const second = await repo.findPage({
+      branchId: branch.branch_id,
+      sortCreatedAt: 1,
+      limit: 2,
+      skip: 2,
+    });
+
+    expect(first.total).toBe(3);
+    expect(first.data.map((session) => session.session_id)).toEqual(
+      created.slice(0, 2).map((session) => session.session_id)
+    );
+    expect(second.data.map((session) => session.session_id)).toEqual([created[2].session_id]);
+    expect(new Set([...first.data, ...second.data].map((session) => session.session_id)).size).toBe(
+      3
+    );
+  });
+});
+
 describe('SessionRepository.enrichManyWithLastMessage', () => {
   dbTest('loads the latest assistant message for every session in one query', async ({ db }) => {
     const sessions = new SessionRepository(db);
@@ -615,6 +658,30 @@ describe('SessionRepository.enrichManyWithLastMessage', () => {
 
     expect(enriched.map((session) => session.last_message)).toEqual(['new', 'other']);
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  dbTest('uses message_id as a deterministic tie-breaker for duplicate indexes', async ({ db }) => {
+    const sessions = new SessionRepository(db);
+    const messageRepo = new MessagesRepository(db);
+    const branch = await createTestBranch(db);
+    const session = await sessions.create(createSessionData({ branch_id: branch.branch_id }));
+
+    const add = async (messageId: UUID, text: string) =>
+      messageRepo.create({
+        message_id: messageId,
+        session_id: session.session_id,
+        type: 'assistant',
+        role: MessageRole.ASSISTANT,
+        index: 4,
+        timestamp: new Date().toISOString(),
+        content_preview: text,
+        content: [{ type: 'text', text }],
+      });
+    await add('00000000-0000-7000-8000-000000000001' as UUID, 'first');
+    await add('00000000-0000-7000-8000-000000000002' as UUID, 'second');
+
+    const [enriched] = await sessions.enrichManyWithLastMessage([session]);
+    expect(enriched.last_message).toBe('second');
   });
 });
 

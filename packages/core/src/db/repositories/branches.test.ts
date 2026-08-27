@@ -5,9 +5,11 @@
  */
 
 import type { BoardID, BranchID, UUID } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
-import { boards } from '../schema';
+import { update } from '../database-wrapper';
+import { boards, branches } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardObjectRepository } from './board-objects';
@@ -555,6 +557,44 @@ describe('BranchRepository.findAll', () => {
         .map(([query]) => JSON.stringify(query))
         .some((query) => /limit/i.test(query))
     ).toBe(true);
+  });
+
+  dbTest('orders nullable updated_at by the logical recency value', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'logical-recency' }));
+    const fallback = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'fallback',
+        branch_unique_id: 1,
+        created_at: '2026-03-01T00:00:00.000Z',
+      })
+    );
+    const explicit = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'explicit',
+        branch_unique_id: 2,
+        created_at: '2026-01-01T00:00:00.000Z',
+      })
+    );
+
+    await update(db, branches)
+      .set({ updated_at: null })
+      .where(eq(branches.branch_id, fallback.branch_id))
+      .run();
+    await update(db, branches)
+      .set({ updated_at: new Date('2026-02-01T00:00:00.000Z') })
+      .where(eq(branches.branch_id, explicit.branch_id))
+      .run();
+
+    const page = await branchRepo.findPage({ sort: { updated_at: 1 }, limit: 2, offset: 0 });
+
+    expect(page.data.map((branch) => branch.branch_id)).toEqual([
+      explicit.branch_id,
+      fallback.branch_id,
+    ]);
   });
 
   dbTest('should filter by board_id', async ({ db }) => {

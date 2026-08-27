@@ -1,6 +1,6 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { inArray, sql } from 'drizzle-orm';
 import type { Database } from '../client';
-import { select } from '../database-wrapper';
+import { isSQLiteDatabase, rawRows } from '../database-wrapper';
 import { messages } from '../schema';
 
 export interface LatestAssistantMessageRow {
@@ -11,9 +11,12 @@ export interface LatestAssistantMessageRow {
 /**
  * Return one (deterministically selected) assistant message per session.
  *
- * This is intentionally a single set-based query.  A correlated NOT EXISTS
- * keeps it portable across SQLite and PostgreSQL and lets the existing
- * `(session_id, index)` index do the work without loading complete transcripts.
+ * This is intentionally a single set-based query. The two-stage aggregate
+ * keeps the work driven by the requested sessions: first find the greatest
+ * assistant index, then use message_id as a deterministic tie-breaker. This
+ * avoids scanning every candidate message with a correlated NOT EXISTS for
+ * every row in a long transcript and remains portable across SQLite and
+ * PostgreSQL.
  */
 export async function findLatestAssistantMessages(
   db: Database,
@@ -21,29 +24,52 @@ export async function findLatestAssistantMessages(
 ): Promise<LatestAssistantMessageRow[]> {
   if (sessionIds.length === 0) return [];
 
-  const latest = sql`NOT EXISTS (
-    SELECT 1
-    FROM "messages" AS newer
-    WHERE newer."session_id" = ${messages.session_id}
-      AND newer."role" = 'assistant'
-      AND (
-        newer."index" > ${messages.index}
-        OR (
-          newer."index" = ${messages.index}
-          AND newer."message_id" > ${messages.message_id}
+  const sessionFilter = inArray(messages.session_id, sessionIds);
+  const query = sql`WITH assistant_max_index AS (
+          SELECT ${messages.session_id} AS session_id,
+                 MAX(${messages.index}) AS max_index
+          FROM ${messages}
+          WHERE ${messages.role} = 'assistant'
+            AND ${sessionFilter}
+          GROUP BY ${messages.session_id}
+        ), assistant_max_id AS (
+          SELECT ${messages.session_id} AS session_id,
+                 MAX(${messages.message_id}) AS message_id
+          FROM ${messages}
+          INNER JOIN assistant_max_index
+            ON assistant_max_index.session_id = ${messages.session_id}
+           AND assistant_max_index.max_index = ${messages.index}
+          WHERE ${messages.role} = 'assistant'
+          GROUP BY ${messages.session_id}
         )
-      )
-  )`;
+        SELECT ${messages.session_id} AS session_id,
+               ${messages.data} AS data
+        FROM ${messages}
+        INNER JOIN assistant_max_id
+          ON assistant_max_id.session_id = ${messages.session_id}
+         AND assistant_max_id.message_id = ${messages.message_id}
+        WHERE ${messages.role} = 'assistant'`;
+  // Drizzle's SQLite `run` is mutation-only; use `all` for a raw SELECT while
+  // PostgreSQL's `execute` returns rows directly. Keep the dialect branch here
+  // so callers still get one SQL statement on either backend.
+  const result = isSQLiteDatabase(db)
+    ? await (db as unknown as { all(statement: unknown): Promise<unknown> }).all(query)
+    : await (db as unknown as { execute(statement: unknown): Promise<unknown> }).execute(query);
 
-  const rows = await select(db, {
-    session_id: messages.session_id,
-    data: messages.data,
-  })
-    .from(messages)
-    .where(and(inArray(messages.session_id, sessionIds), eq(messages.role, 'assistant'), latest))
-    .all();
+  return rawRows<{ session_id: string; data: unknown }>(result).map((row) => ({
+    session_id: row.session_id,
+    // Raw SQLite queries do not apply Drizzle's JSON decoder. PostgreSQL
+    // already returns jsonb as an object, so only decode string payloads.
+    data: typeof row.data === 'string' ? parseJsonData(row.data) : row.data,
+  }));
+}
 
-  return rows as LatestAssistantMessageRow[];
+function parseJsonData(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 export function extractMessageText(data: unknown): string {

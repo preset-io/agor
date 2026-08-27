@@ -635,6 +635,22 @@ describe('BoardRepository.findAll', () => {
     ).toBe(true);
   });
 
+  dbTest('keeps nullable slug ordering portable across pages', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const noSlug = await repo.create(createBoardData({ name: 'No slug' }));
+    const alpha = await repo.create(createBoardData({ name: 'Alpha', slug: 'alpha' }));
+    await update(db, boardsTable)
+      .set({ slug: null })
+      .where(eq(boardsTable.board_id, noSlug.board_id))
+      .run();
+
+    const page = await repo.findPage({ sort: { slug: 1 }, limit: 1, offset: 0 });
+    const nextPage = await repo.findPage({ sort: { slug: 1 }, limit: 1, offset: 1 });
+
+    expect(page.data.map((board) => board.board_id)).toEqual([alpha.board_id]);
+    expect(nextPage.data.map((board) => board.board_id)).toEqual([noSlug.board_id]);
+  });
+
   dbTest('should push board visibility directly into findAll SQL', async ({ db }) => {
     const repo = new BoardRepository(db);
     const viewerId = generateId() as UUID;

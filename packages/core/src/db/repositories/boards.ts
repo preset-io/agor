@@ -480,14 +480,24 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       name: boards.name,
       slug: boards.slug,
       created_at: boards.created_at,
-      updated_at: boards.updated_at,
     } as const;
-    const orderBy = Object.entries(opts.sort ?? {})
-      .map(([field, direction]) => {
-        const column = sortColumns[field as keyof typeof sortColumns];
-        return column ? (direction === -1 ? desc(column) : asc(column)) : undefined;
-      })
-      .filter((expression): expression is SQL => expression !== undefined);
+    const orderBy: SQL[] = [];
+    for (const [field, direction] of Object.entries(opts.sort ?? {})) {
+      if (field === 'updated_at') {
+        const logicalUpdatedAt = sql`COALESCE(${boards.updated_at}, ${boards.created_at})`;
+        orderBy.push(direction === -1 ? desc(logicalUpdatedAt) : asc(logicalUpdatedAt));
+        continue;
+      }
+      const column = sortColumns[field as keyof typeof sortColumns];
+      if (!column) continue;
+      // PostgreSQL sorts NULL first for ASC while SQLite sorts NULL first as
+      // well but differs for DESC. Explicitly put nullable slugs last on both
+      // dialects before applying the requested value direction.
+      if (field === 'slug') {
+        orderBy.push(asc(sql`CASE WHEN ${column} IS NULL THEN 1 ELSE 0 END`));
+      }
+      orderBy.push(direction === -1 ? desc(column) : asc(column));
+    }
     if (orderBy.length === 0) orderBy.push(asc(boards.created_at));
     if (!Object.hasOwn(opts.sort ?? {}, 'board_id')) orderBy.push(asc(boards.board_id));
 

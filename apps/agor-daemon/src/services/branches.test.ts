@@ -1816,6 +1816,31 @@ describe('BranchesService.find SQL pushdown', () => {
     expect(result.data.map((b) => b.branch_id)).toEqual(['b1']);
   });
 
+  it('keeps zone filtering on the SQL page path', async () => {
+    const { service, repository, branchRepo } = createFindHarness({
+      branches: fixture(),
+      branchIdsInZone: ['b1' as BranchID, 'b2' as BranchID],
+    });
+
+    const result = (await service.find({
+      query: { zone_id: 'zone-review', board_id: 'board-1', $limit: 1, $skip: 1 },
+    })) as { data: Array<Record<string, unknown>>; total: number };
+
+    expect(branchRepo.findPage).toHaveBeenCalledWith({
+      repo_id: undefined,
+      board_id: 'board-1',
+      archived: undefined,
+      branchIds: ['b1', 'b2'],
+      visibleToUserId: undefined,
+      limit: 1,
+      offset: 1,
+      sort: undefined,
+    });
+    expect(repository.findAll).not.toHaveBeenCalled();
+    expect(result.total).toBe(2);
+    expect(result.data.map((branch) => branch.branch_id)).toEqual(['b2']);
+  });
+
   it('pushes a scalar branch_id as a single-id set', async () => {
     const { service, branchRepo } = createFindHarness({
       branches: fixture(),
