@@ -6,18 +6,24 @@ import { createRequire } from 'node:module';
  * dd-trace auto-instruments `pg` (node-postgres) but not `postgres.js`, which is
  * the driver Agor's Drizzle client uses — so DB queries are otherwise invisible
  * to APM. Rather than instrument postgres.js's lazy-thenable internals (which
- * also miss transaction-scoped clients), we patch the ONE Drizzle chokepoint
- * every query flows through: `PgSession.prepareQuery(...)` →
+ * also miss transaction-scoped clients), we patch the Drizzle chokepoint that
+ * the builder, `db.execute`, relational (RQB) queries, and transactions all
+ * flow through: `PgSession.prepareQuery(...)` →
  * `PgPreparedQuery.{execute,all,values}()`. This is the same driver-agnostic,
  * transaction/RLS-aware technique the community `@kubiks/otel-drizzle` /
  * `autotel-drizzle` packages use — but emitted via dd-trace's NATIVE tracer
  * (not OpenTelemetry, which dd-trace mis-handles at @opentelemetry/api > 1.4.1,
  * dd-trace-js#6882).
  *
+ * Scope: the low-level `PgSession.query()` / `queryObjects()` methods call the
+ * driver directly, bypassing `prepareQuery`. Agor's normal query paths do not
+ * use them, so they are intentionally out of scope; the real-Drizzle regression
+ * test asserts the covered paths and fails loudly if the chokepoint moves.
+ *
  * Safety contract: this is best-effort and additive. Any failure to resolve the
- * tracer or reach the Drizzle internals leaves the database completely
- * untouched — it can never break, slow, or change a query. Worst case is "no DB
- * spans".
+ * tracer, reach the Drizzle internals, install the patch, OR run the per-query
+ * wrapper leaves the query untouched — it can never break, slow, duplicate, or
+ * change a query. Worst case is "no DB spans".
  */
 
 /** Minimal surface of the dd-trace singleton we depend on. */
@@ -29,10 +35,20 @@ export interface DatadogTracer {
   ): T;
 }
 
-/** The methods on a Drizzle prepared query that actually run the SQL. */
+/**
+ * The methods on a Drizzle prepared query that actually run the SQL. `values`
+ * is not present on every driver's prepared-query class (postgres.js currently
+ * exposes `execute`/`all`); it is included for forward-compatibility and skipped
+ * when absent.
+ */
 const PREPARED_EXECUTE_METHODS = ['execute', 'all', 'values'] as const;
 
-const TRACED_MARK = Symbol.for('agor.db.postgres-tracing.patched');
+/**
+ * Prototypes we've already patched, tracked out-of-band so we never mutate the
+ * Drizzle session object itself (a symbol mark could partially apply on a
+ * sealed prototype, leaving it patched-but-unmarked).
+ */
+const patchedSessionTargets = new WeakSet<object>();
 
 const requireFromCore = createRequire(import.meta.url);
 
@@ -57,9 +73,16 @@ export function resolvePostgresTracer(
 }
 
 /**
- * Collapse a Drizzle SQL string to a bounded span resource. Drizzle always
- * parameterizes ($1, $2, …), so the text carries no literals — but cap length
- * to keep resource cardinality/pipeline size sane.
+ * Collapse a Drizzle SQL string to a bounded span resource.
+ *
+ * Tradeoff (documented deliberately): Drizzle parameterizes normal queries
+ * ($1, $2, …), so the text carries no literals and reads cleanly in Datadog —
+ * the same "SQL as resource" convention dd-trace's own `pg` plugin uses. Two
+ * known edges we accept for now: `sql.raw(...)` can embed literals (developer-
+ * controlled, rare), and variable-length `IN (...)` lists produce distinct
+ * resources (cardinality). Full obfuscation/normalization (`IN (?)`, literal
+ * stripping) is a deliberate future enhancement, not done here to keep the shim
+ * small and the SQL human-readable. Whitespace is collapsed and length capped.
  */
 function toResource(sqlText: unknown): string {
   if (typeof sqlText !== 'string' || sqlText.length === 0) return 'postgres.query';
@@ -68,29 +91,56 @@ function toResource(sqlText: unknown): string {
 }
 
 function wrapPreparedQuery(prepared: unknown, sqlText: unknown, tracer: DatadogTracer): unknown {
-  if (!prepared || typeof prepared !== 'object') return prepared;
-  const resource = toResource(sqlText);
-  for (const method of PREPARED_EXECUTE_METHODS) {
-    const original = (prepared as Record<string, unknown>)[method];
-    if (typeof original !== 'function') continue;
-    (prepared as Record<string, unknown>)[method] = function tracedExecute(
-      this: unknown,
-      ...args: unknown[]
-    ) {
-      // dd-trace finishes the span when the returned promise settles and tags
-      // any rejection automatically.
-      return tracer.trace(
-        'postgres.query',
-        {
-          resource,
-          type: 'sql',
-          tags: { 'db.system': 'postgresql', 'span.kind': 'client', component: 'postgres.js' },
-        },
-        () => (original as (...a: unknown[]) => unknown).apply(this, args)
-      );
-    };
+  try {
+    if (!prepared || typeof prepared !== 'object') return prepared;
+    const resource = toResource(sqlText);
+    for (const method of PREPARED_EXECUTE_METHODS) {
+      const original = (prepared as Record<string, unknown>)[method];
+      if (typeof original !== 'function') continue;
+      const originalFn = original as (...a: unknown[]) => unknown;
+      try {
+        (prepared as Record<string, unknown>)[method] = function tracedExecute(
+          this: unknown,
+          ...args: unknown[]
+        ) {
+          // The query must run exactly once. `ran` distinguishes "tracer.trace
+          // threw before running the query" (safe to run it untraced) from
+          // "the query already ran and something after it threw" (propagate).
+          let ran = false;
+          const invoke = () => {
+            ran = true;
+            return originalFn.apply(this, args);
+          };
+          try {
+            // dd-trace finishes the span when the returned promise settles and
+            // tags any rejection automatically.
+            return tracer.trace(
+              'postgres.query',
+              {
+                resource,
+                type: 'sql',
+                tags: {
+                  'db.system': 'postgresql',
+                  'span.kind': 'client',
+                  component: 'postgres.js',
+                },
+              },
+              invoke
+            );
+          } catch (error) {
+            if (ran) throw error; // the query itself ran; do not re-run it
+            return invoke(); // instrumentation failed synchronously — run untraced
+          }
+        };
+      } catch {
+        // Non-extensible/frozen prepared query: leave this method untraced.
+      }
+    }
+    return prepared;
+  } catch {
+    // Never let instrumentation break the query path.
+    return prepared;
   }
-  return prepared;
 }
 
 interface DrizzleSessionLike {
@@ -120,16 +170,12 @@ export function instrumentDrizzlePostgresForTracing(
     const session = (db as { session?: DrizzleSessionLike } | null)?.session;
     if (!session || typeof session.prepareQuery !== 'function') return false;
 
-    const proto = Object.getPrototypeOf(session) as
-      | (DrizzleSessionLike & { [TRACED_MARK]?: boolean })
-      | null;
+    const proto = Object.getPrototypeOf(session) as DrizzleSessionLike | null;
     // If prepareQuery is an own property (unusual), patch the instance; else the
     // prototype shared across sessions.
-    const target =
-      proto && typeof proto.prepareQuery === 'function'
-        ? proto
-        : (session as DrizzleSessionLike & { [TRACED_MARK]?: boolean });
-    if (target[TRACED_MARK]) return true; // already patched
+    const target: DrizzleSessionLike =
+      proto && typeof proto.prepareQuery === 'function' ? proto : session;
+    if (patchedSessionTargets.has(target)) return true; // already patched
 
     const originalPrepareQuery = target.prepareQuery;
     target.prepareQuery = function patchedPrepareQuery(this: unknown, ...args: unknown[]) {
@@ -138,7 +184,10 @@ export function instrumentDrizzlePostgresForTracing(
       const sqlText = (args[0] as { sql?: unknown } | undefined)?.sql;
       return wrapPreparedQuery(prepared, sqlText, tracer);
     };
-    target[TRACED_MARK] = true;
+    // Mark only AFTER the reassignment succeeds — a frozen prototype throws on
+    // assignment and lands in catch below, leaving the DB untouched (no partial
+    // patch, nothing marked).
+    patchedSessionTargets.add(target);
     return true;
   } catch {
     // Never let instrumentation break database creation.

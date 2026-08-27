@@ -159,6 +159,74 @@ describe('instrumentDrizzlePostgresForTracing', () => {
     expect(instrumentDrizzlePostgresForTracing(null, { tracer })).toBe(false);
     expect(instrumentDrizzlePostgresForTracing({ session: {} }, { tracer })).toBe(false);
   });
+
+  it('runs the query untraced (exactly once) when tracer.trace throws BEFORE running it', async () => {
+    const throwingBefore: DatadogTracer = {
+      trace() {
+        throw new Error('tracer boom');
+      },
+    };
+    const { db } = newDb();
+    instrumentDrizzlePostgresForTracing(db, { tracer: throwingBefore });
+    const prepared = db.session.prepareQuery({ sql: 'select 1' }) as {
+      execute(): Promise<string>;
+      executed: string[];
+    };
+    // Query still succeeds despite the tracer failure...
+    expect(await prepared.execute()).toBe('select 1:execute');
+    // ...and ran exactly once (no double-execution).
+    expect(prepared.executed).toEqual(['execute']);
+  });
+
+  it('does not re-run the query when tracer.trace throws AFTER running it', async () => {
+    const throwingAfter: DatadogTracer = {
+      trace<T>(_n: string, _o: unknown, fn: () => T): T {
+        fn(); // run the query
+        throw new Error('post-run boom');
+      },
+    };
+    const { db } = newDb();
+    instrumentDrizzlePostgresForTracing(db, { tracer: throwingAfter });
+    const prepared = db.session.prepareQuery({ sql: 'select 1' }) as {
+      execute(): Promise<string>;
+      executed: string[];
+    };
+    expect(() => prepared.execute()).toThrow('post-run boom');
+    // Ran exactly once — the post-run failure must not trigger a retry.
+    expect(prepared.executed).toEqual(['execute']);
+  });
+
+  it('leaves a frozen/non-extensible prepared query untraced but working', async () => {
+    const tracer = new RecordingTracer();
+    class FrozenSession {
+      prepareQuery(q: { sql: string }) {
+        return Object.freeze(fakePrepared(q.sql));
+      }
+    }
+    const db = { session: new FrozenSession() };
+    instrumentDrizzlePostgresForTracing(db, { tracer });
+    const prepared = db.session.prepareQuery({ sql: 'select 1' }) as { execute(): Promise<string> };
+    expect(await prepared.execute()).toBe('select 1:execute'); // still works
+    expect(tracer.calls).toHaveLength(0); // could not wrap; no span
+  });
+
+  it('preserves prepareQuery arguments and receiver', () => {
+    const tracer = new RecordingTracer();
+    class RecordingSession {
+      lastArgs: unknown[] = [];
+      lastThis: unknown = null;
+      prepareQuery(...args: unknown[]) {
+        this.lastArgs = args;
+        this.lastThis = this;
+        return fakePrepared(String((args[0] as { sql?: string })?.sql));
+      }
+    }
+    const session = new RecordingSession();
+    instrumentDrizzlePostgresForTracing({ session }, { tracer });
+    session.prepareQuery({ sql: 'x' }, 'fields', 'name', true);
+    expect(session.lastArgs).toEqual([{ sql: 'x' }, 'fields', 'name', true]);
+    expect(session.lastThis).toBe(session);
+  });
 });
 
 describe('resolvePostgresTracer', () => {
