@@ -1,9 +1,18 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { makeBranch, makeBranchPolicy, makeStubClient, makeUser, wrapper } from './testUtils';
 import { useBranchModalForm } from './useBranchModalForm';
 
 describe('useBranchModalForm normalized permission package', () => {
+  beforeEach(() => {
+    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
+  });
+
+  afterEach(() => {
+    __resetAuthConfigForTests();
+  });
+
   it('loads the immutable primary owner and grants that owner management', async () => {
     const owner = makeUser({ user_id: 'user-1', role: 'member' });
     const branch = makeBranch();
