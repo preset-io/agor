@@ -100,9 +100,21 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   // Sync active tab when modal opens — use defaultTab if specified, otherwise reset to general
   useEffect(() => {
     if (open) {
-      setActiveTab(defaultTab || 'general');
+      setActiveTab(
+        defaultTab === 'permissions' && !form.canViewPermissions
+          ? 'general'
+          : defaultTab || 'general'
+      );
     }
-  }, [open, defaultTab]);
+  }, [open, defaultTab, form.canViewPermissions]);
+
+  // A feature-flag change can remove the active tab while the modal remains
+  // open. Do not leave Ant Tabs pointing at a now-unmounted permissions pane.
+  useEffect(() => {
+    if (activeTab === 'permissions' && !form.canViewPermissions) {
+      setActiveTab('general');
+    }
+  }, [activeTab, form.canViewPermissions]);
 
   // Surface permission-package load failures once per error transition.
   useEffect(() => {

@@ -5383,6 +5383,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // unavailable storage modes before submit.
           branchStorage: resolveBranchStorageConfig(config),
           uploadPolicy: getUploadLimits(),
+          // Normalized board/branch policies are independently feature-gated.
+          // This is safe to advertise before login so the UI can avoid
+          // rendering controls that the daemon will reject. Authorization
+          // remains enforced server-side.
+          branchRbac: config.execution?.branch_rbac === true,
         },
       };
 

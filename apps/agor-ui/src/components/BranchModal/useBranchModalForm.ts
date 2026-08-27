@@ -29,6 +29,7 @@ import type {
 } from '@agor-live/client';
 import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAuthConfig } from '../../hooks/useAuthConfig';
 
 /** Patchable subset of `Branch` writable from the modal form. */
 export type BranchUpdate = Omit<
@@ -126,6 +127,10 @@ export function useBranchModalForm({
   currentUser,
   open,
 }: UseBranchModalFormOptions): BranchModalFormApi {
+  const { featuresConfig } = useAuthConfig();
+  // Unknown/legacy health responses fail closed: the normalized permissions
+  // surface must not appear until the daemon explicitly advertises RBAC.
+  const branchRbacEnabled = featuresConfig?.branchRbac === true;
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [permissionsLoading, setPermissionsLoading] = useState<boolean>(true);
@@ -214,6 +219,16 @@ export function useBranchModalForm({
   // Load the normalized permission package and its principal directory.
   useEffect(() => {
     if (!open || !client || !branchId) return;
+    if (!branchRbacEnabled) {
+      setPermissionsLoading(false);
+      setPermissionsLoadError(null);
+      setCapabilityPolicyState(null);
+      setEffectiveAccess(null);
+      setAllUsers([]);
+      setAllGroups([]);
+      setWorkspacePreferences({ personal_session_sharing_enabled: false });
+      return;
+    }
     let cancelled = false;
     const load = async () => {
       setPermissionsLoading(true);
@@ -258,7 +273,7 @@ export function useBranchModalForm({
     return () => {
       cancelled = true;
     };
-  }, [open, client, branchId]);
+  }, [open, client, branchId, branchRbacEnabled]);
 
   // Change detection per slice
   const isTeammateBranch = branch ? isTeammate(branch) : false;
@@ -295,17 +310,25 @@ export function useBranchModalForm({
 
   // Permission gating. The legacy effective-access adapter maps Manager to all.
   const currentUserId = currentUser?.user_id;
+  const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isSuperAdmin = hasMinimumRole(currentUser?.role, ROLES.SUPERADMIN);
   const isPrimaryOwner = capabilityPolicy?.primary_owner_user_id === currentUserId;
   const canManagePolicy = Boolean(
-    capabilityPolicy && (isSuperAdmin || effectiveAccess?.can === 'all' || isPrimaryOwner)
+    branchRbacEnabled &&
+      capabilityPolicy &&
+      (isSuperAdmin || effectiveAccess?.can === 'all' || isPrimaryOwner)
   );
-  const canControlEnvironment = canManagePolicy;
-  const canViewPermissions = Boolean(capabilityPolicy);
-  const canEditGeneral = canManagePolicy;
+  const isCreator = branch?.created_by === currentUserId;
+  const canControlEnvironment = branchRbacEnabled
+    ? canManagePolicy
+    : isAdmin || isCreator || branch?.others_can === 'all';
+  const canViewPermissions = branchRbacEnabled && Boolean(capabilityPolicy);
+  // Preserve the legacy open-RBAC form behavior while the normalized policy
+  // feature is disabled. The server remains authoritative for every write.
+  const canEditGeneral = branchRbacEnabled ? canManagePolicy : true;
   // Every authenticated viewer may author their own personal session-sharing
   // rule; only policy managers can change access entries or binding mode.
-  const canEditPermissions = Boolean(capabilityPolicy && currentUserId);
+  const canEditPermissions = Boolean(branchRbacEnabled && capabilityPolicy && currentUserId);
 
   const reset = useCallback(() => {
     setGeneralState(buildGeneralDefaults(branch));

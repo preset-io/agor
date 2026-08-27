@@ -9,6 +9,7 @@ import type {
 import { Alert, Form, Modal, Skeleton } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
+import { useAuthConfig } from '../../hooks/useAuthConfig';
 import { useAgorStore } from '../../store/agorStore';
 import { selectUserById } from '../../store/selectors';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
@@ -34,6 +35,11 @@ export function BoardEditModal({
   currentUser,
 }: BoardEditModalProps) {
   const userById = useAgorStore(selectUserById);
+  const { featuresConfig } = useAuthConfig();
+  // Do not mount the normalized policy editor against a daemon that has not
+  // explicitly enabled the feature. Legacy board permission fields remain
+  // available in that mode, matching the pre-remodel UI behavior.
+  const branchRbacEnabled = featuresConfig?.branchRbac === true;
   const [form] = Form.useForm();
   const { showError } = useThemedMessage();
   const [loading, setLoading] = useState(false);
@@ -65,29 +71,34 @@ export function BoardEditModal({
       try {
         if (!client) throw new Error('Agor client is unavailable');
         const fresh = await client.service('boards').get(board.board_id);
-        {
-          const [usersResult, groupsResult, policyResult, preferencesResult] =
-            await Promise.allSettled([
-              client.service('users').findAll({}),
-              client.service('groups').findAll({ query: { archived: false } }),
-              client.service('boards/:id/permissions').find({ route: { id: board.board_id } }),
-              client.service('workspace-preferences').find(),
-            ]);
+        // The legacy board permissions tab still needs the principal
+        // directory when normalized RBAC is disabled. Only the normalized
+        // policy package and workspace preference are feature-gated.
+        const [usersResult, groupsResult] = await Promise.allSettled([
+          client.service('users').findAll({}),
+          client.service('groups').findAll({ query: { archived: false } }),
+        ]);
+        if (cancelled) return;
+
+        if (usersResult.status === 'fulfilled') {
+          setAllUsers(usersResult.value as User[]);
+        } else {
+          setAllUsers([]);
+          console.warn('Failed to load users for board permissions:', usersResult.reason);
+        }
+        if (groupsResult.status === 'fulfilled') {
+          setAllGroups(groupsResult.value as Group[]);
+        } else {
+          setAllGroups([]);
+          console.warn('Failed to load groups for board permissions:', groupsResult.reason);
+        }
+
+        if (branchRbacEnabled) {
+          const [policyResult, preferencesResult] = await Promise.allSettled([
+            client.service('boards/:id/permissions').find({ route: { id: board.board_id } }),
+            client.service('workspace-preferences').find(),
+          ]);
           if (cancelled) return;
-
-          if (usersResult.status === 'fulfilled') {
-            setAllUsers(usersResult.value as User[]);
-          } else {
-            setAllUsers([]);
-            console.warn('Failed to load users for board permissions:', usersResult.reason);
-          }
-          if (groupsResult.status === 'fulfilled') {
-            setAllGroups(groupsResult.value as Group[]);
-          } else {
-            setAllGroups([]);
-            console.warn('Failed to load groups for board permissions:', groupsResult.reason);
-          }
-
           if (policyResult.status === 'fulfilled') {
             setPolicy(policyResult.value);
           } else {
@@ -96,6 +107,9 @@ export function BoardEditModal({
           if (preferencesResult.status === 'fulfilled') {
             setWorkspacePreferences(preferencesResult.value);
           }
+        } else {
+          setPolicy(null);
+          setWorkspacePreferences({ personal_session_sharing_enabled: false });
         }
         if (cancelled) return;
         // Populate the form BEFORE exposing loadedBoard so the background
@@ -114,6 +128,8 @@ export function BoardEditModal({
           default_dangerously_allow_session_sharing: Boolean(
             fresh.default_dangerously_allow_session_sharing
           ),
+          owner_ids: fresh.created_by ? [fresh.created_by] : [],
+          board_group_grants: [],
           custom_context: fresh.custom_context ? JSON.stringify(fresh.custom_context, null, 2) : '',
         });
         // Expose the loaded board last: this is what un-gates the form render.
@@ -131,10 +147,10 @@ export function BoardEditModal({
     return () => {
       cancelled = true;
     };
-  }, [board, client, form, open]);
+  }, [board, branchRbacEnabled, client, form, open]);
 
   const syncPermissions = async () => {
-    if (!client || !board || !policy) return;
+    if (!branchRbacEnabled || !client || !board || !policy) return;
     const saved = await client
       .service('boards/:id/permissions')
       .patch(null, policy, { route: { id: board.board_id } });
@@ -153,7 +169,7 @@ export function BoardEditModal({
       await form.validateFields();
       const updated = await onUpdate?.(
         board.board_id,
-        extractBoardFormValues(form, { includeLegacyPermissions: false })
+        extractBoardFormValues(form, { includeLegacyPermissions: !branchRbacEnabled })
       );
       if (updated === false) return;
       await syncPermissions();
@@ -191,23 +207,25 @@ export function BoardEditModal({
             key={loadedBoard.board_id}
             form={form}
             backgroundResetSignal={loadedBoard.board_id}
-            rbacEnabled
+            rbacEnabled={branchRbacEnabled}
             allUsers={allUsers}
             allGroups={allGroups}
             capabilityPolicyEditor={
-              policy ? (
-                <BoardCapabilityPolicyModalEditor
-                  value={policy}
-                  onChange={setPolicy}
-                  client={client}
-                  users={permissionUsers}
-                  groups={allGroups}
-                  currentUser={currentUser}
-                  workspacePreferences={workspacePreferences}
-                />
-              ) : (
-                <Alert type="error" showIcon description="Permissions are unavailable." />
-              )
+              branchRbacEnabled ? (
+                policy ? (
+                  <BoardCapabilityPolicyModalEditor
+                    value={policy}
+                    onChange={setPolicy}
+                    client={client}
+                    users={permissionUsers}
+                    groups={allGroups}
+                    currentUser={currentUser}
+                    workspacePreferences={workspacePreferences}
+                  />
+                ) : (
+                  <Alert type="error" showIcon description="Permissions are unavailable." />
+                )
+              ) : undefined
             }
             extra={
               <Form.Item

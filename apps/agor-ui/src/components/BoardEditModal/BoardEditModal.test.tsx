@@ -2,6 +2,7 @@ import type { AgorClient, Board, BoardCapabilityPolicies } from '@agor-live/clie
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Form, Input } from 'antd';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { BoardEditModal } from './BoardEditModal';
 
 const showError = vi.hoisted(() => vi.fn());
@@ -16,9 +17,11 @@ vi.mock('../forms/BoardFormFields', () => ({
   BoardFormFields: ({
     capabilityPolicyEditor,
     allGroups,
+    rbacEnabled,
   }: {
     capabilityPolicyEditor?: React.ReactNode;
     allGroups?: Array<{ name: string }>;
+    rbacEnabled?: boolean;
   }) => (
     <>
       <Form.Item name="name" label="Name" rules={[{ required: true }]}>
@@ -28,6 +31,7 @@ vi.mock('../forms/BoardFormFields', () => ({
         <div
           data-testid="board-modal-policy-editor"
           data-group-names={allGroups?.map((group) => group.name).join(',')}
+          data-rbac-enabled={String(rbacEnabled)}
         />
       )}
     </>
@@ -71,20 +75,22 @@ const policy = {
 
 function makeClient(metadataError: { code?: number; message?: string } = { code: 404 }) {
   const get = vi.fn().mockResolvedValue(freshBoard);
+  const permissionsFind = vi
+    .fn()
+    .mockImplementation(() =>
+      metadataError.code && metadataError.code !== 404
+        ? Promise.reject(metadataError)
+        : Promise.resolve(policy)
+    );
   return {
     get,
+    permissionsFind,
     client: {
       service: (name: string) => {
         if (name === 'boards') return { get };
         if (name === 'boards/:id/permissions') {
           return {
-            find: vi
-              .fn()
-              .mockImplementation(() =>
-                metadataError.code && metadataError.code !== 404
-                  ? Promise.reject(metadataError)
-                  : Promise.resolve(policy)
-              ),
+            find: permissionsFind,
             patch: vi.fn().mockImplementation(async (_id: unknown, value: unknown) => value),
           };
         }
@@ -98,7 +104,29 @@ function makeClient(metadataError: { code?: number; message?: string } = { code:
 }
 
 describe('BoardEditModal', () => {
-  beforeEach(() => showError.mockReset());
+  beforeEach(() => {
+    showError.mockReset();
+    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
+  });
+
+  it('keeps the normalized editor and policy request hidden when RBAC is disabled', async () => {
+    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: false });
+    const { client, permissionsFind } = makeClient();
+
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByDisplayValue('Fresh name')).toBeInTheDocument();
+    expect(screen.queryByTestId('board-modal-policy-editor')).not.toBeInTheDocument();
+    expect(permissionsFind).not.toHaveBeenCalled();
+  });
 
   it('loads the latest board and normalized permission package before saving', async () => {
     const { client, get } = makeClient({ code: 404 });
