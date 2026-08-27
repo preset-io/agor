@@ -184,6 +184,7 @@ import {
 } from './services/users.js';
 import { resolveWebTerminalCapability } from './terminal-capability.js';
 import { forceFailUnverifiedTask } from './termination-coordinator.js';
+import { createFeathersTracingHook } from './tracing/feathers.js';
 import {
   REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE,
   requireActiveAgenticTool,
@@ -5421,6 +5422,10 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   app.hooks({
     around: {
       all: [
+        // Outermost: open the APM span first so it encloses the metrics timing
+        // and every child (Postgres, Redis) span. No-op unless
+        // metrics.apm.trace_services is enabled and dd-trace is loaded.
+        createFeathersTracingHook(config.metrics?.apm?.trace_services ?? 'off'),
         createFeathersMetricsHook(getDaemonMetrics(app), {
           // Health probes already have HTTP metrics; avoid doubling their
           // high-frequency signal at the Feathers boundary.

@@ -32,6 +32,7 @@ import { assertValidMultiTenancyConfig } from './multitenancy';
 import { AgorPasswordPolicyProfile } from './password-policy';
 import { isPlainConfigRecord } from './plain-record';
 import {
+  type AgorApmSettings,
   type AgorConfig,
   AgorExternalIdentityProvider,
   AgorExternalIdentityProvisioning,
@@ -39,6 +40,7 @@ import {
   AgorRoleAuthority,
   type AgorStatsDSettings,
   AgorUserLifecycleAuthority,
+  APM_TRACE_SERVICE_DEPTHS,
   BRANCH_STORAGE_MODES,
   type BranchStorageMode,
   DEFAULT_BRANCH_STORAGE_MODE,
@@ -343,6 +345,18 @@ function validateStatsDConfig(statsd: AgorStatsDSettings | undefined): void {
   }
 }
 
+function validateApmConfig(apm: AgorApmSettings | undefined): void {
+  if (apm === undefined) return;
+  if (!apm || typeof apm !== 'object' || Array.isArray(apm)) {
+    throw new Error('Config error: metrics.apm must be an object');
+  }
+  if (apm.trace_services !== undefined && !APM_TRACE_SERVICE_DEPTHS.includes(apm.trace_services)) {
+    throw new Error(
+      `Config error: metrics.apm.trace_services must be one of: ${APM_TRACE_SERVICE_DEPTHS.join(', ')}`
+    );
+  }
+}
+
 function parseOptionalBooleanEnvironmentValue(
   value: string | undefined,
   name: string
@@ -351,6 +365,18 @@ function parseOptionalBooleanEnvironmentValue(
   if (value === '1' || value === 'true') return true;
   if (value === '0' || value === 'false') return false;
   throw new Error(`Config error: ${name} must be one of: true, false, 1, 0`);
+}
+
+function parseOptionalApmTraceDepthEnvironmentValue(
+  value: string | undefined
+): AgorApmSettings['trace_services'] | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (!APM_TRACE_SERVICE_DEPTHS.includes(value as never)) {
+    throw new Error(
+      `Config error: AGOR_APM_TRACE_SERVICES must be one of: ${APM_TRACE_SERVICE_DEPTHS.join(', ')}`
+    );
+  }
+  return value as AgorApmSettings['trace_services'];
 }
 
 function parseOptionalPortEnvironmentValue(
@@ -979,7 +1005,7 @@ function validateConfig(config: AgorConfig): void {
   ) {
     throw new Error('Config error: metrics must be an object');
   }
-  only(config.metrics, 'metrics', ['statsd']);
+  only(config.metrics, 'metrics', ['statsd', 'apm']);
   only(config.metrics?.statsd, 'metrics.statsd', [
     'enabled',
     'host',
@@ -987,7 +1013,9 @@ function validateConfig(config: AgorConfig): void {
     'prefix',
     'global_tags',
   ]);
+  only(config.metrics?.apm, 'metrics.apm', ['trace_services']);
   validateStatsDConfig(config.metrics?.statsd);
+  validateApmConfig(config.metrics?.apm);
   only(legacyConfig.onboarding, 'onboarding', [
     ...RETIRED_CONFIG_KEYS.onboarding,
     'frameworkRepoUrl',
@@ -1380,6 +1408,9 @@ export function getDefaultConfig(): AgorConfig {
         prefix: 'agor.daemon.',
         global_tags: {},
       },
+      apm: {
+        trace_services: 'off',
+      },
     },
     multi_tenancy: {
       filesystem_isolation_enabled: false,
@@ -1411,6 +1442,7 @@ export function resolveEffectiveConfig(
     'AGOR_STATSD_ENABLED'
   );
   const statsdPort = parseOptionalPortEnvironmentValue(env.AGOR_STATSD_PORT, 'AGOR_STATSD_PORT');
+  const apmTraceServices = parseOptionalApmTraceDepthEnvironmentValue(env.AGOR_APM_TRACE_SERVICES);
   const externalLaunch = resolveEffectiveExternalLaunchConfig(config.external_launch, env);
 
   // Resolve the effective Unix isolation mode (env override wins) so the
@@ -1532,11 +1564,17 @@ export function resolveEffectiveConfig(
         ...(statsdPort !== undefined ? { port: statsdPort } : {}),
         ...(env.AGOR_STATSD_PREFIX ? { prefix: env.AGOR_STATSD_PREFIX } : {}),
       },
+      apm: {
+        ...defaults.metrics?.apm,
+        ...config.metrics?.apm,
+        ...(apmTraceServices !== undefined ? { trace_services: apmTraceServices } : {}),
+      },
     },
     uploads: { ...defaults.uploads, ...config.uploads },
     multi_tenancy: { ...defaults.multi_tenancy, ...config.multi_tenancy },
   };
   validateStatsDConfig(resolved.metrics?.statsd);
+  validateApmConfig(resolved.metrics?.apm);
   return resolved;
 }
 
