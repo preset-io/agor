@@ -7,7 +7,7 @@
 
 import type { Board, BoardID, BoardObject, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
@@ -612,6 +612,27 @@ describe('BoardRepository.findAll', () => {
     await repo.create(createBoardData({ name: 'B1', slug: 'b1' }));
 
     expect(await repo.findAll({ boardIds: [] })).toEqual([]);
+  });
+
+  dbTest('findPage applies ordering and pagination in SQL', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    await repo.create(createBoardData({ name: 'C', slug: 'c' }));
+    await repo.create(createBoardData({ name: 'A', slug: 'a' }));
+    await repo.create(createBoardData({ name: 'B', slug: 'b' }));
+
+    const client = (
+      db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const page = await repo.findPage({ sort: { name: 1 }, limit: 1, offset: 1 });
+    expect(page.total).toBe(3);
+    expect(page.data.map((board) => board.name)).toEqual(['B']);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(
+      execute.mock.calls
+        .map(([query]) => JSON.stringify(query))
+        .some((query) => /limit/i.test(query))
+    ).toBe(true);
   });
 
   dbTest('should push board visibility directly into findAll SQL', async ({ db }) => {

@@ -62,6 +62,11 @@ import {
 } from './base';
 import { visibleBranchAccessCondition } from './branch-access';
 import { deepMerge } from './merge-utils';
+import {
+  extractMessageText,
+  findLatestAssistantMessages,
+  truncateMessageText,
+} from './message-activity';
 
 /**
  * Session with enriched last message
@@ -393,11 +398,22 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    *
    * LEFT JOINs with branches to populate board_id and url in a single query.
    */
-  async findAll(filter?: { visibleToUserId?: UUID }): Promise<Session[]> {
+  async findAll(filter?: {
+    visibleToUserId?: UUID;
+    branchId?: BranchID;
+    branchIds?: BranchID[];
+    archived?: boolean;
+  }): Promise<Session[]> {
+    if (filter?.branchIds?.length === 0) return [];
     try {
       const baseUrl = await getBaseUrl();
 
       const conditions = [];
+      if (filter?.branchId) conditions.push(eq(sessions.branch_id, filter.branchId));
+      if (filter?.branchIds) conditions.push(inArray(sessions.branch_id, filter.branchIds));
+      if (filter?.archived !== undefined) {
+        conditions.push(eq(sessions.archived, filter.archived));
+      }
       if (filter?.visibleToUserId) {
         conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
       }
@@ -536,6 +552,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    */
   async findPage(opts: {
     boardId?: string;
+    branchId?: BranchID;
     archived?: boolean;
     sortUpdatedAt?: 1 | -1;
     limit?: number;
@@ -547,6 +564,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
       const conditions = [];
       if (opts.boardId !== undefined) conditions.push(eq(branches.board_id, opts.boardId));
+      if (opts.branchId !== undefined) conditions.push(eq(sessions.branch_id, opts.branchId));
       if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
       if (opts.visibleToUserId) {
         conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
@@ -1481,47 +1499,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     try {
       const sessionIds = sessions.map((s) => s.session_id);
 
-      // Import messages table dynamically
-      const { messages: messagesTable } = await import('../schema');
-
-      // Get last assistant message for each session using N+1 queries
-      // This is acceptable since we're enriching a small number of sessions at a time
-      // Much better than fetching all messages which could be huge for long-running sessions
       const lastMessageBySession = new Map<string, string>();
-
-      for (const sessionId of sessionIds) {
-        const query = select(this.db, {
-          data: messagesTable.data,
-        })
-          .from(messagesTable)
-          .where(and(eq(messagesTable.session_id, sessionId), eq(messagesTable.role, 'assistant')));
-
-        // Chain orderBy and limit, then execute with one()
-        // The spread operator in the wrapper passes through these methods
-        const lastMessage = await query.orderBy(desc(messagesTable.index)).limit(1).one();
-
-        if (lastMessage) {
-          // Extract text content from message data and truncate to requested length
-          const messageData = lastMessage.data as {
-            content?: Array<{ type: string; text?: string }>;
-          };
-          let fullText = '';
-
-          // Extract text from content blocks (messages can have multiple content blocks)
-          if (messageData?.content && Array.isArray(messageData.content)) {
-            fullText = messageData.content
-              .filter((block) => block.type === 'text' && block.text)
-              .map((block) => block.text)
-              .join('\n');
-          }
-
-          // Truncate to requested length
-          if (fullText.length > truncationLength) {
-            fullText = `${fullText.substring(0, truncationLength)}...`;
-          }
-
-          lastMessageBySession.set(sessionId, fullText);
-        }
+      const lastMessages = await findLatestAssistantMessages(this.db, sessionIds);
+      for (const lastMessage of lastMessages) {
+        lastMessageBySession.set(
+          lastMessage.session_id,
+          truncateMessageText(extractMessageText(lastMessage.data), truncationLength)
+        );
       }
 
       // Enrich sessions with last message

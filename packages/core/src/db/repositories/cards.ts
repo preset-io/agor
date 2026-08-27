@@ -6,10 +6,10 @@
  */
 
 import type { BoardID, Card, CardType, CardTypeID, CardWithType, UUID } from '@agor/core/types';
-import { and, eq, like } from 'drizzle-orm';
+import { and, asc, eq, getTableColumns, inArray, like } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
 import { boardObjects, type CardInsert, type CardRow, cards, cardTypes } from '../schema';
 import {
   AmbiguousIdError,
@@ -211,16 +211,30 @@ export class CardRepository implements BaseRepository<Card, Partial<Card>> {
    *
    * @param filter - Optional filters
    * @param filter.board_id - Filter to a single board
+   * @param filter.boardIds - Restrict to a set of boards
    * @param filter.archived - Filter to an exact archived state
+   * @param filter.visibleToUserId - Restrict to boards visible to a user
    */
-  async findAll(filter?: { board_id?: BoardID; archived?: boolean }): Promise<Card[]> {
+  async findAll(filter?: {
+    board_id?: BoardID;
+    boardIds?: BoardID[];
+    archived?: boolean;
+    visibleToUserId?: UUID;
+  }): Promise<Card[]> {
     try {
+      if (filter?.boardIds?.length === 0) return [];
       const conditions = [];
       if (filter?.board_id) {
         conditions.push(eq(cards.board_id, filter.board_id));
       }
+      if (filter?.boardIds) conditions.push(inArray(cards.board_id, filter.boardIds));
       if (filter?.archived !== undefined) {
         conditions.push(eq(cards.archived, filter.archived));
+      }
+      if (filter?.visibleToUserId) {
+        conditions.push(
+          visibleBoardReferenceAccessExists(this.db, filter.visibleToUserId, cards.board_id)
+        );
       }
 
       const query = select(this.db).from(cards);
@@ -323,31 +337,39 @@ export class CardRepository implements BaseRepository<Card, Partial<Card>> {
   /**
    * Find cards by zone ID (join with board_objects)
    */
-  async findByZoneId(boardId: BoardID, zoneId: string): Promise<Card[]> {
+  async findByZoneId(
+    boardId: BoardID,
+    zoneId: string,
+    options?: { archived?: boolean; visibleToUserId?: UUID }
+  ): Promise<Card[]> {
     try {
-      // Get board objects in this zone that reference cards
-      const objectRows = await select(this.db)
-        .from(boardObjects)
-        .where(eq(boardObjects.board_id, boardId))
+      const conditions = [
+        eq(boardObjects.board_id, boardId),
+        eq(cards.board_id, boardId),
+        eq(jsonExtract(this.db, boardObjects.data, 'zone_id'), zoneId),
+      ];
+      if (options?.archived !== undefined) conditions.push(eq(cards.archived, options.archived));
+      if (options?.visibleToUserId) {
+        conditions.push(
+          visibleBoardReferenceAccessExists(this.db, options.visibleToUserId, cards.board_id)
+        );
+      }
+
+      // Join the placement rows to cards once. A card may have more than one
+      // placement row in malformed/legacy data, so de-duplicate after the
+      // single SQL read rather than issuing one lookup per card.
+      const rows = await select(this.db, getTableColumns(cards))
+        .from(cards)
+        .innerJoin(boardObjects, eq(boardObjects.card_id, cards.card_id))
+        .where(and(...conditions))
+        .orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id))
         .all();
-
-      const cardIds: string[] = [];
-      for (const row of objectRows) {
-        const data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
-        if (data.zone_id === zoneId && row.card_id) {
-          cardIds.push(row.card_id);
-        }
-      }
-
-      if (cardIds.length === 0) return [];
-
-      // Fetch all cards by IDs
-      const result: Card[] = [];
-      for (const cardId of cardIds) {
-        const card = await this.findById(cardId);
-        if (card) result.push(card);
-      }
-      return result;
+      const seen = new Set<string>();
+      return (rows as CardRow[]).flatMap((row) => {
+        if (seen.has(row.card_id)) return [];
+        seen.add(row.card_id);
+        return [this.rowToCard(row)];
+      });
     } catch (error) {
       throw new RepositoryError(
         `Failed to find cards by zone: ${error instanceof Error ? error.message : String(error)}`,

@@ -341,6 +341,25 @@ function createFindHarness(opts: {
   };
   const branchRepo = {
     findAll: vi.fn(async (filter?: Parameters<typeof applyFilter>[0]) => applyFilter(filter)),
+    findPage: vi.fn(
+      async (
+        filter?: Parameters<typeof applyFilter>[0] & {
+          limit?: number;
+          offset?: number;
+          sort?: Record<string, 1 | -1>;
+        }
+      ) => {
+        let data = applyFilter(filter);
+        if (filter?.sort?.name) {
+          data = [...data].sort(
+            (a, b) => String(a.name ?? '').localeCompare(String(b.name ?? '')) * filter.sort!.name
+          );
+        }
+        const offset = filter?.offset ?? 0;
+        const limit = filter?.limit ?? data.length;
+        return { data: data.slice(offset, offset + limit), total: data.length };
+      }
+    ),
     findBranchIdsByZone: vi.fn(async () => opts.branchIdsInZone),
     enrichManyWithZoneInfo: vi.fn(async (branches: Array<Record<string, unknown>>) =>
       branches.map((branch: Record<string, unknown>) => ({
@@ -1748,7 +1767,16 @@ describe('BranchesService.find SQL pushdown', () => {
     })) as { data: Array<Record<string, unknown>>; total: number };
 
     // Read is SQL-bounded: the scoped repo read runs, the whole-table read does not.
-    expect(branchRepo.findAll).toHaveBeenCalledWith({ board_id: 'board-1', archived: false });
+    expect(branchRepo.findPage).toHaveBeenCalledWith({
+      repo_id: undefined,
+      board_id: 'board-1',
+      archived: false,
+      branchIds: undefined,
+      visibleToUserId: undefined,
+      limit: 10000,
+      offset: 0,
+      sort: { name: 1 },
+    });
     expect(repository.findAll).not.toHaveBeenCalled();
 
     // Parity: same rows the JS filter would keep, same order, same total + zone enrichment.
@@ -1771,10 +1799,15 @@ describe('BranchesService.find SQL pushdown', () => {
       },
     })) as { data: Array<Record<string, unknown>>; total: number };
 
-    expect(branchRepo.findAll).toHaveBeenCalledWith({
+    expect(branchRepo.findPage).toHaveBeenCalledWith({
+      repo_id: undefined,
       board_id: 'board-1',
       archived: false,
       branchIds: ['b1', 'b3', 'b4'],
+      visibleToUserId: undefined,
+      limit: 10000,
+      offset: 0,
+      sort: undefined,
     });
     expect(repository.findAll).not.toHaveBeenCalled();
 
@@ -1793,7 +1826,16 @@ describe('BranchesService.find SQL pushdown', () => {
       query: { branch_id: 'b2' as BranchID },
     })) as { data: Array<Record<string, unknown>>; total: number };
 
-    expect(branchRepo.findAll).toHaveBeenCalledWith({ branchIds: ['b2'] });
+    expect(branchRepo.findPage).toHaveBeenCalledWith({
+      repo_id: undefined,
+      board_id: undefined,
+      archived: undefined,
+      branchIds: ['b2'],
+      visibleToUserId: undefined,
+      limit: 10000,
+      offset: 0,
+      sort: undefined,
+    });
     expect(result.total).toBe(1);
     expect(result.data[0].branch_id).toBe('b2');
   });
@@ -1808,7 +1850,16 @@ describe('BranchesService.find SQL pushdown', () => {
       query: { branch_id: { $in: [] } },
     })) as { data: Array<Record<string, unknown>>; total: number };
 
-    expect(branchRepo.findAll).toHaveBeenCalledWith({ branchIds: [] });
+    expect(branchRepo.findPage).toHaveBeenCalledWith({
+      repo_id: undefined,
+      board_id: undefined,
+      archived: undefined,
+      branchIds: [],
+      visibleToUserId: undefined,
+      limit: 10000,
+      offset: 0,
+      sort: undefined,
+    });
     expect(result.total).toBe(0);
     expect(result.data).toHaveLength(0);
   });
@@ -1824,9 +1875,15 @@ describe('BranchesService.find SQL pushdown', () => {
       query: { board_id: 'board-1' },
     } as BranchParams);
 
-    expect(branchRepo.findAll).toHaveBeenCalledWith({
+    expect(branchRepo.findPage).toHaveBeenCalledWith({
+      repo_id: undefined,
       board_id: 'board-1',
+      archived: undefined,
+      branchIds: undefined,
       visibleToUserId: 'viewer-1',
+      limit: 10000,
+      offset: 0,
+      sort: undefined,
     });
   });
 });

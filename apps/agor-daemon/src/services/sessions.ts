@@ -49,6 +49,7 @@ import type {
   AgenticToolName,
   AuthenticatedParams,
   Branch,
+  BranchID,
   BranchPermissionLevel,
   CreateSessionInput,
   MCPServerID,
@@ -166,7 +167,7 @@ export type SessionParams = QueryParams<{
  * Whether a sessions `find` query should be served by `SessionRepository.findPage`
  * (SQL board filter + recency sort + limit/offset) rather than the generic
  * in-memory path. We only divert the loader's bounded list queries — those that
- * sort by `updated_at` and/or scope to a `board_id` — and only when the rest of
+ * sort by `updated_at` and/or scope to a `board_id`/`branch_id` — and only when the rest of
  * the query is a shape findPage fully models (archived + pagination). Anything
  * with extra filters, operators, or `$select` falls through to the existing path
  * so we never silently drop semantics findPage doesn't implement.
@@ -177,14 +178,16 @@ function shouldSqlPageSessionQuery(query?: Record<string, unknown>, forcePage = 
   const sort = query.$sort as Record<string, unknown> | undefined;
   const wantsRecency = !!sort && sort.updated_at !== undefined;
   const wantsBoard = query.board_id !== undefined;
-  if (!wantsRecency && !wantsBoard && !forcePage) return false;
+  const wantsBranch = query.branch_id !== undefined;
+  if (!wantsRecency && !wantsBoard && !wantsBranch && !forcePage) return false;
 
-  const allowedKeys = new Set(['archived', 'board_id', '$sort', '$limit', '$skip']);
+  const allowedKeys = new Set(['archived', 'board_id', 'branch_id', '$sort', '$limit', '$skip']);
   for (const key of Object.keys(query)) {
     if (!allowedKeys.has(key)) return false;
   }
   if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
   if (wantsBoard && typeof query.board_id !== 'string') return false;
+  if (wantsBranch && typeof query.branch_id !== 'string') return false;
   if (sort) {
     const sortKeys = Object.keys(sort);
     if (sortKeys.length !== 1 || sortKeys[0] !== 'updated_at') return false;
@@ -472,8 +475,21 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   }
 
   protected async fetchData(_query: Query, params?: SessionParams): Promise<Session[]> {
+    const branchId =
+      typeof _query.branch_id === 'string' ? (_query.branch_id as BranchID) : undefined;
+    const branchIds =
+      _query.branch_id &&
+      typeof _query.branch_id === 'object' &&
+      Array.isArray(_query.branch_id.$in) &&
+      _query.branch_id.$in.every((value: unknown) => typeof value === 'string')
+        ? (_query.branch_id.$in as BranchID[])
+        : undefined;
+    const archived = typeof _query.archived === 'boolean' ? _query.archived : undefined;
     return this.sessionRepo.findAll({
       visibleToUserId: params?._agorSqlSessionAccessUserId,
+      branchId,
+      branchIds,
+      archived,
     });
   }
 
@@ -1537,6 +1553,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       const skip = (query?.$skip as number | undefined) ?? 0;
       const { data, total } = await this.sessionRepo.findPage({
         boardId: query?.board_id as string | undefined,
+        branchId: query?.branch_id as BranchID | undefined,
         archived: query?.archived as boolean | undefined,
         sortUpdatedAt: sortSpec?.updated_at,
         limit,
@@ -1569,6 +1586,43 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       const selected = this.selectFields(sorted, residual.$select);
       const paged = this.paginateData(selected as Session[], residual, total);
 
+      if (Array.isArray(paged)) {
+        const enriched = await this.enrichRemoteRelationships(paged);
+        return markRemoteRelationshipsEnrichedResult(enriched);
+      }
+      const enrichedData = await this.enrichRemoteRelationships(paged.data);
+      return markRemoteRelationshipsEnrichedResult({ ...paged, data: enrichedData });
+    }
+
+    // Branch-modal session lists commonly sort by created_at rather than the
+    // recency column used by findPage. Keep the generic Feathers semantics for
+    // those shapes, but scope the candidate rows to the branch in SQL.
+    const branchId = params?.query?.branch_id;
+    const exactBranchId = typeof branchId === 'string' ? (branchId as BranchID) : undefined;
+    const branchIds =
+      branchId &&
+      typeof branchId === 'object' &&
+      Array.isArray(branchId.$in) &&
+      branchId.$in.every((value: unknown) => typeof value === 'string')
+        ? (branchId.$in as BranchID[])
+        : undefined;
+    if (exactBranchId || branchIds) {
+      const { branch_id: _scopedBranchId, ...residualQuery } = (params?.query ?? {}) as Record<
+        string,
+        unknown
+      >;
+      const rows = await this.sessionRepo.findAll({
+        branchId: exactBranchId,
+        branchIds,
+        archived: typeof residualQuery.archived === 'boolean' ? residualQuery.archived : undefined,
+        visibleToUserId: params?._agorSqlSessionAccessUserId,
+      });
+      const residual = residualQuery as Query;
+      const filtered = this.filterData(rows, residual);
+      const total = filtered.length;
+      const sorted = this.sortData(filtered, residual.$sort);
+      const selected = this.selectFields(sorted, residual.$select);
+      const paged = this.paginateData(selected as Session[], residual, total);
       if (Array.isArray(paged)) {
         const enriched = await this.enrichRemoteRelationships(paged);
         return markRemoteRelationshipsEnrichedResult(enriched);

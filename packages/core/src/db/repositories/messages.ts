@@ -6,7 +6,7 @@
  */
 
 import type { Message, MessageCreate, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
-import { and, asc, desc, eq, gt, inArray, lte, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { isCanonicalFullUuid } from '../../types/id';
 import { JsonSanitizationError, sanitizeJsonValue } from '../../utils/sanitize-json';
@@ -516,14 +516,17 @@ export class MessagesRepository {
   ): Promise<Message[]> {
     const rows = await select(this.db)
       .from(messages)
-      .where(eq(messages.session_id, sessionId))
+      .where(
+        and(
+          eq(messages.session_id, sessionId),
+          gte(messages.index, startIndex),
+          lte(messages.index, endIndex)
+        )
+      )
       .orderBy(messages.index)
       .all();
 
-    // Filter by range in memory (simpler than complex SQL)
-    return rows
-      .filter((r: MessageRow) => r.index >= startIndex && r.index <= endIndex)
-      .map((r: MessageRow) => this.rowToMessage(r));
+    return rows.map((r: MessageRow) => this.rowToMessage(r));
   }
 
   /**

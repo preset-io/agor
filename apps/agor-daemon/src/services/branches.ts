@@ -116,6 +116,47 @@ export type BranchParams = QueryParams<{
     _agorSqlBranchAccessUserId?: UUID;
   };
 
+function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
+  if (!query) return true;
+  const allowed = new Set([
+    'archived',
+    'board_id',
+    'repo_id',
+    'branch_id',
+    '$limit',
+    '$skip',
+    '$sort',
+  ]);
+  if (Object.keys(query).some((key) => !allowed.has(key))) return false;
+  for (const key of ['archived', 'board_id', 'repo_id']) {
+    if (query[key] !== undefined && typeof query[key] !== 'boolean' && key === 'archived') {
+      return false;
+    }
+    if (query[key] !== undefined && key !== 'archived' && typeof query[key] !== 'string') {
+      return false;
+    }
+  }
+  if (query.branch_id !== undefined) {
+    const value = query.branch_id;
+    if (typeof value !== 'string') {
+      const ids = value && typeof value === 'object' ? (value as { $in?: unknown }).$in : undefined;
+      if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string')) return false;
+    }
+  }
+  const sort = query.$sort as Record<string, unknown> | undefined;
+  if (sort) {
+    const columns = new Set(['branch_id', 'name', 'ref', 'created_at', 'updated_at']);
+    if (
+      Object.keys(sort).some(
+        (field) => !columns.has(field) || (sort[field] !== 1 && sort[field] !== -1)
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke';
 
 interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
@@ -1312,6 +1353,40 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           branch_id: { $in: filteredBranchIds },
         },
       } as BranchParams;
+    }
+
+    const query = findParams?.query as Record<string, unknown> | undefined;
+    if (!zoneId && shouldSqlPageBranchQuery(query)) {
+      const branchFilter = query?.branch_id;
+      const branchIds =
+        typeof branchFilter === 'string'
+          ? [branchFilter as BranchID]
+          : branchFilter &&
+              typeof branchFilter === 'object' &&
+              Array.isArray((branchFilter as { $in?: unknown }).$in)
+            ? (branchFilter as { $in: BranchID[] }).$in
+            : undefined;
+      const requestedLimit =
+        typeof query?.$limit === 'number' ? query.$limit : PAGINATION.DEFAULT_LIMIT;
+      const limit = Math.min(requestedLimit, PAGINATION.MAX_LIMIT);
+      const skip = typeof query?.$skip === 'number' ? query.$skip : 0;
+      const page = await this.branchRepo.findPage({
+        repo_id: typeof query?.repo_id === 'string' ? (query.repo_id as UUID) : undefined,
+        board_id: typeof query?.board_id === 'string' ? (query.board_id as BoardID) : undefined,
+        archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
+        branchIds,
+        visibleToUserId: findParams?._agorSqlBranchAccessUserId,
+        limit,
+        offset: skip,
+        sort: query?.$sort as Record<string, 1 | -1> | undefined,
+      });
+      const enriched = await this.branchRepo.enrichManyWithZoneInfo(page.data);
+      return {
+        total: page.total,
+        limit,
+        skip,
+        data: enriched,
+      };
     }
 
     // Use default find to ensure all hooks and scoping are applied (including repo_id filter)

@@ -6,13 +6,14 @@
  */
 
 import type { Session, UUID } from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
+import { describe, expect, it, vi } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { SessionRow } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, getHiddenTenantId, RepositoryError } from './base';
 import { BranchRepository } from './branches';
+import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
 import { SessionRepository } from './sessions';
@@ -582,6 +583,39 @@ describe('SessionRepository.findAll', () => {
       expect(page.data.map((session) => session.session_id)).toEqual([visibleSession.session_id]);
     }
   );
+});
+
+describe('SessionRepository.enrichManyWithLastMessage', () => {
+  dbTest('loads the latest assistant message for every session in one query', async ({ db }) => {
+    const sessions = new SessionRepository(db);
+    const messageRepo = new MessagesRepository(db);
+    const branch = await createTestBranch(db);
+    const first = await sessions.create(createSessionData({ branch_id: branch.branch_id }));
+    const second = await sessions.create(createSessionData({ branch_id: branch.branch_id }));
+
+    const message = (sessionId: UUID, index: number, text: string) => ({
+      message_id: generateId(),
+      session_id: sessionId,
+      type: 'assistant' as const,
+      role: MessageRole.ASSISTANT,
+      index,
+      timestamp: new Date().toISOString(),
+      content_preview: text,
+      content: [{ type: 'text' as const, text }],
+    });
+    await messageRepo.create(message(first.session_id as UUID, 1, 'old'));
+    await messageRepo.create(message(first.session_id as UUID, 2, 'new'));
+    await messageRepo.create(message(second.session_id as UUID, 1, 'other'));
+
+    const client = (
+      db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const enriched = await sessions.enrichManyWithLastMessage([first, second]);
+
+    expect(enriched.map((session) => session.last_message)).toEqual(['new', 'other']);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ============================================================================

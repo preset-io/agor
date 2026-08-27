@@ -501,54 +501,77 @@ describe('BoardsService.find SQL pushdown', () => {
     return { service, b1, b2, archived };
   }
 
-  dbTest('reads the whole table when no scope is present (rbac off)', async ({ db }) => {
-    const { service } = await seed(db);
-    const repoFindAll = vi.spyOn(
-      (service as unknown as { boardRepo: BoardRepository }).boardRepo,
-      'findAll'
-    );
+  dbTest(
+    'pages the whole tenant scope in SQL when no filter is present (rbac off)',
+    async ({ db }) => {
+      const { service } = await seed(db);
+      const repoFindPage = vi.spyOn(
+        (service as unknown as { boardRepo: BoardRepository }).boardRepo,
+        'findPage'
+      );
 
-    // Without an archived or board-id predicate the read intentionally falls
-    // through to the whole tenant-scoped table.
-    const result = (await service.find({ query: { $sort: { name: 1 } } })) as {
-      data: Board[];
-      total: number;
-    };
+      const result = (await service.find({ query: { $sort: { name: 1 } } })) as {
+        data: Board[];
+        total: number;
+      };
 
-    expect(repoFindAll).toHaveBeenCalledWith({});
-    expect(result.total).toBe(3);
-    expect(result.data.map((b) => b.name)).toEqual(['Alpha', 'Beta', 'Gamma']);
-  });
+      expect(repoFindPage).toHaveBeenCalledWith({
+        archived: undefined,
+        boardIds: undefined,
+        visibleToUserId: undefined,
+        lean: false,
+        limit: 10_000,
+        offset: 0,
+        sort: { name: 1 },
+      });
+      expect(result.total).toBe(3);
+      expect(result.data.map((b) => b.name)).toEqual(['Alpha', 'Beta', 'Gamma']);
+    }
+  );
 
   dbTest('pushes archived filtering into SQL before pagination', async ({ db }) => {
     const { service } = await seed(db);
-    const repoFindAll = vi.spyOn(
+    const repoFindPage = vi.spyOn(
       (service as unknown as { boardRepo: BoardRepository }).boardRepo,
-      'findAll'
+      'findPage'
     );
 
     const result = (await service.find({
       query: { archived: false, $limit: 1, $skip: 1, $sort: { name: 1 } },
     })) as { data: Board[]; total: number };
 
-    expect(repoFindAll).toHaveBeenCalledWith({ archived: false });
+    expect(repoFindPage).toHaveBeenCalledWith({
+      archived: false,
+      boardIds: undefined,
+      visibleToUserId: undefined,
+      lean: false,
+      limit: 1,
+      offset: 1,
+      sort: { name: 1 },
+    });
     expect(result.total).toBe(2);
     expect(result.data.map((board) => board.name)).toEqual(['Beta']);
   });
 
   dbTest('pushes an accessible board_id $in set into SQL (rbac on)', async ({ db }) => {
     const { service, b1, b2 } = await seed(db);
-    const repoFindAll = vi.spyOn(
+    const repoFindPage = vi.spyOn(
       (service as unknown as { boardRepo: BoardRepository }).boardRepo,
-      'findAll'
+      'findPage'
     );
 
     const result = (await service.find({
       query: { board_id: { $in: [b1.board_id as BoardID, b2.board_id as BoardID] } },
     })) as { data: Board[]; total: number };
 
-    expect(repoFindAll).toHaveBeenCalledWith({
+    expect(repoFindPage).toHaveBeenCalledWith({
+      archived: undefined,
       boardIds: [b1.board_id, b2.board_id],
+      visibleToUserId: undefined,
+      lean: false,
+      limit: 10_000,
+      offset: 0,
+      sort: undefined,
     });
     expect(result.total).toBe(2);
     expect(result.data.map((b) => b.board_id).sort()).toEqual([b1.board_id, b2.board_id].sort());
@@ -556,9 +579,9 @@ describe('BoardsService.find SQL pushdown', () => {
 
   dbTest('pushes a scalar board_id as a single-id set', async ({ db }) => {
     const { service, b1 } = await seed(db);
-    const repoFindAll = vi.spyOn(
+    const repoFindPage = vi.spyOn(
       (service as unknown as { boardRepo: BoardRepository }).boardRepo,
-      'findAll'
+      'findPage'
     );
 
     const result = (await service.find({ query: { board_id: b1.board_id } })) as {
@@ -566,7 +589,15 @@ describe('BoardsService.find SQL pushdown', () => {
       total: number;
     };
 
-    expect(repoFindAll).toHaveBeenCalledWith({ boardIds: [b1.board_id] });
+    expect(repoFindPage).toHaveBeenCalledWith({
+      archived: undefined,
+      boardIds: [b1.board_id],
+      visibleToUserId: undefined,
+      lean: false,
+      limit: 10_000,
+      offset: 0,
+      sort: undefined,
+    });
     expect(result.total).toBe(1);
     expect(result.data[0].board_id).toBe(b1.board_id);
   });
@@ -575,9 +606,9 @@ describe('BoardsService.find SQL pushdown', () => {
     'returns no rows for an empty accessible set without reading the table',
     async ({ db }) => {
       const { service } = await seed(db);
-      const repoFindAll = vi.spyOn(
+      const repoFindPage = vi.spyOn(
         (service as unknown as { boardRepo: BoardRepository }).boardRepo,
-        'findAll'
+        'findPage'
       );
 
       const result = (await service.find({ query: { board_id: { $in: [] } } })) as {
@@ -585,7 +616,15 @@ describe('BoardsService.find SQL pushdown', () => {
         total: number;
       };
 
-      expect(repoFindAll).toHaveBeenCalledWith({ boardIds: [] });
+      expect(repoFindPage).toHaveBeenCalledWith({
+        archived: undefined,
+        boardIds: [],
+        visibleToUserId: undefined,
+        lean: false,
+        limit: 10_000,
+        offset: 0,
+        sort: undefined,
+      });
       expect(result.total).toBe(0);
       expect(result.data).toHaveLength(0);
     }
@@ -593,9 +632,9 @@ describe('BoardsService.find SQL pushdown', () => {
 
   dbTest('pushes the RBAC SQL visibility marker into the repository read', async ({ db }) => {
     const { service } = await seed(db);
-    const repoFindAll = vi.spyOn(
+    const repoFindPage = vi.spyOn(
       (service as unknown as { boardRepo: BoardRepository }).boardRepo,
-      'findAll'
+      'findPage'
     );
 
     await service.find({
@@ -603,7 +642,15 @@ describe('BoardsService.find SQL pushdown', () => {
       query: {},
     } as BoardParams);
 
-    expect(repoFindAll).toHaveBeenCalledWith({ visibleToUserId: TEST_USER });
+    expect(repoFindPage).toHaveBeenCalledWith({
+      archived: undefined,
+      boardIds: undefined,
+      visibleToUserId: TEST_USER,
+      lean: false,
+      limit: 10_000,
+      offset: 0,
+      sort: undefined,
+    });
   });
 
   dbTest('lean list still enforces board RBAC visibility', async ({ db }) => {
@@ -640,9 +687,9 @@ describe('BoardsService.find SQL pushdown', () => {
       },
     })) as Board;
 
-    const repoFindAll = vi.spyOn(
+    const repoFindPage = vi.spyOn(
       (service as unknown as { boardRepo: BoardRepository }).boardRepo,
-      'findAll'
+      'findPage'
     );
 
     const result = (await service.find({
@@ -652,7 +699,15 @@ describe('BoardsService.find SQL pushdown', () => {
 
     // RBAC visibility and the lean projection ride the SAME repository read, so
     // the lean list can never widen visibility past the SQL RBAC predicate.
-    expect(repoFindAll).toHaveBeenCalledWith({ visibleToUserId: TEST_USER, lean: true });
+    expect(repoFindPage).toHaveBeenCalledWith({
+      archived: undefined,
+      boardIds: undefined,
+      visibleToUserId: TEST_USER,
+      lean: true,
+      limit: 10_000,
+      offset: 0,
+      sort: undefined,
+    });
 
     const ids = result.data.map((b) => b.board_id);
     expect(ids).toContain(visible.board_id);

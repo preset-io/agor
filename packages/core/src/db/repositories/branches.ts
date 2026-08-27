@@ -15,7 +15,7 @@ import type {
   SessionStatus,
   UUID,
 } from '@agor/core/types';
-import { and, desc, eq, exists, inArray, like, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, inArray, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getBranchUrl } from '../../utils/url';
@@ -38,7 +38,9 @@ import {
   branchPermissionConfigs,
   branchPermissionEntries,
   groupMemberships,
+  messages,
   schedules,
+  sessions,
   users,
 } from '../schema';
 import {
@@ -57,6 +59,11 @@ import {
 } from './branch-access';
 import { CapabilityPolicyRepository } from './capability-policies';
 import { deepMerge } from './merge-utils';
+import {
+  extractMessageText,
+  findLatestAssistantMessages,
+  truncateMessageText,
+} from './message-activity';
 
 const BRANCH_PERMISSION_SOURCES = ['board', 'override'] as const;
 const FS_ACCESS_BRANCH_PERMISSIONS = ['read', 'write'] as const;
@@ -414,6 +421,61 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
     const baseUrl = await getBaseUrl();
     return rows.map((row: BranchRow) => this.rowToBranch(row, baseUrl));
+  }
+
+  /** Fetch a simple branch list page with filtering, sorting, and pagination in SQL. */
+  async findPage(opts: {
+    repo_id?: UUID;
+    board_id?: BoardID;
+    archived?: boolean;
+    branchIds?: BranchID[];
+    visibleToUserId?: UUID;
+    limit?: number;
+    offset?: number;
+    sort?: Record<string, 1 | -1>;
+  }): Promise<{ data: Branch[]; total: number }> {
+    if (opts.branchIds?.length === 0) return { data: [], total: 0 };
+
+    const conditions: SQL[] = [];
+    if (opts.repo_id) conditions.push(eq(branches.repo_id, opts.repo_id));
+    if (opts.board_id) conditions.push(eq(branches.board_id, opts.board_id));
+    if (opts.archived !== undefined) conditions.push(eq(branches.archived, opts.archived));
+    if (opts.branchIds) conditions.push(inArray(branches.branch_id, opts.branchIds));
+    if (opts.visibleToUserId) {
+      conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
+    }
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    let countQuery = select(this.db, { count: sql<number>`count(*)` }).from(branches);
+    if (whereClause) countQuery = countQuery.where(whereClause);
+    const countRow = await countQuery.one();
+    const total = Number(countRow?.count ?? 0);
+
+    const sortColumns = {
+      branch_id: branches.branch_id,
+      name: branches.name,
+      ref: branches.ref,
+      created_at: branches.created_at,
+      updated_at: branches.updated_at,
+    } as const;
+    const orderBy = Object.entries(opts.sort ?? {})
+      .map(([field, direction]) => {
+        const column = sortColumns[field as keyof typeof sortColumns];
+        return column ? (direction === -1 ? desc(column) : asc(column)) : undefined;
+      })
+      .filter((expression): expression is SQL => expression !== undefined);
+    if (orderBy.length === 0) orderBy.push(asc(branches.created_at));
+    if (!Object.hasOwn(opts.sort ?? {}, 'branch_id')) orderBy.push(asc(branches.branch_id));
+
+    let dataQuery = select(this.db).from(branches);
+    if (whereClause) dataQuery = dataQuery.where(whereClause);
+    dataQuery = dataQuery.orderBy(...orderBy);
+    if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
+    if (opts.offset) dataQuery = dataQuery.offset(opts.offset);
+
+    const baseUrl = await getBaseUrl();
+    const rows = await dataQuery.all();
+    return { data: (rows as BranchRow[]).map((row) => this.rowToBranch(row, baseUrl)), total };
   }
 
   /**
@@ -1267,21 +1329,18 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     try {
       const branchIds = branches.map((wt) => wt.branch_id);
 
-      // Import schema tables dynamically
-      const { sessions: sessionsTable, messages: messagesTable } = await import('../schema');
-
       // Query to get recent sessions for these branches
       const sessionRows = await select(this.db, {
-        branch_id: sessionsTable.branch_id,
-        session_id: sessionsTable.session_id,
-        status: sessionsTable.status,
-        agentic_tool: sessionsTable.agentic_tool,
-        updated_at: sessionsTable.updated_at,
-        unix_username: sessionsTable.unix_username,
+        branch_id: sessions.branch_id,
+        session_id: sessions.session_id,
+        status: sessions.status,
+        agentic_tool: sessions.agentic_tool,
+        updated_at: sessions.updated_at,
+        unix_username: sessions.unix_username,
       })
-        .from(sessionsTable)
-        .where(inArray(sessionsTable.branch_id, branchIds))
-        .orderBy(sessionsTable.updated_at)
+        .from(sessions)
+        .where(inArray(sessions.branch_id, branchIds))
+        .orderBy(sessions.updated_at)
         .all();
 
       const sessionIds = sessionRows.map((s: { session_id: unknown }) => s.session_id as string);
@@ -1291,54 +1350,23 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         return branches.map((wt) => ({ ...wt, sessions: [] }));
       }
 
-      // Get last assistant message for each session using N+1 queries
-      // This is acceptable since we typically have 1-5 sessions per branch
-      // Much better than fetching all messages which could be huge for long-running sessions
       const lastMessageBySession = new Map<string, string>();
-
-      for (const sessionId of sessionIds) {
-        const query = select(this.db, {
-          data: messagesTable.data,
-        })
-          .from(messagesTable)
-          .where(and(eq(messagesTable.session_id, sessionId), eq(messagesTable.role, 'assistant')));
-
-        // Chain orderBy and limit, then execute with one()
-        // The spread operator in the wrapper passes through these methods
-        const lastMessage = await query.orderBy(desc(messagesTable.index)).limit(1).one();
-
-        if (lastMessage) {
-          // Extract text content from message data and truncate to requested length
-          const messageData = lastMessage.data as {
-            content?: Array<{ type: string; text?: string }>;
-          };
-          let fullText = '';
-
-          // Extract text from content blocks (messages can have multiple content blocks)
-          if (messageData?.content && Array.isArray(messageData.content)) {
-            fullText = messageData.content
-              .filter((block) => block.type === 'text' && block.text)
-              .map((block) => block.text)
-              .join('\n');
-          }
-
-          // Truncate to requested length
-          if (fullText.length > truncationLength) {
-            fullText = `${fullText.substring(0, truncationLength)}...`;
-          }
-
-          lastMessageBySession.set(sessionId, fullText);
-        }
+      const lastMessages = await findLatestAssistantMessages(this.db, sessionIds);
+      for (const lastMessage of lastMessages) {
+        lastMessageBySession.set(
+          lastMessage.session_id,
+          truncateMessageText(extractMessageText(lastMessage.data), truncationLength)
+        );
       }
 
       // Batch count messages per session in one query
       const countRows = await select(this.db, {
-        session_id: messagesTable.session_id,
+        session_id: messages.session_id,
         count: sql<number>`count(*)`,
       })
-        .from(messagesTable)
-        .where(inArray(messagesTable.session_id, sessionIds))
-        .groupBy(messagesTable.session_id)
+        .from(messages)
+        .where(inArray(messages.session_id, sessionIds))
+        .groupBy(messages.session_id)
         .all();
       const messageCountBySession = new Map<string, number>();
       for (const r of countRows) {

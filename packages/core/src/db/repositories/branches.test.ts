@@ -5,7 +5,7 @@
  */
 
 import type { BoardID, BranchID, UUID } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
 import { boards } from '../schema';
 import { ownedDbTest as dbTest } from '../test-helpers';
@@ -527,6 +527,34 @@ describe('BranchRepository.findAll', () => {
 
     const filtered = await wtRepo.findAll({ repo_id: generateId() });
     expect(filtered).toEqual([]);
+  });
+
+  dbTest('findPage applies ordering and pagination in SQL', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'paged-repo' }));
+    for (const name of ['branch-c', 'branch-a', 'branch-b']) {
+      await wtRepo.create(createBranchData({ repo_id: repo.repo_id, name }));
+    }
+
+    const client = (
+      db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const page = await wtRepo.findPage({
+      repo_id: repo.repo_id,
+      sort: { name: 1 },
+      limit: 1,
+      offset: 1,
+    });
+    expect(page.total).toBe(3);
+    expect(page.data.map((branch) => branch.name)).toEqual(['branch-b']);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(
+      execute.mock.calls
+        .map(([query]) => JSON.stringify(query))
+        .some((query) => /limit/i.test(query))
+    ).toBe(true);
   });
 
   dbTest('should filter by board_id', async ({ db }) => {

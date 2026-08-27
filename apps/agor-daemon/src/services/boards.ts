@@ -49,6 +49,39 @@ export interface BoardParams
   _agorSqlBoardAccessUserId?: UUID;
 }
 
+function shouldSqlPageBoardQuery(query?: Record<string, unknown>): boolean {
+  if (!query) return true;
+  const allowed = new Set(['archived', 'board_id', 'lean', '$limit', '$skip', '$sort']);
+  if (Object.keys(query).some((key) => !allowed.has(key) || key === '$select')) return false;
+  if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
+  if (query.lean !== undefined && typeof query.lean !== 'boolean') return false;
+  if (query.board_id !== undefined) {
+    const value = query.board_id;
+    if (typeof value !== 'string') {
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        !Array.isArray((value as { $in?: unknown }).$in) ||
+        !(value as { $in: unknown[] }).$in.every((id) => typeof id === 'string')
+      ) {
+        return false;
+      }
+    }
+  }
+  const sort = query.$sort as Record<string, unknown> | undefined;
+  if (sort) {
+    const columns = new Set(['board_id', 'name', 'slug', 'created_at', 'updated_at']);
+    if (
+      Object.keys(sort).some(
+        (field) => !columns.has(field) || (sort[field] !== 1 && sort[field] !== -1)
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 /**
  * Extended boards service with custom methods
  */
@@ -144,6 +177,41 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     }
 
     return this.boardRepo.findAll(filter);
+  }
+
+  override async find(params?: BoardParams) {
+    const query = params?.query as Record<string, unknown> | undefined;
+    if (shouldSqlPageBoardQuery(query)) {
+      const boardFilter = query?.board_id;
+      const boardIds =
+        typeof boardFilter === 'string'
+          ? [boardFilter as BoardID]
+          : boardFilter &&
+              typeof boardFilter === 'object' &&
+              Array.isArray((boardFilter as { $in?: unknown }).$in)
+            ? (boardFilter as { $in: BoardID[] }).$in
+            : undefined;
+      const requestedLimit =
+        typeof query?.$limit === 'number' ? query.$limit : PAGINATION.DEFAULT_LIMIT;
+      const limit = Math.min(requestedLimit, PAGINATION.MAX_LIMIT);
+      const skip = typeof query?.$skip === 'number' ? query.$skip : 0;
+      const page = await this.boardRepo.findPage({
+        archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
+        boardIds,
+        visibleToUserId: params?._agorSqlBoardAccessUserId,
+        lean: query?.lean === true,
+        limit,
+        offset: skip,
+        sort: query?.$sort as Record<string, 1 | -1> | undefined,
+      });
+      return {
+        total: page.total,
+        limit,
+        skip,
+        data: page.data,
+      };
+    }
+    return super.find(params);
   }
 
   /**

@@ -157,7 +157,6 @@ import {
   loadSession,
   loadSessionBranch,
   resolveSessionContext,
-  scopeFindToAccessibleBoards,
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
   scopeFindToAccessibleSessionsSql,
@@ -1760,9 +1759,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     before: {
       all: [requireAuth],
       find: [
-        ...(executionMode.appRbacEnabled
-          ? [scopeFindToAccessibleBoards(new BoardRepository(db), superadminOpts)]
-          : []),
+        ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBoardsSql(superadminOpts)] : []),
       ],
       get: [cardAccess('view', 'view this card')],
       create: [

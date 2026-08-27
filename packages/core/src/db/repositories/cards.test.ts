@@ -5,10 +5,11 @@
  */
 
 import type { BoardID, CardID, UUID } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { ownedDbTest as dbTest } from '../test-helpers';
+import { BoardObjectRepository } from './board-objects';
 import { BoardRepository } from './boards';
 import { CardRepository } from './cards';
 import { UsersRepository } from './users';
@@ -75,6 +76,37 @@ describe('CardRepository.findAll', () => {
 
     const result = await repo.findAll({ board_id: boardA, archived: false });
     expect(result.map((c) => c.title)).toEqual(['a-active']);
+  });
+});
+
+describe('CardRepository.findByZoneId', () => {
+  dbTest('joins placements in one query instead of one lookup per card', async ({ db }) => {
+    const board = await createBoard(db);
+    const cards = new CardRepository(db);
+    const objects = new BoardObjectRepository(db);
+    const first = await cards.create({ board_id: board, title: 'first' });
+    const second = await cards.create({ board_id: board, title: 'second' });
+    await objects.create({
+      board_id: board,
+      card_id: first.card_id as CardID,
+      position: { x: 0, y: 0 },
+      zone_id: 'todo',
+    });
+    await objects.create({
+      board_id: board,
+      card_id: second.card_id as CardID,
+      position: { x: 1, y: 0 },
+      zone_id: 'done',
+    });
+
+    const client = (
+      db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const result = await cards.findByZoneId(board, 'todo');
+
+    expect(result.map((card) => card.title)).toEqual(['first']);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 });
 

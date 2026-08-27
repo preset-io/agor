@@ -16,7 +16,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { isTeammate } from '@agor/core/types';
-import { and, eq, inArray, isNull, like, ne, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, like, ne, type SQL, sql } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -444,6 +444,65 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         error
       );
     }
+  }
+
+  /**
+   * Count and fetch a board page in SQL. The generic Feathers adapter keeps
+   * pagination in memory, which is unnecessarily expensive once a tenant has
+   * many archived boards. Callers only use this for simple list shapes; richer
+   * operator queries continue through `findAll` and the adapter's compatibility
+   * pipeline.
+   */
+  async findPage(opts: {
+    archived?: boolean;
+    boardIds?: BoardID[];
+    visibleToUserId?: UUID;
+    lean?: boolean;
+    limit?: number;
+    offset?: number;
+    sort?: Record<string, 1 | -1>;
+  }): Promise<{ data: Board[]; total: number }> {
+    if (opts.boardIds?.length === 0) return { data: [], total: 0 };
+
+    const conditions: SQL[] = [];
+    if (opts.archived !== undefined) conditions.push(eq(boards.archived, opts.archived));
+    if (opts.boardIds) conditions.push(inArray(boards.board_id, opts.boardIds));
+    if (opts.visibleToUserId) conditions.push(this.visibleBoardCondition(opts.visibleToUserId));
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    let countQuery = select(this.db, { count: sql<number>`count(*)` }).from(boards);
+    if (whereClause) countQuery = countQuery.where(whereClause);
+    const countRow = await countQuery.one();
+    const total = Number(countRow?.count ?? 0);
+
+    const sortColumns = {
+      board_id: boards.board_id,
+      name: boards.name,
+      slug: boards.slug,
+      created_at: boards.created_at,
+      updated_at: boards.updated_at,
+    } as const;
+    const orderBy = Object.entries(opts.sort ?? {})
+      .map(([field, direction]) => {
+        const column = sortColumns[field as keyof typeof sortColumns];
+        return column ? (direction === -1 ? desc(column) : asc(column)) : undefined;
+      })
+      .filter((expression): expression is SQL => expression !== undefined);
+    if (orderBy.length === 0) orderBy.push(asc(boards.created_at));
+    if (!Object.hasOwn(opts.sort ?? {}, 'board_id')) orderBy.push(asc(boards.board_id));
+
+    let dataQuery = select(this.db).from(boards);
+    if (whereClause) dataQuery = dataQuery.where(whereClause);
+    dataQuery = dataQuery.orderBy(...orderBy);
+    if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
+    if (opts.offset) dataQuery = dataQuery.offset(opts.offset);
+
+    const baseUrl = await getBaseUrl();
+    const rows = await dataQuery.all();
+    return {
+      data: (rows as BoardRow[]).map((row) => this.rowToBoard(row, baseUrl, { lean: opts.lean })),
+      total,
+    };
   }
 
   /**

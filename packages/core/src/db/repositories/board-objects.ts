@@ -22,7 +22,6 @@ import { type BoardObjectInsert, type BoardObjectRow, boardObjects, branches } f
 import { EntityNotFoundError, RepositoryError } from './base';
 import {
   visibleBoardReferenceAccessExists,
-  visibleBranchAccessCondition,
   visibleBranchReferenceAccessExists,
 } from './branch-access';
 
@@ -79,7 +78,10 @@ export class BoardObjectRepository {
         visibleBoardReferenceAccessExists(this.db, userId, boardObjects.board_id),
         or(
           isNull(boardObjects.branch_id),
-          and(isNotNull(boardObjects.branch_id), visibleBranchAccessCondition(this.db, userId))
+          and(
+            isNotNull(boardObjects.branch_id),
+            visibleBranchReferenceAccessExists(this.db, userId, boardObjects.branch_id)
+          )
         )
       ) ?? sql`false`
     );
@@ -155,7 +157,6 @@ export class BoardObjectRepository {
       ];
       let query = select(this.db, getTableColumns(boardObjects))
         .from(boardObjects)
-        .leftJoin(branches, eq(branches.branch_id, boardObjects.branch_id))
         .where(and(...conditions));
 
       query = query.orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id));
@@ -187,7 +188,6 @@ export class BoardObjectRepository {
       ];
       const row = await select(this.db, { count: sql<number>`count(*)` })
         .from(boardObjects)
-        .leftJoin(branches, eq(branches.branch_id, boardObjects.branch_id))
         .where(and(...conditions))
         .one();
 
@@ -234,7 +234,6 @@ export class BoardObjectRepository {
     try {
       const row = await select(this.db, getTableColumns(boardObjects))
         .from(boardObjects)
-        .leftJoin(branches, eq(branches.branch_id, boardObjects.branch_id))
         .where(and(eq(boardObjects.object_id, objectId), this.buildVisibleToUserCondition(userId)))
         .one();
 
