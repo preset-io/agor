@@ -245,7 +245,11 @@ import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
-import { createUsersService, USERS_SERVICE_TRANSPORT_METHODS } from './services/users.js';
+import {
+  createTenantTransactionUsersService,
+  createUsersService,
+  USERS_SERVICE_TRANSPORT_METHODS,
+} from './services/users.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
@@ -934,7 +938,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
 
   // Bootstrap superadmin users
-  await bootstrapSuperadminUsers(config, db, usersService, allowSuperadmin);
+  await bootstrapSuperadminUsers(config, db, allowSuperadmin);
 
   // Store oauthCallbackHandler on app for boot.ts to wire up
   appRecord.oauthCallbackHandler = oauthCallbackHandler;
@@ -5592,7 +5596,6 @@ export async function registerMCPServices(
 export async function bootstrapSuperadminUsers(
   config: AgorConfig,
   db: TenantScopeAwareDatabase,
-  usersService: ReturnType<typeof createUsersService>,
   allowSuperadmin: boolean
 ): Promise<void> {
   const { ROLES } = await import('@agor/core/types');
@@ -5619,7 +5622,10 @@ export async function bootstrapSuperadminUsers(
   const trustedParams = { tenant } as unknown as Params;
 
   let promotedCount = 0;
-  await runWithTenantDatabaseTransaction(db, tenant.tenant_id, async () => {
+  await runWithTenantDatabaseTransaction(db, tenant.tenant_id, async (scopedDb) => {
+    // Bind the service to the transaction handle. A long-lived service owns the
+    // base PostgreSQL handle and would execute outside the SET LOCAL RLS scope.
+    const usersService = createTenantTransactionUsersService(scopedDb, config);
     for (const rawUserId of bootstrapUsers) {
       const userId = rawUserId?.trim();
       if (!userId) continue;

@@ -84,8 +84,9 @@ function sqlstateOf(error: unknown): string | undefined {
 
 async function seedTenant(db: Database, tenantId: string): Promise<void> {
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const ownerId = generateId() as UUID;
     await new UsersRepository(scoped).create({
-      user_id: 'tenant-portability-test-user' as UUID,
+      user_id: ownerId,
       email: `tenant-portability-${tenantId}-${generateId()}@example.invalid`,
       role: 'member',
     });
@@ -107,13 +108,13 @@ async function seedTenant(db: Database, tenantId: string): Promise<void> {
       ref: 'main',
       branch_unique_id: branchUniqueSeq++,
       path: `/tmp/${branchId}`,
-      created_by: 'tenant-portability-test-user' as UUID,
+      created_by: ownerId,
     });
     await new SessionRepository(scoped).create({
       session_id: generateId(),
       branch_id: branchId,
       agentic_tool: 'claude-code',
-      created_by: 'tenant-portability-test-user',
+      created_by: ownerId,
     });
   });
 }
@@ -123,11 +124,13 @@ async function addSession(db: Database, tenantId: string): Promise<void> {
     const branch = await new BranchRepository(scoped).findAll();
     const branchId = branch[0]?.branch_id;
     if (!branchId) throw new Error('expected a seeded branch');
+    const ownerId = branch[0]?.primary_owner_user_id;
+    if (!ownerId) throw new Error('expected a seeded branch owner');
     await new SessionRepository(scoped).create({
       session_id: generateId(),
       branch_id: branchId,
       agentic_tool: 'claude-code',
-      created_by: 'tenant-portability-test-user',
+      created_by: ownerId,
     });
   });
 }
@@ -135,6 +138,8 @@ async function addSession(db: Database, tenantId: string): Promise<void> {
 async function seedNonPortableExecutorAuthority(db: Database, tenantId: string): Promise<void> {
   const fingerprint = generateId().replaceAll('-', '').repeat(2);
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const user = (await new UsersRepository(scoped).findAll())[0];
+    if (!user) throw new Error('expected a seeded tenant user');
     await insert(scoped, pg.executorSessionTokenAuthorities)
       .values({
         tenant_id: tenantId,
@@ -142,7 +147,7 @@ async function seedNonPortableExecutorAuthority(db: Database, tenantId: string):
         token_type: 'executor-session',
         purpose: 'executor-task',
         session_id: 'tenant-portability-non-portable-authority',
-        user_id: 'tenant-portability-test-user',
+        user_id: user.user_id,
         created_at: new Date(),
         expires_at: new Date(Date.now() + 60_000),
         max_uses: -1,
@@ -207,11 +212,13 @@ async function seedNonPortableOAuthGrant(
 async function seedNonPortableGitHubInstallState(db: Database, tenantId: string): Promise<void> {
   const stateHash = generateId().replaceAll('-', '').repeat(2);
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const user = (await new UsersRepository(scoped).findAll())[0];
+    if (!user) throw new Error('expected a seeded tenant user');
     await insert(scoped, pg.githubInstallStates)
       .values({
         tenant_id: tenantId,
         state_hash: stateHash,
-        user_id: 'tenant-portability-test-user',
+        user_id: user.user_id,
         intent: 'github-app-install',
         created_at: new Date(),
         expires_at: new Date(Date.now() + 60_000),
@@ -225,8 +232,9 @@ async function seedBoardBranchCycle(
   tenantId: string
 ): Promise<{ boardId: string; branchId: string }> {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const ownerId = generateId() as UUID;
     await new UsersRepository(scoped).create({
-      user_id: 'tenant-portability-test-user' as UUID,
+      user_id: ownerId,
       email: `tenant-portability-cycle-${tenantId}-${generateId()}@example.invalid`,
       role: 'member',
     });
@@ -245,7 +253,7 @@ async function seedBoardBranchCycle(
     await new BoardRepository(scoped).create({
       board_id: boardId,
       name: `cycle board ${tenantId}`,
-      created_by: 'tenant-portability-test-user' as UUID,
+      created_by: ownerId,
     });
     const branchId = generateId();
     await new BranchRepository(scoped).create({
@@ -256,7 +264,7 @@ async function seedBoardBranchCycle(
       ref: 'main',
       branch_unique_id: branchUniqueSeq++,
       path: `/tmp/${branchId}`,
-      created_by: 'tenant-portability-test-user' as UUID,
+      created_by: ownerId,
     });
     await update(scoped, pg.boards)
       .set({ primary_teammate_id: branchId })

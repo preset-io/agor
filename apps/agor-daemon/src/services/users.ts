@@ -48,6 +48,7 @@ import {
   select,
   sql,
   type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
   UserPrimaryTeammateRepository,
   update,
   users,
@@ -423,14 +424,16 @@ export class UsersService {
   private readonly identityAuthority: ResolvedIdentityAuthority;
 
   constructor(
-    protected db: TenantScopeAwareDatabase,
+    protected db: TenantScopeAwareDatabase | TenantScopedDatabase,
     protected app?: Application,
     config?: AgorConfig
   ) {
     const effectiveConfig = config ?? (app?.get('config') as AgorConfig | undefined) ?? {};
     this.identityAuthority = resolveIdentityAuthority(effectiveConfig);
     if (app) {
-      this.avatarSync = new UserAvatarSyncManager(db, app);
+      // Application-bound services are created only from the long-lived,
+      // tenant-scope-aware base handle. Transaction-bound services omit app.
+      this.avatarSync = new UserAvatarSyncManager(db as TenantScopeAwareDatabase, app);
     }
   }
 
@@ -1756,7 +1759,16 @@ class UsersServiceWithAuth extends UsersService {
  */
 export function createUsersService(
   db: TenantScopeAwareDatabase,
-  app?: Application
+  app?: Application,
+  config?: AgorConfig
 ): UsersServiceWithAuth {
-  return new UsersServiceWithAuth(db, app);
+  return new UsersServiceWithAuth(db, app, config);
+}
+
+/** Create a provider-less Users service bound to one active tenant transaction. */
+export function createTenantTransactionUsersService(
+  db: TenantScopedDatabase,
+  config: AgorConfig
+): UsersServiceWithAuth {
+  return new UsersServiceWithAuth(db, undefined, config);
 }

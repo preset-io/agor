@@ -34,7 +34,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ]);
     });
 
-    async function seed(tenantId: TenantID) {
+    async function seed(tenantId: TenantID, permissionSource: 'board' | 'override' = 'override') {
       return runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
         const owner = await new UsersRepository(scoped).create({
           email: `policy-owner-${generateId()}@example.test`,
@@ -62,7 +62,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           path: `/tmp/${generateId()}`,
           created_by: owner.user_id,
           board_id: board.board_id,
-          permission_source: 'override',
+          permission_source: permissionSource,
         });
         return {
           ownerId: owner.user_id as UserID,
@@ -163,7 +163,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
     it('materializes the latest committed template when board deletion races a template edit', async () => {
       const tenantId = `policy-board-delete-template-${generateId()}` as TenantID;
-      const value = await seed(tenantId);
+      const value = await seed(tenantId, 'board');
       const current = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
         new CapabilityPolicyRepository(scoped).getBoardPolicies(value.boardId)
       );

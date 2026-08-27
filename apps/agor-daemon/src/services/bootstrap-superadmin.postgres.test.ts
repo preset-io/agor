@@ -9,7 +9,6 @@ import {
 } from '@agor/core/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { bootstrapSuperadminUsers } from '../register-services.js';
-import { createUsersService } from './users.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -44,7 +43,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         },
       } satisfies AgorConfig;
 
-      await bootstrapSuperadminUsers(config, db, createUsersService(db), true);
+      await bootstrapSuperadminUsers(config, db, true);
       await expect(
         runWithTenantDatabaseScope(db, tenantId, (scoped) =>
           new UsersRepository(scoped).findById(user.user_id)
@@ -58,7 +57,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
           },
           db,
-          createUsersService(db),
           true
         )
       ).rejects.toThrow(/requires multi_tenancy\.mode=static/);
