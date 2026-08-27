@@ -128,6 +128,7 @@ function renderTable(client: AgorClient) {
           branchById={new Map([[branch.branch_id, branch]])}
           userById={new Map([[user.user_id, user]])}
           mcpServerById={new Map<string, MCPServer>()}
+          currentUser={user}
         />
       </AntdApp>
     </MemoryRouter>
