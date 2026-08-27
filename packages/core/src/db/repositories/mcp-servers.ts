@@ -14,7 +14,9 @@ import type {
   UpdateMCPServerInput,
   UserID,
 } from '@agor/core/types';
-import { and, asc, eq, isNull, like, or, sql } from 'drizzle-orm';
+import type { AnyColumn } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, like, or, sql } from 'drizzle-orm';
+import { PAGINATION } from '../../config/constants';
 import { generateId } from '../../lib/ids';
 import {
   assertValidMCPAuthPatch,
@@ -415,6 +417,7 @@ export class MCPServerRepository
       const fullId = await this.resolveId(id);
       const row = await select(this.db, {
         mcp_server_id: mcpServers.mcp_server_id,
+        server_id: mcpServers.mcp_server_id,
         owner_user_id: mcpServers.owner_user_id,
         transport: mcpServers.transport,
         scope: mcpServers.scope,
@@ -581,11 +584,23 @@ export class MCPServerRepository
         query = query.where(and(...conditions));
       }
 
-      if (filters?.limit !== undefined || filters?.offset !== undefined) {
-        query = query.orderBy(asc(mcpServers.mcp_server_id));
-      }
+      const sortableColumns: Record<string, AnyColumn> = {
+        mcp_server_id: mcpServers.mcp_server_id,
+        name: mcpServers.name,
+        transport: mcpServers.transport,
+        scope: mcpServers.scope,
+        enabled: mcpServers.enabled,
+        source: mcpServers.source,
+        created_at: mcpServers.created_at,
+        updated_at: mcpServers.updated_at,
+      };
+      const order = Object.entries(filters?.sort ?? {}).flatMap(([field, direction]) => {
+        const column = sortableColumns[field];
+        return column ? [direction === -1 ? desc(column) : asc(column)] : [];
+      });
+      query = query.orderBy(...order, asc(mcpServers.mcp_server_id));
       if (filters?.limit !== undefined) {
-        query = query.limit(Math.max(1, Math.min(1000, Math.trunc(filters.limit))));
+        query = query.limit(Math.max(1, Math.min(PAGINATION.MAX_LIMIT, Math.trunc(filters.limit))));
       }
       if (filters?.offset !== undefined) {
         query = query.offset(Math.max(0, Math.trunc(filters.offset)));
@@ -1055,8 +1070,29 @@ export class MCPServerRepository
    */
   async count(filters?: MCPServerFilters): Promise<number> {
     try {
-      const servers = await this.findAll(filters);
-      return servers.length;
+      const conditions = [];
+      if (filters?.scope) conditions.push(eq(mcpServers.scope, filters.scope));
+      if (filters?.scopeId && filters.scope === 'global') {
+        conditions.push(eq(mcpServers.owner_user_id, filters.scopeId));
+      }
+      if (filters?.transport) conditions.push(eq(mcpServers.transport, filters.transport));
+      if (filters?.enabled !== undefined) {
+        conditions.push(eq(mcpServers.enabled, filters.enabled));
+      }
+      if (filters?.source) conditions.push(eq(mcpServers.source, filters.source));
+      if (filters?.catalogEntryName) {
+        conditions.push(eq(mcpServers.catalog_entry_name, filters.catalogEntryName));
+      }
+      if (filters?.usableByUserId) {
+        conditions.push(
+          or(isNull(mcpServers.owner_user_id), eq(mcpServers.owner_user_id, filters.usableByUserId))
+        );
+      }
+      if (filters?.ownerless) conditions.push(isNull(mcpServers.owner_user_id));
+
+      const query = select(this.db, { count: sql<number>`count(*)` }).from(mcpServers);
+      const row = await (conditions.length > 0 ? query.where(and(...conditions)) : query).one();
+      return Number(row?.count ?? 0);
     } catch (error) {
       throw new RepositoryError(
         `Failed to count MCP servers: ${error instanceof Error ? error.message : String(error)}`,

@@ -30,7 +30,6 @@ import {
   type BranchRepository,
   CardRepository,
   getMCPEgressGatewayMode,
-  isPostgresDatabaseHandle,
   requireCurrentTenantId,
   runWithTenantDatabaseScope,
   ScheduleRepository,
@@ -39,7 +38,6 @@ import {
   TaskRepository,
   type TenantScopeAwareDatabase,
   TenantWriteGateActiveError,
-  UserMCPOAuthTokenRepository,
   type UsersRepository,
 } from '@agor/core/db';
 import {
@@ -117,7 +115,6 @@ import {
 import { gatewayRouteHook } from './hooks/gateway-route.js';
 import { validateMessageCreate } from './hooks/validate-message-create.js';
 import { coordinateMCPServerMutationAfterWrite } from './mcp-egress/coordination.js';
-import { resolveForUserIdWithGate } from './oauth-auth-helpers.js';
 import { protectExternalPermissionMessageWrites } from './permissions/permission-message-boundary.js';
 import type { RedisRealtimeRuntime } from './realtime/redis-realtime.js';
 import type { ArtifactsService } from './services/artifacts.js';
@@ -129,14 +126,7 @@ import {
 import { CODEX_AUTH_DEFER_USER_REALTIME } from './services/codex-auth-shared.js';
 import type { GatewayService } from './services/gateway.js';
 import { groupMembershipsHooks, groupsHooks } from './services/groups.js';
-import {
-  presentMCPOAuthCompatibilityPolicy,
-  resolveMCPOAuthCompatibilityPolicy,
-} from './services/mcp-oauth-compatibility.js';
-import {
-  isMCPOAuthGrantBoundToServer,
-  shouldVerifyMCPOAuthGrantBinding,
-} from './services/mcp-oauth-grant-binding.js';
+import { presentMCPServerOAuthPolicies } from './services/mcp-server-presentation.js';
 import {
   isRemoteRelationshipsEnrichedResult,
   markRemoteRelationshipsEnrichedResult,
@@ -2317,104 +2307,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   });
 
   // ============================================================================
-  // MCP servers hooks (with per-user OAuth token injection)
+  // MCP servers hooks
   // ============================================================================
 
-  // Hook to inject per-user OAuth tokens into MCP server responses
-  const injectPerUserOAuthTokens = async (context: HookContext) => {
-    // Try multiple sources for user ID:
-    // 1. params.user (from socket authentication)
-    // 2. query.forUserId (explicitly passed from executor for per-user OAuth)
-    const queryForUserId = (context.params?.query as Record<string, unknown>)?.forUserId as
-      | string
-      | undefined;
-    const userId = resolveForUserIdWithGate({
-      queryForUserId,
-      isServiceAccount: context.params?.user?._isServiceAccount,
-      callerUserId: context.params?.user?.user_id,
-    });
-    const injectToken = async (server: MCPServer) => {
-      if (server.auth?.type !== 'oauth') {
-        return server;
-      }
-
-      const compatibilityPolicy = await resolveMCPOAuthCompatibilityPolicy(server);
-      const serverWithPolicy: MCPServer = {
-        ...server,
-        oauth_compatibility_policy: presentMCPOAuthCompatibilityPolicy(compatibilityPolicy),
-      };
-      if (!userId) return serverWithPolicy;
-
-      // Tokens for both modes live in user_mcp_oauth_tokens:
-      //   - per_user  → row keyed by (userId, serverId)
-      //   - shared    → row keyed by (NULL, serverId)
-      const mode = server.auth.oauth_mode ?? 'per_user';
-      const tokenUserId: import('@agor/core/types').UserID | null =
-        mode === 'per_user' ? (userId as import('@agor/core/types').UserID) : null;
-
-      try {
-        const userTokenRepo = new UserMCPOAuthTokenRepository(db);
-        const row = await userTokenRepo.getToken(tokenUserId, server.mcp_server_id);
-
-        if (!row) {
-          return serverWithPolicy;
-        }
-        const compatibilityMode = compatibilityPolicy.mode;
-        if (
-          shouldVerifyMCPOAuthGrantBinding(
-            isPostgresDatabaseHandle(db),
-            row.grant_binding_version
-          ) &&
-          !isMCPOAuthGrantBoundToServer(
-            process.env.AGOR_MASTER_SECRET!,
-            server,
-            row,
-            compatibilityMode
-          )
-        ) {
-          console.warn('[MCP OAuth] grant_rejected category=binding_mismatch');
-          return serverWithPolicy;
-        }
-
-        // Response enrichment is a durable read only. Refresh is coordinated
-        // by oauth-auth-headers/manual refresh, never from an after hook that
-        // may hold an unrelated tenant transaction.
-        if (
-          row.refresh_status !== 'idle' ||
-          (row.oauth_token_expires_at && row.oauth_token_expires_at <= new Date())
-        ) {
-          return serverWithPolicy;
-        }
-        const accessToken = row.oauth_access_token;
-        const expiresAt = row.oauth_token_expires_at;
-
-        return {
-          ...serverWithPolicy,
-          auth: {
-            ...server.auth,
-            oauth_access_token: accessToken,
-            // Surface expiry so the UI can render "expires in X" tooltips.
-            // Stored as Date in the repo, emitted as ms epoch to match MCPAuth.
-            oauth_token_expires_at:
-              expiresAt instanceof Date ? expiresAt.getTime() : (expiresAt ?? undefined),
-          },
-        };
-      } catch {
-        console.warn('[MCP OAuth] grant_resolution_failed category=local_error');
-      }
-
-      return serverWithPolicy;
-    };
-
-    // Handle both single result and array/paginated results
+  const presentMcpOAuthPolicies = async (context: HookContext): Promise<HookContext> => {
     if (Array.isArray(context.result)) {
-      context.result = await Promise.all(context.result.map(injectToken));
+      context.result = await presentMCPServerOAuthPolicies(context.result);
     } else if (context.result?.data && Array.isArray(context.result.data)) {
-      context.result.data = await Promise.all(context.result.data.map(injectToken));
+      context.result.data = await presentMCPServerOAuthPolicies(context.result.data);
     } else if (context.result?.mcp_server_id) {
-      context.result = await injectToken(context.result);
+      [context.result] = await presentMCPServerOAuthPolicies([context.result]);
     }
-
     return context;
   };
 
@@ -2499,10 +2402,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       remove: [authorizeMcpServerWriteHook],
     },
     after: {
-      find: [injectPerUserOAuthTokens, redactMCPServerSecretFieldsForGatewayMode],
+      find: [presentMcpOAuthPolicies, redactMCPServerSecretFieldsForGatewayMode],
       get: [
         denyMcpServerGetOfAnotherUsersPrivate,
-        injectPerUserOAuthTokens,
+        presentMcpOAuthPolicies,
         redactMCPServerSecretFieldsForGatewayMode,
       ],
       create: [redactMCPServerSecretFieldsForGatewayMode],
@@ -2543,7 +2446,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
     },
     after: {
-      find: [injectPerUserOAuthTokens, redactMCPServerSecretFields],
+      find: [redactMCPServerSecretFields],
     },
   });
 

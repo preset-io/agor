@@ -113,6 +113,29 @@ describe('MCPServerRepository.create', () => {
   });
 });
 
+describe('MCPServerRepository pagination', () => {
+  dbTest(
+    'pushes sorting, limit, and offset into the list query while count ignores paging',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      for (const name of ['charlie', 'alpha', 'bravo']) {
+        await repo.create(createMCPServerData({ name, enabled: true }));
+      }
+      await repo.create(createMCPServerData({ name: 'disabled', enabled: false }));
+
+      const page = await repo.findAll({
+        enabled: true,
+        sort: { name: 1 },
+        limit: 1,
+        offset: 1,
+      });
+
+      expect(page.map((server) => server.name)).toEqual(['bravo']);
+      expect(await repo.count({ enabled: true, limit: 1, offset: 1 })).toBe(3);
+    }
+  );
+});
+
 // ============================================================================
 // Read
 // ============================================================================

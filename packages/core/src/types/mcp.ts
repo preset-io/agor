@@ -557,6 +557,8 @@ export interface MCPServerFilters {
   /** Bounded diagnostic/list reads; callers should request one extra row for truncation. */
   limit?: number;
   offset?: number;
+  /** Validated Feathers sort pushed into the repository query. */
+  sort?: Partial<Record<keyof MCPServer, 1 | -1>>;
 }
 
 /**

@@ -33,7 +33,7 @@ import {
 } from './tool-permissions';
 
 export interface MCPScopingServerRepository {
-  findAll(filters?: MCPServerFilters, forUserId?: string): Promise<MCPServer[]>;
+  findAll(filters?: MCPServerFilters): Promise<MCPServer[]>;
 }
 
 export interface MCPScopingSessionRepository {
@@ -185,17 +185,13 @@ export async function getMcpServersForSession(
         addServer(server, server.scope === 'global' ? 'global' : 'session-assigned');
       }
     } else {
-      // STEP 1: Get ALL global-scoped MCP servers (available to all sessions)
-      // Pass forUserId for per-user OAuth token injection
-      mcpDebug(`   [MCP Scoping] Calling findAll with forUserId: ${deps.forUserId || 'NOT SET'}`);
-      const globalServers = await deps.mcpServerRepo.findAll(
-        {
-          scope: 'global',
-          enabled: true,
-          ...(deps.sessionOwnerId ? { usableByUserId: deps.sessionOwnerId } : {}),
-        },
-        deps.forUserId
-      );
+      // STEP 1: Get all usable global definitions. OAuth credentials are
+      // hydrated later through the executor-only auth-header capability.
+      const globalServers = await deps.mcpServerRepo.findAll({
+        scope: 'global',
+        enabled: true,
+        ...(deps.sessionOwnerId ? { usableByUserId: deps.sessionOwnerId } : {}),
+      });
 
       mcpDebug(`   📍 Global scope: ${globalServers?.length ?? 0} server(s)`);
 

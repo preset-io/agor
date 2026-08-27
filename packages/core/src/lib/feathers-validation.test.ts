@@ -189,7 +189,7 @@ describe('taskQueryValidator', () => {
 });
 
 describe('mcpServerQueryValidator', () => {
-  it('preserves forUserId for executor per-user OAuth token injection', async () => {
+  it('strips internal identity hints from public server reads', async () => {
     const context = {
       params: {
         query: {
@@ -206,7 +206,6 @@ describe('mcpServerQueryValidator', () => {
     expect(context.params.query).toEqual({
       scope: 'global',
       enabled: true,
-      forUserId: '019e8e1c',
     });
   });
 });

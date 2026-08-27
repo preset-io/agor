@@ -131,16 +131,13 @@ describe('FeathersMCPServersRepository.findAll', () => {
       service: () => ({ find }),
     } as never);
 
-    await repo.findAll(
-      {
-        scope: 'global',
-        enabled: true,
-        source: 'agor',
-        usableByUserId: 'user-a',
-        ownerless: true,
-      },
-      'user-a'
-    );
+    await repo.findAll({
+      scope: 'global',
+      enabled: true,
+      source: 'agor',
+      usableByUserId: 'user-a',
+      ownerless: true,
+    });
 
     expect(find).toHaveBeenCalledWith({
       query: {
@@ -150,7 +147,6 @@ describe('FeathersMCPServersRepository.findAll', () => {
         source: 'agor',
         usableByUserId: 'user-a',
         ownerless: true,
-        forUserId: 'user-a',
       },
     });
   });
