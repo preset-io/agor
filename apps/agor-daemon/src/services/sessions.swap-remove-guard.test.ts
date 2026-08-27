@@ -22,7 +22,7 @@ import type { Application } from '@agor/core/feathers';
 import type { Session, Task, UUID } from '@agor/core/types';
 import { SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { SessionsService } from './sessions';
 
 const STUB_APP = {} as unknown as Application;

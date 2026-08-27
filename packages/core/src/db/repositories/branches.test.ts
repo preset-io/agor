@@ -8,7 +8,7 @@ import type { BoardID, BranchID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
 import { boards } from '../schema';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardObjectRepository } from './board-objects';
 import { BranchRepository } from './branches';

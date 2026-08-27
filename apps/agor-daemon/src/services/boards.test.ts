@@ -16,7 +16,7 @@ import {
 } from '@agor/core/db';
 import type { Board, BoardID, BranchID, UUID } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { type BoardParams, BoardsService } from './boards';
 
 const TEST_USER = 'test-user' as UUID;

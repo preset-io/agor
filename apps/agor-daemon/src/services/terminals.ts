@@ -14,11 +14,9 @@ import {
   BranchRepository,
   getCurrentTenantId,
   RepoRepository,
-  runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
   shortId,
   type TenantScopeAwareDatabase,
-  type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -86,6 +84,16 @@ interface TerminalStartReservation {
   branchId: BranchID;
   promise: Promise<void>;
   cancelled: boolean;
+}
+
+interface TerminalExecutionProjection {
+  branch: Branch;
+  principalBranchAccess: 'write' | 'read';
+  delegatedHomeKey?: string;
+  executorEnv: Record<string, string>;
+  sandboxHomeStore?: string;
+  sandboxBaseRepoPath?: string;
+  sandboxWorktreesRoot?: string;
 }
 
 /**
@@ -167,12 +175,6 @@ export class TerminalsService {
       if (data.tenantId) this.closeTenant(data.tenantId);
       else this.cleanup();
     });
-  }
-
-  private withTenantDatabase<T>(work: (tenantDb: TenantScopedDatabase) => Promise<T>): Promise<T> {
-    const tenantId = getCurrentTenantId();
-    if (!tenantId) throw new Error('Missing active tenant context for terminal database access');
-    return runWithTenantDatabaseScope(this.db, tenantId, work);
   }
 
   async create(
@@ -274,7 +276,6 @@ export class TerminalsService {
         config,
         scopeKey,
         joinRequestingSocket,
-        principalBranchAccess,
         reservation,
         params,
       });
@@ -292,7 +293,6 @@ export class TerminalsService {
     config: AgorConfig;
     scopeKey: string;
     joinRequestingSocket: (channel: string, allocation: TerminalAllocatedEvent) => Promise<boolean>;
-    principalBranchAccess: 'write' | 'read' | 'none';
     reservation: TerminalStartReservation;
     params: AuthenticatedParams;
   }): Promise<TerminalAttachment> {
@@ -304,68 +304,124 @@ export class TerminalsService {
       config,
       scopeKey,
       joinRequestingSocket,
-      principalBranchAccess: initiallyAuthorizedBranchAccess,
       reservation,
       params,
     } = args;
-    let branch = initiallyAuthorizedBranch;
-    let principalBranchAccess = initiallyAuthorizedBranchAccess;
-    const unixUserMode = config.execution?.unix_user_mode ?? 'simple';
-    const user = await this.withTenantDatabase((tenantDb) =>
-      new UsersRepository(tenantDb).findById(userId)
-    );
-    const delegatedHome = resolveDelegatedHomeKey({
-      mode: unixUserMode as UnixUserMode,
-      executionHomeKey: user?.unix_username ?? null,
+    const projection = await this.createExecutionProjection({
+      tenantId,
+      userId,
+      branchId: initiallyAuthorizedBranch.branch_id,
+      config,
+      reservation,
+      params,
     });
-    const executorEnv = await this.withTenantDatabase((tenantDb) =>
-      createUserProcessEnvironment(userId, tenantDb)
-    );
-
-    // Sandbox mount context for the terminal. The OWNER is the terminal user
-    // (they opened the shell), so the per-user home overlay + RBAC branch mount
-    // key off `userId` — unlike prompts, which key off session.created_by.
-    const sandboxCfg = config.execution?.sandbox;
-    let sandboxHomeStore: string | undefined;
-    let sandboxBaseRepoPath: string | undefined;
-    const sandboxWorktreesRoot =
-      sandboxCfg?.enabled === true
-        ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
-        : undefined;
-    if (sandboxCfg?.enabled === true) {
-      // Only linked worktrees need the shared git dir bound in. A clone-mode
-      // branch carries its own `.git` — EXCEPT for its object store when it was
-      // created with `git clone --reference`, which leaves an alternates
-      // pointer into `<data_home>/repos/<slug>/.git/objects`. The daemon
-      // refuses to create that pointer when this sandbox would hide it (see
-      // `shouldUseCloneReferencePath`), so nothing extra is mounted here.
-      if (branch.storage_mode !== 'clone' && branch.repo_id) {
-        sandboxBaseRepoPath = await this.withTenantDatabase((tenantDb) =>
-          new RepoRepository(tenantDb)
-            .findById(branch.repo_id)
-            .then((r) => r?.local_path ?? undefined)
-        );
-      }
-      if (sandboxCfg.home_mode === 'per_user') {
-        sandboxHomeStore = resolveOwnerHomeStore({
-          config,
-          tenantId,
-          ownerUserId: userId,
-          filesystemHome: user?.filesystem_home,
-        });
-      }
-    }
-
-    // Authorization invalidation also cancels starts that have not entered the
-    // live attachment registry yet.
+    const { branch, principalBranchAccess } = projection;
     if (reservation.cancelled) {
       throw new Forbidden('Terminal access changed while the terminal was starting.');
     }
+
     const identity = this.app.get('distributedWorkIdentity') ?? {
       instanceId: 'daemon',
       bootId: `process-${process.pid}`,
     };
-    const daemonUrl = getDaemonUrl();
+    const terminalId = randomUUID();
+    const channel = terminalChannelName(tenantId, userId, terminalId);
+    const sessionName = buildZellijSessionName(tenantId, userId, branch.branch_id);
+    const terminal: OwnedTerminal = {
+      terminalId,
+      tenantId,
+      userId,
+      branchId: branch.branch_id,
+      branchName: branch.name,
+      channel,
+      sessionName,
+      ownerId: identity.instanceId,
+      ownerBootId: identity.bootId,
+      isNew: true,
+      ready: false,
+      startedAt: new Date(),
+    };
+
+    this.terminals.set(terminalId, terminal);
+    this.terminalByScope.set(scopeKey, terminalId);
+    try {
+      if (reservation.cancelled || this.terminals.get(terminalId) !== terminal) {
+        throw new Forbidden('Terminal access changed while the terminal was starting.');
+      }
+      const joined = await joinRequestingSocket(channel, terminalRequestAllocation(terminal));
+      if (!joined) throw new BadRequest('The owning Socket.IO connection disconnected.');
+      if (reservation.cancelled || this.terminals.get(terminalId) !== terminal) {
+        throw new Forbidden('Terminal access changed while the terminal was starting.');
+      }
+
+      const token = generateTerminalExecutorToken(
+        this.app,
+        {
+          terminal_user_id: userId,
+          terminal_id: terminalId,
+          terminal_branch_id: branch.branch_id,
+          terminal_owner_boot_id: identity.bootId,
+        },
+        TERMINAL_EXECUTOR_TOKEN_TTL
+      );
+      if (reservation.cancelled || this.terminals.get(terminalId) !== terminal) {
+        throw new Forbidden('Terminal access changed while the terminal was starting.');
+      }
+
+      spawnExecutorFireAndForget(
+        {
+          command: 'zellij.attach',
+          sessionToken: token,
+          daemonUrl: getDaemonUrl(),
+          params: {
+            userId,
+            terminalId,
+            channel,
+            sessionName,
+            cwd: branch.path,
+            cols: data.cols || 160,
+            rows: data.rows || 40,
+            sandboxHomeStore: projection.sandboxHomeStore,
+            sandboxBaseRepoPath: projection.sandboxBaseRepoPath,
+            sandboxWorktreesRoot: projection.sandboxWorktreesRoot,
+            principalBranchAccess,
+          },
+        },
+        {
+          logPrefix: `[TerminalsService.executor ${shortId(userId)}/${shortId(terminalId)}]`,
+          delegatedHomeKey: projection.delegatedHomeKey,
+          env: projection.executorEnv,
+          templateVariables: {
+            unix_user: projection.delegatedHomeKey,
+            executor_type: 'shell',
+            user_id: userId,
+            branch_id: branch.branch_id,
+            branch_fs_access: principalBranchAccess,
+          },
+          onExit: () => this.handleExecutorExit(terminalId, userId),
+        }
+      );
+      return terminal;
+    } catch (error) {
+      this.deleteTerminal(terminal);
+      throw error;
+    }
+  }
+
+  /**
+   * Capture every identity, authorization, credential, home, and mount input
+   * at one short fenced admission boundary. Process and Socket.IO side effects
+   * happen only after this transaction commits.
+   */
+  private createExecutionProjection(args: {
+    tenantId: string;
+    userId: UserID;
+    branchId: BranchID;
+    config: AgorConfig;
+    reservation: TerminalStartReservation;
+    params: AuthenticatedParams;
+  }): Promise<TerminalExecutionProjection> {
+    const { tenantId, userId, branchId, config, reservation, params } = args;
     return runWithTenantDatabaseTransaction(this.db, tenantId, async (tenantDb) => {
       await lockTenantAuthorizationFence(tenantDb, params);
       const current = await resolveCurrentTenantAuthorityActor(tenantDb, params);
@@ -376,103 +432,62 @@ export class TerminalsService {
         config.execution?.branch_rbac === true &&
         !isSuperAdmin(current.role, config.execution?.allow_superadmin === true);
       const branchRepo = new BranchRepository(tenantDb);
-      const currentBranch = await branchRepo.findAccessibleById(branch.branch_id, userId, {
+      const branch = await branchRepo.findAccessibleById(branchId, userId, {
         minimumPermission: 'session',
         enforceAccess: enforceCurrentAccess,
       });
-      if (!currentBranch || currentBranch.archived || reservation.cancelled) {
+      if (!branch || branch.archived || reservation.cancelled) {
         throw new Forbidden('Terminal access changed while the terminal was starting.');
       }
-      let currentFsAccess: 'write' | 'read' | 'none' = 'write';
+      let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
       if (enforceCurrentAccess) {
-        const access = await branchRepo.resolveUserAccess(currentBranch, userId);
-        currentFsAccess = access.fs_access ?? 'none';
+        const access = await branchRepo.resolveUserAccess(branch, userId);
+        principalBranchAccess = access.fs_access ?? 'none';
       }
-      if (currentFsAccess === 'none') {
+      if (principalBranchAccess === 'none') {
         throw new Forbidden('Terminal access changed while the terminal was starting.');
       }
-      branch = currentBranch;
-      principalBranchAccess = currentFsAccess;
 
-      const terminalId = randomUUID();
-      const channel = terminalChannelName(tenantId, userId, terminalId);
-      const sessionName = buildZellijSessionName(tenantId, userId, branch.branch_id);
-      const terminal: OwnedTerminal = {
-        terminalId,
-        tenantId,
-        userId,
-        branchId: branch.branch_id,
-        branchName: branch.name,
-        channel,
-        sessionName,
-        ownerId: identity.instanceId,
-        ownerBootId: identity.bootId,
-        isNew: true,
-        ready: false,
-        startedAt: new Date(),
-      };
-
-      this.terminals.set(terminalId, terminal);
-      this.terminalByScope.set(scopeKey, terminalId);
-      try {
-        // Keep the authority fence through browser subscription, token minting,
-        // and spawn. A revocation that wins first is observed; one that loses
-        // waits and then invalidates the just-created process across HA.
-        const joined = await joinRequestingSocket(channel, terminalRequestAllocation(terminal));
-        if (!joined) throw new BadRequest('The owning Socket.IO connection disconnected.');
-        if (reservation.cancelled || this.terminals.get(terminalId) !== terminal) {
-          throw new Forbidden('Terminal access changed while the terminal was starting.');
-        }
-
-        const token = generateTerminalExecutorToken(
-          this.app,
-          {
-            terminal_user_id: userId,
-            terminal_id: terminalId,
-            terminal_branch_id: branch.branch_id,
-            terminal_owner_boot_id: identity.bootId,
-          },
-          TERMINAL_EXECUTOR_TOKEN_TTL
-        );
-
-        spawnExecutorFireAndForget(
-          {
-            command: 'zellij.attach',
-            sessionToken: token,
-            daemonUrl,
-            params: {
-              userId,
-              terminalId,
-              channel,
-              sessionName,
-              cwd: branch.path,
-              cols: data.cols || 160,
-              rows: data.rows || 40,
-              sandboxHomeStore,
-              sandboxBaseRepoPath,
-              sandboxWorktreesRoot,
-              principalBranchAccess,
-            },
-          },
-          {
-            logPrefix: `[TerminalsService.executor ${shortId(userId)}/${shortId(terminalId)}]`,
-            delegatedHomeKey: delegatedHome.delegatedHomeKey || undefined,
-            env: executorEnv,
-            templateVariables: {
-              unix_user: delegatedHome.delegatedHomeKey || undefined,
-              executor_type: 'shell',
-              user_id: userId,
-              branch_id: branch.branch_id,
-              branch_fs_access: principalBranchAccess,
-            },
-            onExit: () => this.handleExecutorExit(terminalId, userId),
-          }
-        );
-        return terminal;
-      } catch (error) {
-        this.deleteTerminal(terminal);
-        throw error;
+      const user = await new UsersRepository(tenantDb).findById(userId);
+      if (!user) {
+        throw new Forbidden('Terminal access changed while the terminal was starting.');
       }
+      const delegatedHome = resolveDelegatedHomeKey({
+        mode: (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode,
+        executionHomeKey: user.unix_username ?? null,
+      });
+      const executorEnv = await createUserProcessEnvironment(userId, tenantDb);
+
+      const sandboxCfg = config.execution?.sandbox;
+      const sandboxWorktreesRoot =
+        sandboxCfg?.enabled === true
+          ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
+          : undefined;
+      let sandboxBaseRepoPath: string | undefined;
+      if (sandboxCfg?.enabled === true && branch.storage_mode !== 'clone' && branch.repo_id) {
+        sandboxBaseRepoPath = await new RepoRepository(tenantDb)
+          .findById(branch.repo_id)
+          .then((repo) => repo?.local_path ?? undefined);
+      }
+      const sandboxHomeStore =
+        sandboxCfg?.enabled === true && sandboxCfg.home_mode === 'per_user'
+          ? resolveOwnerHomeStore({
+              config,
+              tenantId,
+              ownerUserId: userId,
+              filesystemHome: user.filesystem_home,
+            })
+          : undefined;
+
+      return {
+        branch,
+        principalBranchAccess,
+        delegatedHomeKey: delegatedHome.delegatedHomeKey || undefined,
+        executorEnv,
+        sandboxHomeStore,
+        sandboxBaseRepoPath,
+        sandboxWorktreesRoot,
+      };
     });
   }
 

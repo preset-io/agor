@@ -18,7 +18,7 @@ import {
   isExecutionHomeKeyAvailable,
   reattributeLegacyAnonymousRows,
   runWithTenantDatabaseTransaction,
-  seedInitialData,
+  seedInitialDataInTransaction,
   select,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -767,19 +767,20 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
           const projected = await runWithTenantDatabaseTransaction(
             options.db,
             tenant.tenant_id,
-            (scopedDb) => projectLaunchUser(scopedDb, options, claims)
+            async (scopedDb) => {
+              const current = await projectLaunchUser(scopedDb, options, claims);
+              // Claim the default Board while the same tenant authority fence
+              // still serializes first-user projection. Immutable ownership
+              // can therefore never be won by a later concurrent launch.
+              await seedInitialDataInTransaction(scopedDb, current.userId);
+              return current;
+            }
           );
           if (projected.authorizationChanged) {
-            // The role write has committed. Evict stale socket claims before
-            // any unrelated first-run seeding work can delay or fail.
+            // The role write and any first-run Board claim have committed.
+            // Evict every socket that may still carry the previous role.
             options.onAuthorizationInvalidated?.(tenant.tenant_id);
           }
-          // External-launch deployments intentionally skip local bootstrap.
-          // The first trusted projected User owns the tenant's default Board;
-          // a concurrent first launch converges through the tenant/slug key.
-          await runWithTenantDatabaseTransaction(options.db, tenant.tenant_id, (scopedDb) =>
-            seedInitialData(scopedDb, projected.userId)
-          );
           return projected;
         });
         const userLookupParams = {

@@ -23,7 +23,7 @@ import {
   withDiscordConfigDefaults,
 } from '../../types/gateway';
 import type { Database } from '../client';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { GatewayChannelRepository } from './gateway-channels';
 import { RepoRepository } from './repos';

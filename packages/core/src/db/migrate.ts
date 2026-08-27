@@ -583,55 +583,54 @@ export async function initializeDatabase(db: Database): Promise<void> {
  * (interactive) or by `bootstrapFirstRunAdmin` on first daemon start (default
  * admin with generated password).
  */
+export async function seedInitialDataInTransaction(
+  db: Database,
+  createdBy: string
+): Promise<number> {
+  const { generateId } = await import('../lib/ids');
+  const now = new Date();
+  const tenantId = getCurrentTenantId();
+  const boardId = generateId();
+  const inserted = await insert(db, boards)
+    .values({
+      board_id: boardId,
+      name: 'Main Board',
+      slug: 'default',
+      created_at: now,
+      updated_at: now,
+      created_by: createdBy,
+      primary_owner_user_id: createdBy,
+      data: {
+        description: 'Main board for all sessions',
+        sessions: [],
+        color: '#1677ff',
+        icon: '⭐',
+      },
+      ...(isPostgresDatabase(db) && tenantId ? { tenant_id: String(tenantId) } : {}),
+    })
+    .onConflictDoNothing()
+    .run();
+  if (inserted.rowsAffected > 0) {
+    const { CapabilityPolicyRepository } = await import('./repositories/capability-policies');
+    await new CapabilityPolicyRepository(db).initializeBoardInTransaction(
+      db,
+      boardId as import('@agor/core/types').BoardID,
+      createdBy as import('@agor/core/types').UserID,
+      { shared: true, defaultOthersCan: 'session', defaultOthersFsAccess: 'read' }
+    );
+  }
+  return inserted.rowsAffected;
+}
+
 export async function seedInitialData(db: Database, createdBy: string): Promise<void> {
   try {
-    const { generateId } = await import('../lib/ids');
-    const now = new Date();
-    const owner = createdBy;
-
     // Insert atomically instead of using a read-then-write check. Multiple HA
     // daemons can reach first-run seeding together, and the unique tenant/slug
     // constraint is the correctness fence for that race.
-    const tenantId = getCurrentTenantId();
-    const boardId = generateId();
     const seedOnce = () =>
-      runDatabaseTransaction(
-        db,
-        async (tx) => {
-          const inserted = await insert(tx, boards)
-            .values({
-              board_id: boardId,
-              name: 'Main Board',
-              slug: 'default',
-              created_at: now,
-              updated_at: now,
-              created_by: owner,
-              primary_owner_user_id: owner,
-              data: {
-                description: 'Main board for all sessions',
-                sessions: [],
-                color: '#1677ff',
-                icon: '⭐',
-              },
-              ...(isPostgresDatabase(db) && tenantId ? { tenant_id: String(tenantId) } : {}),
-            })
-            .onConflictDoNothing()
-            .run();
-          if (inserted.rowsAffected > 0) {
-            const { CapabilityPolicyRepository } = await import(
-              './repositories/capability-policies'
-            );
-            await new CapabilityPolicyRepository(tx).initializeBoardInTransaction(
-              tx,
-              boardId as import('@agor/core/types').BoardID,
-              owner as import('@agor/core/types').UserID,
-              { shared: true, defaultOthersCan: 'session', defaultOthersFsAccess: 'read' }
-            );
-          }
-          return inserted;
-        },
-        { sqliteImmediate: true }
-      );
+      runDatabaseTransaction(db, (tx) => seedInitialDataInTransaction(tx, createdBy), {
+        sqliteImmediate: true,
+      });
 
     // Two first-start daemons can both reach SQLite before either has claimed
     // the slug. BEGIN IMMEDIATE gives the transaction the right correctness
@@ -651,9 +650,11 @@ export async function seedInitialData(db: Database, createdBy: string): Promise<
         await new Promise((resolve) => setTimeout(resolve, 5 * (attempt + 1)));
       }
     }
-    if (!result) throw new MigrationError('Failed to seed initial data after SQLite busy retries');
+    if (result === undefined) {
+      throw new MigrationError('Failed to seed initial data after SQLite busy retries');
+    }
 
-    if (result.rowsAffected > 0) {
+    if (result > 0) {
       console.log('✅ Main Board created');
     }
   } catch (error) {

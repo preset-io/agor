@@ -6,7 +6,7 @@ import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { runDatabaseTransaction, update } from '../database-wrapper';
 import { discordMessageDeliveries } from '../schema';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { DiscordMessageDeliveryRepository } from './discord-message-deliveries';
 import { GatewayChannelRepository } from './gateway-channels';

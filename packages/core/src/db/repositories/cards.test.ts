@@ -8,7 +8,7 @@ import type { BoardID, CardID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { BoardRepository } from './boards';
 import { CardRepository } from './cards';
 import { UsersRepository } from './users';

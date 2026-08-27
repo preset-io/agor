@@ -13,11 +13,13 @@ const mocks = vi.hoisted(() => {
     created_by: 'user-1',
     archived: false,
   };
-  return {
+  const state = {
     branch,
     tenantId: 'tenant-x' as string | undefined,
     tenantDb: { scope: 'tenant-x' },
     databaseScopeDepth: 0,
+    transactionCalls: 0,
+    failTransactionCall: undefined as number | undefined,
     branchesById: new Map<string, typeof branch>([[branch.branch_id, branch]]),
     spawnExecutorFireAndForget: vi.fn(),
     generateTerminalExecutorToken: vi.fn(() => 'terminal-token'),
@@ -35,6 +37,15 @@ const mocks = vi.hoisted(() => {
     canOpen: true,
     fsAccess: 'write' as 'none' | 'read' | 'write',
     currentRole: 'admin',
+  };
+  return {
+    ...state,
+    resolveCurrentTenantAuthorityActor: vi.fn(async () => ({
+      kind: 'human',
+      user_id: 'user-1',
+      role: state.currentRole,
+      service: false,
+    })),
   };
 });
 
@@ -80,9 +91,12 @@ vi.mock('@agor/core/db', () => ({
     work: (db: unknown) => Promise<unknown>
   ) => {
     if (!tenantId) throw new Error('Missing tenant identity');
+    const call = ++mocks.transactionCalls;
     mocks.databaseScopeDepth += 1;
     try {
-      return await work(mocks.tenantDb);
+      const result = await work(mocks.tenantDb);
+      if (mocks.failTransactionCall === call) throw new Error('forced commit failure');
+      return result;
     } finally {
       mocks.databaseScopeDepth -= 1;
     }
@@ -97,12 +111,7 @@ vi.mock('@agor/core/db', () => ({
 
 vi.mock('./tenant-authorization-fence.js', () => ({
   lockTenantAuthorizationFence: vi.fn(),
-  resolveCurrentTenantAuthorityActor: vi.fn(async () => ({
-    kind: 'human',
-    user_id: 'user-1',
-    role: mocks.currentRole,
-    service: false,
-  })),
+  resolveCurrentTenantAuthorityActor: mocks.resolveCurrentTenantAuthorityActor,
 }));
 
 vi.mock('@agor/core/unix', () => ({
@@ -155,9 +164,17 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.tenantId = 'tenant-x';
   mocks.databaseScopeDepth = 0;
+  mocks.transactionCalls = 0;
+  mocks.failTransactionCall = undefined;
   mocks.canOpen = true;
   mocks.fsAccess = 'write';
   mocks.currentRole = 'admin';
+  mocks.resolveCurrentTenantAuthorityActor.mockImplementation(async () => ({
+    kind: 'human',
+    user_id: 'user-1',
+    role: mocks.currentRole,
+    service: false,
+  }));
   mocks.branchesById.clear();
   mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
   mocks.resolveDelegatedHomeKey.mockReturnValue({
@@ -257,7 +274,7 @@ describe('process-affine attachment creation', () => {
       return { SAFE: '1' };
     });
     mocks.spawnExecutorFireAndForget.mockImplementation(() => {
-      expect(mocks.databaseScopeDepth).toBeGreaterThan(0);
+      expect(mocks.databaseScopeDepth).toBe(0);
     });
     const service = new TerminalsService(makeApp() as never, {} as never);
     const result = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
@@ -291,6 +308,84 @@ describe('process-affine attachment creation', () => {
         }),
       }),
       expect.anything()
+    );
+  });
+
+  it('does not hold the authority transaction while browser subscription is pending', async () => {
+    let release!: () => void;
+    mocks.joinRequestingSocket.mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          expect(mocks.databaseScopeDepth).toBe(0);
+          release = () => resolve(true);
+        })
+    );
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const starting = service.create({ branchId: 'branch-1' as BranchID }, params as never);
+
+    await vi.waitFor(() => expect(mocks.joinRequestingSocket).toHaveBeenCalledOnce());
+    expect(mocks.databaseScopeDepth).toBe(0);
+    release();
+    await expect(starting).resolves.toMatchObject({ isNew: true });
+  });
+
+  it('retains no attachment or process when the final admission commit fails', async () => {
+    mocks.failTransactionCall = 2;
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).rejects.toThrow('forced commit failure');
+    expect(mocks.joinRequestingSocket).not.toHaveBeenCalled();
+    expect(mocks.generateTerminalExecutorToken).not.toHaveBeenCalled();
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+
+    mocks.failTransactionCall = undefined;
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).resolves.toMatchObject({ isNew: true });
+  });
+
+  it('cancels a committed reservation before spawn when authorization invalidates', async () => {
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    mocks.joinRequestingSocket.mockImplementation(async () => {
+      service.closeTenant('tenant-x');
+      return true;
+    });
+
+    await expect(
+      service.create({ branchId: 'branch-1' as BranchID }, params as never)
+    ).rejects.toThrow('Terminal access changed');
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
+  it('captures current credentials only at the final fenced admission boundary', async () => {
+    let release!: () => void;
+    let reads = 0;
+    mocks.resolveCurrentTenantAuthorityActor.mockImplementation(async () => {
+      reads += 1;
+      if (reads === 2) await new Promise<void>((resolve) => (release = resolve));
+      return {
+        kind: 'human',
+        user_id: 'user-1',
+        role: mocks.currentRole,
+        service: false,
+      };
+    });
+    mocks.createUserProcessEnvironment.mockResolvedValue({ CREDENTIAL: 'old' });
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const starting = service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    await vi.waitFor(() =>
+      expect(mocks.resolveCurrentTenantAuthorityActor).toHaveBeenCalledTimes(2)
+    );
+
+    mocks.createUserProcessEnvironment.mockResolvedValue({ CREDENTIAL: 'new' });
+    release();
+    await starting;
+
+    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ env: expect.objectContaining({ CREDENTIAL: 'new' }) })
     );
   });
 
@@ -335,12 +430,22 @@ describe('process-affine attachment creation', () => {
 
   it('rechecks the current member role at the final fenced admission boundary', async () => {
     let release!: () => void;
-    mocks.createUserProcessEnvironment.mockImplementation(
-      () => new Promise<Record<string, string>>((resolve) => (release = () => resolve({})))
-    );
+    let reads = 0;
+    mocks.resolveCurrentTenantAuthorityActor.mockImplementation(async () => {
+      reads += 1;
+      if (reads === 2) await new Promise<void>((resolve) => (release = resolve));
+      return {
+        kind: 'human',
+        user_id: 'user-1',
+        role: mocks.currentRole,
+        service: false,
+      };
+    });
     const service = new TerminalsService(makeApp() as never, {} as never);
     const starting = service.create({ branchId: 'branch-1' as BranchID }, params as never);
-    await vi.waitFor(() => expect(mocks.createUserProcessEnvironment).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(mocks.resolveCurrentTenantAuthorityActor).toHaveBeenCalledTimes(2)
+    );
 
     mocks.currentRole = 'guest';
     release();

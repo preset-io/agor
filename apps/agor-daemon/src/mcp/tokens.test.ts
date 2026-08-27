@@ -29,7 +29,7 @@ import {
 import type { SessionID, UserID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, vi } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   generateSessionToken,
   initMcpTokens,

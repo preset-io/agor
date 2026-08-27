@@ -12,7 +12,7 @@ import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
 import { boards as boardsTable } from '../schema';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';

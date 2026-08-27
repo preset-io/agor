@@ -1,14 +1,15 @@
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
-import { deleteFrom, select, update } from './database-wrapper';
+import { select, update } from './database-wrapper';
 import { bootstrapFirstRunAdmin } from './first-run-bootstrap';
 import { seedInitialData } from './migrate';
-import { boards, users } from './schema';
-import { dbTest } from './test-helpers';
+import { boards } from './schema';
+import { dbTest, ensureTestUser } from './test-helpers';
 import { createUser } from './user-utils';
 
 describe('bootstrapFirstRunAdmin', () => {
   dbTest('allows competing daemon seeders to converge on one default board', async ({ db }) => {
+    await ensureTestUser(db);
     await Promise.all([seedInitialData(db, 'test-user'), seedInitialData(db, 'test-user')]);
 
     const boardRows = await select(db).from(boards).all();
@@ -17,7 +18,6 @@ describe('bootstrapFirstRunAdmin', () => {
   });
 
   dbTest('allows competing daemon admin bootstraps to converge on one user', async ({ db }) => {
-    await deleteFrom(db, users).where(eq(users.user_id, 'test-user')).run();
     const createAdmin = () =>
       createUser(db, {
         email: 'admin@agor.live',

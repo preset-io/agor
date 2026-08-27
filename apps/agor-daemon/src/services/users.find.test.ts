@@ -27,7 +27,7 @@ describe('UsersService.find', () => {
 
     const page = await service.find({ query: { $limit: 1, $skip: 1 } });
 
-    expect(page.total).toBe(4);
+    expect(page.total).toBe(3);
     expect(page.limit).toBe(1);
     expect(page.skip).toBe(1);
     expect(page.data).toHaveLength(1);
@@ -70,7 +70,7 @@ describe('UsersService.find', () => {
 
     const page = await service.find({ query: { limit: 1, offset: 1 } });
 
-    expect(page.total).toBe(3);
+    expect(page.total).toBe(2);
     expect(page.limit).toBe(1);
     expect(page.skip).toBe(1);
     expect(page.data.map((user) => user.email)).toEqual(['bravo@example.com']);

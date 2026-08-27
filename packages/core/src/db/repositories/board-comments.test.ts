@@ -9,7 +9,7 @@ import type { BoardComment, CommentID, UUID } from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BoardCommentsRepository } from './board-comments';
 import { BoardRepository } from './boards';

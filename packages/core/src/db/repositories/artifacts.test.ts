@@ -8,7 +8,7 @@ import type { BoardID, BranchID, UserID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { dbTest, setTestBranchUserRole } from '../test-helpers';
+import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { ArtifactRepository } from './artifacts';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';

@@ -204,7 +204,7 @@ dbTest('redacts token invalidation marker from external user service responses',
   expectNoTokenMarker(getResult);
 
   const findResult = await usersService.find({ provider: 'rest' });
-  expect(findResult.data).toHaveLength(4);
+  expect(findResult.data).toHaveLength(3);
   for (const publicUser of findResult.data) {
     expectNoTokenMarker(publicUser);
   }

@@ -19,7 +19,7 @@ import {
 } from '@agor/core/db';
 import { TaskStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { LeaderboardService } from './leaderboard';
 
 // ---------------------------------------------------------------------------

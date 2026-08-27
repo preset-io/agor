@@ -158,7 +158,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('TaskRepository PostgreSQL'
     ]);
   });
 
-  it('serializes missing queue actors against dispatch across two connections', async () => {
+  it('serializes the missing-actor terminalization command against dispatch', async () => {
     const owner = await new UsersRepository(db).create({
       email: `postgres-queue-owner-${generateId()}@example.invalid`,
       role: 'member',

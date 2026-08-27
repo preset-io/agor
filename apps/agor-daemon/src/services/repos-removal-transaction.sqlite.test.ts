@@ -7,7 +7,7 @@ import {
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, UUID } from '@agor/core/types';
 import { vi } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { BranchesService } from './branches';
 import { ReposService } from './repos';
 

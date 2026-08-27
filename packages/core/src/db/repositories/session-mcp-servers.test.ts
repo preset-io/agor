@@ -10,7 +10,7 @@ import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { MCPServerNotUsableError } from '../../mcp/ownership';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { EntityNotFoundError } from './base';
 import { BranchRepository } from './branches';
 import { MCPServerRepository } from './mcp-servers';

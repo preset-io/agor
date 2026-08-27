@@ -4,7 +4,7 @@ import type { AnalyticsLogger, AnalyticsProperties, AnalyticsTrackOptions } from
 import { resetAnalyticsLoggerForTests, setAnalyticsLoggerForTests } from '../../analytics';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { dbTest, setTestBranchUserRole } from '../test-helpers';
+import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';

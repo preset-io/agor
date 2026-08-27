@@ -8,7 +8,7 @@ import type { BranchID, Session, SessionID, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 import { SessionEnvSelectionRepository } from './session-env-selections';
