@@ -146,7 +146,7 @@ export async function seedDevFixtures(options: SeedOptions): Promise<SeedResult>
 
     // STEP 2: Get default board
     console.log('2️⃣  Getting default board...');
-    const defaultBoard = await boardRepo.getDefault();
+    const defaultBoard = await boardRepo.getDefault(userId);
     console.log(`   ✓ Using default board: ${defaultBoard.name} (${defaultBoard.board_id})`);
 
     // STEP 3: Create test-branch

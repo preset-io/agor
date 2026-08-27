@@ -934,7 +934,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
 
   // Bootstrap superadmin users
-  await bootstrapSuperadminUsers(config, usersService, allowSuperadmin);
+  await bootstrapSuperadminUsers(config, db, usersService, allowSuperadmin);
 
   // Store oauthCallbackHandler on app for boot.ts to wire up
   appRecord.oauthCallbackHandler = oauthCallbackHandler;
@@ -5589,8 +5589,9 @@ export async function registerMCPServices(
 // Bootstrap Superadmin Users
 // ============================================================================
 
-async function bootstrapSuperadminUsers(
+export async function bootstrapSuperadminUsers(
   config: AgorConfig,
+  db: TenantScopeAwareDatabase,
   usersService: ReturnType<typeof createUsersService>,
   allowSuperadmin: boolean
 ): Promise<void> {
@@ -5605,29 +5606,43 @@ async function bootstrapSuperadminUsers(
     return;
   }
 
-  let promotedCount = 0;
-  for (const rawUserId of bootstrapUsers) {
-    const userId = rawUserId?.trim();
-    if (!userId) continue;
-    try {
-      // biome-ignore lint/suspicious/noExplicitAny: userId is a branded UserID at runtime
-      const user = await usersService.get(userId as any);
-      if (user.role === ROLES.SUPERADMIN) continue;
-      // Deliberately use the provider-less, actor-less UsersService seam. This
-      // is daemon startup provisioning from operator-owned config, not a user
-      // request; request-derived callers must always carry actor params.
-      // biome-ignore lint/suspicious/noExplicitAny: userId is a branded UserID at runtime
-      await usersService.patch(userId as any, { role: ROLES.SUPERADMIN });
-      promotedCount++;
-      console.log(
-        `[RBAC] Bootstrap promoted user ${shortId(userId)} (${user.email}) to superadmin`
-      );
-    } catch (error) {
-      console.warn(
-        `[RBAC] Failed to bootstrap superadmin for user ${shortId(userId)}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+  const multiTenancy = resolveMultiTenancyConfig(config);
+  if (multiTenancy.mode !== 'static') {
+    throw new Error(
+      'execution.bootstrap_superadmin_users requires multi_tenancy.mode=static; tenant identity is ambiguous in required_from_auth mode'
+    );
   }
+  const tenant = {
+    tenant_id: multiTenancy.static_tenant_id,
+    source: 'static' as const,
+  };
+  const trustedParams = { tenant } as unknown as Params;
+
+  let promotedCount = 0;
+  await runWithTenantDatabaseTransaction(db, tenant.tenant_id, async () => {
+    for (const rawUserId of bootstrapUsers) {
+      const userId = rawUserId?.trim();
+      if (!userId) continue;
+      try {
+        // biome-ignore lint/suspicious/noExplicitAny: userId is a branded UserID at runtime
+        const user = await usersService.get(userId as any, trustedParams);
+        if (user.role === ROLES.SUPERADMIN) continue;
+        // Deliberately use the provider-less, actor-less UsersService seam.
+        // The surrounding static-tenant transaction supplies RLS identity and
+        // lets UsersService take the tenant authorization fence.
+        // biome-ignore lint/suspicious/noExplicitAny: userId is a branded UserID at runtime
+        await usersService.patch(userId as any, { role: ROLES.SUPERADMIN }, trustedParams);
+        promotedCount++;
+        console.log(
+          `[RBAC] Bootstrap promoted user ${shortId(userId)} (${user.email}) to superadmin`
+        );
+      } catch (error) {
+        console.warn(
+          `[RBAC] Failed to bootstrap superadmin for user ${shortId(userId)}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  });
   console.log(
     `[RBAC] Bootstrap superadmin sync complete (${promotedCount}/${bootstrapUsers.length} promoted)`
   );

@@ -172,6 +172,7 @@ describe('resolveCapabilityPolicyAccess', () => {
         policy,
         primary_owner_user_id: owner,
         user_id: user,
+        user_status: 'active',
         active_group_ids: [groupA, groupB],
       })
     ).toMatchObject({
@@ -201,6 +202,7 @@ describe('resolveCapabilityPolicyAccess', () => {
         policy: splitDimensions,
         primary_owner_user_id: owner,
         user_id: user,
+        user_status: 'active',
         active_group_ids: [groupA, groupB],
       })
     ).toMatchObject({
@@ -229,6 +231,7 @@ describe('resolveCapabilityPolicyAccess', () => {
         policy: directDenied,
         primary_owner_user_id: owner,
         user_id: user,
+        user_status: 'active',
         active_group_ids: [groupB],
       })
     ).toMatchObject({ source: 'direct_user', capabilities: [], fs_access: 'none' });
@@ -236,7 +239,12 @@ describe('resolveCapabilityPolicyAccess', () => {
 
   it('uses Others only for an unmatched active member', () => {
     expect(
-      resolveCapabilityPolicyAccess({ policy, primary_owner_user_id: owner, user_id: user })
+      resolveCapabilityPolicyAccess({
+        policy,
+        primary_owner_user_id: owner,
+        user_id: user,
+        user_status: 'active',
+      })
     ).toMatchObject({ source: 'others', capabilities: ['branch.view'] });
     expect(
       resolveCapabilityPolicyAccess({
@@ -258,6 +266,7 @@ describe('resolveCapabilityPolicyAccess', () => {
       },
       primary_owner_user_id: owner,
       user_id: owner,
+      user_status: 'active',
     });
     expect(access.source).toBe('primary_owner');
     expect(access.fs_access).toBe('write');

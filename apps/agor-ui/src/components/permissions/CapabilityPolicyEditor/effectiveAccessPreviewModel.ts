@@ -68,6 +68,7 @@ export function resolveEffectiveAccessPreview(options: {
       policy,
       primary_owner_user_id: primaryOwnerUserId,
       user_id: subjectId,
+      user_status: subject.user.status,
       active_group_ids: subject.groupIds,
     });
     return {
@@ -93,6 +94,7 @@ export function resolveEffectiveAccessPreview(options: {
     policy: activePolicy,
     primary_owner_user_id: primaryOwnerUserId,
     user_id: subjectId,
+    user_status: subject.user.status,
     active_group_ids: subject.groupIds,
   });
 

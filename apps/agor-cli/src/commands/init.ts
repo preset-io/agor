@@ -579,24 +579,19 @@ export default class Init extends Command {
     try {
       await runMigrations(db);
       this.log(`${chalk.green('   ✓')} Created ${dbPath}`);
-
-      // Seed initial data
-      this.log('');
-      this.log('🌱 Seeding initial data...');
-      await seedInitialData(db);
-      this.log(`${chalk.green('   ✓')} Created Main Board`);
     } finally {
       this.closeSQLiteDatabase(db);
     }
 
     // Create the admin user (auth is always required — anonymous mode was removed).
+    let initialOwnerId: string | null = null;
     if (!skipPrompts) {
-      await this.promptAdminSetup(dbPath);
+      initialOwnerId = await this.promptAdminSetup(dbPath);
     } else {
       // --force: preserve local/dev ergonomics, but defer production admin
       // creation to the daemon-owned first-run bootstrap. This avoids
-      // partially failing after destructive re-initialization has already
-      // recreated the database and seeded initial data.
+      // partially failing after destructive re-initialization has recreated
+      // the database. The daemon will create both the User and default Board.
       if (shouldDeferAdminSetup(this.nonInteractive)) {
         this.log(`${chalk.green('   ✓')} Admin setup deferred to daemon first-run bootstrap`);
         this.log(
@@ -608,7 +603,8 @@ export default class Init extends Command {
         try {
           const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
           try {
-            await createDevelopmentDefaultAdminUser(db);
+            const owner = await createDevelopmentDefaultAdminUser(db);
+            initialOwnerId = owner.user_id;
           } finally {
             this.closeSQLiteDatabase(db);
           }
@@ -623,6 +619,18 @@ export default class Init extends Command {
             throw error;
           }
         }
+      }
+    }
+
+    if (initialOwnerId) {
+      const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+      try {
+        this.log('');
+        this.log('🌱 Seeding initial data...');
+        await seedInitialData(db, initialOwnerId);
+        this.log(`${chalk.green('   ✓')} Created Main Board`);
+      } finally {
+        this.closeSQLiteDatabase(db);
       }
     }
 
@@ -961,7 +969,7 @@ export default class Init extends Command {
    * first start (`runFirstRunAdminBootstrap`) and write credentials to
    * `~/.agor/admin-credentials`.
    */
-  private async promptAdminSetup(dbPath: string): Promise<void> {
+  private async promptAdminSetup(dbPath: string): Promise<string | null> {
     this.log('');
     this.log(chalk.bold('👤 Create your admin account:'));
     this.log(chalk.gray('   (Skip this and the daemon will auto-create one on first start)'));
@@ -982,7 +990,7 @@ export default class Init extends Command {
           '   Skipped. The daemon will create admin@agor.live on first start; the generated password lands in ~/.agor/admin-credentials.'
         )
       );
-      return;
+      return null;
     }
 
     // Prompt for user details
@@ -1020,17 +1028,19 @@ export default class Init extends Command {
 
     // Create admin user directly in database (no daemon required)
     const db = await createDatabaseAsync({ url: `file:${dbPath}`, dialect: 'sqlite' });
+    let userId: string;
     try {
-      await createUser(db, {
+      const user = await createUser(db, {
         email,
         password,
         name: username,
         role: 'admin',
       });
+      userId = user.user_id;
     } finally {
       this.closeSQLiteDatabase(db);
     }
-
     this.log(`${chalk.green('   ✓')} Admin user created (${chalk.gray(email)})`);
+    return userId;
   }
 }

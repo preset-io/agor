@@ -30,7 +30,10 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor/core/types';
 import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
-import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
+import {
+  lockTenantAuthorizationFence,
+  resolveCurrentTenantAuthorityActor,
+} from './tenant-authorization-fence.js';
 
 function requireMember(context: HookContext): HookContext {
   if (!context.params.provider) return context;
@@ -77,6 +80,15 @@ export const GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS = ['find', 'create', 'r
 
 export function createGroupsService(db: TenantScopeAwareDatabase) {
   const repo = new GroupRepository(db);
+  const requireCurrentAdmin = async (operationDb: TenantScopedDatabase, params?: Params) => {
+    const current = await resolveCurrentTenantAuthorityActor(operationDb, params, {
+      allowActorlessTrusted: true,
+    });
+    if (current && !current.service && !hasMinimumRole(current.role, ROLES.ADMIN)) {
+      throw new Forbidden('Only admins can manage groups');
+    }
+    return current;
+  };
   return {
     async find(params?: Params): Promise<Group[]> {
       const archived = params?.query?.archived as boolean | undefined;
@@ -93,11 +105,12 @@ export function createGroupsService(db: TenantScopeAwareDatabase) {
         (params as AuthenticatedParams | undefined)?.tenant?.tenant_id,
         async (operationDb) => {
           await lockTenantAuthorizationFence(operationDb, params);
+          const current = await requireCurrentAdmin(operationDb, params);
           return new GroupRepository(operationDb).create({
             name: data.name || '',
             slug: data.slug,
             description: data.description,
-            created_by: paramsUser(params)?.user_id as UserID | undefined,
+            created_by: current?.user_id,
           });
         }
       );
@@ -108,6 +121,7 @@ export function createGroupsService(db: TenantScopeAwareDatabase) {
         (params as AuthenticatedParams | undefined)?.tenant?.tenant_id,
         async (operationDb) => {
           await lockTenantAuthorizationFence(operationDb, params);
+          await requireCurrentAdmin(operationDb, params);
           return new GroupRepository(operationDb).update(id, {
             name: data.name,
             slug: data.slug,
@@ -123,6 +137,7 @@ export function createGroupsService(db: TenantScopeAwareDatabase) {
         (params as AuthenticatedParams | undefined)?.tenant?.tenant_id,
         async (operationDb) => {
           await lockTenantAuthorizationFence(operationDb, params);
+          await requireCurrentAdmin(operationDb, params);
           return new GroupRepository(operationDb).delete(id);
         }
       );

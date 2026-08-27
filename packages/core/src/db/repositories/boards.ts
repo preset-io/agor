@@ -289,6 +289,15 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       await runDatabaseTransaction(
         this.db,
         async (tx) => {
+          const owner = await select(tx, { user_id: users.user_id })
+            .from(users)
+            .where(eq(users.user_id, insertData.primary_owner_user_id))
+            .one();
+          if (!owner) {
+            throw new RepositoryError(
+              `Cannot create Board: primary owner ${insertData.primary_owner_user_id} does not exist in this tenant`
+            );
+          }
           await insert(tx, boards).values(insertData).run();
           await new CapabilityPolicyRepository(tx).initializeBoardInTransaction(
             tx,
@@ -849,7 +858,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   /**
    * Get default board (or create if doesn't exist)
    */
-  async getDefault(): Promise<Board> {
+  async getDefault(createdBy?: UserID | string): Promise<Board> {
     try {
       const defaultBoard = await this.findBySlug('default');
 
@@ -857,16 +866,16 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         return defaultBoard;
       }
 
-      // Create default board with the legacy sentinel; the first-run admin
-      // bootstrap re-attributes it to the bootstrapped admin on next start.
-      const { LEGACY_ANONYMOUS_OWNER_ID } = await import('../first-run-bootstrap');
+      if (!createdBy) {
+        throw new RepositoryError('Cannot create the default Board without a real primary owner');
+      }
       return this.create({
         name: 'Main Board',
         slug: 'default',
         description: 'Main board for all sessions',
         color: '#1677ff',
         icon: '⭐',
-        created_by: LEGACY_ANONYMOUS_OWNER_ID,
+        created_by: createdBy as UserID,
       });
     } catch (error) {
       throw new RepositoryError(

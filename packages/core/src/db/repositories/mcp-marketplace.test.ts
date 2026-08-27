@@ -11,6 +11,7 @@ import { MCPMarketplaceRepository } from './mcp-marketplace';
 import { MCPServerRepository } from './mcp-servers';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
+import { UsersRepository } from './users';
 
 const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 const BOB = '00000000-0000-7000-8000-00000000b0b0' as UserID;
@@ -55,6 +56,17 @@ describe('MCPMarketplaceRepository', () => {
   dbTest(
     'projects only the current owner, visible sessions, and explicit secret-free fields',
     async ({ db }) => {
+      const users = new UsersRepository(db);
+      await users.create({
+        user_id: ALICE,
+        email: 'alice-marketplace@example.invalid',
+        role: 'member',
+      });
+      await users.create({
+        user_id: BOB,
+        email: 'bob-marketplace@example.invalid',
+        role: 'member',
+      });
       const servers = new MCPServerRepository(db);
       const aliceServerBase = await servers.create({
         name: 'alice-private',

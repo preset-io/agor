@@ -525,6 +525,11 @@ describe('SessionRepository.findAll', () => {
       const repoRepo = new RepoRepository(db);
       const branchRepo = new BranchRepository(db);
       const userId = generateId() as UUID;
+      await new UsersRepository(db).create({
+        user_id: userId,
+        email: `session-rbac-viewer-${userId}@example.invalid`,
+        role: 'member',
+      });
 
       const gitRepo = await repoRepo.create({
         repo_id: generateId(),
@@ -544,7 +549,7 @@ describe('SessionRepository.findAll', () => {
         path: '/tmp/session-rbac-visible',
         base_ref: 'main',
         new_branch: false,
-        created_by: generateId() as UUID,
+        created_by: 'test-user' as UUID,
         permission_source: 'override',
         others_can: 'view',
       });
@@ -557,7 +562,7 @@ describe('SessionRepository.findAll', () => {
         path: '/tmp/session-rbac-hidden',
         base_ref: 'main',
         new_branch: false,
-        created_by: generateId() as UUID,
+        created_by: 'test-user' as UUID,
         permission_source: 'override',
         others_can: 'none',
       });

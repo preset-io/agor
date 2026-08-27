@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => {
     },
     canOpen: true,
     fsAccess: 'write' as 'none' | 'read' | 'write',
+    currentRole: 'admin',
   };
 });
 
@@ -73,12 +74,35 @@ vi.mock('@agor/core/db', () => ({
       mocks.databaseScopeDepth -= 1;
     }
   },
+  runWithTenantDatabaseTransaction: async (
+    _db: unknown,
+    tenantId: string | undefined,
+    work: (db: unknown) => Promise<unknown>
+  ) => {
+    if (!tenantId) throw new Error('Missing tenant identity');
+    mocks.databaseScopeDepth += 1;
+    try {
+      return await work(mocks.tenantDb);
+    } finally {
+      mocks.databaseScopeDepth -= 1;
+    }
+  },
   UsersRepository: class {
     async findById() {
       return { unix_username: 'alice' };
     }
   },
   shortId: (id: string) => id,
+}));
+
+vi.mock('./tenant-authorization-fence.js', () => ({
+  lockTenantAuthorizationFence: vi.fn(),
+  resolveCurrentTenantAuthorityActor: vi.fn(async () => ({
+    kind: 'human',
+    user_id: 'user-1',
+    role: mocks.currentRole,
+    service: false,
+  })),
 }));
 
 vi.mock('@agor/core/unix', () => ({
@@ -133,6 +157,7 @@ beforeEach(() => {
   mocks.databaseScopeDepth = 0;
   mocks.canOpen = true;
   mocks.fsAccess = 'write';
+  mocks.currentRole = 'admin';
   mocks.branchesById.clear();
   mocks.branchesById.set(mocks.branch.branch_id, mocks.branch);
   mocks.resolveDelegatedHomeKey.mockReturnValue({
@@ -232,7 +257,7 @@ describe('process-affine attachment creation', () => {
       return { SAFE: '1' };
     });
     mocks.spawnExecutorFireAndForget.mockImplementation(() => {
-      expect(mocks.databaseScopeDepth).toBe(0);
+      expect(mocks.databaseScopeDepth).toBeGreaterThan(0);
     });
     const service = new TerminalsService(makeApp() as never, {} as never);
     const result = await service.create({ branchId: 'branch-1' as BranchID }, params as never);
@@ -305,6 +330,26 @@ describe('process-affine attachment creation', () => {
     await expect(starting).rejects.toThrow('Terminal access changed');
     expect(mocks.generateTerminalExecutorToken).not.toHaveBeenCalled();
     expect(mocks.joinRequestingSocket).not.toHaveBeenCalled();
+    expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
+  });
+
+  it('rechecks the current member role at the final fenced admission boundary', async () => {
+    let release!: () => void;
+    mocks.createUserProcessEnvironment.mockImplementation(
+      () => new Promise<Record<string, string>>((resolve) => (release = () => resolve({})))
+    );
+    const service = new TerminalsService(makeApp() as never, {} as never);
+    const starting = service.create({ branchId: 'branch-1' as BranchID }, params as never);
+    await vi.waitFor(() => expect(mocks.createUserProcessEnvironment).toHaveBeenCalledOnce());
+
+    mocks.currentRole = 'guest';
+    release();
+
+    await expect(starting).rejects.toThrow(
+      'Terminal access changed while the terminal was starting'
+    );
+    expect(mocks.joinRequestingSocket).not.toHaveBeenCalled();
+    expect(mocks.generateTerminalExecutorToken).not.toHaveBeenCalled();
     expect(mocks.spawnExecutorFireAndForget).not.toHaveBeenCalled();
   });
 

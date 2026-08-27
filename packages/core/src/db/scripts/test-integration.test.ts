@@ -17,14 +17,16 @@ import type { Session, SessionID, TaskID, UserID } from '../../types';
 import { SessionStatus, TaskStatus } from '../../types';
 import { createDatabase } from '../client';
 import { isSQLiteDatabase } from '../database-wrapper';
-import { initializeDatabase, seedInitialData } from '../migrate';
+import { initializeDatabase as initializeSchema, seedInitialData } from '../migrate';
 import {
   BoardRepository,
   BranchRepository,
   RepoRepository,
   SessionRepository,
   TaskRepository,
+  UsersRepository,
 } from '../repositories';
+import { createUser } from '../user-utils';
 
 /**
  * Helper to create a test database instance
@@ -38,6 +40,18 @@ function createTestDb() {
   const directory = mkdtempSync(join(tmpdir(), 'agor-integration-test-'));
   testDirectories.push(directory);
   return createDatabase({ url: `file:${join(directory, 'test.db')}` });
+}
+
+async function initializeDatabase(db: ReturnType<typeof createTestDb>): Promise<void> {
+  await initializeSchema(db);
+  const users = new UsersRepository(db);
+  if (!(await users.findByEmail('test-user@agor.test'))) {
+    await users.create({
+      user_id: 'test-user' as UserID,
+      email: 'test-user@agor.test',
+      role: 'member',
+    });
+  }
 }
 
 afterAll(() => {
@@ -121,7 +135,12 @@ describe('Database Initialization', () => {
   it('should seed default board', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    await seedInitialData(db);
+    const owner = await createUser(db, {
+      email: 'seed-owner@example.com',
+      password: 'seed-owner-password',
+      role: 'admin',
+    });
+    await seedInitialData(db, owner.user_id);
 
     const result = isSQLiteDatabase(db)
       ? await db.run(sql`SELECT board_id, name, slug FROM boards WHERE slug = 'default'`)
@@ -135,8 +154,13 @@ describe('Database Initialization', () => {
   it('should not duplicate default board when called twice', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    await seedInitialData(db);
-    await seedInitialData(db);
+    const owner = await createUser(db, {
+      email: 'seed-owner@example.com',
+      password: 'seed-owner-password',
+      role: 'admin',
+    });
+    await seedInitialData(db, owner.user_id);
+    await seedInitialData(db, owner.user_id);
 
     const result = isSQLiteDatabase(db)
       ? await db.run(sql`SELECT board_id FROM boards WHERE slug = 'default'`)
@@ -456,7 +480,12 @@ describe('Board Repository Integration', () => {
   it('should get default board after seeding', async () => {
     const db = createTestDb();
     await initializeDatabase(db);
-    await seedInitialData(db);
+    const owner = await createUser(db, {
+      email: 'board-seed-owner@example.com',
+      password: 'board-seed-owner-password',
+      role: 'admin',
+    });
+    await seedInitialData(db, owner.user_id);
 
     const repo = new BoardRepository(db);
     const defaultBoard = await repo.getDefault();

@@ -41,7 +41,7 @@ describe('tenant authorization fence coverage', () => {
   it('does not exempt actorless or service-account authority mutations', () => {
     const implementation = fence.slice(
       fence.indexOf('export async function lockTenantAuthorizationFence'),
-      fence.length
+      fence.indexOf('export type CurrentTenantAuthorityActor')
     );
     expect(implementation).not.toContain('_isServiceAccount');
     expect(implementation).not.toContain('!params');

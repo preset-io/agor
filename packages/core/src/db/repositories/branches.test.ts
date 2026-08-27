@@ -46,6 +46,7 @@ function createBranchData(overrides?: {
   path?: string;
   board_id?: UUID;
   created_by?: UUID;
+  primary_owner_user_id?: UUID;
   base_ref?: string;
   base_remote_url?: string;
   base_sha?: string;
@@ -80,7 +81,8 @@ function createBranchData(overrides?: {
     branch_unique_id: overrides?.branch_unique_id ?? 1,
     path: overrides?.path ?? `/home/user/.agor/repos/test-repo/${name}`,
     board_id: overrides?.board_id,
-    created_by: overrides?.created_by ?? (generateId() as UUID),
+    created_by: overrides?.created_by ?? ('test-user' as UUID),
+    primary_owner_user_id: overrides?.primary_owner_user_id,
     base_ref: overrides?.base_ref,
     base_remote_url: overrides?.base_remote_url,
     base_sha: overrides?.base_sha,
@@ -170,6 +172,23 @@ describe('BranchRepository.findBranchIdsByZone', () => {
 // ============================================================================
 
 describe('BranchRepository.create', () => {
+  dbTest('rejects a missing immutable primary owner', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const missing = generateId() as UUID;
+
+    await expect(
+      branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          created_by: missing,
+          primary_owner_user_id: missing,
+        })
+      )
+    ).rejects.toThrow(/primary owner .* does not exist in this tenant/);
+  });
+
   dbTest('should create branch with comprehensive field validation', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);

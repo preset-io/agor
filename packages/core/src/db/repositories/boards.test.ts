@@ -91,7 +91,7 @@ async function createBranchForBoard(
     path: `/tmp/${name}`,
     board_id: boardId,
     archived: overrides.archived,
-    created_by: overrides.created_by ?? generateId(),
+    created_by: overrides.created_by ?? ('test-user' as UUID),
     custom_context:
       overrides.custom_context ??
       (overrides.teammate
@@ -136,6 +136,11 @@ describe('BoardRepository.create', () => {
 
   dbTest('should create board with all required fields', async ({ db }) => {
     const repo = new BoardRepository(db);
+    await new UsersRepository(db).create({
+      user_id: 'user-123' as UUID,
+      email: 'user-123@agor.test',
+      role: 'member',
+    });
     const data = createBoardData({
       name: 'My Board',
       created_by: 'user-123',
@@ -179,6 +184,15 @@ describe('BoardRepository.create', () => {
     delete (data as any).created_by;
 
     await expect(repo.create(data)).rejects.toThrow(/created_by/);
+  });
+
+  dbTest('rejects a missing immutable primary owner', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const missing = generateId() as UUID;
+
+    await expect(
+      repo.create(createBoardData({ created_by: missing, primary_owner_user_id: missing }))
+    ).rejects.toThrow(/primary owner .* does not exist in this tenant/);
   });
 
   dbTest('should reject primary_teammate_id in generic create input', async ({ db }) => {
@@ -603,6 +617,18 @@ describe('BoardRepository.findAll', () => {
   dbTest('should push board visibility directly into findAll SQL', async ({ db }) => {
     const repo = new BoardRepository(db);
     const viewerId = generateId() as UUID;
+    const otherId = generateId() as UUID;
+    const users = new UsersRepository(db);
+    await users.create({
+      user_id: viewerId,
+      email: `viewer-${viewerId}@agor.test`,
+      role: 'member',
+    });
+    await users.create({
+      user_id: otherId,
+      email: `other-${otherId}@agor.test`,
+      role: 'member',
+    });
 
     const ownedPrivate = await repo.create(
       createBoardData({
@@ -617,7 +643,7 @@ describe('BoardRepository.findAll', () => {
         name: 'Other private',
         slug: 'other-private',
         access_mode: 'private',
-        created_by: generateId() as UUID,
+        created_by: otherId,
       })
     );
 
@@ -628,6 +654,18 @@ describe('BoardRepository.findAll', () => {
   dbTest('should resolve visible board IDs without hidden-prefix ambiguity', async ({ db }) => {
     const repo = new BoardRepository(db);
     const viewerId = generateId() as UUID;
+    const otherId = generateId() as UUID;
+    const users = new UsersRepository(db);
+    await users.create({
+      user_id: viewerId,
+      email: `prefix-viewer-${viewerId}@agor.test`,
+      role: 'member',
+    });
+    await users.create({
+      user_id: otherId,
+      email: `prefix-other-${otherId}@agor.test`,
+      role: 'member',
+    });
     const visible = await repo.create(
       createBoardData({
         board_id: '018f0000-0000-7000-8000-000000000001' as BoardID,
@@ -639,7 +677,7 @@ describe('BoardRepository.findAll', () => {
       createBoardData({
         board_id: '018f0000-0000-7000-8000-000000000002' as BoardID,
         access_mode: 'private',
-        created_by: generateId() as UUID,
+        created_by: otherId,
       })
     );
 
@@ -1036,7 +1074,7 @@ describe('BoardRepository.getDefault', () => {
   dbTest('should create default board if it does not exist', async ({ db }) => {
     const repo = new BoardRepository(db);
 
-    const defaultBoard = await repo.getDefault();
+    const defaultBoard = await repo.getDefault('test-user');
 
     expect(defaultBoard.slug).toBe('default');
     expect(defaultBoard.name).toBe('Main Board');
@@ -1048,7 +1086,7 @@ describe('BoardRepository.getDefault', () => {
   dbTest('should not create duplicate default boards', async ({ db }) => {
     const repo = new BoardRepository(db);
 
-    const first = await repo.getDefault();
+    const first = await repo.getDefault('test-user');
     const second = await repo.getDefault();
 
     expect(first.board_id).toBe(second.board_id);
@@ -1800,6 +1838,11 @@ describe('BoardRepository normalized permission boundary', () => {
   dbTest('uses immutable primary ownership for creator mutation access', async ({ db }) => {
     const repo = new BoardRepository(db);
     const creatorId = generateId() as UUID;
+    await new UsersRepository(db).create({
+      user_id: creatorId,
+      email: `owner-${creatorId}@agor.test`,
+      role: 'member',
+    });
     const board = await repo.create(
       createBoardData({ name: 'Owner Board', created_by: creatorId, access_mode: 'private' })
     );

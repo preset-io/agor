@@ -1,14 +1,15 @@
+import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
-import { select } from './database-wrapper';
+import { deleteFrom, select, update } from './database-wrapper';
 import { bootstrapFirstRunAdmin } from './first-run-bootstrap';
 import { seedInitialData } from './migrate';
-import { boards } from './schema';
+import { boards, users } from './schema';
 import { dbTest } from './test-helpers';
 import { createUser } from './user-utils';
 
 describe('bootstrapFirstRunAdmin', () => {
   dbTest('allows competing daemon seeders to converge on one default board', async ({ db }) => {
-    await Promise.all([seedInitialData(db), seedInitialData(db)]);
+    await Promise.all([seedInitialData(db, 'test-user'), seedInitialData(db, 'test-user')]);
 
     const boardRows = await select(db).from(boards).all();
     expect(boardRows).toHaveLength(1);
@@ -16,6 +17,7 @@ describe('bootstrapFirstRunAdmin', () => {
   });
 
   dbTest('allows competing daemon admin bootstraps to converge on one user', async ({ db }) => {
+    await deleteFrom(db, users).where(eq(users.user_id, 'test-user')).run();
     const createAdmin = () =>
       createUser(db, {
         email: 'admin@agor.live',
@@ -43,7 +45,11 @@ describe('bootstrapFirstRunAdmin', () => {
       password: 'superadmin-password',
       role: 'superadmin',
     });
-    await seedInitialData(db);
+    await seedInitialData(db, superadmin.user_id);
+    await update(db, boards)
+      .set({ created_by: 'anonymous' })
+      .where(eq(boards.slug, 'default'))
+      .run();
 
     const result = await bootstrapFirstRunAdmin(db, async () => {
       throw new Error('should not create an admin when users already exist');

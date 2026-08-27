@@ -53,7 +53,7 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { type SessionRow, sessions, type TaskInsert, type TaskRow, tasks } from '../schema';
+import { type SessionRow, sessions, type TaskInsert, type TaskRow, tasks, users } from '../schema';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -176,9 +176,17 @@ export interface TerminationSettlementResult {
 }
 
 export interface TaskDispatchClaimResult {
-  outcome: 'claimed' | 'already_claimed' | 'condition_changed';
+  outcome: 'claimed' | 'already_claimed' | 'condition_changed' | 'actor_missing';
   task: Task;
 }
+
+export interface QueuedTaskActorCheckResult {
+  outcome: 'actor_available' | 'actor_missing' | 'condition_changed';
+  task: Task;
+}
+
+export const MISSING_TASK_ACTOR_ERROR =
+  'The user who created this queued task is no longer available.';
 
 /** Routing-only row returned to the all-daemon queue recovery scanner. */
 export interface QueuedSessionRef {
@@ -1813,6 +1821,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         return { outcome: 'condition_changed', task: current };
       }
 
+      const actor = await select(txDb, { user_id: users.user_id })
+        .from(users)
+        .where(eq(users.user_id, current.created_by))
+        .one();
+      if (!actor) {
+        return {
+          outcome: 'actor_missing',
+          task: await this.terminalizeMissingDispatchActor(txDb, current, fullId),
+        };
+      }
+
       const competingExecution = await select(txDb, { task_id: tasks.task_id })
         .from(tasks)
         .where(
@@ -1883,6 +1902,64 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         .run();
       return { outcome: 'claimed', task: merged };
     });
+  }
+
+  /**
+   * Fail a queued head only if its immutable creator is absent at the locked
+   * Session→Task boundary. A concurrent dispatcher that wins first changes the
+   * status and this command becomes a no-op instead of overwriting DISPATCHING.
+   */
+  async failQueuedTaskIfCreatorMissing(id: string): Promise<QueuedTaskActorCheckResult> {
+    return this.mutateLockedSessionTask(id, async (txDb, currentRow, _sessionRow, fullId) => {
+      const current = this.rowToTask(currentRow);
+      if (current.status !== TaskStatus.QUEUED) {
+        return { outcome: 'condition_changed', task: current };
+      }
+      const queuedHead = await select(txDb, { task_id: tasks.task_id })
+        .from(tasks)
+        .where(and(eq(tasks.session_id, current.session_id), eq(tasks.status, TaskStatus.QUEUED)))
+        .orderBy(asc(tasks.queue_position), asc(tasks.created_at), asc(tasks.task_id))
+        .limit(1)
+        .one();
+      if (queuedHead?.task_id !== fullId) {
+        return { outcome: 'condition_changed', task: current };
+      }
+      const actor = await select(txDb, { user_id: users.user_id })
+        .from(users)
+        .where(eq(users.user_id, current.created_by))
+        .one();
+      if (actor) return { outcome: 'actor_available', task: current };
+      return {
+        outcome: 'actor_missing',
+        task: await this.terminalizeMissingDispatchActor(txDb, current, fullId),
+      };
+    });
+  }
+
+  private async terminalizeMissingDispatchActor(
+    txDb: Database,
+    current: Task,
+    fullId: string
+  ): Promise<Task> {
+    const completedAt = await this.mutationNow(txDb, fullId);
+    const failed: Task = {
+      ...current,
+      status: TaskStatus.FAILED,
+      queue_position: undefined,
+      completed_at: completedAt.toISOString(),
+      error_message: MISSING_TASK_ACTOR_ERROR,
+    };
+    const insertData = this.taskToInsert(failed);
+    await update(txDb, tasks)
+      .set({
+        status: insertData.status,
+        queue_position: null,
+        completed_at: insertData.completed_at,
+        data: insertData.data,
+      })
+      .where(and(eq(tasks.task_id, fullId), eq(tasks.status, current.status)))
+      .run();
+    return failed;
   }
 
   /**

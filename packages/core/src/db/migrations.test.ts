@@ -452,6 +452,47 @@ describe('Board and branch capability-policy migration', () => {
       await expect(
         client.execute("UPDATE board_access_entries SET role='collaborator'")
       ).rejects.toThrow(/CHECK constraint failed/);
+      const migratedSchema = await client.execute(
+        `SELECT sql FROM sqlite_master
+         WHERE type='table' AND name IN (
+           'branches','board_access_policies','board_access_entries','branch_permission_configs',
+           'branch_permission_entries','branch_session_sharing_grants'
+         )`
+      );
+      const migratedSchemaSql = migratedSchema.rows.map((row) => String(row.sql)).join('\n');
+      for (const constraintName of [
+        'branches_permission_binding_check',
+        'board_access_policies_sharing_mode_check',
+        'board_access_policies_others_role_check',
+        'board_access_entries_role_check',
+        'board_access_entries_principal_check',
+        'branch_permission_configs_sharing_mode_check',
+        'branch_permission_configs_others_role_check',
+        'branch_permission_configs_others_fs_access_check',
+        'branch_permission_configs_target_check',
+        'branch_permission_entries_role_check',
+        'branch_permission_entries_fs_access_check',
+        'branch_permission_entries_principal_check',
+        'branch_session_sharing_grants_principal_check',
+      ]) {
+        expect(migratedSchemaSql).toMatch(
+          new RegExp(`CONSTRAINT ["\x60]?${constraintName}["\x60]? CHECK`)
+        );
+      }
+      await expect(
+        client.execute(
+          `INSERT INTO boards
+           (board_id,created_at,created_by,data,primary_owner_user_id)
+           VALUES ('orphan-board',3,'missing','{}','missing')`
+        )
+      ).rejects.toThrow(/board primary owner does not exist/i);
+      await expect(
+        client.execute(
+          `INSERT INTO branches
+           (branch_id,created_at,created_by,permission_source,data,primary_owner_user_id,permission_binding)
+           VALUES ('orphan-branch',3,'missing','override','{}','missing','override')`
+        )
+      ).rejects.toThrow(/branch primary owner does not exist/i);
       const sharing = await client.execute(
         'SELECT count(*) AS count FROM branch_session_sharing_rules'
       );

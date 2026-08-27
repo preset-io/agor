@@ -132,7 +132,11 @@ describe('one-time launch auth service', () => {
     cleanup?.();
   });
 
-  function service(config = baseConfig(), usersService = makeUsersService(db)) {
+  function service(
+    config = baseConfig(),
+    usersService = makeUsersService(db),
+    onAuthorizationInvalidated?: (tenantId: string) => void
+  ) {
     const { settings } = resolveExternalLaunchSettings(config);
     return createLaunchAuthService({
       db,
@@ -142,6 +146,7 @@ describe('one-time launch auth service', () => {
       accessTokenTtl: '15m',
       refreshTokenTtl: '30d',
       usersService,
+      onAuthorizationInvalidated,
     });
   }
 
@@ -417,6 +422,28 @@ describe('one-time launch auth service', () => {
       preferences: { audio: { enabled: false } },
       default_mcp_server_ids: ['mcp-1'],
     });
+  });
+
+  it('invalidates tenant authority only when launch projection changes a persisted role', async () => {
+    const invalidated = vi.fn();
+    mockExchange(signClaims({ sub: 'role-change', role: 'member' }));
+    await service(externalAuthorityConfig(), makeUsersService(db), invalidated).create({
+      launchCode: 'first',
+    });
+    expect(invalidated).not.toHaveBeenCalled();
+
+    mockExchange(signClaims({ sub: 'role-change', role: 'admin' }));
+    await service(externalAuthorityConfig(), makeUsersService(db), invalidated).create({
+      launchCode: 'second',
+    });
+    expect(invalidated).toHaveBeenCalledOnce();
+    expect(invalidated).toHaveBeenCalledWith('default');
+
+    mockExchange(signClaims({ sub: 'role-change', role: 'admin' }));
+    await service(externalAuthorityConfig(), makeUsersService(db), invalidated).create({
+      launchCode: 'third',
+    });
+    expect(invalidated).toHaveBeenCalledOnce();
   });
 
   it('requires a recognized role before externally authoritative JIT creation', async () => {

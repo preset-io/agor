@@ -34,6 +34,7 @@ import {
   MCPCatalogCandidateRepository,
   MCPServerRepository,
   MessagesRepository,
+  MISSING_TASK_ACTOR_ERROR,
   resolveMcpMemberPolicy,
   runWithTenantDatabaseScope,
   runWithTenantDatabaseTransaction,
@@ -173,7 +174,10 @@ import {
   type SchedulerService,
 } from './services/scheduler.js';
 import { runSessionInitializationStages } from './services/session-initialization.js';
-import { lockTenantAuthorizationFence } from './services/tenant-authorization-fence.js';
+import {
+  lockTenantAuthorizationFence,
+  resolveCurrentTenantAuthorityActor,
+} from './services/tenant-authorization-fence.js';
 import type { TerminalsService } from './services/terminals.js';
 import { createUserApiKeysService } from './services/user-api-keys.js';
 import {
@@ -1053,6 +1057,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       accessTokenTtl: ACCESS_TOKEN_TTL,
       refreshTokenTtl: REFRESH_TOKEN_TTL,
       usersService,
+      onAuthorizationInvalidated: (tenantId) => {
+        app.emit('realtime:authorization-invalidated', {
+          tenantId,
+          disconnectSockets: true,
+        });
+      },
     })
   );
 
@@ -1656,7 +1666,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // Atomically claim queued/created → launch status. Process-local session
     // locks reduce contention, but this expected-state transition is the
     // cross-daemon fence that prevents duplicate executor launches.
-    const dispatchClaim = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+    const dispatchClaim = await runWithTenantDatabaseTransaction(db, tenantId, async (tenantDb) => {
+      await lockTenantAuthorizationFence(tenantDb, params);
       await assertTenantWritable(tenantDb, tenantId);
       return tasksService.claimDispatchAndProjectSession(
         task.task_id,
@@ -2092,6 +2103,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 // Serialize against user/group and capability-policy mutations,
                 // then re-authorize at the exact durable admission boundary.
                 await lockTenantAuthorizationFence(operationDb, params);
+                if (!isPromptServiceAccount) {
+                  const current = await resolveCurrentTenantAuthorityActor(operationDb, params);
+                  if (current.service || !hasMinimumRole(current.role, ROLES.MEMBER)) {
+                    throw new Forbidden('Member access is required to prompt a session');
+                  }
+                }
                 const admissionSession = (await sessionsService.get(id, params)) as Session;
                 await assertCurrentPromptAuthority(operationDb, admissionSession);
                 return new TaskRepository(operationDb).createPending({
@@ -3342,35 +3359,54 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     // callback scheduling metadata is provenance only and must never select
     // another user's token, environment, mounts, or private MCP servers.
     const userRepo = bindRepositoryToTenantUnitOfWork(db, new UsersRepository(db));
-    const queuedByUser = await resolveQueuedTaskActor(nextTask, (userId) =>
+    let queuedByUser = await resolveQueuedTaskActor(nextTask, (userId) =>
       userRepo.findById(userId)
     );
     if (!queuedByUser) {
-      const errorMessage = 'The user who created this queued task is no longer available.';
-      const failed = await taskRepo.update(nextTask.task_id, {
-        status: TaskStatus.FAILED,
-        completed_at: new Date().toISOString(),
-        error_message: errorMessage,
-      });
-      emitServiceEvent(app, {
-        path: 'tasks',
-        event: 'patched',
-        data: failed,
-        params,
-        id: failed.task_id,
-      });
-      console.warn(
-        `[task-queue] event=actor_missing task_id=${JSON.stringify(nextTask.task_id)} actor_id=${JSON.stringify(nextTask.created_by)}`
+      const actorCheck = await runWithTenantDatabaseTransaction(
+        db,
+        getCurrentTenantId(),
+        async (operationDb) => {
+          await lockTenantAuthorizationFence(operationDb, params);
+          return new TaskRepository(operationDb).failQueuedTaskIfCreatorMissing(nextTask.task_id);
+        }
       );
-      // A missing actor must not strand later valid work behind this queue
-      // head. Re-enter through the ordinary drain coalescer after returning.
-      deferWithSessionQueueTenantScope(
-        { db, config, sessionId, params, label: 'processNextQueuedTask missing actor' },
-        async (retryParams) => processNextQueuedTask(sessionId, retryParams),
-        (error) => console.error('❌ [Queue] Missing-actor continuation failed:', error)
-      );
-      return;
+      if (actorCheck.outcome === 'condition_changed') return;
+      if (actorCheck.outcome === 'actor_available') {
+        queuedByUser = await userRepo.findById(nextTask.created_by);
+        if (queuedByUser) {
+          // Continue below; the final dispatch admission rechecks this actor
+          // under the same tenant fence as hard deletion.
+        } else {
+          deferWithSessionQueueTenantScope(
+            { db, config, sessionId, params, label: 'processNextQueuedTask actor race' },
+            async (retryParams) => processNextQueuedTask(sessionId, retryParams),
+            (error) => console.error('❌ [Queue] Actor-race continuation failed:', error)
+          );
+          return;
+        }
+      } else {
+        emitServiceEvent(app, {
+          path: 'tasks',
+          event: 'patched',
+          data: actorCheck.task,
+          params,
+          id: actorCheck.task.task_id,
+        });
+        console.warn(
+          `[task-queue] event=actor_missing task_id=${JSON.stringify(nextTask.task_id)} actor_id=${JSON.stringify(nextTask.created_by)}`
+        );
+        // A missing actor must not strand later valid work behind this queue
+        // head. Re-enter through the ordinary drain coalescer after returning.
+        deferWithSessionQueueTenantScope(
+          { db, config, sessionId, params, label: 'processNextQueuedTask missing actor' },
+          async (retryParams) => processNextQueuedTask(sessionId, retryParams),
+          (error) => console.error('❌ [Queue] Missing-actor continuation failed:', error)
+        );
+        return;
+      }
     }
+    if (!queuedByUser) return;
     const taskParams = { ...params, user: queuedByUser } as RouteParams;
 
     const queuedSession = await runWithTenantDatabaseScope(db, getCurrentTenantId(), () =>
@@ -3416,6 +3452,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (admitted.status === TaskStatus.QUEUED) {
       taskQueueDebug(
         `⏸️  Queue head ${shortId(admitted.task_id)} remains queued after a lost/changed claim`
+      );
+      return;
+    }
+    if (
+      admitted.status === TaskStatus.FAILED &&
+      admitted.error_message === MISSING_TASK_ACTOR_ERROR
+    ) {
+      deferWithSessionQueueTenantScope(
+        { db, config, sessionId, params, label: 'processNextQueuedTask actor revoked' },
+        async (retryParams) => processNextQueuedTask(sessionId, retryParams),
+        (error) => console.error('❌ [Queue] Actor-revoked continuation failed:', error)
       );
       return;
     }

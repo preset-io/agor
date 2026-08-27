@@ -948,11 +948,13 @@ export class CapabilityPolicyRepository {
     userId: UserID
   ): Promise<EffectiveCapabilityPolicyAccess> {
     const value = await this.getBoardPolicies(boardId);
+    const userExists = await this.userExists(userId);
     const groupIds = await this.activeGroupIds(userId);
     return resolveCapabilityPolicyAccess({
       policy: value.board_access,
       primary_owner_user_id: value.primary_owner_user_id,
       user_id: userId,
+      user_status: userExists ? 'active' : 'deleted',
       active_group_ids: groupIds,
     });
   }
@@ -965,10 +967,12 @@ export class CapabilityPolicyRepository {
     const config =
       value.binding_mode === 'inherit' ? value.inherited_config : value.override_config;
     if (!config) throw new RepositoryError(`Branch ${branchId} has no effective permission config`);
+    const userExists = await this.userExists(userId);
     return resolveCapabilityPolicyAccess({
       policy: config.access,
       primary_owner_user_id: value.primary_owner_user_id,
       user_id: userId,
+      user_status: userExists ? 'active' : 'deleted',
       active_group_ids: await this.activeGroupIds(userId),
     });
   }
@@ -1000,6 +1004,14 @@ export class CapabilityPolicyRepository {
       .where(eq(groupMemberships.user_id, userId))
       .all();
     return rows.map((row: { group_id: string }) => row.group_id as GroupID);
+  }
+
+  private async userExists(userId: UserID): Promise<boolean> {
+    const row = await select(this.db, { user_id: users.user_id })
+      .from(users)
+      .where(eq(users.user_id, userId))
+      .one();
+    return Boolean(row);
   }
 
   async getWorkspacePreferences(): Promise<CapabilityPolicyWorkspacePreferences> {

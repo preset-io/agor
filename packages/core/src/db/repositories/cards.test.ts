@@ -11,6 +11,7 @@ import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
 import { BoardRepository } from './boards';
 import { CardRepository } from './cards';
+import { UsersRepository } from './users';
 
 async function createBoard(db: Database): Promise<BoardID> {
   const board = await new BoardRepository(db).create({
@@ -80,6 +81,18 @@ describe('CardRepository.findAll', () => {
 describe('CardRepository.findVisibleById', () => {
   dbTest('resolves prefixes only among boards visible to the caller', async ({ db }) => {
     const userId = generateId() as UUID;
+    const hiddenOwnerId = generateId() as UUID;
+    const users = new UsersRepository(db);
+    await users.create({
+      user_id: userId,
+      email: `visible-card-owner-${userId}@example.invalid`,
+      role: 'member',
+    });
+    await users.create({
+      user_id: hiddenOwnerId,
+      email: `hidden-card-owner-${hiddenOwnerId}@example.invalid`,
+      role: 'member',
+    });
     const boards = new BoardRepository(db);
     const visibleBoard = await boards.create({
       board_id: generateId(),
@@ -90,7 +103,7 @@ describe('CardRepository.findVisibleById', () => {
     const hiddenBoard = await boards.create({
       board_id: generateId(),
       name: 'Hidden private board',
-      created_by: generateId(),
+      created_by: hiddenOwnerId,
       access_mode: 'private',
     });
     const repo = new CardRepository(db);

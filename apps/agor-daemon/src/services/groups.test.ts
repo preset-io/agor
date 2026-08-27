@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import {
   createGroupMembershipsService,
+  createGroupsService,
   groupMembershipsHooks,
   groupsHooks,
   setupBranchEffectiveAccessService,
@@ -79,6 +80,26 @@ describe('groups service authorization hooks', () => {
 });
 
 describe('group membership target authority', () => {
+  dbTest('rejects stale admin claims and providerless human mutation calls', async ({ db }) => {
+    const users = new UsersService(db);
+    const groups = createGroupsService(db);
+    const member = await users.create({
+      email: 'stale-group-admin@example.test',
+      password: 'test-password-1234',
+      role: 'member',
+    });
+    const staleAdmin = {
+      user: { user_id: member.user_id, email: member.email, role: 'admin' },
+    } as AuthenticatedParams;
+
+    await expect(groups.create({ name: 'Stale claim group' }, staleAdmin)).rejects.toMatchObject({
+      code: 403,
+    });
+    await expect(
+      groups.create({ name: 'Stale REST claim group' }, { ...staleAdmin, provider: 'rest' })
+    ).rejects.toMatchObject({ code: 403 });
+  });
+
   dbTest('enforces actor authority over the membership target', async ({ db }) => {
     const users = new UsersService(db);
     const memberships = createGroupMembershipsService(db);

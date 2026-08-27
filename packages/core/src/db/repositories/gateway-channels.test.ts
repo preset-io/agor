@@ -48,7 +48,7 @@ async function seedBranch(db: Database) {
     ref: 'refs/heads/main',
     branch_unique_id: 1,
     path: '/home/user/.agor/worktrees/test/repo/main',
-    created_by: generateId() as UUID,
+    created_by: 'test-user' as UUID,
   });
 
   return branch;

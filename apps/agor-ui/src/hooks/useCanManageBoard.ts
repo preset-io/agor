@@ -33,6 +33,7 @@ export function useCanManageBoard(
           policy: permissions.board_access,
           primary_owner_user_id: permissions.primary_owner_user_id,
           user_id: user.user_id,
+          user_status: 'active',
           active_group_ids: (memberships as GroupMembership[]).map((item) => item.group_id),
         });
         setCanManage(access.capabilities.includes('board.edit'));

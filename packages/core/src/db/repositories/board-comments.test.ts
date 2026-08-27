@@ -18,6 +18,7 @@ import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository } from './tasks';
+import { UsersRepository } from './users';
 
 /**
  * Create test comment data with required fields
@@ -70,7 +71,7 @@ async function createAttachedCommentTarget(
     base_ref: 'main',
     new_branch: false,
     board_id: boardId,
-    created_by: generateId() as UUID,
+    created_by: 'test-user' as UUID,
     permission_source: 'override',
     others_can: othersCan,
   });
@@ -415,6 +416,11 @@ describe('BoardCommentsRepository.findAll', () => {
     async ({ db }) => {
       const repo = new BoardCommentsRepository(db);
       const userId = generateId() as UUID;
+      await new UsersRepository(db).create({
+        user_id: userId,
+        email: `board-comment-viewer-${userId}@example.invalid`,
+        role: 'member',
+      });
       const privateBoard = await createTestBoard(db, {
         board_id: generateId() as UUID,
         access_mode: 'private',

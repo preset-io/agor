@@ -18,7 +18,10 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { isSuperAdmin } from '../utils/branch-authorization.js';
-import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
+import {
+  lockTenantAuthorizationFence,
+  resolveCurrentTenantAuthorityActor,
+} from './tenant-authorization-fence.js';
 
 export const CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS = ['find', 'patch'] as const;
 
@@ -126,10 +129,12 @@ export function setupCapabilityPolicyServices(
         return runWithTenantDatabaseTransaction(db, routeTenantId(params), async (operationDb) => {
           const operationRepository = new CapabilityPolicyRepository(operationDb);
           await lockTenantAuthorizationFence(operationDb, params);
-          const current = requireActor(params);
+          const current = await resolveCurrentTenantAuthorityActor(operationDb, params, {
+            allowActorlessTrusted: true,
+          });
           const boardId = routeId(params) as BoardID;
           const existing = await operationRepository.getBoardPolicies(boardId);
-          if (params?.provider && !current?.service) {
+          if (current && !current.service) {
             const access = await operationRepository.resolveBoardAccess(boardId, current!.user_id);
             const managesPolicy =
               hasMinimumRole(current?.role, ROLES.ADMIN) ||
@@ -198,10 +203,12 @@ export function setupCapabilityPolicyServices(
         return runWithTenantDatabaseTransaction(db, routeTenantId(params), async (operationDb) => {
           const operationRepository = new CapabilityPolicyRepository(operationDb);
           await lockTenantAuthorizationFence(operationDb, params);
-          const current = requireActor(params);
+          const current = await resolveCurrentTenantAuthorityActor(operationDb, params, {
+            allowActorlessTrusted: true,
+          });
           const branchId = routeId(params) as BranchID;
           const existing = await operationRepository.getBranchPolicy(branchId);
-          if (params?.provider && !current?.service) {
+          if (current && !current.service) {
             const access = await operationRepository.resolveBranchAccess(
               branchId,
               current!.user_id
@@ -287,15 +294,10 @@ export function setupCapabilityPolicyServices(
       ): Promise<CapabilityPolicyWorkspacePreferences> {
         return runWithTenantDatabaseTransaction(db, routeTenantId(params), async (operationDb) => {
           await lockTenantAuthorizationFence(operationDb, params);
-          const current = requireActor(params);
-          if (
-            params?.provider &&
-            !current?.service &&
-            !hasMinimumRole(current?.role, ROLES.ADMIN)
-          ) {
+          const current = await resolveCurrentTenantAuthorityActor(operationDb, params);
+          if (!current.service && !hasMinimumRole(current.role, ROLES.ADMIN)) {
             throw new Forbidden('Only admins can manage workspace preferences');
           }
-          if (!current) throw new NotAuthenticated('Authentication required');
           const saved = await new CapabilityPolicyRepository(operationDb).setWorkspacePreferences(
             value,
             current.user_id

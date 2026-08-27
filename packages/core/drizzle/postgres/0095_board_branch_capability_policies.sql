@@ -6,7 +6,7 @@ ALTER TABLE "boards" ADD COLUMN "primary_owner_user_id" varchar(36);
 ALTER TABLE "branches" ADD COLUMN "primary_owner_user_id" varchar(36);
 --> statement-breakpoint
 ALTER TABLE "branches" ADD COLUMN "permission_binding" text DEFAULT 'override' NOT NULL
-  CHECK ("permission_binding" IN ('inherit','override'));
+  CONSTRAINT "branches_permission_binding_check" CHECK ("permission_binding" IN ('inherit','override'));
 --> statement-breakpoint
 UPDATE "boards" b SET "primary_owner_user_id" = COALESCE(
   (SELECT bo.user_id FROM board_owners bo JOIN users u ON u.tenant_id=bo.tenant_id AND u.user_id=bo.user_id
@@ -60,18 +60,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS "boards_tenant_board_id_unique" ON "boards" ("
 CREATE UNIQUE INDEX IF NOT EXISTS "branches_tenant_branch_id_unique" ON "branches" ("tenant_id","branch_id");
 --> statement-breakpoint
 ALTER TABLE "boards" ADD CONSTRAINT "boards_tenant_primary_owner_fk"
-  FOREIGN KEY ("tenant_id","primary_owner_user_id") REFERENCES "users"("tenant_id","user_id") ON DELETE RESTRICT;
+  FOREIGN KEY ("tenant_id","primary_owner_user_id") REFERENCES "users"("tenant_id","user_id") ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE;
 --> statement-breakpoint
 ALTER TABLE "branches" ADD CONSTRAINT "branches_tenant_primary_owner_fk"
-  FOREIGN KEY ("tenant_id","primary_owner_user_id") REFERENCES "users"("tenant_id","user_id") ON DELETE RESTRICT;
+  FOREIGN KEY ("tenant_id","primary_owner_user_id") REFERENCES "users"("tenant_id","user_id") ON DELETE RESTRICT DEFERRABLE INITIALLY IMMEDIATE;
 --> statement-breakpoint
 
 CREATE TABLE "board_access_policies" (
   "tenant_id" text DEFAULT 'default' NOT NULL,
   "board_id" varchar(36) PRIMARY KEY NOT NULL,
   "schema_version" integer DEFAULT 1 NOT NULL,
-  "sharing_mode" text NOT NULL CHECK ("sharing_mode" IN ('private','shared')),
-  "others_role" text DEFAULT 'none' NOT NULL CHECK ("others_role" IN ('none','viewer','editor','manager')),
+  "sharing_mode" text NOT NULL CONSTRAINT "board_access_policies_sharing_mode_check" CHECK ("sharing_mode" IN ('private','shared')),
+  "others_role" text DEFAULT 'none' NOT NULL CONSTRAINT "board_access_policies_others_role_check" CHECK ("others_role" IN ('none','viewer','editor','manager')),
   "revision" integer DEFAULT 1 NOT NULL,
   "updated_by" varchar(36),
   "created_at" timestamp with time zone NOT NULL,
@@ -90,9 +90,9 @@ CREATE TABLE "board_access_entries" (
   "tenant_id" text DEFAULT 'default' NOT NULL,
   "entry_id" varchar(36) PRIMARY KEY NOT NULL,
   "board_id" varchar(36) NOT NULL,
-  "user_id" varchar(36), "group_id" varchar(36), "role" text NOT NULL CHECK ("role" IN ('none','viewer','editor','manager')),
+  "user_id" varchar(36), "group_id" varchar(36), "role" text NOT NULL CONSTRAINT "board_access_entries_role_check" CHECK ("role" IN ('none','viewer','editor','manager')),
   "created_at" timestamp with time zone NOT NULL, "updated_at" timestamp with time zone NOT NULL,
-  CHECK (("user_id" IS NOT NULL) <> ("group_id" IS NOT NULL)),
+  CONSTRAINT "board_access_entries_principal_check" CHECK (("user_id" IS NOT NULL) <> ("group_id" IS NOT NULL)),
   CONSTRAINT "board_access_entries_tenant_board_fk" FOREIGN KEY ("tenant_id","board_id") REFERENCES "board_access_policies"("tenant_id","board_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
   CONSTRAINT "board_access_entries_tenant_user_fk" FOREIGN KEY ("tenant_id","user_id") REFERENCES "users"("tenant_id","user_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
   CONSTRAINT "board_access_entries_tenant_group_fk" FOREIGN KEY ("tenant_id","group_id") REFERENCES "groups"("tenant_id","group_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE
@@ -115,11 +115,11 @@ CREATE TABLE "branch_permission_configs" (
   "tenant_id" text DEFAULT 'default' NOT NULL,
   "config_id" varchar(36) PRIMARY KEY NOT NULL,
   "board_id" varchar(36), "branch_id" varchar(36), "schema_version" integer DEFAULT 1 NOT NULL,
-  "sharing_mode" text NOT NULL CHECK ("sharing_mode" IN ('private','shared')), "others_role" text DEFAULT 'none' NOT NULL CHECK ("others_role" IN ('none','viewer','collaborator','manager')),
-  "others_fs_access" text DEFAULT 'none' NOT NULL CHECK ("others_fs_access" IN ('none','read','write')),
+  "sharing_mode" text NOT NULL CONSTRAINT "branch_permission_configs_sharing_mode_check" CHECK ("sharing_mode" IN ('private','shared')), "others_role" text DEFAULT 'none' NOT NULL CONSTRAINT "branch_permission_configs_others_role_check" CHECK ("others_role" IN ('none','viewer','collaborator','manager')),
+  "others_fs_access" text DEFAULT 'none' NOT NULL CONSTRAINT "branch_permission_configs_others_fs_access_check" CHECK ("others_fs_access" IN ('none','read','write')),
   "revision" integer DEFAULT 1 NOT NULL, "updated_by" varchar(36),
   "created_at" timestamp with time zone NOT NULL, "updated_at" timestamp with time zone NOT NULL,
-  CHECK (("board_id" IS NOT NULL) <> ("branch_id" IS NOT NULL)),
+  CONSTRAINT "branch_permission_configs_target_check" CHECK (("board_id" IS NOT NULL) <> ("branch_id" IS NOT NULL)),
   CONSTRAINT "branch_permission_configs_tenant_board_fk" FOREIGN KEY ("tenant_id","board_id") REFERENCES "boards"("tenant_id","board_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
   CONSTRAINT "branch_permission_configs_tenant_branch_fk" FOREIGN KEY ("tenant_id","branch_id") REFERENCES "branches"("tenant_id","branch_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
   CONSTRAINT "branch_permission_configs_updated_by_users_user_id_fk" FOREIGN KEY ("updated_by") REFERENCES "users"("user_id") ON DELETE SET NULL DEFERRABLE INITIALLY IMMEDIATE
@@ -138,10 +138,10 @@ CREATE INDEX "branch_permission_configs_updated_idx" ON "branch_permission_confi
 CREATE TABLE "branch_permission_entries" (
   "tenant_id" text DEFAULT 'default' NOT NULL,
   "entry_id" varchar(36) PRIMARY KEY NOT NULL, "config_id" varchar(36) NOT NULL,
-  "user_id" varchar(36), "group_id" varchar(36), "role" text NOT NULL CHECK ("role" IN ('none','viewer','collaborator','manager')),
-  "fs_access" text DEFAULT 'none' NOT NULL CHECK ("fs_access" IN ('none','read','write')),
+  "user_id" varchar(36), "group_id" varchar(36), "role" text NOT NULL CONSTRAINT "branch_permission_entries_role_check" CHECK ("role" IN ('none','viewer','collaborator','manager')),
+  "fs_access" text DEFAULT 'none' NOT NULL CONSTRAINT "branch_permission_entries_fs_access_check" CHECK ("fs_access" IN ('none','read','write')),
   "created_at" timestamp with time zone NOT NULL, "updated_at" timestamp with time zone NOT NULL,
-  CHECK (("user_id" IS NOT NULL) <> ("group_id" IS NOT NULL)),
+  CONSTRAINT "branch_permission_entries_principal_check" CHECK (("user_id" IS NOT NULL) <> ("group_id" IS NOT NULL)),
   CONSTRAINT "branch_permission_entries_tenant_config_fk" FOREIGN KEY ("tenant_id","config_id") REFERENCES "branch_permission_configs"("tenant_id","config_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
   CONSTRAINT "branch_permission_entries_tenant_user_fk" FOREIGN KEY ("tenant_id","user_id") REFERENCES "users"("tenant_id","user_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
   CONSTRAINT "branch_permission_entries_tenant_group_fk" FOREIGN KEY ("tenant_id","group_id") REFERENCES "groups"("tenant_id","group_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE
@@ -175,7 +175,7 @@ CREATE TABLE "branch_session_sharing_grants" (
   "tenant_id" text DEFAULT 'default' NOT NULL, "grant_id" varchar(36) PRIMARY KEY NOT NULL,
   "config_id" varchar(36) NOT NULL, "session_owner_user_id" varchar(36) NOT NULL,
   "user_id" varchar(36), "group_id" varchar(36), "created_at" timestamp with time zone NOT NULL,
-  CHECK (("user_id" IS NOT NULL) <> ("group_id" IS NOT NULL)),
+  CONSTRAINT "branch_session_sharing_grants_principal_check" CHECK (("user_id" IS NOT NULL) <> ("group_id" IS NOT NULL)),
   CONSTRAINT "branch_session_sharing_grants_tenant_rule_fk" FOREIGN KEY ("tenant_id","config_id","session_owner_user_id") REFERENCES "branch_session_sharing_rules"("tenant_id","config_id","session_owner_user_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
   CONSTRAINT "branch_session_sharing_grants_tenant_user_fk" FOREIGN KEY ("tenant_id","user_id") REFERENCES "users"("tenant_id","user_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE,
   CONSTRAINT "branch_session_sharing_grants_tenant_group_fk" FOREIGN KEY ("tenant_id","group_id") REFERENCES "groups"("tenant_id","group_id") ON DELETE CASCADE DEFERRABLE INITIALLY IMMEDIATE

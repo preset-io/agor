@@ -575,21 +575,19 @@ export async function initializeDatabase(db: Database): Promise<void> {
 /**
  * Seed initial data (default board only).
  *
- * The caller may pass `createdBy` to stamp the default board with a real
- * user_id. When omitted, the board is stamped with `LEGACY_ANONYMOUS_OWNER_ID`
- * — a sentinel that the first-run admin bootstrap re-attributes to a real
- * admin on the next daemon start.
+ * The caller must provide the real User that becomes the immutable primary
+ * owner. Fresh-install setup therefore creates/projects the first User before
+ * seeding the default Board.
  *
  * Admin users are NOT created here. They are created either by `agor init`
  * (interactive) or by `bootstrapFirstRunAdmin` on first daemon start (default
  * admin with generated password).
  */
-export async function seedInitialData(db: Database, createdBy?: string): Promise<void> {
+export async function seedInitialData(db: Database, createdBy: string): Promise<void> {
   try {
     const { generateId } = await import('../lib/ids');
-    const { LEGACY_ANONYMOUS_OWNER_ID } = await import('./first-run-bootstrap');
     const now = new Date();
-    const owner = createdBy ?? LEGACY_ANONYMOUS_OWNER_ID;
+    const owner = createdBy;
 
     // Insert atomically instead of using a read-then-write check. Multiple HA
     // daemons can reach first-run seeding together, and the unique tenant/slug

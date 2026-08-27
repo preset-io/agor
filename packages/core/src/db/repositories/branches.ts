@@ -241,6 +241,15 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       const row = await runDatabaseTransaction(
         this.db,
         async (tx) => {
+          const owner = await select(tx, { user_id: users.user_id })
+            .from(users)
+            .where(eq(users.user_id, insertData.primary_owner_user_id))
+            .one();
+          if (!owner) {
+            throw new RepositoryError(
+              `Cannot create Branch: primary owner ${insertData.primary_owner_user_id} does not exist in this tenant`
+            );
+          }
           const created = await insert(tx, branches).values(insertData).returning().one();
           if (insertData.permission_binding === 'override') {
             await new CapabilityPolicyRepository(tx).initializeBranchOverrideInTransaction(

@@ -308,4 +308,26 @@ describe('capability policy services', () => {
       service.patch(null, { personal_session_sharing_enabled: false }, params(value.admin, 'admin'))
     ).resolves.toEqual({ personal_session_sharing_enabled: false });
   });
+
+  dbTest('rejects stale global-admin claims after the tenant fence', async ({ db }) => {
+    const value = await fixture(db);
+    const app = feathers();
+    setupCapabilityPolicyServices(app, db as never);
+    const policyService = app.service('boards/:id/permissions');
+    const staleAdminParams = {
+      route: { id: value.boardId },
+      user: { user_id: value.viewer, role: 'admin' },
+    } as never;
+    const policy = (await policyService.find(staleAdminParams)) as BoardCapabilityPolicies;
+    policy.board_access.entries = [];
+
+    await expect(policyService.patch(null, policy, staleAdminParams)).rejects.toMatchObject({
+      code: 403,
+    });
+    await expect(
+      app
+        .service('workspace-preferences')
+        .patch(null, { personal_session_sharing_enabled: false }, staleAdminParams)
+    ).rejects.toMatchObject({ code: 403 });
+  });
 });

@@ -40,7 +40,7 @@ async function createBoard(db: Database, overrides?: Partial<Board>): Promise<Bo
   return new BoardRepository(db).create({
     board_id: generateId(),
     name: overrides?.name ?? 'Board',
-    created_by: overrides?.created_by ?? generateId(),
+    created_by: overrides?.created_by ?? 'test-user',
     access_mode: overrides?.access_mode ?? 'shared',
   });
 }
@@ -68,7 +68,7 @@ async function createBranch(
     branch_unique_id: branchUniqueId++,
     path: `/tmp/${name}`,
     board_id: boardId,
-    created_by: generateId(),
+    created_by: 'test-user' as UUID,
     permission_source: overrides?.permission_source ?? 'override',
     others_can: overrides?.others_can ?? 'session',
     custom_context: { teammate: { kind: 'teammate', displayName: name } },

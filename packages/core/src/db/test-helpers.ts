@@ -26,8 +26,10 @@ import { test } from 'vitest';
 import { generateId } from '../lib/ids';
 import { capabilityPolicyPresetCapabilities } from '../types/capability-policy';
 import { createDatabase, type Database } from './client';
+import { insert } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import { CapabilityPolicyRepository } from './repositories/capability-policies';
+import { users } from './schema';
 
 /**
  * Test fixture providing fresh in-memory database for each test.
@@ -62,6 +64,19 @@ export const dbTest = test.extend<{ db: Database }>({
 
     // Initialize schema (creates all tables, indexes, etc.)
     await initializeDatabase(db);
+    // Most historical repository fixtures attribute rows to this stable test
+    // principal. Immutable-owner integrity now requires that attribution to be
+    // backed by a real User, matching production creation semantics.
+    await insert(db, users)
+      .values({
+        user_id: 'test-user',
+        created_at: new Date(),
+        email: 'test-user@agor.test',
+        password: 'not-a-login-secret',
+        role: 'member',
+        data: {},
+      })
+      .run();
 
     try {
       // Provide database to test

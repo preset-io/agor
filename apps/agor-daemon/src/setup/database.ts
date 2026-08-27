@@ -163,12 +163,6 @@ export async function initializeDatabase(
   await checkAndReportMigrations(db, dbPath);
 
   const runInitialDataSetup = async () => {
-    // Seed initial data (idempotent - only creates if missing). In static
-    // Postgres deployments, scope this to the configured tenant so changing
-    // multi_tenancy.static_tenant_id starts from a clean tenant-local slate.
-    console.log('🌱 Seeding initial data...');
-    await seedInitialData(scopedDb);
-
     // First-run admin bootstrap: create a default admin if no users exist in
     // the current tenant, and re-attribute any legacy `created_by='anonymous'`
     // rows to a real user. External-launch managed deployments skip the local
@@ -176,11 +170,16 @@ export async function initializeDatabase(
     // target instead.
     if (options.skipFirstRunAdminBootstrap) {
       console.log(
-        '🔐 Skipping local first-run admin bootstrap; external launch owns user identity.'
+        '🔐 Skipping local first-run admin/bootstrap data; external launch owns the first User and default Board.'
       );
     } else {
       const bootstrapResult = await runFirstRunAdminBootstrap(scopedDb);
       logFirstRunAdminBootstrap(bootstrapResult);
+      if (!bootstrapResult.admin) {
+        throw new Error('First-run setup could not resolve a primary owner for the default Board');
+      }
+      console.log('🌱 Seeding initial data...');
+      await seedInitialData(scopedDb, bootstrapResult.admin.user_id);
     }
   };
 

@@ -198,7 +198,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       updates
     );
     recordDispatchClaim(getDaemonMetrics(this.app), result);
-    if (result.outcome === 'claimed') {
+    if (result.outcome === 'claimed' || result.outcome === 'actor_missing') {
       emitServiceEvent(this.app, {
         path: 'tasks',
         event: 'patched',

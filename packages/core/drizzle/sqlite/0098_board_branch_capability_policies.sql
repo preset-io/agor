@@ -5,7 +5,7 @@ ALTER TABLE `boards` ADD COLUMN `primary_owner_user_id` text;
 ALTER TABLE `branches` ADD COLUMN `primary_owner_user_id` text;
 --> statement-breakpoint
 ALTER TABLE `branches` ADD COLUMN `permission_binding` text DEFAULT 'override' NOT NULL
-  CHECK (`permission_binding` IN ('inherit','override'));
+  CONSTRAINT `branches_permission_binding_check` CHECK (`permission_binding` IN ('inherit','override'));
 --> statement-breakpoint
 UPDATE `boards`
 SET `primary_owner_user_id` = CASE
@@ -54,8 +54,8 @@ UPDATE `branches` SET `permission_binding` = CASE
 CREATE TABLE `board_access_policies` (
   `board_id` text PRIMARY KEY NOT NULL REFERENCES `boards`(`board_id`) ON DELETE CASCADE,
   `schema_version` integer DEFAULT 1 NOT NULL,
-  `sharing_mode` text NOT NULL CHECK (`sharing_mode` IN ('private','shared')),
-  `others_role` text DEFAULT 'none' NOT NULL CHECK (`others_role` IN ('none','viewer','editor','manager')),
+  `sharing_mode` text NOT NULL CONSTRAINT `board_access_policies_sharing_mode_check` CHECK (`sharing_mode` IN ('private','shared')),
+  `others_role` text DEFAULT 'none' NOT NULL CONSTRAINT `board_access_policies_others_role_check` CHECK (`others_role` IN ('none','viewer','editor','manager')),
   `revision` integer DEFAULT 1 NOT NULL,
   `updated_by` text REFERENCES `users`(`user_id`) ON DELETE SET NULL,
   `created_at` integer NOT NULL,
@@ -69,10 +69,10 @@ CREATE TABLE `board_access_entries` (
   `board_id` text NOT NULL REFERENCES `board_access_policies`(`board_id`) ON DELETE CASCADE,
   `user_id` text REFERENCES `users`(`user_id`) ON DELETE CASCADE,
   `group_id` text REFERENCES `groups`(`group_id`) ON DELETE CASCADE,
-  `role` text NOT NULL CHECK (`role` IN ('none','viewer','editor','manager')),
+  `role` text NOT NULL CONSTRAINT `board_access_entries_role_check` CHECK (`role` IN ('none','viewer','editor','manager')),
   `created_at` integer NOT NULL,
   `updated_at` integer NOT NULL,
-  CHECK ((`user_id` IS NOT NULL) <> (`group_id` IS NOT NULL))
+  CONSTRAINT `board_access_entries_principal_check` CHECK ((`user_id` IS NOT NULL) <> (`group_id` IS NOT NULL))
 );
 --> statement-breakpoint
 CREATE INDEX `board_access_entries_board_idx` ON `board_access_entries` (`board_id`);
@@ -91,14 +91,14 @@ CREATE TABLE `branch_permission_configs` (
   `board_id` text REFERENCES `boards`(`board_id`) ON DELETE CASCADE,
   `branch_id` text REFERENCES `branches`(`branch_id`) ON DELETE CASCADE,
   `schema_version` integer DEFAULT 1 NOT NULL,
-  `sharing_mode` text NOT NULL CHECK (`sharing_mode` IN ('private','shared')),
-  `others_role` text DEFAULT 'none' NOT NULL CHECK (`others_role` IN ('none','viewer','collaborator','manager')),
-  `others_fs_access` text DEFAULT 'none' NOT NULL CHECK (`others_fs_access` IN ('none','read','write')),
+  `sharing_mode` text NOT NULL CONSTRAINT `branch_permission_configs_sharing_mode_check` CHECK (`sharing_mode` IN ('private','shared')),
+  `others_role` text DEFAULT 'none' NOT NULL CONSTRAINT `branch_permission_configs_others_role_check` CHECK (`others_role` IN ('none','viewer','collaborator','manager')),
+  `others_fs_access` text DEFAULT 'none' NOT NULL CONSTRAINT `branch_permission_configs_others_fs_access_check` CHECK (`others_fs_access` IN ('none','read','write')),
   `revision` integer DEFAULT 1 NOT NULL,
   `updated_by` text REFERENCES `users`(`user_id`) ON DELETE SET NULL,
   `created_at` integer NOT NULL,
   `updated_at` integer NOT NULL,
-  CHECK ((`board_id` IS NOT NULL) <> (`branch_id` IS NOT NULL))
+  CONSTRAINT `branch_permission_configs_target_check` CHECK ((`board_id` IS NOT NULL) <> (`branch_id` IS NOT NULL))
 );
 --> statement-breakpoint
 CREATE UNIQUE INDEX `branch_permission_configs_board_unique` ON `branch_permission_configs` (`board_id`);
@@ -112,11 +112,11 @@ CREATE TABLE `branch_permission_entries` (
   `config_id` text NOT NULL REFERENCES `branch_permission_configs`(`config_id`) ON DELETE CASCADE,
   `user_id` text REFERENCES `users`(`user_id`) ON DELETE CASCADE,
   `group_id` text REFERENCES `groups`(`group_id`) ON DELETE CASCADE,
-  `role` text NOT NULL CHECK (`role` IN ('none','viewer','collaborator','manager')),
-  `fs_access` text DEFAULT 'none' NOT NULL CHECK (`fs_access` IN ('none','read','write')),
+  `role` text NOT NULL CONSTRAINT `branch_permission_entries_role_check` CHECK (`role` IN ('none','viewer','collaborator','manager')),
+  `fs_access` text DEFAULT 'none' NOT NULL CONSTRAINT `branch_permission_entries_fs_access_check` CHECK (`fs_access` IN ('none','read','write')),
   `created_at` integer NOT NULL,
   `updated_at` integer NOT NULL,
-  CHECK ((`user_id` IS NOT NULL) <> (`group_id` IS NOT NULL))
+  CONSTRAINT `branch_permission_entries_principal_check` CHECK ((`user_id` IS NOT NULL) <> (`group_id` IS NOT NULL))
 );
 --> statement-breakpoint
 CREATE INDEX `branch_permission_entries_config_idx` ON `branch_permission_entries` (`config_id`);
@@ -147,7 +147,7 @@ CREATE TABLE `branch_session_sharing_grants` (
   `group_id` text REFERENCES `groups`(`group_id`) ON DELETE CASCADE,
   `created_at` integer NOT NULL,
   FOREIGN KEY (`config_id`,`session_owner_user_id`) REFERENCES `branch_session_sharing_rules`(`config_id`,`session_owner_user_id`) ON DELETE CASCADE,
-  CHECK ((`user_id` IS NOT NULL) <> (`group_id` IS NOT NULL))
+  CONSTRAINT `branch_session_sharing_grants_principal_check` CHECK ((`user_id` IS NOT NULL) <> (`group_id` IS NOT NULL))
 );
 --> statement-breakpoint
 CREATE INDEX `branch_session_sharing_grants_rule_idx` ON `branch_session_sharing_grants` (`config_id`,`session_owner_user_id`);
@@ -340,9 +340,21 @@ CREATE TRIGGER `boards_primary_owner_required` BEFORE INSERT ON `boards`
 WHEN NEW.`primary_owner_user_id` IS NULL
 BEGIN SELECT RAISE(ABORT, 'board primary owner is required'); END;
 --> statement-breakpoint
+CREATE TRIGGER `boards_primary_owner_exists` BEFORE INSERT ON `boards`
+WHEN NOT EXISTS (
+  SELECT 1 FROM `users` WHERE `user_id`=NEW.`primary_owner_user_id`
+)
+BEGIN SELECT RAISE(ABORT, 'board primary owner does not exist'); END;
+--> statement-breakpoint
 CREATE TRIGGER `branches_primary_owner_required` BEFORE INSERT ON `branches`
 WHEN NEW.`primary_owner_user_id` IS NULL
 BEGIN SELECT RAISE(ABORT, 'branch primary owner is required'); END;
+--> statement-breakpoint
+CREATE TRIGGER `branches_primary_owner_exists` BEFORE INSERT ON `branches`
+WHEN NOT EXISTS (
+  SELECT 1 FROM `users` WHERE `user_id`=NEW.`primary_owner_user_id`
+)
+BEGIN SELECT RAISE(ABORT, 'branch primary owner does not exist'); END;
 --> statement-breakpoint
 CREATE TRIGGER `users_protected_owner_restrict` BEFORE DELETE ON `users`
 WHEN EXISTS (SELECT 1 FROM `boards` WHERE `primary_owner_user_id`=OLD.`user_id`)

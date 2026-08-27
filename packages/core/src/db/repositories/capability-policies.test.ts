@@ -209,6 +209,41 @@ describe('CapabilityPolicyRepository', () => {
     }
   );
 
+  dbTest('denies permissive Others access to a nonexistent principal', async ({ db }) => {
+    const value = await fixture(db);
+    const policies = new CapabilityPolicyRepository(db);
+    const boardPolicy = await policies.getBoardPolicies(value.boardId);
+    boardPolicy.board_access.sharing_mode = 'shared';
+    boardPolicy.board_access.others = {
+      preset: 'viewer',
+      capabilities: capabilityPolicyPresetCapabilities('board_access', 'viewer') ?? [],
+      fs_access: 'none',
+    };
+    boardPolicy.branch_template.access.sharing_mode = 'shared';
+    boardPolicy.branch_template.access.others = {
+      preset: 'collaborator',
+      capabilities:
+        capabilityPolicyPresetCapabilities('branch_access', 'collaborator', 'write') ?? [],
+      fs_access: 'write',
+    };
+    await policies.replaceBoardPolicies(value.boardId, boardPolicy, value.owner);
+    const branchPolicy = await policies.getBranchPolicy(value.branchId);
+    branchPolicy.override_config!.access = structuredClone(boardPolicy.branch_template.access);
+    await policies.replaceBranchPolicy(value.branchId, branchPolicy, value.owner);
+
+    const missing = generateId() as UserID;
+    await expect(policies.resolveBoardAccess(value.boardId, missing)).resolves.toMatchObject({
+      capabilities: [],
+      fs_access: 'none',
+      is_primary_owner: false,
+    });
+    await expect(policies.resolveBranchAccess(value.branchId, missing)).resolves.toMatchObject({
+      capabilities: [],
+      fs_access: 'none',
+      is_primary_owner: false,
+    });
+  });
+
   dbTest(
     'materializes board realtime viewers with direct/group/Others precedence',
     async ({ db }) => {

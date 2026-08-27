@@ -515,11 +515,11 @@ export function resolveCapabilityPolicyAccess(input: {
   policy: CapabilityPolicyDraft;
   primary_owner_user_id: UserID;
   user_id: UserID;
-  user_status?: CapabilityPolicyPrincipalStatus;
+  user_status: CapabilityPolicyPrincipalStatus;
   active_group_ids?: readonly GroupID[];
 }): EffectiveCapabilityPolicyAccess {
   const { policy, primary_owner_user_id: ownerId, user_id: userId } = input;
-  if ((input.user_status ?? 'active') !== 'active') {
+  if (input.user_status !== 'active') {
     return {
       capabilities: [],
       fs_access: 'none',

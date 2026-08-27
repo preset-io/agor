@@ -46,7 +46,7 @@ async function seedMappedDiscord(db: Database, metadata: Record<string, unknown>
     ref: 'refs/heads/main',
     branch_unique_id: 1,
     path: '/tmp/delivery-test-repo/main',
-    created_by: generateId() as UUID,
+    created_by: 'test-user' as UUID,
   });
   const session = await new SessionRepository(db).create({
     session_id: generateId() as SessionID,

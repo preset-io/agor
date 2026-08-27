@@ -93,6 +93,7 @@ export const BoardCapabilityPolicyModalEditor: React.FC<{
         policy: value.board_access,
         primary_owner_user_id: value.primary_owner_user_id,
         user_id: currentUserId,
+        user_status: 'active',
         active_group_ids: activeGroupIds,
       }),
     [value.board_access, value.primary_owner_user_id, currentUserId, activeGroupIds]

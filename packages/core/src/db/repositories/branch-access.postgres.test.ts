@@ -202,7 +202,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           branch_unique_id: unique++,
           created_by: ownerId,
           board_id: oldPrimaryBoard.board_id,
-          permission_source: 'board',
+          permission_source: 'override',
           custom_context: {
             teammate: { kind: 'teammate', displayName: 'Moved primary' },
           },
