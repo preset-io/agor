@@ -32,12 +32,12 @@ export const groups = {
   'ui-1': {
     packages: ['agor-ui'],
     filterArgs: ['--filter=agor-ui...'],
-    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=1/2', '--retry=2']],
+    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=1/2']],
   },
   'ui-2': {
     packages: ['agor-ui'],
     filterArgs: ['--filter=agor-ui...'],
-    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=2/2', '--retry=2']],
+    run: [['--filter', 'agor-ui', 'exec', 'vitest', 'run', '--shard=2/2']],
   },
   executor: {
     packages: ['@agor/executor'],
@@ -97,35 +97,78 @@ for (const workspaceRoot of ['apps', 'packages']) {
   }
 }
 
-const listed = new Set(Object.values(groups).flatMap((group) => group.packages));
+const assignmentCounts = new Map();
+for (const group of Object.values(groups)) {
+  for (const packageName of group.packages) {
+    assignmentCounts.set(packageName, (assignmentCounts.get(packageName) ?? 0) + 1);
+  }
+}
+const listed = new Set(assignmentCounts.keys());
 const missing = [...testBearingPackages.keys()].filter((name) => !listed.has(name));
 const stale = [...listed].filter((name) => !testBearingPackages.has(name));
-if (missing.length || stale.length) {
+const duplicateAssignments = [...assignmentCounts.entries()]
+  .filter(([name, count]) => count > 1 && name !== 'agor-ui')
+  .map(([name, count]) => `${name} (${count} groups)`);
+const uiAssignmentCount = assignmentCounts.get('agor-ui') ?? 0;
+if (uiAssignmentCount !== 2)
+  duplicateAssignments.push(`agor-ui (${uiAssignmentCount} groups; expected 2 shards)`);
+if (missing.length || stale.length || duplicateAssignments.length) {
   if (missing.length)
     console.error(`Test-bearing workspaces missing from CI matrix: ${missing.join(', ')}`);
   if (stale.length)
     console.error(`CI matrix references workspaces without a test script: ${stale.join(', ')}`);
+  if (duplicateAssignments.length)
+    console.error(
+      `Unexpected duplicate CI workspace assignments: ${duplicateAssignments.join(', ')}`
+    );
   process.exit(1);
 }
 
-const browserTests = [];
-for (const { directory } of testBearingPackages.values()) {
-  const result = spawnSync(
-    'find',
-    [directory, '-type', 'f', '-name', '*.browser.test.*', '-print'],
-    {
-      encoding: 'utf8',
-    }
-  );
-  if (result.status !== 0) throw new Error(result.stderr);
-  browserTests.push(
-    ...result.stdout
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((file) => relative(repoRoot, file))
-  );
+const workflowText = await readFile(join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
+const matrixMatch = workflowText.match(/^\s*group:\s*\[([^\]]+)\]/m);
+if (!matrixMatch) throw new Error('CI workflow unit matrix is missing its group list');
+const workflowGroups = matrixMatch[1]
+  .split(',')
+  .map((name) => name.trim().replace(/^['"]|['"]$/g, ''))
+  .filter(Boolean);
+const runnableGroups = Object.entries(groups)
+  .filter(([, group]) => group.run)
+  .map(([name]) => name);
+const duplicateWorkflowGroups = workflowGroups.filter(
+  (name, index) => workflowGroups.indexOf(name) !== index
+);
+const missingWorkflowGroups = runnableGroups.filter((name) => !workflowGroups.includes(name));
+const staleWorkflowGroups = workflowGroups.filter((name) => !runnableGroups.includes(name));
+if (duplicateWorkflowGroups.length || missingWorkflowGroups.length || staleWorkflowGroups.length) {
+  if (duplicateWorkflowGroups.length)
+    console.error(`Duplicate groups in ci.yml unit matrix: ${duplicateWorkflowGroups.join(', ')}`);
+  if (missingWorkflowGroups.length)
+    console.error(
+      `Runnable groups missing from ci.yml unit matrix: ${missingWorkflowGroups.join(', ')}`
+    );
+  if (staleWorkflowGroups.length)
+    console.error(
+      `ci.yml unit matrix references unknown groups: ${staleWorkflowGroups.join(', ')}`
+    );
+  process.exit(1);
 }
+for (const [name, group] of Object.entries(groups)) {
+  if (!group.run && group.lane !== 'build')
+    throw new Error(`CI group ${name} must define runnable commands or a recognized owner lane`);
+}
+if (!workflowText.includes('@agor/executor test:runtime'))
+  throw new Error('Build-owned executor checks are missing from ci.yml');
+
+const browserTests = [];
+async function collectBrowserTests(directory) {
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    const file = join(directory, entry.name);
+    if (entry.isDirectory()) await collectBrowserTests(file);
+    else if (entry.isFile() && entry.name.includes('.browser.test.'))
+      browserTests.push(relative(repoRoot, file));
+  }
+}
+for (const { directory } of testBearingPackages.values()) await collectBrowserTests(directory);
 if (browserTests.some((file) => !file.startsWith('apps/agor-ui/'))) {
   throw new Error(
     `Browser tests must remain owned by the agor-ui browser lane: ${browserTests.join(', ')}`
@@ -162,14 +205,7 @@ if (command === 'install') {
 if (command === 'run') {
   if (!group.run) throw new Error(`CI test group ${groupName} is owned by the ${group.lane} lane`);
   for (const args of group.run) {
-    // Keep the broad daemon suite's normal skip behavior. Only the focused
-    // adapter command is service-gated; setting the URL for both would run the
-    // same integration file twice and make Redis coverage harder to diagnose.
-    const env =
-      group.redis && args.includes('socketio-ha-tenant-isolation.integration.test.ts')
-        ? { ...process.env, AGOR_TEST_REDIS_URL: 'redis://127.0.0.1:6379' }
-        : process.env;
-    const result = spawnSync('pnpm', args, { cwd: repoRoot, env, stdio: 'inherit' });
+    const result = spawnSync('pnpm', args, { cwd: repoRoot, env: process.env, stdio: 'inherit' });
     if (result.status !== 0) process.exit(result.status ?? 1);
   }
   process.exit(0);

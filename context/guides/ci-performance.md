@@ -77,11 +77,13 @@ minutes), plus a short gate queue.
 
 ## Coverage and failure UX
 
-`scripts/ci-test-matrix.mjs` is the single package-group manifest. The lint lane
-runs `check:ci-test-coverage` before expensive work; it fails if any workspace
-with a `test` script is not represented. The ten test-bearing workspaces are
-covered exactly once (UI's two entries are file shards), and the two
-`.browser.test.tsx` files are intentionally owned by the browser lane. The
+`scripts/ci-test-matrix.mjs` is the package-group manifest and validates the
+workflow's YAML matrix against its runnable groups. The lint lane runs
+`check:ci-test-coverage` before expensive work; it fails if any workspace with
+a `test` script is missing, duplicated (except the two intentional UI shards),
+or stale, and it verifies build-owned executor checks. The ten test-bearing
+workspaces are covered exactly once (UI's two entries are file shards), and the
+two `.browser.test.tsx` files are intentionally owned by the browser lane. The
 compiled executor tests/runtime smoke run once in the build lane. The stable
 job name remains `Lint, typecheck, build, test`, so the existing required
 context `CI / Lint, typecheck, build, test (pull_request)` needs no branch
@@ -100,6 +102,6 @@ shard 2 340 s (critical path), daemon unit 253 s, core 196 s, CLI 155 s,
 support 87 s, browser 80 s, Redis HA 93 s, and lint 88 s. The gate itself took
 3 s. The run used warm setup-node pnpm caches (15–31 s setup; 15–46 s install
 or filtered install), while the build lane still had no reusable Turbo remote
-cache. A flaky UI popover assertion reproduced once on an earlier attempt and
-passed with Vitest's two-retry policy; failures still fail the shard after
-retries and retain the assertion output.
+cache. An earlier exploratory run exposed a flaky UI popover assertion; the
+final observed runs require a clean pass with no CI retry policy, so a
+recurrence remains visible and fails the required gate.
