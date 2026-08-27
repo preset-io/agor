@@ -294,25 +294,29 @@ restart the fleet.
 When the daemon runs under a Datadog APM tracer — typically loaded process-wide
 by [single-step instrumentation](https://docs.datadoghq.com/tracing/trace_collection/automatic_instrumentation/single-step-apm/)
 via `NODE_OPTIONS` — HTTP, Express, Postgres, and Redis are auto-instrumented.
-FeathersJS is not: dd-trace ships no Feathers plugin, so service-method calls
-that ride socket.io are invisible to APM. This setting adds an app-level hook
-that wraps each service method in a `feathers.request` span whose **resource**
-name is `<service>.<method>` (for example `sessions.find`), nested under the
-active HTTP span so child Postgres queries appear beneath the method that
-issued them:
+FeathersJS and postgres.js are not: dd-trace ships no native plugins for
+Feathers service methods or the postgres.js driver used by Drizzle. This setting
+controls both custom layers. It adds an app-level hook that wraps each service
+method in a `feathers.request` span whose **resource** name is
+`<service>.<method>` (for example `sessions.find`), and enables the Drizzle
+`postgres.query` shim. Service spans nest under the active HTTP span, with
+their child Postgres queries beneath the method that issued them:
 
 ```yaml
 metrics:
   apm:
-    trace_services: off # off | entrypoint | full
+    trace_services: off # off | entrypoint | full; controls Feathers + PostgreSQL tracing
 ```
 
-- **`off`** (default) — the hook is not registered; zero overhead.
+- **`off`** (default) — neither custom tracing layer is registered; zero custom
+  tracing overhead, including no PostgreSQL shim patch or tracer resolution.
 - **`entrypoint`** — one span per top-level request; nested service-to-service
-  fan-out is suppressed. Cheap and bounded — safe to leave on in production.
+  fan-out is suppressed. PostgreSQL query spans are also enabled. Cheap and
+  bounded — safe to leave on in production.
 - **`full`** — a span per service-method invocation including nested calls, so
   the full fan-out and its child queries are visible. Highest span volume (and
-  ingestion cost) — intended for active investigation, not steady state.
+  ingestion cost); PostgreSQL query spans are also enabled. Intended for active
+  investigation, not steady state.
 
 `AGOR_APM_TRACE_SERVICES` (`off`, `entrypoint`, or `full`) overrides the YAML
 value so depth can be changed without editing config. Like all metrics

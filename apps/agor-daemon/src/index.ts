@@ -761,6 +761,7 @@ async function startDaemonWithOwnedMetrics(
     pool: effectiveConfig.database?.postgresql?.pool?.max
       ? { max: effectiveConfig.database.postgresql.pool.max }
       : undefined,
+    traceServices: effectiveConfig.metrics?.apm?.trace_services ?? 'off',
   });
   configureUploadStagingStoreFromConfig(effectiveConfig, undefined, db);
 

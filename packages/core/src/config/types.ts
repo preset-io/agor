@@ -1205,15 +1205,19 @@ export type ApmTraceServiceDepth = (typeof APM_TRACE_SERVICE_DEPTHS)[number];
  *
  * The tracer itself is loaded process-wide (single-step / `NODE_OPTIONS`
  * injection), which already auto-instruments HTTP, Express, Postgres, and
- * Redis. These settings only govern the FeathersJS service-method layer, which
- * dd-trace has no native plugin for — the calls that ride socket.io are
- * otherwise invisible to APM.
+ * Redis. These settings govern Agor's custom tracing layers: the FeathersJS
+ * service-method layer and the postgres.js Drizzle query shim, both of which
+ * dd-trace has no native plugin for. `off` disables both custom layers.
  */
 export interface AgorApmSettings {
   /**
-   * Depth of FeathersJS service-method span instrumentation. Defaults to `off`.
+   * Depth of custom Agor tracing. Defaults to `off`.
    *
-   * - `off`: the Feathers tracing hook is not registered at all — zero overhead.
+   * PostgreSQL query tracing is enabled for either `entrypoint` or `full` and
+   * disabled for `off`. The depth only affects FeathersJS service spans.
+   *
+   * - `off`: neither custom tracing layer is registered — zero custom tracing
+   *   overhead (including no database shim patch and no tracer resolution).
    * - `entrypoint`: one span per top-level request; nested service-to-service
    *   fan-out is suppressed (mirrors the StatsD metrics hook). Cheap and
    *   bounded — safe to leave on in production.
