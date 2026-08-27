@@ -138,8 +138,6 @@ async function addSession(db: Database, tenantId: string): Promise<void> {
 async function seedNonPortableExecutorAuthority(db: Database, tenantId: string): Promise<void> {
   const fingerprint = generateId().replaceAll('-', '').repeat(2);
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    const user = (await new UsersRepository(scoped).findAll())[0];
-    if (!user) throw new Error('expected a seeded tenant user');
     await insert(scoped, pg.executorSessionTokenAuthorities)
       .values({
         tenant_id: tenantId,
@@ -147,7 +145,7 @@ async function seedNonPortableExecutorAuthority(db: Database, tenantId: string):
         token_type: 'executor-session',
         purpose: 'executor-task',
         session_id: 'tenant-portability-non-portable-authority',
-        user_id: user.user_id,
+        user_id: generateId(),
         created_at: new Date(),
         expires_at: new Date(Date.now() + 60_000),
         max_uses: -1,
@@ -212,13 +210,11 @@ async function seedNonPortableOAuthGrant(
 async function seedNonPortableGitHubInstallState(db: Database, tenantId: string): Promise<void> {
   const stateHash = generateId().replaceAll('-', '').repeat(2);
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
-    const user = (await new UsersRepository(scoped).findAll())[0];
-    if (!user) throw new Error('expected a seeded tenant user');
     await insert(scoped, pg.githubInstallStates)
       .values({
         tenant_id: tenantId,
         state_hash: stateHash,
-        user_id: user.user_id,
+        user_id: generateId(),
         intent: 'github-app-install',
         created_at: new Date(),
         expires_at: new Date(Date.now() + 60_000),
