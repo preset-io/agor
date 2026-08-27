@@ -306,7 +306,7 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
   }, [client, boardId, enabled, globalPresence, presenceMinUpdateIntervalMs]);
 
   return useMemo(() => {
-    const userById = new Map(users.map((user) => [user.user_id, user]));
+    const userById = new Map<string, User>(users.map((user) => [user.user_id, user]));
     const activeByUser = new Map<
       string,
       { lastSeen: number; boardId?: BoardID; boardTimestamp?: number; x?: number; y?: number }
