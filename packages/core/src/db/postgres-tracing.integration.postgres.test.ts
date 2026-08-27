@@ -37,12 +37,24 @@ describe.skipIf(!url)('postgres-tracing against real Drizzle postgres.js', () =>
     expect(instrumentDrizzlePostgresForTracing(db, { tracer })).toBe(true);
   });
 
-  it('emits a postgres.query span for a real query without breaking it', async () => {
+  it('emits a postgres.query span for a real db.execute() without breaking it', async () => {
     calls.length = 0;
     const result = await db.execute(sql`select 42 as answer`);
     const rows = Array.isArray(result) ? result : ((result as { rows?: unknown[] }).rows ?? []);
     expect(Number((rows[0] as { answer?: unknown })?.answer)).toBe(42);
     expect(calls.some((c) => (c.resource ?? '').includes('select 42'))).toBe(true);
+  });
+
+  it('emits a span for a real query-builder select (not just db.execute)', async () => {
+    calls.length = 0;
+    // A builder query with no app table needed — exercises the query-builder
+    // path through `prepareQuery`, so a future Drizzle that reroutes builders
+    // away from the chokepoint (while keeping db.execute) is caught here.
+    const rows = await db
+      .select({ answer: sql<number>`13`.as('answer') })
+      .from(sql`(select 1) as t`);
+    expect(Number((rows[0] as { answer?: unknown })?.answer)).toBe(13);
+    expect(calls.some((c) => (c.resource ?? '').includes('13'))).toBe(true);
   });
 
   // NOTE: transaction-sub-session coverage (the prototype patch reaching the

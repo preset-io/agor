@@ -47,6 +47,11 @@ const PREPARED_EXECUTE_METHODS = ['execute', 'all', 'values'] as const;
  * Prototypes we've already patched, tracked out-of-band so we never mutate the
  * Drizzle session object itself (a symbol mark could partially apply on a
  * sealed prototype, leaving it patched-but-unmarked).
+ *
+ * Idempotency is keyed to the session prototype and captures the FIRST tracer
+ * for the life of the process. Agor has one process-wide Datadog tracer, so a
+ * later call with a different tracer (only reachable via the test-only `tracer`
+ * option) intentionally no-ops.
  */
 const patchedSessionTargets = new WeakSet<object>();
 
