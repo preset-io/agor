@@ -5419,22 +5419,29 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   // Global app hooks + error handler
   // ============================================================================
 
+  // Health probes already have HTTP metrics/spans; auth strategies preserve the
+  // provider for the serialized-entity lookup even though it is framework work.
+  // Both instrumentation hooks skip the same set for a consistent boundary.
+  const feathersInstrumentationOptions = {
+    excludedServicePaths: ['health'],
+    isInternalCall: (context: HookContext) => isAuthenticationUserLookup(context.params),
+  };
+
+  // Outermost: open the APM span first so it encloses the metrics timing and
+  // every child (Postgres, Redis) span. Registered only when enabled, so
+  // metrics.apm.trace_services=off adds nothing to the hook chain.
+  const apmTraceDepth = config.metrics?.apm?.trace_services ?? 'off';
+  const aroundAll =
+    apmTraceDepth === 'off'
+      ? [createFeathersMetricsHook(getDaemonMetrics(app), feathersInstrumentationOptions)]
+      : [
+          createFeathersTracingHook(apmTraceDepth, feathersInstrumentationOptions),
+          createFeathersMetricsHook(getDaemonMetrics(app), feathersInstrumentationOptions),
+        ];
+
   app.hooks({
     around: {
-      all: [
-        // Outermost: open the APM span first so it encloses the metrics timing
-        // and every child (Postgres, Redis) span. No-op unless
-        // metrics.apm.trace_services is enabled and dd-trace is loaded.
-        createFeathersTracingHook(config.metrics?.apm?.trace_services ?? 'off'),
-        createFeathersMetricsHook(getDaemonMetrics(app), {
-          // Health probes already have HTTP metrics; avoid doubling their
-          // high-frequency signal at the Feathers boundary.
-          excludedServicePaths: ['health'],
-          // JWT/local strategies preserve provider for the serialized entity
-          // lookup even though it is authentication framework work.
-          isInternalCall: (context) => isAuthenticationUserLookup(context.params),
-        }),
-      ],
+      all: aroundAll,
     },
     before: {
       all: [enforcePasswordChange],

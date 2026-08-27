@@ -1196,6 +1196,10 @@ export interface AgorStatsDSettings {
   global_tags?: Record<string, string>;
 }
 
+/** Valid depths for FeathersJS service-method tracing, cheapest first. */
+export const APM_TRACE_SERVICE_DEPTHS = ['off', 'entrypoint', 'full'] as const;
+export type ApmTraceServiceDepth = (typeof APM_TRACE_SERVICE_DEPTHS)[number];
+
 /**
  * Datadog APM (dd-trace) tracing knobs for the daemon.
  *
@@ -1205,10 +1209,6 @@ export interface AgorStatsDSettings {
  * dd-trace has no native plugin for — the calls that ride socket.io are
  * otherwise invisible to APM.
  */
-/** Valid depths for FeathersJS service-method tracing, cheapest first. */
-export const APM_TRACE_SERVICE_DEPTHS = ['off', 'entrypoint', 'full'] as const;
-export type ApmTraceServiceDepth = (typeof APM_TRACE_SERVICE_DEPTHS)[number];
-
 export interface AgorApmSettings {
   /**
    * Depth of FeathersJS service-method span instrumentation. Defaults to `off`.
