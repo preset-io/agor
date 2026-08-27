@@ -10,10 +10,10 @@ import type {
 import {
   BOARD_POLICY_CAPABILITIES,
   BRANCH_POLICY_CAPABILITIES,
+  capabilityPolicyPresetCapabilities,
   normalizeCapabilityPolicyCapabilities,
   removeCapabilityPolicyCapability,
 } from '@agor/core/types';
-import { capabilityPolicyPresetCapabilities } from '@agor-live/client';
 
 /**
  * Product-facing role implication. The authorization contract stays
