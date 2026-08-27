@@ -20,6 +20,7 @@ import {
   coordinateInMemorySQLiteClient,
   coordinateInMemorySQLiteDatabase,
 } from './in-memory-sqlite-coordinator';
+import { instrumentDrizzlePostgresForTracing } from './postgres-tracing';
 import { sanitizeDbError } from './sanitize-error';
 import * as postgresSchema from './schema.postgres';
 // Import both schemas explicitly
@@ -273,7 +274,13 @@ function createPostgresDatabase(config: DbConfig): PostgresJsDatabase<typeof pos
     }
     const sql = postgres(config.url, options);
 
-    return drizzlePostgres(sql, { schema: postgresSchema });
+    const db = drizzlePostgres(sql, { schema: postgresSchema });
+    // Emit `postgres.query` APM spans for every query. dd-trace has no
+    // postgres.js plugin, so without this the daemon's DB layer is invisible in
+    // Datadog. Best-effort and additive — a no-op when dd-trace isn't loaded and
+    // it can never break a query (see postgres-tracing.ts).
+    instrumentDrizzlePostgresForTracing(db);
+    return db;
   } catch (error) {
     throw new DatabaseConnectionError(
       `Failed to create PostgreSQL client: ${error instanceof Error ? error.message : String(error)}`,
