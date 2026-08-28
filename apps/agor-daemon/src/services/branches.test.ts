@@ -731,6 +731,8 @@ describe('BranchesService environment start async behavior', () => {
       .mockResolvedValue({
         env: { ACTOR_CANARY: 'present' },
         delegatedHomeKey: undefined,
+        executionUserId: actorId,
+        branchFsAccess: 'read',
       } as never);
     mockedRequestExecutor.mockResolvedValue({
       success: true,
@@ -739,7 +741,7 @@ describe('BranchesService environment start async behavior', () => {
 
     await service.getLogs(branch.branch_id, params);
 
-    expect(resolveContext).toHaveBeenCalledWith(branch, actorId, params);
+    expect(resolveContext).toHaveBeenCalledWith(branch, params, 'read');
     expect(app.sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
       'environment-logs',
       actorId,

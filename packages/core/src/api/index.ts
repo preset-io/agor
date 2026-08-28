@@ -83,7 +83,6 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
-import type { UserGitEnvironment } from '@agor/git/pure';
 import authentication, { type AuthenticationClient } from '@feathersjs/authentication-client';
 import type { Application, Paginated, Params } from '@feathersjs/feathers';
 import { feathers } from '@feathersjs/feathers';
@@ -303,8 +302,24 @@ export interface ServiceTypes {
   'executor-git-environment': ExecutorGitEnvironment;
 }
 
-/** Bounded plaintext capability returned only to authenticated Git executors. */
-export type ExecutorGitEnvironment = UserGitEnvironment;
+/**
+ * Bounded plaintext capability returned only to authenticated Git executors.
+ *
+ * Keep this public client DTO structural: `@agor/git` is a private workspace
+ * package and must not appear in the packed `@agor-live/client` declaration
+ * graph. A daemon-side type-equivalence test keeps it aligned with the
+ * authoritative Git transport allowlist.
+ */
+export interface ExecutorGitEnvironment {
+  GITHUB_TOKEN?: string;
+  GH_TOKEN?: string;
+  HTTP_PROXY?: string;
+  HTTPS_PROXY?: string;
+  NO_PROXY?: string;
+  ALL_PROXY?: string;
+  SSL_CERT_FILE?: string;
+  SSL_CERT_DIR?: string;
+}
 
 /**
  * Feathers service with find method properly typed and event emitter methods
