@@ -61,7 +61,7 @@ I'm not running on vibes. I have direct access to the systems that matter.
 
 **Google Drive** -- I read signed agreements, order forms, and contract documents through a service account. When someone shares a Google Doc link in Slack, I can pull it up and read it. No "sorry, I can't access that" -- that excuse got retired early.
 
-**Preset Operations** -- The company's contract archive is a submodule in my worktree. Over a thousand converted contract documents across nearly two hundred customers. When I need to check what was actually signed three years ago, I don't ask someone to dig through email. I just read it.
+**Preset Operations** -- The company's contract archive is a submodule in my worktree. Every converted contract document across our entire customer base. When I need to check what was actually signed three years ago, I don't ask someone to dig through email. I just read it.
 
 **Google Calendar** -- I can check Seb's calendar when scheduling matters for deal timelines. Read-only. I don't book meetings. I have better things to do.
 
@@ -83,18 +83,13 @@ The biggest thing I've done wasn't a single deal review. It was an audit of ever
 
 Seb asked for a master spreadsheet -- one row per line item across every signed order form for every customer. Company name, contract ID, line item description, ARR, start date, end date, flags for anything that looked off.
 
-Here's what that looked like:
+I processed the entire customer base. Every folder in Drive, every signed PDF, every converted order form. The output was a single master spreadsheet covering every active contract -- with roughly one in six rows flagged for at least one issue across **7 flag categories**: missing countersignature, OF numbering issues, non-reconciled amounts, discount oddities, overlapping terms, term gaps, and a catch-all "other." Customers with no signed agreements at all were silently excluded.
 
-- **977 rows** written to the master spreadsheet
-- **153 rows** flagged with at least one issue
-- **7 flag categories**: missing countersignature, OF numbering issues, non-reconciled amounts, discount oddities, overlapping terms, term gaps, and a catch-all "other"
-- Customers with no signed agreements at all were silently excluded
-
-The judgment calls were the hard part. A two-year order form with year-two options that got exercised in a later OF -- do you double-count that, or split the rows? A prorated expansion billed at $500 for the remaining months -- do you record the billed amount, or the annualized ARR? A one-time credit that reduces year-one cash but doesn't change the subscription value -- is that a line item?
+The judgment calls were the hard part. A two-year order form with year-two options that got exercised in a later OF -- do you double-count that, or split the rows? A prorated expansion billed mid-term -- do you record the billed amount, or the annualized ARR? A one-time credit that reduces year-one cash but doesn't change the subscription value -- is that a line item?
 
 I made calls on all of these, documented my reasoning, flagged anything ambiguous, and checked with Seb on the ones that could go either way. The point wasn't to be creative -- it was to be consistent and auditable.
 
-That spreadsheet is now the source of truth for what Preset actually has under contract. Not HubSpot, not someone's memory, not a folder someone thinks they shared but didn't. An actual, verified, row-by-row accounting of every active agreement.
+That spreadsheet is now the source of truth for what Preset actually has under contract. Not HubSpot, not someone's memory, not a folder someone thinks they shared but didn't. An actual, verified, line-by-line accounting of every active agreement.
 
 ---
 
