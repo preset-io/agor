@@ -12,7 +12,10 @@ class BranchServiceMock extends EventEmitter {
   get = vi.fn(async (branchId: string) =>
     makeBranch({ branch_id: branchId, environment_instance: { status: 'running' } })
   );
-  checkHealth = vi.fn(async () => undefined);
+  checkHealth = vi.fn(
+    async (branchId: string): Promise<Branch | undefined> =>
+      makeBranch({ branch_id: branchId, environment_instance: { status: 'running' } })
+  );
 }
 
 function makeBranch(overrides: Partial<Branch> & { tenant_id?: string } = {}): Branch {
@@ -178,10 +181,7 @@ describe('HealthMonitor tenant context', () => {
 
     await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
 
-    await vi.waitFor(() => expect(branches.get).toHaveBeenCalled());
-    expect(branches.get).toHaveBeenCalledWith('branch-tenant-a', {
-      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
-    });
+    expect(branches.get).not.toHaveBeenCalled();
     expect(branches.checkHealth).toHaveBeenCalledWith(
       'branch-tenant-a',
       { tenant: { tenant_id: 'tenant-a', source: 'auth_claim' } },
@@ -193,16 +193,13 @@ describe('HealthMonitor tenant context', () => {
   it('enters the branch tenant DB scope instead of inheriting stale timer scope', async () => {
     const branches = new BranchServiceMock();
     const ambientTenantIds: Array<string | undefined> = [];
-    branches.get.mockImplementation(async (branchId: string) => {
+    branches.checkHealth.mockImplementation(async (branchId: string) => {
       ambientTenantIds.push(getCurrentTenantId());
       return makeBranch({
         branch_id: branchId,
         tenant_id: 'tenant-a',
         environment_instance: { status: 'running' },
       });
-    });
-    branches.checkHealth.mockImplementation(async () => {
-      ambientTenantIds.push(getCurrentTenantId());
     });
 
     const monitor = new HealthMonitor(makeApp(branches) as never, {
@@ -224,7 +221,7 @@ describe('HealthMonitor tenant context', () => {
     await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
     await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(1));
 
-    expect(ambientTenantIds).toEqual(['tenant-a', 'tenant-a']);
+    expect(ambientTenantIds).toEqual(['tenant-a']);
     await monitor.cleanup();
   });
 
@@ -247,6 +244,51 @@ describe('HealthMonitor tenant context', () => {
 
     await vi.advanceTimersByTimeAsync(ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS * 2);
     await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledTimes(3));
+    expect(branches.get).not.toHaveBeenCalled();
+    await monitor.cleanup();
+  });
+
+  it('performs no Feathers branch point reads during an hour of steady polling', async () => {
+    const branches = new BranchServiceMock();
+    const monitor = new HealthMonitor(makeApp(branches) as never);
+
+    branches.emit(
+      'patched',
+      makeBranch({ branch_id: 'steady-branch', environment_instance: { status: 'running' } })
+    );
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+
+    // One immediate observation after the grace period plus 720 five-second
+    // interval observations. Before this fix the monitor also issued exactly
+    // 721 branches.get calls, each duplicating checkHealth's canonical load.
+    expect(branches.checkHealth).toHaveBeenCalledTimes(721);
+    expect(branches.get).not.toHaveBeenCalled();
+    await monitor.cleanup();
+  });
+
+  it('stops polling from the canonical checkHealth result when a lifecycle hint is missed', async () => {
+    const branches = new BranchServiceMock();
+    branches.checkHealth
+      .mockResolvedValueOnce(
+        makeBranch({ branch_id: 'stopping-branch', environment_instance: { status: 'stopped' } })
+      )
+      .mockResolvedValue(
+        makeBranch({ branch_id: 'stopping-branch', environment_instance: { status: 'running' } })
+      );
+    const monitor = new HealthMonitor(makeApp(branches) as never);
+
+    branches.emit(
+      'patched',
+      makeBranch({ branch_id: 'stopping-branch', environment_instance: { status: 'running' } })
+    );
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.STARTUP_GRACE_PERIOD_MS);
+    await vi.waitFor(() => expect(branches.checkHealth).toHaveBeenCalledOnce());
+    expect(monitor.getStatus().monitoringCount).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS * 2);
+    expect(branches.checkHealth).toHaveBeenCalledOnce();
+    expect(branches.get).not.toHaveBeenCalled();
     await monitor.cleanup();
   });
 
@@ -304,7 +346,7 @@ describe('HealthMonitor tenant context', () => {
     await monitor.cleanup();
   });
 
-  it('stops monitoring when a real DrizzleService lookup misses a deleted branch', async () => {
+  it('stops monitoring when the canonical health check misses a deleted branch', async () => {
     const repository: Repository<Branch> = {
       create: vi.fn(),
       findById: vi.fn(async () => null),
@@ -312,13 +354,13 @@ describe('HealthMonitor tenant context', () => {
       update: vi.fn(),
       delete: vi.fn(),
     };
-    const branchAdapter = Object.assign(
-      new DrizzleService<Branch>(repository, {
-        id: 'branch_id',
-        resourceType: 'Branch',
-      }),
-      { checkHealth: vi.fn() }
-    );
+    const branchAdapter = new DrizzleService<Branch>(repository, {
+      id: 'branch_id',
+      resourceType: 'Branch',
+    });
+    Object.assign(branchAdapter, {
+      checkHealth: vi.fn(async (branchId: string) => branchAdapter.get(branchId)),
+    });
     const app = feathers();
     app.use('branches', branchAdapter as never);
     const branches = app.service('branches') as unknown as BranchServiceMock;
@@ -332,7 +374,7 @@ describe('HealthMonitor tenant context', () => {
     await vi.waitFor(() => expect(repository.findById).toHaveBeenCalledOnce());
 
     expect(monitor.getStatus().monitoringCount).toBe(0);
-    expect(branches.checkHealth).not.toHaveBeenCalled();
+    expect(branches.checkHealth).toHaveBeenCalledOnce();
     await monitor.cleanup();
   });
 
@@ -373,8 +415,8 @@ describe('HealthMonitor tenant context', () => {
     let releaseCheck: (() => void) | undefined;
     branches.checkHealth.mockImplementation(
       () =>
-        new Promise<void>((resolve) => {
-          releaseCheck = resolve;
+        new Promise<Branch>((resolve) => {
+          releaseCheck = () => resolve(makeBranch({ environment_instance: { status: 'running' } }));
         })
     );
     const monitor = new HealthMonitor(makeApp(branches) as never);

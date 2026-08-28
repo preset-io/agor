@@ -1235,11 +1235,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }
 
   /**
-   * Override get to enrich with zone information
-   *
-   * Session activity enrichment is opt-in via include_sessions query parameter
+   * Load the canonical branch shape without entering the Feathers method
+   * wrapper. Internal-only operations use this deliberately when their caller
+   * already owns the authority context and must not manufacture nested
+   * `branches.get` requests.
    */
-  async get(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+  private async getCanonicalBranch(
+    id: BranchID,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
     // Check both query params and root-level params (root-level bypasses Feathers query filtering)
     const includeSessionsQuery = params?.query?.include_sessions;
     const includeSessionsRoot = params?._include_sessions;
@@ -1260,6 +1264,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     return withZone as BranchWithZoneAndSessions;
+  }
+
+  /**
+   * Override get to enrich with zone information.
+   *
+   * Session activity enrichment is opt-in via include_sessions query parameter
+   */
+  async get(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
+    return this.getCanonicalBranch(id, params);
   }
 
   /**
@@ -2500,11 +2513,19 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams,
     internalOptions?: EnvironmentHealthCheckOptions
   ): Promise<BranchWithZoneAndSessions> {
-    const branch = await this.withTenantDatabase(params, () => this.get(id, params));
-    const _repo = await this.withTenantDatabase(
-      params,
-      () => this.app.service('repos').get(branch.repo_id, params) as Promise<Repo>
-    );
+    // `checkHealth` is intentionally not a transport method. Automatic calls
+    // originate only from the tenant-aware health monitor, so use the raw
+    // canonical loader for that path. Calling `this.get` from a registered
+    // Feathers service enters the standard get wrapper even though this custom
+    // method itself is invoked directly; a normal successful observation used
+    // to create two nested `branches.get` service requests in addition to the
+    // monitor's own preflight get. Explicit user/MCP status requests retain the
+    // wrapped get and its fail-closed authorization hooks.
+    const loadCurrent = () =>
+      internalOptions?.intent === 'automatic'
+        ? this.getCanonicalBranch(id, params)
+        : this.get(id, params);
+    const branch = await this.withTenantDatabase(params, loadCurrent);
 
     const currentStatus = branch.environment_instance?.status;
     if (
@@ -2556,7 +2577,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       })
     );
     if (claimResult.outcome !== 'claimed') {
-      return this.withTenantDatabase(params, () => this.get(id, params));
+      return this.withTenantDatabase(params, loadCurrent);
     }
 
     try {
@@ -2565,7 +2586,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         internalOptions?.signal
       );
       if (!observation) {
-        return this.withTenantDatabase(params, () => this.get(id, params));
+        return this.withTenantDatabase(params, loadCurrent);
       }
       const commitResult = await this.withTenantDatabase(params, () =>
         new EnvironmentHealthRepository(this.db).commit({
@@ -2575,7 +2596,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           observation,
         })
       );
-      const current = await this.withTenantDatabase(params, () => this.get(id, params));
+      const current = await this.withTenantDatabase(params, loadCurrent);
       if (commitResult.outcome === 'committed' && commitResult.stateChanged) {
         emitServiceEvent(this.app, {
           path: 'branches',

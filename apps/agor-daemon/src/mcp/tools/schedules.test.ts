@@ -234,4 +234,56 @@ describe('schedule MCP input schemas', () => {
       {}
     );
   });
+
+  it('bulk-loads unique branches when filtering schedules by board', async () => {
+    const handlers = new Map<string, ToolHandler>();
+    const fakeServer = {
+      registerTool: (name: string, _cfg: unknown, cb: ToolHandler) => handlers.set(name, cb),
+    } as unknown as McpServer;
+    const schedules = [
+      { schedule_id: 'schedule-1', branch_id: 'branch-a' },
+      { schedule_id: 'schedule-2', branch_id: 'branch-a' },
+      { schedule_id: 'schedule-3', branch_id: 'branch-b' },
+    ];
+    const branchesFind = vi.fn(async () => [
+      { branch_id: 'branch-a', board_id: 'board-target' },
+      { branch_id: 'branch-b', board_id: 'board-other' },
+    ]);
+    const branchesGet = vi.fn();
+    const boardsGet = vi.fn(async () => ({ board_id: 'board-target' }));
+
+    registerScheduleTools(fakeServer, {
+      app: {
+        service(path: string) {
+          if (path === 'schedules') return { find: vi.fn(async () => schedules) };
+          if (path === 'branches') return { find: branchesFind, get: branchesGet };
+          if (path === 'boards') return { get: boardsGet };
+          throw new Error(`Unexpected service: ${path}`);
+        },
+      } as any,
+      db: {} as any,
+      userId: 'user-1' as any,
+      sessionId: undefined,
+      authenticatedUser: { user_id: 'user-1', email: 'user@example.com', role: 'member' } as any,
+      baseServiceParams: { provider: 'mcp' },
+    });
+
+    const response = (await handlers.get('agor_schedules_list')?.({
+      boardId: 'board-target',
+      limit: 25,
+      offset: 0,
+    })) as { content: Array<{ text: string }> };
+
+    expect(boardsGet).toHaveBeenCalledOnce();
+    expect(branchesGet).not.toHaveBeenCalled();
+    expect(branchesFind).toHaveBeenCalledWith({
+      query: {
+        branch_id: { $in: ['branch-a', 'branch-b'] },
+        $limit: 2,
+      },
+      paginate: false,
+      provider: 'mcp',
+    });
+    expect(JSON.parse(response.content[0].text).data).toHaveLength(2);
+  });
 });

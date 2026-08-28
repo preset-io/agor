@@ -1,5 +1,6 @@
 import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { FEATHERS_INSTRUMENTATION_REASON } from '../utils/feathers-instrumentation.js';
 import { createFeathersTracingHook, type DatadogTracer, resolveTracerModule } from './feathers.js';
 
 interface TracedCall {
@@ -123,6 +124,25 @@ describe('Feathers tracing hook', () => {
         },
       },
     ]);
+  });
+
+  it('adds only a bounded server-authored reason tag when one is present', async () => {
+    const tracer = new RecordingTracer();
+    const hook = createFeathersTracingHook('full', { tracer });
+    const context = ctx('boards', 'get', 'socketio');
+    Object.assign(context.params, {
+      [FEATHERS_INSTRUMENTATION_REASON]: 'presence_cursor_admission',
+      // A wire/client string with the same description is deliberately inert;
+      // only the server-held symbol above is read.
+      feathersReason: 'unbounded-client-value',
+    });
+
+    await hook(context, async () => undefined);
+
+    expect(tracer.calls[0]?.tags).toMatchObject({
+      'feathers.transport': 'socketio',
+      'feathers.reason': 'presence_cursor_admission',
+    });
   });
 
   it('normalizes unknown methods to custom and internal (no-provider) transport', async () => {

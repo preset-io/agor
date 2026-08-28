@@ -12,6 +12,34 @@ import type { HookContext } from '@agor/core/types';
 
 export type FeathersTransport = 'rest' | 'socketio' | 'mcp' | 'other';
 
+/**
+ * Server-authored, bounded reasons for service calls which otherwise look like
+ * anonymous transport entrypoints in APM. Keep this list deliberately small:
+ * values become Datadog tags, while resource IDs and user/tenant identifiers
+ * must never enter tracing dimensions.
+ */
+export const FEATHERS_INSTRUMENTATION_REASONS = ['presence_cursor_admission'] as const;
+export type FeathersInstrumentationReason = (typeof FEATHERS_INSTRUMENTATION_REASONS)[number];
+
+/**
+ * A symbol prevents a browser from forging an internal reason over REST or
+ * Socket.IO serialization. It remains available when server code spreads the
+ * params object into a nested Feathers call.
+ */
+export const FEATHERS_INSTRUMENTATION_REASON = Symbol('agor.feathersInstrumentationReason');
+
+export function readFeathersInstrumentationReason(
+  params: unknown
+): FeathersInstrumentationReason | undefined {
+  if (!params || typeof params !== 'object') return undefined;
+  const reason = (params as { [FEATHERS_INSTRUMENTATION_REASON]?: unknown })[
+    FEATHERS_INSTRUMENTATION_REASON
+  ];
+  return FEATHERS_INSTRUMENTATION_REASONS.includes(reason as FeathersInstrumentationReason)
+    ? (reason as FeathersInstrumentationReason)
+    : undefined;
+}
+
 const KNOWN_METHODS = ['create', 'find', 'get', 'patch', 'remove', 'update'];
 
 /**

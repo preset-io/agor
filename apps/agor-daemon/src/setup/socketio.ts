@@ -67,6 +67,7 @@ import {
   TERMINAL_REQUEST_JOIN_CHANNEL,
   type TerminalRequestConnection,
 } from '../terminal-socket-connection.js';
+import { FEATHERS_INSTRUMENTATION_REASON } from '../utils/feathers-instrumentation.js';
 import {
   joinExecutorTaskChannel,
   leaveAllExecutorTaskChannels,
@@ -1143,6 +1144,7 @@ export function createSocketIOConfig(
                 provider: 'socketio',
                 connection: fs.feathers,
                 tenant: auth.tenant,
+                [FEATHERS_INSTRUMENTATION_REASON]: 'presence_cursor_admission',
               } as never)) as Board;
               if (
                 board.archived ||

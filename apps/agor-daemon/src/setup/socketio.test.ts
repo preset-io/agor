@@ -56,6 +56,7 @@ import {
 import { fingerprintExecutorSessionToken } from '../services/session-token-service';
 import type { TerminalAttachmentIdentity } from '../services/terminals';
 import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection';
+import { FEATHERS_INSTRUMENTATION_REASON } from '../utils/feathers-instrumentation';
 import { executorTaskChannelName } from '../utils/realtime-publish';
 import {
   configureChannels,
@@ -1994,10 +1995,24 @@ describe('terminal:* handler authorization', () => {
         expect.objectContaining({
           provider: 'socketio',
           tenant: expect.objectContaining({ tenant_id: 'default' }),
+          [FEATHERS_INSTRUMENTATION_REASON]: 'presence_cursor_admission',
         })
       );
       expect(getBoard).not.toHaveBeenCalledWith('over-bound', expect.anything());
       expect(socket.joined).toContain(boardPresenceRoomName('default', 'last-slot'));
+
+      // The UI emits on both Socket.IO connect and Feathers authentication.
+      // Once the first admission finishes, that duplicate event is an in-memory
+      // capability hit rather than a second boards.get authorization query.
+      await expect(
+        new Promise<{ ok: boolean }>((resolve) => {
+          void socket.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.(
+            'last-slot',
+            resolve
+          );
+        })
+      ).resolves.toEqual({ ok: true });
+      expect(getBoard).toHaveBeenCalledTimes(1);
     });
 
     it('invalidates a published board when a same-set synchronization is rate-limited', async () => {
