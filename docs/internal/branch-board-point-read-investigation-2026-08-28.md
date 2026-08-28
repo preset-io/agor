@@ -613,12 +613,12 @@ changed and no deployment was performed.
   `NOSUPERUSER`, `NOBYPASSRLS` role: 6/6 tests passed. A fresh callback
   projection succeeds for the owning tenant and both full Session and branch
   projection reads return no row cross-tenant.
-- The multitenancy-boundary static check passed. Core, client, and daemon
-  TypeScript checks passed without a production build. The UI check was
-  attempted but the disposable workspace lacked the prebuilt
-  `packages/client/dist/*.d.ts` declarations, cascading into unrelated module
-  resolution errors; per repository instruction no build was run to recreate
-  them. Focused UI tests compile and pass.
+- The multitenancy-boundary static check passed. A subsequent `pnpm check`
+  completed end-to-end: workspace typechecks, Biome/lint, short-ID,
+  multitenancy, filesystem, realtime-boundary checks, and the Turbo build all
+  passed (21/21 tasks). The build generated the previously missing client
+  declarations, so the UI workspace typecheck now passes as well. Focused UI
+  tests compile and pass.
 
 The managed disposable UI environment was healthy, but live browser capture
 was blocked by a Vite stale optimized-dependency response. UI scenario counts
