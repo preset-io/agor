@@ -1,8 +1,8 @@
 import { type Branch, classifyBranchFilesystemReadiness } from '@agor/core/types';
 
-export const DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS = 30_000;
+export const DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS = 60_000;
 export const MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS = 1_000;
-export const MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS = 60_000;
+export const MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS = 5 * 60_000;
 export const BRANCH_FILESYSTEM_READY_POLL_INTERVAL_MS = 1_000;
 
 export type BranchFilesystemReadinessOutcome = 'ready' | 'timeout' | 'failed' | 'unavailable';

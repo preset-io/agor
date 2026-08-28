@@ -154,8 +154,8 @@ Common workflows:
 Create a branch and start a session:
 1. agor_repos_list → get repoId
 2. agor_boards_list → get boardId
-3. agor_branches_create(repoId, boardId, branchName) → get branchId
-4. agor_branches_wait_for_ready(branchId) → continue only when _readiness.outcome is "ready"; safely call again after a timeout
+3. agor_branches_create(repoId, boardId, branchName, waitForReady:true) → continue only when _readiness.outcome is "ready"
+4. After a timeout, agor_branches_wait_for_ready(branchId) → safely call again as needed
 5. agor_sessions_create(branchId, agenticTool, initialPrompt)
 
 Delegate a subtask to a child agent:

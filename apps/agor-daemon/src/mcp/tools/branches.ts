@@ -28,6 +28,7 @@ import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import {
   BRANCH_FILESYSTEM_READY_POLL_INTERVAL_MS,
+  type BranchFilesystemReadinessResult,
   DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
   MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
   MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
@@ -100,6 +101,53 @@ function readinessPoll(branchId: string) {
     tool: 'agor_branches_wait_for_ready',
     arguments: { branchId },
   };
+}
+
+const branchFilesystemReadyWaitTimeoutSchema = z
+  .number({ error: 'waitTimeoutMs must be a number when provided.' })
+  .int('waitTimeoutMs must be an integer.')
+  .min(
+    MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+    `waitTimeoutMs must be at least ${MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}.`
+  )
+  .max(
+    MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+    `waitTimeoutMs must be at most ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}.`
+  )
+  .optional()
+  .describe(
+    `Maximum milliseconds to wait (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}).`
+  );
+
+function readinessResponse(result: BranchFilesystemReadinessResult): {
+  readiness: Record<string, unknown>;
+  isError: boolean;
+} {
+  const readiness: Record<string, unknown> = {
+    outcome: result.outcome,
+    elapsed_ms: result.elapsedMs,
+    timeout_ms: result.timeoutMs,
+    poll_interval_ms: BRANCH_FILESYSTEM_READY_POLL_INTERVAL_MS,
+  };
+
+  if (result.outcome === 'ready') {
+    readiness.message = 'Branch filesystem is ready for session creation.';
+    return { readiness, isError: false };
+  }
+
+  if (result.outcome === 'timeout') {
+    readiness.message =
+      'Timed out while the branch filesystem is still being created. The wait did not modify or cancel materialization; call agor_branches_wait_for_ready before creating a session.';
+    readiness.poll = readinessPoll(result.branch.branch_id);
+    return { readiness, isError: false };
+  }
+
+  readiness.message =
+    result.outcome === 'failed'
+      ? result.branch.error_message || 'Branch filesystem creation failed.'
+      : `Branch filesystem is unavailable (${result.unavailableReason ?? 'terminal state'}).`;
+  if (result.unavailableReason) readiness.reason = result.unavailableReason;
+  return { readiness, isError: true };
 }
 
 function mcpRequestSignal(requestContext: unknown): AbortSignal | undefined {
@@ -237,22 +285,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: z.object({
         branchId: mcpRequiredId('branchId', 'Branch'),
-        waitTimeoutMs: z
-          .number({ error: 'waitTimeoutMs must be a number when provided.' })
-          .int('waitTimeoutMs must be an integer.')
-          .min(
-            MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
-            `waitTimeoutMs must be at least ${MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}.`
-          )
-          .max(
-            MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
-            `waitTimeoutMs must be at most ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}.`
-          )
-          .optional()
-          .describe(
-            `Maximum milliseconds to wait (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}). ` +
-              'For longer clone/materialization jobs, safely call this read-only tool again.'
-          ),
+        waitTimeoutMs: branchFilesystemReadyWaitTimeoutSchema.describe(
+          `Maximum milliseconds to wait (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}). ` +
+            'For longer clone/materialization jobs, safely call this read-only tool again.'
+        ),
       }),
     },
     async (args, requestContext) => {
@@ -269,49 +305,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ),
       });
 
-      const baseReadiness = {
-        outcome: result.outcome,
-        elapsed_ms: result.elapsedMs,
-        timeout_ms: result.timeoutMs,
-        poll_interval_ms: BRANCH_FILESYSTEM_READY_POLL_INTERVAL_MS,
-      };
-
-      if (result.outcome === 'ready') {
-        return textResult({
-          branch: result.branch,
-          _readiness: {
-            ...baseReadiness,
-            message: 'Branch filesystem is ready for session creation.',
-          },
-        });
-      }
-
-      if (result.outcome === 'timeout') {
-        return textResult({
-          branch: result.branch,
-          _readiness: {
-            ...baseReadiness,
-            message:
-              'Timed out while the branch filesystem is still being created. The wait did not modify or cancel materialization; call this tool again before creating a session.',
-            poll: readinessPoll(result.branch.branch_id),
-          },
-        });
-      }
-
-      const message =
-        result.outcome === 'failed'
-          ? result.branch.error_message || 'Branch filesystem creation failed.'
-          : `Branch filesystem is unavailable (${result.unavailableReason ?? 'terminal state'}).`;
+      const formatted = readinessResponse(result);
       return {
-        ...textResult({
-          branch: result.branch,
-          _readiness: {
-            ...baseReadiness,
-            ...(result.unavailableReason ? { reason: result.unavailableReason } : {}),
-            message,
-          },
-        }),
-        isError: true,
+        ...textResult({ branch: result.branch, _readiness: formatted.readiness }),
+        ...(formatted.isError ? { isError: true } : {}),
       };
     }
   );
@@ -613,8 +610,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'and branchName to your desired unique name (e.g., sourceBranch="issue-282", branchName="issue-282-review-1"). ' +
         'Use zoneId to place the branch in a specific zone (pin only, no trigger). ' +
         'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation. ' +
-        'Filesystem materialization continues asynchronously; call the retry-safe ' +
-        'agor_branches_wait_for_ready tool before creating the first session. ' +
+        'Filesystem materialization is asynchronous by default. Set waitForReady=true to wait for a bounded ' +
+        'authoritative result in this call, or use the retry-safe agor_branches_wait_for_ready tool separately. ' +
         'To create a long-lived Agor teammate (a persistent AI teammate that manages other branches ' +
         'and maintains memory), pass the teammate object — this is the ONLY supported way to make a ' +
         'teammate via MCP. Teammate status cannot be toggled later with agor_branches_update. ' +
@@ -723,6 +720,17 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             'Common shallow value: 100. Trade-off: smaller disk footprint, but ' +
             '`git log` past N commits is broken and some rebase operations fail.'
         ),
+        waitForReady: z
+          .boolean()
+          .optional()
+          .describe(
+            'Wait for filesystem materialization before returning (default: false). ' +
+              'This is an opt-in convenience on a non-idempotent create; if the client loses the response, creation still continues. ' +
+              'Use the separate retry-safe agor_branches_wait_for_ready tool to recover from timeouts.'
+          ),
+        waitTimeoutMs: branchFilesystemReadyWaitTimeoutSchema.describe(
+          `Maximum milliseconds to wait when waitForReady=true (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}). Ignored otherwise.`
+        ),
         teammate: z
           .object({
             displayName: z
@@ -759,7 +767,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ),
       }),
     },
-    async (args) => {
+    async (args, requestContext) => {
       const repoId = await resolveRepoId(ctx, coerceString(args.repoId)!);
       let branchName = coerceString(args.branchName)!;
       const originalName = branchName;
@@ -970,8 +978,23 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         ctx.baseServiceParams
       );
 
+      const readinessResult = args.waitForReady
+        ? await waitForBranchFilesystemReady({
+            branchId: branch.branch_id,
+            timeoutMs: args.waitTimeoutMs ?? DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+            signal: mcpRequestSignal(requestContext),
+            readBranch: (branchId) =>
+              ctx.app
+                .service('branches')
+                .get(branchId, ctx.baseServiceParams as Parameters<BranchesServiceImpl['get']>[1]),
+          })
+        : undefined;
+
       // Build response with appropriate notes
-      const response: Record<string, unknown> = { ...branch };
+      const response: Record<string, unknown> = { ...(readinessResult?.branch ?? branch) };
+
+      const formattedReadiness = readinessResult ? readinessResponse(readinessResult) : undefined;
+      if (formattedReadiness) response._readiness = formattedReadiness.readiness;
 
       if (branchName !== originalName) {
         response._note = `Name '${originalName}' was already taken. Created as '${branchName}' instead (autoSuffix applied).`;
@@ -1013,7 +1036,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           'Use agor_branches_set_zone to pin this branch to a specific zone and optionally trigger zone prompt templates.';
       }
 
-      return textResult(response);
+      return {
+        ...textResult(response),
+        ...(formattedReadiness?.isError ? { isError: true } : {}),
+      };
     }
   );
 

@@ -37,9 +37,18 @@ describe('waitForBranchFilesystemReady', () => {
       const ready = branch('ready', { storage_mode: storageMode });
       const readBranch = vi.fn(async () => ready);
 
-      const result = await waitForBranchFilesystemReady({ branchId: 'short-id', readBranch });
+      const result = await waitForBranchFilesystemReady({
+        branchId: 'short-id',
+        readBranch,
+        now: () => 0,
+      });
 
-      expect(result).toMatchObject({ outcome: 'ready', branch: ready, elapsedMs: 0 });
+      expect(result).toMatchObject({
+        outcome: 'ready',
+        branch: ready,
+        elapsedMs: 0,
+        timeoutMs: 60_000,
+      });
       expect(readBranch).toHaveBeenCalledOnce();
     }
   );
@@ -149,13 +158,13 @@ describe('waitForBranchFilesystemReady', () => {
     expect(readBranch).toHaveBeenCalledOnce();
   });
 
-  it.each([999, 60_001, 1_000.5])('rejects invalid timeout %s', async (timeoutMs) => {
+  it.each([999, 300_001, 1_000.5])('rejects invalid timeout %s', async (timeoutMs) => {
     await expect(
       waitForBranchFilesystemReady({
         branchId: 'branch-id',
         readBranch: async () => branch('ready'),
         timeoutMs,
       })
-    ).rejects.toThrow(/timeoutMs must be an integer from 1000 to 60000/);
+    ).rejects.toThrow(/timeoutMs must be an integer from 1000 to 300000/);
   });
 });
