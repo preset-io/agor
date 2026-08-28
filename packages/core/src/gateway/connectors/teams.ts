@@ -196,17 +196,20 @@ export function normalizeTeamsActivity(
     : undefined;
   let text = extractQuotedReplyText(attachments) ?? stringValue(activityRecord.text) ?? '';
   let hasMention = false;
+  let hasStructuredMention = false;
   for (const entity of entities) {
     const record = asRecord(entity);
     if (record.type !== 'mention') continue;
+    hasStructuredMention = true;
     const mentioned = asRecord(record.mentioned);
     const mentionedId = stringValue(mentioned.id) ?? '';
-    if (mentionedId !== config.app_id && !mentionedId.includes(config.app_id ?? '')) continue;
+    const appId = config.app_id ?? '';
+    if (!appId || (mentionedId !== appId && mentionedId !== `28:${appId}`)) continue;
     hasMention = true;
     const mentionText = stringValue(record.text);
     if (mentionText) text = text.replace(mentionText, '').trim();
   }
-  if (!hasMention) {
+  if (!hasMention && !hasStructuredMention) {
     const botName = stringValue(recipient.name);
     if (botName && hasActiveMention(text, botName)) {
       hasMention = true;

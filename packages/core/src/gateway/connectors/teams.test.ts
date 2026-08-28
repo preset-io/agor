@@ -327,4 +327,29 @@ describe('normalizeTeamsActivity', () => {
     expect(normalized.metadata.teams_channel_type).toBe('standard');
     expect(normalized.providerEventId).toBe('teams:activity:activity-1');
   });
+
+  it('matches only the exact Teams app ID forms in structured mentions', () => {
+    for (const mentionedId of ['app-123', '28:app-123']) {
+      expect(
+        normalizeTeamsActivity(
+          activity({
+            text: '<at>Agor</at> please review',
+            entities: [{ type: 'mention', text: '<at>Agor</at>', mentioned: { id: mentionedId } }],
+          }),
+          config
+        ).hasMention
+      ).toBe(true);
+    }
+    expect(
+      normalizeTeamsActivity(
+        activity({
+          text: '<at>Agor</at> please review',
+          entities: [
+            { type: 'mention', text: '<at>Someone</at>', mentioned: { id: 'prefix-app-123' } },
+          ],
+        }),
+        config
+      ).hasMention
+    ).toBe(false);
+  });
 });

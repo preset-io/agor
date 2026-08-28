@@ -420,14 +420,11 @@ export class GatewayInboundEventRepository {
       throw new RepositoryError('Teams ingress discovery limit must be between 1 and 1000');
     }
     const now = options.now ?? new Date();
-    // Expired payloads must become visible terminal records before discovery;
-    // otherwise the expiry predicate below would make them disappear forever.
-    await terminalizeExpiredTeamsPayloads(db, now);
     const due = sql`${gatewayInboundEvents.status} IN ('pending', 'processing')
       AND ${gatewayInboundEvents.next_attempt_at} <= ${now}
       AND (${gatewayInboundEvents.status} = 'pending'
         OR ${gatewayInboundEvents.processing_expires_at} <= ${now})
-      AND ${gatewayInboundEvents.payload_expires_at} > ${now}`;
+      AND ${gatewayInboundEvents.payload_expires_at} IS NOT NULL`;
     const rows = await select(db, {
       ...(isSQLiteDatabase(db)
         ? {}

@@ -22,6 +22,7 @@ interface GraphMessage {
 
 interface GraphCollection {
   value?: unknown;
+  '@odata.nextLink'?: unknown;
 }
 
 interface CachedToken {
@@ -116,9 +117,9 @@ async function readJson(response: Response): Promise<unknown> {
 
 /**
  * Build the real standard-channel RSC fetcher. It deliberately makes only
- * the two bounded Graph calls needed for the root and its replies, never
- * follows an opaque @odata.nextLink, and keeps all returned messages in
- * memory until the worker formats the single current Task prompt.
+ * the two bounded Graph calls needed for the root and its replies. Graph
+ * reply pages are not followed: an opaque nextLink means the interval is
+ * incomplete, so the worker falls back to the current mention.
  */
 export function createTeamsStandardChannelHistoryFetcher(
   options: { fetchImpl?: typeof fetch } = {}
@@ -205,7 +206,7 @@ export function createTeamsStandardChannelHistoryFetcher(
         throw new Error(`Teams Graph root history returned ${rootResponse.status}`);
       const root = (await readJson(rootResponse)) as GraphMessage;
       const repliesResponse = await fetchImpl(
-        `${base}/messages/${graphPathPart(rootMessageId)}/replies?$top=${Math.min(101, maxMessages + 1)}&$orderby=createdDateTime%20asc`,
+        `${base}/messages/${graphPathPart(rootMessageId)}/replies?$top=${Math.min(50, maxMessages)}`,
         {
           headers: { accept: 'application/json', authorization: `Bearer ${token}` },
           redirect: 'error',
@@ -215,6 +216,18 @@ export function createTeamsStandardChannelHistoryFetcher(
       if (!repliesResponse.ok)
         throw new Error(`Teams Graph reply history returned ${repliesResponse.status}`);
       const repliesBody = (await readJson(repliesResponse)) as GraphCollection;
+      if (textValue(repliesBody['@odata.nextLink'])) {
+        return {
+          activities: [],
+          complete: false,
+          reason: 'truncated',
+          conversationId: activity.conversationId,
+          rootMessageId: activity.rootMessageId,
+          afterActivityId,
+          throughActivityId: activity.activityId,
+          triggerActivityId: activity.activityId,
+        };
+      }
       const replies = Array.isArray(repliesBody.value)
         ? (repliesBody.value.filter(
             (value): value is GraphMessage =>

@@ -17,6 +17,7 @@ import {
   GatewayInboundEventRepository,
   RepoRepository,
   SessionRepository,
+  ThreadSessionMapRepository,
   UsersRepository,
 } from '../repositories';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from '../tenant-scope';
@@ -77,7 +78,14 @@ async function seedTeamsChannel(db: Database, tenantId: TenantID) {
         outbound_enabled: true,
       },
     });
-    return { channel, session };
+    const mapping = await new ThreadSessionMapRepository(scoped).create({
+      channel_id: channel.id,
+      thread_id: '19:postgres-channel|root-1',
+      session_id: session.session_id,
+      branch_id: branch.branch_id,
+      metadata: {},
+    });
+    return { channel, session, mapping };
   });
 }
 
@@ -131,7 +139,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
 
   it('projects tenant ids without ambiguous joins and serializes the same lane across replicas', async () => {
     const tenantId = `teams-pg-${generateId()}` as TenantID;
-    const { channel } = await seedTeamsChannel(dbA, tenantId);
+    const { channel, mapping } = await seedTeamsChannel(dbA, tenantId);
     const first = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
       new GatewayInboundEventRepository(scoped).admitVerifiedHttp(
         admission(channel.id, tenantId, 'teams:activity:pg-first')
@@ -209,5 +217,83 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
         )
       )
     ).toBeNull();
+
+    expect(
+      await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new ThreadSessionMapRepository(scoped).advanceTeamsLastAdmittedActivityId(
+          mapping.id,
+          'activity-second',
+          null
+        )
+      )
+    ).toBe(true);
+    expect(
+      await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+        new ThreadSessionMapRepository(scoped).advanceTeamsLastAdmittedActivityId(
+          mapping.id,
+          'activity-first',
+          null
+        )
+      )
+    ).toBe(false);
+  });
+
+  it('terminalizes expired encrypted payloads inside the owning tenant scope', async () => {
+    const tenantId = `teams-pg-expiry-${generateId()}` as TenantID;
+    const { channel } = await seedTeamsChannel(dbA, tenantId);
+    const admitted = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new GatewayInboundEventRepository(scoped).admitVerifiedHttp({
+        ...admission(channel.id, tenantId, 'teams:activity:pg-expired'),
+        payloadTtlMs: 1,
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const due = await runWithSystemDatabaseScope(
+      dbA,
+      'Teams PostgreSQL expired payload discovery',
+      (systemDb) =>
+        new GatewayInboundEventRepository(systemDb).findDueTeamsRefs(systemDb, {
+          limit: 100,
+          now: new Date(),
+        }),
+      { capability: 'teams_gateway_ingress_discovery' }
+    );
+    expect(due.map((ref) => ref.event_id)).toContain(admitted.event.id);
+
+    const otherTenant = `${tenantId}-other` as TenantID;
+    expect(
+      await runWithTenantDatabaseScope(dbB, otherTenant, (scoped) =>
+        new GatewayInboundEventRepository(scoped).claimQueued(
+          admitted.event.id,
+          'wrong-tenant-claim',
+          30_000,
+          new Date()
+        )
+      )
+    ).toBeNull();
+
+    expect(
+      await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new GatewayInboundEventRepository(scoped).claimQueued(
+          admitted.event.id,
+          'expiry-claim',
+          30_000,
+          new Date()
+        )
+      )
+    ).toBeNull();
+    const terminal = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new GatewayInboundEventRepository(scoped).findByProviderEvent(
+        channel.id,
+        'teams:activity:pg-expired'
+      )
+    );
+    expect(terminal).toMatchObject({
+      status: 'dead_letter',
+      payload_encrypted: null,
+      payload_expires_at: null,
+      last_error_code: 'payload_expired',
+    });
   });
 });

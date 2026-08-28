@@ -24,6 +24,7 @@ import { SessionStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
+import { withVerifiedHttpGatewayAuthority } from './gateway-authority.js';
 import { SessionsService } from './sessions.js';
 
 vi.mock('@agor/agentic-tools/config', async (importOriginal) => {
@@ -1550,6 +1551,52 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
 });
 
 describe('GatewayService durable listener delivery fences', () => {
+  it('rejects forged inbound event IDs and accepts the verified Teams HTTP path', async () => {
+    const channel: GatewayChannel = {
+      ...slackChannel,
+      id: 'teams-authority-channel' as never,
+      channel_type: 'teams',
+      channel_key: 'teams-authority-key',
+      config: {
+        app_id: 'teams-app',
+        app_password: 'secret',
+        microsoft_tenant_id: 'tenant-a',
+        require_mention: true,
+      },
+      provider_installation_id: 'teams-app',
+      provider_config_generation: 3,
+    } as GatewayChannel;
+    const mapping = makeMapping({
+      channel_id: channel.id,
+      thread_id: '19:channel|root-1',
+      session_id: 'sess-teams' as never,
+    });
+    const { service } = makeGatewayHarness({ channel, existingMapping: mapping });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+      taskRepo: { findById: vi.fn(async () => null) },
+    });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: mapping.thread_id,
+      text: 'hello',
+      user_name: 'Ada',
+      metadata: {
+        teams_conversation_type: 'channel',
+        teams_has_mention: true,
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000099' as never,
+      idempotency_task_id: '01927f9d-0000-7000-8000-000000000098' as never,
+      idempotency_session_id: mapping.session_id,
+    };
+
+    await expect(service.create(data)).rejects.toThrow(/authority must be verified/i);
+    await expect(service.create(withVerifiedHttpGatewayAuthority(data))).resolves.toMatchObject({
+      success: true,
+      taskId: 'task-1',
+    });
+  });
+
   it('uses short guarded tenant DB scopes while keeping provider startup outside transactions', async () => {
     const { db, observations, touch, transactions } = makeGuardedPostgresDatabase();
     expect(() => (db as unknown as { marker(): void }).marker()).toThrow(

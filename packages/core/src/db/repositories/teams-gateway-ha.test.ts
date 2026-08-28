@@ -356,7 +356,25 @@ describe('Teams gateway HA repositories', () => {
   });
 
   ownedDbTest(
-    'terminalizes and clears expired pending payloads during discovery',
+    'advances the Teams catch-up cursor only from the expected predecessor',
+    async ({ db }) => {
+      const { mapping } = await seedTeamsMapping(db);
+      const maps = new ThreadSessionMapRepository(db);
+      expect(await maps.advanceTeamsLastAdmittedActivityId(mapping.id, 'activity-1', null)).toBe(
+        true
+      );
+      expect(await maps.advanceTeamsLastAdmittedActivityId(mapping.id, 'activity-2', null)).toBe(
+        false
+      );
+      expect(
+        await maps.advanceTeamsLastAdmittedActivityId(mapping.id, 'activity-2', 'activity-1')
+      ).toBe(true);
+      expect((await maps.findById(mapping.id))?.teams_last_admitted_activity_id).toBe('activity-2');
+    }
+  );
+
+  ownedDbTest(
+    'discovers expired payloads and terminalizes them in tenant-scoped claim',
     async ({ db }) => {
       const { channel } = await seedTeamsMapping(db);
       const inbound = new GatewayInboundEventRepository(db);
@@ -365,7 +383,10 @@ describe('Teams gateway HA repositories', () => {
         payloadTtlMs: 1,
       });
       await new Promise((resolve) => setTimeout(resolve, 5));
-      expect(await inbound.findDueTeamsRefs(db, { now: new Date() })).toEqual([]);
+      expect(await inbound.findDueTeamsRefs(db, { now: new Date() })).toEqual([
+        expect.objectContaining({ event_id: admitted.event.id }),
+      ]);
+      expect(await inbound.claimQueued(admitted.event.id, 'expired-claim', 30_000)).toBeNull();
       const stored = await select(db)
         .from(gatewayInboundEvents)
         .where(eq(gatewayInboundEvents.id, admitted.event.id))

@@ -75,7 +75,10 @@ describe('Teams standard-channel Graph history', () => {
       );
     };
 
-    const result = await createTeamsStandardChannelHistoryFetcher({ fetchImpl })(request);
+    const result = await createTeamsStandardChannelHistoryFetcher({ fetchImpl })({
+      ...request,
+      maxMessages: 100,
+    });
     expect(result.complete).toBe(true);
     expect(result.afterActivityId).toBe('cursor');
     expect(result.triggerActivityId).toBe('current');
@@ -83,6 +86,38 @@ describe('Teams standard-channel Graph history', () => {
     expect(calls[0]?.url).toContain('/tenant-1/oauth2/v2.0/token');
     expect(String(calls[0]?.init?.body)).toContain('https%3A%2F%2Fgraph.microsoft.com%2F.default');
     expect(calls[1]?.init?.headers).toMatchObject({ authorization: `Bearer ${token}` });
+    expect(calls[2]?.url).toBe(
+      'https://graph.microsoft.com/v1.0/teams/team-1/channels/channel-1/messages/root/replies?$top=50'
+    );
+    expect(calls[2]?.url).not.toContain('$orderby');
+  });
+
+  it('falls back when Graph reports incomplete reply coverage', async () => {
+    const token = jwt.sign({ roles: [TEAMS_GRAPH_CHANNEL_MESSAGE_PERMISSION] }, 'test-only');
+    const fetchImpl = async (url: string | URL) => {
+      const value = String(url);
+      if (value.includes('/oauth2/')) {
+        return new Response(JSON.stringify({ access_token: token, expires_in: 300 }), {
+          status: 200,
+        });
+      }
+      if (value.endsWith('/messages/root')) {
+        return new Response(
+          JSON.stringify({ id: 'root', createdDateTime: '2026-08-27T11:58:00Z' }),
+          { status: 200 }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          value: [],
+          '@odata.nextLink': 'https://graph.microsoft.com/v1.0/opaque-next-page',
+        }),
+        { status: 200 }
+      );
+    };
+
+    const result = await createTeamsStandardChannelHistoryFetcher({ fetchImpl })(request);
+    expect(result).toMatchObject({ complete: false, reason: 'truncated', activities: [] });
   });
 
   it('does not use an app token without the required RSC role', async () => {

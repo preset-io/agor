@@ -116,6 +116,7 @@ import {
 } from '../utils/gateway-attachments.js';
 import { fetchGatewayCatchUp, GatewayCatchUpError } from '../utils/gateway-catch-up.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
+import { isVerifiedHttpGatewayCreate } from './gateway-authority.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import type { SessionParams } from './sessions.js';
 
@@ -2122,6 +2123,7 @@ export class GatewayService {
    */
   async create(data: PostMessageData): Promise<PostMessageResult> {
     const durableListenerOwnership = await this.detectDurableListenerOwnership();
+    const verifiedHttpAuthority = isVerifiedHttpGatewayCreate(data);
     // 1. Authenticate via channel_key
     const channel = await this.channelRepo.findByKey(data.channel_key);
     if (!channel) {
@@ -2132,6 +2134,24 @@ export class GatewayService {
       throw new Error('Channel is disabled');
     }
     const channelConfig = channel.config as Record<string, unknown>;
+    if (
+      verifiedHttpAuthority &&
+      (channel.channel_type !== 'teams' ||
+        !data.gateway_inbound_event_id ||
+        data.listener_claim_token !== undefined)
+    ) {
+      throw new Error('Invalid verified HTTP gateway authority');
+    }
+    if (
+      durableListenerOwnership &&
+      data.gateway_inbound_event_id &&
+      !verifiedHttpAuthority &&
+      !data.listener_claim_token
+    ) {
+      throw new Error(
+        'Gateway inbound event authority must be verified by the Teams queue or listener'
+      );
+    }
     if (durableListenerOwnership && !data.gateway_inbound_event_id) {
       throw new Error(
         'Direct gateway inbound delivery is unsupported on PostgreSQL without a provider event identity'
@@ -2139,6 +2159,7 @@ export class GatewayService {
     }
     if (
       data.listener_claim_token &&
+      !verifiedHttpAuthority &&
       (data.listener_channel_id !== channel.id ||
         !(await this.channelRepo.listenerClaimIsCurrent(channel.id, data.listener_claim_token)))
     ) {
@@ -2930,6 +2951,7 @@ export class GatewayService {
       let session: Session;
       if (
         data.listener_claim_token &&
+        !verifiedHttpAuthority &&
         !(await this.channelRepo.listenerClaimIsCurrent(channel.id, data.listener_claim_token))
       ) {
         throw new Error('Gateway listener ownership lost before Session admission');
@@ -3383,6 +3405,7 @@ export class GatewayService {
       const tenantId = getCurrentTenantId();
       if (
         data.listener_claim_token &&
+        !verifiedHttpAuthority &&
         !(await this.channelRepo.listenerClaimIsCurrent(channel.id, data.listener_claim_token))
       ) {
         throw new Error('Gateway listener ownership lost before Task admission');

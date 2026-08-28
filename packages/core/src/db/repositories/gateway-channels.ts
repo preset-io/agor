@@ -24,6 +24,7 @@ import {
   getRequiredSecretFields,
   isDiscordSnowflake,
   isGatewayProviderAuthorityPatch,
+  isTeamsCredentialOnlyConfigPatch,
   mergeGatewayChannelConfigPatch,
   validateDiscordConfig,
   validateTeamsConfig,
@@ -914,15 +915,17 @@ export class GatewayChannelRepository
     try {
       const fullId = await this.resolveId(id);
 
-      const updated = isGatewayProviderAuthorityPatch(updates)
-        ? await this.updateAuthority(
-            id,
-            fullId,
-            updates,
-            verifiedProviderInstallationId,
-            expectedProviderConfigGeneration
-          )
-        : await this.updateNonAuthority(id, fullId, updates);
+      const updated = isTeamsCredentialOnlyConfigPatch(updates)
+        ? await this.updateTeamsCredentialOnly(id, fullId, updates)
+        : isGatewayProviderAuthorityPatch(updates)
+          ? await this.updateAuthority(
+              id,
+              fullId,
+              updates,
+              verifiedProviderInstallationId,
+              expectedProviderConfigGeneration
+            )
+          : await this.updateNonAuthority(id, fullId, updates);
 
       if (!updated) {
         throw new RepositoryError('Failed to retrieve updated gateway channel');
@@ -956,6 +959,43 @@ export class GatewayChannelRepository
       listener_checkpoint: null,
       listener_checkpoint_updated_at: null,
     };
+  }
+
+  /** Rotate only the Teams app password without fencing active gateway work. */
+  private async updateTeamsCredentialOnly(
+    id: string,
+    fullId: string,
+    updates: Partial<GatewayChannel>
+  ): Promise<GatewayChannelRow | null> {
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(txDb, this.db, gatewayChannels, eq(gatewayChannels.id, fullId));
+        const currentRow = await select(txDb)
+          .from(gatewayChannels)
+          .where(eq(gatewayChannels.id, fullId))
+          .one();
+        if (!currentRow) throw new EntityNotFoundError('GatewayChannel', id);
+        if (currentRow.channel_type !== 'teams') {
+          throw new RepositoryError('Credential-only rotation requires a Teams gateway channel');
+        }
+
+        const current = this.rowToChannel(currentRow);
+        const config = mergeGatewayChannelConfigPatch(
+          current.config,
+          updates.config,
+          'teams',
+          current.enabled
+        );
+        this.assertRequiredSecretsWhenEnabled({ ...current, config });
+        await update(txDb, gatewayChannels)
+          .set({ config: encryptConfig(config), updated_at: new Date() })
+          .where(eq(gatewayChannels.id, fullId))
+          .run();
+        return select(txDb).from(gatewayChannels).where(eq(gatewayChannels.id, fullId)).one();
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**

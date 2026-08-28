@@ -1,6 +1,7 @@
 import { encryptApiKey } from '@agor/core/db';
 import type { GatewayChannel } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
+import { isVerifiedHttpGatewayCreate } from './gateway-authority';
 import { TeamsGatewayWorker } from './teams-gateway-worker';
 
 const now = new Date('2026-08-27T12:00:00.000Z');
@@ -100,6 +101,7 @@ function makeWorker(options: {
   const event = inboundEvent();
   const complete = vi.fn(async () => true);
   const advance = vi.fn(async () => true);
+  const recordDeliveryMetadata = vi.fn(async () => true);
   const create = vi.fn(
     options.gatewayCreate ??
       (async () => ({ success: true, taskId: 'task-1', sessionId: 'session-1' }))
@@ -108,6 +110,7 @@ function makeWorker(options: {
     findDueTeamsRefs: vi.fn(),
     claimQueued: vi.fn(async () => event),
     decryptQueuedPayload: vi.fn(() => options.activity),
+    recordDeliveryMetadata,
     complete,
     failQueued: vi.fn(),
   };
@@ -140,7 +143,7 @@ function makeWorker(options: {
       message: { findById: vi.fn() } as never,
     },
   });
-  return { worker, create, complete, advance, inbound, mapping };
+  return { worker, create, complete, advance, inbound, mapping, recordDeliveryMetadata };
 }
 
 describe('TeamsGatewayWorker inbound admission', () => {
@@ -203,6 +206,15 @@ describe('TeamsGatewayWorker inbound admission', () => {
       },
       catchUp,
     });
+    const order: string[] = [];
+    setup.advance.mockImplementation(async () => {
+      order.push('advance');
+      return true;
+    });
+    setup.complete.mockImplementation(async () => {
+      order.push('complete');
+      return true;
+    });
 
     await setup.worker.checkOnce();
     expect(catchUp).toHaveBeenCalledOnce();
@@ -214,7 +226,12 @@ describe('TeamsGatewayWorker inbound admission', () => {
       teams_has_mention: true,
     });
     expect(setup.create).toHaveBeenCalledOnce();
-    expect(setup.advance).toHaveBeenCalledWith('mapping-1', 'activity-current');
+    expect(setup.advance).toHaveBeenCalledWith('mapping-1', 'activity-current', 'prior-cursor');
+    expect(isVerifiedHttpGatewayCreate(setup.create.mock.calls[0]?.[0])).toBe(true);
+    expect(order).toEqual(['advance', 'complete']);
+    expect(setup.recordDeliveryMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: { teams_catch_up: { outcome: 'used' } } })
+    );
   });
 
   it('falls back to the current mention when history is incomplete', async () => {
@@ -235,10 +252,82 @@ describe('TeamsGatewayWorker inbound admission', () => {
     expect(setup.create.mock.calls[0]?.[0].text).toBe('Please review this');
     expect(setup.create).toHaveBeenCalledOnce();
   });
+
+  it('runs channel catch-up without trusting a channel-type metadata label', async () => {
+    const catchUp = vi.fn(async () => ({
+      activities: [
+        {
+          activityId: 'prior-human',
+          timestamp: '2026-08-27T11:59:00.000Z',
+          actorLabel: 'Ada',
+          text: 'Earlier context',
+          isBot: false,
+          isMention: false,
+        },
+        {
+          activityId: 'activity-current',
+          timestamp: now.toISOString(),
+          actorLabel: 'Ada',
+          text: 'Please review this',
+          isBot: false,
+          isMention: true,
+        },
+      ],
+      complete: true,
+      conversationId: '19:channel',
+      rootMessageId: 'root-1',
+      afterActivityId: null,
+      throughActivityId: 'activity-current',
+      triggerActivityId: 'activity-current',
+    }));
+    const setup = makeWorker({
+      activity: activity({
+        metadata: {
+          teams_conversation_type: 'channel',
+          teams_team_id: 'team-1',
+          teams_channel_id: 'channel-graph-1',
+          teams_has_mention: true,
+        },
+      }),
+      catchUp,
+    });
+
+    await setup.worker.checkOnce();
+    expect(catchUp).toHaveBeenCalledOnce();
+    expect(setup.create.mock.calls[0]?.[0].text).toContain('Earlier context');
+  });
+
+  it('does not advance or complete when Task admission fails', async () => {
+    const setup = makeWorker({
+      activity: activity(),
+      catchUp: async () => ({
+        activities: [],
+        complete: false,
+        conversationId: '19:channel',
+        rootMessageId: 'root-1',
+        afterActivityId: null,
+        throughActivityId: 'wrong-trigger',
+        triggerActivityId: 'wrong-trigger',
+      }),
+      gatewayCreate: async () => {
+        throw new Error('Task admission failed');
+      },
+    });
+
+    await setup.worker.checkOnce();
+    expect(setup.advance).not.toHaveBeenCalled();
+    expect(setup.complete).not.toHaveBeenCalled();
+    expect(setup.inbound.failQueued).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending', errorCode: 'Task admission failed' })
+    );
+  });
 });
 
 describe('TeamsGatewayWorker outbound fencing', () => {
-  function deliverySetup(addressOverrides: Record<string, unknown> = {}) {
+  function deliverySetup(
+    addressOverrides: Record<string, unknown> = {},
+    options: { attemptCount?: number; connectorFactory?: () => unknown } = {}
+  ) {
     const delivery = {
       delivery_id: 'delivery-1',
       message_id: 'message-1',
@@ -246,6 +335,7 @@ describe('TeamsGatewayWorker outbound fencing', () => {
       thread_session_map_id: 'mapping-1',
       provider_installation_id: 'teams-app',
       provider_config_generation: 3,
+      attempt_count: options.attemptCount ?? 1,
     };
     const claim = {
       delivery_id: 'delivery-1',
@@ -298,7 +388,9 @@ describe('TeamsGatewayWorker outbound fencing', () => {
         address: { findByChannelAndThread: vi.fn(async () => address) } as never,
         message: { findById: vi.fn(async () => ({ content: 'reply' })) } as never,
       },
-      connectorFactory: () => ({ channelType: 'teams', sendMessage }) as never,
+      connectorFactory:
+        (options.connectorFactory as never) ??
+        (() => ({ channelType: 'teams', sendMessage }) as never),
     });
     return { worker, fail, markEffectStarted, complete, markAmbiguous, sendMessage };
   }
@@ -322,5 +414,44 @@ describe('TeamsGatewayWorker outbound fencing', () => {
       expect.objectContaining({ errorCode: 'provider_effect_unknown' })
     );
     expect(setup.complete).not.toHaveBeenCalled();
+  });
+
+  it('retries failures before the effect marker with bounded backoff', async () => {
+    const setup = deliverySetup(
+      {},
+      {
+        connectorFactory: () => {
+          throw new Error('connector unavailable');
+        },
+      }
+    );
+    await setup.worker.checkOnce();
+    expect(setup.markEffectStarted).not.toHaveBeenCalled();
+    expect(setup.markAmbiguous).not.toHaveBeenCalled();
+    expect(setup.fail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'pending',
+        errorCode: 'pre_effect_failure',
+        nextAttemptAt: new Date(now.getTime() + 1_000),
+      })
+    );
+  });
+
+  it('dead-letters an exhausted pre-effect failure', async () => {
+    const setup = deliverySetup(
+      {},
+      {
+        attemptCount: 8,
+        connectorFactory: () => {
+          throw new Error('connector unavailable');
+        },
+      }
+    );
+    await setup.worker.checkOnce();
+    expect(setup.markEffectStarted).not.toHaveBeenCalled();
+    expect(setup.markAmbiguous).not.toHaveBeenCalled();
+    expect(setup.fail).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'dead_letter', errorCode: 'pre_effect_failure' })
+    );
   });
 });

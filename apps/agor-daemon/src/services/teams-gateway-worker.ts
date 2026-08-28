@@ -36,6 +36,7 @@ import {
   type TeamsStandardChannelHistoryFetcher,
 } from '../utils/teams-channel-history.js';
 import type { GatewayService } from './gateway.js';
+import { withVerifiedHttpGatewayAuthority } from './gateway-authority.js';
 
 const INBOUND_LEASE_MS = 30_000;
 const DELIVERY_LEASE_MS = 30_000;
@@ -43,11 +44,17 @@ const SCAN_BATCH = 25;
 const MAX_CONCURRENCY = 4;
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 5 * 60_000;
+const MAX_DELIVERY_ATTEMPTS = 8;
 const LOOP_INTERVAL_MS = 1_000;
 
 type InboundRepository = Pick<
   GatewayInboundEventRepository,
-  'findDueTeamsRefs' | 'claimQueued' | 'decryptQueuedPayload' | 'complete' | 'failQueued'
+  | 'findDueTeamsRefs'
+  | 'claimQueued'
+  | 'decryptQueuedPayload'
+  | 'recordDeliveryMetadata'
+  | 'complete'
+  | 'failQueued'
 >;
 type DeliveryRepository = Pick<
   TeamsMessageDeliveryRepository,
@@ -64,17 +71,31 @@ interface CorrelatedTeamsCatchUpResult {
   triggerActivityId?: string;
 }
 
+interface TeamsCatchUpDecision {
+  promptText: string;
+  outcome: 'used' | 'empty' | 'fallback';
+  reason?: string;
+}
+
 export interface TeamsGatewayWorkerRepositories {
   inbound: InboundRepository;
   delivery: DeliveryRepository;
   channel: Pick<GatewayChannelRepository, 'findById'>;
-  mapping: Pick<
-    ThreadSessionMapRepository,
-    'findById' | 'findByChannelAndThread' | 'advanceTeamsLastAdmittedActivityId'
-  >;
+  mapping: TeamsMappingRepository;
   address: Pick<TeamsConversationAddressRepository, 'findByChannelAndThread'>;
   message: Pick<MessagesRepository, 'findById'>;
 }
+
+type TeamsMappingRepository = Pick<
+  ThreadSessionMapRepository,
+  'findById' | 'findByChannelAndThread'
+> & {
+  advanceTeamsLastAdmittedActivityId(
+    id: import('@agor/core/types').ThreadSessionMapID,
+    cursor: string,
+    expectedPreviousCursor?: string | null
+  ): Promise<boolean>;
+};
 
 export interface TeamsGatewayWorkerOptions {
   tenantId?: TenantID | string;
@@ -133,6 +154,13 @@ function isDefinitiveProviderFailure(error: unknown): boolean {
   );
 }
 
+class TeamsDeliveryPreEffectError extends Error {
+  constructor(cause: unknown) {
+    super('Teams delivery failed before the provider effect marker', { cause });
+    this.name = 'TeamsDeliveryPreEffectError';
+  }
+}
+
 function payloadActivity(payload: Record<string, unknown>): NormalizedTeamsActivity {
   return payload as unknown as NormalizedTeamsActivity;
 }
@@ -146,13 +174,6 @@ function isTeamsCatchUpResult(
 function stringMetadata(activity: NormalizedTeamsActivity, key: string): string | null {
   const value = activity.metadata[key];
   return typeof value === 'string' && value.trim() ? value : null;
-}
-
-function isStandardChannelActivity(activity: NormalizedTeamsActivity): boolean {
-  return (
-    activity.conversationType.toLowerCase() === 'channel' &&
-    stringMetadata(activity, 'teams_channel_type')?.toLowerCase() === 'standard'
-  );
 }
 
 function formatTeamsCatchUpPrompt(
@@ -490,23 +511,63 @@ export class TeamsGatewayWorker {
     };
     if (
       activity.hasMention &&
-      isStandardChannelActivity(activity) &&
+      activity.conversationType.toLowerCase() === 'channel' &&
       this.catchUp &&
       catchUpConfig.mode !== 'off'
     ) {
-      promptText = await this.runCatchUp(channel, activity, mappingBeforeAdmission);
+      const decision = await this.runCatchUp(channel, activity, mappingBeforeAdmission);
+      promptText = decision.promptText;
+      if (this.inboundRepo.recordDeliveryMetadata) {
+        try {
+          await this.inboundRepo.recordDeliveryMetadata({
+            eventId: event.id,
+            channelId: channel.id,
+            processingToken: event.processing_token,
+            metadata: {
+              ...safeTeamsInboundMetadata(event.delivery_metadata),
+              teams_catch_up: {
+                outcome: decision.outcome,
+                ...(decision.reason ? { reason: decision.reason } : {}),
+              },
+            },
+            requireListenerClaim: false,
+          });
+        } catch (error) {
+          console.debug(
+            '[teams] catch-up diagnosis was not persisted',
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      }
     }
-    const result = await this.gatewayService.create({
-      channel_key: channel.channel_key,
-      thread_id: activity.threadId,
-      text: promptText,
-      user_name: activity.userName ?? activity.userId,
-      metadata: teamsInboundMetadata(activity),
-      teams_user_aad_object_id: activity.userAadObjectId ?? undefined,
-      gateway_inbound_event_id: event.id,
-      idempotency_task_id: gatewayInboundTaskId(event.id),
-      idempotency_session_id: gatewayInboundSessionId(event.id),
-    });
+    const result = await this.gatewayService.create(
+      withVerifiedHttpGatewayAuthority({
+        channel_key: channel.channel_key,
+        thread_id: activity.threadId,
+        text: promptText,
+        user_name: activity.userName ?? activity.userId,
+        metadata: teamsInboundMetadata(activity),
+        teams_user_aad_object_id: activity.userAadObjectId ?? undefined,
+        gateway_inbound_event_id: event.id,
+        idempotency_task_id: gatewayInboundTaskId(event.id),
+        idempotency_session_id: gatewayInboundSessionId(event.id),
+      })
+    );
+    if (result.success && result.taskId) {
+      // Advance only after stable Task admission. The compare-and-swap keeps a
+      // stale replica from moving the shared catch-up cursor backwards.
+      const actualMapping = await this.mappingRepo.findByChannelAndThread(
+        channel.id,
+        activity.threadId
+      );
+      if (actualMapping) {
+        await this.mappingRepo.advanceTeamsLastAdmittedActivityId(
+          actualMapping.id,
+          activity.activityId,
+          mappingBeforeAdmission?.teams_last_admitted_activity_id ?? null
+        );
+      }
+    }
     const completed = await this.inboundRepo.complete({
       eventId: event.id,
       channelId: channel.id,
@@ -516,26 +577,13 @@ export class TeamsGatewayWorker {
       requireListenerClaim: false,
     });
     if (!completed) throw new Error('teams_inbound_completion_fence_lost');
-    if (result.success && result.taskId) {
-      // The gateway is the admission authority; cursor advancement is best
-      // effort after its stable Task. A missing mapping cannot create a Task.
-      const actualMapping = await this.mappingRepo.findByChannelAndThread(
-        channel.id,
-        activity.threadId
-      );
-      if (actualMapping)
-        await this.mappingRepo.advanceTeamsLastAdmittedActivityId(
-          actualMapping.id,
-          activity.activityId
-        );
-    }
   }
 
   private async runCatchUp(
     channel: GatewayChannel,
     activity: NormalizedTeamsActivity,
     mapping: Awaited<ReturnType<ThreadSessionMapRepository['findByChannelAndThread']>>
-  ): Promise<string> {
+  ): Promise<TeamsCatchUpDecision> {
     const config = withTeamsConfigDefaults(channel.config);
     const catchUpConfig = config.catch_up as {
       mode?: 'off' | 'best_effort';
@@ -544,7 +592,9 @@ export class TeamsGatewayWorker {
       request_timeout_ms?: number;
     };
     const maxPromptBytes = catchUpConfig.max_prompt_bytes ?? 16 * 1024;
-    if (catchUpConfig.mode === 'off' || !this.catchUp) return activity.text;
+    if (catchUpConfig.mode === 'off' || !this.catchUp) {
+      return { promptText: activity.text, outcome: 'fallback', reason: 'disabled' };
+    }
     const afterActivityId = mapping?.teams_last_admitted_activity_id ?? null;
     const request = {
       channel,
@@ -575,13 +625,13 @@ export class TeamsGatewayWorker {
         '[teams] catch-up unavailable',
         error instanceof Error ? error.message : String(error)
       );
-      return activity.text;
+      return { promptText: activity.text, outcome: 'fallback', reason: 'unavailable' };
     } finally {
       if (timeout) clearTimeout(timeout);
     }
     if (!isTeamsCatchUpResult(result)) {
       console.debug('[teams] catch-up unavailable or lacked correlation');
-      return activity.text;
+      return { promptText: activity.text, outcome: 'fallback', reason: 'unavailable' };
     }
     if (
       !result.complete ||
@@ -592,7 +642,7 @@ export class TeamsGatewayWorker {
       result.triggerActivityId !== activity.activityId
     ) {
       console.debug('[teams] catch-up correlation incomplete');
-      return activity.text;
+      return { promptText: activity.text, outcome: 'fallback', reason: 'correlation_incomplete' };
     }
     const bounded = boundTeamsCatchUp(result.activities, {
       maxMessages: catchUpConfig.max_messages ?? 50,
@@ -600,14 +650,22 @@ export class TeamsGatewayWorker {
     });
     if (!bounded.complete) {
       console.debug(`[teams] catch-up best-effort incomplete: ${bounded.reason ?? 'unavailable'}`);
-      return activity.text;
+      return {
+        promptText: activity.text,
+        outcome: 'fallback',
+        reason: bounded.reason ?? 'incomplete',
+      };
     }
-    return formatTeamsCatchUpPrompt(
+    const promptText = formatTeamsCatchUpPrompt(
       bounded.activities,
       activity.activityId,
       activity.text,
       maxPromptBytes
     );
+    return {
+      promptText,
+      outcome: promptText === activity.text ? 'empty' : 'used',
+    };
   }
 
   private async processDelivery(deliveryId: TeamsMessageDelivery['delivery_id']): Promise<void> {
@@ -623,7 +681,24 @@ export class TeamsGatewayWorker {
     } catch (error) {
       if (error instanceof TeamsMessageDeliveryClaimLostError) return;
       try {
-        if (isDefinitiveProviderFailure(error)) {
+        if (error instanceof TeamsDeliveryPreEffectError) {
+          const retry = claim.delivery.attempt_count < MAX_DELIVERY_ATTEMPTS;
+          await this.deliveryRepo.fail({
+            deliveryId,
+            claimToken: claim.claim_token,
+            claimGeneration: claim.claim_generation,
+            status: retry ? 'pending' : 'dead_letter',
+            errorCode: 'pre_effect_failure',
+            ...(retry
+              ? {
+                  nextAttemptAt: new Date(
+                    this.now().getTime() + backoff(claim.delivery.attempt_count)
+                  ),
+                }
+              : {}),
+            now: this.now(),
+          });
+        } else if (isDefinitiveProviderFailure(error)) {
           await this.deliveryRepo.fail({
             deliveryId,
             claimToken: claim.claim_token,
@@ -651,6 +726,22 @@ export class TeamsGatewayWorker {
   }
 
   private async deliver(claim: TeamsMessageDeliveryClaim): Promise<void> {
+    let effectMarkerAttempted = false;
+    try {
+      await this.deliverClaim(claim, () => {
+        effectMarkerAttempted = true;
+      });
+    } catch (error) {
+      if (error instanceof TeamsMessageDeliveryClaimLostError) throw error;
+      if (!effectMarkerAttempted) throw new TeamsDeliveryPreEffectError(error);
+      throw error;
+    }
+  }
+
+  private async deliverClaim(
+    claim: TeamsMessageDeliveryClaim,
+    markEffectAttempted: () => void
+  ): Promise<void> {
     const delivery = claim.delivery;
     const [message, mapping, channel] = await Promise.all([
       this.messageRepo.findById(delivery.message_id as MessageID),
@@ -728,6 +819,7 @@ export class TeamsGatewayWorker {
       return;
     }
     const connector = this.connectorFactory(channel.config);
+    markEffectAttempted();
     await this.deliveryRepo.markEffectStarted({
       deliveryId: delivery.delivery_id,
       claimToken: claim.claim_token,

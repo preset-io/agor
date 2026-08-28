@@ -1018,6 +1018,15 @@ export function mergeGatewayChannelConfigPatch(
   return merged;
 }
 
+/** A Teams app password rotation keeps the provider authority unchanged. */
+export function isTeamsCredentialOnlyConfigPatch(patch: {
+  config?: Record<string, unknown>;
+}): boolean {
+  if (Object.keys(patch).length !== 1 || !patch.config || Array.isArray(patch.config)) return false;
+  const keys = Object.keys(patch.config);
+  return keys.length === 1 && keys[0] === 'app_password';
+}
+
 /** Fields that change the provider authority generation and binding. */
 export function isGatewayProviderAuthorityPatch(patch: {
   enabled?: boolean;

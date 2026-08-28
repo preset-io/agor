@@ -68,6 +68,7 @@ import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
 import { redactGatewayChannelForTransport } from '../../utils/gateway-channel-redaction.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
+import { readTeamsGatewayDiagnostics } from '../../utils/teams-gateway-diagnostics.js';
 import { getUploadLimits } from '../../utils/upload.js';
 import { getUploadStagingStore } from '../../utils/upload-staging.js';
 import {
@@ -1827,19 +1828,42 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
     'agor_gateway_teams_status',
     {
       description:
-        'Report the daemon-owned Teams gateway runtime contract (admin-only). This reports queue/worker mode and terminal-state semantics only; it does not probe Azure, Teams, Graph, credentials, or claim live provider health.',
+        'Report the daemon-owned Teams gateway runtime contract (admin-only). With gatewayChannelId, include bounded per-channel ingress, catch-up, and outbound queue diagnosis with safe state and terminal identifiers; it does not probe Azure, Teams, Graph, credentials, or claim live provider health.',
       annotations: { readOnlyHint: true },
-      inputSchema: z.strictObject({}),
+      inputSchema: z.strictObject({
+        gatewayChannelId: mcpOptionalId(
+          'gatewayChannelId',
+          'Teams gateway channel',
+          'Optional Teams gateway channel ID for bounded queue diagnosis.'
+        ),
+      }),
     },
-    async () => {
+    async (args) => {
       requireAdmin(ctx, 'read Teams gateway status');
       const worker = ctx.app.get('teamsGatewayWorker') as
         | { getStatus?: () => Record<string, unknown> }
         | undefined;
-      return textResult({
+      const status = {
         status: worker?.getStatus?.() ?? { running: false },
         live_provider_verification: 'not_performed',
         callback_url_mode: 'shared /gateway/teams/:gatewayChannelId/activities',
+      };
+      if (!args.gatewayChannelId) return textResult(status);
+      return runWithMcpTenantDatabaseScope(ctx, async (db) => {
+        const channel = await new GatewayChannelRepository(db).findById(args.gatewayChannelId!);
+        if (!channel) throw new Error(`Gateway channel not found: ${args.gatewayChannelId}`);
+        if (channel.channel_type !== 'teams') {
+          throw new Error(`Gateway channel ${channel.id} is not a Teams channel`);
+        }
+        return textResult({
+          ...status,
+          channel: {
+            id: channel.id,
+            enabled: channel.enabled,
+            provider_config_generation: channel.provider_config_generation,
+          },
+          diagnosis: await readTeamsGatewayDiagnostics(db, channel.id),
+        });
       });
     }
   );

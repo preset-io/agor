@@ -127,6 +127,14 @@ describe('gateway channel MCP agentic-tool schemas', () => {
       }).success
     ).toBe(false);
   });
+
+  it('keeps Teams status diagnosis optional and strict', async () => {
+    const tools = await captureTools();
+    const schema = tools.agor_gateway_teams_status.cfg.inputSchema;
+    expect(schema.safeParse({}).success).toBe(true);
+    expect(schema.safeParse({ gatewayChannelId: 'teams-channel' }).success).toBe(true);
+    expect(schema.safeParse({ unexpected: true }).success).toBe(false);
+  });
 });
 
 async function captureTools(
