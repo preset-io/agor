@@ -221,6 +221,16 @@ export interface AgenticToolCapabilities {
   /** Can spawn child sessions for subsessions */
   supportsChildSpawn: boolean;
   /**
+   * Whether the tool's SDK/config home can be reliably relocated to an
+   * Agor-chosen directory via environment variable(s), so its persisted state
+   * (transcripts, history, config, skills, plugins) lands wherever Agor points
+   * it. Derived from the presence of a per-tool env-var mapping — see
+   * {@link AgenticToolIntegration.configHomeOverride}; `false` when no reliable
+   * relocation mechanism exists (e.g. cursor, whose relocation is confirmed
+   * broken upstream). Non-sensitive: this type is browser-bundled.
+   */
+  supportsConfigHomeOverride: boolean;
+  /**
    * Supported reasoning-effort overrides. Absent when the runtime has no
    * effort control.
    */
