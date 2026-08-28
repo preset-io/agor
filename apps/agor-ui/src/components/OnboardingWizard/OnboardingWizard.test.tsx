@@ -503,6 +503,32 @@ describe('OnboardingWizard', () => {
     });
   });
 
+  it('strips whitespace picked up from a wrapped terminal paste before saving a subscription token', async () => {
+    // `claude setup-token` prints a long token that a narrow terminal soft-wraps
+    // across lines; copying the wrapped output can carry an embedded newline.
+    const onUpdateUser = vi.fn(async () => undefined);
+    renderWizard({ initialStep: 'llm', onUpdateUser });
+
+    clickButton('Claude');
+    clickButton('Subscription token');
+
+    fireEvent.change(screen.getByLabelText('Claude subscription token'), {
+      target: { value: 'sk-ant-oat01-abc\n123-def456' },
+    });
+    clickButton(/^connect →/i);
+
+    await waitFor(() => {
+      expect(onUpdateUser).toHaveBeenCalledWith(
+        'user-1',
+        expect.objectContaining({
+          agentic_tools: {
+            'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-abc123-def456' },
+          },
+        })
+      );
+    });
+  });
+
   it('shows a previously connected provider as verified and lets the user continue without re-entering a key', async () => {
     const onCheckAuth = vi.fn(async () => ({ authenticated: true }));
     const onUpdateUser = vi.fn(async () => undefined);

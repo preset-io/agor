@@ -29,6 +29,7 @@ import {
 import { Alert, Button, Input, Modal, Spin, Tag, Tooltip, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { useAuthenticatedAuthorityScope } from '../../hooks/useAuthorityOperationGuard';
 import { useAgorStore } from '../../store/agorStore';
 import {
@@ -156,7 +157,7 @@ const LLM_OPTIONS: LlmOption[] = [
 const GOAL_CAP_HINT = 'Deselect one to swap it for this.';
 
 function validateLlmKeyPattern(agent: AgenticToolName, key: string): string | null {
-  const k = key.trim();
+  const k = sanitizeSecretValue(key);
   if (!k) return null;
   switch (agent) {
     case 'claude-code':
@@ -657,11 +658,11 @@ export function OnboardingWizard({
         // Key stored, check still in progress — keep enabled so user isn't stuck
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return true;
         // Require a new key with valid format (stored key absent or broken)
-        if (!apiKey.trim()) return false;
+        if (!sanitizeSecretValue(apiKey)) return false;
         // Subscription tokens have no fixed format — any non-empty string is
         // accepted (the daemon validates the token).
         if (authMethod === 'claude-subscription-token') return true;
-        return validateLlmKeyPattern(selectedAgent, apiKey.trim()) === null;
+        return validateLlmKeyPattern(selectedAgent, sanitizeSecretValue(apiKey)) === null;
       }
       case 'workspace':
         // A teammate name is required — it names the new board we always create.
@@ -698,10 +699,10 @@ export function OnboardingWizard({
           return llmAuthVerified.codex === true ? null : 'Import your Codex login to continue';
         }
         if (agentHasKey(selectedAgent) && llmAuthVerified[selectedAgent] === undefined) return null;
-        if (!apiKey.trim()) {
+        if (!sanitizeSecretValue(apiKey)) {
           return 'Enter your API key to continue';
         }
-        const err = validateLlmKeyPattern(selectedAgent, apiKey.trim());
+        const err = validateLlmKeyPattern(selectedAgent, sanitizeSecretValue(apiKey));
         return err ?? null;
       }
       case 'workspace':
@@ -869,11 +870,11 @@ export function OnboardingWizard({
           goToStep('done');
           return;
         }
-        if (!user || !apiKey.trim()) return;
+        if (!user || !sanitizeSecretValue(apiKey)) return;
         // Subscription tokens have no fixed format (see primaryEnabled/disabledReason
         // above, which already treat them as exempt) — only pattern-validate API keys.
         if (authMethod !== 'claude-subscription-token') {
-          const patternErr = validateLlmKeyPattern(selectedAgent, apiKey.trim());
+          const patternErr = validateLlmKeyPattern(selectedAgent, sanitizeSecretValue(apiKey));
           if (patternErr) {
             setLlmError(patternErr);
             return;
@@ -883,7 +884,7 @@ export function OnboardingWizard({
         setLlmError(null);
         if (onCheckAuth) {
           try {
-            const authResult = await onCheckAuth(selectedAgent, apiKey.trim());
+            const authResult = await onCheckAuth(selectedAgent, sanitizeSecretValue(apiKey));
             if (!isCurrent()) return;
             // Only block on a definitive rejection; 'unknown' (transient/transport
             // failure) proceeds to save rather than rejecting a possibly-valid key.
@@ -904,7 +905,7 @@ export function OnboardingWizard({
         try {
           await onUpdateUser(user.user_id, {
             agentic_tools: {
-              [selectedAgent]: { [keyName]: apiKey.trim() },
+              [selectedAgent]: { [keyName]: sanitizeSecretValue(apiKey) },
             } as UpdateUserInput['agentic_tools'],
           });
           if (!isCurrent()) return;
