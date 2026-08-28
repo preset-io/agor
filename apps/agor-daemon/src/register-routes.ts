@@ -1815,6 +1815,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         );
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
+        // This is a daemon-owned lifecycle transition. Preserve the authenticated
+        // actor and trusted tenant context for hooks/publication, but do not send
+        // the originating transport provider back through server-managed write
+        // guards: external callers cannot finalize Task or Message state.
+        const failureParams = { ...params, provider: undefined };
         console.error(
           `❌ [Daemon] Executor spawn failed for session=${shortId(sessionId)} task=${shortId(taskId)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
           error
@@ -1829,7 +1834,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             error_message: errorMessage,
           },
           'Task',
-          params
+          failureParams
         );
 
         // Synthesize a system message so the chat surfaces *why* the agent
@@ -1851,7 +1856,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             content: errorContent,
             role: MessageRole.ASSISTANT,
             metadata: { is_meta: true },
-            params,
+            params: failureParams,
           });
         } catch (sysErr) {
           console.warn(

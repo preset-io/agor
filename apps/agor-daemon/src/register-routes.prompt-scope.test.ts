@@ -70,6 +70,17 @@ describe('prompt and widget transaction scopes', () => {
     expect(run).toContain('messageSource: normalizeMessageSource(data.messageSource, params)');
   });
 
+  it('finalizes executor spawn failures as trusted daemon writes', () => {
+    const catchStart = source.indexOf('const failureParams = { ...params, provider: undefined };');
+    const catchEnd = source.indexOf("app.service('tasks').emit('failed'", catchStart);
+    const spawnFailure = source.slice(catchStart, catchEnd);
+
+    expect(catchStart).toBeGreaterThan(0);
+    expect(catchEnd).toBeGreaterThan(catchStart);
+    expect(spawnFailure).toContain("'Task',\n          failureParams");
+    expect(spawnFailure).toContain('params: failureParams');
+  });
+
   it('commits required session configuration before using ordinary prompt admission', () => {
     const start = source.indexOf("'/sessions/:id/initialize'");
     const end = source.indexOf('// Health endpoint', start);
