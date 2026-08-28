@@ -1855,10 +1855,6 @@ export async function getGitState(repoPath: string): Promise<string> {
   try {
     // Check if it's a git repo first
     if (!(await isGitRepo(repoPath))) {
-      // The prompt executor adds the session/task/branch context at its
-      // capture boundary. Keep this low-level path-only detail at debug so a
-      // missing checkout does not produce duplicate warning noise.
-      console.debug(`[getGitState] Not a git repo: ${repoPath}`);
       return 'unknown';
     }
 
@@ -1873,20 +1869,12 @@ export async function getGitState(repoPath: string): Promise<string> {
         if (headSha) {
           const clean = await isClean(repoPath);
           const trimmed = headSha.trim();
-          console.debug(
-            `[getGitState] git.log() returned no SHA but rev-parse HEAD succeeded: ${trimmed.substring(0, 8)} (${repoPath})`
-          );
           return clean ? trimmed : `${trimmed}-dirty`;
         }
-      } catch (revParseError) {
-        console.debug(
-          `[getGitState] Both git.log() and rev-parse HEAD failed for ${repoPath}:`,
-          revParseError
-        );
+      } catch {
+        // Fall through to the documented unknown result. Owning callers decide
+        // whether and how to record contextual diagnostics.
       }
-      console.debug(
-        `[getGitState] Could not determine SHA for ${repoPath} (git log returned empty)`
-      );
       return 'unknown';
     }
 
@@ -1894,8 +1882,7 @@ export async function getGitState(repoPath: string): Promise<string> {
     const clean = await isClean(repoPath);
 
     return clean ? sha : `${sha}-dirty`;
-  } catch (error) {
-    console.debug(`[getGitState] Failed for ${repoPath}:`, error);
+  } catch {
     return 'unknown';
   }
 }

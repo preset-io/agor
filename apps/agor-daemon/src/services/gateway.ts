@@ -3550,6 +3550,24 @@ export class GatewayService {
    * processing acknowledgement. If no buffered message exists, this is a no-op.
    */
   async flushOutboundBuffer(sessionId: string): Promise<void> {
+    // This hook runs for every promptable Session, but only mapped GitHub and
+    // Shortcut Sessions have buffered outbound work. Reject the common no-op
+    // cases before reading durable Message history.
+    const mapping = await this.threadMapRepo.findBySession(sessionId);
+    if (!mapping) {
+      this.lastMessageBuffer.delete(sessionId);
+      return;
+    }
+
+    const channel = await this.channelRepo.findById(mapping.channel_id);
+    if (
+      !channel?.enabled ||
+      (channel.channel_type !== 'github' && channel.channel_type !== 'shortcut')
+    ) {
+      this.lastMessageBuffer.delete(sessionId);
+      return;
+    }
+
     let bufferedMessage = this.lastMessageBuffer.get(sessionId);
     let durableMessageId: string | undefined;
     let durableReplyMetadata: Record<string, unknown> | undefined;
@@ -3576,21 +3594,6 @@ export class GatewayService {
     if (!bufferedMessage) return;
 
     this.lastMessageBuffer.delete(sessionId);
-
-    // Look up session → thread mapping
-    const mapping = await this.threadMapRepo.findBySession(sessionId);
-    // Sessions without a gateway mapping are normal (for example, browser or
-    // MCP sessions). There is no outbound work and therefore no operational
-    // event to record here.
-    if (!mapping) return;
-
-    const channel = await this.channelRepo.findById(mapping.channel_id);
-    if (
-      !channel?.enabled ||
-      (channel.channel_type !== 'github' && channel.channel_type !== 'shortcut')
-    ) {
-      return;
-    }
 
     const mappingMetadata = ((mapping.metadata as Record<string, unknown>) ?? {}) as Record<
       string,

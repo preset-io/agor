@@ -239,9 +239,9 @@ current waves to that not-yet-deployed code.
 9. **P2 — contextual Git-state warning (implemented locally, pending deploy).**
    The prompt executor now adds short session, task, and branch IDs plus phase,
    `storage_mode`, `archived`, and `filesystem_status` to one contextual
-   warning. Path-only diagnostics from the generic Git helper are debug-level,
-   avoiding duplicate warning noise. This uses the existing capture wrapper
-   context and no extra executor/process.
+   warning. The generic Git helper returns its documented `unknown` sentinel
+   without logging path-only diagnostics, avoiding duplicate warning noise.
+   This uses the existing capture wrapper context and no extra executor/process.
 
 ## Expected / fail-closed (“nothing actionable” by itself)
 

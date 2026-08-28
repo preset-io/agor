@@ -340,7 +340,9 @@ async function captureGitStateForSession(
     const sha = await getGitState(branch.path);
     if (sha === 'unknown') {
       console.warn(`[Git SHA Capture] Git state unknown ${branchContext}`);
+      return { sha, ref: 'unknown' };
     }
+
     let ref = 'unknown';
     try {
       ref = await getCurrentBranch(branch.path);

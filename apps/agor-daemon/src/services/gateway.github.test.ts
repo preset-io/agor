@@ -197,6 +197,7 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     }),
   };
   const findByEmailForAlignment = vi.fn(async () => alignedUser);
+  const messagesRepo = { findBySessionId: vi.fn(async () => messages) };
   const inboundEventRepo = {
     claim: vi.fn(async () => {
       order.push('claim');
@@ -223,7 +224,7 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     usersRepo: { findByEmailForAlignment },
     outboundRepo: { findUnconsumedByChannelAndThread: vi.fn(async () => null) },
     inboundEventRepo,
-    messagesRepo: { findBySessionId: vi.fn(async () => messages) },
+    messagesRepo,
     taskRepo: {
       findById: vi.fn(async () => (taskMetadata ? { metadata: taskMetadata } : null)),
     },
@@ -247,6 +248,7 @@ function makeGitHubHarness(existingMapping: ThreadSessionMap | null = null) {
     promptCreate,
     channelRepo,
     threadMapRepo,
+    messagesRepo,
     findByEmailForAlignment,
     inboundEventRepo,
     getMapping: () => mapping,
@@ -468,5 +470,17 @@ describe('GatewayService GitHub integration', () => {
     expect(harness.threadMapRepo.mergeMetadata).toHaveBeenCalledWith(mapping.id, {
       gateway_last_flushed_message_id: '019fd900-0000-7000-8000-000000000040',
     });
+  });
+
+  it('skips durable message reads when the session has no gateway mapping', async () => {
+    const harness = makeGitHubHarness(null);
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer('019fd900-0000-7000-8000-000000000099')
+    );
+
+    expect(harness.threadMapRepo.findBySession).toHaveBeenCalledOnce();
+    expect(harness.messagesRepo.findBySessionId).not.toHaveBeenCalled();
+    expect(harness.channelRepo.findById).not.toHaveBeenCalled();
   });
 });
