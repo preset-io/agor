@@ -67,6 +67,17 @@ const buildHarness = (options: {
 
   const sessionsService = {
     async get(sessionId: string) {
+      return {
+        session_id: sessionId,
+        branch_id: BRANCH_ID,
+        created_by: CREATOR_ID,
+        unix_username: 'alice',
+      };
+    },
+  };
+
+  const sessionsRepository = {
+    async findById(sessionId: string) {
       harness.sessionReads += 1;
       return {
         session_id: sessionId,
@@ -101,7 +112,7 @@ const buildHarness = (options: {
     boardsService: undefined,
     branchRepository: {} as RegisterHooksContext['branchRepository'],
     usersRepository: usersRepository as unknown as RegisterHooksContext['usersRepository'],
-    sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    sessionsRepository: sessionsRepository as unknown as RegisterHooksContext['sessionsRepository'],
   });
 
   return harness;
