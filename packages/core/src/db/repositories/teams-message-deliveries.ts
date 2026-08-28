@@ -50,6 +50,8 @@ export interface TeamsMessageDeliveryClaim {
   delivery: TeamsMessageDelivery;
 }
 
+const MAX_TEAMS_RETRY_DELAY_MS = 5 * 60_000;
+
 export class TeamsMessageDeliveryClaimLostError extends Error {
   constructor(deliveryId: string) {
     super(`Teams message delivery claim was lost: ${deliveryId}`);
@@ -495,9 +497,19 @@ export class TeamsMessageDeliveryRepository {
     claimGeneration: number;
     status: 'pending' | 'canceled' | 'dead_letter';
     errorCode: string;
-    nextAttemptAt?: Date;
+    /** Bounded delay added to the transaction's database timestamp. */
+    retryDelayMs?: number;
+    /** Deterministic SQLite test clock; PostgreSQL always uses database time. */
     now?: Date;
   }): Promise<TeamsMessageDelivery> {
+    if (
+      input.retryDelayMs !== undefined &&
+      (!Number.isSafeInteger(input.retryDelayMs) ||
+        input.retryDelayMs < 0 ||
+        input.retryDelayMs > MAX_TEAMS_RETRY_DELAY_MS)
+    ) {
+      throw new RepositoryError('Teams retry delay must be between 0 and 5 minutes');
+    }
     return runDatabaseTransaction(this.db, async (tx) => {
       await lockRowForUpdate(
         tx,
@@ -526,7 +538,8 @@ export class TeamsMessageDeliveryRepository {
           claim_expires_at: null,
           effect_started_at: null,
           last_error_code: input.errorCode,
-          next_attempt_at: input.nextAttemptAt ?? now,
+          next_attempt_at:
+            input.retryDelayMs === undefined ? now : new Date(now.getTime() + input.retryDelayMs),
           canceled_at: input.status === 'canceled' ? now : null,
           dead_lettered_at: input.status === 'dead_letter' ? now : null,
           updated_at: now,

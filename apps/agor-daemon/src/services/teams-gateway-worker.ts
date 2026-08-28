@@ -27,6 +27,7 @@ import type {
   GatewayInboundEvent,
   GatewayInboundEventID,
   MessageID,
+  TeamsConversationAddressID,
   TeamsMessageDelivery,
   TenantID,
 } from '@agor/core/types';
@@ -85,7 +86,7 @@ export interface TeamsGatewayWorkerRepositories {
   channel: Pick<GatewayChannelRepository, 'findById'>;
   mapping: TeamsMappingRepository;
   address: Pick<TeamsConversationAddressRepository, 'findByChannelAndThread'> & {
-    isExpired?: (addressId: string) => Promise<boolean>;
+    isExpired?: (addressId: TeamsConversationAddressID) => Promise<boolean>;
   };
   message: Pick<MessagesRepository, 'findById'>;
 }
@@ -487,9 +488,7 @@ export class TeamsGatewayWorker {
         processingToken: event.processing_token,
         status: retry ? 'pending' : 'dead_letter',
         errorCode: teamsGatewayErrorCode(error),
-        nextAttemptAt: retry
-          ? new Date(this.now().getTime() + backoff(event.attempt_count))
-          : undefined,
+        ...(retry ? { retryDelayMs: backoff(event.attempt_count) } : {}),
       });
     }
   }
@@ -731,13 +730,7 @@ export class TeamsGatewayWorker {
             claimGeneration: claim.claim_generation,
             status: retry ? 'pending' : 'dead_letter',
             errorCode: 'pre_effect_failure',
-            ...(retry
-              ? {
-                  nextAttemptAt: new Date(
-                    this.now().getTime() + backoff(claim.delivery.attempt_count)
-                  ),
-                }
-              : {}),
+            ...(retry ? { retryDelayMs: backoff(claim.delivery.attempt_count) } : {}),
           });
         } else if (isDefinitiveProviderFailure(error)) {
           await this.deliveryRepo.fail({
@@ -816,7 +809,7 @@ export class TeamsGatewayWorker {
     const currentConfig = withTeamsConfigDefaults(channel.config);
     const addressExpired = addressRow
       ? this.addressRepo.isExpired
-        ? await this.addressRepo.isExpired(addressRow.address_id as string)
+        ? await this.addressRepo.isExpired(addressRow.address_id)
         : addressRow.expires_at !== null &&
           addressRow.expires_at !== undefined &&
           new Date(addressRow.expires_at).getTime() <= this.now().getTime()

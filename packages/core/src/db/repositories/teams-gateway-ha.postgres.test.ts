@@ -303,7 +303,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
     });
   });
 
-  it('uses PostgreSQL transaction time for skewed discovery, leases, and effect fences', async () => {
+  it('uses PostgreSQL transaction time for skewed discovery, retries, leases, and effect fences', async () => {
     const tenantId = `teams-pg-clock-${generateId()}` as TenantID;
     const { channel, mapping } = await seedTeamsChannel(dbA, tenantId);
     const admitted = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
@@ -358,6 +358,44 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
         })
       )
     ).toBe(true);
+
+    const retriedInbound = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new GatewayInboundEventRepository(scoped).admitVerifiedHttp(
+        admission(channel.id, tenantId, `teams:activity:retry-${generateId()}`)
+      )
+    );
+    const retriedInboundClaim = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new GatewayInboundEventRepository(scoped).claimQueued(
+        retriedInbound.event.id,
+        'clock-retry-inbound',
+        30_000,
+        callerBehind
+      )
+    );
+    expect(retriedInboundClaim).toBeTruthy();
+    const inboundRetryStartedAt = Date.now();
+    await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new GatewayInboundEventRepository(scoped).failQueued({
+        eventId: retriedInbound.event.id,
+        processingToken: 'clock-retry-inbound',
+        status: 'pending',
+        errorCode: 'transient',
+        retryDelayMs: 60_000,
+        now: callerAhead,
+      })
+    );
+    const inboundRetryRow = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new GatewayInboundEventRepository(scoped).findByProviderEvent(
+        channel.id,
+        retriedInbound.event.provider_event_id
+      )
+    );
+    expect(new Date(inboundRetryRow!.next_attempt_at).getTime()).toBeGreaterThan(
+      inboundRetryStartedAt + 55_000
+    );
+    expect(new Date(inboundRetryRow!.next_attempt_at).getTime()).toBeLessThan(
+      callerAhead.getTime()
+    );
 
     const deliveries = new TeamsMessageDeliveryRepository(dbA);
     let messageId: MessageID;
@@ -422,5 +460,52 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
         })
       )
     ).resolves.toMatchObject({ status: 'completed' });
+
+    let retryMessageId: MessageID;
+    await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+      const messages = new MessagesRepository(scoped, (tx, message) =>
+        deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+      );
+      const message = await messages.create({
+        message_id: generateId() as MessageID,
+        session_id: mapping.session_id,
+        type: 'assistant',
+        role: MessageRole.ASSISTANT,
+        index: 1,
+        timestamp: new Date().toISOString(),
+        content_preview: 'clock retry reply',
+        content: 'clock retry reply',
+      });
+      retryMessageId = message.message_id;
+    });
+    const retryDelivery = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new TeamsMessageDeliveryRepository(scoped).findByMessageId(retryMessageId!)
+    );
+    expect(retryDelivery).toBeTruthy();
+    const retryDeliveryClaim = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new TeamsMessageDeliveryRepository(scoped).claim(
+        retryDelivery!.delivery_id,
+        'clock-retry-delivery',
+        30_000,
+        callerBehind
+      )
+    );
+    expect(retryDeliveryClaim).toBeTruthy();
+    const outboundRetryStartedAt = Date.now();
+    const failedDelivery = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new TeamsMessageDeliveryRepository(scoped).fail({
+        deliveryId: retryDelivery!.delivery_id,
+        claimToken: retryDeliveryClaim!.claim_token,
+        claimGeneration: retryDeliveryClaim!.claim_generation,
+        status: 'pending',
+        errorCode: 'transient',
+        retryDelayMs: 60_000,
+        now: callerAhead,
+      })
+    );
+    expect(new Date(failedDelivery.next_attempt_at).getTime()).toBeGreaterThan(
+      outboundRetryStartedAt + 55_000
+    );
+    expect(new Date(failedDelivery.next_attempt_at).getTime()).toBeLessThan(callerAhead.getTime());
   });
 });

@@ -349,6 +349,7 @@ describe('TeamsGatewayWorker inbound admission', () => {
       expect.objectContaining({
         status: 'pending',
         errorCode: 'teams_gateway_service_unavailable',
+        retryDelayMs: 1_000,
       })
     );
   });
@@ -364,7 +365,6 @@ describe('TeamsGatewayWorker inbound admission', () => {
       expect.objectContaining({
         status: 'dead_letter',
         errorCode: 'teams_payload_identity_mismatch',
-        nextAttemptAt: undefined,
       })
     );
   });
@@ -530,7 +530,7 @@ describe('TeamsGatewayWorker outbound fencing', () => {
       expect.objectContaining({
         status: 'pending',
         errorCode: 'pre_effect_failure',
-        nextAttemptAt: new Date(now.getTime() + 1_000),
+        retryDelayMs: 1_000,
       })
     );
   });
@@ -563,7 +563,7 @@ describe('TeamsGatewayWorker outbound fencing', () => {
       expect.objectContaining({
         status: 'pending',
         errorCode: 'pre_effect_failure',
-        nextAttemptAt: new Date(now.getTime() + 1_000),
+        retryDelayMs: 1_000,
       })
     );
   });

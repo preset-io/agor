@@ -475,4 +475,62 @@ describe('Teams gateway HA repositories', () => {
       });
     }
   );
+
+  ownedDbTest(
+    'schedules inbound and outbound retries from the injected SQLite database time',
+    async ({ db }) => {
+      const { channel, mapping } = await seedTeamsMapping(db);
+      const inbound = new GatewayInboundEventRepository(db);
+      const admitted = await inbound.admitVerifiedHttp(
+        admissionInput(channel.id, channel.provider_config_generation, 'teams:activity:retry')
+      );
+      const inboundNow = new Date(admitted.event.next_attempt_at);
+      expect(
+        await inbound.claimQueued(admitted.event.id, 'inbound-retry', 30_000, inboundNow)
+      ).toBeTruthy();
+      expect(
+        await inbound.failQueued({
+          eventId: admitted.event.id,
+          processingToken: 'inbound-retry',
+          status: 'pending',
+          errorCode: 'transient',
+          retryDelayMs: 1_234,
+          now: inboundNow,
+        })
+      ).toBe(true);
+      const retriedInbound = await inbound.findByProviderEvent(channel.id, 'teams:activity:retry');
+      expect(new Date(retriedInbound!.next_attempt_at).getTime()).toBe(
+        inboundNow.getTime() + 1_234
+      );
+
+      const deliveries = new TeamsMessageDeliveryRepository(db);
+      const messages = new MessagesRepository(db, (tx, message) =>
+        deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+      );
+      const message = await messages.create(assistantMessage(mapping.session_id, 0));
+      const delivery = await deliveries.findByMessageId(message.message_id);
+      if (!delivery) throw new Error('missing Teams delivery');
+      const outboundNow = new Date(delivery.next_attempt_at);
+      const claim = await deliveries.claim(
+        delivery.delivery_id,
+        'outbound-retry',
+        30_000,
+        outboundNow
+      );
+      if (!claim) throw new Error('missing delivery claim');
+      await deliveries.fail({
+        deliveryId: delivery.delivery_id,
+        claimToken: claim.claim_token,
+        claimGeneration: claim.claim_generation,
+        status: 'pending',
+        errorCode: 'transient',
+        retryDelayMs: 2_345,
+        now: outboundNow,
+      });
+      const retriedDelivery = await deliveries.findById(delivery.delivery_id);
+      expect(new Date(retriedDelivery!.next_attempt_at).getTime()).toBe(
+        outboundNow.getTime() + 2_345
+      );
+    }
+  );
 });

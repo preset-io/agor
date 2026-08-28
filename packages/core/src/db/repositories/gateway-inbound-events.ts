@@ -65,6 +65,8 @@ export interface GatewayInboundEventClaimInput {
   requireListenerClaim: boolean;
 }
 
+const MAX_TEAMS_RETRY_DELAY_MS = 5 * 60_000;
+
 export type GatewayInboundEventClaimResult =
   | { outcome: 'claimed'; event: GatewayInboundEvent }
   | { outcome: 'completed_duplicate'; event: GatewayInboundEvent }
@@ -587,9 +589,19 @@ export class GatewayInboundEventRepository {
     processingToken: string;
     status: 'pending' | 'dead_letter';
     errorCode: string;
-    nextAttemptAt?: Date;
+    /** Bounded delay added to the transaction's database timestamp. */
+    retryDelayMs?: number;
+    /** Deterministic SQLite test clock; PostgreSQL always uses database time. */
     now?: Date;
   }): Promise<boolean> {
+    if (
+      input.retryDelayMs !== undefined &&
+      (!Number.isSafeInteger(input.retryDelayMs) ||
+        input.retryDelayMs < 0 ||
+        input.retryDelayMs > MAX_TEAMS_RETRY_DELAY_MS)
+    ) {
+      throw new RepositoryError('Teams retry delay must be between 0 and 5 minutes');
+    }
     return runDatabaseTransaction(
       this.db,
       async (txDb) => {
@@ -615,7 +627,10 @@ export class GatewayInboundEventRepository {
           .set({
             status: input.status,
             processing_expires_at: dbNow,
-            next_attempt_at: input.nextAttemptAt ?? dbNow,
+            next_attempt_at:
+              input.retryDelayMs === undefined
+                ? dbNow
+                : new Date(dbNow.getTime() + input.retryDelayMs),
             last_error_code: input.errorCode,
             ...(input.status === 'dead_letter'
               ? { payload_encrypted: null, payload_expires_at: null }
