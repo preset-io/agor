@@ -97,7 +97,6 @@ function runtimeAuthority(seed: TenantSeed, taskId: string) {
     session_id: seed.sessionId,
     branch_id: seed.branchId,
     branchRbacEnabled: true,
-    allowSuperadmin: false,
   };
 }
 
@@ -111,7 +110,6 @@ async function authorizeRuntime(
   const authority = runtimeAuthority(seed, task.task_id);
   await tasks.bindExecutorLaunchAuthority(task.task_id, {
     branchRbacEnabled: true,
-    allowSuperadmin: false,
   });
   await tasks.connectExecutor(task.task_id, connectedAt);
   const now = new Date();

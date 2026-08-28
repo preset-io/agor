@@ -120,6 +120,8 @@ function roleGrantsSessionPrompt(role: unknown): boolean {
  * primary owner -> direct-user shadow -> additive active groups -> unmatched
  * Others. Fixed cumulative roles let group capability be represented by the
  * greatest role rank, while filesystem access is ranked independently.
+ * Global superadmin bypass is intentionally excluded: administration does not
+ * grant prompt authority or widen one principal's projected Branch mounts.
  */
 export async function resolveSessionRuntimeBranchAccess(
   db: Database,
@@ -127,7 +129,6 @@ export async function resolveSessionRuntimeBranchAccess(
     sessionId: SessionID | string;
     principalUserId: UserID | string;
     branchRbacEnabled: boolean;
-    allowSuperadmin: boolean;
   }
 ): Promise<SessionRuntimeBranchAccess | null> {
   const principal = input.principalUserId;
@@ -211,7 +212,6 @@ export async function resolveSessionRuntimeBranchAccess(
     branch_id: branches.branch_id,
     session_owner_user_id: sessions.created_by,
     principal_user_id: users.user_id,
-    principal_role: users.role,
     branch_primary_owner_user_id: branches.primary_owner_user_id,
     sharing_mode: branchPermissionConfigs.sharing_mode,
     others_role: branchPermissionConfigs.others_role,
@@ -256,11 +256,6 @@ export async function resolveSessionRuntimeBranchAccess(
 
   const principalUserId =
     typeof row.principal_user_id === 'string' ? row.principal_user_id : undefined;
-  const principalRole = typeof row.principal_role === 'string' ? row.principal_role : undefined;
-  const isSuperadminBypass =
-    principalUserId !== undefined &&
-    input.allowSuperadmin &&
-    (principalRole === 'superadmin' || principalRole === 'owner');
   const isPrimaryOwner =
     principalUserId !== undefined && row.branch_primary_owner_user_id === principalUserId;
   const directMatched = typeof row.direct_role === 'string';
@@ -269,7 +264,7 @@ export async function resolveSessionRuntimeBranchAccess(
 
   let canPromptOwn = false;
   let fsAccess: CapabilityPolicyFsAccess = 'none';
-  if (principalUserId && (!input.branchRbacEnabled || isSuperadminBypass || isPrimaryOwner)) {
+  if (principalUserId && (!input.branchRbacEnabled || isPrimaryOwner)) {
     canPromptOwn = true;
     fsAccess = 'write';
   } else if (principalUserId && row.sharing_mode === 'shared') {
@@ -298,17 +293,19 @@ export async function resolveSessionRuntimeBranchAccess(
   const ownsSession =
     principalUserId !== undefined && principalUserId === row.session_owner_user_id;
   const sharedSessionAllowed =
-    isSuperadminBypass ||
-    (Boolean(row.workspace_sharing_enabled) &&
-      Boolean(row.owner_sharing_enabled) &&
-      Boolean(row.principal_sharing_granted));
+    Boolean(row.workspace_sharing_enabled) &&
+    Boolean(row.owner_sharing_enabled) &&
+    Boolean(row.principal_sharing_granted);
   const observedAt =
     row.observed_at instanceof Date ? row.observed_at : new Date(String(row.observed_at));
   return {
     branch_id: String(row.branch_id),
     principal_available: principalUserId !== undefined,
     can_prompt_session: Boolean(
-      principalUserId && canPromptOwn && (ownsSession || sharedSessionAllowed)
+      principalUserId &&
+        // RBAC-disabled admission intentionally permits any existing member to
+        // prompt the Session; its legacy filesystem projection remains write.
+        (!input.branchRbacEnabled || (canPromptOwn && (ownsSession || sharedSessionAllowed)))
     ),
     fs_access: principalUserId ? fsAccess : 'none',
     observed_at: observedAt,

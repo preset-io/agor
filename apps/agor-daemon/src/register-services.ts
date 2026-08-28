@@ -399,7 +399,6 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   ) as unknown as SessionsServiceImpl;
   const tasksService = createTasksService(db, app, sessionTokenService, {
     branchRbacEnabled,
-    allowSuperadmin,
   });
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],

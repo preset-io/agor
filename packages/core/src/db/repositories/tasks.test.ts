@@ -93,7 +93,6 @@ async function bindTestRuntimeAuthority(db: Database, taskRepo: TaskRepository, 
   if (!session?.branch_id) throw new Error('Test runtime Session Branch is unavailable');
   await taskRepo.bindExecutorLaunchAuthority(task.task_id, {
     branchRbacEnabled: true,
-    allowSuperadmin: false,
   });
   return {
     token_fingerprint: 'a'.repeat(64),
@@ -101,7 +100,6 @@ async function bindTestRuntimeAuthority(db: Database, taskRepo: TaskRepository, 
     session_id: task.session_id,
     branch_id: session.branch_id,
     branchRbacEnabled: true,
-    allowSuperadmin: false,
     standalone_token_current: true,
   };
 }

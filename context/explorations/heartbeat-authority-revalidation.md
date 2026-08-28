@@ -93,9 +93,15 @@ to this point projection together with the other capability-policy predicates.
 
 A runtime launched by an older daemon has no trustworthy launch floor. Its
 next new-daemon heartbeat therefore fails closed as `launch_authority_missing`
-instead of inventing a possibly lower floor. Operators should drain active
-Tasks before deploying this runtime-contract change; no schema backfill can
-reconstruct already-projected mounts safely.
+instead of inventing a possibly lower floor. This is therefore a coordinated,
+non-rolling daemon contract change: operators must first quiesce prompt/Task
+admission, drain active Tasks, stop or replace **all** old daemon replicas, and
+only then reopen admission on the new cohort. Draining alone is insufficient:
+an old replica could otherwise launch a floor-less Task or accept heartbeats
+without revalidation during the mixed-version window. No schema backfill can
+reconstruct already-projected mounts safely. A future zero-downtime rollout
+would require an explicit version/admission fence or bridge release rather
+than weakening the missing-floor denial.
 
 Web terminals have launch-time admission/mount projection but no Task
 heartbeat. Dynamic terminal authority parity is intentionally outside this

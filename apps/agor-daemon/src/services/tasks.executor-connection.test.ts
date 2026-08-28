@@ -132,7 +132,6 @@ describe('TasksService runtime telemetry', () => {
     Reflect.set(service, 'db', { run() {} });
     Reflect.set(service, 'runtimeAuthorityOptions', {
       branchRbacEnabled: true,
-      allowSuperadmin: false,
     });
     Reflect.set(service, 'executorCredentialRevoker', {
       isTaskTokenAuthorityCurrent: vi.fn().mockResolvedValue(true),

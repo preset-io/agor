@@ -185,7 +185,6 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker,
     private readonly runtimeAuthorityOptions: TaskRuntimeAuthorityOptions = {
       branchRbacEnabled: app.get?.('config')?.execution?.branch_rbac === true,
-      allowSuperadmin: false,
     }
   ) {
     const taskRepo = new TaskRepository(db);

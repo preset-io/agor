@@ -8,6 +8,7 @@ import { select } from '../database-wrapper';
 import { tasks as tasksTable } from '../schema';
 import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { BranchRepository } from './branches';
+import { CapabilityPolicyRepository } from './capability-policies';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import { TaskRepository, type TaskRuntimeAuthorityScope } from './tasks';
@@ -18,13 +19,66 @@ let branchUnique = (Date.now() % 1_000_000) + 7_000_000;
 interface RuntimeSeed {
   ownerId: UserID;
   actorId: UserID;
+  sessionOwnerId: UserID;
   branchId: BranchID;
   task: Task;
   tasks: TaskRepository;
   authority: TaskRuntimeAuthorityScope;
 }
 
-async function seedRuntime(db: Database, floor: 'read' | 'write' = 'write'): Promise<RuntimeSeed> {
+interface RuntimeSeedOptions {
+  actorRole?: 'member' | 'superadmin';
+  branchRbacEnabled?: boolean;
+  sessionOwner?: 'actor' | 'branch_owner';
+  grantForeignSessionSharing?: boolean;
+}
+
+async function setForeignSessionSharing(
+  db: Database,
+  branchId: BranchID,
+  sessionOwnerId: UserID,
+  actorId: UserID,
+  enabled: boolean
+): Promise<void> {
+  const policies = new CapabilityPolicyRepository(db);
+  await policies.setWorkspacePreferences(
+    { personal_session_sharing_enabled: true },
+    sessionOwnerId
+  );
+  const current = await policies.getBranchPolicy(branchId);
+  const config = structuredClone(current.override_config);
+  if (!config) throw new Error('Expected an override Branch policy');
+  config.session_sharing.owner_rules = [
+    ...config.session_sharing.owner_rules.filter(
+      (rule) => rule.session_owner_user_id !== sessionOwnerId
+    ),
+    ...(enabled
+      ? [
+          {
+            session_owner_user_id: sessionOwnerId,
+            enabled: true,
+            grantees: [
+              {
+                grant_id: generateId() as UUID,
+                principal: { principal_type: 'user' as const, user_id: actorId },
+              },
+            ],
+          },
+        ]
+      : []),
+  ];
+  await policies.replaceBranchPolicy(
+    branchId,
+    { ...current, override_config: config },
+    sessionOwnerId
+  );
+}
+
+async function seedRuntime(
+  db: Database,
+  floor: 'read' | 'write' = 'write',
+  options: RuntimeSeedOptions = {}
+): Promise<RuntimeSeed> {
   const users = new UsersRepository(db);
   const owner = await users.create({
     user_id: generateId() as UserID,
@@ -35,6 +89,7 @@ async function seedRuntime(db: Database, floor: 'read' | 'write' = 'write'): Pro
     user_id: generateId() as UserID,
     email: `${generateId()}-authority-actor@example.com`,
     name: 'Authority actor',
+    role: options.actorRole ?? 'member',
   });
   const repo = await new RepoRepository(db).create({
     repo_id: generateId(),
@@ -62,10 +117,14 @@ async function seedRuntime(db: Database, floor: 'read' | 'write' = 'write'): Pro
     floor,
     owner.user_id
   );
+  const sessionOwnerId = options.sessionOwner === 'branch_owner' ? owner.user_id : actor.user_id;
+  if (options.grantForeignSessionSharing) {
+    await setForeignSessionSharing(db, branch.branch_id, sessionOwnerId, actor.user_id, true);
+  }
   const session = await new SessionRepository(db).create({
     session_id: generateId(),
     branch_id: branch.branch_id,
-    created_by: actor.user_id,
+    created_by: sessionOwnerId,
     agentic_tool: 'codex',
   });
   const tasks = new TaskRepository(db);
@@ -83,15 +142,14 @@ async function seedRuntime(db: Database, floor: 'read' | 'write' = 'write'): Pro
     git_state: { ref_at_start: 'main', sha_at_start: 'authority' },
     tool_use_count: 0,
   });
-  const launch = await tasks.bindExecutorLaunchAuthority(task.task_id, {
-    branchRbacEnabled: true,
-    allowSuperadmin: false,
-  });
-  expect(launch.fs_access).toBe(floor);
+  const branchRbacEnabled = options.branchRbacEnabled ?? true;
+  const launch = await tasks.bindExecutorLaunchAuthority(task.task_id, { branchRbacEnabled });
+  expect(launch.fs_access).toBe(branchRbacEnabled ? floor : 'write');
   await tasks.connectExecutor(task.task_id, new Date('2026-08-28T00:00:01.000Z'));
   return {
     ownerId: owner.user_id,
     actorId: actor.user_id,
+    sessionOwnerId,
     branchId: branch.branch_id,
     task,
     tasks,
@@ -100,8 +158,7 @@ async function seedRuntime(db: Database, floor: 'read' | 'write' = 'write'): Pro
       principal_user_id: actor.user_id,
       session_id: session.session_id,
       branch_id: branch.branch_id,
-      branchRbacEnabled: true,
-      allowSuperadmin: false,
+      branchRbacEnabled,
       standalone_token_current: true,
     },
   };
@@ -143,6 +200,76 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
         outcome: 'continued',
         task: { last_executor_heartbeat_at: '2026-08-28T00:00:10.000Z' },
       });
+    }
+  );
+
+  dbTest('keeps superadmin runtime authority at the normalized policy access', async ({ db }) => {
+    const seed = await seedRuntime(db, 'read', { actorRole: 'superadmin' });
+    const branches = new BranchRepository(db);
+    const branch = await branches.findById(seed.branchId);
+    if (!branch) throw new Error('Expected seeded Branch');
+
+    const [canonicalAccess, canonicalPrompt] = await Promise.all([
+      branches.resolveUserAccess(branch, seed.actorId),
+      branches.resolveSessionPromptAuthority(seed.branchId, seed.actorId, seed.sessionOwnerId),
+    ]);
+    expect(canonicalAccess.fs_access).toBe('read');
+    expect(canonicalPrompt.allowed).toBe(true);
+    await expect(
+      seed.tasks.reportRuntimeTelemetry(seed.task.task_id, seed.authority)
+    ).resolves.toMatchObject({ outcome: 'continued' });
+
+    const stored = await select(db, { data: tasksTable.data })
+      .from(tasksTable)
+      .where(eq(tasksTable.task_id, seed.task.task_id))
+      .one();
+    expect(stored?.data.executor_launch_fs_access_floor).toBe('read');
+  });
+
+  dbTest('revokes a superadmin runtime when foreign-session sharing is removed', async ({ db }) => {
+    const seed = await seedRuntime(db, 'read', {
+      actorRole: 'superadmin',
+      sessionOwner: 'branch_owner',
+      grantForeignSessionSharing: true,
+    });
+    await expect(
+      seed.tasks.reportRuntimeTelemetry(seed.task.task_id, seed.authority)
+    ).resolves.toMatchObject({ outcome: 'continued' });
+
+    await setForeignSessionSharing(db, seed.branchId, seed.sessionOwnerId, seed.actorId, false);
+    await expect(
+      new BranchRepository(db).resolveSessionPromptAuthority(
+        seed.branchId,
+        seed.actorId,
+        seed.sessionOwnerId
+      )
+    ).resolves.toMatchObject({ allowed: false });
+    await expectDeniedWithoutHeartbeatRefresh(seed, 'branch_capability_revoked');
+  });
+
+  dbTest(
+    'preserves RBAC-disabled foreign-session launch and heartbeat admission',
+    async ({ db }) => {
+      const seed = await seedRuntime(db, 'read', {
+        branchRbacEnabled: false,
+        sessionOwner: 'branch_owner',
+      });
+      await expect(
+        new BranchRepository(db).resolveSessionPromptAuthority(
+          seed.branchId,
+          seed.actorId,
+          seed.sessionOwnerId
+        )
+      ).resolves.toMatchObject({ allowed: false });
+      await expect(
+        seed.tasks.reportRuntimeTelemetry(seed.task.task_id, seed.authority)
+      ).resolves.toMatchObject({ outcome: 'continued' });
+
+      const stored = await select(db, { data: tasksTable.data })
+        .from(tasksTable)
+        .where(eq(tasksTable.task_id, seed.task.task_id))
+        .one();
+      expect(stored?.data.executor_launch_fs_access_floor).toBe('write');
     }
   );
 
@@ -202,7 +329,6 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
     await expect(
       seed.tasks.bindExecutorLaunchAuthority(seed.task.task_id, {
         branchRbacEnabled: true,
-        allowSuperadmin: false,
       })
     ).rejects.toThrow('not awaiting executor launch authority');
   });

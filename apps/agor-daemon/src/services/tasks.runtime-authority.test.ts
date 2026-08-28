@@ -57,7 +57,6 @@ function serviceHarness(input: {
   Reflect.set(service, 'db', { run() {} });
   Reflect.set(service, 'runtimeAuthorityOptions', {
     branchRbacEnabled: true,
-    allowSuperadmin: false,
   });
   Reflect.set(service, 'executorCredentialRevoker', { isTaskTokenAuthorityCurrent });
   Reflect.set(service, 'heartbeatCallbackRunner', { isConfigured: () => false });

@@ -159,7 +159,6 @@ export interface TerminationClaimInput {
 
 export interface ExecutorLaunchAuthorityOptions {
   branchRbacEnabled: boolean;
-  allowSuperadmin: boolean;
 }
 
 export interface ExecutorLaunchAuthority {
@@ -1213,7 +1212,6 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         sessionId: row.session_id,
         principalUserId: row.created_by,
         branchRbacEnabled: authority.branchRbacEnabled,
-        allowSuperadmin: authority.allowSuperadmin,
       });
       if (
         authority.principal_user_id !== row.created_by ||
