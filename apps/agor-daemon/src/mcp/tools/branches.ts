@@ -294,6 +294,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         branchId: mcpRequiredId('branchId', 'Branch'),
         waitTimeoutMs: branchFilesystemReadyWaitTimeoutSchema.describe(
           `Maximum milliseconds to wait (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}). ` +
+            "Waits longer than the MCP client's request deadline require a matching client timeout. " +
             'For longer clone/materialization jobs, safely call this read-only tool again.'
         ),
       }),
