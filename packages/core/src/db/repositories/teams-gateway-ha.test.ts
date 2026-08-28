@@ -399,4 +399,43 @@ describe('Teams gateway HA repositories', () => {
       });
     }
   );
+
+  ownedDbTest(
+    'discovers expired encrypted payloads after their Teams channel is disabled',
+    async ({ db }) => {
+      const { channel } = await seedTeamsMapping(db);
+      const inbound = new GatewayInboundEventRepository(db);
+      const admitted = await inbound.admitVerifiedHttp({
+        ...admissionInput(
+          channel.id,
+          channel.provider_config_generation,
+          'teams:activity:disabled'
+        ),
+        payloadTtlMs: 1,
+      });
+      await new GatewayChannelRepository(db).update(channel.id, { enabled: false });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      expect(await inbound.findDueTeamsRefs(db, { now: new Date() })).toEqual([
+        {
+          tenant_id: 'default',
+          gateway_channel_id: channel.id,
+          event_id: admitted.event.id,
+        },
+      ]);
+      expect(
+        await inbound.claimQueued(admitted.event.id, 'expired-disabled-claim', 30_000)
+      ).toBeNull();
+      const stored = await select(db)
+        .from(gatewayInboundEvents)
+        .where(eq(gatewayInboundEvents.id, admitted.event.id))
+        .one();
+      expect(stored).toMatchObject({
+        status: 'dead_letter',
+        payload_encrypted: null,
+        payload_expires_at: null,
+        last_error_code: 'payload_expired',
+      });
+    }
+  );
 });

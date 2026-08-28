@@ -247,6 +247,9 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
         payloadTtlMs: 1,
       })
     );
+    await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new GatewayChannelRepository(scoped).update(channel.id, { enabled: false })
+    );
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     const due = await runWithSystemDatabaseScope(

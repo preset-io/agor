@@ -425,7 +425,7 @@ export class GatewayInboundEventRepository {
       AND (${gatewayInboundEvents.status} = 'pending'
         OR ${gatewayInboundEvents.processing_expires_at} <= ${now})
       AND ${gatewayInboundEvents.payload_expires_at} IS NOT NULL`;
-    const rows = await select(db, {
+    const projection = {
       ...(isSQLiteDatabase(db)
         ? {}
         : {
@@ -435,7 +435,9 @@ export class GatewayInboundEventRepository {
           }),
       gateway_channel_id: gatewayInboundEvents.gateway_channel_id,
       event_id: gatewayInboundEvents.id,
-    })
+      next_attempt_at: gatewayInboundEvents.next_attempt_at,
+    };
+    const enabledRows = await select(db, projection)
       .from(gatewayInboundEvents)
       .innerJoin(gatewayChannels, eq(gatewayChannels.id, gatewayInboundEvents.gateway_channel_id))
       .where(
@@ -449,15 +451,49 @@ export class GatewayInboundEventRepository {
       .orderBy(gatewayInboundEvents.next_attempt_at, gatewayInboundEvents.id)
       .limit(limit)
       .all();
-    return (
-      rows as Array<{ tenant_id?: unknown; gateway_channel_id: string; event_id: string }>
-    ).map((row) => ({
-      tenant_id: isSQLiteDatabase(db)
-        ? 'default'
-        : String((row as { tenant_id: unknown }).tenant_id),
-      gateway_channel_id: row.gateway_channel_id as GatewayChannelID,
-      event_id: row.event_id as GatewayInboundEventID,
-    }));
+
+    // Expired encrypted payloads are the durable Teams envelope. Discover
+    // them independently of gateway_channels because its system policy is
+    // deliberately limited to enabled Teams rows; the owning tenant scope
+    // performs the terminalizing update after this routing-only projection.
+    const expiredRows = await select(db, projection)
+      .from(gatewayInboundEvents)
+      .where(
+        and(
+          due,
+          lte(gatewayInboundEvents.payload_expires_at, now),
+          sql`${gatewayInboundEvents.payload_encrypted} IS NOT NULL`,
+          teamsInboundLaneIsOldest(db)
+        )
+      )
+      .orderBy(gatewayInboundEvents.next_attempt_at, gatewayInboundEvents.id)
+      .limit(limit)
+      .all();
+
+    type DiscoveryRow = {
+      tenant_id?: unknown;
+      gateway_channel_id: string;
+      event_id: string;
+      next_attempt_at: Date | string | number;
+    };
+    const uniqueRows = new Map<string, DiscoveryRow>();
+    for (const row of [...enabledRows, ...expiredRows] as DiscoveryRow[]) {
+      if (!uniqueRows.has(row.event_id)) uniqueRows.set(row.event_id, row);
+    }
+    return [...uniqueRows.values()]
+      .sort((left, right) => {
+        const byNextAttempt =
+          new Date(left.next_attempt_at).getTime() - new Date(right.next_attempt_at).getTime();
+        return byNextAttempt || left.event_id.localeCompare(right.event_id);
+      })
+      .slice(0, limit)
+      .map((row) => ({
+        tenant_id: isSQLiteDatabase(db)
+          ? 'default'
+          : String((row as { tenant_id: unknown }).tenant_id),
+        gateway_channel_id: row.gateway_channel_id as GatewayChannelID,
+        event_id: row.event_id as GatewayInboundEventID,
+      }));
   }
 
   /** Claim a queued Teams occurrence, reclaiming only an expired worker lease. */

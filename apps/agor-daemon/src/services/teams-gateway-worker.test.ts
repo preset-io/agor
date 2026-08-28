@@ -416,6 +416,34 @@ describe('TeamsGatewayWorker outbound fencing', () => {
     expect(setup.complete).not.toHaveBeenCalled();
   });
 
+  it('retries when the durable effect marker is rejected before provider send', async () => {
+    const setup = deliverySetup();
+    setup.markEffectStarted.mockRejectedValueOnce(new Error('marker unavailable'));
+    await setup.worker.checkOnce();
+    expect(setup.markEffectStarted).toHaveBeenCalledOnce();
+    expect(setup.sendMessage).not.toHaveBeenCalled();
+    expect(setup.markAmbiguous).not.toHaveBeenCalled();
+    expect(setup.fail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'pending',
+        errorCode: 'pre_effect_failure',
+        nextAttemptAt: new Date(now.getTime() + 1_000),
+      })
+    );
+  });
+
+  it('dead-letters an exhausted marker rejection without provider send', async () => {
+    const setup = deliverySetup({}, { attemptCount: 8 });
+    setup.markEffectStarted.mockRejectedValueOnce(new Error('marker unavailable'));
+    await setup.worker.checkOnce();
+    expect(setup.markEffectStarted).toHaveBeenCalledOnce();
+    expect(setup.sendMessage).not.toHaveBeenCalled();
+    expect(setup.markAmbiguous).not.toHaveBeenCalled();
+    expect(setup.fail).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'dead_letter', errorCode: 'pre_effect_failure' })
+    );
+  });
+
   it('retries failures before the effect marker with bounded backoff', async () => {
     const setup = deliverySetup(
       {},

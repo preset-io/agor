@@ -819,13 +819,13 @@ export class TeamsGatewayWorker {
       return;
     }
     const connector = this.connectorFactory(channel.config);
-    markEffectAttempted();
     await this.deliveryRepo.markEffectStarted({
       deliveryId: delivery.delivery_id,
       claimToken: claim.claim_token,
       claimGeneration: claim.claim_generation,
       now: this.now(),
     });
+    markEffectAttempted();
     const sent = await connector.sendMessage({
       threadId: mapping.thread_id,
       text: typeof message.content === 'string' ? message.content : (message.content_preview ?? ''),
