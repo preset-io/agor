@@ -2,7 +2,7 @@ import * as configModule from '@agor/core/config';
 import { BranchRepository, CapabilityPolicyRepository } from '@agor/core/db';
 import { Forbidden, feathers } from '@agor/core/feathers';
 import type { Branch, BranchPermissionLevel } from '@agor/core/types';
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DrizzleService, type Repository } from '../../adapters/drizzle.js';
 import { loadBranch } from '../../utils/branch-authorization.js';
@@ -30,7 +30,7 @@ vi.mock('../../utils/spawn-executor.js', async (importOriginal) => {
 
 type ToolHandler = (
   args: Record<string, unknown>,
-  requestContext?: { signal: AbortSignal }
+  requestContext?: ServerContext
 ) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
@@ -45,6 +45,10 @@ type ToolConfig = {
       | { success: false; error: { issues: Array<{ message: string }> } };
   };
 };
+
+function requestContext(signal = new AbortController().signal): ServerContext {
+  return { mcpReq: { signal } } as ServerContext;
+}
 
 function registerAndCaptureHandler(
   toolName: string,
@@ -143,7 +147,6 @@ afterEach(() => {
 });
 
 describe('agor_branches_wait_for_ready', () => {
-  const requestContext = () => ({ signal: new AbortController().signal });
   const makeBranch = (filesystemStatus: string, overrides: Record<string, unknown> = {}) => ({
     branch_id: '01900000-0000-7000-8000-000000000001',
     filesystem_status: filesystemStatus,
@@ -313,6 +316,34 @@ describe('agor_branches_wait_for_ready', () => {
         },
       },
     });
+  });
+
+  it('stops polling when the MCP request is cancelled', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const creating = makeBranch('creating');
+    const get = vi.fn(async () => creating);
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+    });
+
+    const waiting = waitForReady(
+      { branchId: creating.branch_id },
+      requestContext(controller.signal)
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort(new Error('client disconnected'));
+
+    await expect(waiting).rejects.toThrow('client disconnected');
+    expect(get).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('returns the persisted safe failure as a structured terminal error', async () => {
@@ -568,6 +599,22 @@ describe('agor_branches_create', () => {
     return { app, branchId, creating, observed, createBranch, branchesGet };
   }
 
+  it('rejects waitTimeoutMs unless waitForReady is enabled', async () => {
+    const create = registerAndCaptureHandler('agor_branches_create', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    await expect(
+      create({
+        repoId: 'repo-1',
+        branchName: 'feature',
+        boardId: 'board-1',
+        waitTimeoutMs: 1_000,
+      })
+    ).rejects.toThrow('waitTimeoutMs requires waitForReady=true');
+  });
+
   it('passes acting MCP user params through to branch creation so ownership resolves to the prompter', async () => {
     const baseServiceParams = {
       authenticated: true,
@@ -649,7 +696,7 @@ describe('agor_branches_create', () => {
         autoSuffix: false,
         waitForReady: true,
       },
-      { signal: new AbortController().signal }
+      requestContext()
     );
     const payload = JSON.parse(result.content[0].text);
 
@@ -658,7 +705,7 @@ describe('agor_branches_create', () => {
       ...ready,
       _readiness: {
         outcome: 'ready',
-        timeout_ms: 60_000,
+        timeout_ms: 45_000,
         poll_interval_ms: 1_000,
       },
     });
@@ -687,7 +734,7 @@ describe('agor_branches_create', () => {
         waitForReady: true,
         waitTimeoutMs: 1_000,
       },
-      { signal: new AbortController().signal }
+      requestContext()
     );
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -732,7 +779,7 @@ describe('agor_branches_create', () => {
         autoSuffix: false,
         waitForReady: true,
       },
-      { signal: new AbortController().signal }
+      requestContext()
     );
     const payload = JSON.parse(result.content[0].text);
 

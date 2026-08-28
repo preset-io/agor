@@ -14,7 +14,7 @@ import type {
 import { getTeammateConfig, isTeammate } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type {
   BoardsServiceImpl,
@@ -150,18 +150,8 @@ function readinessResponse(result: BranchFilesystemReadinessResult): {
   return { readiness, isError: true };
 }
 
-function mcpRequestSignal(requestContext: unknown): AbortSignal | undefined {
-  if (!requestContext || typeof requestContext !== 'object') return undefined;
-  const signal = (requestContext as { signal?: unknown }).signal;
-  if (
-    !signal ||
-    typeof signal !== 'object' ||
-    typeof (signal as AbortSignal).aborted !== 'boolean' ||
-    typeof (signal as AbortSignal).addEventListener !== 'function'
-  ) {
-    return undefined;
-  }
-  return signal as AbortSignal;
+function mcpRequestSignal(requestContext: ServerContext): AbortSignal {
+  return requestContext.mcpReq.signal;
 }
 
 /**
@@ -746,7 +736,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
               'Use the separate retry-safe agor_branches_wait_for_ready tool to recover from timeouts.'
           ),
         waitTimeoutMs: branchFilesystemReadyWaitTimeoutSchema.describe(
-          `Maximum milliseconds to wait when waitForReady=true (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}). Ignored otherwise.`
+          `Maximum milliseconds to wait when waitForReady=true (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}). Requires waitForReady=true; waits longer than the MCP client's request deadline require a matching client timeout.`
         ),
         teammate: z
           .object({
@@ -785,6 +775,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args, requestContext) => {
+      if (args.waitTimeoutMs !== undefined && args.waitForReady !== true) {
+        throw new Error('waitTimeoutMs requires waitForReady=true.');
+      }
+
       const repoId = await resolveRepoId(ctx, coerceString(args.repoId)!);
       let branchName = coerceString(args.branchName)!;
       const originalName = branchName;

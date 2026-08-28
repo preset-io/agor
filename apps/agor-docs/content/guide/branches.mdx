@@ -93,7 +93,8 @@ MCP callers can set `waitForReady: true` on `agor_branches_create` to wait in th
 use the retry-safe `agor_branches_wait_for_ready` tool before creating the first session. Waiting is
 opt-in, so existing MCP callers—and all REST and UI callers—remain asynchronous. Both paths check
 immediately, then perform a fresh tenant- and RBAC-scoped branch read once per second. They wait for
-60 seconds by default and accept a bounded `waitTimeoutMs` from 1 second to 5 minutes.
+45 seconds by default and accept a bounded `waitTimeoutMs` from 1 second to 5 minutes. Values longer
+than the MCP client's request deadline require that client or host deadline to be raised as well.
 
 The standalone wait tool is the safer choice when request replay is possible: branch creation is not
 idempotent, and losing a waited create response does not cancel the branch that was already created.

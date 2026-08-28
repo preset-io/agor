@@ -47,7 +47,7 @@ describe('waitForBranchFilesystemReady', () => {
         outcome: 'ready',
         branch: ready,
         elapsedMs: 0,
-        timeoutMs: 60_000,
+        timeoutMs: 45_000,
       });
       expect(readBranch).toHaveBeenCalledOnce();
     }
