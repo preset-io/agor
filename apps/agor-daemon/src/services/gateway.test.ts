@@ -697,12 +697,27 @@ describe('GatewayService multi-tenant process state', () => {
         created_by: 'other-user',
       },
     ],
+    [
+      'superadmin with bypass disabled',
+      { provider: 'rest', user: { ...user, role: 'superadmin' } },
+      {
+        session_id: 'sess-1',
+        branch_id: 'branch-1',
+        created_by: 'other-user',
+      },
+    ],
     ['cross-tenant', { provider: 'rest', user: { ...user, role: 'member' } }, null],
   ])(
     'denies transported routeMessage for %s with zero provider activity',
     async (_name, params, session) => {
       const sendMessage = vi.fn();
-      const service = new GatewayService({ run: vi.fn() } as never, { service: vi.fn() } as never);
+      const service = new GatewayService(
+        { run: vi.fn() } as never,
+        {
+          service: vi.fn(),
+          get: vi.fn(() => ({ execution: { allow_superadmin: false } })),
+        } as never
+      );
       Object.assign(service as unknown as Record<string, unknown>, {
         sessionRepo: { findById: vi.fn(async () => session) },
         branchRepo: {
@@ -3426,6 +3441,28 @@ describe('GatewayService Discord beta routing', () => {
     expect(result).toEqual({ routed: true, channelType: 'discord' });
     expect(threadMapRepo.mergeGatewayReplyAliases).not.toHaveBeenCalled();
     expect(mapping.metadata).not.toHaveProperty('gateway_reply_aliases');
+  });
+
+  it('uses a content-free failure code for provider routing logs', async () => {
+    const canary = 'private-user@example.test workspace-secret-label';
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const mapping = makeMapping();
+    const harness = makeGatewayHarness({
+      channel: slackChannel,
+      existingMapping: mapping,
+      connector: { sendMessage: vi.fn(async () => Promise.reject(new Error(canary))) },
+    });
+
+    await expect(
+      harness.service.routeMessage({ session_id: mapping.session_id, message: 'reply' })
+    ).resolves.toEqual({ routed: false, channelType: 'slack' });
+
+    const logged = errorLog.mock.calls.flat().join(' ');
+    expect(logged).toContain(`channel_id=${slackChannel.id}`);
+    expect(logged).toContain('code=provider_request_failed');
+    expect(logged).not.toContain(canary);
+    expect(logged).not.toContain('private-user@example.test');
+    errorLog.mockRestore();
   });
 
   it('suppresses the legacy after-hook send when a durable Discord intent exists', async () => {

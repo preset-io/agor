@@ -55,6 +55,7 @@ import {
   NotFound,
   Unavailable,
 } from '@agor/core/feathers';
+import { redactGatewayChannelSecrets } from '@agor/core/gateway';
 import {
   boardCommentQueryValidator,
   boardObjectQueryValidator,
@@ -167,7 +168,6 @@ import {
 } from './utils/branch-authorization.js';
 import { captureBranchRemovalRealtimeVisibility as captureBranchRemovalVisibility } from './utils/branch-removal-realtime.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
-import { redactGatewayChannelForTransport } from './utils/gateway-channel-redaction.js';
 import { bindPrimaryOwnerToCreatedBy, injectCreatedBy } from './utils/inject-created-by.js';
 import {
   captureMarketplaceInvalidationTargets as captureMarketplaceTargets,
@@ -925,7 +925,7 @@ export const redactMCPServerSecretFields = async (context: HookContext) => {
 /** Redact gateway channel results for both REST callers and realtime dispatch. */
 export function redactGatewayChannelResultsForTransport(context: HookContext): HookContext {
   const redact = (channel: Record<string, unknown>) =>
-    Object.assign(channel, redactGatewayChannelForTransport(channel as unknown as GatewayChannel));
+    Object.assign(channel, redactGatewayChannelSecrets(channel as unknown as GatewayChannel));
   const result = context.result as
     | Record<string, unknown>[]
     | { data?: Record<string, unknown>[] }

@@ -10,6 +10,7 @@ import {
   getConnector,
   isSlackFileSourceAllowed,
   isSlackWriteTargetAllowed,
+  redactGatewayChannelSecrets,
   requiredBotEvents,
   requiredBotScopes,
   type SlackChannelHistoryRequest,
@@ -61,7 +62,6 @@ import { hasBranchPermission } from '../../utils/branch-authorization.js';
 import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
-import { redactGatewayChannelForTransport } from '../../utils/gateway-channel-redaction.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import { getUploadLimits } from '../../utils/upload.js';
 import { getUploadStagingStore } from '../../utils/upload-staging.js';
@@ -850,11 +850,8 @@ type GatewayChannelSummary = Omit<
 };
 
 function redactGatewayChannel(channel: GatewayChannel): GatewayChannelSummary {
-  const redacted = redactGatewayChannelForTransport(channel);
+  const redacted = redactGatewayChannelSecrets(channel);
   const config = { ...(redacted.config ?? {}) };
-  for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
-    if (config[field]) config[field] = GATEWAY_REDACTED_SENTINEL;
-  }
   for (const field of GATEWAY_INTERNAL_CONFIG_KEYS) {
     delete config[field];
   }

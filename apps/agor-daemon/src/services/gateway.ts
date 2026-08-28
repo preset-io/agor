@@ -3376,10 +3376,7 @@ export class GatewayService {
         });
       }
     } catch (error) {
-      const safeError =
-        channel.channel_type === 'discord'
-          ? gatewayFailureCode(error)
-          : sanitizeGatewayProviderError(error);
+      const safeError = gatewayFailureCode(error);
       console.error(
         `[gateway] Failed to send prompt to session: channel_id=${channel.id} code=${safeError}`
       );
@@ -3413,6 +3410,7 @@ export class GatewayService {
     data: RouteMessageData,
     params?: AuthenticatedParams
   ): Promise<RouteMessageResult> {
+    let transportedSession: Session | undefined;
     // Direct service calls are daemon-internal. Every transported invocation
     // must carry trusted auth and prove authority over the session's branch
     // before even consulting a mapping or constructing a provider connector.
@@ -3420,9 +3418,9 @@ export class GatewayService {
       const user = params.user;
       if (!user) throw new NotAuthenticated('Authentication required');
       const userId = user.user_id as UserID;
-      const session = await this.sessionRepo.findById(data.session_id as SessionID);
-      if (!session) throw new Forbidden('Gateway outbound access denied');
-      const branch = await this.branchRepo.findById(session.branch_id);
+      transportedSession = await this.sessionRepo.findById(data.session_id as SessionID);
+      if (!transportedSession) throw new Forbidden('Gateway outbound access denied');
+      const branch = await this.branchRepo.findById(transportedSession.branch_id);
       if (!branch) throw new Forbidden('Gateway outbound access denied');
       const isOwner = await this.branchRepo.isOwner(branch.branch_id, userId);
       const effectivePermission = await this.branchRepo.resolveUserPermission(branch, userId);
@@ -3433,7 +3431,7 @@ export class GatewayService {
           isOwner,
           'all' as BranchPermissionLevel,
           user.role,
-          true,
+          this.app.get('config').execution?.allow_superadmin === true,
           effectivePermission
         )
       ) {
@@ -3472,8 +3470,7 @@ export class GatewayService {
     }
 
     if (params?.provider) {
-      const session = await this.sessionRepo.findById(data.session_id as SessionID);
-      if (!session || session.branch_id !== channel.target_branch_id) {
+      if (!transportedSession || transportedSession.branch_id !== channel.target_branch_id) {
         throw new Forbidden('Gateway outbound access denied');
       }
     }
@@ -3543,10 +3540,7 @@ export class GatewayService {
 
       console.log(`[gateway] Routed message to ${channel.channel_type} thread ${threadId}`);
     } catch (error) {
-      const failure =
-        channel.channel_type === 'discord'
-          ? gatewayFailureCode(error)
-          : sanitizeGatewayProviderError(error);
+      const failure = gatewayFailureCode(error);
       console.error(
         `[gateway] Failed to route message: channel_id=${channel.id} provider=${channel.channel_type} code=${failure}`
       );
