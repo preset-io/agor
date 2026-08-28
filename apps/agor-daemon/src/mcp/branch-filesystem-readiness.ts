@@ -1,4 +1,4 @@
-import { type Branch, classifyBranchFilesystemReadiness } from '@agor/core/types';
+import { type Branch, classifyBranchFilesystemReadiness, type IdInput } from '@agor/core/types';
 
 export const DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS = 60_000;
 export const MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS = 1_000;
@@ -17,8 +17,8 @@ export interface BranchFilesystemReadinessResult {
 
 export interface WaitForBranchFilesystemReadyOptions {
   /** UUIDv7 or short ID for the initial authorized service read. */
-  branchId: string;
-  readBranch: (branchId: string) => Promise<Branch>;
+  branchId: IdInput;
+  readBranch: (branchId: IdInput) => Promise<Branch>;
   timeoutMs?: number;
   pollIntervalMs?: number;
   signal?: AbortSignal;

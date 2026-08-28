@@ -1,8 +1,11 @@
 import * as configModule from '@agor/core/config';
 import { BranchRepository, CapabilityPolicyRepository } from '@agor/core/db';
-import { Forbidden } from '@agor/core/feathers';
+import { Forbidden, feathers } from '@agor/core/feathers';
+import type { Branch, BranchPermissionLevel } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DrizzleService, type Repository } from '../../adapters/drizzle.js';
+import { loadBranch } from '../../utils/branch-authorization.js';
 import { registerBranchTools } from './branches.js';
 
 vi.mock('../../utils/executor-delegated-home.js', () => ({
@@ -211,6 +214,68 @@ describe('agor_branches_wait_for_ready', () => {
       ['01900000', baseServiceParams],
       ['01900000-0000-7000-8000-000000000001', baseServiceParams],
     ]);
+    expect(get.mock.calls[0][1]).not.toBe(baseServiceParams);
+    expect(get.mock.calls[1][1]).not.toBe(get.mock.calls[0][1]);
+  });
+
+  it('uses pristine params so real Feathers RBAC hooks cannot pin the first branch row', async () => {
+    vi.useFakeTimers();
+    const creating = makeBranch('creating') as unknown as Branch;
+    const ready = makeBranch('ready', { path: '/worktrees/feature-ready' }) as unknown as Branch;
+    const findById = vi.fn().mockResolvedValueOnce(creating).mockResolvedValueOnce(ready);
+    const repository = {
+      findById,
+      findAll: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      isOwner: vi.fn(async () => false),
+      resolveUserPermission: vi.fn(async () => 'view' as BranchPermissionLevel),
+    } as unknown as Repository<Branch> & {
+      isOwner: (branchId: string, userId: string) => Promise<boolean>;
+      resolveUserPermission: (branch: Branch, userId: string) => Promise<BranchPermissionLevel>;
+    };
+    const app = feathers();
+    app.use(
+      'branches',
+      new DrizzleService<Branch>(repository, { id: 'branch_id', resourceType: 'Branch' })
+    );
+    app.service('branches').hooks({
+      before: { get: [loadBranch(repository as never)] },
+    });
+
+    // Optional current-Session authorization can already have populated these
+    // request-scoped hook caches before the tool starts. A shallow clone would
+    // carry the stale row into every observation.
+    const poisonedBaseParams = {
+      provider: 'mcp',
+      user: { user_id: 'user-1', email: 'user@example.test', role: 'member' },
+      branch: creating,
+      _agorPrefetchedRecord: {
+        id: creating.branch_id,
+        idField: 'branch_id',
+        record: creating,
+      },
+      _agorRbacCache: {
+        sessions: new Map(),
+        branches: new Map([[creating.branch_id, creating]]),
+        branchAccess: new Map(),
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+      baseServiceParams: poisonedBaseParams,
+    });
+
+    const waiting = waitForReady({ branchId: '01900000' }, requestContext());
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await waiting;
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.branch).toEqual(ready);
+    expect(findById).toHaveBeenCalledTimes(2);
   });
 
   it('returns a retryable structured timeout while preserving the creating branch', async () => {
@@ -643,6 +708,7 @@ describe('agor_branches_create', () => {
     });
     expect(createBranch).toHaveBeenCalledOnce();
     expect(branchesGet).toHaveBeenCalledTimes(2);
+    expect(branchesGet.mock.calls[1][1]).not.toBe(branchesGet.mock.calls[0][1]);
   });
 
   it('returns a persisted materialization failure without losing creation metadata', async () => {

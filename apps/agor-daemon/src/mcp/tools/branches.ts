@@ -164,6 +164,23 @@ function mcpRequestSignal(requestContext: unknown): AbortSignal | undefined {
   return signal as AbortSignal;
 }
 
+/**
+ * Feathers authorization hooks cache loaded records on params for the duration
+ * of one service call. A readiness wait spans multiple observations, so every
+ * read needs a pristine params object or it can reuse the first branch row.
+ * Whitelist the trusted MCP identity fields instead of cloning hook-added data
+ * that may already be present after optional Session authorization.
+ */
+function freshMcpServiceParams(ctx: McpContext): McpContext['baseServiceParams'] {
+  const { authenticated, provider, tenant, user } = ctx.baseServiceParams;
+  return {
+    ...(user ? { user: { ...user } } : {}),
+    ...(authenticated !== undefined ? { authenticated } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    ...(tenant ? { tenant: { ...tenant } } : {}),
+  };
+}
+
 function parseCleanupCutoff(args: { archivedBefore?: string; archivedOlderThanDays?: number }): {
   cutoff: Date;
   source: 'archivedBefore' | 'archivedOlderThanDays';
@@ -301,7 +318,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         readBranch: (branchId) =>
           branches.get(
             branchId,
-            ctx.baseServiceParams as Parameters<BranchesServiceImpl['get']>[1]
+            freshMcpServiceParams(ctx) as Parameters<BranchesServiceImpl['get']>[1]
           ),
       });
 
@@ -986,7 +1003,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             readBranch: (branchId) =>
               ctx.app
                 .service('branches')
-                .get(branchId, ctx.baseServiceParams as Parameters<BranchesServiceImpl['get']>[1]),
+                .get(
+                  branchId,
+                  freshMcpServiceParams(ctx) as Parameters<BranchesServiceImpl['get']>[1]
+                ),
           })
         : undefined;
 
