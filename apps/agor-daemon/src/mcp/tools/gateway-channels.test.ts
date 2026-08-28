@@ -385,6 +385,20 @@ describe('agor_gateway_channels MCP tools', () => {
     expect(String(teamsDraft.error)).toContain('config.app_id is required for Teams');
     expect(String(teamsDraft.error)).not.toContain('config.app_password is required for Teams');
 
+    const teamsDraftWithInvalidMap = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
+      name: 'Draft Teams with invalid map',
+      targetBranchId: 'branch-1',
+      channelType: 'teams',
+      enabled: false,
+      config: {
+        app_id: 'teams-app',
+        microsoft_tenant_id: 'tenant-1',
+        user_map: { 'aad-object-1': 'user@example.com' },
+      },
+    });
+    expect(teamsDraftWithInvalidMap.success).toBe(false);
+    expect(String(teamsDraftWithInvalidMap.error)).toContain('full lowercase UUIDv7 Agor User IDs');
+
     const slackDraft = tools.agor_gateway_channels_create.cfg.inputSchema.safeParse({
       name: 'Draft Slack',
       targetBranchId: 'branch-1',

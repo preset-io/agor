@@ -37,8 +37,6 @@ export interface TeamsConversationAddressInput {
   verifiedAppId: string;
   verifiedTenantId: string;
   providerConfigGeneration: number;
-  refreshedAt?: Date;
-  expiresAt?: Date | null;
 }
 
 /** Verified activities refresh a usable Bot Framework address for this period. */
@@ -103,12 +101,10 @@ export class TeamsConversationAddressRepository {
     const now = await getDatabaseNow(
       tx,
       gatewayChannels,
-      eq(gatewayChannels.id, input.gatewayChannelId),
-      input.refreshedAt
+      eq(gatewayChannels.id, input.gatewayChannelId)
     );
     if (!now) throw new RepositoryError('Unable to obtain database time for Teams address');
-    const expiresAt =
-      input.expiresAt ?? new Date(now.getTime() + TEAMS_CONVERSATION_ADDRESS_TTL_MS);
+    const expiresAt = new Date(now.getTime() + TEAMS_CONVERSATION_ADDRESS_TTL_MS);
     const encryptedAddress = encryptApiKey(JSON.stringify(input.address));
     const where = and(
       eq(teamsConversationAddresses.gateway_channel_id, input.gatewayChannelId),

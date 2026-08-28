@@ -195,6 +195,52 @@ describe('GatewayChannelRepository', () => {
       }
     );
 
+    dbTest(
+      'rejects noncanonical Teams user mappings on disabled create and patch',
+      async ({ db }) => {
+        const branch = await seedBranch(db);
+        const repo = new GatewayChannelRepository(db);
+        const invalidMaps: unknown[] = [
+          { 'aad-object-1': 'user@example.com' },
+          { 'aad-object-1': 'not-a-uuid' },
+          { 'aad-object-1': '01933e4a' },
+          { 'aad-object-1': '01933e4a-7b89-4c35-a8f3-9d2e1c4b5a6f' },
+          { 'aad-object-1': '01933E4A-7B89-7C35-A8F3-9D2E1C4B5A6F' },
+        ];
+
+        for (const userMap of invalidMaps) {
+          await expect(
+            repo.create({
+              name: 'Invalid Teams draft',
+              created_by: generateId() as UUID,
+              target_branch_id: branch.branch_id as UUID,
+              channel_type: 'teams',
+              enabled: false,
+              config: { user_map: userMap },
+            })
+          ).rejects.toThrow('full lowercase UUIDv7 Agor User IDs');
+        }
+
+        const draft = await repo.create({
+          name: 'Teams draft',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'teams',
+          enabled: false,
+          config: {
+            user_map: {
+              'aad-object-1': '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+            },
+          },
+        });
+        await expect(
+          repo.update(draft.id, {
+            config: { user_map: { 'aad-object-1': 'user@example.com' } },
+          })
+        ).rejects.toThrow('full lowercase UUIDv7 Agor User IDs');
+      }
+    );
+
     dbTest('rejects an enabled channel created without secrets', async ({ db }) => {
       const branch = await seedBranch(db);
       const repo = new GatewayChannelRepository(db);

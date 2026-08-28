@@ -6,11 +6,14 @@
  * this file proves tenant projection, qualified tenant selection, and two
  * independent replica claims against PostgreSQL row-level security.
  */
+
+import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { BranchID, MessageID, SessionID, TenantID, UUID } from '../../types';
 import { MessageRole } from '../../types';
 import { createDatabase, type Database } from '../client';
+import { getDatabaseNow } from '../database-wrapper';
 import { initializeDatabase } from '../migrate';
 import {
   BranchRepository,
@@ -23,7 +26,12 @@ import {
   ThreadSessionMapRepository,
   UsersRepository,
 } from '../repositories';
+import { gatewayChannels } from '../schema';
 import { runWithSystemDatabaseScope, runWithTenantDatabaseScope } from '../tenant-scope';
+import {
+  TEAMS_CONVERSATION_ADDRESS_TTL_MS,
+  TeamsConversationAddressRepository,
+} from './teams-conversation-addresses';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
@@ -306,13 +314,46 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
   it('uses PostgreSQL transaction time for skewed discovery, retries, leases, and effect fences', async () => {
     const tenantId = `teams-pg-clock-${generateId()}` as TenantID;
     const { channel, mapping } = await seedTeamsChannel(dbA, tenantId);
-    const admitted = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
-      new GatewayInboundEventRepository(scoped).admitVerifiedHttp(
-        admission(channel.id, tenantId, `teams:activity:clock-${generateId()}`)
-      )
-    );
     const callerBehind = new Date('2000-01-01T00:00:00.000Z');
     const callerAhead = new Date('2999-01-01T00:00:00.000Z');
+    const baseAdmission = admission(channel.id, tenantId, `teams:activity:clock-${generateId()}`);
+    const skewedAdmission = {
+      ...baseAdmission,
+      address: {
+        ...baseAdmission.address,
+        refreshedAt: callerBehind,
+        expiresAt: callerAhead,
+      },
+    };
+    const addressDatabaseStart = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      getDatabaseNow(scoped, gatewayChannels, eq(gatewayChannels.id, channel.id))
+    );
+    const admitted = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new GatewayInboundEventRepository(scoped).admitVerifiedHttp(skewedAdmission)
+    );
+    const addressDatabaseEnd = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      getDatabaseNow(scoped, gatewayChannels, eq(gatewayChannels.id, channel.id))
+    );
+    const storedAddress = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new TeamsConversationAddressRepository(scoped).findByChannelAndThread(
+        channel.id,
+        skewedAdmission.threadId
+      )
+    );
+    expect(storedAddress).toBeTruthy();
+    expect(addressDatabaseStart).toBeTruthy();
+    expect(addressDatabaseEnd).toBeTruthy();
+    expect(new Date(storedAddress!.refreshed_at).getTime()).toBeGreaterThanOrEqual(
+      addressDatabaseStart!.getTime()
+    );
+    expect(new Date(storedAddress!.refreshed_at).getTime()).toBeLessThanOrEqual(
+      addressDatabaseEnd!.getTime()
+    );
+    expect(storedAddress!.refreshed_at).not.toBe(callerBehind.toISOString());
+    expect(storedAddress!.expires_at).not.toBe(callerAhead.toISOString());
+    expect(new Date(storedAddress!.expires_at!).getTime()).toBe(
+      new Date(storedAddress!.refreshed_at).getTime() + TEAMS_CONVERSATION_ADDRESS_TTL_MS
+    );
 
     const inboundDue = await runWithSystemDatabaseScope(
       dbA,

@@ -122,6 +122,10 @@ function makeWorker(options: {
     findByChannelAndThread: vi.fn(async () => options.mapping ?? null),
     advanceTeamsLastAdmittedActivityId: advance,
   };
+  const findChannelById = vi.fn(async () => ({
+    ...channel(),
+    config: { ...channel().config, ...options.channelConfig },
+  }));
   const worker = new TeamsGatewayWorker({} as never, {
     discoverInbound: async () => [
       { tenant_id: 'tenant-1', gateway_channel_id: 'channel-1', event_id: 'event-1' },
@@ -141,17 +145,23 @@ function makeWorker(options: {
         markAmbiguous: vi.fn(),
       } as never,
       channel: {
-        findById: vi.fn(async () => ({
-          ...channel(),
-          config: { ...channel().config, ...options.channelConfig },
-        })),
+        findById: findChannelById,
       },
       mapping: mapping as never,
       address: { findByChannelAndThread: vi.fn() } as never,
       message: { findById: vi.fn() } as never,
     },
   });
-  return { worker, create, complete, advance, inbound, mapping, recordDeliveryMetadata };
+  return {
+    worker,
+    create,
+    complete,
+    advance,
+    inbound,
+    mapping,
+    channel: findChannelById,
+    recordDeliveryMetadata,
+  };
 }
 
 describe('TeamsGatewayWorker inbound admission', () => {
@@ -352,6 +362,108 @@ describe('TeamsGatewayWorker inbound admission', () => {
         retryDelayMs: 1_000,
       })
     );
+  });
+
+  it.each([
+    ['channel lookup', (setup: ReturnType<typeof makeWorker>) => setup.channel],
+    [
+      'pre-admission mapping lookup',
+      (setup: ReturnType<typeof makeWorker>) => setup.mapping.findByChannelAndThread,
+    ],
+  ])('retries a transient %s repository failure', async (_name, getMock) => {
+    const setup = makeWorker({
+      activity: activity(),
+      channelConfig: { catch_up: { mode: 'off' } },
+    });
+    getMock(setup).mockRejectedValueOnce(new Error('repository unavailable'));
+
+    await setup.worker.checkOnce();
+    expect(setup.inbound.failQueued).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending', errorCode: 'teams_worker_failure' })
+    );
+    expect(setup.create).not.toHaveBeenCalled();
+
+    await setup.worker.checkOnce();
+    expect(setup.create).toHaveBeenCalledOnce();
+    expect(setup.complete).toHaveBeenCalledOnce();
+  });
+
+  it('retries a transient post-admission repository failure with event-derived IDs', async () => {
+    const setup = makeWorker({
+      activity: activity(),
+      mapping: { id: 'mapping-1' },
+      channelConfig: { catch_up: { mode: 'off' } },
+    });
+    setup.advance.mockRejectedValueOnce(new Error('cursor unavailable'));
+
+    await setup.worker.checkOnce();
+    expect(setup.inbound.failQueued).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending', errorCode: 'teams_worker_failure' })
+    );
+    await setup.worker.checkOnce();
+
+    expect(setup.create).toHaveBeenCalledTimes(2);
+    expect(setup.create.mock.calls[0]?.[0].idempotency_task_id).toBe(
+      setup.create.mock.calls[1]?.[0].idempotency_task_id
+    );
+    expect(setup.create.mock.calls[0]?.[0].idempotency_session_id).toBe(
+      setup.create.mock.calls[1]?.[0].idempotency_session_id
+    );
+    expect(setup.complete).toHaveBeenCalledOnce();
+  });
+
+  it('retries a transient post-admission mapping lookup failure with event-derived IDs', async () => {
+    const setup = makeWorker({
+      activity: activity(),
+      mapping: { id: 'mapping-1' },
+      channelConfig: { catch_up: { mode: 'off' } },
+    });
+    setup.mapping.findByChannelAndThread
+      .mockResolvedValueOnce({ id: 'mapping-1' })
+      .mockRejectedValueOnce(new Error('mapping unavailable'));
+
+    await setup.worker.checkOnce();
+    expect(setup.inbound.failQueued).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending', errorCode: 'teams_worker_failure' })
+    );
+    await setup.worker.checkOnce();
+
+    expect(setup.create).toHaveBeenCalledTimes(2);
+    expect(setup.create.mock.calls[0]?.[0].idempotency_task_id).toBe(
+      setup.create.mock.calls[1]?.[0].idempotency_task_id
+    );
+    expect(setup.complete).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['non-message', { activityType: 'event', text: '' }],
+    ['unmentioned group message', { conversationType: 'groupChat', hasMention: false }],
+    ['admitted message', {}],
+  ] as const)('retries a transient %s completion failure', async (_name, overrides) => {
+    const setup = makeWorker({
+      activity: activity(overrides),
+      channelConfig: { catch_up: { mode: 'off' } },
+    });
+    setup.complete.mockRejectedValueOnce(new Error('completion unavailable'));
+
+    await setup.worker.checkOnce();
+    expect(setup.inbound.failQueued).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'pending', errorCode: 'teams_worker_failure' })
+    );
+    await setup.worker.checkOnce();
+
+    expect(setup.complete).toHaveBeenCalledTimes(2);
+    if (overrides.activityType === undefined && overrides.conversationType === undefined) {
+      expect(setup.create).toHaveBeenCalledTimes(2);
+      expect(setup.create.mock.calls[0]?.[0].idempotency_task_id).toBe(
+        setup.create.mock.calls[1]?.[0].idempotency_task_id
+      );
+      expect(setup.create.mock.calls[0]?.[0].idempotency_session_id).toBe(
+        setup.create.mock.calls[1]?.[0].idempotency_session_id
+      );
+    } else {
+      expect(setup.create).not.toHaveBeenCalled();
+    }
   });
 
   it('terminalizes a known payload fence without retrying', async () => {

@@ -13,6 +13,7 @@ import type {
 } from './agentic-tool';
 import type { AgenticToolConfigurationReference } from './agentic-tool-preset';
 import type { BranchID, SessionID, TaskID, UserID, UUID } from './id';
+import { isCanonicalUuidV7 } from './id';
 import type { ScheduleID } from './schedule';
 import type { PermissionMode, Session } from './session';
 import type { DefaultModelConfig } from './user';
@@ -221,6 +222,8 @@ export function getRequiredSecretFields(
 }
 
 /** Canonical Teams gateway configuration. Legacy per-port fields are ignored. */
+export type TeamsUserMap = Record<string, UserID>;
+
 export interface TeamsGatewayConfig {
   app_id?: string;
   app_password?: string;
@@ -229,7 +232,7 @@ export interface TeamsGatewayConfig {
   allowed_channel_ids?: string[];
   allowed_user_aad_object_ids?: string[];
   /** AAD object ID → tenant-owned immutable Agor User ID. */
-  user_map?: Record<string, string>;
+  user_map?: TeamsUserMap;
   require_mention?: boolean;
   allow_thread_replies_without_mention?: boolean;
   catch_up?: TeamsCatchUpConfig;
@@ -293,6 +296,26 @@ function validateTeamsList(
   }
 }
 
+/** Validate Teams AAD object ID mappings to canonical tenant-owned User IDs. */
+export function validateTeamsUserMap(value: unknown): TeamsConfigValidationResult {
+  if (value === undefined) return { ok: true, errors: [] };
+  if (!isTeamsRecord(value)) {
+    return {
+      ok: false,
+      errors: ['user_map must map Teams AAD object IDs to full lowercase UUIDv7 Agor User IDs'],
+    };
+  }
+  for (const [aadId, userId] of Object.entries(value)) {
+    if (!isTeamsId(aadId) || !isCanonicalUuidV7(userId)) {
+      return {
+        ok: false,
+        errors: ['user_map must map Teams AAD object IDs to full lowercase UUIDv7 Agor User IDs'],
+      };
+    }
+  }
+  return { ok: true, errors: [] };
+}
+
 /** Apply safe defaults without importing a provider SDK. */
 export function withTeamsConfigDefaults(raw: Record<string, unknown>): Record<string, unknown> {
   const catchUp = isTeamsRecord(raw.catch_up)
@@ -338,18 +361,7 @@ export function validateTeamsConfig(
   ] as const) {
     validateTeamsList(raw, field, errors);
   }
-  if (raw.user_map !== undefined) {
-    if (!isTeamsRecord(raw.user_map)) {
-      errors.push('user_map must map Teams AAD object IDs to Agor User IDs');
-    } else {
-      for (const [aadId, userId] of Object.entries(raw.user_map)) {
-        if (!isTeamsId(aadId) || typeof userId !== 'string' || !userId.trim()) {
-          errors.push('user_map must map nonempty Teams IDs to Agor User IDs');
-          break;
-        }
-      }
-    }
-  }
+  errors.push(...validateTeamsUserMap(raw.user_map).errors);
   if (typeof raw.require_mention !== 'boolean') errors.push('require_mention must be a boolean');
   if (typeof raw.allow_thread_replies_without_mention !== 'boolean') {
     errors.push('allow_thread_replies_without_mention must be a boolean');

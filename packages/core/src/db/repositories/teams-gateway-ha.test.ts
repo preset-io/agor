@@ -151,9 +151,20 @@ describe('Teams gateway HA repositories', () => {
       const inbound = new GatewayInboundEventRepository(db);
       const addresses = new TeamsConversationAddressRepository(db);
       const input = admissionInput(channel.id, channel.provider_config_generation);
+      const callerBehind = new Date('2000-01-01T00:00:00.000Z');
+      const callerAhead = new Date('2999-01-01T00:00:00.000Z');
+      const inputWithObsoleteTimestamps = {
+        ...input,
+        address: {
+          ...input.address,
+          refreshedAt: callerBehind,
+          expiresAt: callerAhead,
+        },
+      } as unknown as TeamsVerifiedHttpAdmissionInput;
 
-      const first = await inbound.admitVerifiedHttp(input);
-      const duplicate = await inbound.admitVerifiedHttp(input);
+      const first = await inbound.admitVerifiedHttp(inputWithObsoleteTimestamps);
+      const firstRawAddress = await addresses.findByChannelAndThread(channel.id, input.threadId);
+      const duplicate = await inbound.admitVerifiedHttp(inputWithObsoleteTimestamps);
       expect(first.outcome).toBe('admitted');
       expect(duplicate.outcome).toBe('duplicate');
       expect(duplicate.event.id).toBe(first.event.id);
@@ -182,9 +193,13 @@ describe('Teams gateway HA repositories', () => {
       const rawAddress = await addresses.findByChannelAndThread(channel.id, input.threadId);
       expect(rawAddress).toBeTruthy();
       expect(rawAddress?.expires_at).toBeTruthy();
-      expect(new Date(rawAddress!.expires_at!).getTime()).toBe(
-        new Date(rawAddress!.refreshed_at).getTime() + TEAMS_CONVERSATION_ADDRESS_TTL_MS
-      );
+      for (const storedAddress of [firstRawAddress, rawAddress]) {
+        expect(storedAddress?.refreshed_at).not.toBe(callerBehind.toISOString());
+        expect(storedAddress?.expires_at).not.toBe(callerAhead.toISOString());
+        expect(new Date(storedAddress!.expires_at!).getTime()).toBe(
+          new Date(storedAddress!.refreshed_at).getTime() + TEAMS_CONVERSATION_ADDRESS_TTL_MS
+        );
+      }
       expect(rawAddress?.encrypted_address).not.toContain('trafficmanager');
       expect(rawAddress && decryptTeamsConversationAddress(rawAddress)).toEqual(
         input.address.address

@@ -400,7 +400,6 @@ export function registerTeamsGatewayIngressRoute(input: {
               verifiedAppId: teamsAppId,
               verifiedTenantId: teamsTenantId,
               providerConfigGeneration: channel!.provider_config_generation,
-              expiresAt: null,
             },
             providerConfigGeneration: channel!.provider_config_generation,
             verifiedAppId: teamsAppId,

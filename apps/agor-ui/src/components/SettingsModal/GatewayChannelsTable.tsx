@@ -25,6 +25,7 @@ import {
   MAX_DISCORD_CATCH_UP,
   MIN_DISCORD_CATCH_UP,
   validateDiscordConfig,
+  validateTeamsUserMap,
 } from '@agor/core/types';
 import type {
   AgenticToolName,
@@ -118,6 +119,20 @@ import { BranchSelect } from './BranchSelect';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { UserSelect } from './UserSelect';
+
+const validateTeamsUserMapField = (_: unknown, value: unknown) => {
+  if (typeof value !== 'string' || !value.trim()) return Promise.resolve();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return Promise.reject(new Error('Enter a valid JSON object.'));
+  }
+  const validation = validateTeamsUserMap(parsed);
+  return validation.ok
+    ? Promise.resolve()
+    : Promise.reject(new Error(validation.errors[0] ?? 'Invalid Teams user map.'));
+};
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
@@ -2892,7 +2907,7 @@ const ChannelFormFields: React.FC<{
                     <Form.Item
                       label="Teams → Agor User ID map (JSON)"
                       name="teams_user_map"
-                      rules={[{ validator: validateJSON }]}
+                      rules={[{ validator: validateTeamsUserMapField }]}
                       tooltip="Optional JSON object mapping Teams AAD object IDs to immutable tenant-owned Agor User IDs."
                     >
                       <Input.TextArea

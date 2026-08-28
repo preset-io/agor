@@ -493,6 +493,14 @@ export class TeamsGatewayWorker {
     }
   }
 
+  private async withTransientRepositoryFailure<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      throw new TeamsTransientError('teams_worker_failure', error);
+    }
+  }
+
   private async admitInbound(event: GatewayInboundEvent): Promise<void> {
     let payload: Record<string, unknown>;
     try {
@@ -501,7 +509,9 @@ export class TeamsGatewayWorker {
       throw new TeamsPermanentError('teams_payload_invalid', error);
     }
     const activity = payloadActivity(payload);
-    const channel = await this.channelRepo.findById(event.gateway_channel_id);
+    const channel = await this.withTransientRepositoryFailure(() =>
+      this.channelRepo.findById(event.gateway_channel_id)
+    );
     if (!channel?.enabled || channel.channel_type !== 'teams')
       throw new TeamsPermanentError('teams_channel_disabled_or_missing');
     if (
@@ -518,12 +528,14 @@ export class TeamsGatewayWorker {
     )
       throw new TeamsPermanentError('teams_payload_identity_mismatch');
     if (activity.activityType !== 'message' || !activity.text.trim()) {
-      const completed = await this.inboundRepo.complete({
-        eventId: event.id,
-        channelId: channel.id,
-        processingToken: event.processing_token,
-        requireListenerClaim: false,
-      });
+      const completed = await this.withTransientRepositoryFailure(() =>
+        this.inboundRepo.complete({
+          eventId: event.id,
+          channelId: channel.id,
+          processingToken: event.processing_token,
+          requireListenerClaim: false,
+        })
+      );
       if (!completed) throw new TeamsPermanentError('teams_inbound_completion_fence_lost');
       return;
     }
@@ -532,20 +544,21 @@ export class TeamsGatewayWorker {
       // Keep ordinary group/channel traffic queue-visible but never pass it to
       // the gateway's Task admission path. This remains duplicated in Gateway
       // Service as defense in depth for non-queue callers.
-      const completed = await this.inboundRepo.complete({
-        eventId: event.id,
-        channelId: channel.id,
-        processingToken: event.processing_token,
-        requireListenerClaim: false,
-      });
+      const completed = await this.withTransientRepositoryFailure(() =>
+        this.inboundRepo.complete({
+          eventId: event.id,
+          channelId: channel.id,
+          processingToken: event.processing_token,
+          requireListenerClaim: false,
+        })
+      );
       if (!completed) throw new TeamsPermanentError('teams_inbound_completion_fence_lost');
       return;
     }
     if (!this.gatewayService) throw new TeamsTransientError('teams_gateway_service_unavailable');
     let promptText = activity.text;
-    const mappingBeforeAdmission = await this.mappingRepo.findByChannelAndThread(
-      channel.id,
-      activity.threadId
+    const mappingBeforeAdmission = await this.withTransientRepositoryFailure(() =>
+      this.mappingRepo.findByChannelAndThread(channel.id, activity.threadId)
     );
     const catchUpConfig = withTeamsConfigDefaults(channel.config).catch_up as {
       mode?: 'off' | 'best_effort';
@@ -604,26 +617,29 @@ export class TeamsGatewayWorker {
     if (result.success && result.taskId) {
       // Advance only after stable Task admission. The compare-and-swap keeps a
       // stale replica from moving the shared catch-up cursor backwards.
-      const actualMapping = await this.mappingRepo.findByChannelAndThread(
-        channel.id,
-        activity.threadId
+      const actualMapping = await this.withTransientRepositoryFailure(() =>
+        this.mappingRepo.findByChannelAndThread(channel.id, activity.threadId)
       );
       if (actualMapping) {
-        await this.mappingRepo.advanceTeamsLastAdmittedActivityId(
-          actualMapping.id,
-          activity.activityId,
-          mappingBeforeAdmission?.teams_last_admitted_activity_id ?? null
+        await this.withTransientRepositoryFailure(() =>
+          this.mappingRepo.advanceTeamsLastAdmittedActivityId(
+            actualMapping.id,
+            activity.activityId,
+            mappingBeforeAdmission?.teams_last_admitted_activity_id ?? null
+          )
         );
       }
     }
-    const completed = await this.inboundRepo.complete({
-      eventId: event.id,
-      channelId: channel.id,
-      processingToken: event.processing_token,
-      ...(result.sessionId ? { sessionId: result.sessionId as never } : {}),
-      ...(result.taskId ? { taskId: result.taskId } : {}),
-      requireListenerClaim: false,
-    });
+    const completed = await this.withTransientRepositoryFailure(() =>
+      this.inboundRepo.complete({
+        eventId: event.id,
+        channelId: channel.id,
+        processingToken: event.processing_token,
+        ...(result.sessionId ? { sessionId: result.sessionId as never } : {}),
+        ...(result.taskId ? { taskId: result.taskId } : {}),
+        requireListenerClaim: false,
+      })
+    );
     if (!completed) throw new TeamsPermanentError('teams_inbound_completion_fence_lost');
   }
 

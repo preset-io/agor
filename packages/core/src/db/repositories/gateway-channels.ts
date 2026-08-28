@@ -28,6 +28,7 @@ import {
   mergeGatewayChannelConfigPatch,
   validateDiscordConfig,
   validateTeamsConfig,
+  validateTeamsUserMap,
 } from '../../types/gateway';
 import { prefixToLikePattern } from '../../types/id';
 import type { Database, SystemDatabase } from '../client';
@@ -634,14 +635,27 @@ export class GatewayChannelRepository
    * An enabled channel can never exist without the secrets its type needs to
    * function. Runs on the post-merge, decrypted config so a patch that only
    * flips `enabled: true` on a channel with already-stored tokens passes.
-   * Disabled ("draft") channels are exempt.
+   * Disabled ("draft") channels are exempt from secret checks; identity
+   * configuration remains validated.
    */
   private assertRequiredSecretsWhenEnabled(channel: Partial<GatewayChannel>): void {
+    const channelType = channel.channel_type ?? 'slack';
+    const config = channel.config ?? {};
+
+    // Teams user mappings are identity configuration, not deferred secrets;
+    // validate them even on disabled drafts before the enabled-only checks.
+    if (channelType === 'teams') {
+      const validation = validateTeamsUserMap(config.user_map);
+      if (!validation.ok) {
+        throw new RepositoryError(
+          `Cannot persist Teams gateway channel: invalid configuration ${validation.errors.join('; ')}`
+        );
+      }
+    }
+
     // Insert defaults `enabled` to true, so treat undefined as enabled here.
     if (channel.enabled === false) return;
 
-    const channelType = channel.channel_type ?? 'slack';
-    const config = channel.config ?? {};
     const missing = getRequiredSecretFields(channelType, config).filter((field) => {
       const value = config[field];
       return (

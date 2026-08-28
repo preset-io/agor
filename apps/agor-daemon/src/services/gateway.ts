@@ -90,6 +90,7 @@ import type {
   SessionID,
   Task,
   TaskID,
+  TeamsUserMap,
   TenantID,
   ThreadSessionMap,
   User,
@@ -98,6 +99,7 @@ import type {
 import {
   DEFAULT_DISCORD_CATCH_UP,
   hasMinimumRole,
+  isCanonicalUuidV7,
   isDiscordSnowflake,
   ROLES,
   SessionStatus,
@@ -1141,13 +1143,10 @@ export class GatewayService {
   /** Teams-only identity alignment: AAD object ID → immutable tenant user ID. */
   private async resolveTeamsUser(opts: {
     aadObjectId: string | undefined;
-    userMap: Record<string, string> | undefined;
+    userMap: TeamsUserMap | undefined;
   }): Promise<Awaited<ReturnType<UsersRepository['findById']>>> {
-    const mappedUserId =
-      opts.aadObjectId && opts.userMap?.[opts.aadObjectId]
-        ? opts.userMap[opts.aadObjectId].trim()
-        : null;
-    if (!mappedUserId) return null;
+    const mappedUserId = opts.aadObjectId ? opts.userMap?.[opts.aadObjectId] : undefined;
+    if (!isCanonicalUuidV7(mappedUserId)) return null;
     const matched = await this.usersRepo.findById(mappedUserId);
     if (matched) {
       console.log(
@@ -2477,7 +2476,7 @@ export class GatewayService {
           typeof data.teams_user_aad_object_id === 'string'
             ? data.teams_user_aad_object_id
             : undefined,
-        userMap: channelConfig.user_map as Record<string, string> | undefined,
+        userMap: channelConfig.user_map as TeamsUserMap | undefined,
       });
       if (!matchedUser) {
         console.log('[gateway] Teams user alignment failed: result=agor_user_not_found');

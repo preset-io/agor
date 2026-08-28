@@ -16,6 +16,7 @@ import type {
   GatewayChannel,
   GatewayOutboundMessage,
   SessionID,
+  TeamsUserMap,
   ThreadSessionMap,
   User,
   UserID,
@@ -623,7 +624,7 @@ describe('GatewayService user alignment operational logs', () => {
     const resolveTeamsUser = service as unknown as {
       resolveTeamsUser(opts: {
         aadObjectId: string | undefined;
-        userMap: Record<string, string> | undefined;
+        userMap: TeamsUserMap | undefined;
       }): Promise<User | null>;
     };
 
@@ -635,6 +636,23 @@ describe('GatewayService user alignment operational logs', () => {
     ).resolves.toBe(alignedUser);
     expect(findById).toHaveBeenCalledWith(alignedUser.user_id);
     expect(findByEmailForAlignment).not.toHaveBeenCalled();
+
+    for (const invalidUserId of [
+      'user@example.com',
+      'not-a-uuid',
+      '01933e4a',
+      '01933e4a-7b89-4c35-a8f3-9d2e1c4b5a6f',
+      '01933E4A-7B89-7C35-A8F3-9D2E1C4B5A6F',
+    ]) {
+      findById.mockClear();
+      await expect(
+        resolveTeamsUser.resolveTeamsUser({
+          aadObjectId: 'aad-object-1',
+          userMap: { 'aad-object-1': invalidUserId } as unknown as TeamsUserMap,
+        })
+      ).resolves.toBeNull();
+      expect(findById).not.toHaveBeenCalled();
+    }
   });
 
   it('logs exact user_map and email-fallback outcomes without external identities', async () => {
