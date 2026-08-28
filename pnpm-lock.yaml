@@ -691,6 +691,9 @@ importers:
 
   packages/agor-codex:
     dependencies:
+      '@openai/codex':
+        specifier: 0.144.0
+        version: 0.144.0
       '@openai/codex-sdk':
         specifier: 0.144.0
         version: 0.144.0

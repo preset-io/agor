@@ -1,7 +1,11 @@
 import { createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { AutocompleteTextarea, type KbDocMention } from './AutocompleteTextarea';
+import {
+  AutocompleteTextarea,
+  type KbDocMention,
+  type SkillMentionStyle,
+} from './AutocompleteTextarea';
 
 const renderSlashAutocomplete = () => {
   const Harness = () => {
@@ -16,6 +20,28 @@ const renderSlashAutocomplete = () => {
         sessionId={null}
         userById={new Map()}
         slashCommands={['alpha', 'beta']}
+      />
+    );
+  };
+
+  render(<Harness />);
+  return screen.getByPlaceholderText('Prompt') as HTMLTextAreaElement;
+};
+
+const renderSkillsAutocomplete = (skillMentionStyle?: SkillMentionStyle) => {
+  const Harness = () => {
+    const [value, setValue] = useState('');
+
+    return (
+      <AutocompleteTextarea
+        value={value}
+        onChange={setValue}
+        placeholder="Prompt"
+        client={null}
+        sessionId={null}
+        userById={new Map()}
+        skills={['weekly-meeting-plugin:collect-from-jira', 'deep-research']}
+        skillMentionStyle={skillMentionStyle}
       />
     );
   };
@@ -182,6 +208,35 @@ describe('AutocompleteTextarea', () => {
 
     await waitFor(() => {
       expect(textarea).toHaveValue('/alpha ');
+    });
+  });
+
+  it('inserts skills as slash commands by default (Claude semantics)', async () => {
+    const textarea = renderSkillsAutocomplete();
+
+    fireEvent.change(textarea, { target: { value: '/jira', selectionStart: 5 } });
+
+    fireEvent.click(await screen.findByText('weekly-meeting-plugin:collect-from-jira'));
+
+    await waitFor(() => {
+      expect(textarea).toHaveValue('/weekly-meeting-plugin:collect-from-jira ');
+    });
+  });
+
+  it('inserts Codex skills as $name mentions when skillMentionStyle is dollar', async () => {
+    const textarea = renderSkillsAutocomplete('dollar');
+
+    fireEvent.change(textarea, { target: { value: '/jira', selectionStart: 5 } });
+
+    await screen.findByText('weekly-meeting-plugin:collect-from-jira');
+    // Codex skills are labeled as skills, not project commands.
+    expect(screen.getByText('skill')).toBeInTheDocument();
+    expect(screen.queryByText('project')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('weekly-meeting-plugin:collect-from-jira'));
+
+    await waitFor(() => {
+      expect(textarea).toHaveValue('$weekly-meeting-plugin:collect-from-jira ');
     });
   });
 
