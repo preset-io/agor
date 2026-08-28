@@ -41,10 +41,20 @@ With filesystem isolation enabled, Agor creates directories lazily:
     <tenant-id>/
       repos/
       worktrees/
+      branch-homes/
       uploads/
   agor.db
   config.yaml
 ```
+
+`branch-homes/<branch-id>/` holds a branch's optional **per-branch SDK home**
+(the relocated `.claude`/`.codex`/… config and state) when
+`execution.sandbox.sdk_home_mode: per_branch` is enabled. It is created lazily
+on first prompt, keyed by the immutable branch id, removed when the branch is
+deleted (archive retains it), and — being under the tenant root — is included
+in tenant export/backup and cross-replica shared storage the same way
+`worktrees/` is. Agent **credentials are never written here**; they are injected
+per-caller at prompt time.
 
 `uploads.location` is a **base storage location**, not the final upload folder.
 Agor owns and appends the tenant and `uploads/` namespaces beneath it. Local
@@ -104,6 +114,7 @@ In the default single-tenant mode, paths remain unchanged:
 ~/.agor/
   repos/
   worktrees/
+  branch-homes/
   uploads/
   agor.db
   config.yaml

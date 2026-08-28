@@ -54,6 +54,17 @@ branches may be separate volumes; they do not need to be one global shared files
 An auth-resolved HA deployment must use `persistent-per-user`; startup rejects a shared or
 replica-local credential home rather than allowing users or tenants to share CLI credentials.
 
+When `execution.sandbox.sdk_home_mode: per_branch` is enabled, the tenant data
+root's `branch-homes/<branch-id>/` tree carries each branch's relocated SDK
+config/state (and, for Codex subscription auth, a bind onto the caller's real
+`auth.json`). It needs the **same shared-storage and `cross-replica-flock`
+guarantee documented above for `homes/`**: a prompt or Task dispatched to
+replica B must see exactly what replica A wrote, and concurrent writers within
+one branch home rely on the same cross-client `flock` semantics. Agor does not
+add a separate `executor_storage` key for it — place `branch-homes/` on the same
+backing store as `homes/`/`worktrees/`, at the same absolute path on every
+replica.
+
 `cross-replica-flock` asserts that an exclusive `flock` on one user's home is
 observed by every daemon/storage client that can mutate that home. Agor cannot
 infer this reliably from a mount path. Do not assert it for NFS mounted with
