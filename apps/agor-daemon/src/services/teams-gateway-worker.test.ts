@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { isVerifiedHttpGatewayCreate } from './gateway-authority';
 import { TeamsGatewayWorker } from './teams-gateway-worker';
 
+vi.stubEnv('AGOR_MASTER_SECRET', 'teams-worker-test-secret');
+
 const now = new Date('2026-08-27T12:00:00.000Z');
 
 function channel(): GatewayChannel {
@@ -95,6 +97,7 @@ function inboundEvent(): Record<string, unknown> {
 function makeWorker(options: {
   activity: Record<string, unknown>;
   mapping?: Record<string, unknown> | null;
+  channelConfig?: Record<string, unknown>;
   catchUp?: (input: Record<string, unknown>) => Promise<unknown>;
   gatewayCreate?: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
 }) {
@@ -137,7 +140,12 @@ function makeWorker(options: {
         fail: vi.fn(),
         markAmbiguous: vi.fn(),
       } as never,
-      channel: { findById: vi.fn(async () => channel()) },
+      channel: {
+        findById: vi.fn(async () => ({
+          ...channel(),
+          config: { ...channel().config, ...options.channelConfig },
+        })),
+      },
       mapping: mapping as never,
       address: { findByChannelAndThread: vi.fn() } as never,
       message: { findById: vi.fn() } as never,
@@ -168,6 +176,26 @@ describe('TeamsGatewayWorker inbound admission', () => {
     expect(setup.complete).toHaveBeenCalledOnce();
     expect(setup.advance).not.toHaveBeenCalled();
     expect(catchUp).not.toHaveBeenCalled();
+  });
+
+  it('never creates a Task for an unmentioned group-chat message even when legacy config is false', async () => {
+    const setup = makeWorker({
+      activity: activity({
+        conversationType: 'groupChat',
+        hasMention: false,
+        text: 'ordinary group chatter',
+        metadata: {
+          teams_conversation_type: 'groupChat',
+          teams_has_mention: false,
+        },
+      }),
+      channelConfig: { require_mention: false },
+    });
+
+    await setup.worker.checkOnce();
+
+    expect(setup.create).not.toHaveBeenCalled();
+    expect(setup.complete).toHaveBeenCalledOnce();
   });
 
   it('puts only correlated bounded human catch-up before the one current Task', async () => {
@@ -318,7 +346,26 @@ describe('TeamsGatewayWorker inbound admission', () => {
     expect(setup.advance).not.toHaveBeenCalled();
     expect(setup.complete).not.toHaveBeenCalled();
     expect(setup.inbound.failQueued).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'pending', errorCode: 'Task admission failed' })
+      expect.objectContaining({
+        status: 'pending',
+        errorCode: 'teams_gateway_service_unavailable',
+      })
+    );
+  });
+
+  it('terminalizes a known payload fence without retrying', async () => {
+    const setup = makeWorker({
+      activity: activity({ providerEventId: 'teams:activity:other' }),
+    });
+
+    await setup.worker.checkOnce();
+
+    expect(setup.inbound.failQueued).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'dead_letter',
+        errorCode: 'teams_payload_identity_mismatch',
+        nextAttemptAt: undefined,
+      })
     );
   });
 });
@@ -326,7 +373,12 @@ describe('TeamsGatewayWorker inbound admission', () => {
 describe('TeamsGatewayWorker outbound fencing', () => {
   function deliverySetup(
     addressOverrides: Record<string, unknown> = {},
-    options: { attemptCount?: number; connectorFactory?: () => unknown } = {}
+    options: {
+      attemptCount?: number;
+      connectorFactory?: () => unknown;
+      providerTimeoutMs?: number;
+      messageContent?: unknown;
+    } = {}
   ) {
     const delivery = {
       delivery_id: 'delivery-1',
@@ -342,6 +394,7 @@ describe('TeamsGatewayWorker outbound fencing', () => {
       claim_token: 'delivery-claim',
       claim_generation: 1,
       lease_expires_at: new Date(now.getTime() + 30_000).toISOString(),
+      lease_remaining_ms: 30_000,
       delivery,
     };
     const fail = vi.fn(async () => true);
@@ -369,6 +422,7 @@ describe('TeamsGatewayWorker outbound fencing', () => {
         { tenant_id: 'tenant-1', delivery_id: 'delivery-1', thread_session_map_id: 'mapping-1' },
       ],
       now: () => now,
+      providerTimeoutMs: options.providerTimeoutMs,
       repositories: {
         inbound: {} as never,
         delivery: {
@@ -385,8 +439,18 @@ describe('TeamsGatewayWorker outbound fencing', () => {
           findByChannelAndThread: vi.fn(),
           advanceTeamsLastAdmittedActivityId: vi.fn(),
         } as never,
-        address: { findByChannelAndThread: vi.fn(async () => address) } as never,
-        message: { findById: vi.fn(async () => ({ content: 'reply' })) } as never,
+        address: {
+          findByChannelAndThread: vi.fn(async () => address),
+          isExpired: vi.fn(
+            async () =>
+              address.expires_at !== null &&
+              address.expires_at !== undefined &&
+              new Date(address.expires_at as string).getTime() <= now.getTime()
+          ),
+        } as never,
+        message: {
+          findById: vi.fn(async () => ({ content: options.messageContent ?? 'reply' })),
+        } as never,
       },
       connectorFactory:
         (options.connectorFactory as never) ??
@@ -414,6 +478,45 @@ describe('TeamsGatewayWorker outbound fencing', () => {
       expect.objectContaining({ errorCode: 'provider_effect_unknown' })
     );
     expect(setup.complete).not.toHaveBeenCalled();
+  });
+
+  it('times out a never-resolving provider call inside the lease and never retries it', async () => {
+    const sendMessage = vi.fn(() => new Promise<never>(() => undefined));
+    const setup = deliverySetup(
+      {},
+      {
+        providerTimeoutMs: 10,
+        connectorFactory: () => ({ channelType: 'teams', sendMessage }) as never,
+      }
+    );
+
+    await setup.worker.checkOnce();
+
+    expect(setup.markEffectStarted).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(setup.markAmbiguous).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: 'provider_effect_unknown' })
+    );
+    expect(setup.complete).not.toHaveBeenCalled();
+  });
+
+  it('delivers the complete extracted text from structured assistant content', async () => {
+    const setup = deliverySetup(
+      {},
+      {
+        messageContent: [
+          { type: 'text', text: 'first block' },
+          { type: 'tool_use', id: 'tool-1' },
+          { type: 'text', text: 'second block' },
+        ],
+      }
+    );
+
+    await setup.worker.checkOnce();
+
+    expect(setup.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'first block\nsecond block' })
+    );
   });
 
   it('retries when the durable effect marker is rejected before provider send', async () => {

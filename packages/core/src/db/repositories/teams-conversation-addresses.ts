@@ -10,9 +10,17 @@ import type {
 import { and, eq } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { insert, isSQLiteDatabase, select, update } from '../database-wrapper';
+import {
+  databaseNowExpression,
+  getDatabaseNow,
+  insert,
+  isSQLiteDatabase,
+  select,
+  update,
+} from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import {
+  gatewayChannels,
   type TeamsConversationAddressInsert,
   type TeamsConversationAddressRow,
   teamsConversationAddresses,
@@ -32,6 +40,9 @@ export interface TeamsConversationAddressInput {
   refreshedAt?: Date;
   expiresAt?: Date | null;
 }
+
+/** Verified activities refresh a usable Bot Framework address for this period. */
+export const TEAMS_CONVERSATION_ADDRESS_TTL_MS = 24 * 60 * 60 * 1000;
 
 function iso(value: Date | string | number): string {
   return new Date(value).toISOString();
@@ -63,10 +74,7 @@ export function decryptTeamsConversationAddress(
     }
     return value as Record<string, unknown>;
   } catch (error) {
-    throw new RepositoryError(
-      `Failed to decrypt Teams conversation address: ${error instanceof Error ? error.message : String(error)}`,
-      error
-    );
+    throw new RepositoryError('Failed to decrypt Teams conversation address', error);
   }
 }
 
@@ -92,7 +100,15 @@ export class TeamsConversationAddressRepository {
       throw new RepositoryError('Teams address verification identity is required');
     }
     const tenantId = requireTenant(tx);
-    const now = input.refreshedAt ?? new Date();
+    const now = await getDatabaseNow(
+      tx,
+      gatewayChannels,
+      eq(gatewayChannels.id, input.gatewayChannelId),
+      input.refreshedAt
+    );
+    if (!now) throw new RepositoryError('Unable to obtain database time for Teams address');
+    const expiresAt =
+      input.expiresAt ?? new Date(now.getTime() + TEAMS_CONVERSATION_ADDRESS_TTL_MS);
     const encryptedAddress = encryptApiKey(JSON.stringify(input.address));
     const where = and(
       eq(teamsConversationAddresses.gateway_channel_id, input.gatewayChannelId),
@@ -109,7 +125,7 @@ export class TeamsConversationAddressRepository {
           verified_tenant_id: input.verifiedTenantId,
           provider_config_generation: input.providerConfigGeneration,
           refreshed_at: now,
-          expires_at: input.expiresAt ?? null,
+          expires_at: expiresAt,
         })
         .where(eq(teamsConversationAddresses.address_id, existing.address_id))
         .returning()
@@ -127,7 +143,7 @@ export class TeamsConversationAddressRepository {
       verified_tenant_id: input.verifiedTenantId,
       provider_config_generation: input.providerConfigGeneration,
       refreshed_at: now,
-      expires_at: input.expiresAt ?? null,
+      expires_at: expiresAt,
       ...(tenantId ? { tenant_id: tenantId } : {}),
     };
     await insert(tx, teamsConversationAddresses).values(insertData).run();
@@ -153,6 +169,23 @@ export class TeamsConversationAddressRepository {
       )
       .one();
     return row ? rowToAddress(row) : null;
+  }
+
+  /** Compare expiry with the database clock, not a worker's wall clock. */
+  async isExpired(addressId: TeamsConversationAddressID): Promise<boolean> {
+    const row = (await select(this.db, {
+      expires_at: teamsConversationAddresses.expires_at,
+      database_now: databaseNowExpression(this.db),
+    })
+      .from(teamsConversationAddresses)
+      .where(eq(teamsConversationAddresses.address_id, addressId))
+      .one()) as { expires_at?: Date | string | number | null; database_now?: unknown } | null;
+    if (!row?.expires_at || row.database_now === undefined || row.database_now === null) {
+      return false;
+    }
+    const expiresAt = new Date(row.expires_at).getTime();
+    const databaseNow = new Date(row.database_now as string | number).getTime();
+    return Number.isFinite(expiresAt) && Number.isFinite(databaseNow) && expiresAt <= databaseNow;
   }
 
   async addressForChannelAndThread(

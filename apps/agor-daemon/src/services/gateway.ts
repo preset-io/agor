@@ -1138,6 +1138,29 @@ export class GatewayService {
     return null;
   }
 
+  /** Teams-only identity alignment: AAD object ID → immutable tenant user ID. */
+  private async resolveTeamsUser(opts: {
+    aadObjectId: string | undefined;
+    userMap: Record<string, string> | undefined;
+  }): Promise<Awaited<ReturnType<UsersRepository['findById']>>> {
+    const mappedUserId =
+      opts.aadObjectId && opts.userMap?.[opts.aadObjectId]
+        ? opts.userMap[opts.aadObjectId].trim()
+        : null;
+    if (!mappedUserId) return null;
+    const matched = await this.usersRepo.findById(mappedUserId);
+    if (matched) {
+      console.log(
+        `[gateway] Teams user alignment succeeded: source=user_map agor_user=${shortId(matched.user_id)}`
+      );
+      return matched;
+    }
+    console.warn(
+      '[gateway] Teams user alignment failed: source=user_map result=agor_user_not_found'
+    );
+    return null;
+  }
+
   private truncateSlackInline(value: string, maxChars = 70): string {
     const singleLine = value.replace(/\s+/g, ' ').trim();
     if (singleLine.length <= maxChars) return singleLine;
@@ -2329,18 +2352,12 @@ export class GatewayService {
       const isPersonal =
         typeof conversationType === 'string' && conversationType.toLowerCase() === 'personal';
       const hasMention = data.metadata?.teams_has_mention === true;
-      const isTeamsChannel =
-        typeof conversationType === 'string' && conversationType.toLowerCase() === 'channel';
-      const requireMention = channelConfig.require_mention !== false;
       // A standard/channel conversation is an observation surface, not a
       // prompt surface: an unmentioned message can never create a Task, even
       // when an older compatibility flag allowed replies in mapped threads.
-      // Personal chats remain mention-free; group chats retain the configured
-      // require_mention behavior.
-      if (
-        (!isPersonal && isTeamsChannel && !hasMention) ||
-        (!isPersonal && !isTeamsChannel && requireMention && !hasMention)
-      ) {
+      // Personal chats remain mention-free; group chats and channels require
+      // an exact structured app-ID mention.
+      if (!isPersonal && !hasMention) {
         console.debug(
           `[gateway] IGNORED: Teams conversation message without required mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
         );
@@ -2389,7 +2406,8 @@ export class GatewayService {
       channel.channel_type === 'teams' &&
       channelConfig.user_map &&
       typeof channelConfig.user_map === 'object' &&
-      !Array.isArray(channelConfig.user_map);
+      !Array.isArray(channelConfig.user_map) &&
+      Object.keys(channelConfig.user_map).length > 0;
 
     // Only fetch and use channel owner when NO alignment is active.
     // When alignment is ON, agor_user_id may be empty (the "Post messages as"
@@ -2451,15 +2469,14 @@ export class GatewayService {
     }
 
     // Teams user alignment is explicit and tenant-local. An unmapped AAD
-    // object ID is rejected; it never inherits the channel owner's identity.
+    // object ID is rejected; it never inherits the channel owner's identity
+    // or falls back to an email match.
     if (alignTeamsUsers) {
-      const matchedUser = await this.resolveAlignedUser({
-        platform: 'Teams',
-        externalId:
+      const matchedUser = await this.resolveTeamsUser({
+        aadObjectId:
           typeof data.teams_user_aad_object_id === 'string'
             ? data.teams_user_aad_object_id
             : undefined,
-        email: undefined,
         userMap: channelConfig.user_map as Record<string, string> | undefined,
       });
       if (!matchedUser) {

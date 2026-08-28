@@ -1,6 +1,7 @@
 import {
   bindRepositoryToTenantUnitOfWork,
   decryptTeamsConversationAddress,
+  extractTeamsDeliveryText,
   GatewayChannelRepository,
   GatewayInboundEventRepository,
   generateId,
@@ -35,6 +36,7 @@ import {
   createTeamsStandardChannelHistoryFetcher,
   type TeamsStandardChannelHistoryFetcher,
 } from '../utils/teams-channel-history.js';
+import { type TeamsGatewayErrorCode, teamsGatewayErrorCode } from '../utils/teams-error.js';
 import type { GatewayService } from './gateway.js';
 import { withVerifiedHttpGatewayAuthority } from './gateway-authority.js';
 
@@ -82,7 +84,9 @@ export interface TeamsGatewayWorkerRepositories {
   delivery: DeliveryRepository;
   channel: Pick<GatewayChannelRepository, 'findById'>;
   mapping: TeamsMappingRepository;
-  address: Pick<TeamsConversationAddressRepository, 'findByChannelAndThread'>;
+  address: Pick<TeamsConversationAddressRepository, 'findByChannelAndThread'> & {
+    isExpired?: (addressId: string) => Promise<boolean>;
+  };
   message: Pick<MessagesRepository, 'findById'>;
 }
 
@@ -102,6 +106,8 @@ export interface TeamsGatewayWorkerOptions {
   scanBatchSize?: number;
   maxConcurrency?: number;
   leaseDurationMs?: number;
+  /** Test/operations cap; the effective deadline never exceeds the claim lease. */
+  providerTimeoutMs?: number;
   recoveryIntervalMs?: number;
   random?: () => number;
   now?: () => Date;
@@ -152,6 +158,35 @@ function isDefinitiveProviderFailure(error: unknown): boolean {
     status < 500 &&
     ![408, 409, 425, 429].includes(status)
   );
+}
+
+export class TeamsTransientError extends Error {
+  readonly teamsCode: TeamsGatewayErrorCode;
+
+  constructor(code: TeamsGatewayErrorCode, cause?: unknown) {
+    super(`Teams transient failure: ${code}`, { cause });
+    this.name = 'TeamsTransientError';
+    this.teamsCode = code;
+  }
+}
+
+class TeamsPermanentError extends Error {
+  readonly teamsCode: TeamsGatewayErrorCode;
+
+  constructor(code: TeamsGatewayErrorCode, cause?: unknown) {
+    super(`Teams permanent failure: ${code}`, { cause });
+    this.name = 'TeamsPermanentError';
+    this.teamsCode = code;
+  }
+}
+
+class TeamsProviderDeadlineError extends Error {
+  readonly teamsCode = 'provider_effect_unknown' as const;
+
+  constructor() {
+    super('Teams provider deadline expired');
+    this.name = 'TeamsProviderDeadlineError';
+  }
 }
 
 class TeamsDeliveryPreEffectError extends Error {
@@ -237,6 +272,7 @@ export class TeamsGatewayWorker {
   private readonly scanBatchSize: number;
   private readonly maxConcurrency: number;
   private readonly leaseDurationMs: number;
+  private readonly providerTimeoutMs?: number;
   private readonly recoveryIntervalMs: number;
   private readonly random: () => number;
   private readonly now: () => Date;
@@ -278,6 +314,7 @@ export class TeamsGatewayWorker {
     this.scanBatchSize = options.scanBatchSize ?? SCAN_BATCH;
     this.maxConcurrency = options.maxConcurrency ?? MAX_CONCURRENCY;
     this.leaseDurationMs = options.leaseDurationMs ?? DELIVERY_LEASE_MS;
+    this.providerTimeoutMs = options.providerTimeoutMs;
     this.recoveryIntervalMs = options.recoveryIntervalMs ?? LOOP_INTERVAL_MS;
     this.random = options.random ?? Math.random;
     this.now = options.now ?? (() => new Date());
@@ -288,6 +325,11 @@ export class TeamsGatewayWorker {
       throw new Error('Teams worker concurrency must be positive');
     if (!Number.isSafeInteger(this.leaseDurationMs) || this.leaseDurationMs < 1)
       throw new Error('Teams worker lease must be positive');
+    if (
+      this.providerTimeoutMs !== undefined &&
+      (!Number.isSafeInteger(this.providerTimeoutMs) || this.providerTimeoutMs < 1)
+    )
+      throw new Error('Teams provider timeout must be positive');
   }
 
   start(): void {
@@ -344,7 +386,7 @@ export class TeamsGatewayWorker {
     } catch (error) {
       console.warn(
         '[distributed-work.teams-gateway] event="scan_failed"',
-        error instanceof Error ? error.message : String(error)
+        `code=${teamsGatewayErrorCode(error)}`
       );
       this.schedule(this.recoveryIntervalMs);
     } finally {
@@ -360,7 +402,6 @@ export class TeamsGatewayWorker {
       (systemDb) =>
         new GatewayInboundEventRepository(systemDb).findDueTeamsRefs(systemDb, {
           limit: this.scanBatchSize,
-          now: this.now(),
         }),
       { capability: 'teams_gateway_ingress_discovery' }
     );
@@ -374,7 +415,6 @@ export class TeamsGatewayWorker {
       (systemDb) =>
         new TeamsMessageDeliveryRepository(systemDb).findDueRefs(systemDb, {
           limit: this.scanBatchSize,
-          now: this.now(),
         }),
       { capability: 'teams_message_delivery_discovery' }
     );
@@ -436,71 +476,73 @@ export class TeamsGatewayWorker {
   }
 
   private async processInbound(eventId: GatewayInboundEventID): Promise<void> {
-    const event = await this.inboundRepo.claimQueued(
-      eventId,
-      generateId(),
-      INBOUND_LEASE_MS,
-      this.now()
-    );
+    const event = await this.inboundRepo.claimQueued(eventId, generateId(), INBOUND_LEASE_MS);
     if (!event) return;
     try {
       await this.admitInbound(event);
     } catch (error) {
-      const retry = event.attempt_count < 8;
+      const retry = error instanceof TeamsTransientError && event.attempt_count < 8;
       await this.inboundRepo.failQueued({
         eventId,
         processingToken: event.processing_token,
         status: retry ? 'pending' : 'dead_letter',
-        errorCode: error instanceof Error ? error.message.slice(0, 120) : 'teams_worker_failure',
+        errorCode: teamsGatewayErrorCode(error),
         nextAttemptAt: retry
           ? new Date(this.now().getTime() + backoff(event.attempt_count))
           : undefined,
-        now: this.now(),
       });
     }
   }
 
   private async admitInbound(event: GatewayInboundEvent): Promise<void> {
-    const payload = this.inboundRepo.decryptQueuedPayload(event);
+    let payload: Record<string, unknown>;
+    try {
+      payload = this.inboundRepo.decryptQueuedPayload(event);
+    } catch (error) {
+      throw new TeamsPermanentError('teams_payload_invalid', error);
+    }
     const activity = payloadActivity(payload);
     const channel = await this.channelRepo.findById(event.gateway_channel_id);
     if (!channel?.enabled || channel.channel_type !== 'teams')
-      throw new Error('teams_channel_disabled_or_missing');
+      throw new TeamsPermanentError('teams_channel_disabled_or_missing');
     if (
       channel.provider_config_generation !== event.provider_config_generation ||
       channel.provider_installation_id !== event.verified_app_id ||
       channel.config.app_id !== event.verified_app_id ||
       channel.config.microsoft_tenant_id !== event.verified_tenant_id
     ) {
-      throw new Error('teams_config_generation_or_identity_changed');
+      throw new TeamsPermanentError('teams_config_generation_or_identity_changed');
     }
     if (
       activity.providerEventId !== event.provider_event_id ||
       activity.threadId !== event.thread_id
     )
-      throw new Error('teams_payload_identity_mismatch');
+      throw new TeamsPermanentError('teams_payload_identity_mismatch');
     if (activity.activityType !== 'message' || !activity.text.trim()) {
-      await this.inboundRepo.complete({
+      const completed = await this.inboundRepo.complete({
         eventId: event.id,
         channelId: channel.id,
         processingToken: event.processing_token,
         requireListenerClaim: false,
       });
+      if (!completed) throw new TeamsPermanentError('teams_inbound_completion_fence_lost');
       return;
     }
-    if (activity.conversationType.toLowerCase() === 'channel' && !activity.hasMention) {
-      // Keep ordinary channel traffic queue-visible but never pass it to the
-      // gateway's Task admission path. This remains duplicated in Gateway
+    const conversationType = activity.conversationType.toLowerCase();
+    if (conversationType !== 'personal' && !activity.hasMention) {
+      // Keep ordinary group/channel traffic queue-visible but never pass it to
+      // the gateway's Task admission path. This remains duplicated in Gateway
       // Service as defense in depth for non-queue callers.
-      await this.inboundRepo.complete({
+      const completed = await this.inboundRepo.complete({
         eventId: event.id,
         channelId: channel.id,
         processingToken: event.processing_token,
         requireListenerClaim: false,
       });
+      if (!completed) throw new TeamsPermanentError('teams_inbound_completion_fence_lost');
       return;
     }
-    if (!this.gatewayService) throw new Error('teams_gateway_service_unavailable');
+    if (!this.gatewayService) throw new TeamsTransientError('teams_gateway_service_unavailable');
     let promptText = activity.text;
     const mappingBeforeAdmission = await this.mappingRepo.findByChannelAndThread(
       channel.id,
@@ -535,24 +577,31 @@ export class TeamsGatewayWorker {
         } catch (error) {
           console.debug(
             '[teams] catch-up diagnosis was not persisted',
-            error instanceof Error ? error.message : String(error)
+            `code=${teamsGatewayErrorCode(error)}`
           );
         }
       }
     }
-    const result = await this.gatewayService.create(
-      withVerifiedHttpGatewayAuthority({
-        channel_key: channel.channel_key,
-        thread_id: activity.threadId,
-        text: promptText,
-        user_name: activity.userName ?? activity.userId,
-        metadata: teamsInboundMetadata(activity),
-        teams_user_aad_object_id: activity.userAadObjectId ?? undefined,
-        gateway_inbound_event_id: event.id,
-        idempotency_task_id: gatewayInboundTaskId(event.id),
-        idempotency_session_id: gatewayInboundSessionId(event.id),
-      })
-    );
+    let result: Awaited<
+      ReturnType<NonNullable<TeamsGatewayWorkerOptions['gatewayService']>['create']>
+    >;
+    try {
+      result = await this.gatewayService.create(
+        withVerifiedHttpGatewayAuthority({
+          channel_key: channel.channel_key,
+          thread_id: activity.threadId,
+          text: promptText,
+          user_name: activity.userName ?? activity.userId,
+          metadata: teamsInboundMetadata(activity),
+          teams_user_aad_object_id: activity.userAadObjectId ?? undefined,
+          gateway_inbound_event_id: event.id,
+          idempotency_task_id: gatewayInboundTaskId(event.id),
+          idempotency_session_id: gatewayInboundSessionId(event.id),
+        })
+      );
+    } catch (error) {
+      throw new TeamsTransientError('teams_gateway_service_unavailable', error);
+    }
     if (result.success && result.taskId) {
       // Advance only after stable Task admission. The compare-and-swap keeps a
       // stale replica from moving the shared catch-up cursor backwards.
@@ -576,7 +625,7 @@ export class TeamsGatewayWorker {
       ...(result.taskId ? { taskId: result.taskId } : {}),
       requireListenerClaim: false,
     });
-    if (!completed) throw new Error('teams_inbound_completion_fence_lost');
+    if (!completed) throw new TeamsPermanentError('teams_inbound_completion_fence_lost');
   }
 
   private async runCatchUp(
@@ -621,10 +670,7 @@ export class TeamsGatewayWorker {
         timedOut,
       ]);
     } catch (error) {
-      console.debug(
-        '[teams] catch-up unavailable',
-        error instanceof Error ? error.message : String(error)
-      );
+      console.debug('[teams] catch-up unavailable', `code=${teamsGatewayErrorCode(error)}`);
       return { promptText: activity.text, outcome: 'fallback', reason: 'unavailable' };
     } finally {
       if (timeout) clearTimeout(timeout);
@@ -669,15 +715,11 @@ export class TeamsGatewayWorker {
   }
 
   private async processDelivery(deliveryId: TeamsMessageDelivery['delivery_id']): Promise<void> {
-    const claim = await this.deliveryRepo.claim(
-      deliveryId,
-      generateId(),
-      this.leaseDurationMs,
-      this.now()
-    );
+    const claimStartedAt = performance.now();
+    const claim = await this.deliveryRepo.claim(deliveryId, generateId(), this.leaseDurationMs);
     if (!claim) return;
     try {
-      await this.deliver(claim);
+      await this.deliver(claim, claimStartedAt);
     } catch (error) {
       if (error instanceof TeamsMessageDeliveryClaimLostError) return;
       try {
@@ -696,7 +738,6 @@ export class TeamsGatewayWorker {
                   ),
                 }
               : {}),
-            now: this.now(),
           });
         } else if (isDefinitiveProviderFailure(error)) {
           await this.deliveryRepo.fail({
@@ -705,7 +746,6 @@ export class TeamsGatewayWorker {
             claimGeneration: claim.claim_generation,
             status: 'canceled',
             errorCode: 'provider_rejected',
-            now: this.now(),
           });
         } else {
           await this.deliveryRepo.markAmbiguous({
@@ -713,22 +753,21 @@ export class TeamsGatewayWorker {
             claimToken: claim.claim_token,
             claimGeneration: claim.claim_generation,
             errorCode: 'provider_effect_unknown',
-            now: this.now(),
           });
         }
       } catch (recordError) {
         console.warn(
           '[teams] unable to persist delivery terminal state',
-          recordError instanceof Error ? recordError.message : String(recordError)
+          `code=${teamsGatewayErrorCode(recordError)}`
         );
       }
     }
   }
 
-  private async deliver(claim: TeamsMessageDeliveryClaim): Promise<void> {
+  private async deliver(claim: TeamsMessageDeliveryClaim, claimStartedAt: number): Promise<void> {
     let effectMarkerAttempted = false;
     try {
-      await this.deliverClaim(claim, () => {
+      await this.deliverClaim(claim, claimStartedAt, () => {
         effectMarkerAttempted = true;
       });
     } catch (error) {
@@ -740,6 +779,7 @@ export class TeamsGatewayWorker {
 
   private async deliverClaim(
     claim: TeamsMessageDeliveryClaim,
+    claimStartedAt: number,
     markEffectAttempted: () => void
   ): Promise<void> {
     const delivery = claim.delivery;
@@ -755,7 +795,6 @@ export class TeamsGatewayWorker {
         claimGeneration: claim.claim_generation,
         status: 'canceled',
         errorCode: 'route_missing_or_disabled',
-        now: this.now(),
       });
       return;
     }
@@ -770,16 +809,18 @@ export class TeamsGatewayWorker {
         claimGeneration: claim.claim_generation,
         status: 'canceled',
         errorCode: 'config_generation_changed',
-        now: this.now(),
       });
       return;
     }
     const addressRow = await this.addressRepo.findByChannelAndThread(channel.id, mapping.thread_id);
     const currentConfig = withTeamsConfigDefaults(channel.config);
-    const addressExpired =
-      addressRow?.expires_at !== null &&
-      addressRow?.expires_at !== undefined &&
-      new Date(addressRow.expires_at).getTime() <= this.now().getTime();
+    const addressExpired = addressRow
+      ? this.addressRepo.isExpired
+        ? await this.addressRepo.isExpired(addressRow.address_id as string)
+        : addressRow.expires_at !== null &&
+          addressRow.expires_at !== undefined &&
+          new Date(addressRow.expires_at).getTime() <= this.now().getTime()
+      : false;
     if (
       !addressRow ||
       addressRow.gateway_channel_id !== channel.id ||
@@ -798,7 +839,6 @@ export class TeamsGatewayWorker {
         claimGeneration: claim.claim_generation,
         status: 'canceled',
         errorCode: addressRow ? 'conversation_address_stale' : 'conversation_address_missing',
-        now: this.now(),
       });
       return;
     }
@@ -814,7 +854,6 @@ export class TeamsGatewayWorker {
         claimGeneration: claim.claim_generation,
         status: 'canceled',
         errorCode: 'conversation_address_invalid',
-        now: this.now(),
       });
       return;
     }
@@ -823,12 +862,11 @@ export class TeamsGatewayWorker {
       deliveryId: delivery.delivery_id,
       claimToken: claim.claim_token,
       claimGeneration: claim.claim_generation,
-      now: this.now(),
     });
     markEffectAttempted();
-    const sent = await connector.sendMessage({
+    const sent = await this.sendProviderMessageWithLeaseDeadline(connector, claim, claimStartedAt, {
       threadId: mapping.thread_id,
-      text: typeof message.content === 'string' ? message.content : (message.content_preview ?? ''),
+      text: extractTeamsDeliveryText(message),
       metadata: { teams_conversation_address: address },
     });
     const providerMessageId = typeof sent === 'string' ? sent : undefined;
@@ -837,7 +875,37 @@ export class TeamsGatewayWorker {
       claimToken: claim.claim_token,
       claimGeneration: claim.claim_generation,
       providerMessageId,
-      now: this.now(),
     });
+  }
+
+  private async sendProviderMessageWithLeaseDeadline(
+    connector: GatewayConnector,
+    claim: TeamsMessageDeliveryClaim,
+    claimStartedAt: number,
+    request: { threadId: string; text: string; metadata: Record<string, unknown> }
+  ) {
+    const claimedLeaseMs = (
+      claim as TeamsMessageDeliveryClaim & {
+        lease_remaining_ms?: number;
+      }
+    ).lease_remaining_ms;
+    const leaseRemaining =
+      (claimedLeaseMs ?? new Date(claim.lease_expires_at).getTime() - this.now().getTime()) -
+      (performance.now() - claimStartedAt) -
+      100;
+    const timeoutMs = Math.max(
+      1,
+      Math.min(this.providerTimeoutMs ?? leaseRemaining, leaseRemaining)
+    );
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new TeamsProviderDeadlineError()), timeoutMs);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([connector.sendMessage(request), deadline]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }

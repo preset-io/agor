@@ -352,4 +352,17 @@ describe('normalizeTeamsActivity', () => {
       ).hasMention
     ).toBe(false);
   });
+
+  it('does not treat a display-name at-tag as a structured app mention', () => {
+    const normalized = normalizeTeamsActivity(
+      activity({
+        conversation: { id: '19:group@thread.v2', conversationType: 'groupChat' },
+        text: '<at>Agor</at> please review',
+      }),
+      config
+    );
+
+    expect(normalized.hasMention).toBe(false);
+    expect(normalized.text).toBe('Agor please review');
+  });
 });

@@ -15,6 +15,8 @@ import { and, asc, eq, isNull, lte, or, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database, SystemDatabase } from '../client';
 import {
+  databaseNowExpression,
+  getDatabaseNow,
   insert,
   isSQLiteDatabase,
   lockRowForUpdate,
@@ -43,6 +45,8 @@ export interface TeamsMessageDeliveryClaim {
   claim_token: string;
   claim_generation: number;
   lease_expires_at: string;
+  /** Remaining lease measured by the database at claim time. */
+  lease_remaining_ms: number;
   delivery: TeamsMessageDelivery;
 }
 
@@ -174,7 +178,12 @@ export class TeamsMessageDeliveryRepository {
     });
     if (!candidate || typeof candidate.provider_installation_id !== 'string') return null;
     const tenantId = tenantFor(tx);
-    const now = new Date();
+    const now = await getDatabaseNow(
+      tx,
+      gatewayChannels,
+      eq(gatewayChannels.id, candidate.channel_id)
+    );
+    if (!now) throw new RepositoryError('Unable to obtain database time for Teams delivery');
     const insertData: TeamsMessageDeliveryInsert = {
       delivery_id: generateId(),
       created_at: now,
@@ -243,7 +252,7 @@ export class TeamsMessageDeliveryRepository {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
       throw new RepositoryError('Teams delivery discovery limit must be between 1 and 1000');
     }
-    const now = options.now ?? new Date();
+    const now = databaseNowExpression(db, options.now);
     const due = and(
       lte(teamsMessageDeliveries.next_attempt_at, now),
       or(
@@ -304,7 +313,7 @@ export class TeamsMessageDeliveryRepository {
     deliveryId: TeamsMessageDeliveryID,
     claimToken: string,
     leaseDurationMs: number,
-    now = new Date()
+    now?: Date
   ): Promise<TeamsMessageDeliveryClaim | null> {
     if (!claimToken.trim() || !Number.isSafeInteger(leaseDurationMs) || leaseDurationMs < 1) {
       throw new RepositoryError('Valid Teams delivery claim and lease are required');
@@ -323,11 +332,18 @@ export class TeamsMessageDeliveryRepository {
           .where(eq(teamsMessageDeliveries.delivery_id, deliveryId))
           .one();
         if (!row) return null;
+        const dbNow = await getDatabaseNow(
+          tx,
+          teamsMessageDeliveries,
+          eq(teamsMessageDeliveries.delivery_id, deliveryId),
+          now
+        );
+        if (!dbNow) throw new RepositoryError('Unable to obtain database time for Teams claim');
         if (
           row.status === 'processing' &&
           row.effect_started_at &&
           row.claim_expires_at &&
-          new Date(row.claim_expires_at) <= now
+          new Date(row.claim_expires_at) <= dbNow
         ) {
           await update(tx, teamsMessageDeliveries)
             .set({
@@ -335,24 +351,24 @@ export class TeamsMessageDeliveryRepository {
               claim_token: null,
               claim_expires_at: null,
               last_error_code: 'provider_effect_unknown',
-              updated_at: now,
+              updated_at: dbNow,
             })
             .where(eq(teamsMessageDeliveries.delivery_id, deliveryId))
             .run();
           return null;
         }
         const claimable =
-          row.next_attempt_at <= now &&
+          row.next_attempt_at <= dbNow &&
           (row.status === 'pending' ||
             (row.status === 'processing' &&
-              (!row.claim_expires_at || new Date(row.claim_expires_at) <= now)));
+              (!row.claim_expires_at || new Date(row.claim_expires_at) <= dbNow)));
         if (!claimable) return null;
         const oldest = await select(tx, { delivery_id: teamsMessageDeliveries.delivery_id })
           .from(teamsMessageDeliveries)
           .where(and(eq(teamsMessageDeliveries.delivery_id, deliveryId), laneIsOldest(this.db)))
           .one();
         if (!oldest) return null;
-        const lease = new Date(now.getTime() + leaseDurationMs);
+        const lease = new Date(dbNow.getTime() + leaseDurationMs);
         const updated = await update(tx, teamsMessageDeliveries)
           .set({
             status: 'processing',
@@ -360,7 +376,7 @@ export class TeamsMessageDeliveryRepository {
             claim_expires_at: lease,
             claim_generation: row.claim_generation + 1,
             attempt_count: row.attempt_count + 1,
-            updated_at: now,
+            updated_at: dbNow,
           })
           .where(eq(teamsMessageDeliveries.delivery_id, deliveryId))
           .returning()
@@ -371,6 +387,7 @@ export class TeamsMessageDeliveryRepository {
           claim_token: claimToken,
           claim_generation: delivery.claim_generation,
           lease_expires_at: asIso(lease),
+          lease_remaining_ms: leaseDurationMs,
           delivery,
         };
       },
@@ -387,7 +404,7 @@ export class TeamsMessageDeliveryRepository {
       eq(teamsMessageDeliveries.status, 'processing'),
       eq(teamsMessageDeliveries.claim_token, input.claimToken),
       eq(teamsMessageDeliveries.claim_generation, input.claimGeneration),
-      sql`${teamsMessageDeliveries.claim_expires_at} > ${isSQLiteDatabase(this.db) ? now : now.toISOString()}`
+      sql`${teamsMessageDeliveries.claim_expires_at} > ${databaseNowExpression(this.db, now)}`
     );
   }
 
@@ -397,7 +414,6 @@ export class TeamsMessageDeliveryRepository {
     claimGeneration: number;
     now?: Date;
   }): Promise<TeamsMessageDelivery> {
-    const now = input.now ?? new Date();
     return runDatabaseTransaction(this.db, async (tx) => {
       await lockRowForUpdate(
         tx,
@@ -409,7 +425,15 @@ export class TeamsMessageDeliveryRepository {
         .from(teamsMessageDeliveries)
         .where(eq(teamsMessageDeliveries.delivery_id, input.deliveryId))
         .one();
-      if (!row || !this.isCurrent(row, input, now))
+      const now = row
+        ? await getDatabaseNow(
+            tx,
+            teamsMessageDeliveries,
+            eq(teamsMessageDeliveries.delivery_id, input.deliveryId),
+            input.now
+          )
+        : null;
+      if (!row || !now || !this.isCurrent(row, input, now))
         throw new TeamsMessageDeliveryClaimLostError(input.deliveryId);
       const updated = await update(tx, teamsMessageDeliveries)
         .set({ effect_started_at: row.effect_started_at ?? now, updated_at: now })
@@ -427,7 +451,6 @@ export class TeamsMessageDeliveryRepository {
     providerMessageId?: string | null;
     now?: Date;
   }): Promise<TeamsMessageDelivery> {
-    const now = input.now ?? new Date();
     return runDatabaseTransaction(this.db, async (tx) => {
       await lockRowForUpdate(
         tx,
@@ -439,7 +462,15 @@ export class TeamsMessageDeliveryRepository {
         .from(teamsMessageDeliveries)
         .where(eq(teamsMessageDeliveries.delivery_id, input.deliveryId))
         .one();
-      if (!row || !this.isCurrent(row, input, now))
+      const now = row
+        ? await getDatabaseNow(
+            tx,
+            teamsMessageDeliveries,
+            eq(teamsMessageDeliveries.delivery_id, input.deliveryId),
+            input.now
+          )
+        : null;
+      if (!row || !now || !this.isCurrent(row, input, now))
         throw new TeamsMessageDeliveryClaimLostError(input.deliveryId);
       const updated = await update(tx, teamsMessageDeliveries)
         .set({
@@ -467,7 +498,6 @@ export class TeamsMessageDeliveryRepository {
     nextAttemptAt?: Date;
     now?: Date;
   }): Promise<TeamsMessageDelivery> {
-    const now = input.now ?? new Date();
     return runDatabaseTransaction(this.db, async (tx) => {
       await lockRowForUpdate(
         tx,
@@ -479,7 +509,15 @@ export class TeamsMessageDeliveryRepository {
         .from(teamsMessageDeliveries)
         .where(eq(teamsMessageDeliveries.delivery_id, input.deliveryId))
         .one();
-      if (!row || !this.isCurrent(row, input, now))
+      const now = row
+        ? await getDatabaseNow(
+            tx,
+            teamsMessageDeliveries,
+            eq(teamsMessageDeliveries.delivery_id, input.deliveryId),
+            input.now
+          )
+        : null;
+      if (!row || !now || !this.isCurrent(row, input, now))
         throw new TeamsMessageDeliveryClaimLostError(input.deliveryId);
       const updated = await update(tx, teamsMessageDeliveries)
         .set({
@@ -507,7 +545,6 @@ export class TeamsMessageDeliveryRepository {
     errorCode?: string;
     now?: Date;
   }): Promise<TeamsMessageDelivery> {
-    const now = input.now ?? new Date();
     return runDatabaseTransaction(this.db, async (tx) => {
       await lockRowForUpdate(
         tx,
@@ -519,7 +556,15 @@ export class TeamsMessageDeliveryRepository {
         .from(teamsMessageDeliveries)
         .where(eq(teamsMessageDeliveries.delivery_id, input.deliveryId))
         .one();
-      if (!row || !this.isCurrent(row, input, now))
+      const now = row
+        ? await getDatabaseNow(
+            tx,
+            teamsMessageDeliveries,
+            eq(teamsMessageDeliveries.delivery_id, input.deliveryId),
+            input.now
+          )
+        : null;
+      if (!row || !now || !this.isCurrent(row, input, now))
         throw new TeamsMessageDeliveryClaimLostError(input.deliveryId);
       const updated = await update(tx, teamsMessageDeliveries)
         .set({

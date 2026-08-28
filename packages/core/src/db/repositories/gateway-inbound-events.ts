@@ -11,12 +11,13 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { and, eq, inArray, lte, sql } from 'drizzle-orm';
+import { and, eq, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import {
+  databaseNowExpression,
+  getDatabaseNow,
   insert,
-  isPostgresDatabase,
   isSQLiteDatabase,
   lockRowForUpdate,
   runDatabaseTransaction,
@@ -112,7 +113,7 @@ function safeTeamsDeliveryMetadata(
   return safe;
 }
 
-async function terminalizeExpiredTeamsPayloads(db: Database, now: Date): Promise<void> {
+async function terminalizeExpiredTeamsPayloads(db: Database, now: Date | SQL): Promise<void> {
   await update(db, gatewayInboundEvents)
     .set({
       status: 'dead_letter',
@@ -176,12 +177,7 @@ export class GatewayInboundEventRepository {
   }
 
   private async transactionNow(txDb: Database, channelId: GatewayChannelID) {
-    if (!isPostgresDatabase(this.db)) return new Date();
-    const row = await select(txDb, { value: sql<Date>`CURRENT_TIMESTAMP` })
-      .from(gatewayChannels)
-      .where(eq(gatewayChannels.id, channelId))
-      .one();
-    return row?.value instanceof Date ? row.value : row?.value ? new Date(row.value) : null;
+    return getDatabaseNow(txDb, gatewayChannels, eq(gatewayChannels.id, channelId));
   }
 
   /**
@@ -419,7 +415,7 @@ export class GatewayInboundEventRepository {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
       throw new RepositoryError('Teams ingress discovery limit must be between 1 and 1000');
     }
-    const now = options.now ?? new Date();
+    const now = databaseNowExpression(db, options.now);
     const due = sql`${gatewayInboundEvents.status} IN ('pending', 'processing')
       AND ${gatewayInboundEvents.next_attempt_at} <= ${now}
       AND (${gatewayInboundEvents.status} = 'pending'
@@ -501,7 +497,7 @@ export class GatewayInboundEventRepository {
     eventId: GatewayInboundEventID,
     processingToken: string,
     leaseDurationMs: number,
-    now = new Date()
+    now?: Date
   ): Promise<GatewayInboundEvent | null> {
     if (!processingToken.trim() || !Number.isSafeInteger(leaseDurationMs) || leaseDurationMs < 1) {
       throw new RepositoryError('Valid Teams queue claim and lease are required');
@@ -509,9 +505,6 @@ export class GatewayInboundEventRepository {
     return runDatabaseTransaction(
       this.db,
       async (txDb) => {
-        // Direct claim callers must not be able to leave an expired
-        // predecessor in the lane forever just because discovery was skipped.
-        await terminalizeExpiredTeamsPayloads(txDb, now);
         await lockRowForUpdate(
           txDb,
           this.db,
@@ -523,16 +516,26 @@ export class GatewayInboundEventRepository {
           .where(eq(gatewayInboundEvents.id, eventId))
           .one();
         if (!row) return null;
+        const dbNow = await getDatabaseNow(
+          txDb,
+          gatewayInboundEvents,
+          eq(gatewayInboundEvents.id, eventId),
+          now
+        );
+        if (!dbNow) throw new RepositoryError('Unable to obtain database time for Teams claim');
+        // Direct claim callers must not be able to leave an expired
+        // predecessor in the lane forever just because discovery was skipped.
+        await terminalizeExpiredTeamsPayloads(txDb, dbNow);
         if (
           row.payload_expires_at &&
-          new Date(row.payload_expires_at).getTime() <= now.getTime() &&
+          new Date(row.payload_expires_at).getTime() <= dbNow.getTime() &&
           (row.status === 'pending' || row.status === 'processing')
         ) {
           await update(txDb, gatewayInboundEvents)
             .set({
               status: 'dead_letter',
-              processing_expires_at: now,
-              next_attempt_at: now,
+              processing_expires_at: dbNow,
+              next_attempt_at: dbNow,
               last_error_code: 'payload_expired',
               payload_encrypted: null,
               payload_expires_at: null,
@@ -543,14 +546,14 @@ export class GatewayInboundEventRepository {
         }
         if (!row.payload_encrypted) return null;
         if (row.status === 'completed' || row.status === 'dead_letter') return null;
-        if (row.status === 'processing' && row.processing_expires_at > now) return null;
-        if (row.status === 'pending' && row.next_attempt_at > now) return null;
+        if (row.status === 'processing' && row.processing_expires_at > dbNow) return null;
+        if (row.status === 'pending' && row.next_attempt_at > dbNow) return null;
         const oldest = await select(txDb, { id: gatewayInboundEvents.id })
           .from(gatewayInboundEvents)
           .where(and(eq(gatewayInboundEvents.id, eventId), teamsInboundLaneIsOldest(this.db)))
           .one();
         if (!oldest) return null;
-        const expiresAt = new Date(now.getTime() + leaseDurationMs);
+        const expiresAt = new Date(dbNow.getTime() + leaseDurationMs);
         const updated = await update(txDb, gatewayInboundEvents)
           .set({
             status: 'processing',
@@ -575,10 +578,7 @@ export class GatewayInboundEventRepository {
         throw new Error('payload is not an object');
       return payload as Record<string, unknown>;
     } catch (error) {
-      throw new RepositoryError(
-        `Failed to decrypt Teams queued payload: ${error instanceof Error ? error.message : String(error)}`,
-        error
-      );
+      throw new RepositoryError('Failed to decrypt Teams queued payload', error);
     }
   }
 
@@ -590,26 +590,49 @@ export class GatewayInboundEventRepository {
     nextAttemptAt?: Date;
     now?: Date;
   }): Promise<boolean> {
-    const now = input.now ?? new Date();
-    const result = await update(this.db, gatewayInboundEvents)
-      .set({
-        status: input.status,
-        processing_expires_at: now,
-        next_attempt_at: input.nextAttemptAt ?? now,
-        last_error_code: input.errorCode,
-        ...(input.status === 'dead_letter'
-          ? { payload_encrypted: null, payload_expires_at: null }
-          : {}),
-      })
-      .where(
-        and(
+    return runDatabaseTransaction(
+      this.db,
+      async (txDb) => {
+        await lockRowForUpdate(
+          txDb,
+          this.db,
+          gatewayInboundEvents,
+          eq(gatewayInboundEvents.id, input.eventId)
+        );
+        const row = await select(txDb)
+          .from(gatewayInboundEvents)
+          .where(eq(gatewayInboundEvents.id, input.eventId))
+          .one();
+        if (!row) return false;
+        const dbNow = await getDatabaseNow(
+          txDb,
+          gatewayInboundEvents,
           eq(gatewayInboundEvents.id, input.eventId),
-          eq(gatewayInboundEvents.status, 'processing'),
-          eq(gatewayInboundEvents.processing_token, input.processingToken)
-        )
-      )
-      .run();
-    return result.rowsAffected > 0;
+          input.now
+        );
+        if (!dbNow) throw new RepositoryError('Unable to obtain database time for Teams failure');
+        const result = await update(txDb, gatewayInboundEvents)
+          .set({
+            status: input.status,
+            processing_expires_at: dbNow,
+            next_attempt_at: input.nextAttemptAt ?? dbNow,
+            last_error_code: input.errorCode,
+            ...(input.status === 'dead_letter'
+              ? { payload_encrypted: null, payload_expires_at: null }
+              : {}),
+          })
+          .where(
+            and(
+              eq(gatewayInboundEvents.id, input.eventId),
+              eq(gatewayInboundEvents.status, 'processing'),
+              eq(gatewayInboundEvents.processing_token, input.processingToken)
+            )
+          )
+          .run();
+        return result.rowsAffected > 0;
+      },
+      { sqliteImmediate: true }
+    );
   }
 
   /**

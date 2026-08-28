@@ -8,15 +8,18 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
-import type { BranchID, SessionID, TenantID, UUID } from '../../types';
+import type { BranchID, MessageID, SessionID, TenantID, UUID } from '../../types';
+import { MessageRole } from '../../types';
 import { createDatabase, type Database } from '../client';
 import { initializeDatabase } from '../migrate';
 import {
   BranchRepository,
   GatewayChannelRepository,
   GatewayInboundEventRepository,
+  MessagesRepository,
   RepoRepository,
   SessionRepository,
+  TeamsMessageDeliveryRepository,
   ThreadSessionMapRepository,
   UsersRepository,
 } from '../repositories';
@@ -298,5 +301,126 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
       payload_expires_at: null,
       last_error_code: 'payload_expired',
     });
+  });
+
+  it('uses PostgreSQL transaction time for skewed discovery, leases, and effect fences', async () => {
+    const tenantId = `teams-pg-clock-${generateId()}` as TenantID;
+    const { channel, mapping } = await seedTeamsChannel(dbA, tenantId);
+    const admitted = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new GatewayInboundEventRepository(scoped).admitVerifiedHttp(
+        admission(channel.id, tenantId, `teams:activity:clock-${generateId()}`)
+      )
+    );
+    const callerBehind = new Date('2000-01-01T00:00:00.000Z');
+    const callerAhead = new Date('2999-01-01T00:00:00.000Z');
+
+    const inboundDue = await runWithSystemDatabaseScope(
+      dbA,
+      'Teams PostgreSQL skewed-clock ingress discovery',
+      (systemDb) =>
+        new GatewayInboundEventRepository(systemDb).findDueTeamsRefs(systemDb, {
+          limit: 10,
+          now: callerBehind,
+        }),
+      { capability: 'teams_gateway_ingress_discovery' }
+    );
+    expect(inboundDue.map((ref) => ref.event_id)).toContain(admitted.event.id);
+
+    const inboundClaim = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new GatewayInboundEventRepository(scoped).claimQueued(
+        admitted.event.id,
+        'clock-replica-a',
+        30_000,
+        callerBehind
+      )
+    );
+    expect(inboundClaim).toBeTruthy();
+    expect(new Date(inboundClaim!.processing_expires_at).getTime()).toBeGreaterThan(
+      callerBehind.getTime()
+    );
+    expect(
+      await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new GatewayInboundEventRepository(scoped).claimQueued(
+          admitted.event.id,
+          'clock-replica-b',
+          30_000,
+          callerAhead
+        )
+      )
+    ).toBeNull();
+    expect(
+      await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new GatewayInboundEventRepository(scoped).complete({
+          eventId: admitted.event.id,
+          channelId: channel.id,
+          processingToken: 'clock-replica-a',
+          requireListenerClaim: false,
+        })
+      )
+    ).toBe(true);
+
+    const deliveries = new TeamsMessageDeliveryRepository(dbA);
+    let messageId: MessageID;
+    await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+      const messages = new MessagesRepository(scoped, (tx, message) =>
+        deliveries.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+      );
+      const message = await messages.create({
+        message_id: generateId() as MessageID,
+        session_id: mapping.session_id,
+        type: 'assistant',
+        role: MessageRole.ASSISTANT,
+        index: 0,
+        timestamp: new Date().toISOString(),
+        content_preview: 'clock reply',
+        content: 'clock reply',
+      });
+      messageId = message.message_id;
+    });
+    const delivery = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new TeamsMessageDeliveryRepository(scoped).findByMessageId(messageId!)
+    );
+    expect(delivery).toBeTruthy();
+    const deliveryDue = await runWithSystemDatabaseScope(
+      dbA,
+      'Teams PostgreSQL skewed-clock delivery discovery',
+      (systemDb) =>
+        new TeamsMessageDeliveryRepository(systemDb).findDueRefs(systemDb, {
+          limit: 10,
+          now: callerBehind,
+        }),
+      { capability: 'teams_message_delivery_discovery' }
+    );
+    expect(deliveryDue.map((ref) => ref.delivery_id)).toContain(delivery!.delivery_id);
+    const deliveryClaim = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+      new TeamsMessageDeliveryRepository(scoped).claim(
+        delivery!.delivery_id,
+        'clock-delivery',
+        30_000,
+        callerBehind
+      )
+    );
+    expect(deliveryClaim).toBeTruthy();
+    await expect(
+      runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new TeamsMessageDeliveryRepository(scoped).markEffectStarted({
+          deliveryId: delivery!.delivery_id,
+          claimToken: deliveryClaim!.claim_token,
+          claimGeneration: deliveryClaim!.claim_generation,
+          now: callerAhead,
+        })
+      )
+    ).resolves.toMatchObject({ status: 'processing', effect_started_at: expect.any(String) });
+    await expect(
+      runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new TeamsMessageDeliveryRepository(scoped).complete({
+          deliveryId: delivery!.delivery_id,
+          claimToken: deliveryClaim!.claim_token,
+          claimGeneration: deliveryClaim!.claim_generation,
+          providerMessageId: 'teams-clock-message',
+          now: callerAhead,
+        })
+      )
+    ).resolves.toMatchObject({ status: 'completed' });
   });
 });

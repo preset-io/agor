@@ -337,6 +337,7 @@ function makeGatewayHarness(args: {
     }),
   };
   const findByEmailForAlignment = vi.fn(async () => args.alignedUser ?? null);
+  const findById = vi.fn(async () => args.alignedUser ?? null);
   const admitReplySession = vi.fn(async () =>
     args.outboundSeed
       ? {
@@ -353,9 +354,12 @@ function makeGatewayHarness(args: {
   (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
   (
     service as unknown as {
-      usersRepo: { findByEmailForAlignment: typeof findByEmailForAlignment };
+      usersRepo: {
+        findByEmailForAlignment: typeof findByEmailForAlignment;
+        findById: typeof findById;
+      };
     }
-  ).usersRepo = { findByEmailForAlignment };
+  ).usersRepo = { findByEmailForAlignment, findById };
   const outboundRepo = {
     admitReplySession,
     completeReplyAdmission,
@@ -383,6 +387,7 @@ function makeGatewayHarness(args: {
     threadMapRepo,
     outboundRepo,
     findByEmailForAlignment,
+    findById,
     admitReplySession,
     completeReplyAdmission,
   };
@@ -612,6 +617,25 @@ describe('GatewayService user alignment operational logs', () => {
       expect(output).not.toContain(value);
     }
   }
+
+  it('resolves Teams AAD mappings by tenant-scoped immutable User ID, never email', async () => {
+    const { service, findById, findByEmailForAlignment } = makeGatewayHarness({ alignedUser });
+    const resolveTeamsUser = service as unknown as {
+      resolveTeamsUser(opts: {
+        aadObjectId: string | undefined;
+        userMap: Record<string, string> | undefined;
+      }): Promise<User | null>;
+    };
+
+    await expect(
+      resolveTeamsUser.resolveTeamsUser({
+        aadObjectId: 'aad-object-1',
+        userMap: { 'aad-object-1': alignedUser.user_id },
+      })
+    ).resolves.toBe(alignedUser);
+    expect(findById).toHaveBeenCalledWith(alignedUser.user_id);
+    expect(findByEmailForAlignment).not.toHaveBeenCalled();
+  });
 
   it('logs exact user_map and email-fallback outcomes without external identities', async () => {
     const { service, findByEmailForAlignment } = makeGatewayHarness({ alignedUser });
@@ -1551,6 +1575,38 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
 });
 
 describe('GatewayService durable listener delivery fences', () => {
+  it('requires exact structured mentions in Teams group chats despite require_mention false', async () => {
+    const channel = {
+      ...slackChannel,
+      id: 'teams-group-mention-channel' as never,
+      channel_type: 'teams',
+      channel_key: 'teams-group-mention-key',
+      config: {
+        app_id: 'teams-app',
+        app_password: 'secret',
+        microsoft_tenant_id: 'tenant-a',
+        require_mention: false,
+      },
+    } as GatewayChannel;
+    const { service, promptCreate } = makeGatewayHarness({
+      channel,
+      existingMapping: makeMapping({ channel_id: channel.id, thread_id: '19:group@thread.v2' }),
+    });
+
+    await expect(
+      service.create({
+        channel_key: channel.channel_key,
+        thread_id: '19:group@thread.v2',
+        text: 'display name only',
+        metadata: {
+          teams_conversation_type: 'groupChat',
+          teams_has_mention: false,
+        },
+      })
+    ).resolves.toMatchObject({ success: false, created: false });
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
   it('rejects forged inbound event IDs and accepts the verified Teams HTTP path', async () => {
     const channel: GatewayChannel = {
       ...slackChannel,

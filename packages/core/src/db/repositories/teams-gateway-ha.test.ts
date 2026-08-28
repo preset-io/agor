@@ -18,6 +18,7 @@ import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
 import {
   decryptTeamsConversationAddress,
+  TEAMS_CONVERSATION_ADDRESS_TTL_MS,
   TeamsConversationAddressRepository,
 } from './teams-conversation-addresses';
 import { TeamsMessageDeliveryRepository } from './teams-message-deliveries';
@@ -180,6 +181,10 @@ describe('Teams gateway HA repositories', () => {
 
       const rawAddress = await addresses.findByChannelAndThread(channel.id, input.threadId);
       expect(rawAddress).toBeTruthy();
+      expect(rawAddress?.expires_at).toBeTruthy();
+      expect(new Date(rawAddress!.expires_at!).getTime()).toBe(
+        new Date(rawAddress!.refreshed_at).getTime() + TEAMS_CONVERSATION_ADDRESS_TTL_MS
+      );
       expect(rawAddress?.encrypted_address).not.toContain('trafficmanager');
       expect(rawAddress && decryptTeamsConversationAddress(rawAddress)).toEqual(
         input.address.address
@@ -435,6 +440,38 @@ describe('Teams gateway HA repositories', () => {
         payload_encrypted: null,
         payload_expires_at: null,
         last_error_code: 'payload_expired',
+      });
+    }
+  );
+
+  ownedDbTest(
+    'dead-letters a permanent inbound fence and erases its queued payload',
+    async ({ db }) => {
+      const { channel } = await seedTeamsMapping(db);
+      const inbound = new GatewayInboundEventRepository(db);
+      const admitted = await inbound.admitVerifiedHttp(
+        admissionInput(channel.id, channel.provider_config_generation, 'teams:activity:permanent')
+      );
+      const claimed = await inbound.claimQueued(admitted.event.id, 'permanent-claim', 30_000);
+      expect(claimed).toBeTruthy();
+
+      expect(
+        await inbound.failQueued({
+          eventId: admitted.event.id,
+          processingToken: 'permanent-claim',
+          status: 'dead_letter',
+          errorCode: 'teams_payload_identity_mismatch',
+        })
+      ).toBe(true);
+      const stored = await select(db)
+        .from(gatewayInboundEvents)
+        .where(eq(gatewayInboundEvents.id, admitted.event.id))
+        .one();
+      expect(stored).toMatchObject({
+        status: 'dead_letter',
+        payload_encrypted: null,
+        payload_expires_at: null,
+        last_error_code: 'teams_payload_identity_mismatch',
       });
     }
   );

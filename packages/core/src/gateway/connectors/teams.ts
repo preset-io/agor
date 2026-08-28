@@ -112,12 +112,6 @@ function stripHtmlTags(text: string): string {
   return text.replace(/<[^>]+>/g, '');
 }
 
-function hasActiveMention(text: string, botName: string): boolean {
-  const stripped = text.replace(/```[\s\S]*?```/g, '').replace(/`[^`]*`/g, '');
-  const escaped = botName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`<at>${escaped}</at>`, 'i').test(stripped);
-}
-
 export function extractQuotedReplyText(
   attachments: Array<{ contentType?: string; content?: string }> | undefined
 ): string | null {
@@ -185,7 +179,6 @@ export function normalizeTeamsActivity(
   }
 
   const from = asRecord(activityRecord.from);
-  const recipient = asRecord(activityRecord.recipient);
   const channelData = asRecord(activityRecord.channelData);
   const tenant = asRecord(channelData.tenant);
   const team = asRecord(channelData.team);
@@ -196,11 +189,9 @@ export function normalizeTeamsActivity(
     : undefined;
   let text = extractQuotedReplyText(attachments) ?? stringValue(activityRecord.text) ?? '';
   let hasMention = false;
-  let hasStructuredMention = false;
   for (const entity of entities) {
     const record = asRecord(entity);
     if (record.type !== 'mention') continue;
-    hasStructuredMention = true;
     const mentioned = asRecord(record.mentioned);
     const mentionedId = stringValue(mentioned.id) ?? '';
     const appId = config.app_id ?? '';
@@ -208,13 +199,6 @@ export function normalizeTeamsActivity(
     hasMention = true;
     const mentionText = stringValue(record.text);
     if (mentionText) text = text.replace(mentionText, '').trim();
-  }
-  if (!hasMention && !hasStructuredMention) {
-    const botName = stringValue(recipient.name);
-    if (botName && hasActiveMention(text, botName)) {
-      hasMention = true;
-      text = stripMention(text, botName);
-    }
   }
   text = stripHtmlTags(text).trim();
   const userAadObjectId = stringValue(from.aadObjectId);

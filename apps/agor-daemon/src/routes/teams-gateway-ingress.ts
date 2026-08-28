@@ -21,6 +21,7 @@ import { authorizeJWT, buildJwksUri } from '@microsoft/agents-hosting';
 import type { Request, Response } from 'express';
 import { ipKeyGenerator, rateLimit } from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
+import { teamsGatewayErrorCode } from '../utils/teams-error.js';
 
 const MAX_ACTIVITY_BYTES = 1_024 * 1_024;
 const BOT_FRAMEWORK_ISSUERS = new Set([
@@ -296,7 +297,7 @@ export function registerTeamsGatewayIngressRoute(input: {
       } catch (error) {
         console.error(
           '[teams] ingress configuration lookup failed',
-          error instanceof Error ? error.message : String(error)
+          `code=${teamsGatewayErrorCode(error)}`
         );
         res.status(503).json({ error: 'Teams activity was not durably admitted' });
         return;
@@ -329,7 +330,7 @@ export function registerTeamsGatewayIngressRoute(input: {
       } catch (error) {
         console.warn(
           '[teams] signing-key endorsement lookup failed',
-          error instanceof Error ? error.message : String(error)
+          `code=${teamsGatewayErrorCode(error)}`
         );
         res.status(503).json({ error: 'Teams activity authentication is temporarily unavailable' });
         return;
@@ -359,7 +360,7 @@ export function registerTeamsGatewayIngressRoute(input: {
       } catch (error) {
         res.status(400).json({
           error: 'Teams activity is malformed',
-          code: error instanceof Error ? error.message : 'invalid_activity',
+          code: teamsGatewayErrorCode(error),
         });
         return;
       }
@@ -409,10 +410,7 @@ export function registerTeamsGatewayIngressRoute(input: {
         res.status(200).json({ ok: true });
       } catch (error) {
         if (!res.headersSent) {
-          console.error(
-            '[teams] ingress admission failed',
-            error instanceof Error ? error.message : String(error)
-          );
+          console.error('[teams] ingress admission failed', `code=${teamsGatewayErrorCode(error)}`);
           res.status(503).json({ error: 'Teams activity was not durably admitted' });
         }
       }

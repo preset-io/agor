@@ -2796,10 +2796,10 @@ const ChannelFormFields: React.FC<{
                           >
                             Azure Portal
                           </Typography.Link>
-                          . Both single-tenant and multi-tenant bots are supported. The{' '}
-                          <strong>Tenant ID</strong> is required so the bot can send replies. Then
-                          sideload the bot as a Teams app via a custom manifest. Teams delivery is
-                          experimental until live provider QA is complete.
+                          . This integration is single-tenant only. The <strong>Tenant ID</strong>{' '}
+                          is required so the bot can send replies. Then sideload the bot as a Teams
+                          app via a custom manifest. Teams delivery is experimental until live
+                          provider QA is complete.
                         </span>
                       }
                     />
@@ -2835,15 +2835,11 @@ const ChannelFormFields: React.FC<{
                       are always enabled.
                     </Typography.Text>
 
-                    <Form.Item
-                      label="Require @mention in channels"
-                      name="teams_require_mention"
-                      valuePropName="checked"
-                      initialValue={true}
-                      tooltip="When enabled, bot only responds when @mentioned in Teams channels (recommended)"
-                    >
-                      <Switch />
-                    </Form.Item>
+                    <Typography.Text type="secondary">
+                      Personal chats are accepted without a mention. Group chats and channels
+                      require a structured mention of this bot's app ID; display names and legacy
+                      require_mention settings cannot bypass that boundary.
+                    </Typography.Text>
                   </>
                 ),
               },
@@ -2894,14 +2890,14 @@ const ChannelFormFields: React.FC<{
                     </Form.Item>
 
                     <Form.Item
-                      label="Teams → Agor email map (JSON)"
+                      label="Teams → Agor User ID map (JSON)"
                       name="teams_user_map"
                       rules={[{ validator: validateJSON }]}
-                      tooltip="Optional JSON object mapping Teams AAD object IDs to tenant-owned Agor emails."
+                      tooltip="Optional JSON object mapping Teams AAD object IDs to immutable tenant-owned Agor User IDs."
                     >
                       <Input.TextArea
                         rows={3}
-                        placeholder={'{"aad-object-id":"person@example.com"}'}
+                        placeholder={'{"aad-object-id":"01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f"}'}
                       />
                     </Form.Item>
 
@@ -4131,7 +4127,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (values.teams_app_id) config.app_id = values.teams_app_id;
       if (values.teams_app_password) config.app_password = values.teams_app_password;
       config.microsoft_tenant_id = values.teams_tenant_id;
-      config.require_mention = values.teams_require_mention ?? true;
+      // Group chats and channels always require a structured app-ID mention;
+      // retain the canonical value so legacy config cannot weaken that fence.
+      config.require_mention = true;
       const teamsList = (value: unknown): string[] =>
         typeof value === 'string'
           ? value
@@ -4518,7 +4516,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     } else if (channel.channel_type === 'teams') {
       formValues.teams_app_id = config?.app_id;
       formValues.teams_tenant_id = config?.microsoft_tenant_id ?? config?.tenant_id;
-      formValues.teams_require_mention = config?.require_mention ?? true;
       formValues.teams_allowed_team_ids = ((config?.allowed_team_ids as string[]) ?? []).join('\n');
       formValues.teams_allowed_channel_ids = ((config?.allowed_channel_ids as string[]) ?? []).join(
         '\n'

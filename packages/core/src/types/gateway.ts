@@ -228,7 +228,7 @@ export interface TeamsGatewayConfig {
   allowed_team_ids?: string[];
   allowed_channel_ids?: string[];
   allowed_user_aad_object_ids?: string[];
-  /** AAD object ID → tenant-owned Agor email. An entry is required for aligned use. */
+  /** AAD object ID → tenant-owned immutable Agor User ID. */
   user_map?: Record<string, string>;
   require_mention?: boolean;
   allow_thread_replies_without_mention?: boolean;
@@ -340,11 +340,11 @@ export function validateTeamsConfig(
   }
   if (raw.user_map !== undefined) {
     if (!isTeamsRecord(raw.user_map)) {
-      errors.push('user_map must map Teams AAD object IDs to Agor emails');
+      errors.push('user_map must map Teams AAD object IDs to Agor User IDs');
     } else {
       for (const [aadId, userId] of Object.entries(raw.user_map)) {
         if (!isTeamsId(aadId) || typeof userId !== 'string' || !userId.trim()) {
-          errors.push('user_map must map nonempty Teams IDs to Agor emails');
+          errors.push('user_map must map nonempty Teams IDs to Agor User IDs');
           break;
         }
       }
