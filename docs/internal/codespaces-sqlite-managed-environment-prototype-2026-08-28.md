@@ -2,29 +2,34 @@
 
 **Date:** 2026-08-28
 
-**Status:** design complete; provider-neutral lifecycle core prototyped and mock-tested; not wired
+**Status:** design complete; provider-neutral core and local `gh` launcher mock-tested; experimental
+variant wired for an explicit single-actor trial
 
-**Decision:** do **not** add a `codespaces-sqlite` entry to `.agor.yml` yet
+**Decision:** add a clearly labeled, non-default `codespaces-sqlite` developer experiment, while
+keeping the Agor-native controller as the production recommendation
 
 ## Executive conclusion
 
-The product is feasible, but current `main` cannot represent it safely as a truthful repository
-variant. A local shell bridge can create and stop a Codespace, but it cannot safely solve dynamic
-URLs, a stable credential owner for shared branches, exact ref availability, duplicate Play across
-replicas, stale executor callbacks, private forwarded-port health, or cleanup ownership. The
-webhook-only HA path is even narrower: it is an unauthenticated static GET with no structured body.
+The product is feasible. Unmodified `main` cannot represent it safely as a truthful shared/HA
+variant, but a bounded current-branch adapter can make a useful local experiment: expose exact
+branch identity/ref to templates with POSIX quoting, accept one tiny nonsecret lifecycle result,
+show its runtime App URL, and treat a completed no-static-health Start as running. A standard-library
+Python bridge then creates or resumes a Codespace through `gh`, validates it, waits for private
+forwarded ports plus an in-Codespace `/health` probe, and reports the current URL.
 
 PR #2304 adds useful generic facts, sync, readiness, and health behavior. It does not provide a
 Codespaces controller or the durable authorization/binding/fencing contract this product needs. It
 is a large draft with conflicts against current `main`; merging it is neither required nor safe for
 this first prototype.
 
-This branch therefore contains an opt-in, unconnected prototype at
-`scripts/managed-environments/codespaces/bridge-core.mjs`. It models the provider lifecycle behind
-an injected adapter and refuses to operate without a current-attempt check. Its tests use no
-network and no credentials. No production config advertises a nonfunctional variant.
+This branch contains both the unconnected, generation-aware model at
+`scripts/managed-environments/codespaces/bridge-core.mjs` and the deliberately narrower executable
+prototype at `agor-codespace-launcher.py`. `.agor.yml` advertises the latter as **EXPERIMENTAL,
+single-GitHub-actor, pushed-ref-only, not Cloud/HA**. The selected devcontainer starts the existing
+Compose SQLite stack and keeps ports GitHub-private. Tests use fake clients, no network mutation,
+and no credentials. The variant was not started during validation.
 
-The shortest production path is an **Agor-native Codespaces controller**, initially restricted to
+The shortest **production** path remains an **Agor-native Codespaces controller**, initially restricted to
 the GitHub user who authorized the resource, plus a small durable remote-environment binding and
 operation lease. Do not use a repository shell script as the long-term security boundary.
 
@@ -32,8 +37,9 @@ operation lease. Do not use a repository shell script as the long-term security 
 
 | Item                                                      | Exact revision/status on 2026-08-28                                                                                       |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `preset-io/agor` current `main`                           | `f1ba9474846c703639db71cb5a8cea1edfa73cf1`                                                                                |
-| This branch at task start                                 | same revision, branch `codespaces-sqlite-variant`                                                                         |
+| `preset-io/agor` `main` at task start                     | `f1ba9474846c703639db71cb5a8cea1edfa73cf1`                                                                                |
+| `preset-io/agor` current `main` at final recheck          | `200eefb66e0d1d4cc6b439536e7a0010e79d9ac5` (one later, unrelated PostgreSQL migration fix)                                |
+| This branch at task start                                 | `f1ba9474846c703639db71cb5a8cea1edfa73cf1`, branch `codespaces-sqlite-variant`                                            |
 | PR #2304                                                  | draft/open, head `1608be0d6d19f0ee7edc0fbee01d44954a6918e9`, 40 commits, 105 changed files, +6072/-57, merge status dirty |
 | PR #2304 original design baseline                         | `47882bd9` (recorded in its design note, 2026-07-30)                                                                      |
 | `preset-io/agor-cloud` current `main` inspected read-only | `67f2b38fc04343fbbf95fbf910c43e7adc0eaf97`                                                                                |
@@ -131,6 +137,28 @@ source of truth; the remote SQLite database is disposable environment state.
 | Attempt fencing      | Health only                                                               | Health only                                       | Blocking for safe mutations/results                                        |
 | SQLite preview       | Existing repo `sqlite` stack can run in the Codespace                     | Same once the VM exists                           | Feasible; requires repository-owned devcontainer/bootstrap contract        |
 
+### Experimental branch delta (not present on `main`)
+
+The bounded implementation adds only the pieces needed to make a local trial observable:
+
+- `branch.id` and `branch.ref` template values plus `{{shellQuote ...}}`; lifecycle arguments remain
+  discrete after the shell parses the rendered command.
+- One exact `AGOR_ENVIRONMENT_RESULT=<JSON>` line with only validated HTTP(S) `access_urls`. It is
+  removed from persisted command output. This is intentionally smaller than PR #2304 facts and is
+  not a provider binding or credential channel.
+- `EnvironmentPill` and `BranchHeaderPill` prefer validated runtime access URLs over the rendered
+  static URL.
+- A successful executor Start with no static health URL becomes `running`. The launcher has already
+  checked provider `Available`, registered ports 3000/5000, and the daemon `/health` over authenticated
+  `gh codespace ssh`. There is no continuous health monitor after that command exits.
+- A repository devcontainer at `.devcontainer/agor-managed/devcontainer.json` uses Docker-in-Docker,
+  forwards private ports 3000/5000, and starts the normal SQLite Compose project on every Codespace
+  start.
+
+These deltas do **not** add durable lifecycle CAS, provider binding columns, distributed locking,
+an OAuth sponsor, or an authenticated Cloud controller. They therefore do not change the Cloud/HA
+answer in the table.
+
 ## PR #2304: what it adds and what v0 needs
 
 The PR starts with facts and grows into a broader remote-environment change set:
@@ -204,8 +232,9 @@ machine, location, devcontainer path, idle timeout, and retention period. It doe
 arbitrary Agor environment payload.
 
 The documented REST API supports create/list/get/start/stop/delete for the authenticated user's
-Codespaces. Create takes a repository ID and ref and returns a provider-generated name, state,
-repository, owner, `git_status.ref`, and editor URL. The authenticated user owns the resulting
+Codespaces. The repository-scoped create endpoint takes an owner/repository path plus a body ref
+(the alternate authenticated-user endpoint takes `repository_id`) and returns a provider-generated
+name, state, repository, owner, `git_status.ref`, and editor URL. The authenticated user owns the resulting
 Codespace. GitHub App **user access tokens** and appropriate fine-grained tokens are supported by
 the user Codespaces endpoints; an installation token is not a substitute for the user's ownership
 credential. A classic token needs the `codespace` scope. Organization admin endpoints are a
@@ -216,6 +245,17 @@ Authoritative references:
 - <https://docs.github.com/en/rest/codespaces/codespaces?apiVersion=2026-03-10>
 - <https://cli.github.com/manual/gh_codespace_create>
 - <https://cli.github.com/manual/gh_codespace_ports>
+
+The documented REST Codespace object has no forwarded-port collection. `gh codespace ports --json`
+gets `sourcePort`, `visibility`, `label`, and `browseUrl` by opening an authenticated Codespaces
+dev-tunnel connection; the CLI implementation can start a shutdown Codespace while establishing
+that connection. The experiment calls it only after the provider reports `Available`, and never in
+Stop/Nuke or stopped Logs. It also never calls `gh codespace ports forward`: host `gh` 2.89.0 is in
+the affected range of August 2026 advisory GHSA-vfhh-p7hm-pxfh, whose issue is an unsafe local
+listener. Port inventory does not open that listener. A source-level detail matters: the tunnel
+returns the port/access-control inventory, while GitHub CLI currently computes `browseUrl` as
+`https://<codespace>-<port>.app.github.dev`; it is not a REST response field.
+
 - <https://docs.github.com/en/codespaces/reference/security-in-github-codespaces>
 
 The local `gh auth status` check found an authenticated developer account with Codespaces scope,
@@ -315,15 +355,15 @@ behavior should be confirmed in a disposable account.
 
 ### Action semantics
 
-| UI action  | Controller behavior                                                                                                                                                                   | Clear limitation                                                              |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| **Play**   | Under one durable lease, rediscover; start a valid stopped Codespace or create exact pushed ref; poll provider readiness with deadline; then require preview readiness before publish | Cold boot can be long; no dirty/local-only commits in v0                      |
-| **Stop**   | Rediscover and validate; stop exact resource; retain Codespace disk and remote SQLite                                                                                                 | Storage remains billed until retention/delete                                 |
-| **Nuke**   | Rediscover, re-fetch, validate all identity fields, delete exact resource, clear binding URLs only after current-attempt CAS                                                          | Never wildcard-delete by prefix or stale name                                 |
-| **Health** | Reconcile provider state and current URLs; separately report preview readiness                                                                                                        | Private/org port auth may prevent a central HTTP probe                        |
-| **Logs**   | Return bounded sanitized controller audit + Codespaces creation diagnostics                                                                                                           | Not the preview daemon/container logs; those need an in-Codespace log channel |
-| **App**    | Link the newly observed forwarded UI URL, with visibility/auth indicated                                                                                                              | Current EnvironmentPill must be changed to consume instance URLs              |
-| **SSH**    | Future explicit authorized action using the sponsor grant                                                                                                                             | It is not an access URL and must not be fabricated or persisted as one        |
+| UI action  | Controller behavior                                                                                                                                                                   | Clear limitation                                                          |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **Play**   | Under one durable lease, rediscover; start a valid stopped Codespace or create exact pushed ref; poll provider readiness with deadline; then require preview readiness before publish | Cold boot can be long; no dirty/local-only commits in v0                  |
+| **Stop**   | Rediscover and validate; stop exact resource; retain Codespace disk and remote SQLite                                                                                                 | Storage remains billed until retention/delete                             |
+| **Nuke**   | Rediscover, re-fetch, validate all identity fields, delete exact resource, clear binding URLs only after current-attempt CAS                                                          | Never wildcard-delete by prefix or stale name                             |
+| **Health** | Reconcile provider state and current URLs; separately report preview readiness                                                                                                        | Private/org port auth may prevent a central HTTP probe                    |
+| **Logs**   | Return bounded sanitized controller audit + Codespaces creation diagnostics and, only while Available, the nested Compose log tail                                                    | Streaming and durable remote logs remain future work                      |
+| **App**    | Link the newly observed forwarded UI URL, with visibility/auth indicated                                                                                                              | Experiment consumes it; production still needs attempt-fenced persistence |
+| **SSH**    | Future explicit authorized action using the sponsor grant                                                                                                                             | It is not an access URL and must not be fabricated or persisted as one    |
 
 Codespaces can be stopped or recreated outside Agor. Health and every mutating action must list and
 validate current provider state. Stored names and URLs are hints only. If the old resource is gone,
@@ -345,10 +385,12 @@ Max must choose one v0 posture:
 3. **Public preview port:** only for explicitly disposable, nonsecret demo data, with a prominent
    warning and repository opt-in. Do not use it as the default.
 
-The controller must read current port metadata after every resume. Do not synthesize
-`https://<remembered-name>-<port>.app.github.dev`; GitHub returns browse URLs and policies can
-change. True preview readiness can come from a short-lived signed callback or a controller that
-runs the probe inside the Codespace. Provider `Available` alone means VM-ready, not Agor-ready.
+The controller must read current port metadata after every resume. Do not publish a URL merely from
+a remembered name and assumed port: current GitHub CLI synthesizes the browse URL only after it has
+connected and observed that port. A native integration should model the documented URL convention
+and Codespaces-provided forwarding domain explicitly. True preview readiness can come from a
+short-lived signed callback or a controller that runs the probe inside the Codespace. Provider
+`Available` alone means VM-ready, not Agor-ready.
 
 ## Remote source and SQLite bootstrap
 
@@ -390,9 +432,38 @@ same operation ID; callbacks compare-and-set generation so Start cannot overwrit
 Stop/Nuke. In-memory serialization, including the prototype lease and PR #2304 sync lock, is not HA
 coordination.
 
+## Disposable manual trial (not performed by this change)
+
+Use only a repository/ref whose Codespace can be safely created and deleted:
+
+1. Push the branch ref to GitHub. Local/uncommitted changes are not copied; Codespaces clones the
+   GitHub ref.
+2. Ensure the **same GitHub user** will perform Play, Stop, Logs, and Nuke. For a local trusted Agor,
+   that can be the daemon account's existing `gh auth login`. Prefer a caller-owned saved global
+   `GH_TOKEN`/`GITHUB_TOKEN` with Codespaces read/write permission; never add it to `.agor.yml`, a
+   command, URL, fact/result, image, or branch data.
+3. Reload/import this branch's `.agor.yml`, stop any current preview, and explicitly re-render the
+   branch with `codespaces-sqlite`. The existing branch remains on `sqlite` until that opt-in.
+4. Press Play once. Cold Docker image build and Agor startup occur in the Codespace and can take up
+   to the launcher's ten-minute deadline. The App pill appears only after current private port
+   metadata and remote `/health` succeed.
+5. Open App while logged into GitHub as the Codespace creator. If GitHub's private-port auth does
+   not work for the split UI/daemon origins, stop and Nuke; do not switch the fixed-admin preview to
+   public as a workaround.
+6. Stop retains the Codespace and its SQLite volume. Nuke deletes the validated Codespace. The
+   create request also asks GitHub for a 30-minute idle timeout and 1-day stopped retention as an
+   orphan backstop.
+
+The launcher stores only a mode-0600 local binding fence under
+`~/.local/state/agor/codespaces/` (or `AGOR_CODESPACES_STATE_DIR`). It still lists GitHub on every
+action. Deleting that file does not delete a Codespace; the exact display marker allows same-actor
+rediscovery. If a different GitHub actor is presented while the fence exists, the launcher refuses
+to create or mutate anything.
+
 ## Prototype contract and measured validation
 
-`bridge-core.mjs` deliberately has no GitHub token resolver and no `.agor.yml` entry. A future
+`bridge-core.mjs` deliberately has no GitHub token resolver and remains the production-contract
+model. The executable experiment is separately wired into `.agor.yml`. A future
 adapter supplies viewer/repository resolution, list/create/get/start/stop/delete, creation logs, and
 current access URLs. The core supplies:
 
@@ -421,11 +492,28 @@ owner/repository/ref/duplicate identity rejection, stale attempt, destructive re
 redaction/bounds, invalid URL rejection, and invalid input. The test provider is fully in-memory; no
 GitHub resource or customer repository was read or mutated by the tests.
 
-Agor's read-only environment status confirms this branch is rendered with the existing `sqlite`
-variant and static daemon/UI ports; it was stopped (`status: unknown`) during validation. Per the
-repository's watch-mode rule, the prototype did not start Docker or a background development stack.
-The lifecycle behavior above was exercised hermetically from the managed branch worktree rather
-than pretending an unconnected `.agor.yml` variant was live.
+Agor's read-only environment status confirms this branch is still rendered with the existing
+`sqlite` variant and has no active environment status during validation. Per the repository's
+watch-mode rule and the no-mutation safety boundary, validation did not start Docker, a background
+development stack, or a real Codespace. The new variant must be explicitly selected/re-rendered
+before a disposable manual trial.
+
+The launcher tests additionally cover create, repeated Play without duplicate creation, stopped
+resume, stale-name/recreated-resource adoption, duplicate-marker freeze, actor change rejection,
+idempotent Stop/Nuke, owner/repository/ref/marker mismatch, dynamic URL allowlisting, redaction, and
+argv/JSON-stdin transport of shell-looking refs. Its local `flock` closes the duplicate-Play window
+only for processes sharing one launcher state directory; it is not a distributed lock.
+
+Command run:
+
+```text
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -q scripts/managed-environments/codespaces/test_agor_codespace_launcher.py
+```
+
+Measured result: **15/15 launcher tests passed in 35 ms**. Combined with the provider-neutral suite,
+the prototype has 31 hermetic lifecycle/security cases. Focused Core, executor, daemon, and UI
+Vitest suites cover command rendering, result parsing/no-health completion, branch dispatch, and
+runtime URL consumption.
 
 The prototype current-attempt callback demonstrates the required boundary but cannot make the
 check and remote API mutation atomic. Only the durable controller operation/lease described above
@@ -435,22 +523,23 @@ can close that race.
 
 ### Engineering primitives, in order
 
-1. **Exact source contract:** add trustworthy current ref + commit SHA as structured controller
-   input; choose pushed-only v0 or design a separate sync ref.
+1. **Exact source contract:** the experiment now supplies the persisted branch ref and resolves its
+   GitHub SHA before creation, but the Codespaces REST object does not attest the checked-out SHA.
+   Add provider-attested SHA verification or a structured remote check for production.
 2. **Tenant-scoped binding and lifecycle CAS:** provider identity, sponsor grant reference,
    generation/operation ID, lease, cleanup state; unique by tenant/branch/provider.
 3. **Authenticated structured controller path:** Agor-native is preferred; otherwise signed POST,
    never today's generic GET webhook.
 4. **GitHub user OAuth grant:** minimal permissions, encrypted storage, revoke/reauthorize UX, and
    explicit credential sponsor policy.
-5. **Dynamic result contract:** typed nonsecret state/access URLs, generation-bound persistence,
-   realtime update, EnvironmentPill/App consumption, and URL visibility metadata.
+5. **Dynamic result contract:** replace the experimental access-URL-only stdout line with typed,
+   generation-bound provider state, visibility metadata, and attempt-fenced realtime persistence.
 6. **Readiness channel:** distinguish GitHub VM state from preview Agor readiness without making a
    private port public.
 7. **Reconciler/cleanup:** retry orphan cleanup, enforce retention, inventory verified bindings,
    and alert on ambiguous/mismatched resources.
-8. **Repository bootstrap:** a Codespaces devcontainer path that starts the SQLite preview and emits
-   a signed readiness signal. Only after this exists should `.agor.yml` advertise the variant.
+8. **Repository bootstrap:** the experiment supplies the SQLite devcontainer and an authenticated
+   SSH health probe; production still needs a versioned bootstrap contract and signed readiness.
 
 Useful parts of PR #2304 (clear persistence, typed dynamic rendering idea, health transitions) can
 be split and rebased. Do not make raw lifecycle stdout the authoritative provider protocol.
@@ -473,8 +562,9 @@ be split and rebased. Do not make raw lifecycle stdout the authoritative provide
 2. Start with one disposable test repository, sponsor-only actions, private ports, pushed refs, a
    small machine, short idle timeout, and a bounded retention period.
 3. Audit safe categories only: tenant-scoped operation ID, action, provider result category, and
-   cleanup outcome. Never log repository/ref/name/URL/token/raw provider output under the current
-   logging policy.
+   cleanup outcome. The experimental caller-visible lifecycle log includes validated
+   repository/ref/name/URL diagnostics; it redacts tokens and raw failures. Production central logs
+   should avoid those identifiers unless the logging policy explicitly allows them.
 4. Reconcile inventory before expanding: every remote resource must map to exactly one binding;
    ambiguous or identity-drifted resources freeze rather than mutate.
 5. Rollback disables new Start immediately. Existing bindings remain visible for explicit Stop and

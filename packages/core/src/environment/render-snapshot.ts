@@ -52,8 +52,10 @@ export interface RenderRepoInput {
  * {@link buildBranchContext} already accepts).
  */
 export interface RenderBranchInput {
+  branch_id?: string;
   branch_unique_id: number;
   name: string;
+  ref?: string;
   path: string;
   custom_context?: Record<string, unknown>;
   host_ip_address?: string;
@@ -131,8 +133,10 @@ export function renderBranchSnapshot(
   // template_overrides INTO the context, preserving `custom.*` from the
   // branch by merging custom context LAST.
   const baseContext = buildBranchContext({
+    branch_id: branch.branch_id,
     branch_unique_id: branch.branch_unique_id,
     name: branch.name,
+    ref: branch.ref,
     path: branch.path,
     repo_slug: repo.slug,
     custom_context: branch.custom_context,

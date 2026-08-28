@@ -148,6 +148,23 @@ export function registerHandlebarsHelpers(): void {
       .join(replace);
   });
 
+  /**
+   * Quote one value as a single POSIX shell word.
+   *
+   * Environment lifecycle templates are ultimately executed by a shell. Any
+   * branch/ref value interpolated into one of those commands must therefore be
+   * quoted at the template boundary rather than relying on branch naming
+   * conventions. The standard single-quote escape (`'` -> `'\"'\"'`) works in
+   * POSIX shells and in bash. SafeString prevents Handlebars' HTML escaping
+   * from corrupting those quote characters.
+   *
+   * Usage: {{shellQuote branch.ref}}
+   */
+  Handlebars.registerHelper('shellQuote', (value: unknown): Handlebars.SafeString => {
+    const quoted = `'${String(value ?? '').replaceAll("'", `'"'"'`)}'`;
+    return new Handlebars.SafeString(quoted);
+  });
+
   // ===== Conditional Helpers =====
 
   /**
@@ -304,7 +321,9 @@ export function renderTemplate(
  *
  * Provides scoped entity references (consistent with zone triggers):
  * - {{branch.unique_id}} - Auto-assigned unique number (1, 2, 3, ...)
+ * - {{branch.id}} - Stable UUIDv7 identity for this Agor branch
  * - {{branch.name}} - Branch name (slug format)
+ * - {{branch.ref}} - Exact git ref recorded for this branch
  * - {{branch.path}} - Absolute path to branch directory
  * - {{branch.base_ref}} - Source branch/tag name this branch was created from
  *   (the "Base Branch"/"Base Tag" from the create dialog). Empty string if unknown.
@@ -322,8 +341,10 @@ export function renderTemplate(
  * a future major release.
  */
 export function buildBranchContext(branch: {
+  branch_id?: string;
   branch_unique_id: number;
   name: string;
+  ref?: string;
   path: string;
   repo_slug?: string;
   custom_context?: Record<string, unknown>;
@@ -332,8 +353,10 @@ export function buildBranchContext(branch: {
   ref_type?: 'branch' | 'tag';
 }): Record<string, unknown> {
   const branchEntity = {
+    id: branch.branch_id || '',
     unique_id: branch.branch_unique_id,
     name: branch.name,
+    ref: branch.ref || branch.name,
     path: branch.path,
     base_ref: branch.base_ref || '',
     ref_type: branch.ref_type || 'branch',
