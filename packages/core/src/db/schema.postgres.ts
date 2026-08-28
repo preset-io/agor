@@ -829,6 +829,15 @@ export const branches = pgTable(
     // a non-null clone_depth on worktree-mode rows.
     clone_depth: integer('clone_depth'),
 
+    // Per-branch SDK home intent (design §9.2). NULL = inherit today's behavior
+    // (no branch SDK home). 'per_branch' = this branch has its own relocated SDK
+    // home under `branch-homes/<branchId>`. Stored as an intent enum, NOT a path
+    // — the path is derived from branch_id by a single resolver (getBranchHomePath)
+    // so it cannot drift or be injected. Sticky once set: the value here — not
+    // the live `execution.sandbox.sdk_home_mode` flag — governs whether an
+    // existing branch keeps its home (design §8B.3). Validated at the app layer.
+    sdk_home: text('sdk_home', { enum: ['per_branch'] }).$type<'per_branch'>(),
+
     // JSON blob for everything else
     data: t
       .json<unknown>('data')

@@ -536,6 +536,22 @@ export interface AgorSandboxSettings {
    */
   home_mode?: 'shared' | 'per_user';
   /**
+   * Whether new branches receive their own per-branch SDK home (relocating the
+   * agentic tool's config/state dir — `.claude`/`.codex`/… — to a branch-keyed
+   * directory under `<tenantDataRoot>/branch-homes/<branchId>`) instead of
+   * inheriting the session-owner's home:
+   *  - `inherit` (default): today's behavior — SDK state lives in whatever home
+   *    `home_mode` presents. No branch SDK homes are created. Byte-for-byte
+   *    identical to a deployment that never set this key.
+   *  - `per_branch`: a branch prompted for the first time under this mode gets a
+   *    branch SDK home, recorded stickily on the branch. See §8B.3: the branch
+   *    record — not the live value of this flag — governs whether an existing
+   *    branch keeps its home, so flipping back to `inherit` only stops NEW
+   *    branches from getting one; it never strands an existing branch's history.
+   * Default: `inherit`.
+   */
+  sdk_home_mode?: 'inherit' | 'per_branch';
+  /**
    * Preserve a symlinked daemon home's canonical alias inside a per-user
    * sandbox. The owner store and authorized dynamic paths are exposed at both
    * the passwd-home path and its daemon-resolved canonical path, and the

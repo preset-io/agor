@@ -156,6 +156,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         // Branch storage mode
         storage_mode: row.storage_mode ?? 'worktree',
         clone_depth: row.clone_depth ?? undefined,
+        // Per-branch SDK home intent (design §9.2)
+        sdk_home: row.sdk_home ?? undefined,
         ...row.data,
         url,
       },
@@ -219,6 +221,8 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       // Branch storage mode (default 'worktree' matches schema default)
       storage_mode: branch.storage_mode ?? 'worktree',
       clone_depth: branch.clone_depth ?? null,
+      // Per-branch SDK home intent (design §9.2). NULL = inherit (default).
+      sdk_home: branch.sdk_home ?? null,
       data: {
         path: branch.path!,
         base_ref: branch.base_ref,

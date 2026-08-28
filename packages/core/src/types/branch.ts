@@ -419,6 +419,23 @@ export interface Branch {
    */
   clone_depth?: number;
 
+  /**
+   * Per-branch SDK home intent (design §9.2).
+   *
+   * `undefined`/`null` = inherit today's behavior — no relocated SDK home; the
+   * agentic tool's state lives in whatever home the sandbox `home_mode`
+   * presents. `'per_branch'` = this branch has its own SDK home under
+   * `branch-homes/<branchId>` (path derived from `branch_id` by
+   * `getBranchHomePath`; only the intent is stored, never a path).
+   *
+   * STICKY: once set, this value — not the live
+   * `execution.sandbox.sdk_home_mode` deployment flag — governs whether the
+   * branch keeps being mounted with its home. Flipping the flag back to
+   * `inherit` only stops NEW branches from adopting one; it never strands an
+   * existing branch's accumulated Claude/Codex/… history (design §8B.3).
+   */
+  sdk_home?: 'per_branch' | null;
+
   // ===== Session Sharing (legacy identity-borrow opt-in) =====
 
   /**

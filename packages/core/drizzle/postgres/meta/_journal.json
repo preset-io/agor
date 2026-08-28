@@ -673,6 +673,13 @@
       "when": 1787947200000,
       "tag": "0096_strip_stdio_remote_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1788033600000,
+      "tag": "0097_branch_sdk_home",
+      "breakpoints": true
     }
   ]
 }

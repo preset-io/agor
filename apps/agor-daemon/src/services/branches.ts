@@ -6,6 +6,7 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
+import { rm } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { analyticsLogger } from '@agor/core/analytics';
 import {
@@ -14,6 +15,7 @@ import {
   ensureBranchCloneDepthAllowed,
   ensureBranchStorageModeAllowed,
   getBranchesDir,
+  getBranchHomePath,
   PAGINATION,
   resolveBranchStorageConfig,
   resolveExecutionSecurityMode,
@@ -1639,6 +1641,26 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
       console.log(`🗑️  Spawning executor to delete branch from filesystem: ${branch.path}`);
       const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+
+      // Remove the branch's per-branch SDK home on the same delete step
+      // (design §8B.4 item 1). This is daemon-owned state under the tenant data
+      // root, so the daemon removes it directly rather than through the sandboxed
+      // git.branch.remove executor. Deliberately NOT done on archive: an archived
+      // branch keeps its worktree, so it keeps its SDK home too — it is meant to
+      // be resumable. Fire-and-forget with error logging, mirroring the
+      // best-effort worktree-removal spawn below. Directories that were never
+      // created (feature off / branch never adopted a home) resolve to a no-op
+      // via `force: true`. An orphaned home left by a crash mid-delete or direct
+      // DB surgery is a documented follow-up (§8B.4 item 2 — no periodic GC to
+      // slot into yet).
+      const branchHomeDir = getBranchHomePath(branch.branch_id, tenantId ?? undefined);
+      void rm(branchHomeDir, { recursive: true, force: true }).catch((err) => {
+        console.warn(
+          `[BranchesService.delete ${branch.name}] Failed to remove branch SDK home ` +
+            `${branchHomeDir}: ${err instanceof Error ? err.message : String(err)}`
+        );
+      });
+
       spawnExecutor(
         {
           command: 'git.branch.remove',
