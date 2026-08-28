@@ -4,6 +4,7 @@
  * design doc.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import { BadRequest } from '@agor/core/feathers';
 import {
   AGENTIC_TOOL_NAMES,
@@ -132,19 +133,25 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
         const boardId = await resolveBoardId(ctx, args.boardId);
         const allData: Schedule[] = Array.isArray(result) ? result : result.data;
         const branchIds = [...new Set(allData.map((schedule) => schedule.branch_id))];
-        const branchesResult = branchIds.length
-          ? await ctx.app.service('branches').find({
-              query: {
-                branch_id: { $in: branchIds },
-                $limit: branchIds.length,
-              },
-              paginate: false,
-              ...ctx.baseServiceParams,
-            })
-          : [];
-        const branches = (
-          Array.isArray(branchesResult) ? branchesResult : branchesResult.data
-        ) as Branch[];
+        const branches: Branch[] = [];
+        // BranchesService clamps every `$limit` to PAGINATION.MAX_LIMIT even
+        // for non-paginated calls. Keep each authorization batch below that
+        // boundary so large schedule sets are complete rather than silently
+        // dropping branches above the cap.
+        for (let offset = 0; offset < branchIds.length; offset += PAGINATION.MAX_LIMIT) {
+          const batch = branchIds.slice(offset, offset + PAGINATION.MAX_LIMIT);
+          const branchesResult = await ctx.app.service('branches').find({
+            query: {
+              branch_id: { $in: batch },
+              $limit: batch.length,
+            },
+            paginate: false,
+            ...ctx.baseServiceParams,
+          });
+          branches.push(
+            ...((Array.isArray(branchesResult) ? branchesResult : branchesResult.data) as Branch[])
+          );
+        }
         const matchingBranchIds = new Set(
           branches.filter((branch) => branch.board_id === boardId).map((branch) => branch.branch_id)
         );
