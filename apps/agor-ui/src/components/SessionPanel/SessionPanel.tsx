@@ -80,7 +80,7 @@ import {
 import { getSessionStatusLabel } from '../../utils/sessionStatus';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
-import { AutocompleteTextarea } from '../AutocompleteTextarea';
+import { AutocompleteTextarea, type SkillMentionStyle } from '../AutocompleteTextarea';
 import { FileUpload } from '../FileUpload';
 import { ForkSpawnModal } from '../ForkSpawnModal/ForkSpawnModal';
 import type { ModelConfig } from '../ModelSelector';
@@ -148,6 +148,7 @@ interface PromptInputProps {
   suppressEmptyHighlight?: boolean;
   slashCommands?: string[];
   skills?: string[];
+  skillMentionStyle?: SkillMentionStyle;
 }
 
 const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
@@ -173,6 +174,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
       suppressEmptyHighlight = false,
       slashCommands,
       skills,
+      skillMentionStyle,
     },
     ref
   ) => {
@@ -318,6 +320,7 @@ const PromptInput = React.forwardRef<PromptInputHandle, PromptInputProps>(
         suppressEmptyHighlight={suppressEmptyHighlight}
         slashCommands={slashCommands}
         skills={skills}
+        skillMentionStyle={skillMentionStyle}
         enableKnowledgeMentions
         kbLinkTarget="absolute-route"
         highlightWhenEmpty
@@ -893,6 +896,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           skills={
             Array.isArray(sessionCustomContext?.skills) ? sessionCustomContext.skills : undefined
           }
+          skillMentionStyle={session.agentic_tool === 'codex' ? 'dollar' : 'slash'}
         />
         <input
           ref={attachmentInputRef}

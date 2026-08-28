@@ -60,8 +60,10 @@ interface EmojiResult {
 
 interface SlashCommandResult {
   command: string;
-  source: 'built-in' | 'project' | 'personal';
+  source: 'built-in' | 'project' | 'personal' | 'skill';
   type: 'slash_command';
+  /** Full text inserted on select (e.g. `/compact`, or `$dwh-user:dwh-operations` for Codex skills). */
+  insertText: string;
 }
 
 interface KbDocResult {
@@ -81,6 +83,7 @@ type AutocompleteResult =
   | { heading: string };
 
 type KbLinkTarget = 'stable-uri' | 'absolute-route';
+export type SkillMentionStyle = 'slash' | 'dollar';
 
 interface AutocompleteTextareaProps {
   value: string;
@@ -105,6 +108,13 @@ interface AutocompleteTextareaProps {
   slashCommands?: string[];
   /** Available skills from the SDK (stored on session.custom_context) */
   skills?: string[];
+  /**
+   * How selecting a skill inserts it into the prompt. Claude Code invokes
+   * skills as slash commands (`/name`); Codex expects a `$name` mention in
+   * the prompt text (its model-side trigger rule), so Codex sessions pass
+   * 'dollar'. Discovery stays on the `/` trigger for both.
+   */
+  skillMentionStyle?: SkillMentionStyle;
   /** Enable live Knowledge Base lookup for `@` references. Disabled by default so shared comment inputs do not search KB. */
   enableKnowledgeMentions?: boolean;
   /**
@@ -377,6 +387,7 @@ export const AutocompleteTextarea = React.forwardRef<
       suppressEmptyHighlight = false,
       slashCommands = EMPTY_SLASH_COMMANDS,
       skills = EMPTY_SKILLS,
+      skillMentionStyle = 'slash',
       enableKnowledgeMentions = false,
       kbDocs,
       kbLinkTarget = 'stable-uri',
@@ -800,14 +811,33 @@ export const AutocompleteTextarea = React.forwardRef<
             const normalizedCmd = cmd.toLowerCase();
             if (normalizedCmd.includes(q) && !seen.has(normalizedCmd)) {
               seen.add(normalizedCmd);
-              commandResults.push({ command: cmd, source: 'built-in', type: 'slash_command' });
+              commandResults.push({
+                command: cmd,
+                source: 'built-in',
+                type: 'slash_command',
+                insertText: `/${cmd}`,
+              });
             }
           }
           for (const skill of skills) {
             const normalizedSkill = skill.toLowerCase();
             if (normalizedSkill.includes(q) && !seen.has(normalizedSkill)) {
               seen.add(normalizedSkill);
-              commandResults.push({ command: skill, source: 'project', type: 'slash_command' });
+              commandResults.push(
+                skillMentionStyle === 'dollar'
+                  ? {
+                      command: skill,
+                      source: 'skill',
+                      type: 'slash_command',
+                      insertText: `$${skill}`,
+                    }
+                  : {
+                      command: skill,
+                      source: 'project',
+                      type: 'slash_command',
+                      insertText: `/${skill}`,
+                    }
+              );
             }
           }
           commandResults.sort((a, b) =>
@@ -892,6 +922,7 @@ export const AutocompleteTextarea = React.forwardRef<
         searchEmojis,
         slashCommands,
         skills,
+        skillMentionStyle,
         shouldSearchKnowledge,
       ]
     );
@@ -919,8 +950,8 @@ export const AutocompleteTextarea = React.forwardRef<
               ? buildKbMarkdownLink(item.kbTitle, `${window.location.origin}${item.kbRoutePath}`)
               : buildKbDocLink(item.kbTitle, item.kbDocumentId);
         } else if ('command' in item) {
-          // Slash command selection - replace with /command
-          insertText = `/${item.command}`;
+          // Command/skill selection - insert its provider-specific invocation
+          insertText = item.insertText;
         } else if ('emoji' in item) {
           // Emoji selection - just insert the emoji character
           insertText = item.emoji;
@@ -1259,7 +1290,7 @@ export const AutocompleteTextarea = React.forwardRef<
               itemKey = `kb-${item.kbUri}`;
               isKbDoc = true;
             } else if ('command' in item) {
-              label = `/${item.command}`;
+              label = item.insertText;
               itemKey = `cmd-${item.command}`;
               isCommand = true;
             } else if ('emoji' in item) {
@@ -1305,8 +1336,8 @@ export const AutocompleteTextarea = React.forwardRef<
                   e.currentTarget.style.backgroundColor = 'transparent';
                 }}
               >
-                {/* Show command icon for slash commands */}
-                {isCommand && (
+                {/* Show the invocation sigil for commands (/) and Codex skills ($) */}
+                {isCommand && 'insertText' in item && (
                   <span
                     style={{
                       fontFamily: 'monospace',
@@ -1315,7 +1346,7 @@ export const AutocompleteTextarea = React.forwardRef<
                       fontWeight: 600,
                     }}
                   >
-                    /
+                    {item.insertText.charAt(0)}
                   </span>
                 )}
                 {/* Show emoji larger if it's an emoji result */}

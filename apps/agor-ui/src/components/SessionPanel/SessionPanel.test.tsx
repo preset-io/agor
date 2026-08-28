@@ -181,6 +181,29 @@ function getSearchRow() {
   return screen.getByPlaceholderText('Search session...').closest('div[style*="max-height"]');
 }
 
+describe('SessionPanel provider skill autocomplete wiring', () => {
+  afterEach(() => {
+    autocomplete.props = null;
+    reactive.tasks = [];
+    vi.restoreAllMocks();
+  });
+
+  it('passes discovered Codex skills through with dollar-mention insertion semantics', () => {
+    renderPanel({
+      activeSession: {
+        ...session,
+        agentic_tool: 'codex',
+        custom_context: { skills: ['dwh-user:dwh-operations'] },
+      },
+    });
+
+    expect(autocomplete.props).toMatchObject({
+      skills: ['dwh-user:dwh-operations'],
+      skillMentionStyle: 'dollar',
+    });
+  });
+});
+
 describe.each(findShortcuts)('SessionPanel native $label behavior', ({ modifiers }) => {
   afterEach(() => {
     reactive.tasks = [];
