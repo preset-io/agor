@@ -10,7 +10,7 @@ describe('config diagnostic redaction', () => {
       database: {
         dialect: 'postgresql',
         postgresql: {
-          url: `postgresql://user:${canary}@db.example/agor`,
+          url: `postgresql://user:${canary}@db.example/agor?sslpassword=${canary}`,
           ssl: { ca: canary, cert: canary, key: canary },
         },
       },

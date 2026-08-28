@@ -211,6 +211,7 @@ import {
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
+import { buildDatabaseHealthInfo } from './utils/database-health-diagnostics.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import {
   redactMCPServerSecrets,
@@ -5419,21 +5420,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       if (isAuthenticated) {
         const dialect = process.env.AGOR_DB_DIALECT === 'postgresql' ? 'postgresql' : 'sqlite';
-        let databaseInfo: { dialect: string; url?: string; path?: string };
-
-        if (dialect === 'postgresql') {
-          let maskedUrl = '<redacted-database-url>';
-          try {
-            const parsed = new URL(DB_PATH);
-            if (parsed.password) parsed.password = '****';
-            maskedUrl = parsed.toString();
-          } catch {
-            // Invalid connection diagnostics must not echo the original DSN.
-          }
-          databaseInfo = { dialect, url: maskedUrl };
-        } else {
-          databaseInfo = { dialect, path: DB_PATH };
-        }
+        const databaseInfo = buildDatabaseHealthInfo(dialect, DB_PATH);
 
         // Diagnostic only; not in the public payload, doesn't gate readiness.
         // Gated behind auth like the rest of this block (any authenticated

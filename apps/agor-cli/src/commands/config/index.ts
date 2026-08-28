@@ -7,6 +7,7 @@ import {
   formatConfigYaml,
   getConfigPath,
   loadConfig,
+  redactPostgresqlUrlForDiagnostics,
   resolveEffectiveConfig,
 } from '@agor/core/config';
 import { getDatabaseUrl } from '@agor/core/db';
@@ -21,13 +22,10 @@ export function redactSecrets(config: AgorConfig): AgorConfig {
   if (copy.daemon?.masterSecret) copy.daemon.masterSecret = REDACTED;
   if (copy.database?.postgresql?.password) copy.database.postgresql.password = REDACTED;
   if (copy.database?.postgresql?.url) {
-    try {
-      const url = new URL(copy.database.postgresql.url);
-      if (url.password) url.password = REDACTED;
-      copy.database.postgresql.url = url.toString();
-    } catch {
-      copy.database.postgresql.url = REDACTED;
-    }
+    copy.database.postgresql.url = redactPostgresqlUrlForDiagnostics(
+      copy.database.postgresql.url,
+      REDACTED
+    );
   }
   if (typeof copy.database?.postgresql?.ssl === 'object') {
     if (copy.database.postgresql.ssl.ca) copy.database.postgresql.ssl.ca = REDACTED;
