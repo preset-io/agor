@@ -23,6 +23,7 @@ import type {
   BranchCapabilityPolicy,
   CapabilityPolicyWorkspacePreferences,
   EffectiveBranchAccess,
+  EffectiveCapabilityPolicyAccess,
   Group,
   TeammateConfig,
   User,
@@ -86,6 +87,13 @@ export interface BranchModalFormApi {
   canEditPermissions: boolean;
   canControlEnvironment: boolean;
 
+  // Board-move validation: `board_id` is a Select of every board the caller
+  // can VIEW, not just the ones they can attach a branch to, so a selection
+  // can't be pre-filtered the way other fields are disabled outright. This
+  // is checked reactively once a target board is actually picked.
+  boardAttachChecking: boolean;
+  boardAttachError: string | null;
+
   // Aggregate state
   hasChanges: boolean;
   saving: boolean;
@@ -141,6 +149,8 @@ export function useBranchModalForm({
   const [workspacePreferences, setWorkspacePreferences] =
     useState<CapabilityPolicyWorkspacePreferences>({ personal_session_sharing_enabled: false });
   const [permissionsLoadError, setPermissionsLoadError] = useState<Error | null>(null);
+  const [boardAttachChecking, setBoardAttachChecking] = useState(false);
+  const [boardAttachError, setBoardAttachError] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
 
@@ -275,6 +285,51 @@ export function useBranchModalForm({
     };
   }, [open, client, branchId, branchRbacEnabled]);
 
+  // Validate a newly-selected target board once it's actually picked, rather
+  // than trying to pre-filter the Select's options: the board list is scoped
+  // to "boards I can VIEW", and knowing which of those the caller can also
+  // attach a branch to would mean an effective-access call per board. The
+  // daemon rejects a move to a board without `board.attach_branch` (or away
+  // from the current board without `board.edit`), so this mirrors that one
+  // check for the one board actually chosen.
+  const targetBoardId = general.boardId;
+  useEffect(() => {
+    if (!open || !client || !branchRbacEnabled) {
+      setBoardAttachError(null);
+      return;
+    }
+    const originalBoardId = branch?.board_id || undefined;
+    if (!targetBoardId || targetBoardId === originalBoardId) {
+      setBoardAttachError(null);
+      return;
+    }
+    let cancelled = false;
+    setBoardAttachChecking(true);
+    setBoardAttachError(null);
+    client
+      .service('boards/:id/effective-access')
+      .find({ route: { id: targetBoardId } })
+      .then((access: unknown) => {
+        if (cancelled) return;
+        const capabilities = (access as EffectiveCapabilityPolicyAccess).capabilities;
+        if (!capabilities.includes('board.attach_branch')) {
+          setBoardAttachError('You need Board Editor or Manager access to move a branch here.');
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setBoardAttachError(
+          error instanceof Error ? error.message : 'Could not verify access to that board.'
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setBoardAttachChecking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, client, branchRbacEnabled, branch?.board_id, targetBoardId]);
+
   // Change detection per slice
   const isTeammateBranch = branch ? isTeammate(branch) : false;
   const generalChanged = useMemo(() => {
@@ -345,6 +400,9 @@ export function useBranchModalForm({
 
   const save = useCallback(async (): Promise<{ ok: true } | { ok: false; error: Error }> => {
     if (!branch || !client) return { ok: false, error: new Error('Modal not ready') };
+    // Belt-and-suspenders: the Save button is already disabled while this is
+    // set, but save() is also exported directly, so re-check here too.
+    if (boardAttachError) return { ok: false, error: new Error(boardAttachError) };
     setSaving(true);
     try {
       const updates: BranchUpdate = {};
@@ -396,6 +454,7 @@ export function useBranchModalForm({
   }, [
     branch,
     client,
+    boardAttachError,
     generalChanged,
     canEditGeneral,
     general,
@@ -426,6 +485,8 @@ export function useBranchModalForm({
     canManagePolicy,
     canEditPermissions,
     canControlEnvironment,
+    boardAttachChecking,
+    boardAttachError,
     hasChanges,
     saving,
     save,

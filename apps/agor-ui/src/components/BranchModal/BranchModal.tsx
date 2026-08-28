@@ -210,6 +210,8 @@ export const BranchModal: React.FC<BranchModalProps> = ({
           state={form.general}
           setField={form.setGeneral}
           onArchiveOrDelete={onArchiveOrDelete}
+          boardAttachChecking={form.boardAttachChecking}
+          boardAttachError={form.boardAttachError}
         />
       ),
     },
@@ -316,7 +318,11 @@ export const BranchModal: React.FC<BranchModalProps> = ({
   // (General, Teammate, Permissions). Tabs like Environment / Sessions /
   // Files / Schedules have their own actions outside the form.
   const canSave =
-    (form.canEditGeneral || form.canEditPermissions) && form.hasChanges && !form.saving;
+    (form.canEditGeneral || form.canEditPermissions) &&
+    form.hasChanges &&
+    !form.saving &&
+    !form.boardAttachError &&
+    !form.boardAttachChecking;
 
   const footer = (
     <Space>

@@ -1,3 +1,4 @@
+import type { Branch } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
@@ -157,5 +158,100 @@ describe('useBranchModalForm normalized permission package', () => {
     act(() => result.current.reset());
     expect(result.current.capabilityPolicy?.binding_mode).toBe('override');
     expect(result.current.permissionsChanged).toBe(false);
+  });
+});
+
+describe('useBranchModalForm board-move validation', () => {
+  beforeEach(() => {
+    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
+  });
+
+  afterEach(() => {
+    __resetAuthConfigForTests();
+  });
+
+  it('blocks the move and reports why when the caller lacks board.attach_branch on the target board', async () => {
+    const owner = makeUser({ user_id: 'user-1', role: 'member' });
+    const branch = makeBranch();
+    const { client } = makeStubClient({
+      users: [owner],
+      boardEffectiveAccessById: {
+        'board-no-attach': {
+          capabilities: ['board.view'],
+          fs_access: 'none',
+          source: 'others',
+          group_ids: [],
+          is_primary_owner: false,
+        },
+      },
+    });
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: owner, open: true }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.permissionsLoading).toBe(false));
+
+    act(() => result.current.setGeneral('boardId', 'board-no-attach'));
+    await waitFor(() => expect(result.current.boardAttachChecking).toBe(false));
+
+    expect(result.current.boardAttachError).toContain('Board Editor or Manager access');
+
+    let saved: Awaited<ReturnType<typeof result.current.save>> | undefined;
+    await act(async () => {
+      saved = await result.current.save();
+    });
+    expect(saved?.ok).toBe(false);
+  });
+
+  it('allows the move once the caller has board.attach_branch on the target board', async () => {
+    const owner = makeUser({ user_id: 'user-1', role: 'member' });
+    const branch = makeBranch();
+    const { client, calls } = makeStubClient({
+      users: [owner],
+      boardEffectiveAccessById: {
+        'board-allowed': {
+          capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+          fs_access: 'none',
+          source: 'direct_user',
+          group_ids: [],
+          is_primary_owner: false,
+        },
+      },
+    });
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: owner, open: true }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.permissionsLoading).toBe(false));
+
+    act(() => result.current.setGeneral('boardId', 'board-allowed'));
+    await waitFor(() => expect(result.current.boardAttachChecking).toBe(false));
+    expect(result.current.boardAttachError).toBeNull();
+
+    let saved: Awaited<ReturnType<typeof result.current.save>> | undefined;
+    await act(async () => {
+      saved = await result.current.save();
+    });
+    expect(saved).toEqual({ ok: true });
+    expect(
+      calls.some((call) => call.service === 'boards/:id/effective-access' && call.method === 'find')
+    ).toBe(true);
+  });
+
+  it('does not check effective-access when the board selection is unchanged', async () => {
+    const owner = makeUser({ user_id: 'user-1', role: 'member' });
+    const branch = makeBranch({ board_id: 'board-1' as Branch['board_id'] });
+    const { client, calls } = makeStubClient({ users: [owner] });
+    const { result } = renderHook(
+      () => useBranchModalForm({ branch, client, currentUser: owner, open: true }),
+      { wrapper }
+    );
+    await waitFor(() => expect(result.current.permissionsLoading).toBe(false));
+
+    act(() => result.current.setGeneral('notes', 'unrelated change'));
+    await waitFor(() => expect(result.current.generalChanged).toBe(true));
+
+    expect(result.current.boardAttachError).toBeNull();
+    expect(calls.some((call) => call.service === 'boards/:id/effective-access')).toBe(false);
   });
 });
