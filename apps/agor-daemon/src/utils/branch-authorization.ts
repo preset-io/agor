@@ -134,8 +134,7 @@ function rememberPrefetchedRecord(
 
 async function loadCachedSession(
   params: AuthenticatedParams,
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  sessionService: any,
+  sessionRepo: Pick<SessionRepository, 'findById'>,
   sessionId: string
 ): Promise<Session> {
   const cachedParamSession = (params as PrefetchParams).session as Session | undefined;
@@ -147,7 +146,7 @@ async function loadCachedSession(
   const cached = cache.sessions.get(sessionId);
   if (cached) return cached;
 
-  const session = (await sessionService.get(sessionId, { provider: undefined })) as Session | null;
+  const session = await sessionRepo.findById(sessionId);
   if (!session) {
     throw new Forbidden(`Session not found: ${sessionId}`);
   }
@@ -828,13 +827,12 @@ export function filterBranchesByPermission(branchRepo: BranchRepository) {
  * For session/task/message operations, we need to resolve the branch first.
  * This hook loads the session, then loads its branch.
  *
- * @param sessionService - FeathersJS sessions service
+ * @param sessionRepo - Tenant-scoped canonical session repository
  * @param branchRepo - BranchRepository instance
  * @returns Feathers hook
  */
 export function loadSessionBranch(
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  sessionService: any, // Type as FeathersService if available
+  sessionRepo: Pick<SessionRepository, 'findById'>,
   branchRepo: BranchRepository
 ) {
   return async (context: HookContext) => {
@@ -892,9 +890,13 @@ export function loadSessionBranch(
       throw new Error('Cannot load session branch: session_id not found');
     }
 
-    const session = await loadCachedSession(context.params, sessionService, sessionId);
-    if (context.path === 'sessions' && context.id && String(context.id) === sessionId) {
-      rememberPrefetchedRecord(context, session, 'session_id', sessionId);
+    const session = await loadCachedSession(context.params, sessionRepo, sessionId);
+    if (context.path === 'sessions' && context.id) {
+      // Canonicalize short IDs once at the authorization boundary, then pass
+      // the exact tenant-scoped row through to the service body. This avoids a
+      // recursive Feathers sessions.get and lets DrizzleService reuse the row.
+      context.id = session.session_id;
+      rememberPrefetchedRecord(context, session, 'session_id', session.session_id);
     }
 
     const branch = await loadCachedBranch(context.params, branchRepo, session.branch_id);
@@ -995,12 +997,9 @@ export function resolveSessionContext() {
  *
  * This is Step 2 of the RBAC hook chain.
  *
- * @param sessionService - FeathersJS sessions service
+ * @param sessionRepo - Tenant-scoped canonical session repository
  */
-export function loadSession(
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type
-  sessionService: any
-) {
+export function loadSession(sessionRepo: Pick<SessionRepository, 'findById'>) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -1013,9 +1012,10 @@ export function loadSession(
       throw new Error('resolveSessionContext hook must run before loadSession');
     }
 
-    const session = await loadCachedSession(context.params, sessionService, sessionId);
-    if (context.path === 'sessions' && context.id && String(context.id) === sessionId) {
-      rememberPrefetchedRecord(context, session, 'session_id', sessionId);
+    const session = await loadCachedSession(context.params, sessionRepo, sessionId);
+    if (context.path === 'sessions' && context.id) {
+      context.id = session.session_id;
+      rememberPrefetchedRecord(context, session, 'session_id', session.session_id);
     }
 
     // Cache on context for downstream hooks (type-safe via RBACParams)

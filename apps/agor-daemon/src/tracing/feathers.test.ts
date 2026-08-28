@@ -1,3 +1,4 @@
+import { feathers } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { FEATHERS_INSTRUMENTATION_REASON } from '../utils/feathers-instrumentation.js';
@@ -151,6 +152,69 @@ describe('Feathers tracing hook', () => {
     await hook(ctx('sessions', 'archive'), async () => undefined);
     expect(tracer.calls[0]?.resource).toBe('sessions.custom');
     expect(tracer.calls[0]?.tags?.['feathers.transport']).toBe('internal');
+    expect(tracer.calls[0]?.tags).not.toHaveProperty('feathers.custom_method');
+  });
+
+  it.each([
+    'connectExecutor',
+    'reportTerminationComplete',
+    'reportRuntimeTelemetry',
+    'reportSdkHealthFailure',
+  ])(
+    'attributes the bounded tasks.custom method %s without changing its resource',
+    async (name) => {
+      const tracer = new RecordingTracer();
+      const hook = createFeathersTracingHook('full', { tracer });
+
+      await hook(ctx('tasks', name, 'socketio'), async () => undefined);
+
+      expect(tracer.calls[0]?.resource).toBe('tasks.custom');
+      expect(tracer.calls[0]?.tags).toMatchObject({
+        'feathers.method': 'custom',
+        'feathers.custom_method': name,
+      });
+    }
+  );
+
+  it('does not tag an unreviewed custom method', async () => {
+    const tracer = new RecordingTracer();
+    const hook = createFeathersTracingHook('full', { tracer });
+
+    await hook(ctx('tasks', 'callerSelectedMethod', 'socketio'), async () => undefined);
+
+    expect(tracer.calls[0]?.tags).not.toHaveProperty('feathers.custom_method');
+  });
+
+  it('receives the registered custom method name from a real Feathers invocation', async () => {
+    const tracer = new RecordingTracer();
+    const serviceApp = feathers();
+    serviceApp.use(
+      'tasks',
+      {
+        async reportRuntimeTelemetry() {
+          return { task_id: 'not-emitted' };
+        },
+      },
+      { methods: ['reportRuntimeTelemetry'] }
+    );
+    serviceApp.hooks({
+      around: { all: [createFeathersTracingHook('full', { tracer })] },
+    });
+
+    await (
+      serviceApp.service('tasks') as unknown as {
+        reportRuntimeTelemetry(data: unknown, params: unknown): Promise<unknown>;
+      }
+    ).reportRuntimeTelemetry({}, { provider: 'socketio' });
+
+    expect(tracer.calls).toHaveLength(1);
+    expect(tracer.calls[0]).toMatchObject({
+      resource: 'tasks.custom',
+      tags: {
+        'feathers.method': 'custom',
+        'feathers.custom_method': 'reportRuntimeTelemetry',
+      },
+    });
   });
 
   it('skips the high-frequency health probe by default at every depth', async () => {

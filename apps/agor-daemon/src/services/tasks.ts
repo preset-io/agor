@@ -20,6 +20,7 @@ import {
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
+  SessionRepository,
   shortId,
   type TaskDispatchClaimResult,
   TaskRepository,
@@ -35,6 +36,7 @@ import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
+  BranchID,
   ContentBlock,
   ExecutorTerminationCompleteInput,
   MessageID,
@@ -573,10 +575,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     };
 
     try {
-      const session = await this.app.service('sessions').get(task.session_id);
-      if (session?.branch_id) {
-        payload.branch_id = session.branch_id;
-      }
+      const branchId = await this.findHeartbeatBranchId(task.session_id);
+      if (branchId) payload.branch_id = branchId;
     } catch (error) {
       console.warn(
         `⚠️  [TasksService] Could not resolve branch_id for heartbeat task ${shortId(task.task_id)}:`,
@@ -585,6 +585,19 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     }
 
     this.heartbeatCallbackRunner.run(payload);
+  }
+
+  /**
+   * The opt-in heartbeat callback needs only the Session's branch pointer.
+   * Re-enter a fresh tenant DB unit after the heartbeat request commits and
+   * avoid a fully enriched Feathers sessions.get on every ten-second tick.
+   */
+  private async findHeartbeatBranchId(sessionId: string): Promise<BranchID | null> {
+    const tenantId = getCurrentTenantId();
+    if (!tenantId) throw new Error('Missing tenant context for executor heartbeat callback');
+    return runWithTenantDatabaseScope(this.db, tenantId, (tenantDb) =>
+      new SessionRepository(tenantDb).findBranchIdBySessionId(sessionId)
+    );
   }
 
   private async runAfterTenantDatabaseCommit(
@@ -1510,9 +1523,9 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     );
     if (this.heartbeatCallbackRunner.isConfigured()) {
       // Heartbeats arrive inside the request's tenant DB transaction. The
-      // optional callback enrichment performs a later sessions.get, so retain
-      // only the trusted tenant identity and re-enter after commit instead of
-      // inheriting a committed database scope into detached work.
+      // optional callback performs a later branch-pointer projection, so
+      // retain only the trusted tenant identity and re-enter after commit
+      // instead of inheriting a committed DB scope into detached work.
       deferWithTenantContext(
         params,
         () => this.handleExecutorHeartbeat(task, task.last_executor_heartbeat_at!),

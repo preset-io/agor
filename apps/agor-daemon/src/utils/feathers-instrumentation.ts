@@ -18,7 +18,10 @@ export type FeathersTransport = 'rest' | 'socketio' | 'mcp' | 'other';
  * values become Datadog tags, while resource IDs and user/tenant identifiers
  * must never enter tracing dimensions.
  */
-export const FEATHERS_INSTRUMENTATION_REASONS = ['presence_cursor_admission'] as const;
+export const FEATHERS_INSTRUMENTATION_REASONS = [
+  'presence_cursor_admission',
+  'session_stream_admission',
+] as const;
 export type FeathersInstrumentationReason = (typeof FEATHERS_INSTRUMENTATION_REASONS)[number];
 
 /**
@@ -41,6 +44,24 @@ export function readFeathersInstrumentationReason(
 }
 
 const KNOWN_METHODS = ['create', 'find', 'get', 'patch', 'remove', 'update'];
+
+/**
+ * Custom methods whose APM attribution is operationally useful and strictly
+ * bounded by a reviewed server registration. Do not accept arbitrary method
+ * strings here: values become Datadog tags.
+ */
+const TAGGED_CUSTOM_METHODS: Readonly<Record<string, readonly string[]>> = {
+  tasks: [
+    'connectExecutor',
+    'reportTerminationComplete',
+    'reportRuntimeTelemetry',
+    'reportSdkHealthFailure',
+  ],
+};
+
+export function readTaggedFeathersCustomMethod(path: string, method: string): string | undefined {
+  return TAGGED_CUSTOM_METHODS[path]?.includes(method) ? method : undefined;
+}
 
 /**
  * Map a Feathers `params.provider` to a bounded transport label. Returns

@@ -151,9 +151,9 @@ describe('TasksService runtime telemetry', () => {
     async ({ tenantId, expectedBranchId }) => {
       const service = Object.create(TasksService.prototype) as TasksService;
       const callbackRun = vi.fn();
-      const sessionGet = vi.fn(async () => {
+      const findHeartbeatBranchId = vi.fn(async () => {
         if (getCurrentTenantId() !== 'tenant-a') throw new Error('session not found');
-        return { session_id: task.session_id, branch_id: 'branch-a' };
+        return 'branch-a';
       });
       const emit = vi.fn();
       Reflect.set(service, 'taskRepo', {
@@ -163,9 +163,8 @@ describe('TasksService runtime telemetry', () => {
         isConfigured: () => true,
         run: callbackRun,
       });
-      Reflect.set(service, 'app', {
-        service: (path: string) => (path === 'sessions' ? { get: sessionGet } : { emit }),
-      });
+      Reflect.set(service, 'findHeartbeatBranchId', findHeartbeatBranchId);
+      Reflect.set(service, 'app', { service: () => ({ emit }) });
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
       await service.reportRuntimeTelemetry({ task_id: task.task_id }, {
@@ -173,7 +172,7 @@ describe('TasksService runtime telemetry', () => {
       } as never);
       await vi.waitFor(() => expect(callbackRun).toHaveBeenCalledOnce());
 
-      expect(sessionGet).toHaveBeenCalledWith(task.session_id);
+      expect(findHeartbeatBranchId).toHaveBeenCalledWith(task.session_id);
       expect(callbackRun).toHaveBeenCalledWith({
         event: 'executor_heartbeat',
         task_id: task.task_id,

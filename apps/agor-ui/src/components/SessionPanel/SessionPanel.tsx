@@ -618,7 +618,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
-    reactiveOptions: { taskHydration: 'none' },
+    // ConversationView retains the same lazy handle. Keeping the cache key
+    // identical collapses duplicate Session bootstrap/reconnect reads while
+    // preserving the transcript's latest-task hydration contract.
+    reactiveOptions: { taskHydration: 'lazy' },
   });
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;

@@ -30,9 +30,11 @@ and sampling/extrapolation settings must be captured with the follow-up query.
 | Investigated `main` / `origin/main` / branch base | `5d19fbc6d72f36c9672010396510b35f1f8afbb9`                              | 2026-08-27 | `fix: allow HA Codex auth with delegated user homes (#2575)`            |
 | Deployed sandbox health response                  | `6a0074c1351f0a6d65540267dc7783b06cf7b258` (health reports `6a0074c13`) | 2026-08-26 | `feat(apm): trace postgres.js queries via Drizzle session shim (#2571)` |
 
-The deployed revision is an ancestor of investigated `main`. The health
-response reports Agor 0.25.2 and `realtime.required=false`, so this deployment
-uses the standalone `HealthMonitor`, not the distributed HA health observer.
+Both revisions were reverified at completion on 2026-08-28. The deployed
+revision is an ancestor of investigated `main`. The health response reports
+Agor 0.25.2, build time `2026-08-27T06:00:20.945Z`, and
+`realtime.required=false`, so this deployment uses the standalone
+`HealthMonitor`, not the distributed HA health observer.
 
 Relevant deployed changes are:
 
@@ -106,6 +108,55 @@ bounded server-authored tag
 `feathers.reason=presence_cursor_admission`. IDs and caller-controlled strings
 are never tags.
 
+### Follow-up: `tasks.custom` and `sessions.get`
+
+The follow-up confirms that `tasks.custom` is an attribution bucket, not a
+single transport method. The task service already exposes four distinct custom
+methods: `connectExecutor`, `reportTerminationComplete`,
+`reportRuntimeTelemetry`, and `reportSdkHealthFailure`. The tracing normalizer
+collapses all nonstandard Feathers methods to resource/method `custom`; creating
+another heartbeat method would not improve APM attribution.
+
+`reportRuntimeTelemetry` is sent once immediately and then every ten seconds
+while an executor owns a Task. Its steady-state rate is therefore:
+
+```text
+tasks.custom telemetry = 360 calls/hour/active Task
+```
+
+The other three custom methods are normally once per Task, once per Stop, or
+exceptional. A ten-second comb in production would strongly identify telemetry,
+but production traces were unavailable, so this remains a model rather than an
+observed attribution. This change adds a bounded `feathers.custom_method` tag
+for exactly the four registered methods while deliberately retaining the
+`tasks.custom` resource for dashboard continuity.
+
+The heartbeat write itself is intentional HA control-plane work. It is the
+durable liveness fact used by stale-task reconciliation and the response is how
+an executor connected to any replica observes `STOPPING`. The ten-second
+default was not changed. The optional operator heartbeat callback, however,
+previously performed a fully enriched internal `sessions.get` on every tick
+solely to obtain `branch_id`. It now performs one tenant-scoped branch-pointer
+projection with PostgreSQL RLS. When that callback is configured, this removes
+360 `sessions.get` resources/hour/active Task. The callback is disabled by
+default; production configuration was not accessible.
+
+The follow-up also confirms two independent `sessions.get` amplifiers:
+
+1. external RBAC authorization recursively called the registered
+   `sessions.get`, so `full` tracing recorded two spans and remote-relationship
+   enrichment ran twice for every external get; and
+2. an open session retained separate `none` and `lazy` reactive handles in
+   `SessionPanel` and `ConversationView`, causing two bootstraps and two
+   reconnect resyncs for the same canonical session.
+
+Authorization now loads the canonical Session once through the tenant-scoped
+repository and passes that exact row to the outer service. Both UI consumers
+retain the same `lazy` handle. Session-stream room admission remains a separate,
+fail-closed authorized `sessions.get` and is tagged
+`feathers.reason=session_stream_admission`; it is not cached across sockets,
+users, tenants, or policy epochs.
+
 ### Validated assumptions
 
 - **UI hydration:** confirmed. The normal workspace path uses a lean
@@ -132,7 +183,8 @@ operation: feathers.request
 resource:  <normalized service>.<normalized method>
 service:   inherited agor-daemon service
 tags:      feathers.service, feathers.method, feathers.transport, span.kind
-new tag:   feathers.reason (bounded and server-authored only)
+new tags:  feathers.reason (bounded and server-authored only)
+           feathers.custom_method (reviewed task-method allowlist only)
 ```
 
 `full` depth traces every registered standard service invocation, including
@@ -207,6 +259,35 @@ otherwise. Repository reads do not generate a Feathers resource span.
 | Scheduler/gateway/permission callbacks/MCP egress               | repository          |                      0 service gets in core loops |                          same | per scheduled run/message/decision                                | Direct branch lookup and explicit authorization; not represented by service resource rate            |
 | Redis Feathers relay publication                                | repository/cache    |                                    0 service gets |                          same | per relayed event/receiving replica                               | Re-resolves tenant/audience without trusting Redis room names; revocation is preserved               |
 
+### Follow-up caller/frequency matrix
+
+The counts below are exact source/test counts. “Full” and “entrypoint” refer to
+`metrics.apm.trace_services` depth, not to different numbers of browser calls.
+
+| Caller / trigger                                           | Transport          |                                      Before |                                        After | Frequency / fanout                                       | Security and query notes                                                                                       |
+| ---------------------------------------------------------- | ------------------ | ------------------------------------------: | -------------------------------------------: | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| Active executor `reportRuntimeTelemetry`                   | socketio           |                            1 `tasks.custom` |                      1 tagged `tasks.custom` | immediate + every 10 s; steady 360/h/Task                | Required durable HA write/control read; interval unchanged                                                     |
+| `connectExecutor`                                          | socketio           |                  1 anonymous `tasks.custom` |                      1 tagged `tasks.custom` | normal once/Task; reconnect/retry can repeat safely      | Row-locked executor admission                                                                                  |
+| `reportTerminationComplete`                                | socketio           |                  1 anonymous `tasks.custom` |                      1 tagged `tasks.custom` | normally once/Stop, retry-safe                           | Task/request-fenced quiescence evidence                                                                        |
+| `reportSdkHealthFailure`                                   | socketio           |                  1 anonymous `tasks.custom` |                      1 tagged `tasks.custom` | exceptional watchdog path                                | Bounded failure reasons; may initiate containment                                                              |
+| Configured heartbeat callback enrichment                   | internal           |                   1 enriched `sessions.get` | 0 service gets + 1 Session branch projection | every telemetry tick; 360/h/Task removed when configured | Fresh originating-tenant DB scope; cross-tenant RLS returns no row                                             |
+| One external authorized `sessions.get`, full tracing       | any external       |                      2 `sessions.get` spans |                                            1 | per call                                                 | Repository authorization remains current; relationship enrichment 2 -> 1                                       |
+| One external authorized `sessions.get`, entrypoint tracing | any external       |                              1 visible span |                                            1 | per call                                                 | Nested auth span was already suppressed, but its work still ran before                                         |
+| Cold-open session UI, full tracing                         | socketio           |                      6 `sessions.get` spans |                                            2 | per open tab/session                                     | Before: stream admission + panel + conversation, each doubled by auth; after: admission + one shared bootstrap |
+| Cold-open session UI, entrypoint tracing                   | socketio           |                             2 visible spans |                                            1 | per open tab/session                                     | Stream admission is nested under `session-streams.create` and remains authorized                               |
+| Cold-open session relationship enrichment                  | socketio/database  |                      6 relationship queries |                                            2 | per open tab/session                                     | Canonical Session-row reads 3 -> 2; no policy cache introduced                                                 |
+| Reconnect with an open session                             | socketio           |                           same as cold open |                            same as cold open | per reconnect/tab                                        | New connection reauthorizes stream room; one shared handle resyncs                                             |
+| Close an open session                                      | socketio           |                            0 `sessions.get` |                                            0 | once/close                                               | Canonical stream ID leaves without a resolve read                                                              |
+| Idle board with no open session                            | socketio           |                   0 periodic `sessions.get` |                                            0 | idle                                                     | No session polling found                                                                                       |
+| External task/message/session RBAC hook needing a Session  | inherited external | 1 nested `sessions.get` plus outer resource |    0 nested service gets + 1 repository load | per protected request                                    | Same request/tenant authority; canonical row is request-local only                                             |
+
+For the open-session full-depth receipt, the six pre-fix spans were one outer
+and one recursive authorization get for each of stream admission, panel
+bootstrap, and conversation bootstrap. After both fixes, the only two are the
+preserved stream admission and one shared bootstrap. This is `6 -> 2` spans and
+relationship queries (66.7% reduction), while entrypoint-visible bootstraps are
+`2 -> 1` (50% reduction).
+
 ## Production call-site inventory
 
 ### Standard `branches.get` service callers
@@ -253,7 +334,52 @@ These reads matter for database load but cannot explain a
 Feathers wrapper to a direct canonical load reduces APM and hook/transaction
 overhead even when a required database read remains.
 
+### Standard `sessions.get` service callers
+
+- **UI/client:** the shared reactive-session bootstrap/reconnect path, direct
+  session-link healing, environment-variable widgets, and explicit session
+  detail actions. The session-stream subscription performs its own server-side
+  access check.
+- **Executor:** safe-directory preparation and Claude/Cursor/OpenCode/base SDK
+  setup. These are bounded startup reads, not the ten-second heartbeat.
+- **Daemon task lifecycle:** startup recovery, executor startup, Stop and
+  reconciliation, completion/auto-title/parent-context paths, permission
+  decisions, callbacks, config/session tokens, widgets, routes, and gateway
+  orchestration.
+- **MCP:** ID resolution, session/context/Knowledge/server tools, and MCP server
+  setup. These are explicit tool actions.
+- **Authorization:** before this follow-up, shared branch/session RBAC helpers
+  recursively invoked `sessions.get` for external session-, task-, and
+  message-scoped operations. These calls were internal provider-less children
+  but visible at `full` APM depth.
+
+No idle `sessions.get` polling loop was found. The only ten-second coupling is
+the opt-in executor-heartbeat callback. Realtime publication uses
+`SessionRepository.findBranchIdBySessionId` behind a one-hour, invalidation-
+fenced session-to-branch cache and a five-minute, invalidation-fenced branch
+visibility cache; it does not call the Feathers Session service. Each replica
+reauthorizes Redis-relayed delivery and never trusts relay room names.
+
 ## Authorization and realtime findings
+
+### Sessions
+
+The shared external authorization loader previously called the registered
+Session service with `provider:undefined`. That was fail-closed, but it crossed
+the full Feathers service/hook/enrichment boundary recursively. The outer get
+reused the returned row through `_agorPrefetchedRecord`; nevertheless both
+service bodies queried remote relationships. The same helper amplified
+session-dependent task and message authorization even when their outer resource
+was not `sessions.get`.
+
+The loader now accepts only a tenant-scoped `SessionRepository.findById`,
+canonicalizes short IDs, and passes the exact row through the same prefetched
+record boundary. The current request still resolves the Session and Branch and
+performs current user/group/policy authorization. Nothing is cached across a
+request, transaction, tenant, user, connection, or policy epoch. Missing and
+cross-tenant rows remain non-enumerating failures. PostgreSQL validation under a
+`NOSUPERUSER`, `NOBYPASSRLS` role proves both the full Session load and the
+heartbeat branch projection return no row in a different tenant scope.
 
 ### Branches
 
@@ -357,6 +483,76 @@ service adapter consumes the same request-scoped canonical row
 The Feathers span count remains one; database board-row reads fall by two.
 Authorization query count and revocation semantics do not change.
 
+### External authorized Session get
+
+Before:
+
+```text
+outer Feathers sessions.get
+  -> external RBAC hook
+     -> inner provider-less Feathers sessions.get
+        -> tenant-scoped Session row + Branch join/derived board_id
+        -> remote relationship enrichment
+     -> current Branch + user/group/policy authorization
+  -> prefetched Session row
+  -> remote relationship enrichment again
+```
+
+After:
+
+```text
+outer Feathers sessions.get
+  -> external RBAC hook
+     -> tenant-scoped canonical Session row + Branch join/derived board_id
+     -> current Branch + user/group/policy authorization
+  -> same request-scoped prefetched Session row
+  -> remote relationship enrichment once
+```
+
+This is `2 -> 1` full-depth service spans and `2 -> 1` relationship queries per
+external call. The required Session/Branch/policy reads remain and still run in
+the request's tenant transaction.
+
+### Executor runtime telemetry tick
+
+For a full UUID on SQLite, the normal heartbeat repository path is one
+`BEGIN IMMEDIATE` unit containing one Task-row SELECT and one UPDATE; row-lock
+acquisition is a no-op and the timestamp uses the process clock. On PostgreSQL,
+it is one transaction containing `SELECT 1 ... FOR UPDATE`, one Task-row SELECT,
+one database-clock SELECT, and one UPDATE. The row is returned to the executor
+and published as `tasks.patched`. If the write is rejected because the Task is
+no longer executor-owned, one exceptional fallback read lets a reconnected
+executor observe `STOPPING`; otherwise the call conflicts.
+
+The main transaction was not weakened or cached. It serializes heartbeat/
+termination races, advances only a newer bounded pulse fact, and supplies the
+durable HA timestamp. Replacing it with an in-memory heartbeat or a blind update
+would break cross-replica stale detection and Stop propagation.
+
+Configured callback enrichment before:
+
+```text
+post-commit callback in originating tenant context
+  -> internal Feathers sessions.get
+     -> full Session row + Branch join/derived board_id
+     -> remote relationship enrichment
+  -> extract branch_id
+```
+
+After:
+
+```text
+post-commit callback in originating tenant context
+  -> fresh tenant/RLS database unit
+     -> SELECT sessions.branch_id for this Session
+```
+
+The default callback is disabled. Operator analytics are also disabled by
+default; if enabled, `executor.heartbeat` is emitted once per tick and the
+built-in HTTP plugin batches it. That analytics event is separate from the
+Feathers/APM count and can be excluded through the existing bounded event
+filter if an operator does not need it.
+
 ## Implemented bounded fixes
 
 1. Remove the standalone health monitor preflight and unused repo read.
@@ -373,6 +569,18 @@ Authorization query count and revocation semantics do not change.
    over unique IDs.
 7. Add the bounded server-only `presence_cursor_admission` APM reason.
 8. Add deterministic UI and daemon call-count receipts.
+9. Add the bounded `feathers.custom_method` tag for exactly the four registered
+   Task custom methods without changing the `tasks.custom` resource.
+10. Replace recursive authorization `sessions.get` calls with a tenant-scoped
+    canonical repository load passed through the current request.
+11. Make `SessionPanel` and `ConversationView` retain the same lazy reactive
+    handle, collapsing duplicate bootstrap/reconnect work.
+12. Replace opt-in heartbeat callback Session enrichment with a fresh
+    originating-tenant `branch_id` projection.
+13. Tag necessary Session stream admission separately, and prove cursor samples
+    perform no Feathers/database work after admission. Cursor positions use
+    lossy Socket.IO volatile fanout; authorization/revocation edge events remain
+    reliable.
 
 No global/TTL entity cache was introduced. No production data/configuration was
 changed and no deployment was performed.
@@ -390,8 +598,24 @@ changed and no deployment was performed.
 - Core SQLite board repository suite: 103 tests passed.
 - PostgreSQL 16 under a non-superuser, `NOBYPASSRLS` role: capability-policy
   concurrency plus environment-health HA suites, 9/9 tests passed.
-- Core and daemon TypeScript checks passed without a production build. The UI
-  check was attempted but the disposable workspace lacked the prebuilt
+- Follow-up daemon tracing/session/auth/heartbeat/native-Socket.IO suites:
+  231/231 tests passed across 6 files.
+- Executor heartbeat cadence/single-flight/control-response suite: 6/6 tests
+  passed. Focused SQLite Task repository telemetry suite: 5/5 tests passed.
+- Follow-up shared client reactive-session suite: 40/40 tests passed, including
+  exact cold/reconnect call counts and final-release unsubscribe.
+- Follow-up SessionPanel suite: 17/17 tests passed, including the shared lazy
+  cache-key contract.
+- Focused UI cursor hot-path receipt: 1/1 test passed; a 20-event mouse burst
+  produces one immediate and one coalesced volatile sample, with no reliable
+  cursor-move emission.
+- Follow-up PostgreSQL 16 Task-runtime HA/RLS suite under a verified
+  `NOSUPERUSER`, `NOBYPASSRLS` role: 6/6 tests passed. A fresh callback
+  projection succeeds for the owning tenant and both full Session and branch
+  projection reads return no row cross-tenant.
+- The multitenancy-boundary static check passed. Core, client, and daemon
+  TypeScript checks passed without a production build. The UI check was
+  attempted but the disposable workspace lacked the prebuilt
   `packages/client/dist/*.d.ts` declarations, cascading into unrelated module
   resolution errors; per repository instruction no build was run to recreate
   them. Focused UI tests compile and pass.
@@ -434,12 +658,34 @@ as tags.
 9. Compare before/after by build and replica. During a mixed rollout, old
    replicas retain three health gets and have no reason tag; new replicas have
    zero automatic health gets and tag cursor admissions.
+10. For `resource_name:tasks.custom`, group new-revision spans by
+    `feathers.custom_method`. `reportRuntimeTelemetry` should show a ten-second
+    comb and scale at 360/hour per average active Task. Old-revision spans are
+    expected to have no custom-method tag; do not interpret them as a fifth
+    method.
+11. For `sessions.get`, split
+    `feathers.reason:session_stream_admission`, transport, trace depth, and
+    parent operation. Compare open-session/reconnect clusters with Task starts
+    and check specifically for ten-second callback coupling. A callback comb
+    can exist only when the operator callback is configured.
+12. For a sampled old-revision external `sessions.get` at full depth, verify
+    the expected child `sessions.get` and two relationship-query children. New
+    revisions should have no recursive Session service span and one
+    relationship query. Compare trace-local resource equality only; never emit
+    a Session/resource fingerprint as a production tag.
 
 Expected post-rollout health reduction, if the production pattern matches the
 source-derived model, is up to 2,160 `branches.get` spans/hour per active local
 environment—approximately the reported 30,000/hour at 13.9 average active
 environments. This is an expectation to verify, not an observed production
 result.
+
+For Session traffic, expected savings are source-dependent: every external
+authorized `sessions.get` loses one full-depth nested span and relationship
+query; an open UI Session loses four of six full-depth spans; and a configured
+heartbeat callback loses all 360 Session service resources/hour/active Task.
+No production percentage is claimed until the tag/config/time-cluster splits
+are observed.
 
 ## Residual risks and follow-up branches
 
@@ -460,3 +706,23 @@ result.
    determine whether policy/principal/group queries rather than row reads
    dominate duration. Optimize only with a policy-revision/transaction-bound
    design and cross-tenant negative coverage.
+6. **Heartbeat transport/DB measurement:** after the bounded custom-method tag
+   is deployed, verify the ten-second comb, active-Task fanout, transaction
+   duration, lock wait, replica balance, errors, and STOPPING fallback rate.
+   Do not change the default interval from 10 s without explicitly accepting
+   that 20 s halves write volume but moves the default stale threshold from
+   30 s to 60 s.
+7. **Heartbeat realtime/analytics:** `tasks.patched` is intentionally published
+   because the UI exposes current heartbeat/pulse state, and realtime authority
+   is invalidation-fenced. Measure Redis/publication and optional analytics
+   plugin cost separately. If it dominates, design a bounded coarse UI signal
+   rather than silently removing durable writes or revocation checks.
+8. **Remaining Session reads:** pass an already-authorized canonical Session
+   within task startup/completion/Stop operations only where the authority and
+   transaction are identical. Executor startup reads are bounded and should be
+   handled as an immutable per-Task execution context, not a global Session
+   cache.
+9. **Mixed-version observation:** old replicas emit untagged `tasks.custom`,
+   recursively trace Session authorization at full depth, and use two reactive
+   UI handles; new replicas emit bounded tags and reduced counts. Group every
+   rollout comparison by build and replica before drawing a rate conclusion.

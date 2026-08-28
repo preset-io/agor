@@ -1580,7 +1580,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
    */
   const promptWriteGuards = [
     ...(executionMode.appRbacEnabled || executionMode.requiresExecutionHomeKey
-      ? [resolveSessionContext(), loadSession(sessionsService)]
+      ? [resolveSessionContext(), loadSession(sessionsRepository)]
       : []),
     ...(executionMode.requiresExecutionHomeKey
       ? [validateSessionUnixUsername(usersRepository)]
@@ -1620,7 +1620,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
-              loadSession(sessionsService),
+              loadSession(sessionsRepository),
               loadBranchFromSession(branchRepository),
               ensureCanView(superadminOpts), // Require 'view' permission
             ]
@@ -1653,7 +1653,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
-              loadSession(sessionsService),
+              loadSession(sessionsRepository),
               loadBranchFromSession(branchRepository),
               ensureCanPromptInSession({ ...superadminOpts, branchRepository }), // Require 'prompt' (or 'session' for own sessions)
             ]
@@ -1666,7 +1666,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
-              loadSession(sessionsService),
+              loadSession(sessionsRepository),
               loadBranchFromSession(branchRepository),
               ensureCanPromptInSession({ ...superadminOpts, branchRepository }), // Require 'prompt' (or 'session' for own sessions)
             ]
@@ -2684,7 +2684,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
                 if (!sessionId) return context;
                 context.params.sessionId = sessionId;
                 // Delegate to the existing chain now that sessionId is primed.
-                await loadSession(sessionsService)(context);
+                await loadSession(sessionsRepository)(context);
                 await loadBranchFromSession(branchRepository)(context);
                 await ensureCanView(superadminOpts)(context);
                 return context;
@@ -2973,7 +2973,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
     ...(executionMode.appRbacEnabled
       ? [
           resolveSessionContext(),
-          loadSession(sessionsService),
+          loadSession(sessionsRepository),
           loadBranchFromSession(branchRepository),
           // Branch permission by patch type:
           //   - Prompt-flow patches (tasks, archived, status, …) are bookkeeping
@@ -3029,7 +3029,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(executionMode.appRbacEnabled
           ? [
               // Load session's branch and check permissions
-              loadSessionBranch(sessionsService, branchRepository),
+              loadSessionBranch(sessionsRepository, branchRepository),
               ensureCanView(superadminOpts), // Require 'view' permission on branch
             ]
           : []),
@@ -3117,7 +3117,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
-              loadSession(sessionsService),
+              loadSession(sessionsRepository),
               loadBranchFromSession(branchRepository),
               ensureBranchPermission('all', 'delete sessions', superadminOpts), // Require 'all' permission
             ]
@@ -3315,7 +3315,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
-              loadSession(sessionsService),
+              loadSession(sessionsRepository),
               loadBranchFromSession(branchRepository),
               ensureCanView(superadminOpts), // Require 'view' permission
             ]
@@ -3333,7 +3333,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
-              loadSession(sessionsService),
+              loadSession(sessionsRepository),
               loadBranchFromSession(branchRepository),
               ensureCanPromptInSession({ ...superadminOpts, branchRepository }), // Require 'prompt' (or 'session' for own sessions)
             ]
@@ -3351,7 +3351,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(executionMode.appRbacEnabled
           ? [
               resolveSessionContext(),
-              loadSession(sessionsService),
+              loadSession(sessionsRepository),
               loadBranchFromSession(branchRepository),
               ensureBranchPermission('all', 'delete tasks', superadminOpts),
             ]

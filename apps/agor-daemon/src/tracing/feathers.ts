@@ -9,6 +9,7 @@ import {
   normalizeFeathersService,
   normalizeFeathersTransport,
   readFeathersInstrumentationReason,
+  readTaggedFeathersCustomMethod,
 } from '../utils/feathers-instrumentation.js';
 
 type AroundNext = () => Promise<void>;
@@ -118,6 +119,7 @@ export function createFeathersTracingHook(
     const service = normalizeFeathersService(context.path);
     const method = normalizeFeathersMethod(context.method);
     const reason = readFeathersInstrumentationReason(context.params);
+    const customMethod = readTaggedFeathersCustomMethod(context.path, context.method);
     const runTraced = () =>
       tracer.trace(
         'feathers.request',
@@ -129,6 +131,7 @@ export function createFeathersTracingHook(
             'feathers.transport':
               normalizeFeathersTransport(context.params?.provider) ?? 'internal',
             ...(reason ? { 'feathers.reason': reason } : {}),
+            ...(customMethod ? { 'feathers.custom_method': customMethod } : {}),
             'span.kind': 'server',
           },
         },

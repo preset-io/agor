@@ -62,9 +62,20 @@ vi.mock('./SessionRunSettingsPopover', () => ({
   SessionRunSettingsPopover: () => null,
 }));
 
-const reactive = vi.hoisted(() => ({ tasks: [] as Task[] }));
+const reactive = vi.hoisted(() => {
+  const state = { tasks: [] as Task[] };
+  return {
+    get tasks() {
+      return state.tasks;
+    },
+    set tasks(tasks: Task[]) {
+      state.tasks = tasks;
+    },
+    useSharedReactiveSession: vi.fn(() => ({ state: { tasks: state.tasks } })),
+  };
+});
 vi.mock('../../hooks/useSharedReactiveSession', () => ({
-  useSharedReactiveSession: () => ({ state: { tasks: reactive.tasks } }),
+  useSharedReactiveSession: reactive.useSharedReactiveSession,
 }));
 
 const connected = {
@@ -240,6 +251,15 @@ describe('SessionPanel search control', () => {
 
     fireEvent.keyDown(searchInput, { key: 'Escape' });
     expect(getSearchRow()).toHaveStyle({ maxHeight: '0px' });
+  });
+
+  it('retains the same lazy reactive-session cache key as ConversationView', () => {
+    renderPanel();
+
+    expect(reactive.useSharedReactiveSession).toHaveBeenLastCalledWith(null, session.session_id, {
+      enabled: true,
+      reactiveOptions: { taskHydration: 'lazy' },
+    });
   });
 });
 
