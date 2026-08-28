@@ -2777,6 +2777,45 @@ describe('GatewayService Discord beta routing', () => {
     }
   );
 
+  it('does not apply Teams queue authority requirements to direct Discord admission', async () => {
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: null,
+      outboundSeed: {
+        id: 'discord-seed',
+        gateway_channel_id: discordChannel.id,
+        channel_type: 'discord',
+        platform_channel_id: '323456789012345678',
+        platform_message_id: '523456789012345678',
+        platform_thread_id: 'discord:message:323456789012345678:523456789012345678',
+        platform_permalink: null,
+        target_branch_id: discordChannel.target_branch_id,
+        emitted_by_user_id: 'user-1',
+        emitted_by_session_id: null,
+        emitted_by_task_id: null,
+        emitted_by_schedule_id: null,
+        message_text: 'proactive seed',
+        message_preview: 'proactive seed',
+        metadata: { provider_reply_aliases: [] },
+        consumed_by_session_id: null,
+        consumed_at: null,
+        created_at: '2026-06-22T00:00:00.000Z',
+        updated_at: '2026-06-22T00:00:00.000Z',
+      } as GatewayOutboundMessage,
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+    });
+
+    await expect(
+      service.create({
+        ...validDiscordInbound(),
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000099' as never,
+      })
+    ).resolves.toMatchObject({ success: true, created: true });
+    expect(promptCreate).toHaveBeenCalledOnce();
+  });
+
   it('writes a new Discord mapping with the verified provider thread Snowflake', async () => {
     const harness = makeGatewayHarness({ channel: discordChannel, existingMapping: null });
     const inbound = validDiscordInbound();

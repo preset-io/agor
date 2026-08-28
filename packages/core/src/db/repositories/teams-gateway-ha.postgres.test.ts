@@ -38,6 +38,7 @@ const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
 
 async function seedTeamsChannel(db: Database, tenantId: TenantID) {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const appId = `teams-app-${generateId()}`;
     const user = await new UsersRepository(scoped).create({
       email: `${tenantId}-${generateId()}@example.com`,
       name: 'Teams HA PostgreSQL',
@@ -75,9 +76,9 @@ async function seedTeamsChannel(db: Database, tenantId: TenantID) {
       agor_user_id: user.user_id,
       channel_type: 'teams',
       enabled: true,
-      provider_installation_id: 'teams-app',
+      provider_installation_id: appId,
       config: {
-        app_id: 'teams-app',
+        app_id: appId,
         app_password: 'teams-secret',
         microsoft_tenant_id: tenantId,
         catch_up: {
@@ -96,11 +97,11 @@ async function seedTeamsChannel(db: Database, tenantId: TenantID) {
       branch_id: branch.branch_id,
       metadata: {},
     });
-    return { channel, session, mapping };
+    return { appId, channel, session, mapping };
   });
 }
 
-function admission(channelId: string, tenantId: string, providerEventId: string) {
+function admission(channelId: string, tenantId: string, providerEventId: string, appId: string) {
   return {
     channelId: channelId as never,
     providerEventId,
@@ -121,12 +122,12 @@ function admission(channelId: string, tenantId: string, providerEventId: string)
       conversationId: '19:postgres-channel',
       rootMessageId: 'root-1',
       address: { serviceUrl: 'https://smba.trafficmanager.net/teams/' },
-      verifiedAppId: 'teams-app',
+      verifiedAppId: appId,
       verifiedTenantId: tenantId,
       providerConfigGeneration: 1,
     },
     providerConfigGeneration: 1,
-    verifiedAppId: 'teams-app',
+    verifiedAppId: appId,
     verifiedTenantId: tenantId,
   };
 }
@@ -150,15 +151,15 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
 
   it('projects tenant ids without ambiguous joins and serializes the same lane across replicas', async () => {
     const tenantId = `teams-pg-${generateId()}` as TenantID;
-    const { channel, mapping } = await seedTeamsChannel(dbA, tenantId);
+    const { appId, channel, mapping } = await seedTeamsChannel(dbA, tenantId);
     const first = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
       new GatewayInboundEventRepository(scoped).admitVerifiedHttp(
-        admission(channel.id, tenantId, 'teams:activity:pg-first')
+        admission(channel.id, tenantId, 'teams:activity:pg-first', appId)
       )
     );
     const second = await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
       new GatewayInboundEventRepository(scoped).admitVerifiedHttp(
-        admission(channel.id, tenantId, 'teams:activity:pg-second')
+        admission(channel.id, tenantId, 'teams:activity:pg-second', appId)
       )
     );
 
@@ -251,10 +252,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
 
   it('terminalizes expired encrypted payloads inside the owning tenant scope', async () => {
     const tenantId = `teams-pg-expiry-${generateId()}` as TenantID;
-    const { channel } = await seedTeamsChannel(dbA, tenantId);
+    const { appId, channel } = await seedTeamsChannel(dbA, tenantId);
     const admitted = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
       new GatewayInboundEventRepository(scoped).admitVerifiedHttp({
-        ...admission(channel.id, tenantId, 'teams:activity:pg-expired'),
+        ...admission(channel.id, tenantId, 'teams:activity:pg-expired', appId),
         payloadTtlMs: 1,
       })
     );
@@ -313,10 +314,15 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
 
   it('uses PostgreSQL transaction time for skewed discovery, retries, leases, and effect fences', async () => {
     const tenantId = `teams-pg-clock-${generateId()}` as TenantID;
-    const { channel, mapping } = await seedTeamsChannel(dbA, tenantId);
+    const { appId, channel, mapping } = await seedTeamsChannel(dbA, tenantId);
     const callerBehind = new Date('2000-01-01T00:00:00.000Z');
     const callerAhead = new Date('2999-01-01T00:00:00.000Z');
-    const baseAdmission = admission(channel.id, tenantId, `teams:activity:clock-${generateId()}`);
+    const baseAdmission = admission(
+      channel.id,
+      tenantId,
+      `teams:activity:clock-${generateId()}`,
+      appId
+    );
     const skewedAdmission = {
       ...baseAdmission,
       address: {
@@ -402,7 +408,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Teams gateway HA PostgreSQ
 
     const retriedInbound = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
       new GatewayInboundEventRepository(scoped).admitVerifiedHttp(
-        admission(channel.id, tenantId, `teams:activity:retry-${generateId()}`)
+        admission(channel.id, tenantId, `teams:activity:retry-${generateId()}`, appId)
       )
     );
     const retriedInboundClaim = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
