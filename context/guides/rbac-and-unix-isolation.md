@@ -179,10 +179,9 @@ RBAC cannot provide filesystem isolation. Use it only on trusted installations.
 
 The capability remodel is an offline, big-bang migration for both SQLite and
 PostgreSQL. Existing databases require the explicit offline-cutover
-acknowledgement; SQLite and PostgreSQL preflight every board/branch primary
-owner, abort with the unresolved IDs when attribution is impossible, create
-normalized policies, then empty the legacy authority tables/fields. Backfill
-is deliberately equal-or-less:
+acknowledgement. Both dialects attribute every Board/Branch owner they can,
+create normalized policies, then empty the legacy authority tables/fields.
+Backfill is deliberately equal-or-less:
 
 - an existing current owner, then the creator as a fallback, is used for
   primary-owner attribution;
@@ -195,6 +194,19 @@ is deliberately equal-or-less:
 - board-aligned branches with branch-specific authority are materialized as
   complete overrides copied from the board template;
 - personal sharing starts empty and the workspace gate starts off.
+
+If no existing User or legacy owner row can truthfully own a resource, the
+migration does not abort the rest of the database and does not invent an owner.
+It retains the row with a NULL legacy-quarantine owner and creates a private,
+empty normalized policy. Authorization requires a non-NULL owner independently
+of policy contents. Migration diagnostics report only aggregate Board/Branch
+counts, never resource or tenant identifiers. See
+[`context/explorations/rbac-migration-owner-quarantine.md`](../explorations/rbac-migration-owner-quarantine.md).
+
+`branch_rbac=false` remains the intentional trusted-installation bypass for
+normalized application authorization; it does not change migration
+attribution or revive legacy authority. Enable RBAC (or sandbox mode) before
+restart when the runtime quarantine boundary is required.
 
 Legacy authority fields are tombstoned to private/none so a stray old daemon
 fails closed, and daemon startup rejects a database newer than its migration

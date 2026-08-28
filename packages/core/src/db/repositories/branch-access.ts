@@ -1,7 +1,17 @@
 /** Shared SQL predicates for normalized board/branch capability policies. */
 
 import type { UUID } from '@agor/core/types';
-import { and, eq, exists, inArray, or, type SQL, type SQLWrapper, sql } from 'drizzle-orm';
+import {
+  and,
+  eq,
+  exists,
+  inArray,
+  isNotNull,
+  or,
+  type SQL,
+  type SQLWrapper,
+  sql,
+} from 'drizzle-orm';
 import type { Database } from '../client';
 import {
   boardAccessEntries,
@@ -188,14 +198,19 @@ function branchCapabilityCondition(
   const directMatch = directBranchEntryExists(db, userId);
   const groupMatch = activeBranchGroupEntryExists(db, userId);
   return (
-    or(
-      eq(branches.primary_owner_user_id, userId),
-      directBranchEntryExists(db, userId, capability),
-      and(sql`NOT ${directMatch}`, activeBranchGroupEntryExists(db, userId, capability)),
-      and(
-        sql`NOT ${directMatch}`,
-        sql`NOT ${groupMatch}`,
-        branchOthersHasCapability(db, capability)
+    and(
+      // NULL marks a legacy resource whose owner could not be attributed by
+      // the RBAC migration. No policy row may make that quarantine visible.
+      isNotNull(branches.primary_owner_user_id),
+      or(
+        eq(branches.primary_owner_user_id, userId),
+        directBranchEntryExists(db, userId, capability),
+        and(sql`NOT ${directMatch}`, activeBranchGroupEntryExists(db, userId, capability)),
+        and(
+          sql`NOT ${directMatch}`,
+          sql`NOT ${groupMatch}`,
+          branchOthersHasCapability(db, capability)
+        )
       )
     ) ?? sql`false`
   );
@@ -214,7 +229,7 @@ export function minimumBranchAccessCondition(
   userId: UserIdExpression,
   minimumPermission: 'none' | 'view' | 'session' | 'prompt' | 'all'
 ): SQL {
-  if (minimumPermission === 'none') return sql`true`;
+  if (minimumPermission === 'none') return isNotNull(branches.primary_owner_user_id);
   const capability =
     minimumPermission === 'view'
       ? 'branch.view'
@@ -278,23 +293,28 @@ export function visibleBoardAccessCondition(db: Database, userId: UserIdExpressi
   const directMatch = directBoardEntryExists(db, userId);
   const groupMatch = activeBoardGroupEntryExists(db, userId);
   return (
-    or(
-      eq(boards.primary_owner_user_id, userId),
-      directBoardEntryExists(db, userId, 'board.view'),
-      and(sql`NOT ${directMatch}`, activeBoardGroupEntryExists(db, userId, 'board.view')),
-      and(
-        sql`NOT ${directMatch}`,
-        sql`NOT ${groupMatch}`,
-        exists(
-          selectRaw(db)
-            .from(boardAccessPolicies)
-            .where(
-              and(
-                eq(boardAccessPolicies.board_id, boards.board_id),
-                eq(boardAccessPolicies.sharing_mode, 'shared'),
-                roleGrantsCapability(boardAccessPolicies.others_role, 'board', 'board.view')
+    and(
+      // See branchCapabilityCondition: ownerless legacy rows are quarantined
+      // independently of policy contents.
+      isNotNull(boards.primary_owner_user_id),
+      or(
+        eq(boards.primary_owner_user_id, userId),
+        directBoardEntryExists(db, userId, 'board.view'),
+        and(sql`NOT ${directMatch}`, activeBoardGroupEntryExists(db, userId, 'board.view')),
+        and(
+          sql`NOT ${directMatch}`,
+          sql`NOT ${groupMatch}`,
+          exists(
+            selectRaw(db)
+              .from(boardAccessPolicies)
+              .where(
+                and(
+                  eq(boardAccessPolicies.board_id, boards.board_id),
+                  eq(boardAccessPolicies.sharing_mode, 'shared'),
+                  roleGrantsCapability(boardAccessPolicies.others_role, 'board', 'board.view')
+                )
               )
-            )
+          )
         )
       )
     ) ?? sql`false`

@@ -74,6 +74,23 @@ const EMPTY_BRANCH_CONFIG: BranchPermissionConfig = {
 const WORKSPACE_PREFERENCES_NAMESPACE = 'workspace_preferences';
 const PERSONAL_SESSION_SHARING_KEY = 'personal_session_sharing_enabled';
 
+class UnattributedPrimaryOwnerError extends RepositoryError {
+  constructor(resource: 'Board' | 'Branch') {
+    super(`${resource} permissions are quarantined until primary ownership is repaired`);
+    this.name = 'UnattributedPrimaryOwnerError';
+  }
+}
+
+function quarantinedAccess(): EffectiveCapabilityPolicyAccess {
+  return {
+    capabilities: [],
+    fs_access: 'none',
+    source: 'others',
+    group_ids: [],
+    is_primary_owner: false,
+  };
+}
+
 function assertPolicy(policy: CapabilityPolicy, kind: CapabilityPolicy['policy_kind']): void {
   if (policy.schema_version !== CAPABILITY_POLICY_SCHEMA_VERSION || policy.policy_kind !== kind) {
     throw new RepositoryError(`Expected ${kind} capability policy schema version 1`);
@@ -478,6 +495,7 @@ export class CapabilityPolicyRepository {
       .where(eq(boards.board_id, boardId))
       .one();
     if (!board) throw new EntityNotFoundError('Board', boardId);
+    if (!board.primary_owner_user_id) throw new UnattributedPrimaryOwnerError('Board');
     const policy = await select(this.db)
       .from(boardAccessPolicies)
       .where(eq(boardAccessPolicies.board_id, boardId))
@@ -518,6 +536,7 @@ export class CapabilityPolicyRepository {
       .where(eq(branches.branch_id, branchId))
       .one();
     if (!branch) throw new EntityNotFoundError('Branch', branchId);
+    if (!branch.primary_owner_user_id) throw new UnattributedPrimaryOwnerError('Branch');
     if (branch.permission_binding === 'inherit') {
       if (!branch.board_id) throw new RepositoryError('An inherited branch must belong to a board');
       const template = await select(this.db)
@@ -947,7 +966,13 @@ export class CapabilityPolicyRepository {
     boardId: BoardID,
     userId: UserID
   ): Promise<EffectiveCapabilityPolicyAccess> {
-    const value = await this.getBoardPolicies(boardId);
+    let value: BoardCapabilityPolicies;
+    try {
+      value = await this.getBoardPolicies(boardId);
+    } catch (error) {
+      if (error instanceof UnattributedPrimaryOwnerError) return quarantinedAccess();
+      throw error;
+    }
     const userExists = await this.userExists(userId);
     const groupIds = await this.activeGroupIds(userId);
     return resolveCapabilityPolicyAccess({
@@ -963,7 +988,13 @@ export class CapabilityPolicyRepository {
     branchId: BranchID,
     userId: UserID
   ): Promise<EffectiveCapabilityPolicyAccess> {
-    const value = await this.getBranchPolicy(branchId);
+    let value: BranchCapabilityPolicy;
+    try {
+      value = await this.getBranchPolicy(branchId);
+    } catch (error) {
+      if (error instanceof UnattributedPrimaryOwnerError) return quarantinedAccess();
+      throw error;
+    }
     const config =
       value.binding_mode === 'inherit' ? value.inherited_config : value.override_config;
     if (!config) throw new RepositoryError(`Branch ${branchId} has no effective permission config`);
