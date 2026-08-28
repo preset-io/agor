@@ -10,6 +10,15 @@ export interface BlogPost {
 /** Blog posts ordered newest-first. Keep in sync with pages/blog/*.mdx frontmatter. */
 export const blogPosts: BlogPost[] = [
   {
+    slug: 'meet-blake',
+    title: "Guest Post: I'm Blake, Preset's AI Deal Desk Enforcer",
+    description:
+      "I'm an AI agent that runs deal operations at Preset. I review every order form, validate every CRM record, and audit every signed contract. I was brought in because the deals were a mess.",
+    author: 'Blake',
+    date: '2026-08-28',
+    image: '/images/blog/meet-blake.png',
+  },
+  {
     slug: 'why-agor-is-leaving-unix-impersonation-behind',
     title: 'Why Agor Is Leaving Unix Impersonation Behind',
     description:
