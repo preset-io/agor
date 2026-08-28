@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { getAgenticToolIntegration } from '@agor/agentic-tools';
+import { AGENTIC_TOOL_INTEGRATIONS, getAgenticToolIntegration } from '@agor/agentic-tools';
 import type { AgorConfig } from '@agor/core/config';
 import { getBranchHomePath } from '@agor/core/config';
 import type { AgenticToolName } from '@agor/core/types';
@@ -114,6 +114,42 @@ export function resolveBranchSdkHomeLaunch(input: {
     const dir = path.join(branchHomeDir, subdir);
     envVars[name] = dir;
     dirs.add(dir);
+  }
+  return { branchHomeDir, envVars, ensureDirs: [...dirs] };
+}
+
+/**
+ * Aggregate branch SDK home env for an interactive terminal (design §12 Q7 —
+ * terminals get the branch home for consistency). A terminal is not scoped to
+ * one tool, so it points EVERY generic-env-path tool's config-home var at the
+ * branch home. OpenCode is deliberately excluded: its relocation is the four
+ * `XDG_*` roots, which are too broad to force onto an arbitrary interactive
+ * shell (they steer far more than OpenCode). OpenCode state in a raw terminal is
+ * therefore not branch-relocated — a documented limitation.
+ *
+ * The per-caller credential env (API keys) is injected separately by
+ * `createUserProcessEnvironment`, so the common terminal path authenticates
+ * without any credential being written into the branch home.
+ */
+export function resolveBranchSdkHomeTerminalEnv(input: { branchId: string; tenantId?: string }): {
+  branchHomeDir: string;
+  envVars: Record<string, string>;
+  ensureDirs: string[];
+} {
+  const branchHomeDir = getBranchHomePath(input.branchId, input.tenantId);
+  const envVars: Record<string, string> = {};
+  const dirs = new Set<string>([branchHomeDir]);
+  for (const tool of Object.keys(AGENTIC_TOOL_INTEGRATIONS) as AgenticToolName[]) {
+    if (HOOK_MANAGED_TOOLS.has(tool)) continue;
+    if (!getAgenticToolIntegration(tool).configHomeOverride) continue;
+    const launch = resolveBranchSdkHomeLaunch({
+      tool,
+      branchId: input.branchId,
+      tenantId: input.tenantId,
+    });
+    if (!launch) continue;
+    Object.assign(envVars, launch.envVars);
+    for (const dir of launch.ensureDirs) dirs.add(dir);
   }
   return { branchHomeDir, envVars, ensureDirs: [...dirs] };
 }

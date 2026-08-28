@@ -53,6 +53,65 @@ describe('resolveBwrapArgs', () => {
     expect(hasPair(args, '--chdir', CTX.branchPath)).toBe(true);
   });
 
+  describe('per-branch SDK home binds (design §7)', () => {
+    const BRANCH_HOME = '/home/agor/.agor/branch-homes/0193b1c2-branch';
+
+    it('is INERT by default: no branch SDK home bind when unset (shared mode)', () => {
+      const args = resolveBwrapArgs({}, CTX);
+      expect(
+        args.some(
+          (a, i) =>
+            a === '--bind' && args[i + 1] === args[i + 2] && args[i + 1]?.includes('branch-homes')
+        )
+      ).toBe(false);
+    });
+
+    it('is INERT by default: no branch SDK home bind when unset (per_user mode)', () => {
+      const args = resolveBwrapArgs(
+        { home_mode: 'per_user' },
+        { ...CTX, ownerHomeStore: '/home/agor/.agor/homes/owner' }
+      );
+      expect(args.some((a) => a.includes('branch-homes'))).toBe(false);
+    });
+
+    it('binds the branch SDK home at its own real path in shared mode', () => {
+      const args = resolveBwrapArgs({}, { ...CTX, branchSdkHomeDir: BRANCH_HOME });
+      expect(hasTriple(args, '--bind', BRANCH_HOME, BRANCH_HOME)).toBe(true);
+    });
+
+    it('binds the branch SDK home in per_user mode AFTER the owner overlay (later wins)', () => {
+      const ownerStore = '/home/agor/.agor/homes/owner';
+      const args = resolveBwrapArgs(
+        { home_mode: 'per_user' },
+        { ...CTX, ownerHomeStore: ownerStore, branchSdkHomeDir: BRANCH_HOME }
+      );
+      expect(hasTriple(args, '--bind', BRANCH_HOME, BRANCH_HOME)).toBe(true);
+      const overlayIdx = args.findIndex((a, i) => a === '--bind' && args[i + 1] === ownerStore);
+      const branchIdx = args.findIndex((a, i) => a === '--bind' && args[i + 1] === BRANCH_HOME);
+      expect(overlayIdx).toBeGreaterThanOrEqual(0);
+      expect(branchIdx).toBeGreaterThan(overlayIdx);
+    });
+
+    it('layers the Codex subscription auth.json single-file bind on top (design §8A.4)', () => {
+      const source = '/home/agor/.agor/homes/owner/.codex/auth.json';
+      const dest = `${BRANCH_HOME}/codex/auth.json`;
+      const args = resolveBwrapArgs(
+        {},
+        { ...CTX, branchSdkHomeDir: BRANCH_HOME, branchSdkHomeCodexAuthBind: { source, dest } }
+      );
+      expect(hasTriple(args, '--bind', BRANCH_HOME, BRANCH_HOME)).toBe(true);
+      expect(hasTriple(args, '--bind', source, dest)).toBe(true);
+      // The file bind must come AFTER the dir bind so it overlays it.
+      const dirIdx = args.findIndex((a, i) => a === '--bind' && args[i + 1] === BRANCH_HOME);
+      const fileIdx = args.findIndex((a, i) => a === '--bind' && args[i + 1] === source);
+      expect(fileIdx).toBeGreaterThan(dirIdx);
+    });
+
+    it('rejects a non-absolute branch SDK home', () => {
+      expect(() => resolveBwrapArgs({}, { ...CTX, branchSdkHomeDir: 'relative/path' })).toThrow();
+    });
+  });
+
   it('protect_secrets masks daemon secrets + credential dirs', () => {
     const args = resolveBwrapArgs({}, CTX);
     expect(hasTriple(args, '--ro-bind', '/dev/null', '/home/agor/.agor/config.yaml')).toBe(true);

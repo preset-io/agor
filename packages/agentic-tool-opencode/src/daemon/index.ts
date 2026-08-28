@@ -6,13 +6,17 @@ import {
   hasCompleteOpenCodeModelConfig,
   OPENCODE_MODEL_CONFIG_PAIR_ERROR,
 } from '../shared/index.js';
-import { resolveOpenCodeTaskCredentialNamespace } from './credential-namespace.js';
+import {
+  resolveOpenCodeBranchCredentialNamespace,
+  resolveOpenCodeTaskCredentialNamespace,
+} from './credential-namespace.js';
 import { assertOpenCodeExecutionAllowed } from './execution-admission.js';
 
 export {
   assertOpenCodeNativeAuthSupported,
   type OpenCodeCredentialNamespace,
   type OpenCodeNativeUnixUserMode,
+  resolveOpenCodeBranchCredentialNamespace,
   resolveOpenCodeCredentialNamespace,
   resolveOpenCodeTaskCredentialNamespace,
 } from './credential-namespace.js';
@@ -36,8 +40,14 @@ export const OPENCODE_DAEMON_CONTRIBUTION = {
     tenantId: string;
     session: Pick<Session, 'created_by' | 'unix_username'>;
     homeDir: string;
+    branchSdkHomeDir?: string;
   }) {
-    const namespace = resolveOpenCodeTaskCredentialNamespace(input);
+    // Per-branch SDK home active ⇒ re-key native state to the branch (design §7);
+    // otherwise the historical per-(tenant,user) namespace under the executor
+    // home. Either way the runtime derives XDG from the returned dataHome.
+    const namespace = input.branchSdkHomeDir
+      ? resolveOpenCodeBranchCredentialNamespace({ branchSdkHomeDir: input.branchSdkHomeDir })
+      : resolveOpenCodeTaskCredentialNamespace(input);
     return {
       namespaceKey: namespace.namespaceKey,
       executorPayload: {

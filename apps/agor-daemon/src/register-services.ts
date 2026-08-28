@@ -6,15 +6,21 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
+import { AGENTIC_TOOL_DISPLAY_NAMES, getAgenticToolIntegration } from '@agor/agentic-tools';
 import {
   type AgorConfig,
+  getBranchHomePath,
   isDeploymentAgenticToolAvailable,
   MESSAGE_PAGINATION,
   type ResolvedDeploymentConfig,
   requirePublicBaseUrl,
+  resolveApiKey,
   resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
@@ -72,6 +78,7 @@ import type {
 import { OAuthConfigurationError } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { RefreshAndPersistDeps } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
+  AgenticToolName,
   AuthenticatedParams,
   HookContext,
   MCPAuth,
@@ -106,6 +113,7 @@ import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe
 import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
+import { resolveBranchSdkHomeLaunch, resolveSdkHomeConfig } from './branch-sdk-home.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -1086,6 +1094,8 @@ function createExecuteHandler(
     const rbacOn = config.execution?.branch_rbac === true;
     let cwd = process.cwd();
     let sandboxBaseRepoPath: string | undefined;
+    // Per-branch SDK home intent read from the branch record (design §9.2/§8B.3).
+    let branchSdkHomeIntent: 'per_branch' | null = null;
     const sandboxWorktreesRoot =
       sandboxCfg?.enabled === true
         ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
@@ -1118,13 +1128,14 @@ function createExecuteHandler(
           fsAccess =
             access.fs_access === 'write' ? 'write' : access.fs_access === 'read' ? 'read' : 'none';
         }
-        return { path: branch.path, baseRepoPath, fsAccess };
+        return { path: branch.path, baseRepoPath, fsAccess, sdkHome: branch.sdk_home ?? null };
       });
       if (!branchMounts)
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);
       cwd = branchMounts.path;
       sandboxBaseRepoPath = branchMounts.baseRepoPath;
       principalBranchAccess = branchMounts.fsAccess;
+      branchSdkHomeIntent = branchMounts.sdkHome;
       // Under the sandbox, 'none' means the branch would not be mounted at all,
       // so the task cannot operate on it. Fail fast with a clear message rather
       // than letting bwrap abort on a missing chdir target.
@@ -1164,6 +1175,97 @@ function createExecuteHandler(
         ownerUserId: session.created_by,
         filesystemHome: ownerFilesystemHome,
       });
+    }
+
+    // ── Per-branch SDK home (design §7/§8/§11) ─────────────────────────────
+    // Decide whether THIS prompt runs against a per-branch SDK home, adopt one
+    // stickily for a new branch under `per_branch`, and refuse tools that cannot
+    // relocate their config home. Inert by default: with `sdk_home_mode` unset
+    // AND no branch-record intent, nothing here changes behavior.
+    const sdkHomeTool = session.agentic_tool as AgenticToolName;
+    const sdkHomePolicy = resolveSdkHomeConfig(config);
+    const isDelegatedExecution = (config.execution?.unix_user_mode ?? 'simple') === 'delegated';
+    let sandboxBranchSdkHome: string | undefined;
+    let sandboxCodexAuthBind: { source: string; dest: string } | undefined;
+    let branchSdkHomeEnv: Record<string, string> | undefined;
+    let branchSdkHomeForOpenCode: string | undefined;
+    let branchSdkHomeTemplatePath = '';
+    if (session.branch_id) {
+      const branchId = session.branch_id as string;
+      const alreadyHasHome = branchSdkHomeIntent === 'per_branch';
+      const adoptHome = !alreadyHasHome && sdkHomePolicy.enabledForNewBranches;
+      if (alreadyHasHome || adoptHome) {
+        // §11 step 5 / §12 Q2: a tool with no reliable config-home relocation
+        // (cursor) is REFUSED on an SDK-home branch — never a silent fallback.
+        if (!getAgenticToolIntegration(sdkHomeTool).capabilities.supportsConfigHomeOverride) {
+          throw new BadRequest(
+            `${AGENTIC_TOOL_DISPLAY_NAMES[sdkHomeTool]} cannot run on a branch with a per-branch ` +
+              `SDK home: its SDK cannot relocate its config/state directory. Use a tool that ` +
+              `supports it, or run this tool on a branch without a per-branch SDK home.`
+          );
+        }
+        // Sticky adoption: record the intent once so later prompts keep the home
+        // regardless of the global flag's future value (§8B.3).
+        if (adoptHome) {
+          await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+            new BranchRepository(tenantDb).update(branchId, { sdk_home: 'per_branch' })
+          );
+        }
+        const branchHomeDir = getBranchHomePath(branchId, tenantId ?? undefined);
+        // Delegated mode: Agor mounts nothing; the external launcher owns
+        // enforcement and is told the path via `{branch_sdk_home}` (§7.4). We do
+        // not inject env, create dirs, or mount here.
+        branchSdkHomeTemplatePath = branchHomeDir;
+        if (!isDelegatedExecution) {
+          // Lazy-create the branch home + per-tool subdirs on first prompt
+          // (§6.2); idempotent, and the bwrap --bind source must exist pre-spawn
+          // (§7.2 — dropMasksForMissingTargets never drops a --bind).
+          await mkdir(branchHomeDir, { recursive: true });
+          const launch = resolveBranchSdkHomeLaunch({
+            tool: sdkHomeTool,
+            branchId,
+            tenantId: tenantId ?? undefined,
+          });
+          if (launch) {
+            branchSdkHomeEnv = launch.envVars;
+            for (const dir of launch.ensureDirs) await mkdir(dir, { recursive: true });
+          } else {
+            // Hook-managed (opencode): the getExecutorLaunch hook derives its own
+            // XDG values from a branch-scoped dataHome (§13.1 carry-forward #1).
+            branchSdkHomeForOpenCode = branchHomeDir;
+          }
+          // Bind the branch home into the sandbox (consumed by buildSandboxWrap).
+          // Harmless when the sandbox is disabled (buildSandboxWrap returns null).
+          sandboxBranchSdkHome = branchHomeDir;
+
+          // Codex subscription auth (§8A.4). Once CODEX_HOME is relocated to the
+          // (initially empty) branch home, a ChatGPT-subscription session has no
+          // auth.json there. There is no CODEX_AUTH_FILE override, so bind the
+          // caller's real SINGLE auth.json file rw onto the branch home. Codex's
+          // refresh write is truncate-in-place (inode preserved), so it lands
+          // back on the caller's real file — no credential is ever written INTO
+          // the branch home (§8A.3, confirmed §8A.8). API-key mode needs no bind
+          // (the executor injects CODEX_API_KEY). A mount namespace is required,
+          // so this is scoped to the sandbox; the source file must pre-exist.
+          if (sdkHomeTool === 'codex' && sandboxCfg?.enabled === true) {
+            const codexAuth = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+              resolveApiKey('OPENAI_API_KEY', { userId, db: tenantDb, tool: 'codex' })
+            );
+            const subscriptionMode = codexAuth.useNativeAuth && !codexAuth.apiKey;
+            if (subscriptionMode) {
+              // The credential lives in whichever home is actually mounted: the
+              // per-owner store in per_user mode, else the daemon's shared home.
+              const credentialHome = sandboxHomeStore ?? homedir();
+              const source = join(credentialHome, '.codex', 'auth.json');
+              // No file to bind ⇒ user never authenticated; let Codex surface its
+              // normal "run codex login" flow rather than binding a missing path.
+              if (existsSync(source)) {
+                sandboxCodexAuthBind = { source, dest: join(branchHomeDir, 'codex', 'auth.json') };
+              }
+            }
+          }
+        }
+      }
     }
 
     // Resolve the optional delegated home key reported to an external launcher.
@@ -1287,20 +1389,35 @@ function createExecuteHandler(
       scrubMCPSecretsFromExecutorEnv(executorEnv, [...usableAttached, ...global]);
     });
 
+    // Point the tool's SDK/config-home env var(s) at the per-branch SDK home
+    // (design §8). These are relocations, NOT credentials — so the MCP scrub
+    // above leaves them alone, and they compose with the caller-scoped
+    // credential env injected by createUserProcessEnvironment (#2555): different
+    // keys, no collision (verified — the branch home never carries a credential,
+    // §8A.3). Skipped in delegated mode (the launcher owns the environment).
+    if (branchSdkHomeEnv) {
+      Object.assign(executorEnv, branchSdkHomeEnv);
+    }
+
     executorEnv.DAEMON_URL = daemonUrl;
 
     // Generalized executor-launch hook (design §4/§13 Phase 2). Every tool has a
     // daemon contribution; only OpenCode implements getExecutorLaunch today, so
-    // this stays a no-op for all other tools and preserves prior behavior.
+    // this stays a no-op for all other tools and preserves prior behavior. When a
+    // per-branch SDK home is active, OpenCode is re-keyed from (tenant,user) to
+    // the branch by passing the branch home in — its runtime derives the four XDG
+    // roots from that single dataHome (§13.1 carry-forward #1).
     const executorLaunch = (() => {
       const contribution = getAgenticToolDaemonContribution(session.agentic_tool);
       if (!contribution?.getExecutorLaunch) return undefined;
-      if (!tenantId) throw new Error('Missing active tenant context for OpenCode execution');
-      if (!executorHomeDir) throw new Error('Missing executor home for OpenCode execution');
+      // These guards fire for any tool with a launch hook (currently OpenCode).
+      if (!tenantId) throw new Error('Missing active tenant context for executor-launch hook');
+      if (!executorHomeDir) throw new Error('Missing executor home for executor-launch hook');
       return contribution.getExecutorLaunch({
         tenantId,
         session,
         homeDir: executorHomeDir,
+        branchSdkHomeDir: branchSdkHomeForOpenCode,
       });
     })();
 
@@ -1331,6 +1448,13 @@ function createExecuteHandler(
         sandboxHomeStore,
         sandboxWorktreesRoot,
         principalBranchAccess,
+        // Per-branch SDK home to bind into the sandbox (design §7). Undefined
+        // when the feature is off, the branch never adopted one, or in delegated
+        // mode (where the launcher mounts it via the {branch_sdk_home} template).
+        sandboxBranchSdkHome,
+        // Codex subscription single-file auth.json bind (design §8A.4); set only
+        // for a Codex subscription session on an SDK-home branch (see below).
+        sandboxCodexAuthBind,
       },
     };
 
@@ -1354,6 +1478,9 @@ function createExecuteHandler(
         branch_id: session.branch_id,
         user_id: userId,
         branch_fs_access: principalBranchAccess,
+        // Delegated launchers own SDK-home enforcement (§7.4): absolute path when
+        // this branch has an SDK home, empty string otherwise.
+        branch_sdk_home: branchSdkHomeTemplatePath,
       },
       onSpawn: (child, spawnContext) => {
         metrics.increment('executor.launches', 1, { mode: spawnContext.mode });

@@ -22,7 +22,7 @@
  */
 
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   type AgorSandboxSettings,
   resolveBwrapArgs,
@@ -105,6 +105,16 @@ export function buildSandboxWrap(params: {
   worktreesRoot?: string;
   /** RBAC-resolved fs access of the current prompt actor. Default 'write'. */
   branchAccess?: 'write' | 'read' | 'none';
+  /**
+   * Per-branch SDK home to bind into the sandbox (design §7). Absolute host
+   * path of `branch-homes/<branchId>`; unset ⇒ no branch SDK home ⇒ inert.
+   */
+  branchSdkHomeDir?: string;
+  /**
+   * Codex subscription-auth single-file bind (design §8A.4): caller's real
+   * `auth.json` bound rw onto `<branchSdkHomeDir>/codex/auth.json`.
+   */
+  branchSdkHomeCodexAuthBind?: { source: string; dest: string };
   /** Immutable deployment paths injected by configureExecutor at startup. */
   runtimePaths: SandboxRuntimePaths;
 }): SandboxWrap | null {
@@ -117,6 +127,8 @@ export function buildSandboxWrap(params: {
     ownerHomeStore,
     worktreesRoot,
     branchAccess,
+    branchSdkHomeDir,
+    branchSdkHomeCodexAuthBind,
     runtimePaths,
   } = params;
   if (!sandbox?.enabled) return null;
@@ -159,9 +171,30 @@ export function buildSandboxWrap(params: {
     }
   }
 
+  if (branchSdkHomeDir) {
+    // The branch home is `--bind`ed at its own real path; bwrap aborts on a
+    // missing --bind source and dropMasksForMissingTargets never drops a --bind
+    // (design §7.2), so guarantee the source exists here — same precedent as the
+    // owner home store above. The Codex auth bind dest lives inside this dir;
+    // ensure its parent so the layered single-file bind has a mountpoint.
+    try {
+      mkdirSync(branchSdkHomeDir, { recursive: true });
+      if (branchSdkHomeCodexAuthBind) {
+        mkdirSync(dirname(branchSdkHomeCodexAuthBind.dest), { recursive: true });
+      }
+    } catch (err) {
+      throw new Error(
+        `Per-branch SDK home ${branchSdkHomeDir} could not be created: ` +
+          `${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
   const ctx: SandboxPathContext = {
     branchPath,
     branchAccess,
+    branchSdkHomeDir,
+    branchSdkHomeCodexAuthBind,
     pidNamespace: pidNamespaceAvailable(),
     homeDir: home,
     canonicalHomeDir: canonicalizeExistingPath(home),

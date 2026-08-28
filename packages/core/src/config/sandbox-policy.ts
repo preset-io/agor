@@ -134,6 +134,29 @@ export interface SandboxPathContext {
   agorConfigPath?: string;
   /** Absolute path to `~/.agor/agor.db` — masked under protect_secrets. */
   agorDbPath?: string;
+  /**
+   * Per-branch SDK home to bind INTO the sandbox at its own real path (design
+   * §7). When set, the branch's `branch-homes/<branchId>` directory is
+   * `--bind`ed at the identical absolute path inside the sandbox, so the tool's
+   * relocated config/state env vars (which name real sub-paths of this dir)
+   * resolve to the same location inside and outside the sandbox. The daemon
+   * guarantees the source exists before spawn (bwrap aborts on a missing
+   * `--bind` source; `dropMasksForMissingTargets` only drops tmpfs/ro-bind,
+   * never `--bind` — design §7.2). Unset ⇒ no branch SDK home (feature off or
+   * branch never adopted one) ⇒ byte-for-byte today's behavior.
+   */
+  branchSdkHomeDir?: string;
+  /**
+   * Codex subscription-auth single-file bind (design §8A.4): the caller's real
+   * `auth.json` bound read-write onto `<branchSdkHomeDir>/codex/auth.json`, so a
+   * shared branch Codex home carries per-caller subscription credentials without
+   * a credential ever being written into the branch home. Codex's refresh write
+   * is truncate-in-place (inode preserved), so the refresh lands back on the
+   * caller's real file (empirically confirmed, §8A.8). Both paths must exist
+   * before spawn. Unset in API-key mode (which injects `CODEX_API_KEY` instead)
+   * and for every non-Codex tool.
+   */
+  branchSdkHomeCodexAuthBind?: { source: string; dest: string };
 }
 
 /**
@@ -301,6 +324,13 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
         args.push('--ro-bind-try', ctx.agenticToolsPath, destination);
       }
     }
+    // Per-branch SDK home (design §7.1). Bound at its own real path, ON TOP of
+    // the home overlay and after the agentic-tools re-expose, but BEFORE the
+    // unconditional trust-root masks below. The branch-homes root lives under
+    // the tenant data root, which the overlay masks with a tmpfs above; bwrap
+    // resolves the bind SOURCE from the host root before applying that mask, so
+    // re-exposing it here is valid.
+    appendBranchSdkHomeBinds(args, ctx);
     for (const p of sandbox.extra_allow_write ?? []) args.push('--bind', p, p);
     for (const p of sandbox.extra_deny_read ?? []) args.push('--ro-bind', '/dev/null', p);
 
@@ -351,6 +381,11 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
       args.push('--bind-try', join(ctx.homeDir, sub), join(ctx.homeDir, sub));
     }
   }
+  // Per-branch SDK home (design §7.1). Inserted AFTER the home-subdir binds so
+  // it overrides them: the tool's env vars point into this branch-owned mount
+  // rather than the daemon's real home, giving one directory per branch instead
+  // of one shared home for all branches and users.
+  appendBranchSdkHomeBinds(args, ctx);
   for (const p of sandbox.extra_allow_write ?? []) args.push('--bind', p, p);
 
   // ── denials LAST so they win over any writable/home bind above ──
@@ -371,6 +406,28 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
   args.push('--chdir', ctx.branchPath);
 
   return args;
+}
+
+/**
+ * Append the per-branch SDK home binds (design §7). Shared by both home modes so
+ * the mount is identical regardless of overlay. The branch home is bound at its
+ * own real path; the optional Codex subscription `auth.json` single-file bind is
+ * layered on top of it (its dest is inside the just-bound dir, and later binds
+ * win). No-op when the branch has no SDK home — the inert default path.
+ */
+function appendBranchSdkHomeBinds(args: string[], ctx: SandboxPathContext): void {
+  if (!ctx.branchSdkHomeDir) return;
+  if (!isAbsolute(ctx.branchSdkHomeDir)) {
+    throw new Error(`Invalid branch SDK home ${ctx.branchSdkHomeDir}: expected an absolute path`);
+  }
+  args.push('--bind', ctx.branchSdkHomeDir, ctx.branchSdkHomeDir);
+  const codexBind = ctx.branchSdkHomeCodexAuthBind;
+  if (codexBind) {
+    if (!isAbsolute(codexBind.source) || !isAbsolute(codexBind.dest)) {
+      throw new Error('Codex auth bind requires absolute source and dest paths');
+    }
+    args.push('--bind', codexBind.source, codexBind.dest);
+  }
 }
 
 function isPathWithin(candidate: string, parent: string): boolean {

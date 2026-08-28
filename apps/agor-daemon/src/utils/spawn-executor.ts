@@ -161,6 +161,15 @@ export interface ExecutorTemplateVariables {
   log_level?: string;
   executor_type?: string;
   /**
+   * Absolute path of the per-branch SDK home for this prompt, or empty when the
+   * branch has none (design §7.4). In `delegated` mode Agor mounts nothing, so
+   * the external launcher owns enforcement: it must relocate the tool's SDK home
+   * (and, for Codex subscription auth, the single `auth.json`) to this path.
+   * Shell-escaped during substitution like {tenant_id}; always rendered (empty
+   * string when unused) so the placeholder never survives into the command.
+   */
+  branch_sdk_home?: string;
+  /**
    * Trusted runtime tenant identity. This is populated from the ambient tenant
    * context, shell-escaped during substitution, and is not caller-overridable
    * through `SpawnExecutorOptions.templateVariables`.
@@ -312,17 +321,23 @@ export function substituteTemplateVariables(
     branch_fs_access: variables.branch_fs_access,
     log_level: variables.log_level,
     executor_type: variables.executor_type,
+    // Always render (empty string when unused) so `{branch_sdk_home}` never
+    // survives literally into the command line (design §7.4).
+    branch_sdk_home: variables.branch_sdk_home ?? '',
     tenant_id: variables.tenant_id,
   };
 
+  // Security-sensitive values rendered as one opaque shell argument. tenant_id
+  // may originate in external auth claims; branch_sdk_home is a filesystem path
+  // that must not word-split or glob. Templates should use them unquoted, e.g.
+  // `launcher --tenant-id {tenant_id} --sdk-home {branch_sdk_home}`.
+  const shellEscapedKeys = new Set(['tenant_id', 'branch_sdk_home']);
   for (const [key, value] of Object.entries(substitutions)) {
     if (value !== undefined) {
       const placeholder = new RegExp(`\\{${key}\\}`, 'g');
-      // executor_command_template is executed via `sh -c`. Tenant IDs may
-      // originate in external auth claims, so render this security-sensitive
-      // value as one opaque shell argument. Templates should use
-      // `{tenant_id}` unquoted, e.g. `launcher --tenant-id {tenant_id}`.
-      const renderedValue = key === 'tenant_id' ? escapeShellArg(String(value)) : String(value);
+      const renderedValue = shellEscapedKeys.has(key)
+        ? escapeShellArg(String(value))
+        : String(value);
       result = result.replace(placeholder, renderedValue);
     }
   }
@@ -467,6 +482,15 @@ function sendExecutorPayload(
  * Spawn executor as a local subprocess.
  * stdout/stderr are inherited so logs appear in daemon output.
  */
+function isCodexAuthBind(value: unknown): value is { source: string; dest: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { source?: unknown }).source === 'string' &&
+    typeof (value as { dest?: unknown }).dest === 'string'
+  );
+}
+
 function sandboxLocalExecutorCommand(
   payload: Record<string, unknown>,
   command: { cmd: string; args: string[]; env: Record<string, string | undefined> },
@@ -482,6 +506,8 @@ function sandboxLocalExecutorCommand(
         sandboxHomeStore?: unknown;
         sandboxWorktreesRoot?: unknown;
         principalBranchAccess?: unknown;
+        sandboxBranchSdkHome?: unknown;
+        sandboxCodexAuthBind?: unknown;
       }
     | undefined;
   const workdir =
@@ -508,6 +534,11 @@ function sandboxLocalExecutorCommand(
     worktreesRoot:
       typeof params?.sandboxWorktreesRoot === 'string' ? params.sandboxWorktreesRoot : undefined,
     branchAccess,
+    branchSdkHomeDir:
+      typeof params?.sandboxBranchSdkHome === 'string' ? params.sandboxBranchSdkHome : undefined,
+    branchSdkHomeCodexAuthBind: isCodexAuthBind(params?.sandboxCodexAuthBind)
+      ? params.sandboxCodexAuthBind
+      : undefined,
     runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
   });
   if (!wrap) return command;

@@ -529,7 +529,13 @@ export class GeminiPromptService {
     try {
       // Calculate project hash (same as SDK does)
       const projectHash = crypto.createHash('sha256').update(projectRoot).digest('hex');
-      const chatsDir = path.join(os.homedir(), '.gemini', 'tmp', projectHash, 'chats');
+      // Read from the SAME location the Gemini CLI writes to. GEMINI_CLI_HOME is
+      // a home ROOT (the CLI appends `.gemini`), so honor it when a per-branch
+      // SDK home relocates it (design §8 item 3); else fall back to the passwd
+      // home. Without this, Agor would read the old `~/.gemini` while the SDK
+      // wrote to the relocated branch home (silent split-brain).
+      const geminiHomeRoot = process.env.GEMINI_CLI_HOME || os.homedir();
+      const chatsDir = path.join(geminiHomeRoot, '.gemini', 'tmp', projectHash, 'chats');
 
       // Check if chats directory exists
       try {
