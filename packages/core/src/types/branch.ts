@@ -444,6 +444,35 @@ export interface Branch {
   dangerously_allow_session_sharing?: boolean;
 }
 
+export type BranchFilesystemReadinessState = 'pending' | 'ready' | 'failed' | 'unavailable';
+
+/**
+ * Classify whether a branch can safely host filesystem-backed work.
+ *
+ * Keep this interpretation shared between UI and automation callers. Legacy
+ * rows without a filesystem status are ready; archived or cleaned-up branches
+ * are terminal and unavailable.
+ */
+export function classifyBranchFilesystemReadiness(
+  branch: Pick<Branch, 'archived' | 'filesystem_status'>
+): BranchFilesystemReadinessState {
+  if (branch.archived) return 'unavailable';
+
+  switch (branch.filesystem_status) {
+    case undefined:
+    case 'ready':
+      return 'ready';
+    case 'creating':
+      return 'pending';
+    case 'failed':
+      return 'failed';
+    case 'preserved':
+    case 'cleaned':
+    case 'deleted':
+      return 'unavailable';
+  }
+}
+
 /**
  * Ordered permission levels for branch RBAC (least → most privileged).
  *

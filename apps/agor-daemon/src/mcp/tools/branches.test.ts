@@ -25,7 +25,10 @@ vi.mock('../../utils/spawn-executor.js', async (importOriginal) => {
   };
 });
 
-type ToolHandler = (args: Record<string, unknown>) => Promise<{
+type ToolHandler = (
+  args: Record<string, unknown>,
+  requestContext?: { signal: AbortSignal }
+) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
 }>;
@@ -134,6 +137,158 @@ function registerAndCaptureUpdate(ctx: {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe('agor_branches_wait_for_ready', () => {
+  const requestContext = () => ({ signal: new AbortController().signal });
+  const makeBranch = (filesystemStatus: string, overrides: Record<string, unknown> = {}) => ({
+    branch_id: '01900000-0000-7000-8000-000000000001',
+    filesystem_status: filesystemStatus,
+    archived: false,
+    path: '/worktrees/feature',
+    start_command: 'pnpm dev',
+    board_id: 'board-1',
+    ...overrides,
+  });
+
+  it('returns the refreshed authoritative branch on the already-ready fast path', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+      tenant: { tenant_id: 'tenant-1' },
+    };
+    const ready = makeBranch('ready');
+    const get = vi.fn(async () => ready);
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await waitForReady({ branchId: '01900000' }, requestContext());
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(payload).toMatchObject({
+      branch: ready,
+      _readiness: { outcome: 'ready', poll_interval_ms: 1_000 },
+    });
+    expect(get).toHaveBeenCalledWith('01900000', baseServiceParams);
+  });
+
+  it('uses fresh authorized service reads until a creating branch is ready', async () => {
+    vi.useFakeTimers();
+    const creating = makeBranch('creating');
+    const ready = makeBranch('ready', { path: '/worktrees/feature-ready' });
+    const get = vi.fn().mockResolvedValueOnce(creating).mockResolvedValueOnce(ready);
+    const baseServiceParams = { provider: 'mcp', tenant: { tenant_id: 'tenant-1' } };
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const waiting = waitForReady({ branchId: '01900000' }, requestContext());
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await waiting;
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.branch).toEqual(ready);
+    expect(get.mock.calls).toEqual([
+      ['01900000', baseServiceParams],
+      ['01900000-0000-7000-8000-000000000001', baseServiceParams],
+    ]);
+  });
+
+  it('returns a retryable structured timeout while preserving the creating branch', async () => {
+    vi.useFakeTimers();
+    const creating = makeBranch('creating');
+    const get = vi.fn(async () => creating);
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+    });
+
+    const waiting = waitForReady(
+      { branchId: creating.branch_id, waitTimeoutMs: 1_000 },
+      requestContext()
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await waiting;
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(payload).toMatchObject({
+      branch: creating,
+      _readiness: {
+        outcome: 'timeout',
+        timeout_ms: 1_000,
+        poll: {
+          tool: 'agor_branches_wait_for_ready',
+          arguments: { branchId: creating.branch_id },
+        },
+      },
+    });
+  });
+
+  it('returns the persisted safe failure as a structured terminal error', async () => {
+    const failed = makeBranch('failed', { error_message: 'clone authentication failed' });
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: vi.fn(async () => failed) };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+    });
+
+    const result = await waitForReady({ branchId: failed.branch_id }, requestContext());
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({
+      branch: failed,
+      _readiness: { outcome: 'failed', message: 'clone authentication failed' },
+    });
+  });
+
+  it('enforces bounded MCP timeout inputs in the tool schema', () => {
+    const config = registerAndCaptureConfig('agor_branches_wait_for_ready', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', waitTimeoutMs: 1_000 }).success
+    ).toBe(true);
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', waitTimeoutMs: 999 }).success
+    ).toBe(false);
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', waitTimeoutMs: 60_001 }).success
+    ).toBe(false);
+  });
 });
 
 describe('agor_branches_delete authorization boundary', () => {
