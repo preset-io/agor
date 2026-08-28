@@ -4,7 +4,11 @@ import { join } from 'node:path';
 import { createClient } from '@libsql/client';
 import { describe, expect, it } from 'vitest';
 import { createDatabase } from './client';
-import { pendingOfflineCutoverMigrations, preflightSQLiteCapabilityPolicyOwners } from './migrate';
+import {
+  inspectSQLiteCapabilityPolicyOwnerBackfill,
+  pendingOfflineCutoverMigrations,
+} from './migrate';
+import { CapabilityPolicyRepository } from './repositories/capability-policies';
 
 interface JournalEntry {
   idx: number;
@@ -344,14 +348,20 @@ describe('Board and branch capability-policy migration', () => {
           'board-1',1,2,'owner',
           '{"access_mode":"shared","default_others_can":"prompt","default_others_fs_access":"write","default_dangerously_allow_session_sharing":true}'
         );
-        INSERT INTO board_owners VALUES ('board-1','owner',1),('board-1','manager',2);
-        INSERT INTO board_group_grants VALUES ('board-1','design','all','write',1,2);
+        INSERT INTO board_owners VALUES
+          ('board-1','owner',1),('board-1','manager',2),('board-1','missing-user',3);
+        INSERT INTO board_group_grants VALUES
+          ('board-1','design','all','write',1,2),
+          ('board-1','missing-group','all','write',1,2);
         INSERT INTO branches VALUES (
           'branch-1','board-1',1,2,'deleted-creator','override','prompt','write',
           '{"dangerously_allow_session_sharing":true}'
         );
-        INSERT INTO branch_owners VALUES ('branch-1','owner',1),('branch-1','manager',2);
-        INSERT INTO branch_group_grants VALUES ('branch-1','design','prompt','write',1,2);
+        INSERT INTO branch_owners VALUES
+          ('branch-1','owner',1),('branch-1','manager',2),('branch-1','missing-user',3);
+        INSERT INTO branch_group_grants VALUES
+          ('branch-1','design','prompt','write',1,2),
+          ('branch-1','missing-group','all','write',1,2);
         INSERT INTO branches VALUES (
           'branch-2','board-1',1,2,'member','board','none','none','{}'
         );
@@ -665,40 +675,122 @@ describe('Board and branch capability-policy migration', () => {
     }
   });
 
-  it('fails closed when SQLite cannot attribute a primary owner', async () => {
-    const directory = await mkdtemp(join(tmpdir(), 'agor-rbac-owner-preflight-'));
+  it('quarantines unattributable SQLite owners without aborting or leaking identifiers', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-rbac-owner-quarantine-'));
     const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
     try {
       await createLegacyTables(client);
-      await client.execute(
-        `INSERT INTO branches VALUES ('orphan',NULL,1,1,'missing','override','none','none','{}')`
-      );
+      await client.executeMultiple(`
+        ALTER TABLE groups ADD COLUMN archived integer NOT NULL DEFAULT 0;
+        INSERT INTO users VALUES ('member');
+        INSERT INTO groups (group_id) VALUES ('design');
+        INSERT INTO boards VALUES (
+          'sensitive-orphan-board',1,1,'anonymous',
+          '{"access_mode":"shared","default_others_can":"all","default_others_fs_access":"write"}'
+        );
+        INSERT INTO branches VALUES (
+          'sensitive-orphan-branch','sensitive-orphan-board',1,1,'missing',
+          'override','all','write','{}'
+        );
+        INSERT INTO board_group_grants VALUES (
+          'sensitive-orphan-board','design','all','write',1,1
+        );
+        INSERT INTO branch_owners VALUES (
+          'sensitive-orphan-branch','missing-user',1
+        );
+        INSERT INTO branch_group_grants VALUES (
+          'sensitive-orphan-branch','design','all','write',1,1
+        );
+      `);
       const db = createDatabase({ url: `file:${join(directory, 'migration.db')}` });
-      await expect(preflightSQLiteCapabilityPolicyOwners(db)).rejects.toThrow(/branch:orphan/);
-      await (db as unknown as { $client: { close(): Promise<void> } }).$client.close();
+      const diagnostics = await inspectSQLiteCapabilityPolicyOwnerBackfill(db);
+      expect(diagnostics).toEqual({ unattributedBoards: 1, unattributedBranches: 1 });
+      expect(JSON.stringify(diagnostics)).not.toContain('sensitive-orphan');
       const migration = await readFile(
         new URL('../../drizzle/sqlite/0098_board_branch_capability_policies.sql', import.meta.url),
         'utf8'
       );
-      let failed = false;
       for (const statement of migration.split('--> statement-breakpoint')) {
-        if (!statement.trim()) continue;
-        try {
-          await client.execute(statement);
-        } catch (error) {
-          failed = true;
-          expect(String(error)).toMatch(/constraint/i);
-          break;
-        }
+        if (statement.trim()) await client.execute(statement);
       }
-      expect(failed).toBe(true);
+
+      const owners = await client.execute(
+        `SELECT (SELECT primary_owner_user_id FROM boards WHERE board_id='sensitive-orphan-board') AS board_owner,
+                (SELECT primary_owner_user_id FROM branches WHERE branch_id='sensitive-orphan-branch') AS branch_owner`
+      );
+      expect(owners.rows[0]).toEqual({ board_owner: null, branch_owner: null });
+      const boardPolicy = await client.execute(
+        `SELECT sharing_mode,others_role FROM board_access_policies
+         WHERE board_id='sensitive-orphan-board'`
+      );
+      expect(boardPolicy.rows[0]).toEqual({ sharing_mode: 'private', others_role: 'none' });
+      const branchPolicy = await client.execute(
+        `SELECT sharing_mode,others_role,others_fs_access FROM branch_permission_configs
+         WHERE branch_id='sensitive-orphan-branch'`
+      );
+      expect(branchPolicy.rows[0]).toEqual({
+        sharing_mode: 'private',
+        others_role: 'none',
+        others_fs_access: 'none',
+      });
+      const copiedGrants = await client.execute(
+        `SELECT
+           (SELECT count(*) FROM board_access_entries
+            WHERE board_id='sensitive-orphan-board') AS board_count,
+           (SELECT count(*) FROM branch_permission_entries
+            WHERE config_id IN (
+              SELECT config_id FROM branch_permission_configs
+              WHERE branch_id='sensitive-orphan-branch'
+            )) AS branch_count`
+      );
+      expect(copiedGrants.rows[0]).toEqual({ board_count: 0, branch_count: 0 });
+
+      // Defense in depth: even corrupting the private fallback cannot make an
+      // ownerless resource visible through the point authorization resolver.
+      await client.execute(
+        `UPDATE board_access_policies SET sharing_mode='shared',others_role='manager'
+         WHERE board_id='sensitive-orphan-board'`
+      );
+      await client.execute(
+        `UPDATE branch_permission_configs
+         SET sharing_mode='shared',others_role='manager',others_fs_access='write'
+         WHERE branch_id='sensitive-orphan-branch'`
+      );
+      const policies = new CapabilityPolicyRepository(db);
+      await expect(
+        policies.resolveBoardAccess('sensitive-orphan-board' as never, 'member' as never)
+      ).resolves.toMatchObject({ capabilities: [], fs_access: 'none', is_primary_owner: false });
+      await expect(
+        policies.resolveBranchAccess('sensitive-orphan-branch' as never, 'member' as never)
+      ).resolves.toMatchObject({ capabilities: [], fs_access: 'none', is_primary_owner: false });
+
+      // New rows still require owners, while an offline operator can repair a
+      // quarantined legacy row exactly once with an existing user.
+      await expect(
+        client.execute(
+          `INSERT INTO boards
+           (board_id,created_at,created_by,data,primary_owner_user_id)
+           VALUES ('new-ownerless',2,'member','{}',NULL)`
+        )
+      ).rejects.toThrow(/primary owner is required/i);
+      await client.execute(
+        `UPDATE boards SET primary_owner_user_id='member'
+         WHERE board_id='sensitive-orphan-board'`
+      );
+      await expect(
+        client.execute(
+          `UPDATE boards SET primary_owner_user_id='somebody-else'
+           WHERE board_id='sensitive-orphan-board'`
+        )
+      ).rejects.toThrow(/primary owner is immutable/i);
+      await (db as unknown as { $client: { close(): Promise<void> } }).$client.close();
     } finally {
       client.close();
       await rm(directory, { recursive: true, force: true });
     }
   });
 
-  it('forces tenant RLS and reports unattributed object IDs in PostgreSQL', async () => {
+  it('forces tenant RLS and emits only count-based quarantine diagnostics in PostgreSQL', async () => {
     const migration = await readFile(
       new URL('../../drizzle/postgres/0095_board_branch_capability_policies.sql', import.meta.url),
       'utf8'
@@ -715,8 +807,12 @@ describe('Board and branch capability-policy migration', () => {
       expect(migration).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
       expect(migration).toContain(`tenant_isolation_${table}`);
     }
-    expect(migration).toContain("string_agg(kind||':'||id");
-    expect(migration).toContain('RBAC migration cannot attribute primary owners');
+    expect(migration).toContain('RAISE WARNING');
+    expect(migration).toContain('boards=%, branches=%');
+    expect(migration).not.toContain('string_agg');
+    expect(migration).not.toContain("kind||':'||id");
+    expect(migration).not.toContain('RBAC migration cannot attribute primary owners');
+    expect(migration).not.toContain('ALTER COLUMN "primary_owner_user_id" SET NOT NULL');
     expect(migration).toContain("SET LOCAL lock_timeout = '3s'");
     expect(migration).toContain('ORDER BY bo.created_at NULLS LAST,bo.user_id');
     expect(migration).toContain('CONSTRAINT "boards_tenant_primary_owner_fk"');

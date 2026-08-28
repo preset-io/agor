@@ -130,7 +130,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
           ? new Date(row.updated_at).toISOString()
           : new Date(row.created_at).toISOString(),
         created_by: row.created_by as UUID,
-        primary_owner_user_id: row.primary_owner_user_id as UUID,
+        primary_owner_user_id: (row.primary_owner_user_id as UUID | null) ?? undefined,
         name: row.name,
         ref: row.ref,
         ref_type: row.ref_type ?? 'branch',
@@ -166,7 +166,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   /**
    * Convert Branch to database insert format
    */
-  private branchToInsert(branch: Partial<Branch>): BranchInsert {
+  private branchToInsert(branch: Partial<Branch>): BranchInsert & {
+    primary_owner_user_id: UUID;
+  } {
     if (
       branch.permission_source !== undefined &&
       !BRANCH_PERMISSION_SOURCES.includes(branch.permission_source)
@@ -967,7 +969,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       throw new EntityNotFoundError('Branch', branchId);
     }
 
-    return [branch.primary_owner_user_id as UUID];
+    return branch.primary_owner_user_id ? [branch.primary_owner_user_id as UUID] : [];
   }
 
   /**
@@ -1042,7 +1044,10 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
     const ownersByBranch = new Map<BranchID, UUID[]>();
     for (const row of rows) {
-      ownersByBranch.set(row.branch_id as BranchID, [row.primary_owner_user_id as UUID]);
+      ownersByBranch.set(
+        row.branch_id as BranchID,
+        row.primary_owner_user_id ? [row.primary_owner_user_id as UUID] : []
+      );
     }
 
     return ownersByBranch;

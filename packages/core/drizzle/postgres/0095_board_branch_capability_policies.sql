@@ -1,6 +1,45 @@
 SET LOCAL lock_timeout = '3s';
 --> statement-breakpoint
+-- The cutover is a database-wide maintenance operation. Existing tenant RLS
+-- otherwise exposes only the implicit default tenant to the migration role,
+-- which would leave non-default tenants without policies. These narrowly
+-- named policies exist only inside this migration transaction.
+CREATE POLICY "rbac_migration_0095_all_tenants" ON "boards" FOR ALL
+  USING (current_setting('agor.system_scope', true) = 'rbac_migration_0095')
+  WITH CHECK (current_setting('agor.system_scope', true) = 'rbac_migration_0095');
+--> statement-breakpoint
+CREATE POLICY "rbac_migration_0095_all_tenants" ON "branches" FOR ALL
+  USING (current_setting('agor.system_scope', true) = 'rbac_migration_0095')
+  WITH CHECK (current_setting('agor.system_scope', true) = 'rbac_migration_0095');
+--> statement-breakpoint
+CREATE POLICY "rbac_migration_0095_all_tenants" ON "users" FOR SELECT
+  USING (current_setting('agor.system_scope', true) = 'rbac_migration_0095');
+--> statement-breakpoint
+CREATE POLICY "rbac_migration_0095_all_tenants" ON "groups" FOR SELECT
+  USING (current_setting('agor.system_scope', true) = 'rbac_migration_0095');
+--> statement-breakpoint
+CREATE POLICY "rbac_migration_0095_all_tenants" ON "board_owners" FOR ALL
+  USING (current_setting('agor.system_scope', true) = 'rbac_migration_0095')
+  WITH CHECK (current_setting('agor.system_scope', true) = 'rbac_migration_0095');
+--> statement-breakpoint
+CREATE POLICY "rbac_migration_0095_all_tenants" ON "branch_owners" FOR ALL
+  USING (current_setting('agor.system_scope', true) = 'rbac_migration_0095')
+  WITH CHECK (current_setting('agor.system_scope', true) = 'rbac_migration_0095');
+--> statement-breakpoint
+CREATE POLICY "rbac_migration_0095_all_tenants" ON "board_group_grants" FOR ALL
+  USING (current_setting('agor.system_scope', true) = 'rbac_migration_0095')
+  WITH CHECK (current_setting('agor.system_scope', true) = 'rbac_migration_0095');
+--> statement-breakpoint
+CREATE POLICY "rbac_migration_0095_all_tenants" ON "branch_group_grants" FOR ALL
+  USING (current_setting('agor.system_scope', true) = 'rbac_migration_0095')
+  WITH CHECK (current_setting('agor.system_scope', true) = 'rbac_migration_0095');
+--> statement-breakpoint
+SELECT set_config('agor.system_scope', 'rbac_migration_0095', true);
+--> statement-breakpoint
 -- Offline/big-bang RBAC remodel. No runtime dual-read/dual-write bridge is retained.
+-- A NULL primary owner is reserved as a quarantine marker for a legacy
+-- resource whose owner cannot be attributed without inventing a user or
+-- broadening access.
 ALTER TABLE "boards" ADD COLUMN "primary_owner_user_id" varchar(36);
 --> statement-breakpoint
 ALTER TABLE "branches" ADD COLUMN "primary_owner_user_id" varchar(36);
@@ -13,34 +52,36 @@ UPDATE "boards" b SET "primary_owner_user_id" = COALESCE(
    WHERE bo.tenant_id=b.tenant_id AND bo.board_id=b.board_id
    ORDER BY bo.created_at NULLS LAST,bo.user_id LIMIT 1),
   (SELECT u.user_id FROM users u WHERE u.tenant_id=b.tenant_id AND u.user_id=b.created_by)
-);
+)
+WHERE b."primary_owner_user_id" IS NULL;
 --> statement-breakpoint
 UPDATE "branches" br SET "primary_owner_user_id" = COALESCE(
   (SELECT bo.user_id FROM branch_owners bo JOIN users u ON u.tenant_id=bo.tenant_id AND u.user_id=bo.user_id
    WHERE bo.tenant_id=br.tenant_id AND bo.branch_id=br.branch_id
    ORDER BY bo.created_at NULLS LAST,bo.user_id LIMIT 1),
   (SELECT u.user_id FROM users u WHERE u.tenant_id=br.tenant_id AND u.user_id=br.created_by)
-);
+)
+WHERE br."primary_owner_user_id" IS NULL;
 --> statement-breakpoint
+-- Count-only diagnostics avoid writing tenant/resource identifiers to shared
+-- migration logs. The unresolved rows continue through the private quarantine
+-- path below instead of aborting the whole tenant or database cutover.
 DO $$
-DECLARE failures text;
+DECLARE missing_boards bigint; missing_branches bigint;
 BEGIN
-  SELECT string_agg(kind||':'||id, ', ' ORDER BY kind,id) INTO failures FROM (
-    SELECT 'board' kind, board_id id FROM boards WHERE primary_owner_user_id IS NULL
-    UNION ALL SELECT 'branch', branch_id FROM branches WHERE primary_owner_user_id IS NULL
-  ) missing;
-  IF failures IS NOT NULL THEN RAISE EXCEPTION 'RBAC migration cannot attribute primary owners: %', failures; END IF;
+  SELECT count(*) INTO missing_boards FROM boards WHERE primary_owner_user_id IS NULL;
+  SELECT count(*) INTO missing_branches FROM branches WHERE primary_owner_user_id IS NULL;
+  IF missing_boards > 0 OR missing_branches > 0 THEN
+    RAISE WARNING 'RBAC migration quarantined unattributable resources (boards=%, branches=%)', missing_boards, missing_branches;
+  END IF;
 END $$;
---> statement-breakpoint
-ALTER TABLE "boards" ALTER COLUMN "primary_owner_user_id" SET NOT NULL;
---> statement-breakpoint
-ALTER TABLE "branches" ALTER COLUMN "primary_owner_user_id" SET NOT NULL;
 --> statement-breakpoint
 -- Keep inheritance only when the board package already represents every old
 -- source of authority. Branch-specific owners/groups and a different board
 -- owner require a materialized override so directly representable grants are
 -- not discarded by the cutover.
 UPDATE "branches" br SET "permission_binding"=CASE
+ WHEN br."primary_owner_user_id" IS NULL THEN 'override'
  WHEN br."permission_source"='board' AND br."board_id" IS NOT NULL
   AND br."primary_owner_user_id"=(SELECT b."primary_owner_user_id" FROM "boards" b WHERE b."tenant_id"=br."tenant_id" AND b."board_id"=br."board_id")
   AND NOT EXISTS(SELECT 1 FROM "branch_owners" bo WHERE bo."tenant_id"=br."tenant_id" AND bo."branch_id"=br."branch_id" AND bo."user_id"<>br."primary_owner_user_id")
@@ -196,16 +237,22 @@ CREATE UNIQUE INDEX "branch_session_sharing_grants_rule_group_unique" ON "branch
 
 INSERT INTO board_access_policies
 SELECT b.tenant_id,b.board_id,1,
- CASE WHEN COALESCE(b.data->>'access_mode','shared')='shared'
+ CASE WHEN b.primary_owner_user_id IS NULL THEN 'private'
+   WHEN COALESCE(b.data->>'access_mode','shared')='shared'
    OR EXISTS(SELECT 1 FROM board_owners bo WHERE bo.tenant_id=b.tenant_id AND bo.board_id=b.board_id AND bo.user_id<>b.primary_owner_user_id)
    OR EXISTS(SELECT 1 FROM users u WHERE u.tenant_id=b.tenant_id AND u.user_id=b.created_by AND b.created_by<>b.primary_owner_user_id)
    THEN 'shared' ELSE 'private' END,
- CASE WHEN COALESCE(b.data->>'access_mode','shared')='shared' THEN 'viewer' ELSE 'none' END,
+ CASE WHEN b.primary_owner_user_id IS NOT NULL
+        AND COALESCE(b.data->>'access_mode','shared')='shared'
+      THEN 'viewer' ELSE 'none' END,
  1,b.primary_owner_user_id,COALESCE(b.created_at,now()),COALESCE(b.updated_at,b.created_at,now()) FROM boards b;
 --> statement-breakpoint
 INSERT INTO board_access_entries
 SELECT bo.tenant_id,gen_random_uuid()::text,bo.board_id,bo.user_id,NULL,'manager',COALESCE(bo.created_at,now()),COALESCE(bo.created_at,now())
-FROM board_owners bo JOIN boards b ON b.tenant_id=bo.tenant_id AND b.board_id=bo.board_id WHERE bo.user_id<>b.primary_owner_user_id;
+FROM board_owners bo
+JOIN boards b ON b.tenant_id=bo.tenant_id AND b.board_id=bo.board_id
+JOIN users owner_user ON owner_user.tenant_id=bo.tenant_id AND owner_user.user_id=bo.user_id
+WHERE b.primary_owner_user_id IS NOT NULL AND bo.user_id<>b.primary_owner_user_id;
 --> statement-breakpoint
 -- Legacy board visibility always included a valid creator independently of
 -- the mutable owner table. Preserve that authority as Manager without making
@@ -214,46 +261,61 @@ INSERT INTO board_access_entries
 SELECT b.tenant_id,gen_random_uuid()::text,b.board_id,b.created_by,NULL,'manager',
  COALESCE(b.created_at,now()),COALESCE(b.updated_at,b.created_at,now())
 FROM boards b JOIN users u ON u.tenant_id=b.tenant_id AND u.user_id=b.created_by
-WHERE b.created_by<>b.primary_owner_user_id
+WHERE b.primary_owner_user_id IS NOT NULL AND b.created_by<>b.primary_owner_user_id
 ON CONFLICT (tenant_id,board_id,user_id) DO UPDATE SET role='manager',updated_at=EXCLUDED.updated_at;
 --> statement-breakpoint
 INSERT INTO board_access_entries
 SELECT bg.tenant_id,gen_random_uuid()::text,bg.board_id,NULL,bg.group_id,CASE bg.can WHEN 'all' THEN 'manager' ELSE 'viewer' END,
  COALESCE(bg.created_at,now()),COALESCE(bg.updated_at,bg.created_at,now())
-FROM board_group_grants bg JOIN boards b ON b.tenant_id=bg.tenant_id AND b.board_id=bg.board_id
-WHERE bg.can<>'none' AND COALESCE(b.data->>'access_mode','shared')='shared';
+FROM board_group_grants bg
+JOIN boards b ON b.tenant_id=bg.tenant_id AND b.board_id=bg.board_id
+JOIN groups granted_group ON granted_group.tenant_id=bg.tenant_id AND granted_group.group_id=bg.group_id
+WHERE b.primary_owner_user_id IS NOT NULL
+ AND bg.can<>'none' AND COALESCE(b.data->>'access_mode','shared')='shared';
 --> statement-breakpoint
 
 INSERT INTO branch_permission_configs
 SELECT b.tenant_id,gen_random_uuid()::text,b.board_id,NULL,1,
- CASE WHEN COALESCE(b.data->>'access_mode','shared')='shared'
+ CASE WHEN b.primary_owner_user_id IS NULL THEN 'private'
+   WHEN COALESCE(b.data->>'access_mode','shared')='shared'
             AND (COALESCE(b.data->>'default_others_can','session')<>'none'
                  OR EXISTS(SELECT 1 FROM board_group_grants bg WHERE bg.tenant_id=b.tenant_id AND bg.board_id=b.board_id AND bg.can<>'none'))
    OR EXISTS(SELECT 1 FROM board_owners bo WHERE bo.tenant_id=b.tenant_id AND bo.board_id=b.board_id AND bo.user_id<>b.primary_owner_user_id)
    THEN 'shared' ELSE 'private' END,
- CASE WHEN COALESCE(b.data->>'access_mode','shared')='private' THEN 'none'
+ CASE WHEN b.primary_owner_user_id IS NULL OR COALESCE(b.data->>'access_mode','shared')='private' THEN 'none'
       ELSE CASE COALESCE(b.data->>'default_others_can','session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
- CASE WHEN COALESCE(b.data->>'access_mode','shared')='private' OR COALESCE(b.data->>'default_others_can','session')='none'
+ CASE WHEN b.primary_owner_user_id IS NULL OR COALESCE(b.data->>'access_mode','shared')='private' OR COALESCE(b.data->>'default_others_can','session')='none'
       THEN 'none' ELSE COALESCE(b.data->>'default_others_fs_access','read') END,
  1,b.primary_owner_user_id,COALESCE(b.created_at,now()),COALESCE(b.updated_at,b.created_at,now()) FROM boards b;
 --> statement-breakpoint
 INSERT INTO branch_permission_entries
 SELECT bo.tenant_id,gen_random_uuid()::text,c.config_id,bo.user_id,NULL,'manager','write',COALESCE(bo.created_at,now()),COALESCE(bo.created_at,now())
-FROM board_owners bo JOIN boards b ON b.tenant_id=bo.tenant_id AND b.board_id=bo.board_id JOIN branch_permission_configs c ON c.tenant_id=bo.tenant_id AND c.board_id=bo.board_id WHERE bo.user_id<>b.primary_owner_user_id;
+FROM board_owners bo
+JOIN boards b ON b.tenant_id=bo.tenant_id AND b.board_id=bo.board_id
+JOIN users owner_user ON owner_user.tenant_id=bo.tenant_id AND owner_user.user_id=bo.user_id
+JOIN branch_permission_configs c ON c.tenant_id=bo.tenant_id AND c.board_id=bo.board_id
+WHERE b.primary_owner_user_id IS NOT NULL AND bo.user_id<>b.primary_owner_user_id;
 --> statement-breakpoint
 INSERT INTO branch_permission_entries
 SELECT bg.tenant_id,gen_random_uuid()::text,c.config_id,NULL,bg.group_id,CASE bg.can WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
  COALESCE(bg.fs_access,'read'),COALESCE(bg.created_at,now()),COALESCE(bg.updated_at,bg.created_at,now())
-FROM board_group_grants bg JOIN boards b ON b.tenant_id=bg.tenant_id AND b.board_id=bg.board_id JOIN branch_permission_configs c ON c.tenant_id=bg.tenant_id AND c.board_id=bg.board_id
-WHERE bg.can<>'none' AND COALESCE(b.data->>'access_mode','shared')='shared';
+FROM board_group_grants bg
+JOIN boards b ON b.tenant_id=bg.tenant_id AND b.board_id=bg.board_id
+JOIN groups granted_group ON granted_group.tenant_id=bg.tenant_id AND granted_group.group_id=bg.group_id
+JOIN branch_permission_configs c ON c.tenant_id=bg.tenant_id AND c.board_id=bg.board_id
+WHERE b.primary_owner_user_id IS NOT NULL
+ AND bg.can<>'none' AND COALESCE(b.data->>'access_mode','shared')='shared';
 --> statement-breakpoint
 
 INSERT INTO branch_permission_configs
 SELECT br.tenant_id,gen_random_uuid()::text,NULL,br.branch_id,1,
- CASE WHEN br.permission_source='board' THEN 'shared'
+ CASE WHEN br.primary_owner_user_id IS NULL THEN 'private'
+  WHEN br.permission_source='board' THEN 'shared'
   WHEN COALESCE(br.others_can,'session')<>'none' OR EXISTS(SELECT 1 FROM branch_owners bo WHERE bo.tenant_id=br.tenant_id AND bo.branch_id=br.branch_id AND bo.user_id<>br.primary_owner_user_id) OR EXISTS(SELECT 1 FROM branch_group_grants bg WHERE bg.tenant_id=br.tenant_id AND bg.branch_id=br.branch_id AND bg.can<>'none') THEN 'shared' ELSE 'private' END,
- CASE WHEN br.permission_source='board' THEN board_config.others_role ELSE CASE COALESCE(br.others_can,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
- CASE WHEN br.permission_source='board' THEN board_config.others_fs_access WHEN COALESCE(br.others_can,'session')='none' THEN 'none' ELSE COALESCE(br.others_fs_access,'read') END,
+ CASE WHEN br.primary_owner_user_id IS NULL THEN 'none'
+  WHEN br.permission_source='board' THEN board_config.others_role ELSE CASE COALESCE(br.others_can,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
+ CASE WHEN br.primary_owner_user_id IS NULL THEN 'none'
+  WHEN br.permission_source='board' THEN board_config.others_fs_access WHEN COALESCE(br.others_can,'session')='none' THEN 'none' ELSE COALESCE(br.others_fs_access,'read') END,
  1,br.primary_owner_user_id,COALESCE(br.created_at,now()),COALESCE(br.updated_at,br.created_at,now())
 FROM branches br
 LEFT JOIN branch_permission_configs board_config ON board_config.tenant_id=br.tenant_id AND board_config.board_id=br.board_id
@@ -268,6 +330,7 @@ JOIN branch_permission_configs target ON target.tenant_id=br.tenant_id AND targe
 JOIN branch_permission_configs source ON source.tenant_id=br.tenant_id AND source.board_id=br.board_id
 JOIN branch_permission_entries source_entry ON source_entry.tenant_id=source.tenant_id AND source_entry.config_id=source.config_id
 WHERE br.permission_source='board'
+ AND br.primary_owner_user_id IS NOT NULL
  AND (source_entry.user_id IS NULL OR source_entry.user_id<>br.primary_owner_user_id);
 --> statement-breakpoint
 -- A board owner was an implicit branch owner under the old board-aligned
@@ -283,13 +346,21 @@ ON CONFLICT (tenant_id,config_id,user_id) DO NOTHING;
 --> statement-breakpoint
 INSERT INTO branch_permission_entries
 SELECT bo.tenant_id,gen_random_uuid()::text,c.config_id,bo.user_id,NULL,'manager','write',COALESCE(bo.created_at,now()),COALESCE(bo.created_at,now())
-FROM branch_owners bo JOIN branches br ON br.tenant_id=bo.tenant_id AND br.branch_id=bo.branch_id JOIN branch_permission_configs c ON c.tenant_id=bo.tenant_id AND c.branch_id=bo.branch_id WHERE bo.user_id<>br.primary_owner_user_id
+FROM branch_owners bo
+JOIN branches br ON br.tenant_id=bo.tenant_id AND br.branch_id=bo.branch_id
+JOIN users owner_user ON owner_user.tenant_id=bo.tenant_id AND owner_user.user_id=bo.user_id
+JOIN branch_permission_configs c ON c.tenant_id=bo.tenant_id AND c.branch_id=bo.branch_id
+WHERE br.primary_owner_user_id IS NOT NULL AND bo.user_id<>br.primary_owner_user_id
 ON CONFLICT (tenant_id,config_id,user_id) DO UPDATE SET role='manager',fs_access='write',updated_at=EXCLUDED.updated_at;
 --> statement-breakpoint
 INSERT INTO branch_permission_entries
 SELECT bg.tenant_id,gen_random_uuid()::text,c.config_id,NULL,bg.group_id,CASE bg.can WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
  COALESCE(bg.fs_access,'read'),COALESCE(bg.created_at,now()),COALESCE(bg.updated_at,bg.created_at,now())
-FROM branch_group_grants bg JOIN branch_permission_configs c ON c.tenant_id=bg.tenant_id AND c.branch_id=bg.branch_id WHERE bg.can<>'none'
+FROM branch_group_grants bg
+JOIN branches br ON br.tenant_id=bg.tenant_id AND br.branch_id=bg.branch_id
+JOIN groups granted_group ON granted_group.tenant_id=bg.tenant_id AND granted_group.group_id=bg.group_id
+JOIN branch_permission_configs c ON c.tenant_id=bg.tenant_id AND c.branch_id=bg.branch_id
+WHERE br.primary_owner_user_id IS NOT NULL AND bg.can<>'none'
 ON CONFLICT (tenant_id,config_id,group_id) DO UPDATE SET
  role=CASE
   WHEN EXCLUDED.role='manager' OR branch_permission_entries.role='manager' THEN 'manager'
@@ -317,12 +388,43 @@ UPDATE boards SET data=(data-'access_mode'-'default_others_can'-'default_others_
  '{"access_mode":"private","default_others_can":"none","default_others_fs_access":"none","default_dangerously_allow_session_sharing":false}'::jsonb;
 --> statement-breakpoint
 
-CREATE FUNCTION agor_reject_primary_owner_change() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
- IF NEW.primary_owner_user_id IS DISTINCT FROM OLD.primary_owner_user_id THEN RAISE EXCEPTION 'primary owner is immutable'; END IF; RETURN NEW; END $$;
+CREATE FUNCTION agor_enforce_primary_owner() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+ IF TG_OP='INSERT' AND NEW.primary_owner_user_id IS NULL THEN
+  RAISE EXCEPTION '% primary owner is required', TG_TABLE_NAME;
+ END IF;
+ IF TG_OP='UPDATE' AND OLD.primary_owner_user_id IS NOT NULL
+    AND NEW.primary_owner_user_id IS DISTINCT FROM OLD.primary_owner_user_id THEN
+  RAISE EXCEPTION 'primary owner is immutable';
+ END IF;
+ RETURN NEW;
+END $$;
 --> statement-breakpoint
-CREATE TRIGGER boards_primary_owner_immutable BEFORE UPDATE OF primary_owner_user_id ON boards FOR EACH ROW EXECUTE FUNCTION agor_reject_primary_owner_change();
+CREATE TRIGGER boards_primary_owner_required BEFORE INSERT ON boards FOR EACH ROW EXECUTE FUNCTION agor_enforce_primary_owner();
 --> statement-breakpoint
-CREATE TRIGGER branches_primary_owner_immutable BEFORE UPDATE OF primary_owner_user_id ON branches FOR EACH ROW EXECUTE FUNCTION agor_reject_primary_owner_change();
+CREATE TRIGGER branches_primary_owner_required BEFORE INSERT ON branches FOR EACH ROW EXECUTE FUNCTION agor_enforce_primary_owner();
+--> statement-breakpoint
+CREATE TRIGGER boards_primary_owner_immutable BEFORE UPDATE OF primary_owner_user_id ON boards FOR EACH ROW EXECUTE FUNCTION agor_enforce_primary_owner();
+--> statement-breakpoint
+CREATE TRIGGER branches_primary_owner_immutable BEFORE UPDATE OF primary_owner_user_id ON branches FOR EACH ROW EXECUTE FUNCTION agor_enforce_primary_owner();
+--> statement-breakpoint
+
+DROP POLICY "rbac_migration_0095_all_tenants" ON "boards";
+--> statement-breakpoint
+DROP POLICY "rbac_migration_0095_all_tenants" ON "branches";
+--> statement-breakpoint
+DROP POLICY "rbac_migration_0095_all_tenants" ON "users";
+--> statement-breakpoint
+DROP POLICY "rbac_migration_0095_all_tenants" ON "groups";
+--> statement-breakpoint
+DROP POLICY "rbac_migration_0095_all_tenants" ON "board_owners";
+--> statement-breakpoint
+DROP POLICY "rbac_migration_0095_all_tenants" ON "branch_owners";
+--> statement-breakpoint
+DROP POLICY "rbac_migration_0095_all_tenants" ON "board_group_grants";
+--> statement-breakpoint
+DROP POLICY "rbac_migration_0095_all_tenants" ON "branch_group_grants";
+--> statement-breakpoint
+SELECT set_config('agor.system_scope', '', true);
 --> statement-breakpoint
 
 -- Every normalized policy table is tenant-owned and forced through the same RLS boundary.

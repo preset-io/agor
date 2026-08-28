@@ -548,8 +548,11 @@ export const boards = sqliteTable(
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
     // User deletion guards are a separate lifecycle flow; this immutable
-    // logical owner pointer intentionally does not cascade or transfer.
-    primary_owner_user_id: text('primary_owner_user_id', { length: 36 }).notNull(),
+    // logical owner pointer intentionally does not cascade or transfer. NULL
+    // is reserved for legacy rows that migration 0098 could not safely
+    // attribute. New writes require a real owner and authorization treats
+    // these quarantined rows as inaccessible.
+    primary_owner_user_id: text('primary_owner_user_id', { length: 36 }),
 
     // Materialized for lookups
     name: text('name').notNull(),
@@ -700,7 +703,10 @@ export const branches = sqliteTable(
 
     // User attribution
     created_by: text('created_by', { length: 36 }).notNull(),
-    primary_owner_user_id: text('primary_owner_user_id', { length: 36 }).notNull(),
+    // NULL is the fail-closed quarantine marker for an unattributable legacy
+    // row. Repository creation and database triggers still require an owner
+    // for every new Branch.
+    primary_owner_user_id: text('primary_owner_user_id', { length: 36 }),
 
     // Materialized for queries
     name: text('name').notNull(), // "feat-auth", "main"

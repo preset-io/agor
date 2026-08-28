@@ -140,7 +140,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
           ? new Date(row.updated_at).toISOString()
           : new Date(row.created_at).toISOString(),
         created_by: row.created_by,
-        primary_owner_user_id: row.primary_owner_user_id,
+        primary_owner_user_id: row.primary_owner_user_id ?? undefined,
         url,
         archived: Boolean(row.archived),
         archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
@@ -162,7 +162,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   /**
    * Convert Board to database insert format
    */
-  private boardToInsert(board: Partial<Board>): BoardInsert {
+  private boardToInsert(board: Partial<Board>): BoardInsert & { primary_owner_user_id: string } {
     validateBoardPermissionDefaults(board);
     const now = Date.now();
     const boardId = board.board_id ?? generateId();
@@ -614,7 +614,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async getOwners(boardId: string): Promise<UUID[]> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);
-    return [board.primary_owner_user_id as UUID];
+    return board.primary_owner_user_id ? [board.primary_owner_user_id as UUID] : [];
   }
 
   async addOwner(boardId: string, userId: UUID): Promise<void> {

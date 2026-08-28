@@ -586,8 +586,11 @@ export const boards = pgTable(
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
     // Deletion guards are handled by the dedicated user lifecycle flow. This
-    // owner pointer is immutable and is never cascaded or re-attributed.
-    primary_owner_user_id: varchar('primary_owner_user_id', { length: 36 }).notNull(),
+    // owner pointer is immutable and is never cascaded or re-attributed. NULL
+    // is reserved for legacy rows that migration 0095 could not safely
+    // attribute. New writes require a real owner and authorization treats
+    // these quarantined rows as inaccessible.
+    primary_owner_user_id: varchar('primary_owner_user_id', { length: 36 }),
 
     // Materialized for lookups
     name: text('name').notNull(),
@@ -744,7 +747,9 @@ export const branches = pgTable(
 
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
-    primary_owner_user_id: varchar('primary_owner_user_id', { length: 36 }).notNull(),
+    // NULL is the fail-closed quarantine marker for an unattributable legacy
+    // row. Repository creation still requires an owner for every new Branch.
+    primary_owner_user_id: varchar('primary_owner_user_id', { length: 36 }),
 
     // Materialized for queries
     name: text('name').notNull(), // "feat-auth", "main"

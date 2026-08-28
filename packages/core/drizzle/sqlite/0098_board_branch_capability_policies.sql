@@ -1,5 +1,7 @@
 -- Offline/big-bang RBAC remodel. The migration deliberately does not retain a
--- runtime fallback to the legacy owner/grant/default fields.
+-- runtime fallback to the legacy owner/grant/default fields. A NULL primary
+-- owner is reserved as a quarantine marker for a legacy resource whose owner
+-- cannot be attributed without inventing a user or broadening access.
 ALTER TABLE `boards` ADD COLUMN `primary_owner_user_id` text;
 --> statement-breakpoint
 ALTER TABLE `branches` ADD COLUMN `primary_owner_user_id` text;
@@ -16,7 +18,8 @@ SET `primary_owner_user_id` = CASE
           WHERE bo.`board_id` = `boards`.`board_id`
           ORDER BY (bo.`created_at` IS NULL), bo.`created_at`, bo.`user_id` LIMIT 1)
   WHEN EXISTS (SELECT 1 FROM `users` WHERE `users`.`user_id` = `boards`.`created_by`) THEN `created_by`
-END;
+END
+WHERE `primary_owner_user_id` IS NULL;
 --> statement-breakpoint
 UPDATE `branches`
 SET `primary_owner_user_id` = CASE
@@ -27,23 +30,15 @@ SET `primary_owner_user_id` = CASE
           WHERE bo.`branch_id` = `branches`.`branch_id`
           ORDER BY (bo.`created_at` IS NULL), bo.`created_at`, bo.`user_id` LIMIT 1)
   WHEN EXISTS (SELECT 1 FROM `users` WHERE `users`.`user_id` = `branches`.`created_by`) THEN `created_by`
-END;
---> statement-breakpoint
--- Fail closed instead of silently assigning an administrator when attribution is impossible.
-CREATE TEMP TABLE `_rbac_owner_preflight` (`ok` integer NOT NULL CHECK (`ok` = 1));
---> statement-breakpoint
-INSERT INTO `_rbac_owner_preflight` (`ok`)
-SELECT 0 FROM `boards` WHERE `primary_owner_user_id` IS NULL
-UNION ALL
-SELECT 0 FROM `branches` WHERE `primary_owner_user_id` IS NULL;
---> statement-breakpoint
-DROP TABLE `_rbac_owner_preflight`;
+END
+WHERE `primary_owner_user_id` IS NULL;
 --> statement-breakpoint
 -- Keep inheritance only when the board package already represents every old
 -- source of authority. Branch-specific owners/groups and a different board
 -- owner require a materialized override so the cutover does not discard a
 -- directly representable grant.
 UPDATE `branches` SET `permission_binding` = CASE
+  WHEN `primary_owner_user_id` IS NULL THEN 'override'
   WHEN `permission_source` = 'board' AND `board_id` IS NOT NULL
     AND `primary_owner_user_id` = (SELECT b.`primary_owner_user_id` FROM `boards` b WHERE b.`board_id`=`branches`.`board_id`)
     AND NOT EXISTS (SELECT 1 FROM `branch_owners` bo WHERE bo.`branch_id`=`branches`.`branch_id` AND bo.`user_id`<>`branches`.`primary_owner_user_id`)
@@ -166,11 +161,14 @@ CREATE UNIQUE INDEX `branch_session_sharing_grants_rule_group_unique` ON `branch
 -- besides the primary owner must remain Managers.
 INSERT INTO `board_access_policies`
 SELECT b.`board_id`, 1,
-  CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared') = 'shared'
+  CASE WHEN b.`primary_owner_user_id` IS NULL THEN 'private'
+       WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared') = 'shared'
          OR EXISTS (SELECT 1 FROM `board_owners` bo WHERE bo.`board_id`=b.`board_id` AND bo.`user_id`<>b.`primary_owner_user_id`)
          OR EXISTS (SELECT 1 FROM `users` u WHERE u.`user_id`=b.`created_by` AND b.`created_by`<>b.`primary_owner_user_id`)
        THEN 'shared' ELSE 'private' END,
-  CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared') = 'shared' THEN 'viewer' ELSE 'none' END,
+  CASE WHEN b.`primary_owner_user_id` IS NOT NULL
+         AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared') = 'shared'
+       THEN 'viewer' ELSE 'none' END,
   1, b.`primary_owner_user_id`, COALESCE(b.`created_at`, unixepoch()*1000), COALESCE(b.`updated_at`, b.`created_at`, unixepoch()*1000)
 FROM `boards` b;
 --> statement-breakpoint
@@ -178,8 +176,11 @@ INSERT INTO `board_access_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   bo.`board_id`, bo.`user_id`, NULL, 'manager',
   COALESCE(bo.`created_at`, unixepoch()*1000), COALESCE(bo.`created_at`, unixepoch()*1000)
-FROM `board_owners` bo JOIN `boards` b ON b.`board_id`=bo.`board_id`
-WHERE bo.`user_id`<>b.`primary_owner_user_id`;
+FROM `board_owners` bo
+JOIN `boards` b ON b.`board_id`=bo.`board_id`
+JOIN `users` owner_user ON owner_user.`user_id`=bo.`user_id`
+WHERE b.`primary_owner_user_id` IS NOT NULL
+  AND bo.`user_id`<>b.`primary_owner_user_id`;
 --> statement-breakpoint
 -- Legacy board visibility always included a valid creator independently of
 -- the mutable owner table. Preserve that authority as Manager without making
@@ -189,15 +190,19 @@ SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(l
   b.`board_id`, b.`created_by`, NULL, 'manager',
   COALESCE(b.`created_at`, unixepoch()*1000), COALESCE(b.`updated_at`, b.`created_at`, unixepoch()*1000)
 FROM `boards` b JOIN `users` u ON u.`user_id`=b.`created_by`
-WHERE b.`created_by`<>b.`primary_owner_user_id`
+WHERE b.`primary_owner_user_id` IS NOT NULL
+  AND b.`created_by`<>b.`primary_owner_user_id`
 ON CONFLICT (`board_id`,`user_id`) DO UPDATE SET `role`='manager',`updated_at`=excluded.`updated_at`;
 --> statement-breakpoint
 INSERT INTO `board_access_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   bg.`board_id`, NULL, bg.`group_id`, CASE bg.`can` WHEN 'all' THEN 'manager' ELSE 'viewer' END,
   COALESCE(bg.`created_at`, unixepoch()*1000), COALESCE(bg.`updated_at`, bg.`created_at`, unixepoch()*1000)
-FROM `board_group_grants` bg JOIN `boards` b ON b.`board_id`=bg.`board_id`
-WHERE bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared';
+FROM `board_group_grants` bg
+JOIN `boards` b ON b.`board_id`=bg.`board_id`
+JOIN `groups` granted_group ON granted_group.`group_id`=bg.`group_id`
+WHERE b.`primary_owner_user_id` IS NOT NULL
+  AND bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared';
 --> statement-breakpoint
 
 -- One branch template per board. Legacy prompt is intentionally reduced to
@@ -205,14 +210,17 @@ WHERE bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'sh
 INSERT INTO `branch_permission_configs`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   b.`board_id`, NULL, 1,
-  CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared'
+  CASE WHEN b.`primary_owner_user_id` IS NULL THEN 'private'
+       WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared'
          AND (COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session')<>'none'
               OR EXISTS (SELECT 1 FROM `board_group_grants` bg WHERE bg.`board_id`=b.`board_id` AND bg.`can`<>'none'))
          OR EXISTS (SELECT 1 FROM `board_owners` bo WHERE bo.`board_id`=b.`board_id` AND bo.`user_id`<>b.`primary_owner_user_id`)
        THEN 'shared' ELSE 'private' END,
-  CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='private' THEN 'none'
+  CASE WHEN b.`primary_owner_user_id` IS NULL
+         OR COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='private' THEN 'none'
        ELSE CASE COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
-  CASE WHEN COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='private'
+  CASE WHEN b.`primary_owner_user_id` IS NULL
+         OR COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='private'
          OR COALESCE(json_extract(b.`data`, '$.default_others_can'), 'session')='none'
        THEN 'none' ELSE COALESCE(json_extract(b.`data`, '$.default_others_fs_access'), 'read') END,
   1, b.`primary_owner_user_id`, COALESCE(b.`created_at`, unixepoch()*1000), COALESCE(b.`updated_at`, b.`created_at`, unixepoch()*1000)
@@ -222,18 +230,24 @@ INSERT INTO `branch_permission_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   c.`config_id`, bo.`user_id`, NULL, 'manager',
   'write', COALESCE(bo.`created_at`, unixepoch()*1000), COALESCE(bo.`created_at`, unixepoch()*1000)
-FROM `board_owners` bo JOIN `boards` b ON b.`board_id`=bo.`board_id`
+FROM `board_owners` bo
+JOIN `boards` b ON b.`board_id`=bo.`board_id`
+JOIN `users` owner_user ON owner_user.`user_id`=bo.`user_id`
 JOIN `branch_permission_configs` c ON c.`board_id`=bo.`board_id`
-WHERE bo.`user_id`<>b.`primary_owner_user_id`;
+WHERE b.`primary_owner_user_id` IS NOT NULL
+  AND bo.`user_id`<>b.`primary_owner_user_id`;
 --> statement-breakpoint
 INSERT INTO `branch_permission_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   c.`config_id`, NULL, bg.`group_id`, CASE bg.`can` WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
   CASE WHEN bg.`can`='none' THEN 'none' ELSE COALESCE(bg.`fs_access`,'read') END,
   COALESCE(bg.`created_at`, unixepoch()*1000), COALESCE(bg.`updated_at`, bg.`created_at`, unixepoch()*1000)
-FROM `board_group_grants` bg JOIN `boards` b ON b.`board_id`=bg.`board_id`
+FROM `board_group_grants` bg
+JOIN `boards` b ON b.`board_id`=bg.`board_id`
+JOIN `groups` granted_group ON granted_group.`group_id`=bg.`group_id`
 JOIN `branch_permission_configs` c ON c.`board_id`=bg.`board_id`
-WHERE bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared';
+WHERE b.`primary_owner_user_id` IS NOT NULL
+  AND bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'shared')='shared';
 --> statement-breakpoint
 
 -- Explicit branch packages. A branch that formerly used board permissions is
@@ -242,14 +256,17 @@ WHERE bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'sh
 INSERT INTO `branch_permission_configs`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   NULL, br.`branch_id`, 1,
-  CASE WHEN br.`permission_source`='board' THEN 'shared'
+  CASE WHEN br.`primary_owner_user_id` IS NULL THEN 'private'
+       WHEN br.`permission_source`='board' THEN 'shared'
        WHEN COALESCE(br.`others_can`,'session')<>'none'
          OR EXISTS (SELECT 1 FROM `branch_owners` bo WHERE bo.`branch_id`=br.`branch_id` AND bo.`user_id`<>br.`primary_owner_user_id`)
          OR EXISTS (SELECT 1 FROM `branch_group_grants` bg WHERE bg.`branch_id`=br.`branch_id` AND bg.`can`<>'none')
        THEN 'shared' ELSE 'private' END,
-  CASE WHEN br.`permission_source`='board' THEN board_config.`others_role`
+  CASE WHEN br.`primary_owner_user_id` IS NULL THEN 'none'
+       WHEN br.`permission_source`='board' THEN board_config.`others_role`
        ELSE CASE COALESCE(br.`others_can`,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
-  CASE WHEN br.`permission_source`='board' THEN board_config.`others_fs_access`
+  CASE WHEN br.`primary_owner_user_id` IS NULL THEN 'none'
+       WHEN br.`permission_source`='board' THEN board_config.`others_fs_access`
        WHEN COALESCE(br.`others_can`,'session')='none' THEN 'none' ELSE COALESCE(br.`others_fs_access`,'read') END,
   1, br.`primary_owner_user_id`, COALESCE(br.`created_at`, unixepoch()*1000), COALESCE(br.`updated_at`, br.`created_at`, unixepoch()*1000)
 FROM `branches` br
@@ -266,6 +283,7 @@ JOIN `branch_permission_configs` target ON target.`branch_id`=br.`branch_id`
 JOIN `branch_permission_configs` source ON source.`board_id`=br.`board_id`
 JOIN `branch_permission_entries` source_entry ON source_entry.`config_id`=source.`config_id`
 WHERE br.`permission_source`='board'
+  AND br.`primary_owner_user_id` IS NOT NULL
   AND (source_entry.`user_id` IS NULL OR source_entry.`user_id`<>br.`primary_owner_user_id`);
 --> statement-breakpoint
 -- A board owner was an implicit branch owner under the old board-aligned
@@ -284,9 +302,12 @@ INSERT INTO `branch_permission_entries`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   c.`config_id`, bo.`user_id`, NULL, 'manager',
   'write', COALESCE(bo.`created_at`, unixepoch()*1000), COALESCE(bo.`created_at`, unixepoch()*1000)
-FROM `branch_owners` bo JOIN `branches` br ON br.`branch_id`=bo.`branch_id`
+FROM `branch_owners` bo
+JOIN `branches` br ON br.`branch_id`=bo.`branch_id`
+JOIN `users` owner_user ON owner_user.`user_id`=bo.`user_id`
 JOIN `branch_permission_configs` c ON c.`branch_id`=bo.`branch_id`
-WHERE bo.`user_id`<>br.`primary_owner_user_id`
+WHERE br.`primary_owner_user_id` IS NOT NULL
+  AND bo.`user_id`<>br.`primary_owner_user_id`
 ON CONFLICT (`config_id`,`user_id`) DO UPDATE SET `role`='manager',`fs_access`='write',`updated_at`=excluded.`updated_at`;
 --> statement-breakpoint
 INSERT INTO `branch_permission_entries`
@@ -294,7 +315,9 @@ SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(l
   c.`config_id`, NULL, bg.`group_id`, CASE bg.`can` WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END,
   COALESCE(bg.`fs_access`,'read'), COALESCE(bg.`created_at`, unixepoch()*1000), COALESCE(bg.`updated_at`, bg.`created_at`, unixepoch()*1000)
 FROM `branch_group_grants` bg JOIN `branch_permission_configs` c ON c.`branch_id`=bg.`branch_id`
-WHERE bg.`can`<>'none'
+JOIN `branches` br ON br.`branch_id`=bg.`branch_id`
+JOIN `groups` granted_group ON granted_group.`group_id`=bg.`group_id`
+WHERE br.`primary_owner_user_id` IS NOT NULL AND bg.`can`<>'none'
 ON CONFLICT (`config_id`,`group_id`) DO UPDATE SET
   `role`=CASE
     WHEN excluded.`role`='manager' OR `branch_permission_entries`.`role`='manager' THEN 'manager'
@@ -329,11 +352,13 @@ UPDATE `boards` SET `data`=json_set(
 );
 --> statement-breakpoint
 CREATE TRIGGER `boards_primary_owner_immutable` BEFORE UPDATE OF `primary_owner_user_id` ON `boards`
-WHEN NEW.`primary_owner_user_id` IS NOT OLD.`primary_owner_user_id`
+WHEN OLD.`primary_owner_user_id` IS NOT NULL
+  AND NEW.`primary_owner_user_id` IS NOT OLD.`primary_owner_user_id`
 BEGIN SELECT RAISE(ABORT, 'board primary owner is immutable'); END;
 --> statement-breakpoint
 CREATE TRIGGER `branches_primary_owner_immutable` BEFORE UPDATE OF `primary_owner_user_id` ON `branches`
-WHEN NEW.`primary_owner_user_id` IS NOT OLD.`primary_owner_user_id`
+WHEN OLD.`primary_owner_user_id` IS NOT NULL
+  AND NEW.`primary_owner_user_id` IS NOT OLD.`primary_owner_user_id`
 BEGIN SELECT RAISE(ABORT, 'branch primary owner is immutable'); END;
 --> statement-breakpoint
 CREATE TRIGGER `boards_primary_owner_required` BEFORE INSERT ON `boards`
@@ -341,7 +366,13 @@ WHEN NEW.`primary_owner_user_id` IS NULL
 BEGIN SELECT RAISE(ABORT, 'board primary owner is required'); END;
 --> statement-breakpoint
 CREATE TRIGGER `boards_primary_owner_exists` BEFORE INSERT ON `boards`
-WHEN NOT EXISTS (
+WHEN NEW.`primary_owner_user_id` IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM `users` WHERE `user_id`=NEW.`primary_owner_user_id`
+)
+BEGIN SELECT RAISE(ABORT, 'board primary owner does not exist'); END;
+--> statement-breakpoint
+CREATE TRIGGER `boards_primary_owner_repair_exists` BEFORE UPDATE OF `primary_owner_user_id` ON `boards`
+WHEN OLD.`primary_owner_user_id` IS NULL AND NOT EXISTS (
   SELECT 1 FROM `users` WHERE `user_id`=NEW.`primary_owner_user_id`
 )
 BEGIN SELECT RAISE(ABORT, 'board primary owner does not exist'); END;
@@ -351,7 +382,13 @@ WHEN NEW.`primary_owner_user_id` IS NULL
 BEGIN SELECT RAISE(ABORT, 'branch primary owner is required'); END;
 --> statement-breakpoint
 CREATE TRIGGER `branches_primary_owner_exists` BEFORE INSERT ON `branches`
-WHEN NOT EXISTS (
+WHEN NEW.`primary_owner_user_id` IS NOT NULL AND NOT EXISTS (
+  SELECT 1 FROM `users` WHERE `user_id`=NEW.`primary_owner_user_id`
+)
+BEGIN SELECT RAISE(ABORT, 'branch primary owner does not exist'); END;
+--> statement-breakpoint
+CREATE TRIGGER `branches_primary_owner_repair_exists` BEFORE UPDATE OF `primary_owner_user_id` ON `branches`
+WHEN OLD.`primary_owner_user_id` IS NULL AND NOT EXISTS (
   SELECT 1 FROM `users` WHERE `user_id`=NEW.`primary_owner_user_id`
 )
 BEGIN SELECT RAISE(ABORT, 'branch primary owner does not exist'); END;

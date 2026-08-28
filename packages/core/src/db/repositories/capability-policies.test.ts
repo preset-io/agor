@@ -7,13 +7,13 @@ import type {
   GroupID,
   UserID,
 } from '@agor/core/types';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { capabilityPolicyPresetCapabilities } from '../../types/capability-policy';
 import type { Database } from '../client';
-import { update } from '../database-wrapper';
-import { branchPermissionConfigs } from '../schema';
+import { executeRaw, update } from '../database-wrapper';
+import { boardAccessPolicies, boards, branches, branchPermissionConfigs } from '../schema';
 import { dbTest } from '../test-helpers';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
@@ -336,6 +336,66 @@ describe('CapabilityPolicyRepository', () => {
       ).resolves.toBeNull();
       await expect(branches.findRealtimeViewUserIds(value.branchId)).resolves.not.toContain(
         value.direct
+      );
+    }
+  );
+
+  dbTest(
+    'denies ownerless migration quarantines in point, inventory, realtime, and prompt authorization',
+    async ({ db }) => {
+      const value = await fixture(db);
+      const policies = new CapabilityPolicyRepository(db);
+      const boardRepo = new BoardRepository(db);
+      const branchRepo = new BranchRepository(db);
+
+      // Only the unreleased migration can create this state. Drop the SQLite
+      // immutability triggers to model its retained legacy NULLs, then corrupt
+      // both fallbacks to prove authorization does not rely on private data
+      // alone. Production repair never uses this test-only seam.
+      await executeRaw(db, sql`DROP TRIGGER boards_primary_owner_immutable`);
+      await executeRaw(db, sql`DROP TRIGGER branches_primary_owner_immutable`);
+      await update(db, boards)
+        .set({ primary_owner_user_id: null })
+        .where(eq(boards.board_id, value.boardId))
+        .run();
+      await update(db, branches)
+        .set({ primary_owner_user_id: null })
+        .where(eq(branches.branch_id, value.branchId))
+        .run();
+      await update(db, boardAccessPolicies)
+        .set({ sharing_mode: 'shared', others_role: 'manager' })
+        .where(eq(boardAccessPolicies.board_id, value.boardId))
+        .run();
+      await update(db, branchPermissionConfigs)
+        .set({ sharing_mode: 'shared', others_role: 'manager', others_fs_access: 'write' })
+        .where(eq(branchPermissionConfigs.branch_id, value.branchId))
+        .run();
+
+      await expect(
+        policies.resolveBoardAccess(value.boardId, value.unmatched)
+      ).resolves.toMatchObject({ capabilities: [], fs_access: 'none', is_primary_owner: false });
+      await expect(
+        policies.resolveBranchAccess(value.branchId, value.unmatched)
+      ).resolves.toMatchObject({ capabilities: [], fs_access: 'none', is_primary_owner: false });
+      await expect(
+        policies.resolveSessionPromptAuthority({
+          branch_id: value.branchId,
+          caller_user_id: value.unmatched,
+          session_owner_user_id: value.unmatched,
+        })
+      ).resolves.toEqual({ allowed: false, source: 'denied' });
+      await expect(boardRepo.findAll({ visibleToUserId: value.unmatched })).resolves.toEqual([]);
+      await expect(
+        branchRepo.findAccessibleById(value.branchId, value.unmatched, {
+          minimumPermission: 'view',
+        })
+      ).resolves.toBeNull();
+      await expect(boardRepo.findRealtimeViewUserIds(value.boardId)).resolves.toEqual([]);
+      await expect(branchRepo.findRealtimeViewUserIds(value.branchId)).resolves.toEqual([]);
+      await expect(boardRepo.getOwners(value.boardId)).resolves.toEqual([]);
+      await expect(branchRepo.getOwners(value.branchId)).resolves.toEqual([]);
+      await expect(branchRepo.bulkLoadOwners([value.branchId])).resolves.toEqual(
+        new Map([[value.branchId, []]])
       );
     }
   );

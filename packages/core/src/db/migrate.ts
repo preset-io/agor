@@ -258,39 +258,45 @@ export function pendingOfflineCutoverMigrations(
   );
 }
 
+export interface CapabilityPolicyOwnerBackfillDiagnostics {
+  unattributedBoards: number;
+  unattributedBranches: number;
+}
+
 /**
- * SQLite cannot interpolate object ids into a trigger/constraint error. Run a
- * readable preflight before the transactional migration so operators know
- * exactly which protected resources need manual cleanup or attribution.
+ * Count legacy resources that the SQLite RBAC migration will quarantine.
+ *
+ * Resource IDs and attribution values are deliberately never returned: this
+ * object is written to shared startup/CLI logs, where counts are sufficient
+ * to tell an operator that offline repair is needed without disclosing tenant
+ * resource identifiers.
  */
-export async function preflightSQLiteCapabilityPolicyOwners(db: Database): Promise<void> {
-  if (!isSQLiteDatabase(db)) return;
+export async function inspectSQLiteCapabilityPolicyOwnerBackfill(
+  db: Database
+): Promise<CapabilityPolicyOwnerBackfillDiagnostics> {
+  if (!isSQLiteDatabase(db)) return { unattributedBoards: 0, unattributedBranches: 0 };
   const result = await db.run(sql`
-    SELECT 'board' AS kind, b.board_id AS id
-    FROM boards b
-    WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = b.created_by)
-      AND NOT EXISTS (
-        SELECT 1 FROM board_owners bo
-        JOIN users u ON u.user_id = bo.user_id
-        WHERE bo.board_id = b.board_id
-      )
-    UNION ALL
-    SELECT 'branch' AS kind, br.branch_id AS id
-    FROM branches br
-    WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = br.created_by)
-      AND NOT EXISTS (
-        SELECT 1 FROM branch_owners bo
-        JOIN users u ON u.user_id = bo.user_id
-        WHERE bo.branch_id = br.branch_id
-      )
-    ORDER BY kind, id
-    LIMIT 100
+    SELECT
+      (SELECT count(*) FROM boards b
+       WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = b.created_by)
+         AND NOT EXISTS (
+           SELECT 1 FROM board_owners bo
+           JOIN users u ON u.user_id = bo.user_id
+           WHERE bo.board_id = b.board_id
+         )) AS unattributed_boards,
+      (SELECT count(*) FROM branches br
+       WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.user_id = br.created_by)
+         AND NOT EXISTS (
+           SELECT 1 FROM branch_owners bo
+           JOIN users u ON u.user_id = bo.user_id
+           WHERE bo.branch_id = br.branch_id
+         )) AS unattributed_branches
   `);
-  if (result.rows.length === 0) return;
-  const failures = result.rows.map((row) => `${String(row.kind)}:${String(row.id)}`).join(', ');
-  throw new MigrationError(
-    `RBAC migration cannot attribute primary owners: ${failures}. Delete these resources or restore an existing creator/owner, then rerun the migration.`
-  );
+  const row = result.rows[0];
+  return {
+    unattributedBoards: Number(row?.unattributed_boards ?? 0),
+    unattributedBranches: Number(row?.unattributed_branches ?? 0),
+  };
 }
 
 function getRootCause(error: unknown): unknown {
@@ -537,7 +543,14 @@ export async function runMigrations(
       status.applied.length > 0 &&
       status.pending.includes('0098_board_branch_capability_policies')
     ) {
-      await preflightSQLiteCapabilityPolicyOwners(db);
+      const diagnostics = await inspectSQLiteCapabilityPolicyOwnerBackfill(db);
+      if (diagnostics.unattributedBoards > 0 || diagnostics.unattributedBranches > 0) {
+        console.warn(
+          '⚠️  RBAC migration will quarantine unattributable legacy resources ' +
+            `(boards=${diagnostics.unattributedBoards}, branches=${diagnostics.unattributedBranches}); ` +
+            'normalized access remains private until primary ownership is repaired.'
+        );
+      }
     }
 
     // Drizzle handles everything:

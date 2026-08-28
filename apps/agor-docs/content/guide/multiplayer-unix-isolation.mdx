@@ -96,7 +96,9 @@ The normalized board/branch permission migration is a coordinated offline cutove
 
 The migration maps legacy rules conservatively. Where an exact mapping is impossible, it grants equal or less access; foreign-session sharing starts empty and disabled. Some users may therefore have less access after the upgrade. Review important board and branch permission screens before resuming normal work.
 
-If a board or branch cannot be attributed to a primary owner, migration stops and lists the affected IDs. Resolve those resources manually rather than assigning an arbitrary owner. Old daemon versions cannot run against the migrated authority model. Rollback requires restoring the complete pre-migration database backup.
+If a Board or Branch cannot be attributed to an existing User, migration keeps the data but quarantines its normalized permissions as private and empty. It never creates a User or assigns an arbitrary administrator. Shared migration diagnostics report only aggregate Board and Branch counts. Review and repair ownership offline before enabling access; an already-attributed primary owner still cannot be transferred. Old daemon versions cannot run against the migrated authority model. Rollback requires restoring the complete pre-migration database backup.
+
+The cutover runs even when `execution.branch_rbac` is false so a later enablement has complete normalized data. That flag intentionally bypasses normalized application authorization on trusted installations; enable RBAC (or use sandbox mode, which enables it automatically) before restart when ownerless-resource quarantine must be enforced at runtime.
 
 ## Migrating from 0.24
 
