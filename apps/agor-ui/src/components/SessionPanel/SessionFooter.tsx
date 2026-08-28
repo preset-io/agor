@@ -98,7 +98,7 @@ export interface SessionFooterProps {
   modelLabel?: string;
   modelConfig?: ModelConfig;
   // Handlers
-  onModelConfigChange: (config: ModelConfig) => void;
+  onModelConfigCommit: (config: ModelConfig) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onSendPrompt: () => void;
   onStop: () => void;
@@ -146,7 +146,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   client,
   modelLabel,
   modelConfig,
-  onModelConfigChange,
+  onModelConfigCommit,
   onOpenSessionSettings,
   onSendPrompt,
   onStop,
@@ -335,7 +335,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
         >
           <ModelSelector
             value={modelConfig}
-            onChange={onModelConfigChange}
+            onCommit={onModelConfigCommit}
             agentic_tool={session.agentic_tool}
             client={client}
             branchId={session.branch_id}
@@ -1413,7 +1413,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     ) : (
                       <ModelSelector
                         value={modelConfig}
-                        onChange={onModelConfigChange}
+                        onCommit={onModelConfigCommit}
                         agentic_tool={session.agentic_tool}
                         client={client}
                         branchId={session.branch_id}

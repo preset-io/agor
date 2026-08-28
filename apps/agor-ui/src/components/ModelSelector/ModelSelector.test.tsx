@@ -35,11 +35,13 @@ describe('ModelSelector (Claude)', () => {
 
   it('updates pin mode when a controlled value changes', () => {
     const pinned = 'claude-sonnet-4-6-20260101';
+    const onCommit = vi.fn();
     const { rerender } = render(
       <ModelSelector
         agentic_tool="claude-code"
         showAdvisor={false}
         value={{ mode: 'alias', model: 'claude-sonnet-5' }}
+        onCommit={onCommit}
       />
     );
 
@@ -48,11 +50,46 @@ describe('ModelSelector (Claude)', () => {
         agentic_tool="claude-code"
         showAdvisor={false}
         value={{ mode: 'exact', model: pinned }}
+        onCommit={onCommit}
       />
     );
 
     expect(screen.getByRole('combobox')).toHaveValue(pinned);
     expect(screen.getByText('Use a recommended model')).toBeInTheDocument();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('filters aliases without change or commit on first mount and remount', () => {
+    const onChange = vi.fn();
+    const onCommit = vi.fn();
+    const picker = (
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'alias' as const, model: 'claude-sonnet-5' }}
+        onChange={onChange}
+        onCommit={onCommit}
+      />
+    );
+    const first = render(picker);
+
+    let input = screen.getByRole('combobox');
+    fireEvent.mouseDown(input);
+    for (const query of ['f', 'fa', 'fable']) {
+      fireEvent.change(input, { target: { value: query } });
+    }
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
+
+    first.unmount();
+    render(picker);
+    input = screen.getByRole('combobox');
+    fireEvent.mouseDown(input);
+    fireEvent.change(input, { target: { value: 'sonnet' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(onCommit).not.toHaveBeenCalled();
   });
 
   it('updates exact model text without committing until selection or blur', () => {
@@ -203,6 +240,89 @@ describe('ModelSelector (Claude)', () => {
     expect(onCommit).toHaveBeenCalledWith({ mode: 'exact', model: 'claude-fable-5' });
   });
 
+  it('does not commit an unchanged exact model on blur', () => {
+    const onCommit = vi.fn();
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'exact', model: 'claude-sonnet-5' }}
+        onCommit={onCommit}
+      />
+    );
+
+    const input = screen.getByRole('combobox');
+    fireEvent.blur(input);
+    fireEvent.blur(input);
+
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('cancels a dirty exact-model draft on Escape without committing on blur', () => {
+    const onCommit = vi.fn();
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'exact', model: 'claude-sonnet-5' }}
+        onCommit={onCommit}
+      />
+    );
+
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'claude-fable-5' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    fireEvent.blur(input);
+
+    expect(input).toHaveValue('claude-sonnet-5');
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('does not commit an unfinished exact-model draft when unmounted', () => {
+    const onCommit = vi.fn();
+    const view = render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'exact', model: 'claude-sonnet-5' }}
+        onCommit={onCommit}
+      />
+    );
+
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: 'claude-fable-5' },
+    });
+    view.unmount();
+
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('commits one advisor selection with a pending exact draft and no blur duplicate', () => {
+    const onCommit = vi.fn();
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        value={{ mode: 'exact', model: 'claude-sonnet-5' }}
+        onCommit={onCommit}
+      />
+    );
+
+    const [exactInput, advisorInput] = screen.getAllByRole('combobox');
+    fireEvent.change(exactInput, { target: { value: 'claude-custom-20260828' } });
+    fireEvent.mouseDown(advisorInput);
+    fireEvent.click(screen.getAllByText('Claude Fable 5 · 1M').at(-1)!);
+    expect(onCommit).toHaveBeenCalledOnce();
+    expect(onCommit).toHaveBeenCalledWith({
+      mode: 'exact',
+      model: 'claude-custom-20260828',
+      advisorModel: 'claude-fable-5',
+    });
+
+    fireEvent.blur(advisorInput);
+    fireEvent.blur(exactInput);
+    expect(onCommit).toHaveBeenCalledOnce();
+  });
+
   it('commits an alias when the user selects it', () => {
     const onCommit = vi.fn();
     render(
@@ -216,6 +336,27 @@ describe('ModelSelector (Claude)', () => {
 
     fireEvent.mouseDown(screen.getByRole('combobox'));
     fireEvent.click(screen.getByText('Claude Fable 5 · 1M'));
+    expect(onCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'claude-fable-5' });
+  });
+
+  it('commits one keyboard-selected alias on Enter', () => {
+    const onCommit = vi.fn();
+    render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'alias', model: 'claude-sonnet-5' }}
+        onCommit={onCommit}
+      />
+    );
+
+    const input = screen.getByRole('combobox');
+    fireEvent.mouseDown(input);
+    fireEvent.change(input, { target: { value: 'fable' } });
+    fireEvent.keyDown(input, { key: 'ArrowDown', keyCode: 40, which: 40 });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 13, which: 13 });
+
+    expect(onCommit).toHaveBeenCalledOnce();
     expect(onCommit).toHaveBeenCalledWith({ mode: 'alias', model: 'claude-fable-5' });
   });
 

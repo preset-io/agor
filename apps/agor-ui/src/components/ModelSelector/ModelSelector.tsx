@@ -278,12 +278,17 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   // version, anything else is a discovered alias selection.
   const [pinned, setPinned] = useState(value?.mode === 'exact');
   const [pinnedModel, setPinnedModel] = useState(value?.model ?? '');
+  const pinnedDirtyRef = useRef(false);
   const pickerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setPinned(value?.mode === 'exact');
+    if (value?.mode !== 'exact') pinnedDirtyRef.current = false;
   }, [value?.mode]);
   useEffect(() => {
-    setPinnedModel(value?.model ?? '');
+    // Controlled form parents echo each draft through `value`; footer parents
+    // instead replace it from realtime. Preserve an active local edit in both
+    // cases, then accept the authoritative value after the edit commits.
+    if (!pinnedDirtyRef.current) setPinnedModel(value?.model ?? '');
   }, [value?.model]);
 
   if (ToolModelSelector) {
@@ -331,17 +336,20 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const currentModel = value?.model || fallbackModel;
 
   const selectAlias = (model: string) => {
+    pinnedDirtyRef.current = false;
     const selection: ModelConfig = { ...value, mode: 'alias', model };
     onChange?.(selection);
     onCommit?.(selection);
   };
   const selectPinned = (model: string) => {
     // Keep the text input responsive even when a controlled parent needs a
-    // render to persist each draft character.
+    // render to reflect each draft character.
+    pinnedDirtyRef.current = true;
     setPinnedModel(model);
     onChange?.({ ...value, mode: 'exact', model });
   };
   const commitPinned = (draft = pinnedModel) => {
+    if (!pinnedDirtyRef.current) return;
     const model = draft.trim();
     const selection: ModelConfig = { ...value, mode: 'exact', model };
     // Keep the displayed value and submitted payload aligned when the user
@@ -350,22 +358,35 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       setPinnedModel(model);
       onChange?.(selection);
     }
-    if (model) onCommit?.(selection);
+    if (model) {
+      pinnedDirtyRef.current = false;
+      onCommit?.(selection);
+    }
   };
   const handleAdvisorModelChange = (advisorModel: string | undefined) => {
-    onChange?.({
+    const exactDraft = pinnedModel.trim();
+    const commitsExactDraft = pinned && pinnedDirtyRef.current && Boolean(exactDraft);
+    const selection: ModelConfig = {
       ...value,
-      mode: value?.mode ?? 'alias',
-      model: currentModel,
+      mode: pinned ? 'exact' : (value?.mode ?? 'alias'),
+      model: commitsExactDraft ? exactDraft : currentModel,
       advisorModel,
-    });
+    };
+    if (commitsExactDraft) {
+      pinnedDirtyRef.current = false;
+      setPinnedModel(exactDraft);
+    }
+    onChange?.(selection);
+    onCommit?.(selection);
   };
 
   const enablePin = () => {
+    pinnedDirtyRef.current = true;
     setPinnedModel(currentModel);
     setPinned(true);
   };
   const disablePin = () => {
+    pinnedDirtyRef.current = false;
     setPinned(false);
     const model = curated.some((candidate) => candidate.id === currentModel)
       ? currentModel
@@ -507,6 +528,11 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             value={pinnedModel}
             onChange={selectPinned}
             onSelect={commitPinned}
+            onKeyDown={(event) => {
+              if (event.key !== 'Escape') return;
+              pinnedDirtyRef.current = false;
+              setPinnedModel(value?.model ?? '');
+            }}
             options={pinOptions}
             filterOption={(input, option) =>
               `${option?.value ?? ''} ${option?.label ?? ''}`
