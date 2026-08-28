@@ -22,7 +22,12 @@ import {
   hasCrossReplicaExecutorCredentialLock,
   hasTenantSafeExecutorCredentialHome,
 } from '@agor/core/config';
-import { getCurrentTenantId, type TenantScopedDatabase } from '@agor/core/db';
+import {
+  getCurrentTenantId,
+  type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
+} from '@agor/core/db';
+import type { Application } from '@agor/core/feathers';
 import { BadRequest } from '@agor/core/feathers';
 import type {
   AgenticAuthMethods,
@@ -31,6 +36,7 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
+import { invalidateLiveCodexBindsForUser } from '../codex-reauth-invalidation.js';
 import type { CodexAuthSummary } from '../utils/codex-auth-file.js';
 import { writeCodexAuthCredential } from '../utils/executor-codex-auth.js';
 import {
@@ -40,6 +46,7 @@ import {
 
 export interface AppLike {
   get(name: 'config'): DeepReadonly<AgorConfig>;
+  get(name: 'db'): TenantScopeAwareDatabase;
   service(path: string): unknown;
 }
 
@@ -247,6 +254,18 @@ export async function persistVerifiedCodexAuth(options: {
       ...(authorityGeneration === undefined ? {} : { [CODEX_AUTH_DEFER_USER_REALTIME]: true }),
     }
   );
+
+  // Re-auth replaced the on-disk auth.json inode via atomicWrite's rename. Any
+  // live Codex session with a per-branch bind is still serving the prior,
+  // now-unlinked inode and would silently orphan its refresh writes (design
+  // §8A.8 test B). Restart those live sessions so the next prompt re-binds the
+  // fresh credential. Best-effort and non-fatal — never blocks the re-auth.
+  await invalidateLiveCodexBindsForUser({
+    app: app as unknown as Application,
+    db: app.get('db'),
+    tenantId: getCurrentTenantId(),
+    userId,
+  });
 
   return summary;
 }
