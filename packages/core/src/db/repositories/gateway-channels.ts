@@ -26,6 +26,7 @@ import {
   isGatewayProviderAuthorityPatch,
   mergeGatewayChannelConfigPatch,
   validateDiscordConfig,
+  validateTeamsConfig,
 } from '../../types/gateway';
 import { prefixToLikePattern } from '../../types/id';
 import type { Database, SystemDatabase } from '../client';
@@ -682,6 +683,30 @@ export class GatewayChannelRepository
         );
       }
     }
+
+    if (channelType === 'teams') {
+      const validation = validateTeamsConfig(config, { requireAppPassword: true });
+      if (!validation.ok) {
+        throw new RepositoryError(
+          `Cannot enable Teams gateway channel: invalid configuration ${validation.errors.join('; ')}`
+        );
+      }
+      if (channel.provider_installation_id !== config.app_id) {
+        throw new RepositoryError(
+          'Cannot enable Teams gateway channel: a configured Teams application binding is required'
+        );
+      }
+      const hasUserMap =
+        config.user_map &&
+        typeof config.user_map === 'object' &&
+        !Array.isArray(config.user_map) &&
+        Object.keys(config.user_map).length > 0;
+      if (!hasUserMap && (!channel.agor_user_id || !String(channel.agor_user_id).trim())) {
+        throw new RepositoryError(
+          'Cannot enable Teams gateway channel: fixed agor_user_id or user_map is required'
+        );
+      }
+    }
   }
 
   private isDiscordInstallationConflict(error: unknown): boolean {
@@ -703,9 +728,19 @@ export class GatewayChannelRepository
     );
   }
 
+  private isTeamsInstallationConflict(error: unknown): boolean {
+    return String(error).includes('gateway_channels_teams_installation_unique');
+  }
+
   private duplicateDiscordInstallationError(): RepositoryError {
     return new RepositoryError(
       'Cannot enable Discord gateway channel: this Discord application is already enabled'
+    );
+  }
+
+  private duplicateTeamsInstallationError(): RepositoryError {
+    return new RepositoryError(
+      'Cannot enable Teams gateway channel: this Teams application is already enabled'
     );
   }
 
@@ -751,8 +786,15 @@ export class GatewayChannelRepository
         id: data.id ?? generateId(),
         channel_key: data.channel_key ?? generateId(),
       };
+      const preparedProviderInstallationId =
+        channelType === 'teams' &&
+        prepared.enabled !== false &&
+        typeof prepared.config.app_id === 'string'
+          ? prepared.config.app_id
+          : prepared.provider_installation_id;
       const insertData = this.channelToInsert({
         ...prepared,
+        provider_installation_id: preparedProviderInstallationId,
       });
 
       this.assertRequiredSecretsWhenEnabled({
@@ -779,6 +821,9 @@ export class GatewayChannelRepository
     } catch (error) {
       if (this.isDiscordInstallationConflict(error)) {
         throw this.duplicateDiscordInstallationError();
+      }
+      if (this.isTeamsInstallationConflict(error)) {
+        throw this.duplicateTeamsInstallationError();
       }
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
@@ -889,6 +934,9 @@ export class GatewayChannelRepository
       if (this.isDiscordInstallationConflict(error)) {
         throw this.duplicateDiscordInstallationError();
       }
+      if (this.isTeamsInstallationConflict(error)) {
+        throw this.duplicateTeamsInstallationError();
+      }
       if (error instanceof RepositoryError) throw error;
       throw new RepositoryError(
         `Failed to update gateway channel: ${error instanceof Error ? error.message : String(error)}`,
@@ -938,7 +986,7 @@ export class GatewayChannelRepository
           current.provider_config_generation !== expectedProviderConfigGeneration
         ) {
           throw new RepositoryError(
-            'Discord verification became stale while the gateway configuration changed'
+            'Provider verification became stale while the gateway configuration changed'
           );
         }
 
@@ -951,14 +999,16 @@ export class GatewayChannelRepository
         );
 
         if (verifiedProviderInstallationId !== undefined) {
-          if (merged.channel_type !== 'discord' || merged.enabled === false) {
+          if (!['discord', 'teams'].includes(merged.channel_type) || merged.enabled === false) {
             throw new RepositoryError(
-              'Verified Discord application identity requires an enabled Discord gateway channel'
+              'Verified provider identity requires an enabled Discord or Teams gateway channel'
             );
           }
-          if (merged.config.application_id !== verifiedProviderInstallationId) {
+          const configuredApplicationId =
+            merged.channel_type === 'discord' ? merged.config.application_id : merged.config.app_id;
+          if (configuredApplicationId !== verifiedProviderInstallationId) {
             throw new RepositoryError(
-              'Verified Discord application identity does not match the configured application'
+              'Verified provider identity does not match the configured application'
             );
           }
           merged.provider_installation_id = verifiedProviderInstallationId;
@@ -966,6 +1016,13 @@ export class GatewayChannelRepository
           throw new RepositoryError(
             'verified Discord application binding is required for enabled authority changes'
           );
+        } else if (merged.channel_type === 'teams' && merged.enabled !== false) {
+          if (typeof merged.config.app_id !== 'string' || !merged.config.app_id.trim()) {
+            throw new RepositoryError(
+              'Teams application identity is required for an enabled channel'
+            );
+          }
+          merged.provider_installation_id = merged.config.app_id;
         } else {
           merged.provider_installation_id = null;
         }
@@ -1013,7 +1070,7 @@ export class GatewayChannelRepository
 
         if (expectedProviderConfigGeneration !== undefined && result.rowsAffected !== 1) {
           throw new RepositoryError(
-            'Discord verification became stale while the gateway configuration changed'
+            'Provider verification became stale while the gateway configuration changed'
           );
         }
         if (result.rowsAffected !== 1) {

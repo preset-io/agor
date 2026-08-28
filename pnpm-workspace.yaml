@@ -18,7 +18,6 @@ overrides:
   axios: '>=1.18.0 <2'
   # ansi-to-react is still on vulnerable linkify-it 3.x; remove when it accepts >=5.0.2.
   ansi-to-react>linkify-it: '>=5.0.2 <6'
-  botbuilder>zod: ^3.25.0
   body-parser@<2: '>=1.20.6 <2'
   body-parser@>=2 <3: '>=2.3.0 <3'
   brace-expansion@<2.1.3: '>=2.1.3 <3'
@@ -96,3 +95,7 @@ allowBuilds:
   'unix-dgram@2.0.7': false
 patchedDependencies:
   streamdown@2.5.0: patches/streamdown@2.5.0.patch
+minimumReleaseAgeExclude:
+  - '@microsoft/agents-activity@1.8.1'
+  - '@microsoft/agents-hosting@1.8.1'
+  - '@microsoft/agents-telemetry@1.8.1'

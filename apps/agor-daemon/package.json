@@ -29,6 +29,7 @@
     "@agor/agentic-tool-opencode": "workspace:*",
     "@agor/agentic-tools": "workspace:*",
     "@agor/core": "workspace:*",
+    "@microsoft/agents-hosting": "1.8.1",
     "@modelcontextprotocol/core": "2.0.0",
     "@modelcontextprotocol/node": "2.0.0",
     "@modelcontextprotocol/sdk": "^1.29.0",

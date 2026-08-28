@@ -590,7 +590,25 @@ async function startDaemonWithOwnedMetrics(
   // template payloads). 10MB is the balance: tight enough to bound a single
   // attacker request while allowing real prompts and templates. Multipart uploads bypass this
   // limit (multer parses the body itself) and are capped separately.
-  app.use(express.json({ limit: '10mb' }));
+  app.use(
+    express.json({
+      limit: '10mb',
+      verify: (req, _res, buffer) => {
+        // Teams callbacks have a much tighter provider-facing bound than the
+        // general API. Reject while parsing so an oversized body is never
+        // materialized into req.body before the ingress route can inspect it.
+        if (req.url?.startsWith('/gateway/teams/') && buffer.byteLength > 1_024 * 1_024) {
+          const error = new Error('Teams activity exceeds the 1 MiB limit') as Error & {
+            status?: number;
+            type?: string;
+          };
+          error.status = 413;
+          error.type = 'entity.too.large';
+          throw error;
+        }
+      },
+    })
+  );
   app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
   // --------------------------------------------------------------------------

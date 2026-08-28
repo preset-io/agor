@@ -1110,7 +1110,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
       name: 'My Teams',
       target_branch_id: 'branch-1',
       agor_user_id: 'user-1',
-      config: { app_id: 'app-123', tenant_id: 'tenant-123' },
+      config: { app_id: 'app-123', microsoft_tenant_id: 'tenant-123' },
     });
     // Same headroom rationale as the GitHub wizard test above: opens the real
     // channel-type Select, so it's among the heaviest tests in this file.
