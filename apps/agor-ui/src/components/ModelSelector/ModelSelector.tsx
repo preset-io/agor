@@ -72,6 +72,11 @@ interface DynamicModelsResponse {
   source: 'dynamic' | 'static';
 }
 
+interface PinnedEditBaseline {
+  mode: ModelConfig['mode'];
+  model: string;
+}
+
 // Codex model options (derived from @agor/core metadata)
 const CODEX_MODEL_OPTIONS = Object.entries(CODEX_MODEL_METADATA).map(([modelId, meta]) => ({
   id: modelId,
@@ -279,17 +284,32 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const [pinned, setPinned] = useState(value?.mode === 'exact');
   const [pinnedModel, setPinnedModel] = useState(value?.model ?? '');
   const pinnedDirtyRef = useRef(false);
+  const pinnedBaselineRef = useRef<PinnedEditBaseline>({
+    mode: value?.mode === 'exact' ? 'exact' : 'alias',
+    model: value?.model ?? '',
+  });
   const pickerRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     setPinned(value?.mode === 'exact');
-    if (value?.mode !== 'exact') pinnedDirtyRef.current = false;
-  }, [value?.mode]);
+    if (value?.mode !== 'exact') {
+      pinnedDirtyRef.current = false;
+      pinnedBaselineRef.current = { mode: 'alias', model: value?.model ?? '' };
+    } else if (!pinnedDirtyRef.current) {
+      pinnedBaselineRef.current = { mode: 'exact', model: value?.model ?? '' };
+    }
+  }, [value?.mode, value?.model]);
   useEffect(() => {
     // Controlled form parents echo each draft through `value`; footer parents
     // instead replace it from realtime. Preserve an active local edit in both
     // cases, then accept the authoritative value after the edit commits.
-    if (!pinnedDirtyRef.current) setPinnedModel(value?.model ?? '');
-  }, [value?.model]);
+    if (!pinnedDirtyRef.current) {
+      pinnedBaselineRef.current = {
+        mode: value?.mode === 'exact' ? 'exact' : 'alias',
+        model: value?.model ?? '',
+      };
+      setPinnedModel(value?.model ?? '');
+    }
+  }, [value?.model, value?.mode]);
 
   if (ToolModelSelector) {
     return (
@@ -337,6 +357,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
 
   const selectAlias = (model: string) => {
     pinnedDirtyRef.current = false;
+    pinnedBaselineRef.current = { mode: 'alias', model };
     const selection: ModelConfig = { ...value, mode: 'alias', model };
     onChange?.(selection);
     onCommit?.(selection);
@@ -344,6 +365,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const selectPinned = (model: string) => {
     // Keep the text input responsive even when a controlled parent needs a
     // render to reflect each draft character.
+    if (!pinnedDirtyRef.current) {
+      pinnedBaselineRef.current = { mode: 'exact', model: pinnedModel };
+    }
     pinnedDirtyRef.current = true;
     setPinnedModel(model);
     onChange?.({ ...value, mode: 'exact', model });
@@ -351,6 +375,14 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
   const commitPinned = (draft = pinnedModel) => {
     if (!pinnedDirtyRef.current) return;
     const model = draft.trim();
+    if (!model) {
+      const baseline = pinnedBaselineRef.current;
+      pinnedDirtyRef.current = false;
+      setPinned(baseline.mode === 'exact');
+      setPinnedModel(baseline.model);
+      onChange?.({ ...value, mode: baseline.mode, model: baseline.model });
+      return;
+    }
     const selection: ModelConfig = { ...value, mode: 'exact', model };
     // Keep the displayed value and submitted payload aligned when the user
     // finishes an edit with surrounding whitespace (or whitespace only).
@@ -358,10 +390,9 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
       setPinnedModel(model);
       onChange?.(selection);
     }
-    if (model) {
-      pinnedDirtyRef.current = false;
-      onCommit?.(selection);
-    }
+    pinnedDirtyRef.current = false;
+    pinnedBaselineRef.current = { mode: 'exact', model };
+    onCommit?.(selection);
   };
   const handleAdvisorModelChange = (advisorModel: string | undefined) => {
     const exactDraft = pinnedModel.trim();
@@ -374,13 +405,19 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     };
     if (commitsExactDraft) {
       pinnedDirtyRef.current = false;
+      pinnedBaselineRef.current = { mode: 'exact', model: exactDraft };
       setPinnedModel(exactDraft);
     }
+    pinnedBaselineRef.current = { mode: selection.mode, model: selection.model };
     onChange?.(selection);
     onCommit?.(selection);
   };
 
   const enablePin = () => {
+    pinnedBaselineRef.current = {
+      mode: value?.mode === 'exact' ? 'exact' : 'alias',
+      model: currentModel,
+    };
     pinnedDirtyRef.current = true;
     setPinnedModel(currentModel);
     setPinned(true);
@@ -391,6 +428,7 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
     const model = curated.some((candidate) => candidate.id === currentModel)
       ? currentModel
       : fallbackModel;
+    pinnedBaselineRef.current = { mode: 'alias', model };
     // This only switches editing modes. The user still needs to choose an
     // alias before the picker reports a committed selection.
     onChange?.({ ...value, mode: 'alias', model });
@@ -530,8 +568,12 @@ export const ModelSelector: React.FC<ModelSelectorProps> = ({
             onSelect={commitPinned}
             onKeyDown={(event) => {
               if (event.key !== 'Escape') return;
+              if (!pinnedDirtyRef.current) return;
+              const baseline = pinnedBaselineRef.current;
               pinnedDirtyRef.current = false;
-              setPinnedModel(value?.model ?? '');
+              setPinned(baseline.mode === 'exact');
+              setPinnedModel(baseline.model);
+              onChange?.({ ...value, mode: baseline.mode, model: baseline.model });
             }}
             options={pinOptions}
             filterOption={(input, option) =>

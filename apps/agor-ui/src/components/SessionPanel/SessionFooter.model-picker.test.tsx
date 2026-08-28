@@ -180,4 +180,41 @@ describe('SessionFooter model picker persistence boundary', () => {
     expect(updateSession).toHaveBeenCalledTimes(2);
     expect(showError).not.toHaveBeenCalled();
   });
+
+  it('resets an unfinished exact draft when the footer switches sessions', async () => {
+    const onModelConfigCommit = vi.fn();
+    const view = render(
+      <SessionFooter {...baseProps} onModelConfigCommit={onModelConfigCommit} />,
+      { wrapper: Wrapper }
+    );
+
+    fireEvent.click(screen.getByTestId('model-chip'));
+    const input = await screen.findByDisplayValue(exactModel);
+    fireEvent.change(input, { target: { value: 'session-a-draft' } });
+
+    const secondModel = 'claude-fable-5';
+    view.rerender(
+      <SessionFooter
+        {...baseProps}
+        session={
+          {
+            ...session,
+            session_id: 'session-2',
+            model_config: {
+              mode: 'exact',
+              model: secondModel,
+              updated_at: '2026-08-28T00:02:00.000Z',
+            },
+          } as Session
+        }
+        modelConfig={{ mode: 'exact', model: secondModel }}
+        onModelConfigCommit={onModelConfigCommit}
+      />
+    );
+
+    const nextInput = await screen.findByDisplayValue(secondModel);
+    expect(nextInput).toHaveValue(secondModel);
+    fireEvent.blur(nextInput);
+    expect(onModelConfigCommit).not.toHaveBeenCalled();
+  });
 });

@@ -278,6 +278,117 @@ describe('ModelSelector (Claude)', () => {
     expect(onCommit).not.toHaveBeenCalled();
   });
 
+  it('restores the pre-edit baseline through a controlled parent on Escape', () => {
+    const onChange = vi.fn();
+    const onCommit = vi.fn();
+
+    function ControlledPicker() {
+      const [value, setValue] = useState({
+        mode: 'exact' as const,
+        model: 'claude-sonnet-5',
+      });
+      return (
+        <ModelSelector
+          agentic_tool="claude-code"
+          showAdvisor={false}
+          value={value}
+          onChange={(next) => {
+            onChange(next);
+            setValue(next);
+          }}
+          onCommit={onCommit}
+        />
+      );
+    }
+
+    render(<ControlledPicker />);
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'claude-fable-5' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    fireEvent.blur(input);
+
+    expect(input).toHaveValue('claude-sonnet-5');
+    expect(onChange).toHaveBeenLastCalledWith({
+      mode: 'exact',
+      model: 'claude-sonnet-5',
+    });
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('restores recommended mode when cancelling a newly enabled pin draft', () => {
+    const onChange = vi.fn();
+    const onCommit = vi.fn();
+
+    function ControlledPicker() {
+      const [value, setValue] = useState({
+        mode: 'alias' as const,
+        model: 'claude-sonnet-5',
+      });
+      return (
+        <ModelSelector
+          agentic_tool="claude-code"
+          showAdvisor={false}
+          value={value}
+          onChange={(next) => {
+            onChange(next);
+            setValue(next);
+          }}
+          onCommit={onCommit}
+        />
+      );
+    }
+
+    render(<ControlledPicker />);
+    fireEvent.click(screen.getByRole('button', { name: 'Pin a specific version…' }));
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: 'claude-fable-5' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+
+    expect(screen.getByText('Claude Sonnet 5 · 1M')).toBeInTheDocument();
+    expect(onChange).toHaveBeenLastCalledWith({
+      mode: 'alias',
+      model: 'claude-sonnet-5',
+    });
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it('clears a blank exact draft and accepts the next realtime model', () => {
+    const onChange = vi.fn();
+    const onCommit = vi.fn();
+    const { rerender } = render(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'exact', model: 'claude-sonnet-5' }}
+        onChange={onChange}
+        onCommit={onCommit}
+      />
+    );
+
+    const input = screen.getByRole('combobox');
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.blur(input);
+
+    expect(input).toHaveValue('claude-sonnet-5');
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(onChange).toHaveBeenLastCalledWith({
+      mode: 'exact',
+      model: 'claude-sonnet-5',
+    });
+
+    const realtimeModel = 'claude-fable-5';
+    rerender(
+      <ModelSelector
+        agentic_tool="claude-code"
+        showAdvisor={false}
+        value={{ mode: 'exact', model: realtimeModel }}
+        onChange={onChange}
+        onCommit={onCommit}
+      />
+    );
+    expect(input).toHaveValue(realtimeModel);
+  });
+
   it('does not commit an unfinished exact-model draft when unmounted', () => {
     const onCommit = vi.fn();
     const view = render(

@@ -334,6 +334,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
         >
           <ModelSelector
+            key={session.session_id}
             value={modelConfig}
             onCommit={onModelConfigCommit}
             agentic_tool={session.agentic_tool}
@@ -1412,6 +1413,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                       </Typography.Text>
                     ) : (
                       <ModelSelector
+                        key={session.session_id}
                         value={modelConfig}
                         onCommit={onModelConfigCommit}
                         agentic_tool={session.agentic_tool}
