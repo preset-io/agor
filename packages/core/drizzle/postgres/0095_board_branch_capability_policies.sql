@@ -1,5 +1,22 @@
 SET LOCAL lock_timeout = '3s';
 --> statement-breakpoint
+-- Drop FORCE RLS so the owning migrate role sees every tenant during the
+-- cross-tenant backfill/normalization below; without this the statements run
+-- against only the 'default' tenant and SET NOT NULL fails. Restored at the end.
+ALTER TABLE "boards" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branches" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "users" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "board_owners" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branch_owners" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "board_group_grants" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branch_group_grants" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
 -- Offline/big-bang RBAC remodel. No runtime dual-read/dual-write bridge is retained.
 ALTER TABLE "boards" ADD COLUMN "primary_owner_user_id" varchar(36);
 --> statement-breakpoint
@@ -361,3 +378,19 @@ ALTER TABLE branch_session_sharing_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE branch_session_sharing_grants FORCE ROW LEVEL SECURITY;
 --> statement-breakpoint
 CREATE POLICY "tenant_isolation_branch_session_sharing_grants" ON "branch_session_sharing_grants" USING (tenant_id=COALESCE(NULLIF(current_setting('agor.tenant_id',true),''),'default')) WITH CHECK (tenant_id=COALESCE(NULLIF(current_setting('agor.tenant_id',true),''),'default'));
+--> statement-breakpoint
+
+-- Restore FORCE row-level security dropped at the top of this migration.
+ALTER TABLE "boards" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branches" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "users" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "board_owners" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branch_owners" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "board_group_grants" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branch_group_grants" FORCE ROW LEVEL SECURITY;
