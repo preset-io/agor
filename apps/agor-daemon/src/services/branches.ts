@@ -174,6 +174,7 @@ interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
     stopCommand?: string;
     nukeCommand?: string;
     appUrl?: string;
+    healthCheckUrl?: string;
   };
 }
 
