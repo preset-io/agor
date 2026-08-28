@@ -15,6 +15,8 @@ import type {
   AgenticToolName,
   AgorClient,
   AuthCheckResult,
+  Board,
+  OnboardingState,
   UpdateUserInput,
   User,
   UserPreferences,
@@ -350,13 +352,21 @@ export interface OnboardingCompletionResult {
   // loading state until it resolves, so the modal covers the whole operation.
 }
 
+export interface OnboardingCompletionAttempt {
+  /** False after timeout, dismissal, remount, or authenticated-owner replacement. */
+  isCurrent: () => boolean;
+}
+
 export interface OnboardingWizardProps {
   open: boolean;
   /** Synchronous owner fence for every async continuation in this wizard instance. */
   isCurrent?: () => boolean;
-  onComplete: (result: OnboardingCompletionResult) => void | Promise<void>;
+  onComplete: (
+    result: OnboardingCompletionResult,
+    attempt: OnboardingCompletionAttempt
+  ) => void | Promise<void>;
   /** Called when the user dismisses the wizard without completing it. */
-  onDismiss?: () => void;
+  onDismiss?: (progress: Partial<OnboardingState>) => void;
 
   user?: User | null;
   client: AgorClient | null;
@@ -367,9 +377,37 @@ export interface OnboardingWizardProps {
 
   /** Re-open wizard starting at a specific step (used by tests / future callers). */
   initialStep?: WizardStep;
+  /** Override only for deterministic timeout tests. */
+  completionTimeoutMs?: number;
 }
 
 const ALWAYS_CURRENT = () => true;
+export const ONBOARDING_COMPLETION_TIMEOUT_MS = 45_000;
+
+class OnboardingCompletionTimeoutError extends Error {
+  constructor() {
+    super('Setup timed out before completion was confirmed. Try again, or close and finish later.');
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(
+      () => reject(new OnboardingCompletionTimeoutError()),
+      timeoutMs
+    );
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
 
 // ─── Static glass layer (non-token values intentionally kept) ─────────────────
 
@@ -407,6 +445,7 @@ export function OnboardingWizard({
   onUpdateUser,
   onCheckAuth,
   initialStep,
+  completionTimeoutMs = ONBOARDING_COMPLETION_TIMEOUT_MS,
 }: OnboardingWizardProps) {
   const { token } = useToken();
   const savedOnboarding = user?.preferences?.onboarding;
@@ -469,11 +508,14 @@ export function OnboardingWizard({
   // leaves no orphan board. Errors from that final creation surface on step 4.
   const [boardError, setBoardError] = useState<string | null>(null);
   const [createdBoardId, setCreatedBoardId] = useState<string | null>(null);
+  const boardCreationConfirmedRef = useRef(false);
 
   // ── Step 4: completion ────────────────────────────────────────────────────
   // True while the async onComplete (teammate creation + navigation) runs, so
   // the final step shows a spinner + copy instead of vanishing the modal.
   const [completing, setCompleting] = useState(false);
+  const completionInFlightRef = useRef(false);
+  const completionAttemptGenerationRef = useRef(0);
 
   // ── Reset on open ────────────────────────────────────────────────────────
   // Reset wizard state when modal opens. Clears all local state so re-opens are
@@ -495,7 +537,10 @@ export function OnboardingWizard({
     setInvalidSavedTemplateId(null);
     setBoardError(null);
     setCreatedBoardId(null);
+    boardCreationConfirmedRef.current = false;
     setCompleting(false);
+    completionInFlightRef.current = false;
+    completionAttemptGenerationRef.current += 1;
     // Force seed effect to re-run on every open for the same user
     userSeedRef.current = null;
     authCheckInFlightRef.current.clear();
@@ -547,6 +592,7 @@ export function OnboardingWizard({
       setSelectedTemplateId(savedTemplate?.id ?? null);
       setInvalidSavedTemplateId(savedTemplateId && !savedTemplate ? savedTemplateId : null);
       setCreatedBoardId(savedBoard.board_id);
+      boardCreationConfirmedRef.current = true;
       if (!initialStep) setCurrentStep('done');
     } else {
       setTeammateName('');
@@ -839,6 +885,21 @@ export function OnboardingWizard({
     goToStep(STEPS[stepIndex + 1]);
   }, [currentStep, stepIndex, goToStep, selectedAgent, agentHasKey]);
 
+  const handleDismiss = useCallback(() => {
+    if (!onDismiss) return;
+    // Invalidate a provisioning continuation synchronously before the parent
+    // closes the surface. App combines this fence with its authenticated owner.
+    completionAttemptGenerationRef.current += 1;
+    const name = teammateName.trim();
+    onDismiss({
+      ...(createdBoardId ? { boardId: createdBoardId } : {}),
+      goals: selectedGoals,
+      teammateDisplayName: name || undefined,
+      teammateEmoji: name ? teammateEmoji : undefined,
+      teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
+    });
+  }, [createdBoardId, onDismiss, selectedGoals, selectedTemplateId, teammateEmoji, teammateName]);
+
   const handlePrimary = useCallback(async () => {
     if (!isCurrent()) return;
     switch (currentStep) {
@@ -931,6 +992,17 @@ export function OnboardingWizard({
       }
       case 'done': {
         if (invalidSavedTemplateId) return;
+        // React state does not update quickly enough to guard two native click
+        // events delivered in the same turn. The ref is the authoritative
+        // single-flight gate for board creation and completion.
+        if (completionInFlightRef.current) return;
+        completionInFlightRef.current = true;
+        completionAttemptGenerationRef.current += 1;
+        const attemptGeneration = completionAttemptGenerationRef.current;
+        const completionAttempt: OnboardingCompletionAttempt = {
+          isCurrent: () =>
+            isCurrent() && completionAttemptGenerationRef.current === attemptGeneration,
+        };
         const name = teammateName.trim();
         // Merged MCP integrations for the chosen goals, threaded into the
         // teammate's bootstrap prompt. The in-wizard MCP step was removed, but
@@ -950,17 +1022,33 @@ export function OnboardingWizard({
           // than issuing another create.
           let boardId = createdBoardId ?? '';
           if (!boardId) {
-            const board = await client.service('boards').create({
-              name: name || (user?.name ? `${user.name}'s board` : 'My board'),
-              icon: teammateEmoji,
-            });
+            boardId = globalThis.crypto.randomUUID();
+            setCreatedBoardId(boardId);
+          }
+          if (!boardCreationConfirmedRef.current) {
+            let board: Board | undefined;
+            try {
+              board = await client.service('boards').create({
+                board_id: boardId,
+                name: name || (user?.name ? `${user.name}'s board` : 'My board'),
+                icon: teammateEmoji,
+              });
+            } catch (createError) {
+              // The response can fail after the server committed. Resolve the
+              // client-generated ID before offering retry, so an ambiguous
+              // transport failure cannot create a second board.
+              try {
+                board = await client.service('boards').get(boardId);
+              } catch {
+                throw createError;
+              }
+            }
             if (!isCurrent()) return;
-            boardId = board?.board_id ?? '';
-            if (!boardId) {
-              setBoardError('Board was created but returned no ID - try again.');
+            if (board?.board_id !== boardId) {
+              setBoardError('Board creation returned an unexpected ID - try again.');
               return;
             }
-            setCreatedBoardId(boardId);
+            boardCreationConfirmedRef.current = true;
           }
           if (!isCurrent()) return;
           const progressSaved = await saveOnboardingProgress({
@@ -971,30 +1059,46 @@ export function OnboardingWizard({
             teammateEmoji: name ? teammateEmoji : undefined,
             teammateTemplateId: name ? (selectedTemplateId ?? undefined) : undefined,
           });
-          if (!progressSaved || !isCurrent()) return;
-          await onComplete({
-            branchId: '',
-            sessionId: '',
-            boardId,
-            path: 'teammate',
-            // Naming details for the first AI teammate, seeded on completion.
-            teammateName: name || undefined,
-            teammateEmoji,
-            // Framework source branch from the chosen gallery template; undefined
-            // (blank / no pick) falls back to the repo default branch.
-            sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
-            sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
-            templateId: selectedTemplateId,
-            agent: selectedAgent,
-            suggestedIntegrations,
-            goals: selectedGoals,
-          });
+          if (!progressSaved || !completionAttempt.isCurrent()) return;
+          await withTimeout(
+            Promise.resolve(
+              onComplete(
+                {
+                  branchId: '',
+                  sessionId: '',
+                  boardId,
+                  path: 'teammate',
+                  // Naming details for the first AI teammate, seeded on completion.
+                  teammateName: name || undefined,
+                  teammateEmoji,
+                  // Framework source branch from the chosen gallery template; undefined
+                  // (blank / no pick) falls back to the repo default branch.
+                  sourceBranch: resolveTemplateSourceBranch(selectedTemplateId),
+                  sourceRemoteUrl: resolveTemplateSourceRemoteUrl(selectedTemplateId),
+                  templateId: selectedTemplateId,
+                  agent: selectedAgent,
+                  suggestedIntegrations,
+                  goals: selectedGoals,
+                },
+                completionAttempt
+              )
+            ),
+            completionTimeoutMs
+          );
         } catch (err) {
+          if (completionAttemptGenerationRef.current === attemptGeneration) {
+            // Timeout/rejection retires this attempt before retry becomes
+            // available, so a late continuation cannot commit or navigate.
+            completionAttemptGenerationRef.current += 1;
+          }
           if (isCurrent()) {
             setBoardError(err instanceof Error ? err.message : 'Failed to finish setup');
           }
         } finally {
-          if (isCurrent()) setCompleting(false);
+          completionInFlightRef.current = false;
+          if (isCurrent()) {
+            setCompleting(false);
+          }
         }
         break;
       }
@@ -1020,6 +1124,7 @@ export function OnboardingWizard({
     createdBoardId,
     saveOnboardingProgress,
     onComplete,
+    completionTimeoutMs,
     goToStep,
   ]);
 
@@ -1864,7 +1969,7 @@ export function OnboardingWizard({
         mask={{ closable: false }}
         keyboard={Boolean(onDismiss)}
         onCancel={() => {
-          if (onDismiss && !completing && currentStep !== 'done') onDismiss();
+          handleDismiss();
         }}
         footer={null}
         // Widened from 600 → 730 so step-2's gallery fits 3 cards per row while
@@ -1895,14 +2000,13 @@ export function OnboardingWizard({
         <div style={{ position: 'relative' }}>
           <GlassPanelHighlights intensity="strong" animated={open} />
 
-          {/* Dismiss button — only shown when onDismiss is provided and not on the final step */}
-          {onDismiss && currentStep !== 'done' && (
+          {/* Dismiss/defer is available on every step, including completion errors. */}
+          {onDismiss && (
             <Button
               type="text"
               size="small"
               aria-label="Close"
-              onClick={onDismiss}
-              disabled={completing}
+              onClick={handleDismiss}
               icon={<CloseOutlined style={{ fontSize: 12 }} />}
               style={{
                 position: 'absolute',

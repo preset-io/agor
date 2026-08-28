@@ -14,6 +14,7 @@ import type {
   CreateUserInput,
   GatewayChannelCreateData,
   GatewayChannelPatchData,
+  OnboardingState,
   PermissionMode,
   Repo,
   Session,
@@ -73,6 +74,10 @@ import { useAuthorityOperationGuard } from './hooks/useAuthorityOperationGuard';
 import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
 import { findFrameworkRepo } from './hooks/useFrameworkRepo';
 import { useMarketplaceOAuthAuthorityOwner } from './hooks/useMarketplaceOAuthAuthorityOwner';
+import {
+  type OnboardingOperationOwner,
+  useOnboardingLifecycle,
+} from './hooks/useOnboardingLifecycle';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
@@ -93,6 +98,10 @@ import { isMobileDevice } from './utils/deviceDetection';
 import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
+import {
+  buildDeferredOnboardingPreferences,
+  isOnboardingDeferred,
+} from './utils/onboardingLifecycle';
 import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
@@ -110,26 +119,6 @@ interface PendingEnvironmentToast {
   action: EnvironmentAction;
   key: string;
   requestedAt: number;
-}
-
-interface OnboardingOperationOwner {
-  userId: UUID;
-  authenticationGeneration: number;
-  activationGeneration: number;
-}
-
-function isSameOnboardingOwner(
-  left: OnboardingOperationOwner | null,
-  right: OnboardingOperationOwner | null
-): boolean {
-  return (
-    left === right ||
-    (!!left &&
-      !!right &&
-      left.userId === right.userId &&
-      left.authenticationGeneration === right.authenticationGeneration &&
-      left.activationGeneration === right.activationGeneration)
-  );
 }
 
 // Stable reference — an inline object here re-processes the modal on every App
@@ -635,57 +624,44 @@ function AppContent() {
     });
   }, [capturedSha, currentUser?.email]);
 
-  // Onboarding wizard state
-  const [onboardingWizardOwner, setOnboardingWizardOwnerState] =
-    useState<OnboardingOperationOwner | null>(null);
-  const onboardingWizardOwnerRef = useRef<OnboardingOperationOwner | null>(null);
-  const onboardingActivationSequenceRef = useRef(0);
-  const setOnboardingWizardOwner = useCallback((owner: OnboardingOperationOwner | null) => {
-    if (isSameOnboardingOwner(onboardingWizardOwnerRef.current, owner)) return;
-    // Invalidate retained callbacks synchronously; waiting for React to commit
-    // the replacement wizard leaves a promise-continuation race.
-    onboardingWizardOwnerRef.current = owner;
-    setOnboardingWizardOwnerState(owner);
-  }, []);
-  const activateOnboardingWizard = useCallback(
-    (userId: UUID, ownerAuthenticationGeneration: number, replaceActive = false) => {
-      const activeOwner = onboardingWizardOwnerRef.current;
-      if (
-        !replaceActive &&
-        activeOwner?.userId === userId &&
-        activeOwner.authenticationGeneration === ownerAuthenticationGeneration
-      ) {
-        return activeOwner;
-      }
-
-      // Allocate a new opaque generation for every activation from an
-      // invalidated state. Never reconstruct a prior owner tuple: promises
-      // retained by an unmounted wizard must not become current again if the
-      // same user/authentication generation later becomes eligible to reopen.
-      onboardingActivationSequenceRef.current += 1;
-      const owner: OnboardingOperationOwner = {
-        userId,
-        authenticationGeneration: ownerAuthenticationGeneration,
-        activationGeneration: onboardingActivationSequenceRef.current,
-      };
-      setOnboardingWizardOwner(owner);
-      return owner;
-    },
-    [setOnboardingWizardOwner]
-  );
-  const isOnboardingOwnerCurrent = useCallback(
-    (owner: OnboardingOperationOwner) =>
-      isSameOnboardingOwner(onboardingWizardOwnerRef.current, owner) &&
-      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration),
-    [isAuthenticationOwnerCurrent]
-  );
-  const onboardingWizardOpen =
+  // Onboarding visibility has one owner. Explicit deferred/completed terminal
+  // states prevent loading, route, realtime, or stale-auth churn from turning a
+  // close into an immediate reopen.
+  const onboardingDeferred = isOnboardingDeferred(currentUser?.preferences);
+  const onboardingReady =
     !!currentUser &&
-    onboardingWizardOwner?.userId === currentUser.user_id &&
-    isOnboardingOwnerCurrent(onboardingWizardOwner);
+    !(currentUser.must_change_password && passwordWriteAvailable) &&
+    connected &&
+    workspaceSurfaceShouldRun &&
+    currentSurface.startsWorkspaceRuntime &&
+    !loading;
+  const {
+    activeOwner: onboardingWizardOwner,
+    open: onboardingWizardOpen,
+    activate: activateOnboardingWizard,
+    isOwnerCurrent: isOnboardingOwnerCurrent,
+    defer: deferOnboardingWizard,
+    complete: completeOnboardingWizard,
+  } = useOnboardingLifecycle({
+    userId: currentUser?.user_id,
+    authenticationGeneration,
+    eligible: canRunOnboarding,
+    ready: onboardingReady,
+    completed: currentUser?.onboarding_completed === true,
+    deferred: onboardingDeferred,
+    isAuthenticationOwnerCurrent,
+  });
   const onboardingSeedResultRef = useRef(
     new Map<string, { branchId?: string; sessionId?: string }>()
   );
+  const onboardingCompletionWriteRef = useRef<{
+    owner: OnboardingOperationOwner;
+    promise: Promise<unknown>;
+  } | null>(null);
+  const onboardingWizardWriteRef = useRef<{
+    owner: OnboardingOperationOwner;
+    promise: Promise<unknown>;
+  } | null>(null);
   const onboardingSeedOwnerRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -883,50 +859,20 @@ function AppContent() {
     enabled: onboardingWizardOpen && canRunOnboarding,
   });
 
-  // Trigger wizard when user is loaded and hasn't completed onboarding
-  useEffect(() => {
-    if (currentUser && !canRunOnboarding) {
-      setOnboardingWizardOwner(null);
-      return;
-    }
-    if (
-      currentUser &&
-      canRunOnboarding &&
-      currentUser.onboarding_completed === false &&
-      !(currentUser.must_change_password && passwordWriteAvailable) &&
-      connected &&
-      workspaceSurfaceShouldRun &&
-      currentSurface.startsWorkspaceRuntime &&
-      !loading
-    ) {
-      activateOnboardingWizard(currentUser.user_id, authenticationGeneration);
-    }
-  }, [
-    currentUser,
-    canRunOnboarding,
-    connected,
-    workspaceSurfaceShouldRun,
-    currentSurface.startsWorkspaceRuntime,
-    loading,
-    authenticationGeneration,
-    passwordWriteAvailable,
-    activateOnboardingWizard,
-    setOnboardingWizardOwner,
-  ]);
-
   // Handle wizard completion
   const handleOnboardingComplete = async (
     owner: OnboardingOperationOwner,
-    result: OnboardingCompletionResult
+    result: OnboardingCompletionResult,
+    isAttemptCurrent: () => boolean
   ) => {
-    // The wizard awaits this and stays open in a loading state until it
-    // resolves, so we do the teammate creation + navigation FIRST and only
-    // close the modal at the very end — otherwise the user stares at a blank
-    // homepage while the async work runs.
+    // The wizard awaits this and stays open while resource creation and
+    // navigation run. The durable completion write then closes it before the
+    // best-effort auth refresh, so refresh failure cannot turn success into a
+    // trapped final screen.
     if (!currentUser || !isOnboardingOwnerCurrent(owner)) return;
     if (!client) throw new Error('Not connected - try again when Agor reconnects.');
     const operationUserId = owner.userId;
-    const isCurrentUser = () => isOnboardingOwnerCurrent(owner);
+    const isCurrentUser = () => isAttemptCurrent() && isOnboardingOwnerCurrent(owner);
 
     // Completing onboarding is an explicit tool choice. Seed it only while the
     // preference is unset; a Settings selection made concurrently always wins.
@@ -1031,7 +977,7 @@ function AppContent() {
     const latestUser = (await client.service('users').get(currentUser.user_id)) as User;
     if (!isCurrentUser()) return;
     const completionResult = { ...result, branchId, sessionId };
-    await handleUpdateUser(
+    const completionWrite = handleUpdateUser(
       currentUser.user_id,
       {
         onboarding_completed: true,
@@ -1039,20 +985,13 @@ function AppContent() {
       },
       { silent: true }
     );
-    if (!isCurrentUser()) return;
-
-    // `currentUser` deliberately keeps login gates from the authenticated
-    // principal rather than accepting a possibly-stale directory row. Refresh
-    // that principal after this self-update before closing the wizard;
-    // otherwise its login-time `onboarding_completed: false` can immediately
-    // satisfy the auto-open effect again even though the durable patch above
-    // succeeded.
-    const refreshedCurrentUser = await refreshCurrentUserForAuthorityCycle(isCurrentUser);
-    if (!refreshedCurrentUser) {
-      if (!isCurrentUser()) return;
-      throw new Error(
-        'Setup was saved, but your account could not be refreshed. Reload to continue.'
-      );
+    onboardingCompletionWriteRef.current = { owner, promise: completionWrite };
+    try {
+      await completionWrite;
+    } finally {
+      if (onboardingCompletionWriteRef.current?.promise === completionWrite) {
+        onboardingCompletionWriteRef.current = null;
+      }
     }
     if (!isCurrentUser()) return;
 
@@ -1074,9 +1013,84 @@ function AppContent() {
       navigate(boardPath(targetBoardId as BoardID, boardById.get(targetBoardId)?.slug));
     }
 
-    // Close the wizard only now that creation + navigation are done, so the
-    // loading affordance stayed visible for the whole operation.
-    setOnboardingWizardOwner(null);
+    // The durable completion write is the terminal transition. Close from this
+    // explicit state rather than relying on the auth user object to update in
+    // the same render; readiness/route/realtime churn cannot reopen it.
+    if (!completeOnboardingWizard(owner)) return;
+
+    // `currentUser` keeps login gates from the authenticated principal rather
+    // than accepting a possibly-stale directory row. Synchronize it after the
+    // modal is safely terminal. A refresh failure must not trap a user whose
+    // completion is already durable; the next token refresh/reload will read it.
+    const refreshedCurrentUser = await refreshCurrentUserForAuthorityCycle(() =>
+      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)
+    );
+    if (
+      !refreshedCurrentUser &&
+      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)
+    ) {
+      showWarning('Setup is saved. Reload if your account does not refresh automatically.', {
+        key: 'onboarding-auth-refresh',
+        duration: 8,
+      });
+    }
+  };
+
+  const handleOnboardingDismiss = (
+    owner: OnboardingOperationOwner,
+    progress: Partial<OnboardingState>
+  ) => {
+    // Close synchronously first. Persistence is a defer marker, never a fake
+    // completion, and a transport error cannot make the modal spring open in
+    // this authority generation.
+    if (!deferOnboardingWizard(owner)) return;
+    if (!client) {
+      showError('Onboarding is closed, but “finish later” could not be saved while offline.');
+      return;
+    }
+
+    void (async () => {
+      try {
+        const wizardWrite = onboardingWizardWriteRef.current;
+        if (wizardWrite?.owner === owner) {
+          try {
+            await wizardWrite.promise;
+          } catch {
+            // Deferral still has to be recorded after a failed wizard write.
+          }
+        }
+        // Dismiss may race the narrow completion-commit window. Close remains
+        // immediate, but wait for that authoritative write before reading
+        // preferences so a stale deferral patch cannot erase completion data.
+        const completionWrite = onboardingCompletionWriteRef.current;
+        if (completionWrite?.owner === owner) {
+          try {
+            await completionWrite.promise;
+          } catch {
+            // A failed completion is exactly when the deferral should persist.
+          }
+        }
+        if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
+        const latestUser = (await client.service('users').get(owner.userId)) as User;
+        if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
+        if (latestUser.onboarding_completed) return;
+        await client.service('users').patch(owner.userId, {
+          preferences: buildDeferredOnboardingPreferences(
+            latestUser.preferences,
+            new Date().toISOString(),
+            progress
+          ),
+        });
+      } catch (error) {
+        if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
+        showError(
+          `Onboarding is closed, but “finish later” could not be saved: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          { key: 'onboarding-defer', duration: 8 }
+        );
+      }
+    })();
   };
 
   const handleCheckAuth = useCallback(
@@ -2273,9 +2287,13 @@ function AppContent() {
           isCurrent={() =>
             !!onboardingWizardOwner && isOnboardingOwnerCurrent(onboardingWizardOwner)
           }
-          onComplete={(result) => {
+          onComplete={(result, attempt) => {
             if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) return;
-            return handleOnboardingComplete(onboardingWizardOwner, result);
+            return handleOnboardingComplete(onboardingWizardOwner, result, attempt.isCurrent);
+          }}
+          onDismiss={(progress) => {
+            if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) return;
+            handleOnboardingDismiss(onboardingWizardOwner, progress);
           }}
           user={currentUser}
           client={client}
@@ -2287,7 +2305,18 @@ function AppContent() {
             ) {
               return;
             }
-            await handleUpdateUser(userId, updates, { silent: true });
+            const wizardWrite = handleUpdateUser(userId, updates, { silent: true });
+            onboardingWizardWriteRef.current = {
+              owner: onboardingWizardOwner,
+              promise: wizardWrite,
+            };
+            try {
+              await wizardWrite;
+            } finally {
+              if (onboardingWizardWriteRef.current?.promise === wizardWrite) {
+                onboardingWizardWriteRef.current = null;
+              }
+            }
           }}
           onCheckAuth={async (tool, apiKey) => {
             if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) {

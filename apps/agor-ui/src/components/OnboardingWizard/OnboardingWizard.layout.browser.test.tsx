@@ -13,8 +13,9 @@
 import type { User } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { theme as antdTheme, ConfigProvider } from 'antd';
-import type { ComponentProps } from 'react';
+import { type ComponentProps, useEffect } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useOnboardingLifecycle } from '../../hooks/useOnboardingLifecycle';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import type { WizardStep } from './OnboardingWizard';
@@ -46,7 +47,10 @@ function makeUser(): User {
 function renderWizardAt(initialStep: WizardStep) {
   agorStore.setState({ ...EMPTY_MAPS });
   const boardsService = {
-    create: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
+    create: vi.fn(async (data: { board_id?: string }) => ({
+      board_id: data.board_id,
+      created_by: 'user-1',
+    })),
   };
   const user = makeUser();
   const client = {
@@ -84,6 +88,92 @@ afterEach(() => {
 });
 
 describe('OnboardingWizard layout (real browser)', () => {
+  it('closes once after skip-all completion and never reopens from a stale user gate', async () => {
+    const user = makeUser();
+    const transitions: boolean[] = [];
+    const boardsService = {
+      create: vi.fn(async (data: { board_id?: string }) => ({
+        board_id: data.board_id,
+        created_by: user.user_id,
+      })),
+    };
+    const usersService = { get: vi.fn(async () => user) };
+    const client = {
+      io: { on: vi.fn(), off: vi.fn() },
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'users') return usersService;
+        return {};
+      }),
+    };
+    const onUpdateUser = vi.fn(async () => undefined);
+    const completionWrites = vi.fn(async () => undefined);
+
+    function Harness() {
+      const lifecycle = useOnboardingLifecycle({
+        userId: user.user_id,
+        authenticationGeneration: 1,
+        eligible: true,
+        ready: true,
+        // Deliberately stale for the whole test: this reproduced the reopen
+        // loop after the completion write had already succeeded.
+        completed: false,
+        deferred: false,
+        isAuthenticationOwnerCurrent: () => true,
+      });
+      useEffect(() => {
+        if (transitions.at(-1) !== lifecycle.open) transitions.push(lifecycle.open);
+      }, [lifecycle.open]);
+      const owner = lifecycle.activeOwner;
+
+      return (
+        <OnboardingWizard
+          open={lifecycle.open}
+          isCurrent={() => !!owner && lifecycle.isOwnerCurrent(owner)}
+          user={user}
+          client={client as never}
+          onUpdateUser={onUpdateUser}
+          onComplete={async (_result, attempt) => {
+            await completionWrites();
+            if (owner && attempt.isCurrent()) lifecycle.complete(owner);
+          }}
+          onDismiss={() => {
+            if (owner) lifecycle.defer(owner);
+          }}
+        />
+      );
+    }
+
+    render(
+      <ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm, token: { motion: false } }}>
+        <Harness />
+      </ConfigProvider>
+    );
+    await screen.findByText(/what do you want to get done/i);
+
+    fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
+    await screen.findByText('Build your teammate');
+    fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
+    await screen.findByText('Connect your AI');
+    fireEvent.click(screen.getByText(/skip for now/i).closest('button')!);
+    await screen.findByText("You're ready to build.");
+    const closeRect = screen.getByRole('button', { name: 'Close' }).getBoundingClientRect();
+    expect(closeRect.top).toBeGreaterThanOrEqual(0);
+    expect(closeRect.right).toBeLessThanOrEqual(window.innerWidth);
+    expect(closeRect.bottom).toBeLessThanOrEqual(window.innerHeight);
+    fireEvent.click(screen.getByText(/open my board/i).closest('button')!);
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await nextFrame();
+    await nextFrame();
+
+    expect(transitions).toEqual([false, true, false]);
+    expect(boardsService.create).toHaveBeenCalledTimes(1);
+    expect(usersService.get).toHaveBeenCalledTimes(1);
+    expect(onUpdateUser).toHaveBeenCalledTimes(1);
+    expect(completionWrites).toHaveBeenCalledTimes(1);
+  });
+
   it('lays the step-2 teammate gallery out in exactly three columns at the widened modal', async () => {
     renderWizardAt('workspace');
     const grid = await waitFor(() => {

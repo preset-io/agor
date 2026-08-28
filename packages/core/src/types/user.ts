@@ -421,6 +421,11 @@ export interface EventStreamPreferences {
  */
 export interface OnboardingState {
   /**
+   * ISO timestamp recorded when the user closes onboarding to finish later.
+   * Deferral is distinct from completion and never provisions resources.
+   */
+  deferredAt?: string;
+  /**
    * Onboarding goal ids the user selected, order-preserving (primary first),
    * max 2. See ONBOARDING_GOALS in agor-ui. Written once at completion.
    */
