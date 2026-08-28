@@ -1664,9 +1664,7 @@ function createExecuteHandler(
           // Launcher callbacks can outlive the tenant transaction that spawned
           // them. Leave any inherited DB scope before opening the fresh
           // tenant scope derived from the verified token claim.
-          await runWithoutTenantDatabaseScope(() =>
-            appWithExecutor.sessionTokenService?.revokeToken(sessionToken)
-          );
+          await runWithoutTenantDatabaseScope(() => sessionTokenService.revokeToken(sessionToken));
         } finally {
           nativeState?.finished.resolve();
         }
