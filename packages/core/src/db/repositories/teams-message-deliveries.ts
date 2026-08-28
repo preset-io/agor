@@ -278,7 +278,11 @@ export class TeamsMessageDeliveryRepository {
       }));
     }
     const rows = await select(db, {
-      tenant_id: sql<string>`tenant_id`,
+      // Keep this projection qualified as well: system-scope joins and RLS
+      // policies may expose more than one tenant_id column to PostgreSQL.
+      tenant_id: sql<string>`${
+        (teamsMessageDeliveries as unknown as { tenant_id: unknown }).tenant_id
+      }`,
       delivery_id: teamsMessageDeliveries.delivery_id,
       thread_session_map_id: teamsMessageDeliveries.thread_session_map_id,
     })

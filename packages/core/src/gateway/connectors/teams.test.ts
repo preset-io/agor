@@ -288,7 +288,7 @@ describe('normalizeTeamsActivity', () => {
       conversation: { id: '19:conversation@thread.v2', conversationType: 'personal' },
       from: { id: '29:user-1', name: 'Ada', aadObjectId: 'aad-1' },
       recipient: { id: '28:app-123', name: 'Agor' },
-      channelData: { tenant: { id: 'tenant-1' } },
+      channelData: { tenant: { id: 'tenant-1' }, channel: { type: 'standard' } },
       text: 'hello',
       ...overrides,
     };
@@ -324,6 +324,7 @@ describe('normalizeTeamsActivity', () => {
     expect(normalized.rootMessageId).toBe('1700000000000');
     expect(normalized.hasMention).toBe(true);
     expect(normalized.text).toBe('please review');
+    expect(normalized.metadata.teams_channel_type).toBe('standard');
     expect(normalized.providerEventId).toBe('teams:activity:activity-1');
   });
 });

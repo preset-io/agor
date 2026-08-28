@@ -1,0 +1,326 @@
+import { encryptApiKey } from '@agor/core/db';
+import type { GatewayChannel } from '@agor/core/types';
+import { describe, expect, it, vi } from 'vitest';
+import { TeamsGatewayWorker } from './teams-gateway-worker';
+
+const now = new Date('2026-08-27T12:00:00.000Z');
+
+function channel(): GatewayChannel {
+  return {
+    id: 'channel-1' as never,
+    channel_key: 'channel-key',
+    name: 'Teams experimental',
+    channel_type: 'teams',
+    enabled: true,
+    created_by: 'user-1' as never,
+    target_branch_id: 'branch-1' as never,
+    agor_user_id: 'user-1' as never,
+    config: {
+      app_id: 'teams-app',
+      app_password: 'secret',
+      microsoft_tenant_id: 'tenant-1',
+      require_mention: true,
+      allow_thread_replies_without_mention: true,
+      catch_up: {
+        mode: 'best_effort',
+        max_messages: 50,
+        max_prompt_bytes: 16 * 1024,
+        request_timeout_ms: 100,
+      },
+      outbound_enabled: true,
+    },
+    provider_installation_id: 'teams-app',
+    provider_config_generation: 3,
+  } as GatewayChannel;
+}
+
+function activity(overrides: Record<string, unknown> = {}) {
+  return {
+    activityId: 'activity-current',
+    providerEventId: 'teams:activity:activity-current',
+    threadId: '19:channel|root-1',
+    conversationId: '19:channel',
+    rootMessageId: 'root-1',
+    conversationType: 'channel',
+    serviceUrl: 'https://smba.trafficmanager.net/teams/',
+    text: 'Please review this',
+    activityType: 'message',
+    userId: '29:human',
+    userName: 'Ada',
+    userAadObjectId: 'aad-1',
+    tenantId: 'tenant-1',
+    hasMention: true,
+    timestamp: now.toISOString(),
+    address: { serviceUrl: 'https://smba.trafficmanager.net/teams/' },
+    metadata: {
+      teams_conversation_type: 'channel',
+      teams_channel_type: 'standard',
+      teams_team_id: 'team-1',
+      teams_channel_id: 'channel-graph-1',
+      teams_service_url: 'https://smba.trafficmanager.net/teams/',
+      teams_conversation_id: '19:channel',
+      teams_tenant_id: 'tenant-1',
+      teams_user_aad_id: 'aad-1',
+      teams_has_mention: true,
+    },
+    ...overrides,
+  };
+}
+
+function inboundEvent(): Record<string, unknown> {
+  return {
+    id: 'event-1',
+    gateway_channel_id: 'channel-1',
+    provider_event_id: 'teams:activity:activity-current',
+    thread_id: '19:channel|root-1',
+    status: 'processing',
+    processing_token: 'claim-1',
+    processing_expires_at: now.toISOString(),
+    payload_encrypted: 'encrypted',
+    payload_expires_at: new Date(now.getTime() + 60_000).toISOString(),
+    provider_config_generation: 3,
+    verified_app_id: 'teams-app',
+    verified_tenant_id: 'tenant-1',
+    attempt_count: 1,
+    next_attempt_at: now.toISOString(),
+    last_error_code: null,
+    session_id: null,
+    task_id: null,
+    received_at: now.toISOString(),
+    completed_at: null,
+  };
+}
+
+function makeWorker(options: {
+  activity: Record<string, unknown>;
+  mapping?: Record<string, unknown> | null;
+  catchUp?: (input: Record<string, unknown>) => Promise<unknown>;
+  gatewayCreate?: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+}) {
+  const event = inboundEvent();
+  const complete = vi.fn(async () => true);
+  const advance = vi.fn(async () => true);
+  const create = vi.fn(
+    options.gatewayCreate ??
+      (async () => ({ success: true, taskId: 'task-1', sessionId: 'session-1' }))
+  );
+  const inbound = {
+    findDueTeamsRefs: vi.fn(),
+    claimQueued: vi.fn(async () => event),
+    decryptQueuedPayload: vi.fn(() => options.activity),
+    complete,
+    failQueued: vi.fn(),
+  };
+  const mapping = {
+    findById: vi.fn(),
+    findByChannelAndThread: vi.fn(async () => options.mapping ?? null),
+    advanceTeamsLastAdmittedActivityId: advance,
+  };
+  const worker = new TeamsGatewayWorker({} as never, {
+    discoverInbound: async () => [
+      { tenant_id: 'tenant-1', gateway_channel_id: 'channel-1', event_id: 'event-1' },
+    ],
+    discoverDelivery: async () => [],
+    gatewayService: { create },
+    catchUp: options.catchUp as never,
+    now: () => now,
+    repositories: {
+      inbound: inbound as never,
+      delivery: {
+        findDueRefs: vi.fn(),
+        claim: vi.fn(),
+        markEffectStarted: vi.fn(),
+        complete: vi.fn(),
+        fail: vi.fn(),
+        markAmbiguous: vi.fn(),
+      } as never,
+      channel: { findById: vi.fn(async () => channel()) },
+      mapping: mapping as never,
+      address: { findByChannelAndThread: vi.fn() } as never,
+      message: { findById: vi.fn() } as never,
+    },
+  });
+  return { worker, create, complete, advance, inbound, mapping };
+}
+
+describe('TeamsGatewayWorker inbound admission', () => {
+  it('never creates a Task for an unmentioned standard-channel message', async () => {
+    const catchUp = vi.fn(async () => ({ activities: [], complete: true }));
+    const setup = makeWorker({
+      activity: activity({
+        hasMention: false,
+        text: 'ordinary channel chatter',
+        metadata: {
+          teams_conversation_type: 'channel',
+          teams_channel_type: 'standard',
+          teams_has_mention: false,
+          requires_mapping_verification: true,
+        },
+      }),
+      catchUp,
+    });
+
+    expect(await setup.worker.checkOnce()).toBe(1);
+    expect(setup.create).not.toHaveBeenCalled();
+    expect(setup.complete).toHaveBeenCalledOnce();
+    expect(setup.advance).not.toHaveBeenCalled();
+    expect(catchUp).not.toHaveBeenCalled();
+  });
+
+  it('puts only correlated bounded human catch-up before the one current Task', async () => {
+    const catchUp = vi.fn(async () => ({
+      activities: [
+        {
+          activityId: 'prior-human',
+          timestamp: '2026-08-27T11:59:00.000Z',
+          actorLabel: 'Ada',
+          text: 'The failing test is in auth.ts',
+          isBot: false,
+          isMention: false,
+        },
+        {
+          activityId: 'activity-current',
+          timestamp: now.toISOString(),
+          actorLabel: 'Ada',
+          text: 'Please review this',
+          isBot: false,
+          isMention: true,
+        },
+      ],
+      complete: true,
+      conversationId: '19:channel',
+      rootMessageId: 'root-1',
+      afterActivityId: 'prior-cursor',
+      throughActivityId: 'activity-current',
+      triggerActivityId: 'activity-current',
+    }));
+    const setup = makeWorker({
+      activity: activity(),
+      mapping: {
+        id: 'mapping-1',
+        thread_id: '19:channel|root-1',
+        teams_last_admitted_activity_id: 'prior-cursor',
+      },
+      catchUp,
+    });
+
+    await setup.worker.checkOnce();
+    expect(catchUp).toHaveBeenCalledOnce();
+    expect(setup.create.mock.calls[0]?.[0].text).toContain('The failing test is in auth.ts');
+    expect(setup.create.mock.calls[0]?.[0].text).toContain('**Current mention**');
+    expect(setup.create.mock.calls[0]?.[0].metadata).toEqual({
+      teams_conversation_type: 'channel',
+      teams_channel_type: 'standard',
+      teams_has_mention: true,
+    });
+    expect(setup.create).toHaveBeenCalledOnce();
+    expect(setup.advance).toHaveBeenCalledWith('mapping-1', 'activity-current');
+  });
+
+  it('falls back to the current mention when history is incomplete', async () => {
+    const setup = makeWorker({
+      activity: activity(),
+      catchUp: async () => ({
+        activities: [],
+        complete: false,
+        conversationId: '19:channel',
+        rootMessageId: 'root-1',
+        afterActivityId: null,
+        throughActivityId: 'wrong-trigger',
+        triggerActivityId: 'wrong-trigger',
+      }),
+    });
+
+    await setup.worker.checkOnce();
+    expect(setup.create.mock.calls[0]?.[0].text).toBe('Please review this');
+    expect(setup.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('TeamsGatewayWorker outbound fencing', () => {
+  function deliverySetup(addressOverrides: Record<string, unknown> = {}) {
+    const delivery = {
+      delivery_id: 'delivery-1',
+      message_id: 'message-1',
+      gateway_channel_id: 'channel-1',
+      thread_session_map_id: 'mapping-1',
+      provider_installation_id: 'teams-app',
+      provider_config_generation: 3,
+    };
+    const claim = {
+      delivery_id: 'delivery-1',
+      claim_token: 'delivery-claim',
+      claim_generation: 1,
+      lease_expires_at: new Date(now.getTime() + 30_000).toISOString(),
+      delivery,
+    };
+    const fail = vi.fn(async () => true);
+    const markEffectStarted = vi.fn(async () => true);
+    const complete = vi.fn(async () => true);
+    const markAmbiguous = vi.fn(async () => true);
+    const sendMessage = vi.fn(async () => 'teams-message-1');
+    const address = {
+      address_id: 'address-1',
+      gateway_channel_id: 'channel-1',
+      thread_id: '19:channel|root-1',
+      conversation_id: '19:channel',
+      root_message_id: 'root-1',
+      encrypted_address: encryptApiKey(JSON.stringify({ serviceUrl: 'https://teams.example' })),
+      verified_app_id: 'teams-app',
+      verified_tenant_id: 'tenant-1',
+      provider_config_generation: 3,
+      refreshed_at: now.toISOString(),
+      expires_at: null,
+      ...addressOverrides,
+    };
+    const worker = new TeamsGatewayWorker({} as never, {
+      discoverInbound: async () => [],
+      discoverDelivery: async () => [
+        { tenant_id: 'tenant-1', delivery_id: 'delivery-1', thread_session_map_id: 'mapping-1' },
+      ],
+      now: () => now,
+      repositories: {
+        inbound: {} as never,
+        delivery: {
+          findDueRefs: vi.fn(),
+          claim: vi.fn(async () => claim),
+          markEffectStarted,
+          complete,
+          fail,
+          markAmbiguous,
+        } as never,
+        channel: { findById: vi.fn(async () => channel()) },
+        mapping: {
+          findById: vi.fn(async () => ({ id: 'mapping-1', thread_id: '19:channel|root-1' })),
+          findByChannelAndThread: vi.fn(),
+          advanceTeamsLastAdmittedActivityId: vi.fn(),
+        } as never,
+        address: { findByChannelAndThread: vi.fn(async () => address) } as never,
+        message: { findById: vi.fn(async () => ({ content: 'reply' })) } as never,
+      },
+      connectorFactory: () => ({ channelType: 'teams', sendMessage }) as never,
+    });
+    return { worker, fail, markEffectStarted, complete, markAmbiguous, sendMessage };
+  }
+
+  it('cancels before decryption or effect when the address generation is stale', async () => {
+    const setup = deliverySetup({ provider_config_generation: 2 });
+    await setup.worker.checkOnce();
+    expect(setup.fail).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'canceled', errorCode: 'conversation_address_stale' })
+    );
+    expect(setup.markEffectStarted).not.toHaveBeenCalled();
+    expect(setup.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('records an ambiguous terminal after effect start throws', async () => {
+    const setup = deliverySetup();
+    setup.sendMessage.mockRejectedValueOnce(new Error('connection reset'));
+    await setup.worker.checkOnce();
+    expect(setup.markEffectStarted).toHaveBeenCalledOnce();
+    expect(setup.markAmbiguous).toHaveBeenCalledWith(
+      expect.objectContaining({ errorCode: 'provider_effect_unknown' })
+    );
+    expect(setup.complete).not.toHaveBeenCalled();
+  });
+});

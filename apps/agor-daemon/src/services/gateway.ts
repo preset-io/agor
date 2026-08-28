@@ -135,6 +135,8 @@ interface PostMessageData {
   gateway_inbound_event_id?: import('@agor/core/types').GatewayInboundEventID;
   listener_claim_token?: string;
   listener_channel_id?: import('@agor/core/types').GatewayChannelID;
+  /** Decrypted only for the alignment lookup; never persisted as metadata. */
+  teams_user_aad_object_id?: string;
 }
 
 /**
@@ -473,6 +475,25 @@ function quoteForPrompt(text: string, maxChars = 2000): string {
     .split(/\r?\n/)
     .map((line) => `> ${line}`)
     .join('\n');
+}
+
+function safeTeamsMappingMetadata(
+  metadata: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const safe: Record<string, unknown> = {};
+  for (const key of [
+    'teams_conversation_type',
+    'teams_channel_type',
+    'teams_channel_name',
+    'teams_team_name',
+    'teams_user_name',
+    'teams_has_mention',
+    'requires_mapping_verification',
+  ]) {
+    const value = metadata?.[key];
+    if (typeof value === 'string' || typeof value === 'boolean') safe[key] = value;
+  }
+  return safe;
 }
 
 function getSlackMessageTs(metadata?: Record<string, unknown>): string | undefined {
@@ -2287,10 +2308,18 @@ export class GatewayService {
       const isPersonal =
         typeof conversationType === 'string' && conversationType.toLowerCase() === 'personal';
       const hasMention = data.metadata?.teams_has_mention === true;
-      const isThreadReply = data.metadata?.requires_mapping_verification === true;
+      const isTeamsChannel =
+        typeof conversationType === 'string' && conversationType.toLowerCase() === 'channel';
       const requireMention = channelConfig.require_mention !== false;
-      const allowThreadReply = channelConfig.allow_thread_replies_without_mention !== false;
-      if (!isPersonal && requireMention && !hasMention && !(isThreadReply && allowThreadReply)) {
+      // A standard/channel conversation is an observation surface, not a
+      // prompt surface: an unmentioned message can never create a Task, even
+      // when an older compatibility flag allowed replies in mapped threads.
+      // Personal chats remain mention-free; group chats retain the configured
+      // require_mention behavior.
+      if (
+        (!isPersonal && isTeamsChannel && !hasMention) ||
+        (!isPersonal && !isTeamsChannel && requireMention && !hasMention)
+      ) {
         console.debug(
           `[gateway] IGNORED: Teams conversation message without required mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
         );
@@ -2406,8 +2435,8 @@ export class GatewayService {
       const matchedUser = await this.resolveAlignedUser({
         platform: 'Teams',
         externalId:
-          typeof data.metadata?.teams_user_aad_id === 'string'
-            ? data.metadata.teams_user_aad_id
+          typeof data.teams_user_aad_object_id === 'string'
+            ? data.teams_user_aad_object_id
             : undefined,
         email: undefined,
         userMap: channelConfig.user_map as Record<string, string> | undefined,
@@ -2693,9 +2722,29 @@ export class GatewayService {
       const existingMetadata = ((existingMapping.metadata as Record<string, unknown>) ?? {}) as
         | Record<string, unknown>
         | undefined;
+      const metadataBase =
+        channel.channel_type === 'teams'
+          ? {
+              ...safeTeamsMappingMetadata(existingMetadata),
+              ...(typeof existingMetadata?.outbound_seed_id === 'string'
+                ? { outbound_seed_id: existingMetadata.outbound_seed_id }
+                : {}),
+              ...(typeof existingMetadata?.outbound_seed_initial_prompt_pending === 'boolean'
+                ? {
+                    outbound_seed_initial_prompt_pending:
+                      existingMetadata.outbound_seed_initial_prompt_pending,
+                  }
+                : {}),
+              ...(typeof existingMetadata?.outbound_seed_initial_event_id === 'string'
+                ? {
+                    outbound_seed_initial_event_id: existingMetadata.outbound_seed_initial_event_id,
+                  }
+                : {}),
+            }
+          : existingMetadata;
       const mergedMetadata = {
-        ...existingMetadata,
-        ...(data.metadata?.processing_comment_id
+        ...metadataBase,
+        ...(channel.channel_type !== 'teams' && data.metadata?.processing_comment_id
           ? { processing_comment_id: data.metadata.processing_comment_id }
           : {}),
         ...(typeof data.metadata?.slack_user_id === 'string'
@@ -2724,15 +2773,17 @@ export class GatewayService {
       }
 
       if (outboundSeed) {
-        await this.addGatewayReplyAliases(mappingForCursor, [
-          outboundSeed.platform_thread_id,
-          data.thread_id,
-          ...(Array.isArray(outboundSeed.metadata?.provider_reply_aliases)
-            ? outboundSeed.metadata.provider_reply_aliases.filter(
-                (alias): alias is string => typeof alias === 'string'
-              )
-            : []),
-        ]);
+        if (channel.channel_type !== 'teams') {
+          await this.addGatewayReplyAliases(mappingForCursor, [
+            outboundSeed.platform_thread_id,
+            data.thread_id,
+            ...(Array.isArray(outboundSeed.metadata?.provider_reply_aliases)
+              ? outboundSeed.metadata.provider_reply_aliases.filter(
+                  (alias): alias is string => typeof alias === 'string'
+                )
+              : []),
+          ]);
+        }
         if (outboundAdmission) {
           await this.outboundRepo.completeReplyAdmission(
             outboundSeed.id as GatewayOutboundMessageID,
@@ -3008,7 +3059,9 @@ export class GatewayService {
                 : {}),
             }
           : {
-              ...(data.metadata ?? {}),
+              ...(channel.channel_type === 'teams'
+                ? safeTeamsMappingMetadata(data.metadata)
+                : (data.metadata ?? {})),
               ...(outboundSeed ? { outbound_seed_id: outboundSeed.id } : {}),
               ...(outboundSeed
                 ? {
@@ -3018,7 +3071,7 @@ export class GatewayService {
                       : {}),
                   }
                 : {}),
-              ...(outboundReplyAliases.length > 0
+              ...(outboundReplyAliases.length > 0 && channel.channel_type !== 'teams'
                 ? { gateway_reply_aliases: [...new Set(outboundReplyAliases)] }
                 : {}),
             };
@@ -3053,7 +3106,9 @@ export class GatewayService {
       }
 
       if (outboundAdmission && mappingForCursor) {
-        await this.addGatewayReplyAliases(mappingForCursor, outboundReplyAliases);
+        if (channel.channel_type !== 'teams') {
+          await this.addGatewayReplyAliases(mappingForCursor, outboundReplyAliases);
+        }
         await this.outboundRepo.completeReplyAdmission(
           outboundSeed!.id as GatewayOutboundMessageID,
           sessionId

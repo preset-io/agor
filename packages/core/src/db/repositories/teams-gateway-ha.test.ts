@@ -1,7 +1,7 @@
 import type { BranchID, Message, MessageID, SessionID, UUID } from '@agor/core/types';
 import { MessageRole, SessionStatus } from '@agor/core/types';
 import { and, eq } from 'drizzle-orm';
-import { describe, expect } from 'vitest';
+import { afterAll, beforeAll, describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
@@ -112,7 +112,11 @@ function admissionInput(
     providerEventId,
     threadId,
     payload: { providerEventId, threadId, text: 'hello' },
-    deliveryMetadata: { teams_tenant_id: 'teams-tenant-id' },
+    deliveryMetadata: {
+      teams_tenant_id: 'teams-tenant-id',
+      teams_conversation_id: '19:secret@thread.tacv2',
+      teams_channel_name: 'safe-display-name',
+    },
     address: {
       gatewayChannelId: channelId as never,
       threadId,
@@ -130,6 +134,15 @@ function admissionInput(
 }
 
 describe('Teams gateway HA repositories', () => {
+  const priorMasterSecret = process.env.AGOR_MASTER_SECRET;
+  beforeAll(() => {
+    process.env.AGOR_MASTER_SECRET = 'teams-gateway-ha-test-secret';
+  });
+  afterAll(() => {
+    if (priorMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
+    else process.env.AGOR_MASTER_SECRET = priorMasterSecret;
+  });
+
   ownedDbTest(
     'commits encrypted admission once and refreshes the durable address on retries',
     async ({ db }) => {
@@ -145,6 +158,9 @@ describe('Teams gateway HA repositories', () => {
       expect(duplicate.event.id).toBe(first.event.id);
       expect(first.event.payload_encrypted).toBeTruthy();
       expect(first.event.payload_encrypted).not.toContain('hello');
+      expect(first.event.delivery_metadata).toEqual({
+        teams_channel_name: 'safe-display-name',
+      });
       expect(inbound.decryptQueuedPayload(first.event)).toMatchObject({ text: 'hello' });
       expect(await addresses.addressForChannelAndThread(channel.id, input.threadId)).toEqual(
         input.address.address
@@ -160,6 +176,7 @@ describe('Teams gateway HA repositories', () => {
           )
         )
       ).rejects.toThrow('different thread');
+      expect(await addresses.findByChannelAndThread(channel.id, 'different-thread')).toBeNull();
 
       const rawAddress = await addresses.findByChannelAndThread(channel.id, input.threadId);
       expect(rawAddress).toBeTruthy();
@@ -176,6 +193,24 @@ describe('Teams gateway HA repositories', () => {
           event_id: first.event.id,
         },
       ]);
+
+      const claim = await inbound.claimQueued(first.event.id, 'cleanup-token', 30_000);
+      expect(claim).toBeTruthy();
+      expect(
+        await inbound.complete({
+          eventId: first.event.id,
+          channelId: channel.id,
+          processingToken: 'cleanup-token',
+          requireListenerClaim: false,
+        })
+      ).toBe(true);
+      const stored = await select(db)
+        .from(gatewayInboundEvents)
+        .where(eq(gatewayInboundEvents.id, first.event.id))
+        .one();
+      expect(stored?.payload_encrypted).toBeNull();
+      expect(stored?.payload_expires_at).toBeNull();
+      expect(await inbound.findDueTeamsRefs(db, { now: new Date() })).toEqual([]);
     }
   );
 
@@ -288,4 +323,59 @@ describe('Teams gateway HA repositories', () => {
       .where(eq(gatewayInboundEvents.gateway_channel_id, channel.id))
       .run();
   });
+
+  ownedDbTest('holds a later inbound occurrence behind its predecessor', async ({ db }) => {
+    const { channel } = await seedTeamsMapping(db);
+    const inbound = new GatewayInboundEventRepository(db);
+    const first = await inbound.admitVerifiedHttp(
+      admissionInput(channel.id, channel.provider_config_generation, 'teams:activity:first')
+    );
+    const second = await inbound.admitVerifiedHttp(
+      admissionInput(channel.id, channel.provider_config_generation, 'teams:activity:second')
+    );
+    expect(first.outcome).toBe('admitted');
+    expect(second.outcome).toBe('admitted');
+
+    expect(
+      (await inbound.findDueTeamsRefs(db, { now: new Date() })).map((row) => row.event_id)
+    ).toEqual([first.event.id]);
+    const claim = await inbound.claimQueued(first.event.id, 'predecessor-token', 30_000);
+    expect(claim).toBeTruthy();
+    expect(await inbound.findDueTeamsRefs(db, { now: new Date() })).toEqual([]);
+    expect(
+      await inbound.complete({
+        eventId: first.event.id,
+        channelId: channel.id,
+        processingToken: 'predecessor-token',
+        requireListenerClaim: false,
+      })
+    ).toBe(true);
+    expect(
+      (await inbound.findDueTeamsRefs(db, { now: new Date() })).map((row) => row.event_id)
+    ).toEqual([second.event.id]);
+  });
+
+  ownedDbTest(
+    'terminalizes and clears expired pending payloads during discovery',
+    async ({ db }) => {
+      const { channel } = await seedTeamsMapping(db);
+      const inbound = new GatewayInboundEventRepository(db);
+      const admitted = await inbound.admitVerifiedHttp({
+        ...admissionInput(channel.id, channel.provider_config_generation, 'teams:activity:expires'),
+        payloadTtlMs: 1,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      expect(await inbound.findDueTeamsRefs(db, { now: new Date() })).toEqual([]);
+      const stored = await select(db)
+        .from(gatewayInboundEvents)
+        .where(eq(gatewayInboundEvents.id, admitted.event.id))
+        .one();
+      expect(stored).toMatchObject({
+        status: 'dead_letter',
+        payload_encrypted: null,
+        payload_expires_at: null,
+        last_error_code: 'payload_expired',
+      });
+    }
+  );
 });

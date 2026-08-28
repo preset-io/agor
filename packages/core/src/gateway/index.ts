@@ -90,6 +90,7 @@ export {
   normalizeTeamsActivity,
   parseThreadId as parseTeamsThreadId,
   TeamsConnector,
+  teamsSafeInboundMetadata,
 } from './connectors/teams';
 export type { TeamsCatchUpActivity, TeamsCatchUpResult } from './connectors/teams-catch-up';
 export { boundTeamsCatchUp } from './connectors/teams-catch-up';

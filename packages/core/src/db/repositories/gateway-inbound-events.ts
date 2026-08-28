@@ -11,7 +11,7 @@ import type {
   SessionID,
   TaskID,
 } from '@agor/core/types';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import {
@@ -69,6 +69,67 @@ export type GatewayInboundEventClaimResult =
   | { outcome: 'completed_duplicate'; event: GatewayInboundEvent }
   | { outcome: 'in_progress_elsewhere'; event: GatewayInboundEvent }
   | { outcome: 'listener_lost' };
+
+/**
+ * The process-local worker tail is only an optimization. This predicate is
+ * the actual HA lane fence: a later occurrence cannot be claimed while an
+ * earlier pending/processing occurrence for the same tenant/channel/thread
+ * remains non-terminal.
+ */
+function teamsInboundLaneIsOldest(db: Database) {
+  const tenantPredicate = isSQLiteDatabase(db)
+    ? sql``
+    : sql` AND predecessor."tenant_id" = "gateway_inbound_events"."tenant_id"`;
+  return sql`NOT EXISTS (
+    SELECT 1 FROM "gateway_inbound_events" AS predecessor
+    WHERE predecessor."gateway_channel_id" = ${gatewayInboundEvents.gateway_channel_id}
+      AND predecessor."thread_id" = ${gatewayInboundEvents.thread_id}
+      ${tenantPredicate}
+      AND predecessor."status" IN ('pending', 'processing')
+      AND (predecessor."received_at" < ${gatewayInboundEvents.received_at}
+        OR (predecessor."received_at" = ${gatewayInboundEvents.received_at}
+          AND predecessor."id" < ${gatewayInboundEvents.id}))
+  )`;
+}
+
+function safeTeamsDeliveryMetadata(
+  metadata: Record<string, unknown> | null | undefined
+): Record<string, unknown> | null {
+  if (!metadata) return null;
+  const safe: Record<string, unknown> = {};
+  for (const key of [
+    'teams_conversation_type',
+    'teams_channel_type',
+    'teams_channel_name',
+    'teams_team_name',
+    'teams_user_name',
+    'teams_has_mention',
+    'requires_mapping_verification',
+  ]) {
+    const value = metadata[key];
+    if (typeof value === 'string' || typeof value === 'boolean') safe[key] = value;
+  }
+  return safe;
+}
+
+async function terminalizeExpiredTeamsPayloads(db: Database, now: Date): Promise<void> {
+  await update(db, gatewayInboundEvents)
+    .set({
+      status: 'dead_letter',
+      processing_expires_at: now,
+      next_attempt_at: now,
+      last_error_code: 'payload_expired',
+      payload_encrypted: null,
+      payload_expires_at: null,
+    })
+    .where(
+      and(
+        inArray(gatewayInboundEvents.status, ['pending', 'processing']),
+        lte(gatewayInboundEvents.payload_expires_at, now)
+      )
+    )
+    .run();
+}
 
 function rowToEvent(row: GatewayInboundEventRow): GatewayInboundEvent {
   return {
@@ -298,7 +359,7 @@ export class GatewayInboundEventRepository {
             gateway_channel_id: input.channelId,
             provider_event_id: input.providerEventId,
             thread_id: input.threadId,
-            delivery_metadata: input.deliveryMetadata ?? null,
+            delivery_metadata: safeTeamsDeliveryMetadata(input.deliveryMetadata),
             status: 'pending',
             processing_token: generateId(),
             processing_expires_at: now,
@@ -314,7 +375,6 @@ export class GatewayInboundEventRepository {
           })
           .onConflictDoNothing()
           .run();
-        await addressRepository.upsertInTransaction(txDb, input.address);
         const row = await select(txDb)
           .from(gatewayInboundEvents)
           .where(
@@ -337,6 +397,10 @@ export class GatewayInboundEventRepository {
             'Teams activity identity was reused across provider generations'
           );
         }
+        // Do not refresh the durable address until the provider occurrence has
+        // passed every duplicate/thread/generation identity check. A rejected
+        // retry must not leave any persisted Teams address behind.
+        await addressRepository.upsertInTransaction(txDb, input.address);
         return {
           outcome: row.id === eventId ? 'admitted' : 'duplicate',
           event: rowToEvent(row),
@@ -356,19 +420,35 @@ export class GatewayInboundEventRepository {
       throw new RepositoryError('Teams ingress discovery limit must be between 1 and 1000');
     }
     const now = options.now ?? new Date();
+    // Expired payloads must become visible terminal records before discovery;
+    // otherwise the expiry predicate below would make them disappear forever.
+    await terminalizeExpiredTeamsPayloads(db, now);
     const due = sql`${gatewayInboundEvents.status} IN ('pending', 'processing')
       AND ${gatewayInboundEvents.next_attempt_at} <= ${now}
       AND (${gatewayInboundEvents.status} = 'pending'
         OR ${gatewayInboundEvents.processing_expires_at} <= ${now})
       AND ${gatewayInboundEvents.payload_expires_at} > ${now}`;
     const rows = await select(db, {
-      ...(isSQLiteDatabase(db) ? {} : { tenant_id: sql<string>`tenant_id` }),
+      ...(isSQLiteDatabase(db)
+        ? {}
+        : {
+            tenant_id: sql<string>`${
+              (gatewayInboundEvents as unknown as { tenant_id: unknown }).tenant_id
+            }`,
+          }),
       gateway_channel_id: gatewayInboundEvents.gateway_channel_id,
       event_id: gatewayInboundEvents.id,
     })
       .from(gatewayInboundEvents)
       .innerJoin(gatewayChannels, eq(gatewayChannels.id, gatewayInboundEvents.gateway_channel_id))
-      .where(and(due, eq(gatewayChannels.channel_type, 'teams'), eq(gatewayChannels.enabled, true)))
+      .where(
+        and(
+          due,
+          teamsInboundLaneIsOldest(db),
+          eq(gatewayChannels.channel_type, 'teams'),
+          eq(gatewayChannels.enabled, true)
+        )
+      )
       .orderBy(gatewayInboundEvents.next_attempt_at, gatewayInboundEvents.id)
       .limit(limit)
       .all();
@@ -396,6 +476,9 @@ export class GatewayInboundEventRepository {
     return runDatabaseTransaction(
       this.db,
       async (txDb) => {
+        // Direct claim callers must not be able to leave an expired
+        // predecessor in the lane forever just because discovery was skipped.
+        await terminalizeExpiredTeamsPayloads(txDb, now);
         await lockRowForUpdate(
           txDb,
           this.db,
@@ -406,15 +489,34 @@ export class GatewayInboundEventRepository {
           .from(gatewayInboundEvents)
           .where(eq(gatewayInboundEvents.id, eventId))
           .one();
+        if (!row) return null;
         if (
-          !row?.payload_encrypted ||
-          (row.payload_expires_at && new Date(row.payload_expires_at) <= now)
+          row.payload_expires_at &&
+          new Date(row.payload_expires_at).getTime() <= now.getTime() &&
+          (row.status === 'pending' || row.status === 'processing')
         ) {
+          await update(txDb, gatewayInboundEvents)
+            .set({
+              status: 'dead_letter',
+              processing_expires_at: now,
+              next_attempt_at: now,
+              last_error_code: 'payload_expired',
+              payload_encrypted: null,
+              payload_expires_at: null,
+            })
+            .where(eq(gatewayInboundEvents.id, eventId))
+            .run();
           return null;
         }
+        if (!row.payload_encrypted) return null;
         if (row.status === 'completed' || row.status === 'dead_letter') return null;
         if (row.status === 'processing' && row.processing_expires_at > now) return null;
         if (row.status === 'pending' && row.next_attempt_at > now) return null;
+        const oldest = await select(txDb, { id: gatewayInboundEvents.id })
+          .from(gatewayInboundEvents)
+          .where(and(eq(gatewayInboundEvents.id, eventId), teamsInboundLaneIsOldest(this.db)))
+          .one();
+        if (!oldest) return null;
         const expiresAt = new Date(now.getTime() + leaseDurationMs);
         const updated = await update(txDb, gatewayInboundEvents)
           .set({
@@ -462,7 +564,9 @@ export class GatewayInboundEventRepository {
         processing_expires_at: now,
         next_attempt_at: input.nextAttemptAt ?? now,
         last_error_code: input.errorCode,
-        ...(input.status === 'dead_letter' ? { payload_encrypted: null } : {}),
+        ...(input.status === 'dead_letter'
+          ? { payload_encrypted: null, payload_expires_at: null }
+          : {}),
       })
       .where(
         and(
@@ -516,6 +620,8 @@ export class GatewayInboundEventRepository {
             session_id: input.sessionId ?? null,
             task_id: input.taskId ?? null,
             completed_at: now,
+            payload_encrypted: null,
+            payload_expires_at: null,
           })
           .where(
             and(

@@ -50,6 +50,7 @@ import {
   getDaemonUrl,
   requestExecutor,
 } from './utils/spawn-executor.js';
+import { createTeamsStandardChannelHistoryFetcher } from './utils/teams-channel-history.js';
 
 const DEBUG_STARTUP =
   process.env.AGOR_DEBUG_STARTUP === '1' || process.env.DEBUG?.includes('startup');
@@ -875,6 +876,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
     gatewayService: gatewayService
       ? { create: gatewayService.create.bind(gatewayService) }
       : undefined,
+    // The worker owns the real bounded Graph/RSC fetcher. Tests may replace
+    // it, but production startup never relies on an injected-only hook.
+    catchUp: createTeamsStandardChannelHistoryFetcher(),
   });
   app.set('teamsGatewayWorker', teamsGatewayWorker);
   teamsGatewayWorker.start();

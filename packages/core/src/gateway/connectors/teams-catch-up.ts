@@ -13,6 +13,11 @@ export interface TeamsCatchUpResult {
   activities: TeamsCatchUpActivity[];
   complete: boolean;
   reason?: 'disabled' | 'unavailable' | 'truncated' | 'invalid';
+  conversationId?: string;
+  rootMessageId?: string | null;
+  afterActivityId?: string | null;
+  throughActivityId?: string;
+  triggerActivityId?: string;
 }
 
 export interface TeamsCatchUpBounds {

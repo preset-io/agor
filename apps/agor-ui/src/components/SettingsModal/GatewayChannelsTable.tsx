@@ -2266,6 +2266,7 @@ const ChannelFormFields: React.FC<{
                   <Space>
                     {opt.icon}
                     {opt.label}
+                    {opt.value === 'teams' && <Tag color="gold">Experimental</Tag>}
                     {opt.comingSoon && <Tag style={{ marginInlineStart: 4 }}>Coming soon</Tag>}
                   </Space>
                 </Select.Option>
@@ -2783,7 +2784,7 @@ const ChannelFormFields: React.FC<{
 
                     <CompactAlert
                       type="info"
-                      heading="Azure Bot Setup"
+                      heading="Azure Bot Setup · Experimental"
                       expandable
                       description={
                         <span>
@@ -2797,7 +2798,8 @@ const ChannelFormFields: React.FC<{
                           </Typography.Link>
                           . Both single-tenant and multi-tenant bots are supported. The{' '}
                           <strong>Tenant ID</strong> is required so the bot can send replies. Then
-                          sideload the bot as a Teams app via a custom manifest.
+                          sideload the bot as a Teams app via a custom manifest. Teams delivery is
+                          experimental until live provider QA is complete.
                         </span>
                       }
                     />
@@ -4676,6 +4678,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       render: (type: ChannelType) => (
         <Tag icon={getChannelTypeIcon(type)} color={getChannelTypeColor(type)}>
           {type.charAt(0).toUpperCase() + type.slice(1)}
+          {type === 'teams' && ' · Experimental'}
         </Tag>
       ),
     },

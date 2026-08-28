@@ -11,6 +11,25 @@ import { type AuthConfiguration, CloudAdapter } from '@microsoft/agents-hosting'
 import type { ChannelType, TeamsGatewayConfig } from '../../types/gateway';
 import type { GatewayConnector } from '../connector';
 
+export function teamsSafeInboundMetadata(
+  metadata: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const safe: Record<string, unknown> = {};
+  for (const key of [
+    'teams_conversation_type',
+    'teams_channel_type',
+    'teams_channel_name',
+    'teams_team_name',
+    'teams_user_name',
+    'teams_has_mention',
+    'requires_mapping_verification',
+  ]) {
+    const value = metadata?.[key];
+    if (typeof value === 'string' || typeof value === 'boolean') safe[key] = value;
+  }
+  return safe;
+}
+
 export interface NormalizedTeamsActivity {
   activityId: string;
   providerEventId: string;
@@ -220,6 +239,7 @@ export function normalizeTeamsActivity(
     address,
     metadata: {
       teams_conversation_type: conversationType,
+      teams_channel_type: stringValue(channel.type) ?? stringValue(channelData.channelType),
       teams_conversation_id: baseConversationId,
       teams_root_message_id: rootMessageId,
       teams_service_url: serviceUrl,
