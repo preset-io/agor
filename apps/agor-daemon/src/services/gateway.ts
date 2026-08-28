@@ -3049,6 +3049,11 @@ export class GatewayService {
 
     // 4. Send prompt via /sessions/:id/prompt — it handles queue-vs-execute internally
     //    (auto-queues when session is busy or has queued items, executes when idle)
+    const routingMode = recoveringInitialDelivery
+      ? 'recovering_initial'
+      : created
+        ? 'new_session'
+        : 'existing_session';
     try {
       const promptService = this.app.service('/sessions/:id/prompt') as {
         create: (
@@ -3350,7 +3355,8 @@ export class GatewayService {
 
       if (task.status === 'queued') {
         console.log(
-          `[gateway] Message queued for session ${shortId(sessionId)} at position ${task.queue_position}`
+          `[gateway] Message queued for session ${shortId(sessionId)} ` +
+            `route=${routingMode} at position ${task.queue_position}`
         );
         this.sendSystemMessage(
           channel,
@@ -3366,7 +3372,8 @@ export class GatewayService {
         });
       } else {
         console.log(
-          `[gateway] Prompt sent to session ${shortId(sessionId)} via /sessions/:id/prompt`
+          `[gateway] Prompt sent to session ${shortId(sessionId)} ` +
+            `route=${routingMode} via /sessions/:id/prompt`
         );
         this.updateProgressAfterCommit({
           session_id: sessionId,
@@ -3572,12 +3579,10 @@ export class GatewayService {
 
     // Look up session → thread mapping
     const mapping = await this.threadMapRepo.findBySession(sessionId);
-    if (!mapping) {
-      console.warn(
-        `[gateway] flushOutboundBuffer: no thread mapping for session ${shortId(sessionId)}`
-      );
-      return;
-    }
+    // Sessions without a gateway mapping are normal (for example, browser or
+    // MCP sessions). There is no outbound work and therefore no operational
+    // event to record here.
+    if (!mapping) return;
 
     const channel = await this.channelRepo.findById(mapping.channel_id);
     if (

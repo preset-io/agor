@@ -615,7 +615,7 @@ export async function executeCursorTask(params: {
 
       const failed = runResult.status === 'error';
       const stopped = runResult.status === 'cancelled' || params.abortController.signal.aborted;
-      const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+      const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId, taskId);
       const taskPatch: Partial<Task> = {
         status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
         completed_at: new Date().toISOString(),
@@ -641,7 +641,7 @@ export async function executeCursorTask(params: {
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error('[cursor] execution failed category=task_execution');
-    const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+    const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId, taskId);
     const taskPatch: Partial<Task> = {
       status: 'failed',
       completed_at: new Date().toISOString(),

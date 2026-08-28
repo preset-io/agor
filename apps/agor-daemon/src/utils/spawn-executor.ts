@@ -1058,7 +1058,9 @@ export function startContainedExecutorCommand(
  * Run a short-lived executor command and wait for its authenticated response.
  *
  * Use this for daemon call sites that need an immediate answer (for example
- * autocomplete and git-state probes). Long-running commands and lifecycle
+ * autocomplete, branch inspection, and other bounded lifecycle probes).
+ * Prompt Git-state snapshots are captured inside the prompt executor; they do
+ * not use this request/response path. Long-running commands and lifecycle
  * tasks should keep using spawnExecutorFireAndForget().
  */
 export async function requestExecutor(

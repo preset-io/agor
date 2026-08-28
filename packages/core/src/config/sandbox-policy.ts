@@ -6,8 +6,9 @@
  * **bubblewrap** argument list. The daemon prepends `bwrap <args> --` to each
  * AGENT executor spawn (prompt tasks + web terminals) at the `spawnExecutorLocal`
  * chokepoint, so the isolation policy is uniform across all agentic tools and
- * terminals. (Daemon-internal bounded executor commands — git-state/autocomplete
- * probes, file reads, OAuth — run unwrapped as Agor's own code.)
+ * terminals. Daemon-internal bounded executor commands (file reads, OAuth,
+ * branch inspection, and other lifecycle work) may run unwrapped as Agor's
+ * own code; prompt Git-state snapshots run inside the prompt executor.
  *
  * The sandbox unshares the **user + mount** namespaces (and the **PID**
  * namespace where the host allows it — see `pidNamespace`) but NOT the network:
