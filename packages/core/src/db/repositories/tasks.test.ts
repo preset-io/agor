@@ -88,6 +88,24 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
   return session.session_id;
 }
 
+async function bindTestRuntimeAuthority(db: Database, taskRepo: TaskRepository, task: Task) {
+  const session = await new SessionRepository(db).findById(task.session_id);
+  if (!session?.branch_id) throw new Error('Test runtime Session Branch is unavailable');
+  await taskRepo.bindExecutorLaunchAuthority(task.task_id, {
+    branchRbacEnabled: true,
+    allowSuperadmin: false,
+  });
+  return {
+    token_fingerprint: 'a'.repeat(64),
+    principal_user_id: task.created_by,
+    session_id: task.session_id,
+    branch_id: session.branch_id,
+    branchRbacEnabled: true,
+    allowSuperadmin: false,
+    standalone_token_current: true,
+  };
+}
+
 // ============================================================================
 // Create
 // ============================================================================
@@ -1290,31 +1308,41 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     const task = await taskRepo.create(
       createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
     await taskRepo.connectExecutor(task.task_id);
 
     const first = await taskRepo.reportRuntimeTelemetry(
       task.task_id,
+      authority,
       { sequence: 2, kind: 'progress', detail: 'tool.start' },
       new Date('2026-01-01T00:00:02.000Z')
     );
     const retry = await taskRepo.reportRuntimeTelemetry(
       task.task_id,
+      authority,
       { sequence: 2, kind: 'waiting' },
       new Date('2026-01-01T00:00:03.000Z')
     );
 
     expect(first).toMatchObject({
-      last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
-      latest_executor_pulse: {
-        sequence: 2,
-        kind: 'progress',
-        detail: 'tool.start',
-        observed_at: '2026-01-01T00:00:02.000Z',
+      outcome: 'continued',
+      task: {
+        last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
+        latest_executor_pulse: {
+          sequence: 2,
+          kind: 'progress',
+          detail: 'tool.start',
+          observed_at: '2026-01-01T00:00:02.000Z',
+        },
       },
     });
     expect(retry).toMatchObject({
-      last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
-      latest_executor_pulse: first?.latest_executor_pulse,
+      outcome: 'continued',
+      task: {
+        last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
+        latest_executor_pulse:
+          first.outcome === 'continued' ? first.task.latest_executor_pulse : {},
+      },
     });
   });
 
@@ -1326,6 +1354,7 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       const task = await taskRepo.create(
         createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
       );
+      const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
       await taskRepo.connectExecutor(task.task_id);
       await taskRepo.claimTermination({
         taskId: task.task_id,
@@ -1337,16 +1366,20 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       await expect(
         taskRepo.reportRuntimeTelemetry(
           task.task_id,
+          authority,
           { sequence: 3, kind: 'progress', detail: 'provider.cancel.pending' },
           new Date('2026-01-01T00:00:03.000Z')
         )
       ).resolves.toMatchObject({
-        status: TaskStatus.STOPPING,
-        last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
-        latest_executor_pulse: {
-          sequence: 3,
-          kind: 'progress',
-          detail: 'provider.cancel.pending',
+        outcome: 'continued',
+        task: {
+          status: TaskStatus.STOPPING,
+          last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
+          latest_executor_pulse: {
+            sequence: 3,
+            kind: 'progress',
+            detail: 'provider.cancel.pending',
+          },
         },
       });
     }
@@ -1358,6 +1391,7 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     const task = await taskRepo.create(
       createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
     await taskRepo.connectExecutor(task.task_id);
     const claim = await taskRepo.claimTermination({
       taskId: task.task_id,
@@ -1373,7 +1407,10 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       new Date('2026-01-01T00:00:03.000Z')
     );
 
-    await expect(taskRepo.reportRuntimeTelemetry(task.task_id)).resolves.toBeNull();
+    await expect(taskRepo.reportRuntimeTelemetry(task.task_id, authority)).resolves.toMatchObject({
+      outcome: 'control',
+      task: { status: TaskStatus.STOPPING },
+    });
   });
 
   dbTest(
@@ -1384,6 +1421,7 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       const task = await taskRepo.create(
         createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
       );
+      const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
       await taskRepo.connectExecutor(task.task_id);
       await taskRepo.claimTermination({
         taskId: task.task_id,
@@ -1413,14 +1451,18 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       await expect(
         taskRepo.reportRuntimeTelemetry(
           task.task_id,
+          authority,
           { sequence: 4, kind: 'progress', detail: 'provider.cancel.still_pending' },
           new Date('2026-01-01T00:00:04.000Z')
         )
       ).resolves.toMatchObject({
-        status: TaskStatus.STOPPING,
-        sdk_failure: { termination: 'unverified' },
-        last_executor_heartbeat_at: '2026-01-01T00:00:04.000Z',
-        latest_executor_pulse: { sequence: 4, detail: 'provider.cancel.still_pending' },
+        outcome: 'continued',
+        task: {
+          status: TaskStatus.STOPPING,
+          sdk_failure: { termination: 'unverified' },
+          last_executor_heartbeat_at: '2026-01-01T00:00:04.000Z',
+          latest_executor_pulse: { sequence: 4, detail: 'provider.cancel.still_pending' },
+        },
       });
     }
   );
@@ -1431,11 +1473,16 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     const task = await taskRepo.create(
       createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
 
-    expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
+    expect(await taskRepo.reportRuntimeTelemetry(task.task_id, authority)).toMatchObject({
+      outcome: 'control',
+    });
     await taskRepo.connectExecutor(task.task_id);
     await taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED });
-    expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
+    expect(await taskRepo.reportRuntimeTelemetry(task.task_id, authority)).toMatchObject({
+      outcome: 'control',
+    });
   });
 });
 
@@ -1703,13 +1750,14 @@ describe('TaskRepository.update', () => {
     const task = await taskRepo.create(
       createTaskData({
         session_id: sessionId,
-        status: TaskStatus.RUNNING,
-        executor_connected_at: '2026-07-10T20:00:00.000Z',
-        last_executor_heartbeat_at: '2026-07-10T20:00:01.000Z',
+        status: TaskStatus.DISPATCHING,
       })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
+    await taskRepo.connectExecutor(task.task_id, new Date('2026-07-10T20:00:01.000Z'));
     await taskRepo.reportRuntimeTelemetry(
       task.task_id,
+      authority,
       undefined,
       new Date('2026-07-10T20:00:05Z')
     );

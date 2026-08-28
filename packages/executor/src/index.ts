@@ -24,7 +24,7 @@ import type {
   Task,
   TaskID,
 } from '@agor/core/types';
-import { TaskStatus } from '@agor/core/types';
+import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE, TaskStatus } from '@agor/core/types';
 import { patchConsole } from '@agor/core/utils/logger';
 import { type ExecutorHeartbeatHandle, startExecutorHeartbeat } from './executor-heartbeat.js';
 import type { ResolvedConfigSlice } from './payload-types.js';
@@ -236,6 +236,9 @@ export class AgorExecutor {
       `[executor.stop] event=request_observed task_id=${shortId(this.config.taskId)} ` +
         `cause=${task.termination_request.cause} source=${source}`
     );
+    if (task.termination_request.cause === 'authorization_revoked') {
+      console.warn(AUTHORIZATION_REVOKED_TERMINATION_MESSAGE);
+    }
     markCoordinatorTerminationAbort(this.abortController);
     // Keep task-scoped heartbeat/pulse reporting alive until ToolRegistry.execute
     // and provider cleanup actually return. STOPPING is still live work; hiding

@@ -34,6 +34,15 @@ For each launch the daemon derives mount access from trusted tenant and branch a
 - the principal receives a persistent private home overlay;
 - provider and daemon connectivity still use the host network namespace—this is filesystem isolation, not network isolation.
 
+While a Task is running, its existing executor heartbeat rechecks the exact
+user, Task, Session, Branch, prompt permission, and effective file access
+against PostgreSQL authority. Losing prompt permission ends the Task through
+the normal fenced shutdown path. A file-access reduction also ends a runtime
+whose original mounts were broader (`read/write` to `read` or `none`, and
+`read` to `none`). An access increase does not widen or remount a live runtime;
+it applies to a later launch. Redis can accelerate disconnection but is not
+required for the next heartbeat decision.
+
 `users.filesystem_home` can point at a migrated home. Otherwise Agor uses its canonical tenant-scoped home store. Never derive this path from untrusted request data.
 
 ### Per-branch SDK homes
@@ -90,6 +99,10 @@ Interactive terminals do not mount or receive environment variables for a
 per-branch SDK home. Native tool login commands write credentials into their
 config home, so exposing the shared home to an arbitrary shell would violate
 the caller-scoped credential boundary.
+
+Terminals do not share the Task executor heartbeat, so this continuous
+revalidation applies to Task executors only. Closing that live-terminal parity
+gap requires separate terminal lifecycle work.
 
 ```yaml
 execution:

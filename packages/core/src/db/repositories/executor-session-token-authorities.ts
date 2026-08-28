@@ -42,6 +42,16 @@ export interface ExecutorSessionTokenAuthorityClaim {
   userId: string;
 }
 
+/** Exact already-authenticated Task credential checked by the heartbeat hot path. */
+export interface CurrentTaskExecutorSessionTokenAuthority {
+  tenantId: string;
+  tokenFingerprint: string;
+  sessionId: string;
+  taskId: string;
+  branchId: string;
+  userId: string;
+}
+
 export interface ConsumedExecutorSessionTokenAuthority {
   sessionId: string;
   taskId: string | null;
@@ -194,6 +204,41 @@ export class ExecutorSessionTokenAuthorityRepository {
       return row ? mapConsumed(row) : null;
     } catch (error) {
       throw databaseFailure('validation', error);
+    }
+  }
+
+  /**
+   * Revalidate one task-scoped credential without consuming another token use.
+   *
+   * The fingerprint primary key is the first and only candidate lookup. The
+   * remaining predicates prove that the authenticated socket's durable row is
+   * still current for the exact tenant/principal/resource tuple.
+   */
+  async isCurrent(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean> {
+    assertFingerprint(input.tokenFingerprint);
+    if (!input.tenantId || !input.sessionId || !input.taskId || !input.branchId || !input.userId) {
+      throw new RepositoryError('Executor task token authority scope is incomplete');
+    }
+    try {
+      const result = await executeRaw(
+        this.db,
+        sql`
+          SELECT 1 AS current
+          FROM ${executorSessionTokenAuthorities}
+          WHERE tenant_id = ${input.tenantId}
+            AND token_fingerprint = ${input.tokenFingerprint}
+            AND session_id = ${input.sessionId}
+            AND task_id = ${input.taskId}
+            AND branch_id = ${input.branchId}
+            AND user_id = ${input.userId}
+            AND revoked_at IS NULL
+            AND expires_at > CURRENT_TIMESTAMP
+          LIMIT 1
+        `
+      );
+      return rowsOf(result).length === 1;
+    } catch (error) {
+      throw databaseFailure('current-authority check', error);
     }
   }
 

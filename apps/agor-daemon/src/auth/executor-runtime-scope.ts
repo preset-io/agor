@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import { Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Params } from '@agor/core/types';
+import { getAuthenticatedConnectionAuthority } from './authenticated-connection-authority.js';
 import {
   EXECUTOR_COMMAND_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_PURPOSE,
@@ -36,6 +38,16 @@ export interface TaskExecutorRuntimeScope extends ExecutorDelegationContext {
 export interface ExecutorCommandRuntimeScope {
   commandId: string;
   branchId?: string;
+}
+
+/** Immutable Task credential authority needed by runtime-heartbeat revalidation. */
+export interface AuthenticatedTaskExecutorRuntimeAuthority {
+  tenantId: string;
+  userId: string;
+  tokenFingerprint: string;
+  sessionId: string;
+  taskId: string;
+  branchId: string;
 }
 
 /**
@@ -79,6 +91,60 @@ export function authenticatedTaskExecutorRuntimeScope(
   return scope?.purpose === EXECUTOR_SESSION_TOKEN_PURPOSE && scope.taskId && scope.sessionId
     ? { sessionId: scope.sessionId, taskId: scope.taskId, branchId: scope.branchId }
     : null;
+}
+
+/**
+ * Project the exact already-authenticated Task bearer scope for a heartbeat.
+ *
+ * Socket.IO uses its private immutable connection authority because the raw
+ * token is intentionally discarded after admission. REST hashes the bearer
+ * that the JWT authentication hook already verified. Resource and identity
+ * fields always come from that verified JWT, never request data.
+ */
+export function authenticatedTaskExecutorRuntimeAuthority(
+  params?: Params
+): AuthenticatedTaskExecutorRuntimeAuthority | null {
+  const authenticated = params as AuthenticatedParams | undefined;
+  const scope = authenticatedTaskExecutorRuntimeScope(params);
+  const payload = authenticated?.authentication?.payload as ExecutorSessionTokenPayload | undefined;
+  if (
+    !scope?.branchId ||
+    !payload ||
+    typeof payload.sub !== 'string' ||
+    !payload.sub ||
+    typeof payload.tenant_id !== 'string' ||
+    !payload.tenant_id ||
+    authenticated?.tenant?.tenant_id !== payload.tenant_id
+  ) {
+    return null;
+  }
+
+  const connectionAuthority = getAuthenticatedConnectionAuthority(params?.connection);
+  let tokenFingerprint: string;
+  if (connectionAuthority) {
+    if (
+      connectionAuthority.principal.kind !== 'executor' ||
+      connectionAuthority.principal.taskId !== scope.taskId ||
+      connectionAuthority.tenant?.tenant_id !== payload.tenant_id
+    ) {
+      return null;
+    }
+    tokenFingerprint = connectionAuthority.principal.tokenFingerprint;
+  } else {
+    const accessToken = (authenticated?.authentication as { accessToken?: unknown } | undefined)
+      ?.accessToken;
+    if (typeof accessToken !== 'string' || !accessToken) return null;
+    tokenFingerprint = createHash('sha256').update(accessToken, 'utf8').digest('hex');
+  }
+
+  return {
+    tenantId: payload.tenant_id,
+    userId: payload.sub,
+    tokenFingerprint,
+    sessionId: scope.sessionId,
+    taskId: scope.taskId,
+    branchId: scope.branchId,
+  };
 }
 
 /** Verified taskless executor command authority from the authenticated JWT. */

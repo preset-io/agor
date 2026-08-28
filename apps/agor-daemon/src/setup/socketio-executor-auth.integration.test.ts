@@ -2,11 +2,12 @@ import type { Server as HttpServer } from 'node:http';
 import { type AgorClient, createClient } from '@agor/core/api';
 import { getCurrentTenantId, runWithTenantContext } from '@agor/core/db';
 import { AuthenticationService, feathers, feathersExpress, socketio } from '@agor/core/feathers';
-import { ROLES } from '@agor/core/types';
+import { type Params, ROLES } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect, it } from 'vitest';
 import { getAuthenticatedConnectionAuthority } from '../auth/authenticated-connection-authority.js';
 import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-admission.js';
+import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runtime-scope.js';
 import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy.js';
 import { RUNTIME_JWT_AUDIENCE, RUNTIME_JWT_ISSUER } from '../auth/runtime-tokens.js';
 import {
@@ -146,6 +147,9 @@ async function startHarness(
         ...(input.branchId ? { branch_id: input.branchId } : {}),
         user_id: input.userId,
       };
+    },
+    async isCurrent() {
+      return !revoked;
     },
     async revoke() {
       revoked = true;
@@ -355,6 +359,20 @@ describe('executor Socket.IO connection capability', () => {
         kind: 'executor',
         taskId: TASK_ID,
       },
+    });
+    expect(
+      authenticatedTaskExecutorRuntimeAuthority({
+        ...connection,
+        provider: 'socketio',
+        connection,
+      } as Params)
+    ).toMatchObject({
+      tenantId: TENANT_ID,
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      taskId: TASK_ID,
+      branchId: BRANCH_ID,
+      tokenFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
     });
     expect(connection?.tenant).toMatchObject({ tenant_id: TENANT_ID });
     await expect(

@@ -398,6 +398,12 @@ export const tasks = pgTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
+        /**
+         * Immutable filesystem authority projected when this executor was
+         * launched. Internal repository fact; deliberately omitted from the
+         * public Task DTO and never accepted from executor writes.
+         */
+        executor_launch_fs_access_floor?: import('@agor/core/types').CapabilityPolicyFsAccess;
       }>()
       .notNull(),
   },

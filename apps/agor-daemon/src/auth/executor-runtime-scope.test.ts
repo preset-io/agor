@@ -2,6 +2,7 @@ import type { HookContext, Params } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
 import {
   authenticatedExecutorCommandRuntimeScope,
+  authenticatedTaskExecutorRuntimeAuthority,
   authenticatedTaskExecutorRuntimeScope,
   executorRuntimeScopeSessionId,
   isTaskScopedExecutorRequest,
@@ -57,6 +58,65 @@ describe('executor runtime authentication context', () => {
         authentication: { strategy: 'local' },
         headers: { authorization: 'Bearer forged' },
         query: { session_id: 'session-1', task_id: 'task-1' },
+      } as Params)
+    ).toBeNull();
+  });
+
+  it('derives REST heartbeat authority only from verified claims and the authenticated bearer', () => {
+    const accessToken = 'already-verified-task-bearer';
+    expect(
+      authenticatedTaskExecutorRuntimeAuthority({
+        provider: 'rest',
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        authentication: {
+          strategy: 'jwt',
+          accessToken,
+          payload: {
+            ...taskPayload,
+            sub: 'user-1',
+            tenant_id: 'tenant-a',
+          },
+        },
+      } as Params)
+    ).toMatchObject({
+      tenantId: 'tenant-a',
+      userId: 'user-1',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      branchId: 'branch-1',
+      tokenFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+  });
+
+  it('fails closed on wrong tenant projection, missing Branch, or absent authenticated bearer', () => {
+    const base = {
+      provider: 'rest',
+      tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+      authentication: {
+        strategy: 'jwt',
+        accessToken: 'verified-task-bearer',
+        payload: { ...taskPayload, sub: 'user-1', tenant_id: 'tenant-a' },
+      },
+    };
+    expect(
+      authenticatedTaskExecutorRuntimeAuthority({
+        ...base,
+        tenant: { tenant_id: 'tenant-b', source: 'auth_claim' },
+      } as Params)
+    ).toBeNull();
+    expect(
+      authenticatedTaskExecutorRuntimeAuthority({
+        ...base,
+        authentication: {
+          ...base.authentication,
+          payload: { ...base.authentication.payload, branch_id: undefined },
+        },
+      } as Params)
+    ).toBeNull();
+    expect(
+      authenticatedTaskExecutorRuntimeAuthority({
+        ...base,
+        authentication: { ...base.authentication, accessToken: undefined },
       } as Params)
     ).toBeNull();
   });

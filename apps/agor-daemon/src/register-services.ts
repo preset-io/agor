@@ -256,7 +256,11 @@ import { createSessionEnvSelectionsService } from './services/session-env-select
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
-import { createTasksService, TASKS_SERVICE_TRANSPORT_METHODS } from './services/tasks.js';
+import {
+  createTasksService,
+  TASKS_SERVICE_TRANSPORT_METHODS,
+  type TasksService,
+} from './services/tasks.js';
 import { TASKS_SERVICE_CUSTOM_EVENTS } from './services/tasks-events.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
@@ -393,13 +397,17 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const sessionsService = createSessionsService(db, app, (tool) =>
     isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
   ) as unknown as SessionsServiceImpl;
+  const tasksService = createTasksService(db, app, sessionTokenService, {
+    branchRbacEnabled,
+    allowSuperadmin,
+  });
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
   });
 
   // Wire up the execute handler for spawning executor processes
   sessionsService.setExecuteHandler(
-    createExecuteHandler(ctx, sessionsService, sessionTokenService)
+    createExecuteHandler(ctx, sessionsService, sessionTokenService, tasksService)
   );
 
   // Realtime control-plane: browsers subscribe (create) / unsubscribe (remove)
@@ -415,7 +423,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
   app.service('/session-streams').publish(() => []);
 
-  app.use('/tasks', createTasksService(db, app, sessionTokenService), {
+  app.use('/tasks', tasksService, {
     methods: [...TASKS_SERVICE_TRANSPORT_METHODS],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
@@ -1022,7 +1030,8 @@ function createDeferredSignal() {
 function createExecuteHandler(
   ctx: RegisterServicesContext,
   sessionsService: SessionsServiceImpl,
-  sessionTokenService: import('./services/session-token-service.js').SessionTokenService
+  sessionTokenService: import('./services/session-token-service.js').SessionTokenService,
+  tasksService: TasksService
 ) {
   const { db, app, config, daemonUrl } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
@@ -1062,7 +1071,19 @@ function createExecuteHandler(
       session,
       requestedMode: data.permissionMode,
     });
-    const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
+    if (!tenantId) throw new Error('Missing active tenant context for executor launch');
+    const launchAuthority = await runWithTenantDatabaseScope(db, tenantId, () =>
+      tasksService.bindExecutorLaunchAuthority(data.taskId)
+    );
+    if (
+      launchAuthority.session_id !== sessionId ||
+      launchAuthority.branch_id !== session.branch_id
+    ) {
+      throw new Error('Task launch authority does not match its prepared Session');
+    }
+    // Principal, Session, Branch, and projected filesystem floor all come from
+    // the locked Task and normalized capability policy, never request params.
+    const userId = launchAuthority.principal_user_id as UserID;
     if (
       session.agentic_tool_preset_id &&
       data.permissionMode !== undefined &&
@@ -1081,29 +1102,6 @@ function createExecuteHandler(
       });
     }
 
-    // Generate session token for executor authentication
-    const appWithExecutor = app as unknown as {
-      sessionTokenService?: import('./services/session-token-service.js').SessionTokenService;
-    };
-    if (!appWithExecutor.sessionTokenService) {
-      throw new Error('Session token service not initialized');
-    }
-    // Hook chain enforces auth before we get here.
-    const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
-      sessionId,
-      (params as AuthenticatedParams).user!.user_id,
-      {
-        taskId: data.taskId,
-        branchId: session.branch_id,
-        // Executor JWTs authenticate at Socket.IO handshake/reconnect (and on
-        // every REST request), so low use limits make normal execution fail
-        // during transport recovery. Keep expiry + lifecycle revocation for
-        // these runtime credentials. Bounded tokens retain per-validation use
-        // counting for compatibility.
-        maxUses: -1,
-      }
-    );
-
     const taskId = data.taskId;
     const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
       withFreshTenantWrite(db, tenantId, work);
@@ -1117,7 +1115,6 @@ function createExecuteHandler(
     // state rather than parsing the on-disk `.git` pointer (deterministic, and
     // unaffected if a worktree's origin/gitdir is later rewritten).
     const sandboxCfg = config.execution?.sandbox;
-    const rbacOn = config.execution?.branch_rbac === true;
     let cwd = process.cwd();
     let sandboxBaseRepoPath: string | undefined;
     // Per-branch SDK home intent read from the branch record (design §9.2/§8B.3).
@@ -1129,7 +1126,7 @@ function createExecuteHandler(
     // Effective fs access of the prompt actor on the branch: write/read/none.
     // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
     // to 'write' when RBAC is off (open-access behavior).
-    let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
+    const principalBranchAccess = launchAuthority.fs_access;
     if (session.branch_id) {
       const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
         const branchRepo = new BranchRepository(tenantDb);
@@ -1147,20 +1144,12 @@ function createExecuteHandler(
           const repo = await new RepoRepository(tenantDb).findById(branch.repo_id);
           baseRepoPath = repo?.local_path ?? undefined;
         }
-        let fsAccess: 'write' | 'read' | 'none' = 'write';
-        if (rbacOn) {
-          if (!userId) throw new Error('Missing prompt actor for branch filesystem authorization');
-          const access = await branchRepo.resolveUserAccess(branch, userId as UUID);
-          fsAccess =
-            access.fs_access === 'write' ? 'write' : access.fs_access === 'read' ? 'read' : 'none';
-        }
-        return { path: branch.path, baseRepoPath, fsAccess, sdkHome: branch.sdk_home ?? null };
+        return { path: branch.path, baseRepoPath, sdkHome: branch.sdk_home ?? null };
       });
       if (!branchMounts)
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);
       cwd = branchMounts.path;
       sandboxBaseRepoPath = branchMounts.baseRepoPath;
-      principalBranchAccess = branchMounts.fsAccess;
       branchSdkHomeIntent = branchMounts.sdkHome;
       // Under the sandbox, 'none' means the branch would not be mounted at all,
       // so the task cannot operate on it. Fail fast with a clear message rather
@@ -1457,6 +1446,17 @@ function createExecuteHandler(
         homeDir: executorHomeDir,
       });
     })();
+
+    // Issue only after every launch prerequisite succeeds. The credential
+    // scope repeats the locked, server-derived launch authority; token retries
+    // cannot lower the already-bound filesystem floor.
+    const sessionToken = await sessionTokenService.generateToken(sessionId, userId, {
+      taskId: data.taskId,
+      branchId: launchAuthority.branch_id,
+      // Runtime JWTs reconnect and authenticate frequently. Expiry + lifecycle
+      // revocation, not bounded validation uses, retire this credential.
+      maxUses: -1,
+    });
 
     // Build executor payload
     const executorPayload = {
