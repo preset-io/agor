@@ -4077,7 +4077,7 @@ describe('GatewayService outbound emit allowed_channel_ids enforcement', () => {
     });
 
     await expect(service.emitMessage(emitData({ target: 'channel:C999' }))).rejects.toThrow(
-      /allowed_channel_ids/
+      /provider_request_failed/
     );
     expect(sendSlackMessage).not.toHaveBeenCalled();
     expect(outboundRepo.create).not.toHaveBeenCalled();
@@ -4091,10 +4091,24 @@ describe('GatewayService outbound emit allowed_channel_ids enforcement', () => {
     });
 
     await expect(service.emitMessage(emitData({ target: '#general' }))).rejects.toThrow(
-      /allowed_channel_ids/
+      /provider_request_failed/
     );
     expect(resolveChannelByName).toHaveBeenCalledWith('general');
     expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not expose provider-authored text from proactive outbound failures', async () => {
+    const canary = 'private-user@example.test workspace-secret-label';
+    const sendDirectMessage = vi.fn(async () => Promise.reject(new Error(canary)));
+    const { service } = makeAllowlistHarness({ connectorExtras: { sendDirectMessage } });
+
+    const failure = await service
+      .emitMessage(emitData({ target: 'channel:C123' }))
+      .catch((error: unknown) => error as Error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toBe('Slack API failure: provider_request_failed');
+    expect(failure.message).not.toMatch(/private-user|workspace/);
   });
 
   it('allows an email target resolved to a DM even with an allowlist configured', async () => {

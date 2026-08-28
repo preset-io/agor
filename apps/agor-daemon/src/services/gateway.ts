@@ -70,7 +70,6 @@ import {
   normalizeSendReceipt,
   parseDiscordAuthorityMetadata,
   parseGitHubThreadId,
-  sanitizeGatewayProviderError,
 } from '@agor/core/gateway';
 import { resolveSessionMcpServerIds } from '@agor/core/sessions';
 import type {
@@ -1990,10 +1989,7 @@ export class GatewayService {
         })
       );
     } catch (error) {
-      const failure =
-        channel.channel_type === 'discord'
-          ? gatewayFailureCode(error)
-          : sanitizeGatewayProviderError(error);
+      const failure = gatewayFailureCode(error);
       throw new Error(
         `${channel.channel_type === 'slack' ? 'Slack' : 'Discord'} API failure: ${failure}`
       );
@@ -3410,7 +3406,7 @@ export class GatewayService {
     data: RouteMessageData,
     params?: AuthenticatedParams
   ): Promise<RouteMessageResult> {
-    let transportedSession: Session | undefined;
+    let transportedSession: Session | null | undefined;
     // Direct service calls are daemon-internal. Every transported invocation
     // must carry trusted auth and prove authority over the session's branch
     // before even consulting a mapping or constructing a provider connector.
