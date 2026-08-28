@@ -6,13 +6,11 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
-import { AGENTIC_TOOL_DISPLAY_NAMES, getAgenticToolIntegration } from '@agor/agentic-tools';
+import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import {
   type AgorConfig,
   getBranchHomePath,
@@ -113,7 +111,12 @@ import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe
 import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
-import { resolveBranchSdkHomeLaunch, resolveSdkHomeConfig } from './branch-sdk-home.js';
+import {
+  branchSdkHomeAuthUnsupportedReason,
+  branchSdkHomeUnsupportedReason,
+  resolveBranchSdkHomeLaunch,
+  resolveSdkHomeConfig,
+} from './branch-sdk-home.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -1186,29 +1189,42 @@ function createExecuteHandler(
     const sdkHomePolicy = resolveSdkHomeConfig(config);
     const isDelegatedExecution = (config.execution?.unix_user_mode ?? 'simple') === 'delegated';
     let sandboxBranchSdkHome: string | undefined;
-    let sandboxCodexAuthBind: { source: string; dest: string } | undefined;
     let branchSdkHomeEnv: Record<string, string> | undefined;
-    let branchSdkHomeForOpenCode: string | undefined;
     let branchSdkHomeTemplatePath = '';
     if (session.branch_id) {
       const branchId = session.branch_id as string;
       const alreadyHasHome = branchSdkHomeIntent === 'per_branch';
       const adoptHome = !alreadyHasHome && sdkHomePolicy.enabledForNewBranches;
       if (alreadyHasHome || adoptHome) {
-        // §11 step 5 / §12 Q2: a tool with no reliable config-home relocation
-        // (cursor) is REFUSED on an SDK-home branch — never a silent fallback.
-        if (!getAgenticToolIntegration(sdkHomeTool).capabilities.supportsConfigHomeOverride) {
+        // A relocatable directory is necessary but not sufficient: OpenCode's
+        // current XDG data home also contains its native credential file. Until
+        // its actor credential namespace is split from branch-owned state, a
+        // branch home would either lose configured credentials or share them.
+        const localCodexAuth =
+          sdkHomeTool === 'codex' && !isDelegatedExecution
+            ? await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+                resolveApiKey('OPENAI_API_KEY', { userId, db: tenantDb, tool: 'codex' })
+              )
+            : undefined;
+        const unsupportedReason =
+          branchSdkHomeUnsupportedReason(sdkHomeTool) ??
+          branchSdkHomeAuthUnsupportedReason({
+            tool: sdkHomeTool,
+            delegated: isDelegatedExecution,
+            auth: localCodexAuth,
+          });
+        if (unsupportedReason) {
           throw new BadRequest(
             `${AGENTIC_TOOL_DISPLAY_NAMES[sdkHomeTool]} cannot run on a branch with a per-branch ` +
-              `SDK home: its SDK cannot relocate its config/state directory. Use a tool that ` +
-              `supports it, or run this tool on a branch without a per-branch SDK home.`
+              `SDK home because ${unsupportedReason}. Use a supported tool, or ` +
+              `run this tool on a branch without a per-branch SDK home.`
           );
         }
         // Sticky adoption: record the intent once so later prompts keep the home
         // regardless of the global flag's future value (§8B.3).
         if (adoptHome) {
           await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
-            new BranchRepository(tenantDb).update(branchId, { sdk_home: 'per_branch' })
+            new BranchRepository(tenantDb).adoptSdkHome(branchId)
           );
         }
         const branchHomeDir = getBranchHomePath(branchId, tenantId ?? undefined);
@@ -1226,44 +1242,11 @@ function createExecuteHandler(
             branchId,
             tenantId: tenantId ?? undefined,
           });
-          if (launch) {
-            branchSdkHomeEnv = launch.envVars;
-            for (const dir of launch.ensureDirs) await mkdir(dir, { recursive: true });
-          } else {
-            // Hook-managed (opencode): the getExecutorLaunch hook derives its own
-            // XDG values from a branch-scoped dataHome (§13.1 carry-forward #1).
-            branchSdkHomeForOpenCode = branchHomeDir;
-          }
+          branchSdkHomeEnv = launch.envVars;
+          for (const dir of launch.ensureDirs) await mkdir(dir, { recursive: true });
           // Bind the branch home into the sandbox (consumed by buildSandboxWrap).
           // Harmless when the sandbox is disabled (buildSandboxWrap returns null).
           sandboxBranchSdkHome = branchHomeDir;
-
-          // Codex subscription auth (§8A.4). Once CODEX_HOME is relocated to the
-          // (initially empty) branch home, a ChatGPT-subscription session has no
-          // auth.json there. There is no CODEX_AUTH_FILE override, so bind the
-          // caller's real SINGLE auth.json file rw onto the branch home. Codex's
-          // refresh write is truncate-in-place (inode preserved), so it lands
-          // back on the caller's real file — no credential is ever written INTO
-          // the branch home (§8A.3, confirmed §8A.8). API-key mode needs no bind
-          // (the executor injects CODEX_API_KEY). A mount namespace is required,
-          // so this is scoped to the sandbox; the source file must pre-exist.
-          if (sdkHomeTool === 'codex' && sandboxCfg?.enabled === true) {
-            const codexAuth = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
-              resolveApiKey('OPENAI_API_KEY', { userId, db: tenantDb, tool: 'codex' })
-            );
-            const subscriptionMode = codexAuth.useNativeAuth && !codexAuth.apiKey;
-            if (subscriptionMode) {
-              // The credential lives in whichever home is actually mounted: the
-              // per-owner store in per_user mode, else the daemon's shared home.
-              const credentialHome = sandboxHomeStore ?? homedir();
-              const source = join(credentialHome, '.codex', 'auth.json');
-              // No file to bind ⇒ user never authenticated; let Codex surface its
-              // normal "run codex login" flow rather than binding a missing path.
-              if (existsSync(source)) {
-                sandboxCodexAuthBind = { source, dest: join(branchHomeDir, 'codex', 'auth.json') };
-              }
-            }
-          }
         }
       }
     }
@@ -1403,10 +1386,7 @@ function createExecuteHandler(
 
     // Generalized executor-launch hook (design §4/§13 Phase 2). Every tool has a
     // daemon contribution; only OpenCode implements getExecutorLaunch today, so
-    // this stays a no-op for all other tools and preserves prior behavior. When a
-    // per-branch SDK home is active, OpenCode is re-keyed from (tenant,user) to
-    // the branch by passing the branch home in — its runtime derives the four XDG
-    // roots from that single dataHome (§13.1 carry-forward #1).
+    // this stays a no-op for all other tools and preserves prior behavior.
     const executorLaunch = (() => {
       const contribution = getAgenticToolDaemonContribution(session.agentic_tool);
       if (!contribution?.getExecutorLaunch) return undefined;
@@ -1417,7 +1397,6 @@ function createExecuteHandler(
         tenantId,
         session,
         homeDir: executorHomeDir,
-        branchSdkHomeDir: branchSdkHomeForOpenCode,
       });
     })();
 
@@ -1452,9 +1431,6 @@ function createExecuteHandler(
         // when the feature is off, the branch never adopted one, or in delegated
         // mode (where the launcher mounts it via the {branch_sdk_home} template).
         sandboxBranchSdkHome,
-        // Codex subscription single-file auth.json bind (design §8A.4); set only
-        // for a Codex subscription session on an SDK-home branch (see below).
-        sandboxCodexAuthBind,
       },
     };
 

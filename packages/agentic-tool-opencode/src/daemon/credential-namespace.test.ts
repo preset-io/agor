@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   assertOpenCodeNativeAuthSupported,
-  resolveOpenCodeBranchCredentialNamespace,
   resolveOpenCodeCredentialNamespace,
   resolveOpenCodeTaskCredentialNamespace,
 } from './credential-namespace';
@@ -82,49 +81,6 @@ describe('OpenCode credential namespace routing', () => {
     expect(OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch(input)).toEqual({
       namespaceKey: namespace.namespaceKey,
       executorPayload: { agenticToolContext: { dataHome: namespace.dataHome } },
-    });
-  });
-
-  describe('per-branch SDK home re-keying (design §7/§13.1)', () => {
-    it('routes native state under the branch SDK home, reusing the XDG dataHome derivation', () => {
-      const branchSdkHomeDir = '/data/branch-homes/branch-123';
-      const ns = resolveOpenCodeBranchCredentialNamespace({ branchSdkHomeDir });
-      // dataHome is the branch home's opencode/ subdir; the runtime derives the
-      // four XDG roots from it (source of truth for values stays in the runtime).
-      expect(ns.dataHome).toBe('/data/branch-homes/branch-123/opencode');
-      expect(ns.namespaceKey).toMatch(/^[0-9a-f]{64}$/);
-    });
-
-    it('is stable per branch and distinct across branches', () => {
-      const a = resolveOpenCodeBranchCredentialNamespace({ branchSdkHomeDir: '/d/branch-homes/a' });
-      const a2 = resolveOpenCodeBranchCredentialNamespace({
-        branchSdkHomeDir: '/d/branch-homes/a',
-      });
-      const b = resolveOpenCodeBranchCredentialNamespace({ branchSdkHomeDir: '/d/branch-homes/b' });
-      expect(a).toEqual(a2);
-      expect(a.namespaceKey).not.toBe(b.namespaceKey);
-      expect(a.dataHome).not.toBe(b.dataHome);
-    });
-
-    it('getExecutorLaunch honors branchSdkHomeDir over the (tenant,user) namespace', () => {
-      const branchSdkHomeDir = '/data/branch-homes/branch-123';
-      const branchNs = resolveOpenCodeBranchCredentialNamespace({ branchSdkHomeDir });
-      const launch = OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch({
-        tenantId: 'tenant-a',
-        session: { created_by: 'owner', unix_username: 'alice' },
-        homeDir: '/home/alice',
-        branchSdkHomeDir,
-      });
-      expect(launch).toEqual({
-        namespaceKey: branchNs.namespaceKey,
-        executorPayload: { agenticToolContext: { dataHome: branchNs.dataHome } },
-      });
-    });
-
-    it('rejects a non-absolute branch SDK home', () => {
-      expect(() =>
-        resolveOpenCodeBranchCredentialNamespace({ branchSdkHomeDir: 'relative/path' })
-      ).toThrow();
     });
   });
 

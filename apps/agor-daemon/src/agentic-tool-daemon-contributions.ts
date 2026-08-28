@@ -30,13 +30,6 @@ export interface AgenticToolDaemonContribution {
     tenantId: string;
     session: Pick<Session, 'created_by' | 'unix_username'>;
     homeDir: string;
-    /**
-     * When set (per-branch SDK home active, design §7), the hook keys its
-     * relocated state to the branch instead of (tenant,user): the tool's home
-     * derives from this branch SDK home dir rather than the executor home. Unset
-     * ⇒ today's per-(tenant,user) behavior.
-     */
-    branchSdkHomeDir?: string;
   }) => ExecutorLaunchContribution;
 }
 

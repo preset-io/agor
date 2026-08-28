@@ -164,9 +164,9 @@ export interface ExecutorTemplateVariables {
    * Absolute path of the per-branch SDK home for this prompt, or empty when the
    * branch has none (design §7.4). In `delegated` mode Agor mounts nothing, so
    * the external launcher owns enforcement: it must relocate the tool's SDK home
-   * (and, for Codex subscription auth, the single `auth.json`) to this path.
-   * Shell-escaped during substitution like {tenant_id}; always rendered (empty
-   * string when unused) so the placeholder never survives into the command.
+   * and provide any safe caller-scoped credential overlay. Shell-escaped during
+   * substitution like {tenant_id}; always rendered (empty string when unused)
+   * so the placeholder never survives into the command.
    */
   branch_sdk_home?: string;
   /**
@@ -482,15 +482,6 @@ function sendExecutorPayload(
  * Spawn executor as a local subprocess.
  * stdout/stderr are inherited so logs appear in daemon output.
  */
-function isCodexAuthBind(value: unknown): value is { source: string; dest: string } {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as { source?: unknown }).source === 'string' &&
-    typeof (value as { dest?: unknown }).dest === 'string'
-  );
-}
-
 function sandboxLocalExecutorCommand(
   payload: Record<string, unknown>,
   command: { cmd: string; args: string[]; env: Record<string, string | undefined> },
@@ -507,7 +498,6 @@ function sandboxLocalExecutorCommand(
         sandboxWorktreesRoot?: unknown;
         principalBranchAccess?: unknown;
         sandboxBranchSdkHome?: unknown;
-        sandboxCodexAuthBind?: unknown;
       }
     | undefined;
   const workdir =
@@ -536,9 +526,6 @@ function sandboxLocalExecutorCommand(
     branchAccess,
     branchSdkHomeDir:
       typeof params?.sandboxBranchSdkHome === 'string' ? params.sandboxBranchSdkHome : undefined,
-    branchSdkHomeCodexAuthBind: isCodexAuthBind(params?.sandboxCodexAuthBind)
-      ? params.sandboxCodexAuthBind
-      : undefined,
     runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
   });
   if (!wrap) return command;

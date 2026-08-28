@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import { AGENTIC_TOOL_INTEGRATIONS, getAgenticToolIntegration } from '@agor/agentic-tools';
+import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type { AgorConfig } from '@agor/core/config';
 import { getBranchHomePath } from '@agor/core/config';
 import type { AgenticToolName } from '@agor/core/types';
@@ -53,13 +53,38 @@ const ENV_VAR_SUBDIR: Readonly<Record<string, string>> = Object.freeze({
   COPILOT_CACHE_HOME: 'copilot-cache',
 });
 
-/**
- * Tools whose relocation is delivered through their own daemon `getExecutorLaunch`
- * hook rather than the generic env path. OpenCode derives its four XDG roots
- * from a single `dataHome` in its runtime (design §13.1 carry-forward #1) — the
- * flat "point every listed var at one path" reading is too coarse for it.
- */
-const HOOK_MANAGED_TOOLS: ReadonlySet<AgenticToolName> = new Set<AgenticToolName>(['opencode']);
+/** Why a tool must be refused before a branch adopts shared SDK state. */
+export function branchSdkHomeUnsupportedReason(tool: AgenticToolName): string | undefined {
+  const integration = getAgenticToolIntegration(tool);
+  if (!integration.capabilities.supportsConfigHomeOverride) {
+    return 'its SDK cannot relocate its config/state directory';
+  }
+  if (tool === 'opencode') {
+    return 'its current XDG data home combines native credentials with relocatable state';
+  }
+  return undefined;
+}
+
+/** Local native-auth modes that cannot keep credentials out of branch state. */
+export function branchSdkHomeAuthUnsupportedReason(input: {
+  tool: AgenticToolName;
+  delegated: boolean;
+  auth?: { useNativeAuth: boolean; apiKey?: string };
+}): string | undefined {
+  if (
+    input.tool === 'codex' &&
+    !input.delegated &&
+    input.auth?.useNativeAuth === true &&
+    !input.auth.apiKey
+  ) {
+    return (
+      'local Codex subscription auth cannot separate auth.json from its writable config home ' +
+      'safely; switch Codex to an API key, use a reviewed delegated launcher, or use a branch ' +
+      'without a per-branch SDK home'
+    );
+  }
+  return undefined;
+}
 
 export type BranchSdkHomeLaunch = {
   /** Host path of the branch SDK home (bind-mount source + real state root). */
@@ -74,10 +99,9 @@ export type BranchSdkHomeLaunch = {
  * Resolve the branch SDK home launch (env vars + dirs) for a tool that
  * relocates through the generic env path.
  *
- * Returns `null` for hook-managed tools (opencode), whose values are derived by
- * their own launch hook. Throws for a tool with no relocation mechanism
- * (cursor) — callers MUST refuse such a session before reaching here
- * (design §11 step 5); this throw is a fail-closed backstop.
+ * Throws for tools that cannot preserve the branch-state/caller-credential
+ * boundary. Callers MUST refuse such a session before reaching here; this throw
+ * is a fail-closed backstop.
  *
  * The returned env values are REAL absolute host paths (sub-dirs of the branch
  * home). The sandbox binds the branch home at its own real path, so the same
@@ -89,15 +113,17 @@ export function resolveBranchSdkHomeLaunch(input: {
   tool: AgenticToolName;
   branchId: string;
   tenantId?: string;
-}): BranchSdkHomeLaunch | null {
-  if (HOOK_MANAGED_TOOLS.has(input.tool)) return null;
+}): BranchSdkHomeLaunch {
+  const unsupportedReason = branchSdkHomeUnsupportedReason(input.tool);
+  if (unsupportedReason) {
+    throw new Error(
+      `Agentic tool "${input.tool}" cannot use a per-branch SDK home because ${unsupportedReason}.`
+    );
+  }
 
   const override = getAgenticToolIntegration(input.tool).configHomeOverride;
   if (!override) {
-    throw new Error(
-      `Agentic tool "${input.tool}" does not support config-home relocation, so it cannot run ` +
-        `on a branch with a per-branch SDK home. Refuse the prompt instead of reaching this path.`
-    );
+    throw new Error(`Missing config-home relocation metadata for supported tool ${input.tool}.`);
   }
 
   const branchHomeDir = getBranchHomePath(input.branchId, input.tenantId);
@@ -114,42 +140,6 @@ export function resolveBranchSdkHomeLaunch(input: {
     const dir = path.join(branchHomeDir, subdir);
     envVars[name] = dir;
     dirs.add(dir);
-  }
-  return { branchHomeDir, envVars, ensureDirs: [...dirs] };
-}
-
-/**
- * Aggregate branch SDK home env for an interactive terminal (design §12 Q7 —
- * terminals get the branch home for consistency). A terminal is not scoped to
- * one tool, so it points EVERY generic-env-path tool's config-home var at the
- * branch home. OpenCode is deliberately excluded: its relocation is the four
- * `XDG_*` roots, which are too broad to force onto an arbitrary interactive
- * shell (they steer far more than OpenCode). OpenCode state in a raw terminal is
- * therefore not branch-relocated — a documented limitation.
- *
- * The per-caller credential env (API keys) is injected separately by
- * `createUserProcessEnvironment`, so the common terminal path authenticates
- * without any credential being written into the branch home.
- */
-export function resolveBranchSdkHomeTerminalEnv(input: { branchId: string; tenantId?: string }): {
-  branchHomeDir: string;
-  envVars: Record<string, string>;
-  ensureDirs: string[];
-} {
-  const branchHomeDir = getBranchHomePath(input.branchId, input.tenantId);
-  const envVars: Record<string, string> = {};
-  const dirs = new Set<string>([branchHomeDir]);
-  for (const tool of Object.keys(AGENTIC_TOOL_INTEGRATIONS) as AgenticToolName[]) {
-    if (HOOK_MANAGED_TOOLS.has(tool)) continue;
-    if (!getAgenticToolIntegration(tool).configHomeOverride) continue;
-    const launch = resolveBranchSdkHomeLaunch({
-      tool,
-      branchId: input.branchId,
-      tenantId: input.tenantId,
-    });
-    if (!launch) continue;
-    Object.assign(envVars, launch.envVars);
-    for (const dir of launch.ensureDirs) dirs.add(dir);
   }
   return { branchHomeDir, envVars, ensureDirs: [...dirs] };
 }

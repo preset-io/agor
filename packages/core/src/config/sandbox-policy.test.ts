@@ -92,21 +92,6 @@ describe('resolveBwrapArgs', () => {
       expect(branchIdx).toBeGreaterThan(overlayIdx);
     });
 
-    it('layers the Codex subscription auth.json single-file bind on top (design §8A.4)', () => {
-      const source = '/home/agor/.agor/homes/owner/.codex/auth.json';
-      const dest = `${BRANCH_HOME}/codex/auth.json`;
-      const args = resolveBwrapArgs(
-        {},
-        { ...CTX, branchSdkHomeDir: BRANCH_HOME, branchSdkHomeCodexAuthBind: { source, dest } }
-      );
-      expect(hasTriple(args, '--bind', BRANCH_HOME, BRANCH_HOME)).toBe(true);
-      expect(hasTriple(args, '--bind', source, dest)).toBe(true);
-      // The file bind must come AFTER the dir bind so it overlays it.
-      const dirIdx = args.findIndex((a, i) => a === '--bind' && args[i + 1] === BRANCH_HOME);
-      const fileIdx = args.findIndex((a, i) => a === '--bind' && args[i + 1] === source);
-      expect(fileIdx).toBeGreaterThan(dirIdx);
-    });
-
     it('rejects a non-absolute branch SDK home', () => {
       expect(() => resolveBwrapArgs({}, { ...CTX, branchSdkHomeDir: 'relative/path' })).toThrow();
     });

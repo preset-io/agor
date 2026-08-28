@@ -1060,6 +1060,20 @@ describe('BranchesService environment start async behavior', () => {
 });
 
 describe('BranchesService.patch primary teammate invariants', () => {
+  it('rejects attempts to change server-managed SDK-home intent', async () => {
+    const branchId = 'sdk-home-managed' as BranchID;
+    const { service, repository } = createPatchHarness({
+      current: { branch_id: branchId, board_id: 'board-a' as BoardID },
+      updated: { branch_id: branchId, board_id: 'board-a' as BoardID },
+    });
+
+    await expect(service.patch(branchId, { sdk_home: 'per_branch' })).rejects.toThrow(
+      /server-managed/
+    );
+    await expect(service.patch(branchId, { sdk_home: null })).rejects.toThrow(/server-managed/);
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
   it('rejects changing the trusted template remote after creation', async () => {
     const branchId = 'teammate-template-remote' as BranchID;
     const { service, repository } = createPatchHarness({
@@ -1485,6 +1499,9 @@ describe('BranchesService.archiveOrDelete', () => {
 
   it('delegates filesystem deletion with authoritative paths and no daemon bearer', async () => {
     const { service, sessionTokenService } = createServiceHarness();
+    const removeSdkHome = vi
+      .spyOn(service as never, 'removeBranchSdkHomeAfterDelete')
+      .mockImplementation(() => undefined);
     const branchId = 'wt-delete-files' as BranchID;
     const branch = {
       branch_id: branchId,
@@ -1531,6 +1548,7 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(payload).not.toHaveProperty('sessionToken');
     expect(payload).not.toHaveProperty('daemonUrl');
     expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
+    expect(removeSdkHome).not.toHaveBeenCalled();
   });
 
   it('rejects filesystem cleanup when a Manager has no write grant', async () => {
@@ -1590,6 +1608,9 @@ describe('BranchesService.archiveOrDelete', () => {
     } as never);
     vi.spyOn(branchRepo, 'findRealtimeViewUserIds').mockResolvedValue(['user-1' as UUID]);
     const repositoryDelete = vi.spyOn(branchRepo, 'delete').mockResolvedValue();
+    const removeSdkHome = vi
+      .spyOn(service as never, 'removeBranchSdkHomeAfterDelete')
+      .mockImplementation(() => undefined);
     markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
 
     await service.archiveOrDelete(
@@ -1614,6 +1635,8 @@ describe('BranchesService.archiveOrDelete', () => {
         params,
       })
     );
+    expect(removeSdkHome).toHaveBeenCalledOnce();
+    expect(removeSdkHome).toHaveBeenCalledWith(removedBranch, 'tenant-a');
   });
 
   it('refuses metadata deletion while a descendant task is unfinished', async () => {
@@ -2510,6 +2533,18 @@ describe('BranchesService teammate home Knowledge namespace guard', () => {
 });
 
 describe('BranchesService.create permission defaults', () => {
+  it('rejects client-supplied SDK-home intent before repository creation', async () => {
+    const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+
+    await expect(
+      service.create({
+        board_id: 'board-a' as BoardID,
+        sdk_home: 'per_branch',
+      })
+    ).rejects.toThrow(/server-managed/);
+  });
+
   dbTest(
     'defaults new board branches to board permissions when no explicit branch permissions are provided',
     async ({ db }) => {

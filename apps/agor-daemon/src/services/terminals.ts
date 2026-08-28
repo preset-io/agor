@@ -9,7 +9,6 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
 import { type AgorConfig, createUserProcessEnvironment } from '@agor/core/config';
 import {
   BranchRepository,
@@ -31,7 +30,6 @@ import type {
 } from '@agor/core/types';
 import { hasMinimumRole, ROLES } from '@agor/core/types';
 import { resolveDelegatedHomeKey, type UnixUserMode } from '@agor/core/unix';
-import { resolveBranchSdkHomeTerminalEnv, resolveSdkHomeConfig } from '../branch-sdk-home.js';
 import {
   LOCAL_AUTHORIZATION_INVALIDATION_EVENT,
   terminalChannelName,
@@ -96,10 +94,6 @@ interface TerminalExecutionProjection {
   sandboxHomeStore?: string;
   sandboxBaseRepoPath?: string;
   sandboxWorktreesRoot?: string;
-  /** Per-branch SDK home to bind into the terminal sandbox (design §7, §12 Q7). */
-  sandboxBranchSdkHome?: string;
-  /** Absolute branch SDK home for delegated launchers, empty when none (§7.4). */
-  branchSdkHomeTemplatePath: string;
 }
 
 /**
@@ -391,7 +385,6 @@ export class TerminalsService {
             sandboxBaseRepoPath: projection.sandboxBaseRepoPath,
             sandboxWorktreesRoot: projection.sandboxWorktreesRoot,
             principalBranchAccess,
-            sandboxBranchSdkHome: projection.sandboxBranchSdkHome,
           },
         },
         {
@@ -404,7 +397,11 @@ export class TerminalsService {
             user_id: userId,
             branch_id: branch.branch_id,
             branch_fs_access: principalBranchAccess,
-            branch_sdk_home: projection.branchSdkHomeTemplatePath,
+            // Interactive shells are deliberately excluded from shared SDK
+            // homes: native login commands could persist caller credentials
+            // into branch-owned state. Delegated launchers receive the same
+            // fail-closed empty value.
+            branch_sdk_home: '',
           },
           onExit: () => this.handleExecutorExit(terminalId, userId),
         }
@@ -487,31 +484,6 @@ export class TerminalsService {
             })
           : undefined;
 
-      // Per-branch SDK home for the interactive terminal (design §7, §12 Q7 —
-      // decided yes, for consistency). Active when the branch already adopted a
-      // home (sticky) OR the deployment opts NEW branches in. A terminal does
-      // not write the sticky flag (that is a prompt-time adoption) and is not
-      // tool-scoped, so it relocates every generic tool's config home via the
-      // aggregate terminal env. Delegated mode mounts nothing (the launcher owns
-      // it via {branch_sdk_home}). Inert by default.
-      const sdkHomePolicy = resolveSdkHomeConfig(config);
-      const terminalIsDelegated = (config.execution?.unix_user_mode ?? 'simple') === 'delegated';
-      let sandboxBranchSdkHome: string | undefined;
-      let branchSdkHomeTemplatePath = '';
-      if (branch.sdk_home === 'per_branch' || sdkHomePolicy.enabledForNewBranches) {
-        const terminalSdkHome = resolveBranchSdkHomeTerminalEnv({
-          branchId: branch.branch_id,
-          tenantId: tenantId ?? undefined,
-        });
-        branchSdkHomeTemplatePath = terminalSdkHome.branchHomeDir;
-        if (!terminalIsDelegated) {
-          await mkdir(terminalSdkHome.branchHomeDir, { recursive: true });
-          for (const dir of terminalSdkHome.ensureDirs) await mkdir(dir, { recursive: true });
-          Object.assign(executorEnv, terminalSdkHome.envVars);
-          sandboxBranchSdkHome = terminalSdkHome.branchHomeDir;
-        }
-      }
-
       return {
         branch,
         principalBranchAccess,
@@ -520,8 +492,6 @@ export class TerminalsService {
         sandboxHomeStore,
         sandboxBaseRepoPath,
         sandboxWorktreesRoot,
-        sandboxBranchSdkHome,
-        branchSdkHomeTemplatePath,
       };
     });
   }

@@ -146,17 +146,6 @@ export interface SandboxPathContext {
    * branch never adopted one) ⇒ byte-for-byte today's behavior.
    */
   branchSdkHomeDir?: string;
-  /**
-   * Codex subscription-auth single-file bind (design §8A.4): the caller's real
-   * `auth.json` bound read-write onto `<branchSdkHomeDir>/codex/auth.json`, so a
-   * shared branch Codex home carries per-caller subscription credentials without
-   * a credential ever being written into the branch home. Codex's refresh write
-   * is truncate-in-place (inode preserved), so the refresh lands back on the
-   * caller's real file (empirically confirmed, §8A.8). Both paths must exist
-   * before spawn. Unset in API-key mode (which injects `CODEX_API_KEY` instead)
-   * and for every non-Codex tool.
-   */
-  branchSdkHomeCodexAuthBind?: { source: string; dest: string };
 }
 
 /**
@@ -411,9 +400,7 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
 /**
  * Append the per-branch SDK home binds (design §7). Shared by both home modes so
  * the mount is identical regardless of overlay. The branch home is bound at its
- * own real path; the optional Codex subscription `auth.json` single-file bind is
- * layered on top of it (its dest is inside the just-bound dir, and later binds
- * win). No-op when the branch has no SDK home — the inert default path.
+ * own real path. No-op when the branch has no SDK home — the inert default path.
  */
 function appendBranchSdkHomeBinds(args: string[], ctx: SandboxPathContext): void {
   if (!ctx.branchSdkHomeDir) return;
@@ -421,13 +408,6 @@ function appendBranchSdkHomeBinds(args: string[], ctx: SandboxPathContext): void
     throw new Error(`Invalid branch SDK home ${ctx.branchSdkHomeDir}: expected an absolute path`);
   }
   args.push('--bind', ctx.branchSdkHomeDir, ctx.branchSdkHomeDir);
-  const codexBind = ctx.branchSdkHomeCodexAuthBind;
-  if (codexBind) {
-    if (!isAbsolute(codexBind.source) || !isAbsolute(codexBind.dest)) {
-      throw new Error('Codex auth bind requires absolute source and dest paths');
-    }
-    args.push('--bind', codexBind.source, codexBind.dest);
-  }
 }
 
 function isPathWithin(candidate: string, parent: string): boolean {

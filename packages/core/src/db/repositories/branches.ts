@@ -15,7 +15,7 @@ import type {
   SessionStatus,
   UUID,
 } from '@agor/core/types';
-import { and, asc, desc, eq, exists, inArray, like, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, inArray, isNull, like, or, type SQL, sql } from 'drizzle-orm';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
 import { getBranchUrl } from '../../utils/url';
@@ -221,8 +221,6 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       // Branch storage mode (default 'worktree' matches schema default)
       storage_mode: branch.storage_mode ?? 'worktree',
       clone_depth: branch.clone_depth ?? null,
-      // Per-branch SDK home intent (design §9.2). NULL = inherit (default).
-      sdk_home: branch.sdk_home ?? null,
       data: {
         path: branch.path!,
         base_ref: branch.base_ref,
@@ -603,6 +601,11 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
     if (Object.hasOwn(updates, 'primary_owner_user_id')) {
       throw new RepositoryError('Primary ownership is immutable');
     }
+    if (Object.hasOwn(updates, 'sdk_home')) {
+      throw new RepositoryError(
+        'Branch SDK-home intent is server-managed and must be adopted through adoptSdkHome()'
+      );
+    }
     if (
       [
         'permission_binding',
@@ -712,6 +715,35 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
 
       return this.rowToBranch(row, baseUrl);
     });
+  }
+
+  /**
+   * Stickily adopt the server-managed per-branch SDK-home intent.
+   *
+   * This is deliberately separate from generic branch CRUD: clients may not
+   * opt a branch in or clear an adopted home through create/patch, and the
+   * only supported transition is the idempotent null -> per_branch adoption
+   * performed by supported-tool prompt admission.
+   */
+  async adoptSdkHome(id: string): Promise<Branch> {
+    const existing = await this.findById(id);
+    if (!existing) {
+      throw new EntityNotFoundError('Branch', id);
+    }
+    if (existing.sdk_home === 'per_branch') return existing;
+
+    const row = await update(this.db, branches)
+      .set({ sdk_home: 'per_branch', updated_at: new Date() })
+      .where(and(eq(branches.branch_id, existing.branch_id), isNull(branches.sdk_home)))
+      .returning()
+      .one();
+    if (!row) {
+      const current = await this.findById(existing.branch_id);
+      if (!current) throw new EntityNotFoundError('Branch', id);
+      return current;
+    }
+
+    return this.rowToBranch(row, await getBaseUrl());
   }
 
   /**

@@ -54,28 +54,6 @@ export function resolveOpenCodeTaskCredentialNamespace(input: {
 }
 
 /**
- * Resolve OpenCode's native-state home when a per-branch SDK home is active
- * (design §7, §13.1 carry-forward #1). The state is re-keyed from (tenant,user)
- * to the branch: `dataHome` is the branch SDK home's `opencode/` sub-dir, from
- * which the runtime derives the four XDG roots (managed-server stays the source
- * of truth for the values). `namespaceKey` is derived from that dataHome so
- * concurrent prompts on the SAME branch serialize on the same native-state fence
- * while different branches stay independent.
- */
-export function resolveOpenCodeBranchCredentialNamespace(input: {
-  branchSdkHomeDir: string;
-}): OpenCodeCredentialNamespace {
-  if (!isAbsolute(input.branchSdkHomeDir)) {
-    throw new Error('OpenCode branch credential routing requires an absolute branch SDK home');
-  }
-  const dataHome = join(resolve(input.branchSdkHomeDir), 'opencode');
-  const namespaceKey = createHash('sha256')
-    .update(JSON.stringify([SUBJECT_KEY_VERSION, 'branch', dataHome]))
-    .digest('hex');
-  return { namespaceKey, dataHome };
-}
-
-/**
  * Resolve the Unix mode only after proving that native OpenCode state has a
  * durable home boundary in the current execution topology.
  */

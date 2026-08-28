@@ -690,6 +690,7 @@ export interface AgorExecutionSettings {
    * - {branch_id} - Branch ID (if available)
    * - {user_id} - Trusted authenticated Agor user UUID (if available)
    * - {branch_fs_access} - Actor's branch projection: none, read, or write
+   * - {branch_sdk_home} - Absolute branch SDK-home path, or empty when unused
    * - {tenant_id} - Trusted ambient tenant ID (shell-escaped; fails if unavailable)
    *
    * The template command receives JSON payload via stdin and should pipe it

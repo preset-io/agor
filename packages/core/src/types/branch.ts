@@ -427,6 +427,8 @@ export interface Branch {
    * presents. `'per_branch'` = this branch has its own SDK home under
    * `branch-homes/<branchId>` (path derived from `branch_id` by
    * `getBranchHomePath`; only the intent is stored, never a path).
+   * This is a server-managed read model; generic Branch create/patch callers
+   * cannot set or clear it.
    *
    * STICKY: once set, this value — not the live
    * `execution.sandbox.sdk_home_mode` deployment flag — governs whether the

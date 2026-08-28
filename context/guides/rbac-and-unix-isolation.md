@@ -168,9 +168,11 @@ state and sibling tenant homes and fails closed when bubblewrap policy setup is
 unavailable.
 
 Delegated mode requires an explicit `executor_command_template`. Prefer
-`{tenant_id}`, `{user_id}`, and `{branch_fs_access}`. `{unix_user}` remains an
-opaque compatibility home key. The launcher owns runtime identity, storage,
-credentials, containment, cancellation, and tenant isolation.
+`{tenant_id}`, `{user_id}`, `{branch_fs_access}`, and `{branch_sdk_home}` (an
+absolute, shell-escaped branch SDK-home path, or the empty string when unused).
+`{unix_user}` remains an opaque compatibility home key. The launcher owns
+runtime identity, storage, credentials, branch SDK-home mounting, containment,
+cancellation, and tenant isolation.
 
 In `simple` mode, agents and terminals run as the daemon account and application
 RBAC cannot provide filesystem isolation. Use it only on trusted installations.

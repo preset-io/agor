@@ -36,10 +36,11 @@ execution:
     # If execution.sandbox.sdk_home_mode is set to per_branch, the tenant data
     # root's branch-homes/<branch-id>/ tree needs this SAME shared-storage +
     # cross-replica-flock guarantee: a session dispatched to either replica must
-    # see what the other wrote, and Codex subscription auth binds the caller's
-    # real auth.json under it. There is no separate executor_storage key for it —
-    # keep branch-homes/ on the same backing store as the nested Agor volume, at
-    # the same absolute path on both replicas. (Left at the inherit default here.)
+    # see what the other wrote. Local Codex subscription auth is refused on a
+    # per-branch home because auth.json cannot be separated safely. There is no
+    # separate executor_storage key for branch homes — keep them on the same
+    # backing store as the nested Agor volume, at the same absolute path on both
+    # replicas. (Left at the inherit default here.)
     user_home_locking: cross-replica-flock
     branch_workspace: shared
     base_repository: shared

@@ -872,6 +872,37 @@ describe('BranchRepository.findByRepoAndName', () => {
 // ============================================================================
 
 describe('BranchRepository.update', () => {
+  dbTest('keeps SDK-home intent out of generic branch updates', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+
+    await expect(branchRepo.update(branch.branch_id, { sdk_home: 'per_branch' })).rejects.toThrow(
+      /server-managed/
+    );
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: undefined,
+    });
+  });
+
+  dbTest('adopts an SDK home stickily through the narrow transition', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+
+    await expect(branchRepo.adoptSdkHome(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
+    await expect(branchRepo.adoptSdkHome(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
+  });
+
   dbTest(
     'revalidates inherited binding under the row lock before moving boards',
     async ({ db }) => {

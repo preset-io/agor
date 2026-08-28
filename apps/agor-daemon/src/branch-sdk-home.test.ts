@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  branchSdkHomeAuthUnsupportedReason,
   resolveBranchSdkHomeLaunch,
-  resolveBranchSdkHomeTerminalEnv,
   resolveSdkHomeConfig,
 } from './branch-sdk-home.js';
 
@@ -72,8 +72,10 @@ describe('resolveBranchSdkHomeLaunch (design §8)', () => {
     expect(launch?.envVars.COPILOT_HOME).not.toBe(launch?.envVars.COPILOT_CACHE_HOME);
   });
 
-  it('opencode is hook-managed → returns null (handled via getExecutorLaunch)', () => {
-    expect(resolveBranchSdkHomeLaunch({ tool: 'opencode', branchId: BRANCH_ID })).toBeNull();
+  it('refuses opencode because native credentials share its XDG data home', () => {
+    expect(() => resolveBranchSdkHomeLaunch({ tool: 'opencode', branchId: BRANCH_ID })).toThrow(
+      /credentials/
+    );
   });
 
   it('cursor has no relocation mechanism → throws (caller must refuse first)', () => {
@@ -85,20 +87,33 @@ describe('resolveBranchSdkHomeLaunch (design §8)', () => {
   });
 });
 
-describe('resolveBranchSdkHomeTerminalEnv (design §12 Q7)', () => {
-  it('aggregates every generic tool var but excludes OpenCode XDG globals', () => {
-    const env = resolveBranchSdkHomeTerminalEnv({ branchId: BRANCH_ID }).envVars;
-    expect(Object.keys(env).sort()).toEqual(
-      [
-        'CLAUDE_CONFIG_DIR',
-        'CODEX_HOME',
-        'CODEX_SQLITE_HOME',
-        'COPILOT_CACHE_HOME',
-        'COPILOT_HOME',
-        'GEMINI_CLI_HOME',
-      ].sort()
-    );
-    expect(env.XDG_DATA_HOME).toBeUndefined();
-    expect(env.XDG_CONFIG_HOME).toBeUndefined();
+describe('branchSdkHomeAuthUnsupportedReason', () => {
+  const nativeAuth = { useNativeAuth: true };
+
+  it('refuses local Codex subscription auth before branch adoption', () => {
+    expect(
+      branchSdkHomeAuthUnsupportedReason({
+        tool: 'codex',
+        delegated: false,
+        auth: nativeAuth,
+      })
+    ).toMatch(/subscription auth/);
+  });
+
+  it('allows Codex API-key mode and delegates external credential policy', () => {
+    expect(
+      branchSdkHomeAuthUnsupportedReason({
+        tool: 'codex',
+        delegated: false,
+        auth: { useNativeAuth: false, apiKey: 'configured' },
+      })
+    ).toBeUndefined();
+    expect(
+      branchSdkHomeAuthUnsupportedReason({
+        tool: 'codex',
+        delegated: true,
+        auth: nativeAuth,
+      })
+    ).toBeUndefined();
   });
 });

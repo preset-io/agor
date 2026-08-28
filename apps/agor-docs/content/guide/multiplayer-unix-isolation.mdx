@@ -36,9 +36,44 @@ For each launch the daemon derives mount access from trusted tenant and branch a
 
 `users.filesystem_home` can point at a migrated home. Otherwise Agor uses its canonical tenant-scoped home store. Never derive this path from untrusted request data.
 
+### Per-branch SDK homes
+
+Agent SDK state can be relocated from the session owner's home into a directory
+shared by sessions on one branch:
+
+```yaml
+execution:
+  unix_user_mode: sandbox
+  sandbox:
+    sdk_home_mode: per_branch
+```
+
+The default is `inherit`, which preserves the existing home layout. With
+`per_branch`, the first supported-tool prompt on a branch stickily records the
+intent and creates `<tenantDataRoot>/branch-homes/<branchId>`. Disabling the
+deployment setting later stops new adoption but does not strand an existing
+branch's state. Archiving retains the directory; permanently deleting the
+branch removes it.
+
+Agor sets each supported tool's config-home environment variables and mounts
+the branch directory at its real path. Cursor is refused because its config
+home cannot currently be relocated reliably. OpenCode is also refused because
+its current XDG data home combines native credentials with relocatable state.
+Credentials remain caller-scoped rather than being copied into the shared
+branch home. Codex API keys are injected through the environment; Codex
+subscription auth is refused for local execution because Codex cannot
+independently relocate or safely mount its actor-writable `auth.json`. A
+reviewed delegated launcher may provide its own caller-scoped credential
+overlay.
+
 ### Web terminals
 
 A branch terminal requires Collaborator or Manager access plus `read` or `read/write` file access. In sandbox mode it receives the same filesystem boundary as an agent launch. In `simple` mode it is a daemon-user shell and should be disabled on shared instances:
+
+Interactive terminals do not mount or receive environment variables for a
+per-branch SDK home. Native tool login commands write credentials into their
+config home, so exposing the shared home to an arbitrary shell would violate
+the caller-scoped credential boundary.
 
 ```yaml
 execution:
@@ -52,6 +87,7 @@ execution:
   unix_user_mode: delegated
   executor_command_template: >-
     launcher --tenant {tenant_id} --user {user_id} --branch-access {branch_fs_access}
+    --branch-sdk-home {branch_sdk_home}
 ```
 
 Agor does not claim to prove an external launcher's isolation. The operator must ensure:
@@ -63,7 +99,12 @@ Agor does not claim to prove an external launcher's isolation. The operator must
 - terminal support is owner-affine or disabled;
 - network access is explicitly controlled.
 
-Prefer `{tenant_id}`, `{user_id}`, and `{branch_fs_access}`. `{unix_user}` remains temporarily as an opaque, validated home key for compatible hosted launchers; it is not a Unix account and is never passed to sudo.
+Prefer `{tenant_id}`, `{user_id}`, `{branch_fs_access}`, and
+`{branch_sdk_home}`. The branch-home value is shell-escaped and is empty when
+the branch has not adopted one; the launcher owns its mount and tool-environment
+policy. `{unix_user}` remains temporarily as an opaque, validated home key for
+compatible hosted launchers; it is not a Unix account and is never passed to
+sudo.
 
 ## Board and branch permissions
 
