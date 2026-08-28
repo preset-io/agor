@@ -9,7 +9,6 @@ import { createHash, randomBytes } from 'node:crypto';
 import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
-
 import {
   type AgorConfig,
   isDeploymentAgenticToolAvailable,
@@ -105,6 +104,7 @@ import {
 import type { UnixUserMode } from '@agor/core/unix';
 import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
+import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
@@ -1289,11 +1289,15 @@ function createExecuteHandler(
 
     executorEnv.DAEMON_URL = daemonUrl;
 
-    const openCodeLaunch = (() => {
-      if (session.agentic_tool !== 'opencode') return undefined;
+    // Generalized executor-launch hook (design §4/§13 Phase 2). Every tool has a
+    // daemon contribution; only OpenCode implements getExecutorLaunch today, so
+    // this stays a no-op for all other tools and preserves prior behavior.
+    const executorLaunch = (() => {
+      const contribution = getAgenticToolDaemonContribution(session.agentic_tool);
+      if (!contribution?.getExecutorLaunch) return undefined;
       if (!tenantId) throw new Error('Missing active tenant context for OpenCode execution');
       if (!executorHomeDir) throw new Error('Missing executor home for OpenCode execution');
-      return OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch({
+      return contribution.getExecutorLaunch({
         tenantId,
         session,
         homeDir: executorHomeDir,
@@ -1305,7 +1309,7 @@ function createExecuteHandler(
       command: 'prompt' as const,
       sessionToken,
       daemonUrl,
-      ...(openCodeLaunch?.executorPayload ?? {}),
+      ...(executorLaunch?.executorPayload ?? {}),
       env: executorEnv,
       params: {
         sessionId,
@@ -1484,11 +1488,11 @@ function createExecuteHandler(
       },
     });
 
-    if (openCodeLaunch) {
+    if (executorLaunch) {
       const ready = createDeferredSignal();
       const finished = createDeferredSignal();
       let spawned = false;
-      const slot = inOpenCodeNativeStateMutationSlot(openCodeLaunch.namespaceKey, async (fence) => {
+      const slot = inOpenCodeNativeStateMutationSlot(executorLaunch.namespaceKey, async (fence) => {
         try {
           spawnExecutor(
             executorPayload,
