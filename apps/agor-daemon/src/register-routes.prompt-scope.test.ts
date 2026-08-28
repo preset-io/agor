@@ -72,7 +72,7 @@ describe('prompt and widget transaction scopes', () => {
 
   it('finalizes executor spawn failures as trusted daemon writes', () => {
     const catchStart = source.indexOf('const failureParams = { ...params, provider: undefined };');
-    const catchEnd = source.indexOf("app.service('tasks').emit('failed'", catchStart);
+    const catchEnd = source.indexOf('Failed to emit tasks:failed event', catchStart);
     const spawnFailure = source.slice(catchStart, catchEnd);
 
     expect(catchStart).toBeGreaterThan(0);
