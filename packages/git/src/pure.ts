@@ -7,6 +7,58 @@ import { Buffer } from 'node:buffer';
 
 const DEFAULT_AUTH_HEADER_HOST = 'github.com';
 
+/**
+ * Explicit user-managed values that Agor's fixed Git operations understand.
+ * This is intentionally a capability DTO, not a generic user environment bag.
+ */
+export const USER_GIT_ENVIRONMENT_NAMES = [
+  'GITHUB_TOKEN',
+  'GH_TOKEN',
+  'HTTP_PROXY',
+  'HTTPS_PROXY',
+  'NO_PROXY',
+  'ALL_PROXY',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
+] as const;
+
+export type UserGitEnvironmentName = (typeof USER_GIT_ENVIRONMENT_NAMES)[number];
+export type UserGitEnvironment = Partial<Record<UserGitEnvironmentName, string>>;
+
+export interface HttpGitRemoteScope {
+  protocol: 'http:' | 'https:';
+  /** URL authority used by Git's http.<url> subsection, including a nondefault port. */
+  authority: string;
+}
+
+const USER_GIT_ENVIRONMENT_NAME_SET = new Set<string>(USER_GIT_ENVIRONMENT_NAMES);
+const MAX_USER_GIT_ENV_VALUE_BYTES = 10 * 1024;
+
+/**
+ * Project a generic resolved user map into the bounded Git capability DTO.
+ * Unknown values (for example STRIPE_API_KEY) never reach a Git child merely
+ * because they were globally configured for an agent session.
+ */
+export function filterUserGitEnvironment(env: Record<string, string> | undefined): {
+  env: UserGitEnvironment;
+  rejected: string[];
+} {
+  const safe: UserGitEnvironment = {};
+  const rejected: string[] = [];
+  for (const [key, value] of Object.entries(env ?? {})) {
+    if (
+      !USER_GIT_ENVIRONMENT_NAME_SET.has(key) ||
+      value.includes('\0') ||
+      Buffer.byteLength(value, 'utf8') > MAX_USER_GIT_ENV_VALUE_BYTES
+    ) {
+      rejected.push(key);
+      continue;
+    }
+    safe[key as UserGitEnvironmentName] = value;
+  }
+  return { env: safe, rejected };
+}
+
 function escapeShellArg(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
@@ -126,6 +178,87 @@ export function parseHostFromGitUrl(url: string): string | undefined {
   }
 
   return url.match(/^(?:[^@\s:]+@)?([^/:\s]+):(?!\/)/)?.[1];
+}
+
+/** Resolve the exact HTTP config authority, preserving nondefault ports. */
+export function parseHttpGitRemoteScope(url: string): HttpGitRemoteScope | undefined {
+  if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return undefined;
+    return { protocol: parsed.protocol, authority: parsed.host };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Reject option-shaped and remote-helper inputs before any Git argument is
+ * assembled. Managed production remotes use HTTP(S), SSH, or SCP syntax;
+ * absolute/file paths remain available for explicit local/test workflows.
+ */
+export function assertSafeGitRemoteUrl(rawUrl: string): string {
+  if (
+    typeof rawUrl !== 'string' ||
+    rawUrl.length === 0 ||
+    rawUrl.startsWith('-') ||
+    /[\0\r\n]/.test(rawUrl) ||
+    rawUrl.trim() !== rawUrl
+  ) {
+    throw new Error('Invalid Git remote URL');
+  }
+
+  if (/^https?:\/\//i.test(rawUrl) || /^ssh:\/\//i.test(rawUrl) || /^git:\/\//i.test(rawUrl)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      throw new Error('Invalid Git remote URL');
+    }
+    if (!['http:', 'https:', 'ssh:', 'git:'].includes(parsed.protocol) || !parsed.hostname) {
+      throw new Error('Unsupported Git remote protocol');
+    }
+    if (
+      (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+      (parsed.username || parsed.password)
+    ) {
+      throw new Error('Git remote URL must not contain credentials');
+    }
+    if (parsed.protocol === 'ssh:') {
+      if (parsed.password) throw new Error('SSH Git remote URL must not contain a password');
+      if (parsed.username && !/^[A-Za-z0-9._-]{1,64}$/.test(parsed.username)) {
+        throw new Error('SSH Git remote URL contains an invalid username');
+      }
+    }
+    if (!parsed.pathname || parsed.pathname === '/') {
+      throw new Error('Git remote URL must include a repository path');
+    }
+    return rawUrl;
+  }
+
+  if (/^file:\/\//i.test(rawUrl)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl);
+    } catch {
+      throw new Error('Invalid file Git remote URL');
+    }
+    if (parsed.protocol !== 'file:' || !parsed.pathname.startsWith('/')) {
+      throw new Error('Invalid file Git remote URL');
+    }
+    return rawUrl;
+  }
+
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(rawUrl)) {
+    throw new Error('Unsupported Git remote protocol');
+  }
+
+  if (/^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:[^\s]+$/.test(rawUrl)) return rawUrl;
+  if (rawUrl.startsWith('/')) return rawUrl;
+
+  // In particular, reject `<helper>::...`, unknown schemes, relative paths,
+  // and other inputs that make Git select an executable remote helper.
+  throw new Error('Unsupported Git remote URL');
 }
 
 /** True when an HTTP(S) git URL embeds URL userinfo. */

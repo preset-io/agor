@@ -243,6 +243,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'auth/launch': { audience: 'none', why: 'Exchanges a launch token for a session.' },
   'check-auth': { audience: 'none', why: 'Echoes back the API key it was asked to validate.' },
   'config/resolve-api-key': { audience: 'none', why: 'Returns a provider API key.' },
+  'executor-git-environment': {
+    audience: 'none',
+    why: 'Returns a command-scoped Git credential DTO to one executor.',
+  },
   'api/v1/user/api-keys': { audience: 'none', why: 'Returns a freshly minted user API key.' },
   terminals: {
     audience: 'none',

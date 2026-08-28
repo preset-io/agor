@@ -222,6 +222,31 @@ describe('resolveUserEnvironment — scope filtering (v0.5)', () => {
 });
 
 describe('buildAllowlistedEnv — daemon credential capabilities', () => {
+  it('forwards only explicit runtime metadata, never ambient account context', () => {
+    const input = {
+      HTTPS_PROXY: 'https://daemon:secret@proxy.example',
+      OPENAI_API_KEY: 'daemon-openai-secret',
+      GIT_AUTHOR_NAME: 'Daemon Account',
+      XDG_CONFIG_HOME: '/home/agor/.config',
+      GIT_CONFIG_PARAMETERS: "'protocol.file.allow=never'",
+    };
+    const saved = Object.fromEntries(Object.keys(input).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, input);
+    try {
+      const env = buildAllowlistedEnv();
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(env.GIT_AUTHOR_NAME).toBeUndefined();
+      expect(env.XDG_CONFIG_HOME).toBeUndefined();
+      expect(env.GIT_CONFIG_PARAMETERS).toBe(input.GIT_CONFIG_PARAMETERS);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
   it('does not forward host SSH or GPG agent sockets', () => {
     const saved = {
       SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK,
@@ -251,8 +276,8 @@ describe('buildAllowlistedEnv — daemon credential capabilities', () => {
   });
 });
 
-describe('createUserProcessEnvironment — gateway runtime filtering', () => {
-  dbTest('filters the trusted additional-env seam before process use', async ({ db }) => {
+describe('createUserProcessEnvironment — explicit mapping validation', () => {
+  dbTest('passes configured names while rejecting malformed process entries', async ({ db }) => {
     const env = await createUserProcessEnvironment(undefined, db, {
       SAFE_ADDITIONAL_KEY: 'safe',
       PATH: '/attacker',
@@ -263,28 +288,51 @@ describe('createUserProcessEnvironment — gateway runtime filtering', () => {
     expect(env.SAFE_ADDITIONAL_KEY).toBe('safe');
     expect(env['bad-key']).toBeUndefined();
     expect(env.NUL_ADDITIONAL_KEY).toBeUndefined();
-    expect(env.PATH).not.toBe('/attacker');
+    expect(env.PATH).toBe('/attacker');
   });
 
-  dbTest(
-    'drops blocked, malformed, NUL-containing, and duplicate gateway entries',
-    async ({ db }) => {
-      const env = await createUserProcessEnvironment(undefined, db, undefined, [
-        { key: 'SAFE_GATEWAY_KEY', value: 'safe', forceOverride: false },
-        { key: 'PATH', value: '/attacker', forceOverride: true },
-        { key: 'bad-key', value: 'malformed', forceOverride: true },
-        { key: 'NUL_GATEWAY_KEY', value: 'bad\0value', forceOverride: true },
-        { key: 'DUPLICATE_GATEWAY_KEY', value: 'fallback', forceOverride: false },
-        { key: 'DUPLICATE_GATEWAY_KEY', value: 'forced', forceOverride: true },
-      ]);
-
-      expect(env.SAFE_GATEWAY_KEY).toBe('safe');
-      expect(env['bad-key']).toBeUndefined();
-      expect(env.NUL_GATEWAY_KEY).toBeUndefined();
-      expect(env.DUPLICATE_GATEWAY_KEY).toBeUndefined();
-      expect(env.PATH).not.toBe('/attacker');
+  dbTest('overlays trusted Git policy after user/additional mappings', async ({ db }) => {
+    const saved = process.env.GIT_CONFIG_PARAMETERS;
+    process.env.GIT_CONFIG_PARAMETERS = "'protocol.file.allow=never'";
+    try {
+      const userId = await createUserWithEnv(db, {
+        GIT_CONFIG_PARAMETERS: encEntry("'protocol.file.allow=user'", 'global'),
+      });
+      const env = await createUserProcessEnvironment(
+        userId,
+        db,
+        { GIT_CONFIG_PARAMETERS: "'protocol.file.allow=additional'" },
+        [
+          {
+            key: 'GIT_CONFIG_PARAMETERS',
+            value: "'protocol.file.allow=gateway'",
+            forceOverride: true,
+          },
+        ]
+      );
+      expect(env.GIT_CONFIG_PARAMETERS).toBe("'protocol.file.allow=never'");
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CONFIG_PARAMETERS;
+      else process.env.GIT_CONFIG_PARAMETERS = saved;
     }
-  );
+  });
+
+  dbTest('drops malformed, NUL-containing, and duplicate gateway entries', async ({ db }) => {
+    const env = await createUserProcessEnvironment(undefined, db, undefined, [
+      { key: 'SAFE_GATEWAY_KEY', value: 'safe', forceOverride: false },
+      { key: 'PATH', value: '/attacker', forceOverride: true },
+      { key: 'bad-key', value: 'malformed', forceOverride: true },
+      { key: 'NUL_GATEWAY_KEY', value: 'bad\0value', forceOverride: true },
+      { key: 'DUPLICATE_GATEWAY_KEY', value: 'fallback', forceOverride: false },
+      { key: 'DUPLICATE_GATEWAY_KEY', value: 'forced', forceOverride: true },
+    ]);
+
+    expect(env.SAFE_GATEWAY_KEY).toBe('safe');
+    expect(env['bad-key']).toBeUndefined();
+    expect(env.NUL_GATEWAY_KEY).toBeUndefined();
+    expect(env.DUPLICATE_GATEWAY_KEY).toBeUndefined();
+    expect(env.PATH).toBe('/attacker');
+  });
 });
 
 // ============================================================================

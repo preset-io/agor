@@ -83,6 +83,7 @@ import type {
   UserID,
   UUID,
 } from '@agor/core/types';
+import type { UserGitEnvironment } from '@agor/git/pure';
 import authentication, { type AuthenticationClient } from '@feathersjs/authentication-client';
 import type { Application, Paginated, Params } from '@feathersjs/feathers';
 import { feathers } from '@feathersjs/feathers';
@@ -299,7 +300,11 @@ export interface ServiceTypes {
   'agentic-tool-presets': AgenticToolPreset;
   'opencode-auth': OpenCodeProviderSettings;
   'opencode-models': OpenCodeModelCatalog;
+  'executor-git-environment': ExecutorGitEnvironment;
 }
+
+/** Bounded plaintext capability returned only to authenticated Git executors. */
+export type ExecutorGitEnvironment = UserGitEnvironment;
 
 /**
  * Feathers service with find method properly typed and event emitter methods
@@ -654,16 +659,8 @@ export interface BoardsService extends AgorService<Board> {
   ensureTeammateWelcomeNote(data: TeammateWelcomeNoteRequest, params?: Params): Promise<Board>;
 }
 
-/**
- * Users service with git environment support
- */
+/** Users service custom methods. */
 export interface UsersService extends AgorService<User> {
-  /**
-   * Get the full resolved git environment for a user.
-   * Auth: service-account JWTs may fetch any user's env;
-   * regular users may only fetch their own.
-   */
-  getGitEnvironment(data: { userId: string }, params?: Params): Promise<Record<string, string>>;
   getAvatarSettings(data?: unknown, params?: Params): Promise<UserAvatarSettings>;
   updateAvatarSettings(
     data: Partial<UserAvatarSettings>,
@@ -1292,7 +1289,6 @@ function extendUsersService(client: AgorClient): void {
   if (usersService[USERS_SERVICE_EXTENDED]) return;
   if (typeof usersService.methods === 'function') {
     usersService.methods(
-      'getGitEnvironment',
       'getAvatarSettings',
       'updateAvatarSettings',
       'syncAvatars',

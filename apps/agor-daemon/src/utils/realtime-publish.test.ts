@@ -665,6 +665,7 @@ describe('HA Feathers publication relay', () => {
         'authentication',
         'session-tokens',
         'external-launch',
+        'executor-git-environment',
         'mcp-servers/oauth-auth-headers',
         'codex-auth/device',
         'opencode-auth',

@@ -153,7 +153,6 @@ export const USERS_SERVICE_TRANSPORT_METHODS = [
   'create',
   'patch',
   'remove',
-  'getGitEnvironment',
   'getAvatarSettings',
   'updateAvatarSettings',
   'syncAvatars',
@@ -1062,10 +1061,10 @@ export class UsersService {
             throw new Error(`Cannot set environment variable "${key}": ${reason}`);
           }
 
-          // Git tokens are embedded into a git-credentials file and a clone URL
-          // at runtime. Reject at ingest anything that doesn't match the
-          // `isLikelyGitToken` shape so shell metacharacters / whitespace cannot
-          // smuggle in even if the credential-file path later regresses.
+          // Managed Git consumes these values through its bounded transport DTO
+          // and accepts only the `isLikelyGitToken` shape before constructing an
+          // authorization header. Reject unusable values at ingest so the saved
+          // settings contract and the transport boundary stay aligned.
           if ((key === 'GITHUB_TOKEN' || key === 'GH_TOKEN') && value) {
             if (!isLikelyGitToken(value)) {
               throw new Error(
@@ -1120,7 +1119,9 @@ export class UsersService {
             continue;
           }
           nextEnvVars[key] = { ...existing, scope };
-          if (existing.scope === 'session' && scope !== 'session') {
+          // A selection is not a durable future grant. Clear it on every
+          // transition so global → session cannot reactivate stale metadata.
+          if (existing.scope !== scope) {
             selectionNamesToRemove.add(key);
           }
           console.log(`🔧 Updated scope for env var ${key}: ${scope}`);
@@ -1386,39 +1387,6 @@ export class UsersService {
    * to `resolveUserEnvironment` instead of receiving every stored scope.
    */
   async getEnvironmentVariables(userId: UserID): Promise<Record<string, string>> {
-    return resolveUserEnvironment(userId, this.db);
-  }
-
-  /**
-   * Get the full resolved git environment for a user.
-   *
-   * Returns all user env vars (global scope) post-filterEnv, suitable for
-   * passing to git operations via `options.env`. The executor calls this via
-   * Feathers RPC so per-user credentials flow through the daemon's auth
-   * boundary instead of being baked into spawn payloads.
-   *
-   * Auth: explicit daemon service JWTs may fetch any user's env. Delegated
-   * executors and ordinary user JWTs may fetch only their own env.
-   */
-  async getGitEnvironment(
-    data: { userId: string },
-    params?: Params
-  ): Promise<Record<string, string>> {
-    const userId = data.userId as UserID;
-    const caller = (params as AuthenticatedParams | undefined)?.user;
-
-    // Auth check: explicit daemon service accounts can fetch any user's env;
-    // delegated executors and other user identities can fetch only their own.
-    if (params?.provider) {
-      if (!caller) {
-        throw new NotAuthenticated('Authentication required');
-      }
-      const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
-      if (!isService && caller.user_id !== userId) {
-        throw new Forbidden("Cannot access another user's git environment");
-      }
-    }
-
     return resolveUserEnvironment(userId, this.db);
   }
 

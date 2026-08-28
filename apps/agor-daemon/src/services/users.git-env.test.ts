@@ -1,11 +1,4 @@
-/**
- * Tests for UsersService.getGitEnvironment permission checks.
- *
- * Verifies that:
- * - Service-account JWTs can fetch any user's git environment
- * - User JWTs can only fetch their own git environment
- * - Unauthenticated callers are rejected
- */
+/** Managed environment persistence and DTO boundary tests. */
 
 import {
   BranchRepository,
@@ -16,7 +9,6 @@ import {
   SessionRepository,
   sql,
 } from '@agor/core/db';
-import { Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, BranchID, SessionID, UserID, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
@@ -31,104 +23,7 @@ async function makeUser(service: UsersService): Promise<UserID> {
   return user.user_id;
 }
 
-describe('UsersService.getGitEnvironment — permission checks', () => {
-  dbTest('service-account JWT can fetch any user env', async ({ db }) => {
-    const service = new UsersService(db);
-    const userId = await makeUser(service);
-
-    const params: AuthenticatedParams = {
-      provider: 'socketio',
-      user: {
-        user_id: 'executor-service',
-        email: 'service@internal',
-        role: 'service',
-        _isServiceAccount: true,
-      },
-    };
-
-    const env = await service.getGitEnvironment({ userId }, params);
-    expect(env).toBeDefined();
-    expect(typeof env).toBe('object');
-  });
-
-  dbTest('user JWT can fetch own env', async ({ db }) => {
-    const service = new UsersService(db);
-    const userId = await makeUser(service);
-
-    const params: AuthenticatedParams = {
-      provider: 'socketio',
-      user: {
-        user_id: userId,
-        email: 'self@test.local',
-        role: 'member',
-      },
-    };
-
-    const env = await service.getGitEnvironment({ userId }, params);
-    expect(env).toBeDefined();
-    expect(typeof env).toBe('object');
-  });
-
-  dbTest('user JWT cannot fetch another user env', async ({ db }) => {
-    const service = new UsersService(db);
-    const userA = await makeUser(service);
-    const userB = await makeUser(service);
-
-    const params: AuthenticatedParams = {
-      provider: 'socketio',
-      user: {
-        user_id: userA,
-        email: 'a@test.local',
-        role: 'member',
-      },
-    };
-
-    // Service throws a Feathers `Forbidden` (which the HTTP/WS layer maps to 403)
-    // with a human-readable message — assert both class and message so a future
-    // change to either is caught.
-    await expect(service.getGitEnvironment({ userId: userB }, params)).rejects.toThrow(Forbidden);
-    await expect(service.getGitEnvironment({ userId: userB }, params)).rejects.toThrow(
-      /Cannot access another user's git environment/
-    );
-  });
-
-  dbTest('unauthenticated caller is rejected', async ({ db }) => {
-    const service = new UsersService(db);
-    const userId = await makeUser(service);
-
-    const params: AuthenticatedParams = {
-      provider: 'socketio',
-      // no user
-    };
-
-    await expect(service.getGitEnvironment({ userId }, params)).rejects.toThrow(
-      /Authentication required/
-    );
-  });
-
-  dbTest('internal call (no provider) bypasses auth', async ({ db }) => {
-    const service = new UsersService(db);
-    const userId = await makeUser(service);
-
-    // Internal calls have no provider — they bypass auth (Feathers convention)
-    const env = await service.getGitEnvironment({ userId }, {});
-    expect(env).toBeDefined();
-    expect(typeof env).toBe('object');
-  });
-
-  dbTest('returns decrypted env vars for user with configured tokens', async ({ db }) => {
-    const service = new UsersService(db);
-    const userId = await makeUser(service);
-
-    // Set an env var
-    await service.patch(userId, {
-      env_vars: { GITHUB_TOKEN: `ghp_${'x'.repeat(36)}` },
-    });
-
-    const env = await service.getGitEnvironment({ userId }, {});
-    expect(env.GITHUB_TOKEN).toBe(`ghp_${'x'.repeat(36)}`);
-  });
-
+describe('UsersService managed environment boundaries', () => {
   dbTest('does not let the legacy environment helper bypass session scope', async ({ db }) => {
     const service = new UsersService(db);
     const userId = await makeUser(service);
@@ -179,14 +74,6 @@ describe('UsersService.getGitEnvironment — permission checks', () => {
     }
   });
 
-  dbTest('returns empty object for nonexistent user', async ({ db }) => {
-    const service = new UsersService(db);
-    const fakeId = '019e0000-0000-7000-8000-000000000000';
-
-    const env = await service.getGitEnvironment({ userId: fakeId }, {});
-    expect(env).toEqual({});
-  });
-
   dbTest('removes stale selections when a variable is deleted or made global', async ({ db }) => {
     const service = new UsersService(db);
     const userId = await makeUser(service);
@@ -232,6 +119,12 @@ describe('UsersService.getGitEnvironment — permission checks', () => {
     await service.patch(userId, { env_var_scopes: { SESSION_SECRET: 'session' } });
     await selections.add(session.session_id, 'SESSION_SECRET');
     await service.patch(userId, { env_var_scopes: { SESSION_SECRET: 'global' } });
+    expect(await selections.listNames(session.session_id)).toEqual([]);
+
+    // Imported/stale metadata must not spring back to life when the variable
+    // later returns to session scope.
+    await selections.add(session.session_id, 'SESSION_SECRET');
+    await service.patch(userId, { env_var_scopes: { SESSION_SECRET: 'session' } });
     expect(await selections.listNames(session.session_id)).toEqual([]);
   });
 

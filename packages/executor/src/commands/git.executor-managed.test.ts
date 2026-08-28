@@ -125,8 +125,8 @@ function createClient(records: {
           find,
         };
       }
-      if (name === 'users') {
-        return { getGitEnvironment: vi.fn(async () => ({})) };
+      if (name === 'executor-git-environment') {
+        return { create: vi.fn(async () => ({})) };
       }
       if (name === 'branches') {
         const find = vi.fn(

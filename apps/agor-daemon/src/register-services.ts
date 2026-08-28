@@ -158,6 +158,7 @@ import { createDurableCodexDeviceAuthService } from './services/codex-device-aut
 import { createConfigService } from './services/config.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { createExecutorGitEnvironmentService } from './services/executor-git-environment.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
@@ -931,10 +932,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const usersService = createUsersService(db, app);
   // UsersService implements find/get/create/patch/remove (no `update`), plus
-  // custom RPCs like `getGitEnvironment` and avatar sync helpers. Listing `update` here makes Feathers' hook
+  // avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
   app.use('/users', usersService, {
     methods: [...USERS_SERVICE_TRANSPORT_METHODS],
+  });
+
+  // Plaintext Git credentials are not a Users RPC. They are exposed only to
+  // the exact daemon-issued Git executor command acting as its token owner.
+  app.use('/executor-git-environment', createExecutorGitEnvironmentService(db), {
+    methods: ['create'],
   });
 
   // Bootstrap superadmin users

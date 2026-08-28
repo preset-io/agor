@@ -325,6 +325,23 @@ describe('env_vars widget — applySubmit', () => {
     expect(getTrustedUserMutationPurpose(params)).toBe('env-vars-widget');
   });
 
+  it('rejects a guest session-scoped value instead of creating an unusable selection', async () => {
+    const { ctx: baseCtx, patchSpy } = makeCtx();
+    const guestCtx = {
+      ...baseCtx,
+      submitterUserId: 'user-guest' as UserID,
+    };
+
+    await expect(
+      envVarsWidget.applySubmit(
+        guestCtx,
+        { values: { HUBSPOT_API_KEY: 'shh' }, use_existing: [], scope: 'session' },
+        { names: ['HUBSPOT_API_KEY'], reason: 'call hubspot', auto_resume: true }
+      )
+    ).rejects.toThrow(/only be configured by the session owner/i);
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
   it('writes ALL submitted names in one patch call', async () => {
     const { ctx, patchSpy } = makeCtx();
     await envVarsWidget.applySubmit(
@@ -437,17 +454,18 @@ describe('env_vars widget — applySubmit', () => {
     expect(patchSpy).not.toHaveBeenCalled();
   });
 
-  it('rejects blocklisted names before patching', async () => {
+  it('passes an explicitly configured runtime-control name to the user service', async () => {
     const { ctx, patchSpy } = makeCtx();
-    // PATH is on the blocklist (system identity).
-    await expect(
-      envVarsWidget.applySubmit(
-        ctx,
-        { values: { PATH: '/tmp/evil' }, use_existing: [], scope: 'global' },
-        { names: ['PATH'], reason: 'why', auto_resume: true }
-      )
-    ).rejects.toThrow(/blocked|cannot be set/i);
-    expect(patchSpy).not.toHaveBeenCalled();
+    await envVarsWidget.applySubmit(
+      ctx,
+      { values: { PATH: '/tmp/user-bin' }, use_existing: [], scope: 'global' },
+      { names: ['PATH'], reason: 'why', auto_resume: true }
+    );
+    expect(patchSpy).toHaveBeenCalledWith(
+      'user-creator',
+      { env_vars: { PATH: '/tmp/user-bin' }, env_var_scopes: { PATH: 'global' } },
+      expect.any(Object)
+    );
   });
 
   it('surfaces validation errors from the users-service patch', async () => {

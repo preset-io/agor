@@ -15,7 +15,7 @@ The stored-value API boundary already redacted user env values from REST, Socket
 1. fixed local executors, templated launchers, and Git child processes could inherit the daemon's ambient environment;
 2. a collaborator-authorized managed-environment action resolved the branch creator's global secrets rather than the authenticated actor's;
 3. a foreign session's name-only selections could select the prompter's same-named session secret;
-4. user-controlled Git process/config variables could turn a fixed Git operation into attacker-selected execution; and
+4. managed Git received a generic user secret bag and combined authenticated transport with mutable repository configuration; and
 5. the compatibility helper that temporarily mutates `process.env` serialized per user rather than per process, allowing two users' values to overlap.
 
 Those defects are fixed at shared spawn, Git, resolver, lifecycle, and locking boundaries. The change also makes encryption fail closed when the deployment key is absent, normalizes malformed-ciphertext errors, validates every selection and gateway env map, removes an accidental gateway double envelope, makes corrupt gateway secrets unusable, silences selection-name realtime events, and makes env mutation plus stale-selection cleanup atomic with optimistic concurrency protection.
@@ -52,7 +52,7 @@ Where code, old exploration text, and current product copy disagreed, this docum
 
 - A generic env value belongs to the `users` row in which it is stored. There is no tenant-global or shared generic env class.
 - External user reads—including self, admin, and superadmin—receive only `{ set, scope, resource_id }` metadata. They never receive plaintext or stored ciphertext.
-- Admin management rights permit replacing/deleting some lower-role users' values but do not imply an application-level reveal operation. Host/code/config control is outside that protection and remains a trusted-administrator boundary.
+- Admin management rights permit replacing/deleting some lower-role users' values but do not imply a plaintext reveal operation. Exact executor commands may resolve a bounded credential DTO for their token principal. Host/code/config control is outside that protection and remains a trusted-administrator boundary.
 - Agentic-tool credentials are also user-owned, but resolve only for the selected tool. Provider credential resolution is separate from generic process env resolution.
 - Session selection rows are secret metadata, not secrets: they contain names only. Their implicit owner is `sessions.created_by`.
 
@@ -60,15 +60,16 @@ Where code, old exploration text, and current product copy disagreed, this docum
 
 - `global`: eligible for a task executing as that user.
 - `session`: eligible only when the session has a matching name selection **and** `sessions.created_by` equals the execution user.
-- Effective process precedence is:
+- Effective task-process precedence is:
   1. allowlisted host/substrate runtime metadata;
   2. gateway fallback values;
   3. the execution user's eligible global/session variables;
   4. gateway `forceOverride` values;
-  5. narrow trusted additional executor fields.
+  5. narrow trusted additional executor fields;
+  6. the daemon-resolved `GIT_CONFIG_PARAMETERS` operator policy is overlaid last.
 - Values are snapshotted at process launch. Changing a value, scope, or selection affects a future launch, not a running process. The already-running process retains its environment until it exits; task heartbeat/termination bounds, rather than live revocation, limit that period.
 - Empty values are rejected on user/gateway write; `null` deletes. There is no tombstone/unset overlay. Rename is delete plus create.
-- Variable names are portable uppercase identifiers matching `^[A-Z_][A-Z0-9_]*$`, subject to the loader/shell/system blocklist. Values are UTF-8 strings up to 10 KiB and may not contain NUL.
+- Variable names are portable uppercase identifiers matching `^[A-Z_][A-Z0-9_]*$`. Values are UTF-8 strings up to 10 KiB and may not contain NUL. Explicit user mappings have no semantic deny-list: the user already controls their own terminal/executor. Consumers with narrower authority, notably managed Git, accept a typed subset instead of a generic map.
 
 ### Genealogy and remote triggers
 
@@ -144,7 +145,7 @@ This is the target cryptographic shape for a future generic-secret v2. It must n
 
 **After**
 
-`UI / REST / Socket.IO / MCP widget` → authenticated actor + strict field allowlist → per-tenant/user in-process mutation serialization → canonical name/value/blocklist/NUL/size validation → service authorization → one repository/service encryption boundary → tenant transaction → JSON compare-and-swap + selection cleanup → metadata-only DTO. Gateway has one encrypt-on-write boundary; direct/provider-less service calls still hit authoritative validation. PostgreSQL retains its cross-replica advisory/transaction fences. A stale concurrent JSON mutation fails rather than silently replacing another encrypted map.
+`UI / REST / Socket.IO / MCP widget` → authenticated actor + strict field allowlist → per-tenant/user in-process mutation serialization → canonical name/value/NUL/size validation → service authorization → one repository/service encryption boundary → tenant transaction → JSON compare-and-swap + selection cleanup → metadata-only DTO. Gateway has one encrypt-on-write boundary; direct/provider-less service calls still hit authoritative validation. PostgreSQL retains its cross-replica advisory/transaction fences. A stale concurrent JSON mutation fails rather than silently replacing another encrypted map.
 
 ### Read/resolve path
 
@@ -166,9 +167,9 @@ Resolved task env was safe when `preparedEnv` was supplied, but fixed local exec
 
 - fixed local executor default: curated host allowlist only;
 - task/lifecycle executor: already-resolved actor env plus narrow daemon URL/log fields;
-- templated launcher shell: curated secret-free host allowlist; payload remains JSON stdin;
-- executor credential helpers and operator heartbeat callbacks: curated secret-free host allowlist; bounded data remains on stdin or the command payload;
-- Git child: a Git-specific secret-free runtime/network/identity allowlist plus the sanitized resolved user map; daemon master/DB/JWT/provider values and ambient Git/SSH/GPG capabilities are absent;
+- templated launcher shell: curated minimal host runtime allowlist; payload remains JSON stdin;
+- executor credential helpers and operator heartbeat callbacks: curated minimal host runtime allowlist; bounded data remains on stdin or the command payload;
+- managed Git: an executor-only, exact-command capability resolves only token/proxy/TLS fields for the token principal; authenticated HTTP transport runs in a clean temporary repository, and subsequent mutable-repository/materialization operations are credential-free;
 - managed lifecycle/log action: authenticated actor consistently supplies command token, env, and delegated home; trusted provider-less automation falls back to the branch creator;
 - no host SSH/GPG agent socket or ambient `GIT_SSH_COMMAND` is projected into user/sandbox/delegated processes.
 
@@ -181,7 +182,7 @@ Resolved task env was safe when `preparedEnv` was supplied, but fixed local exec
 | Normal prompt, delegated                    | durable task prompter                                           |                                        yes |                        owner-bound selected names |                            selected tool/user only |                 if gateway source | launcher gets secret-free env; authenticated payload on stdin; substrate enforces identity                                  |
 | Standalone/local executor                   | token subject / prepared actor                                  |                only if explicitly prepared |        only if session-bound resolution requested |                         command-specific API fetch |                  command-specific | default fixed commands use curated env, never daemon ambient                                                                |
 | HA executor/replica                         | token task/user/tenant claims                                   |                              same as above |            same owner-bound join under tenant RLS |                                               same |                              same | each launch resolves in its tenant DB scope; old replicas must be drained during rollout                                    |
-| Git clone/fetch/push                        | authenticated user env supplied to Git command                  |                         eligible safe vars |                                  caller-dependent |                                no agentic-tool bag |                                no | process-control vars rejected; token is host-scoped extraheader via env, not argv                                           |
+| Git clone/fetch                             | exact Git command-token principal                               |           bounded token/proxy/TLS DTO only |                                                no |                                no agentic-tool bag |                                no | raw token becomes a canonical-host extraheader in clean transport, never argv; checkout/worktree phase is credential-free   |
 | Managed environment start/stop/restart/nuke | authenticated action actor; creator only for trusted automation |                              actor globals |                              no session selection |                                no agentic-tool bag |                                no | same command token/env/delegated-home actor; branch command itself can print its env                                        |
 | Environment logs                            | authenticated action actor                                      |                              actor globals |                                                no |                                                 no |                                no | creator values are not lent to collaborator fetching logs                                                                   |
 | Automatic health observation                | daemon-owned bounded observer                                   |                                         no |                                                no |                                                 no |                                no | direct HTTP GET with no env map or authorization header; redirect handling is explicit                                      |
@@ -193,7 +194,7 @@ Resolved task env was safe when `preparedEnv` was supplied, but fixed local exec
 | Schedule                                    | schedule creator                                                |                            creator globals |        no arbitrary source-session selection copy |                                       creator/tool |      no unless explicitly gateway | next run resolves fresh values                                                                                              |
 | Message gateway                             | configured Agor execution owner                                 |                              owner globals | gateway sessions do not borrow foreign selections |                              configured owner/tool |            channel fallback/force | platform and connector credentials remain gateway-specific                                                                  |
 | MCP tool/server                             | authenticated caller/token subject                              |       only explicit template/resolver uses | session MCP association does not itself grant env | per-user grant for caller or explicit shared grant |                                no | MCP redactors cover auth/header/env ciphertext and plaintext                                                                |
-| Secure env widget                           | target session creator (explicit product behavior)              |                                 write only |                    requested scope/selection flow |                                                 no |                                no | value bypasses model transcript; collaborator sees name/status, not value; this is an explicit cross-user write surface     |
+| Secure env widget                           | authenticated submitter                                         |                                 write only |       owner-only session scope; guests use global |                                                 no |                                no | value bypasses model transcript; shared-session submissions never mutate the session owner's credential profile             |
 | Users REST/UI/MCP                           | self/admin metadata policy                                      |                                  no values |                         names/scope metadata only |                           presence/config metadata |                                no | select/include/projection cannot bypass `rowToUser`; provider-less actor-less mutation reserved for trusted bootstrap paths |
 | Socket.IO/realtime                          | tenant channel + service policy                                 |                                  no values |                                no selection event |                                          no values |                          redacted | user events strip self-only fields; selection service audience is `none`                                                    |
 | Analytics                                   | attributed IDs/counts/configured booleans                       |                                         no |                                                no |                                           no value |                          no value | reviewed payload builders do not serialize user JSON or env maps                                                            |
@@ -209,7 +210,7 @@ Severity reflects confidentiality/tenant impact under the deployment's stated tr
 
 **Impact:** an external launcher, a compromised fixed executor, or code executed by Git could receive deployment-wide credentials, crossing every user and tenant boundary.
 
-**Fix:** secret-free allowlists at `spawn-executor`, Codex auth dispatch, the heartbeat callback, and `@agor/git`; JSON stdin retained; regression assertions cover local/template/request/helper/callback and Git env construction.
+**Fix:** minimal ambient allowlists at `spawn-executor`, Codex auth dispatch, the heartbeat callback, and `@agor/git`; JSON stdin retained. Proxy URLs, provider tokens, Git identity, XDG paths, and account startup context are absent unless supplied through the authenticated user's explicit mapping. The daemon-resolved Git safety policy is the sole explicit overlay.
 
 ### High — managed lifecycle confused branch ownership with execution authority (fixed)
 
@@ -227,7 +228,7 @@ Severity reflects confidentiality/tenant impact under the deployment's stated tr
 
 **Proof:** resolved generic env could contain `GIT_CONFIG_COUNT/KEY/VALUE`, `GIT_SSH_COMMAND`, askpass, editor/pager, external diff, template/exec path, proxy command, repository/object path, and trace controls. A direct `@agor/git` caller could also supply generic loader/shell controls such as `LD_PRELOAD`, `NODE_OPTIONS`, or `BASH_ENV`. `createGit` opted into simple-git's corresponding unsafe flags.
 
-**Fix:** filter caller-provided generic process-injection and Git controls before token extraction/spawn; server adds only its bounded host-specific auth config afterward. Generic values remain usable where the normal env contract permits them, but they cannot redefine Agor's one-purpose Git executor.
+**Fix:** generic user mappings remain generic only in the user's own executor. Managed Git uses a typed token/proxy/TLS DTO returned by an executor-only exact-command service; ordinary users, admins, service accounts, and provider-less calls cannot reveal it. The raw token is consumed into a canonical-host Authorization header in a clean transport repository, then removed before local checkout/worktree operations.
 
 ### High — process-wide env mutation used only per-user exclusion (fixed)
 
@@ -251,7 +252,7 @@ Severity reflects confidentiality/tenant impact under the deployment's stated tr
 
 **Proof:** Node rejects NUL in env values at spawn. Direct/provider-less gateway data and imported/old JSON could bypass the Profile validator, producing deterministic failures on every future task/action. Invalid/lowercase/shell-like names were not universally filtered at final merge.
 
-**Fix:** canonical portable-name and NUL checks at ingress and final runtime filters; gateway service rejects duplicates, empty values, invalid names, blocked names, oversize values, NUL, and unresolved redaction sentinels.
+**Fix:** canonical portable-name, NUL, and byte-size checks at ingress and final runtime filters; gateway service also rejects duplicates, empty values, oversize values, and unresolved redaction sentinels. There is deliberately no semantic deny-list for a user's own mapping.
 
 ### Medium — env mutation and selection cleanup were not atomic/concurrency-safe (fixed)
 
@@ -289,13 +290,9 @@ Each value is capped at 10 KiB, but the user map has no count/aggregate-byte quo
 
 Generic task credentials are prompter-bound while branch mounts/home remain session-owner-bound. The behavior avoids automatic secret lending but composes two authorities in one process. Product must decide whether cross-owner prompting should be prohibited, fully re-attributed, or explicitly retain this high-trust composition.
 
-### Medium residual — secure env widget is an explicit cross-user credential write (decision required)
+### Low residual — widget secret and selection are separate writes
 
-A prompt-tier collaborator may resolve an env widget on another user's session. The submitted value is written into the **session creator's** profile, then the system-authored retry is deliberately attributed to that creator. This makes the retry work without putting the value in chat, but it also lets an equal-role collaborator replace a creator's future global value and composes submitter consent with creator execution authority. Changing the target to the submitter, or restricting submission to the creator, would change the documented widget workflow; Max must choose. The user write and subsequent session-selection write are also separate durable steps: failure after the encrypted user write is confidentiality-safe but can leave an unselected value and a resolving widget for operator recovery.
-
-### Medium residual — full daemon service tokens retain a cross-user secret-read capability
-
-`users.getGitEnvironment` intentionally permits the explicit `_isServiceAccount` identity to request any user's globals; ordinary task and taskless command tokens retain the real initiating user and are self-only. The current production full-service token is reserved for a startup Git credential-scrub job that does not need this read, but the API/type/test contract still grants it. Removing or purpose/subject-binding that legacy capability needs a compatibility inventory of external system jobs; no human admin inherits it.
+The widget writes only to the authenticated submitter. A shared-session guest may choose global scope (which already follows that guest into any prompted task) but cannot create a session-scoped value on somebody else's session. For an owner submission, the encrypted user write and session-selection write remain separate durable steps: a failure after the first is confidentiality-safe but can leave an unselected value for operator recovery.
 
 ### Medium adjacent residual — plaintext credential classes
 
@@ -338,7 +335,7 @@ Malformed legacy envelopes are rejected before scrypt while well-formed wrong-ke
 Focused tests added or expanded cover:
 
 - generic encryption parser, key absence/change, authentication, nonce diversity, and error normalization;
-- name/value/NUL/blocklist validation and final map filtering;
+- name/value/NUL/byte-size validation and final map filtering;
 - same-owner versus foreign-owner selection resolution;
 - selection route ownership/scope checks and realtime silence;
 - two-user process-env overlap;
@@ -415,7 +412,7 @@ No user-managed development server was started.
 - Generic ciphertext serialization is unchanged; old and new binaries can read values written by this change.
 - A historical raw plaintext value written while the old helper had no master key is intentionally no longer readable as a credential. It is skipped as an invalid envelope and must be replaced by its owner after the deployment key is configured.
 - Gateway new writes are a single historical envelope. Old readers already decrypt one envelope, and the new reader additionally handles old double envelopes. Mixed-version writes remain readable.
-- Selection cleanup deletes only name metadata for a removed/non-session value.
+- Selection cleanup deletes only name metadata for a removed value or any scope transition.
 - Git/env narrowing is a behavioral security change, not a persisted-data change.
 
 ### Rolling HA
@@ -440,10 +437,9 @@ No user-managed development server was started.
 4. **Admin secret management:** retain write/replace/delete without reveal, or require owner-only/step-up approval for destructive changes. Host admins remain trusted either way.
 5. **Unset semantics and limits:** choose tombstones, atomic rename, whitespace UI behavior, and a portable maximum count/aggregate resolved-env byte limit.
 6. **Adjacent plaintext stores:** schedule migration/hashing work for SQLite OAuth grants and gateway inbound keys.
-7. **Widget execution identity:** keep creator-targeted cross-user writes, target the submitter, or require the session creator to resolve env widgets; also decide whether secret+selection needs a one-transaction API.
-8. **Full service credential disclosure:** remove `getGitEnvironment`'s daemon-service wildcard or define and enforce the system jobs/purpose claims allowed to use it.
-9. **Master-secret strength:** decide whether a bridge release should warn and then reject standalone nonempty keys shorter than the documented 32 random bytes.
-10. **Artifact disclosure:** confirm that consent means arbitrary artifact code may read/exfiltrate the selected viewer globals; otherwise move to a tool-mediated capability.
+7. **Widget atomicity:** decide whether the owner-only secret+selection flow needs a one-transaction API.
+8. **Master-secret strength:** decide whether a bridge release should warn and then reject standalone nonempty keys shorter than the documented 32 random bytes.
+9. **Artifact disclosure:** confirm that consent means arbitrary artifact code may read/exfiltrate the selected viewer globals; otherwise move to a tool-mediated capability.
 
 ## Security invariants after this PR
 
@@ -453,7 +449,7 @@ No user-managed development server was started.
 4. Every untrusted env map is validated at ingress and filtered again at a process boundary.
 5. Fixed executors, credential helpers, operator callbacks, launcher shells, and Git children do not inherit the daemon's credential-bearing environment.
 6. A managed lifecycle command uses one authenticated actor consistently for token, env, and delegated home.
-7. User Git env cannot redefine Agor's fixed Git config, executable/helper/editor/proxy, or repository/object paths.
+7. Managed Git receives only its typed DTO; authenticated transport and mutable-repository execution never coexist with the raw user token or generic secret bag.
 8. Concurrent users cannot overlap compatibility `process.env` mutation, and concurrent User JSON patches cannot silently replace each other.
 9. Gateway credentials have one encrypt-on-write boundary; unreadable stored representations never become runtime credentials.
 10. Selection names do not travel on realtime channels; values never travel in analytics.

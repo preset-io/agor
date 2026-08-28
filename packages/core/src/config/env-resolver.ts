@@ -29,7 +29,6 @@ export const ALLOWED_ENV_VARS = new Set([
   'USER',
   'LOGNAME',
   'SHELL',
-  'HOSTNAME',
 
   // Temp directories
   'TMPDIR',
@@ -46,14 +45,6 @@ export const ALLOWED_ENV_VARS = new Set([
   'TERM_PROGRAM',
   'TERM_PROGRAM_VERSION',
 
-  // Editor
-  'EDITOR',
-  'VISUAL',
-
-  // Display (for GUI tools)
-  'DISPLAY',
-  'WAYLAND_DISPLAY',
-
   // Host SSH/GPG agent sockets are intentionally not forwarded. They are
   // credential capabilities, not inert process metadata; projecting the
   // daemon account's socket into a user, sandbox, or delegated executor would
@@ -61,29 +52,13 @@ export const ALLOWED_ENV_VARS = new Set([
   // their own explicit env mapping where the execution substrate provides a
   // user-scoped agent.
 
-  // Proxy / TLS (needed for corporate environments)
-  'HTTP_PROXY',
-  'HTTPS_PROXY',
-  'NO_PROXY',
-  'ALL_PROXY',
-  'http_proxy',
-  'https_proxy',
-  'no_proxy',
-  'all_proxy',
-  'SSL_CERT_FILE',
-  'SSL_CERT_DIR',
-
-  // Node.js (safe subset — NOT NODE_OPTIONS which could inject code)
-  'NODE_PATH',
-  'NODE_EXTRA_CA_CERTS',
   // Logging controls. Keep executor log filtering aligned with the daemon.
   'LOG_LEVEL',
 
-  // Git identity
-  'GIT_AUTHOR_NAME',
-  'GIT_AUTHOR_EMAIL',
-  'GIT_COMMITTER_NAME',
-  'GIT_COMMITTER_EMAIL',
+  // Explicit operator-owned Git safety policy. This is resolved from
+  // security.git_config_parameters at daemon startup; it is not arbitrary
+  // shell context inherited from the account that launched the daemon.
+  'GIT_CONFIG_PARAMETERS',
 
   // Agor session context (safe for executor/sessions)
   'DAEMON_URL',
@@ -110,7 +85,6 @@ export const ALLOWED_ENV_VARS = new Set([
  */
 export const ALLOWED_ENV_PREFIXES = [
   'LC_', // Locale settings (LC_ALL, LC_CTYPE, etc.)
-  'XDG_', // Freedesktop directories (XDG_DATA_HOME, XDG_CONFIG_HOME, etc.)
 ];
 
 /**
@@ -259,15 +233,15 @@ export async function resolveUserEnvironment(
     console.error(`Failed to resolve environment for user ${userId}:`, err);
   }
 
-  // Strip process-hijacking env vars (NODE_OPTIONS, LD_PRELOAD, PYTHON*, etc.)
-  // before returning, so callers who spawn subprocesses with this env cannot
-  // be hijacked by an attacker who stored such a key in their user env.
+  // Enforce structural spawn safety for old/imported rows. Explicitly stored
+  // user names are otherwise passed through unchanged; semantic filtering is
+  // consumer-specific (for example the bounded Git transport DTO).
   const { env: safeEnv, rejected } = filterEnv(env, (key) => {
-    console.warn(`[resolveUserEnvironment] Rejected denied env key from user ${userId}: ${key}`);
+    console.warn(`[resolveUserEnvironment] Rejected invalid env key from user ${userId}: ${key}`);
   });
   if (rejected.length > 0) {
     console.warn(
-      `[resolveUserEnvironment] Stripped ${rejected.length} denied env key(s) for user ${userId}`
+      `[resolveUserEnvironment] Stripped ${rejected.length} invalid env key(s) for user ${userId}`
     );
   }
 
@@ -324,11 +298,13 @@ export function buildAllowlistedEnv(): Record<string, string> {
  * 1. Starts with a minimal allowlisted subset of process.env
  * 2. Resolves and merges user-specific encrypted environment variables from database
  * 3. Optionally merges additional environment variables
- * 4. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
+ * 4. Restores the daemon-resolved Git policy after configurable mappings
+ * 5. Sets AGOR_USER_ENV_KEYS with comma-separated list of user-defined var keys
  *
  * @param userId - User ID to resolve environment for (optional)
  * @param db - Database instance (required if userId provided)
- * @param additionalEnv - Additional env vars to merge (optional, highest priority)
+ * @param additionalEnv - Additional env vars to merge (optional; highest configurable priority,
+ *   below the daemon-resolved Git safety policy)
  * @returns Clean environment object ready for child process spawning
  *
  * @example
@@ -374,6 +350,7 @@ export async function createUserProcessEnvironment(
 ): Promise<Record<string, string>> {
   // SECURITY: Start with allowlisted env vars only — never inherit full process.env
   const env = buildAllowlistedEnv();
+  const trustedGitConfigParameters = env.GIT_CONFIG_PARAMETERS;
 
   // Track user-defined env var keys (for MCP template scoping)
   const userEnvKeys: string[] = [];
@@ -453,6 +430,12 @@ export async function createUserProcessEnvironment(
       }
     }
   }
+
+  // This one name is operator policy, not ambient shell context. Apply it
+  // after user/gateway/additional mappings so an identically named user value
+  // cannot impersonate the daemon-resolved security configuration.
+  if (trustedGitConfigParameters === undefined) delete env.GIT_CONFIG_PARAMETERS;
+  else env.GIT_CONFIG_PARAMETERS = trustedGitConfigParameters;
 
   // If you set one half of GIT_AUTHOR_*/GIT_COMMITTER_* via env, mirror to the other.
   // Env vars are the multi-tenant identity boundary; falling through to shared

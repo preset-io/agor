@@ -524,6 +524,9 @@ export const TENANT_OWNED_SERVICE_PATHS = [
 // units of work at the call site instead of holding an HTTP-long transaction.
 export const TENANT_IDENTITY_ONLY_SERVICE_PATHS = [
   'check-auth',
+  // This command-scoped capability opens one short owner-bound read after
+  // verifying the executor token; it must not inherit an HTTP-long DB scope.
+  'executor-git-environment',
   // File browsing delegates to the executor after bounded repository reads.
   // Keep request-wide tenant identity while each service opens only a short
   // database unit of work before crossing the executor boundary.
@@ -2930,6 +2933,10 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         },
       ],
     },
+  });
+
+  safeService('executor-git-environment')?.hooks({
+    before: { all: [requireAuth] },
   });
 
   // ============================================================================

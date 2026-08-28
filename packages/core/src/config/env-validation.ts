@@ -1,11 +1,11 @@
-import { ENV_VAR_NAME_PATTERN, getEnvVarBlockReason, isEnvVarAllowed } from './env-blocklist';
+import { ENV_VAR_NAME_PATTERN, MAX_ENV_VAR_VALUE_BYTES } from './env-blocklist';
 
 /**
  * Validation constraints for environment variables
  */
 export const ENV_VAR_CONSTRAINTS = {
   /** Maximum value length in bytes */
-  MAX_VALUE_LENGTH: 10 * 1024, // 10KB
+  MAX_VALUE_LENGTH: MAX_ENV_VAR_VALUE_BYTES,
 
   /** Regex for valid variable names (uppercase, underscore, numbers) */
   NAME_PATTERN: ENV_VAR_NAME_PATTERN,
@@ -16,13 +16,7 @@ export const ENV_VAR_CONSTRAINTS = {
  */
 export interface ValidationError {
   field: 'name' | 'value';
-  code:
-    | 'invalid_format'
-    | 'invalid_character'
-    | 'blocked'
-    | 'empty_value'
-    | 'too_long'
-    | 'missing_field';
+  code: 'invalid_format' | 'invalid_character' | 'empty_value' | 'too_long' | 'missing_field';
   message: string;
 }
 
@@ -52,16 +46,6 @@ export function validateEnvVar(name: string, value?: string): ValidationError[] 
       field: 'name',
       code: 'invalid_format',
       message: `Variable name must match pattern: ${ENV_VAR_CONSTRAINTS.NAME_PATTERN.source} (e.g., GITHUB_TOKEN, AWS_ACCESS_KEY_ID)`,
-    });
-  }
-
-  // Validate name is not blocked
-  if (!isEnvVarAllowed(name)) {
-    const reason = getEnvVarBlockReason(name);
-    errors.push({
-      field: 'name',
-      code: 'blocked',
-      message: `Variable "${name}" cannot be set: ${reason}`,
     });
   }
 
