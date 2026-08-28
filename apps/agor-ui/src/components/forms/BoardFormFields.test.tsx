@@ -6,8 +6,10 @@ import { BoardFormFields, extractBoardFormValues } from './BoardFormFields';
 
 function BoardFormHarness({
   onRead,
+  canEditGeneral,
 }: {
   onRead: (values: ReturnType<typeof extractBoardFormValues>) => void;
+  canEditGeneral?: boolean;
 }) {
   const [form] = Form.useForm();
   return (
@@ -20,7 +22,7 @@ function BoardFormHarness({
         owner_ids: ['user-1'],
       }}
     >
-      <BoardFormFields form={form} rbacEnabled />
+      <BoardFormFields form={form} rbacEnabled canEditGeneral={canEditGeneral} />
       <button type="button" onClick={() => onRead(extractBoardFormValues(form))}>
         Read values
       </button>
@@ -50,5 +52,32 @@ describe('BoardFormFields permissions', () => {
     expect(onRead).toHaveBeenLastCalledWith(
       expect.objectContaining({ default_others_can: 'view' })
     );
+  });
+});
+
+describe('BoardFormFields general-settings permission gating', () => {
+  it('disables name and description when the caller lacks board.edit', () => {
+    renderWithApp(<BoardFormHarness onRead={vi.fn()} canEditGeneral={false} />);
+
+    expect(screen.getByPlaceholderText('My Board')).toBeDisabled();
+    expect(screen.getByPlaceholderText('Optional description...')).toBeDisabled();
+    expect(screen.getByText("You don't have permission to edit this board.")).toBeInTheDocument();
+  });
+
+  it('swaps the appearance tab for a read-only notice instead of leaving live controls that bypass disabling', () => {
+    renderWithApp(<BoardFormHarness onRead={vi.fn()} canEditGeneral={false} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'CSS' }));
+
+    expect(
+      screen.getByText("You don't have permission to edit this board's appearance.")
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Background mode')).not.toBeInTheDocument();
+  });
+
+  it('leaves name and description editable by default (legacy/non-RBAC path)', () => {
+    renderWithApp(<BoardFormHarness onRead={vi.fn()} />);
+
+    expect(screen.getByPlaceholderText('My Board')).not.toBeDisabled();
+    expect(screen.getByPlaceholderText('Optional description...')).not.toBeDisabled();
   });
 });

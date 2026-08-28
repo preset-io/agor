@@ -4,7 +4,7 @@
  * Admin-managed groups and memberships used by group-aware Branch RBAC.
  */
 
-import type { BranchRepository } from '@agor/core/db';
+import type { BoardRepository, BranchRepository } from '@agor/core/db';
 import {
   eq,
   GroupRepository,
@@ -21,6 +21,7 @@ import type {
   Branch,
   BranchID,
   EffectiveBranchAccess,
+  EffectiveCapabilityPolicyAccess,
   Group,
   GroupMembership,
   HookContext,
@@ -28,7 +29,12 @@ import type {
   User,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, hasRoleAuthorityOver, ROLES } from '@agor/core/types';
+import {
+  BOARD_POLICY_CAPABILITIES,
+  hasMinimumRole,
+  hasRoleAuthorityOver,
+  ROLES,
+} from '@agor/core/types';
 import { isSuperAdmin, PERMISSION_RANK } from '../utils/branch-authorization.js';
 import {
   lockTenantAuthorizationFence,
@@ -262,6 +268,63 @@ export function setupBranchEffectiveAccessService(
 
         if (PERMISSION_RANK[can] < PERMISSION_RANK.view) {
           throw new Forbidden('You need view permission to see branch access');
+        }
+
+        return effective;
+      },
+    },
+    { methods: ['find'] }
+  );
+}
+
+const SUPERADMIN_BOARD_ACCESS: EffectiveCapabilityPolicyAccess = {
+  capabilities: [...BOARD_POLICY_CAPABILITIES],
+  fs_access: 'none',
+  source: 'primary_owner',
+  group_ids: [],
+  is_primary_owner: false,
+};
+
+/**
+ * Board analog of `setupBranchEffectiveAccessService`. Boards were the
+ * newer resource in the capability-policy remodel, so their effective
+ * access is already the normalized `EffectiveCapabilityPolicyAccess` shape
+ * (no legacy `others_can`-tier translation needed).
+ */
+export function setupBoardEffectiveAccessService(
+  app: import('@agor/core/feathers').Application,
+  boardRepo: BoardRepository,
+  options: { allowSuperadmin?: boolean } = {}
+) {
+  app.use(
+    'boards/:id/effective-access',
+    {
+      async find(params?: Params): Promise<EffectiveCapabilityPolicyAccess> {
+        const authParams = params as
+          | (Params & { user?: { user_id: string; role: string; _isServiceAccount?: boolean } })
+          | undefined;
+        if (authParams?.provider && authParams.user?._isServiceAccount) {
+          return SUPERADMIN_BOARD_ACCESS;
+        }
+
+        const user = authParams?.user;
+        if (!user) throw new NotAuthenticated('Authentication required');
+
+        const boardId = paramsRoute(params)?.id;
+        if (!boardId) throw new BadRequest('Board ID is required');
+
+        const board = await boardRepo.findById(boardId);
+        if (!board) throw new BadRequest(`Board not found: ${boardId}`);
+
+        if (isSuperAdmin(user.role, options.allowSuperadmin ?? true)) {
+          return SUPERADMIN_BOARD_ACCESS;
+        }
+
+        const userId = user.user_id as UserID;
+        const effective = await boardRepo.resolveUserAccess(board, userId);
+
+        if (!effective.capabilities.includes('board.view')) {
+          throw new Forbidden('You need view permission to see board access');
         }
 
         return effective;

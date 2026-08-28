@@ -1,9 +1,15 @@
 import {
+  type BoardRepository,
   type BranchRepository,
   GroupRepository,
   getCurrentTenantDatabaseScope,
 } from '@agor/core/db';
-import type { AuthenticatedParams, HookContext, User } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  EffectiveCapabilityPolicyAccess,
+  HookContext,
+  User,
+} from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -12,6 +18,7 @@ import {
   createGroupsService,
   groupMembershipsHooks,
   groupsHooks,
+  setupBoardEffectiveAccessService,
   setupBranchEffectiveAccessService,
 } from './groups';
 import { UsersService } from './users';
@@ -278,6 +285,101 @@ describe('normalized branch effective-access service', () => {
       service.find({
         provider: 'rest',
         route: { id: branchId },
+        user: undefined as never,
+      })
+    ).rejects.toThrow(/authentication required/i);
+  });
+});
+
+describe('normalized board effective-access service', () => {
+  const boardId = '019f0000-0000-7000-8000-00000000c0de';
+  const userId = '019f0000-0000-7000-8000-00000000abcd';
+
+  function install(access: EffectiveCapabilityPolicyAccess) {
+    let service:
+      | {
+          find(params: {
+            route: { id: string };
+            user: { user_id: string; role: string };
+          }): Promise<unknown>;
+        }
+      | undefined;
+    const app = {
+      use: vi.fn((_path: string, value: typeof service) => {
+        service = value;
+      }),
+    };
+    const repo = {
+      findById: vi.fn(async () => ({ board_id: boardId })),
+      resolveUserAccess: vi.fn(async () => access),
+    } as unknown as BoardRepository;
+    setupBoardEffectiveAccessService(app as never, repo);
+    if (!service) throw new Error('effective-access service was not registered');
+    return { service, repo };
+  }
+
+  function params(role: string) {
+    return {
+      route: { id: boardId },
+      user: {
+        user_id: userId,
+        role,
+      },
+    };
+  }
+
+  it('returns the normalized resolver result, including group and filesystem access', async () => {
+    const effective: EffectiveCapabilityPolicyAccess = {
+      capabilities: ['board.view', 'board.edit'],
+      fs_access: 'none',
+      source: 'group',
+      group_ids: ['019f0000-0000-7000-8000-00000000f00d' as never],
+      is_primary_owner: false,
+    };
+    const { service, repo } = install(effective);
+
+    await expect(service.find(params(ROLES.MEMBER))).resolves.toEqual(effective);
+    expect(repo.resolveUserAccess).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when the normalized policy grants no view capability', async () => {
+    const { service } = install({
+      capabilities: [],
+      fs_access: 'none',
+      source: 'others',
+      group_ids: [],
+      is_primary_owner: false,
+    });
+    await expect(service.find(params(ROLES.MEMBER))).rejects.toThrow(/view permission/i);
+  });
+
+  it('retains the configured superadmin bypass without consulting policy rows', async () => {
+    const { service, repo } = install({
+      capabilities: [],
+      fs_access: 'none',
+      source: 'others',
+      group_ids: [],
+      is_primary_owner: false,
+    });
+    await expect(service.find(params(ROLES.SUPERADMIN))).resolves.toMatchObject({
+      capabilities: expect.arrayContaining(['board.view', 'board.edit']),
+      source: 'primary_owner',
+    });
+    expect(repo.resolveUserAccess).not.toHaveBeenCalled();
+  });
+
+  it('requires an authenticated principal', async () => {
+    const { service } = install({
+      capabilities: ['board.view'],
+      fs_access: 'none',
+      source: 'others',
+      group_ids: [],
+      is_primary_owner: false,
+    });
+    await expect(
+      service.find({
+        provider: 'rest',
+        route: { id: boardId },
         user: undefined as never,
       })
     ).rejects.toThrow(/authentication required/i);

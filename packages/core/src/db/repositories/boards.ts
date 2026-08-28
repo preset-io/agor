@@ -12,6 +12,7 @@ import type {
   BoardObject,
   Branch,
   BranchPermissionLevel,
+  EffectiveCapabilityPolicyAccess,
   UserID,
   UUID,
 } from '@agor/core/types';
@@ -577,6 +578,20 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       userId as UserID
     );
     return access.capabilities.includes('board.view');
+  }
+
+  /**
+   * Resolve a user's effective capability-policy access to a board.
+   *
+   * Mirrors `BranchRepository.resolveUserAccess` — the central app-layer
+   * resolver for point checks. Callers that need the full effective-access
+   * payload (not just a single boolean like `canMutate`/`canView`) use this.
+   */
+  async resolveUserAccess(board: Board, userId: UUID): Promise<EffectiveCapabilityPolicyAccess> {
+    return new CapabilityPolicyRepository(this.db).resolveBoardAccess(
+      board.board_id,
+      userId as UserID
+    );
   }
 
   /** Resolve a board only when the caller can currently view it. */
