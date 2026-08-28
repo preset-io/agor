@@ -3380,7 +3380,9 @@ export class GatewayService {
         channel.channel_type === 'discord'
           ? gatewayFailureCode(error)
           : sanitizeGatewayProviderError(error);
-      console.error('[gateway] Failed to send prompt to session:', safeError);
+      console.error(
+        `[gateway] Failed to send prompt to session: channel_id=${channel.id} code=${safeError}`
+      );
       this.sendSystemMessage(channel, data.thread_id, `Error sending prompt: ${safeError}`);
       this.updateProgressAfterCommit({
         session_id: sessionId,
@@ -3545,7 +3547,9 @@ export class GatewayService {
         channel.channel_type === 'discord'
           ? gatewayFailureCode(error)
           : sanitizeGatewayProviderError(error);
-      console.error(`[gateway] Failed to route message to ${channel.channel_type}: ${failure}`);
+      console.error(
+        `[gateway] Failed to route message: channel_id=${channel.id} provider=${channel.channel_type} code=${failure}`
+      );
       return { routed: false, channelType: channel.channel_type };
     }
 
