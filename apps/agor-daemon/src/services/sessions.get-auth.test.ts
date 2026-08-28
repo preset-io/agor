@@ -3,6 +3,7 @@ import {
   generateId,
   RepoRepository,
   SessionRepository,
+  shortId,
   UsersRepository,
 } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
@@ -57,7 +58,7 @@ describe('sessions.get authorization loading', () => {
         provider: 'rest',
         user: { user_id: user.user_id, role: ROLES.MEMBER },
       } as never;
-      const shortSessionId = session.session_id.slice(0, 8) as SessionID;
+      const shortSessionId = shortId(session.session_id) as SessionID;
 
       const createRegisteredService = () => {
         const app = feathers();
