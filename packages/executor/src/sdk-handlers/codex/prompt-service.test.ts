@@ -2360,7 +2360,9 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       );
       expect(JSON.stringify(warn.mock.calls)).not.toContain(sentinel);
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('Auth header resolution failed server_id=')
+        expect.stringContaining(
+          'executor=codex servers=1 credential_unavailable=0 resolution_failed=1'
+        )
       );
     } finally {
       warn.mockRestore();
