@@ -529,6 +529,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           stopCommand: branch.stop_command,
           nukeCommand: branch.nuke_command,
           appUrl: branch.app_url,
+          healthCheckUrl: branch.health_check_url,
         },
       },
       executionUserId,
@@ -2815,8 +2816,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const snapshot = renderBranchSnapshot(
       { slug: repo.slug, environment: env },
       {
+        branch_id: branch.branch_id,
         branch_unique_id: branch.branch_unique_id,
         name: branch.name,
+        ref: branch.ref,
         path: branch.path,
         custom_context: branch.custom_context,
         host_ip_address: hostIpAddress,

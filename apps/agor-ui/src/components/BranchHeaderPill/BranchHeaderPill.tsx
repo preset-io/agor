@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
+import { getEnvironmentAccessUrl } from '../../utils/environmentUrl';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
 import { EnvironmentStatusIcon } from '../EnvironmentPill';
 import { ENTITY_PILL_COLORS } from '../Pill/Pill';
@@ -94,7 +95,7 @@ export function BranchHeaderPill({
   const hasConfig = effectiveEnv.hasConfig;
   const env = branch.environment_instance;
   const inferredState = getEnvironmentState(env);
-  const environmentUrl = branch.app_url;
+  const environmentUrl = getEnvironmentAccessUrl(branch);
   // Surface the active environment variant name on the label instead of the
   // generic "env" — only when the repo defines more than one variant to
   // distinguish (single-variant / v1 repos stay quiet as "env"). Mirrors

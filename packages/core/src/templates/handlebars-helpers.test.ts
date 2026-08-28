@@ -503,6 +503,23 @@ describe('handlebars-helpers', () => {
     });
   });
 
+  describe('shellQuote helper', () => {
+    it('renders one inert POSIX shell word without HTML escaping', () => {
+      const template = Handlebars.compile('{{shellQuote value}}');
+
+      expect(template({ value: "feature/it's-$(not-a-command)" })).toBe(
+        `'feature/it'"'"'s-$(not-a-command)'`
+      );
+    });
+
+    it('quotes empty and non-string values', () => {
+      const template = Handlebars.compile('{{shellQuote value}}');
+
+      expect(template({ value: '' })).toBe("''");
+      expect(template({ value: 42 })).toBe("'42'");
+    });
+  });
+
   // ===== Conditional Helpers =====
 
   describe('eq helper', () => {
@@ -1056,16 +1073,20 @@ NAME={{replace (uppercase branch.name) "-" "_"}}
   describe('buildBranchContext', () => {
     it('should build basic context with all fields', () => {
       const context = buildBranchContext({
+        branch_id: '01999999-1111-7222-8333-444444444444',
         branch_unique_id: 42,
         name: 'my-branch',
+        ref: 'refs/heads/my-branch',
         path: '/path/to/branch',
         repo_slug: 'my-repo',
         custom_context: { foo: 'bar' },
       });
 
       const expectedBranchEntity = {
+        id: '01999999-1111-7222-8333-444444444444',
         unique_id: 42,
         name: 'my-branch',
+        ref: 'refs/heads/my-branch',
         path: '/path/to/branch',
         gid: undefined,
         base_ref: '',
@@ -1083,6 +1104,19 @@ NAME={{replace (uppercase branch.name) "-" "_"}}
         },
         custom: { foo: 'bar' },
       });
+    });
+
+    it('exposes a stable branch id and falls back from a missing ref to the branch name', () => {
+      const context = buildBranchContext({
+        branch_id: '01999999-1111-7222-8333-444444444444',
+        branch_unique_id: 1,
+        name: 'feature-x',
+        path: '/test',
+      });
+
+      expect(renderTemplate('{{branch.id}} {{branch.ref}}', context)).toBe(
+        '01999999-1111-7222-8333-444444444444 feature-x'
+      );
     });
 
     it('should expose base_ref/ref_type under branch.* and the worktree.* alias', () => {

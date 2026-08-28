@@ -19,6 +19,126 @@ import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 
 const MAX_OUTPUT_LINES = ENVIRONMENT.LOGS_MAX_LINES;
+const ENVIRONMENT_RESULT_PREFIX = 'AGOR_ENVIRONMENT_RESULT=';
+const MAX_ENVIRONMENT_RESULT_BYTES = 8 * 1024;
+
+interface EnvironmentCommandResult {
+  access_urls: Array<{ name: string; url: string }>;
+}
+
+function validateEnvironmentCommandResult(value: unknown): EnvironmentCommandResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('environment result must be a JSON object');
+  }
+
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'access_urls')) {
+    throw new Error('environment result contains an unsupported field');
+  }
+  if (!Array.isArray(record.access_urls) || record.access_urls.length === 0) {
+    throw new Error('environment result access_urls must be a non-empty array');
+  }
+  if (record.access_urls.length > 8) {
+    throw new Error('environment result contains too many access URLs');
+  }
+
+  const access_urls = record.access_urls.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error(`environment result access_urls[${index}] must be an object`);
+    }
+    const item = entry as Record<string, unknown>;
+    if (
+      Object.keys(item).some((key) => key !== 'name' && key !== 'url') ||
+      typeof item.name !== 'string' ||
+      item.name.length === 0 ||
+      item.name.length > 64 ||
+      typeof item.url !== 'string' ||
+      item.url.length > 2048
+    ) {
+      throw new Error(`environment result access_urls[${index}] is invalid`);
+    }
+
+    let parsed: URL;
+    try {
+      parsed = new URL(item.url);
+    } catch {
+      throw new Error(`environment result access_urls[${index}].url is invalid`);
+    }
+    if (
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      throw new Error(
+        `environment result access_urls[${index}].url must be an HTTP(S) URL without credentials, query, or fragment`
+      );
+    }
+
+    return { name: item.name, url: parsed.toString() };
+  });
+
+  return { access_urls };
+}
+
+/**
+ * Extract the deliberately tiny, non-secret result protocol emitted by a
+ * repository lifecycle command. The line is removed from persisted command
+ * output; it may contain public/private app locations, never credentials.
+ */
+export function parseEnvironmentCommandOutput(output: string): {
+  output: string;
+  environmentResult?: EnvironmentCommandResult;
+} {
+  const resultLines: string[] = [];
+  const visibleLines: string[] = [];
+
+  for (const line of output.split('\n')) {
+    if (line.startsWith(ENVIRONMENT_RESULT_PREFIX)) {
+      resultLines.push(line.slice(ENVIRONMENT_RESULT_PREFIX.length));
+    } else {
+      visibleLines.push(line);
+    }
+  }
+
+  if (resultLines.length === 0) return { output };
+  if (resultLines.length !== 1) {
+    throw new Error('environment command emitted more than one result line');
+  }
+
+  const encoded = resultLines[0];
+  if (Buffer.byteLength(encoded, 'utf8') > MAX_ENVIRONMENT_RESULT_BYTES) {
+    throw new Error('environment command result exceeds the size limit');
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(encoded);
+  } catch {
+    throw new Error('environment command emitted invalid result JSON');
+  }
+
+  return {
+    output: visibleLines.join('\n'),
+    environmentResult: validateEnvironmentCommandResult(decoded),
+  };
+}
+
+export function startCompletionWithoutContinuousHealth(
+  healthCheckUrl: string | undefined,
+  timestamp: string
+): Record<string, unknown> {
+  if (healthCheckUrl) return {};
+  return {
+    status: 'running',
+    last_health_check: {
+      timestamp,
+      status: 'unknown',
+      message: 'Start command completed; no continuous health URL is configured',
+    },
+  };
+}
 
 function truncateOutput(outputChunks: string[]): string | undefined {
   const fullOutput = outputChunks.join('');
@@ -88,7 +208,7 @@ async function runShellCommand(options: {
   cwd: string;
   env?: Record<string, string>;
   commandType: 'start' | 'stop' | 'nuke' | 'logs';
-}): Promise<{ pid?: number; output?: string }> {
+}): Promise<{ pid?: number; output?: string; environmentResult?: EnvironmentCommandResult }> {
   const { command, cwd, env, commandType } = options;
   assertEnvCommandAllowed(command, commandType);
 
@@ -125,7 +245,16 @@ async function runShellCommand(options: {
     });
   });
 
-  return { pid: child.pid, output: truncateOutput(outputChunks) };
+  const rawOutput = outputChunks.join('');
+  const parsed =
+    commandType === 'start'
+      ? parseEnvironmentCommandOutput(rawOutput)
+      : { output: rawOutput, environmentResult: undefined };
+  return {
+    pid: child.pid,
+    output: truncateOutput([parsed.output]),
+    environmentResult: parsed.environmentResult,
+  };
 }
 
 export async function handleEnvironmentLogs(
@@ -227,9 +356,7 @@ export async function handleEnvironmentLifecycle(
         last_health_check: null,
         last_error: null,
         last_command: null,
-        ...(payload.params.appUrl
-          ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
-          : {}),
+        access_urls: payload.params.appUrl ? [{ name: 'App', url: payload.params.appUrl }] : null,
       });
 
       const result = await runShellCommand({
@@ -239,19 +366,26 @@ export async function handleEnvironmentLifecycle(
         commandType: 'start',
       });
 
+      const accessUrls =
+        result.environmentResult?.access_urls ??
+        (payload.params.appUrl ? [{ name: 'App', url: payload.params.appUrl }] : undefined);
+      const commandCompletedAt = new Date().toISOString();
+
       await updateBranchEnvironment(client, branchId, {
+        ...startCompletionWithoutContinuousHealth(
+          payload.params.healthCheckUrl,
+          commandCompletedAt
+        ),
         process: {
           ...(branch.environment_instance?.process ?? {}),
           pid: result.pid,
           started_at: startedAt,
         },
-        ...(payload.params.appUrl
-          ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
-          : {}),
+        ...(accessUrls ? { access_urls: accessUrls } : {}),
         last_command: {
           action: payload.params.action,
           status: 'succeeded',
-          timestamp: new Date().toISOString(),
+          timestamp: commandCompletedAt,
           message: successMessage(payload.params.action),
           ...(result.output ? { output: result.output } : {}),
         },

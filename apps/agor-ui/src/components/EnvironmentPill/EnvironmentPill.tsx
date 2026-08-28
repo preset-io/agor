@@ -11,6 +11,7 @@ import { Button, Space, Tooltip, theme } from 'antd';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
+import { getEnvironmentAccessUrl } from '../../utils/environmentUrl';
 import { Tag } from '../Tag';
 import { EnvironmentStatusIcon } from './EnvironmentStatusIcon';
 
@@ -54,8 +55,7 @@ export function EnvironmentPill({
     ? undefined
     : "Requires branch 'all' permission or admin access";
 
-  // Get static app_url (user-editable, initialized from template)
-  const environmentUrl = branch.app_url;
+  const environmentUrl = getEnvironmentAccessUrl(branch);
 
   // Surface the active environment variant name on the pill instead of the
   // generic "env" label — but only when the repo actually defines more than one

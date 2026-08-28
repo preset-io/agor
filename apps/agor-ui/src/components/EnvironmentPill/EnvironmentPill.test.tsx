@@ -109,6 +109,26 @@ describe('EnvironmentPill', () => {
     expect(screen.getByText('env').parentElement).toHaveStyle({ cursor: 'default' });
   });
 
+  it('uses a dynamic environment instance URL before the static branch URL', () => {
+    render(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={
+          {
+            ...branch,
+            app_url: 'https://static.example.test',
+            environment_instance: {
+              status: 'running',
+              access_urls: [{ name: 'App', url: 'https://dynamic.example.test' }],
+            },
+          } as Branch
+        }
+      />
+    );
+
+    expect(screen.getByRole('link')).toHaveAttribute('href', 'https://dynamic.example.test');
+  });
+
   it('shows a pointer only for an enabled configure control', () => {
     const { rerender } = render(<EnvironmentPill {...defaultProps} />);
 

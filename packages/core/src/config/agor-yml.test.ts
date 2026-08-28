@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { renderBranchSnapshot } from '../environment/render-snapshot';
 import type { RepoEnvironment, RepoEnvironmentConfigV1 } from '../types/branch';
 import { parseAgorYml, resolveVariant, writeAgorYml } from './agor-yml';
 
@@ -266,6 +267,29 @@ describe('parseAgorYml — misc', () => {
 });
 
 describe('parseAgorYml — repo .agor.yml demo variants', () => {
+  it('renders the experimental Codespaces launcher with shell-quoted exact identity and ref', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    const snapshot = renderBranchSnapshot(
+      { slug: 'preset-io/agor', environment: env! },
+      {
+        branch_id: '01999999-1111-7222-8333-444444444444',
+        branch_unique_id: 42,
+        name: 'safe-display-name',
+        ref: "feature/it's-$(not-a-command)",
+        path: '/worktree',
+      },
+      'codespaces-sqlite'
+    );
+
+    expect(snapshot?.start).toContain("--repository 'preset-io/agor'");
+    expect(snapshot?.start).toContain("--ref 'feature/it'\"'\"'s-$(not-a-command)'");
+    expect(snapshot?.start).toContain("--binding '01999999-1111-7222-8333-444444444444'");
+    expect(snapshot?.health).toBeUndefined();
+    expect(snapshot?.app).toBeUndefined();
+  });
+
   it('renders HA as the auth-resolved multi-tenant development profile', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML);
     expect(env).not.toBeNull();
