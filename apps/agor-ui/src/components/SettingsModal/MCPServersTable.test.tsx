@@ -573,6 +573,48 @@ async function chooseSelect(label: string, option: string): Promise<void> {
   fireEvent.click(optionContent);
 }
 
+describe('MCPServersTable transport form state', { timeout: ANT_FORM_INTEGRATION_TIMEOUT }, () => {
+  it('does not submit preserved remote fields after switching the create form to stdio', async () => {
+    const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+
+    fireEvent.change(screen.getByLabelText('Name (Internal ID)'), {
+      target: { value: 'transport-switch-server' },
+    });
+    await chooseSelect('Transport', 'HTTP');
+    fireEvent.change(await screen.findByLabelText('URL'), {
+      target: { value: 'https://stale-remote.example/mcp' },
+    });
+    await chooseSelect('Auth Type', 'Bearer Token');
+    fireEvent.change(await screen.findByLabelText('Token'), {
+      target: { value: 'stale-remote-token' },
+    });
+    fireEvent.click(screen.getByText('Advanced Configuration'));
+    fireEvent.change(await screen.findByLabelText('Custom HTTP Headers'), {
+      target: { value: '{"X-Stale":"remote"}' },
+    });
+
+    await chooseSelect('Transport', 'stdio (Local process)');
+    fireEvent.change(await screen.findByLabelText('Command'), {
+      target: { value: 'mcp-server-shortcut' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(seam.onCreate).toHaveBeenCalledOnce());
+    const submitted = seam.onCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(submitted).toMatchObject({
+      name: 'transport-switch-server',
+      transport: 'stdio',
+      command: 'mcp-server-shortcut',
+      args: [],
+    });
+    expect(submitted).not.toHaveProperty('url');
+    expect(submitted).not.toHaveProperty('headers');
+    expect(submitted).not.toHaveProperty('auth');
+  });
+});
+
 describe('MCPServersTable open-dialog authority transitions', {
   timeout: AUTHORITY_TRANSITION_TIMEOUT,
 }, () => {

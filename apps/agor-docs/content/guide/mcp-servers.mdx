@@ -17,7 +17,7 @@ For unsupported schemes, configure the server in **Settings → MCP Servers**. C
 
 An stdio configuration uses only its command, arguments, and environment. HTTP/SSE authentication, URL, and custom-header fields do not apply. Agor does not download the command: it must already be available in the actual executor environment, which may differ from the daemon host. Store a per-user token in **Settings → Environment Variables**, then reference it from the server environment, for example `{"SHORTCUT_API_TOKEN":"{{ user.env.SHORTCUT_API_TOKEN }}"}`. The managed value is encrypted and resolved only for the authenticated user whose task is running; do not paste the token directly into the MCP server definition.
 
-Upgrading Agor removes obsolete remote-auth, URL, and header fields from existing stdio rows while preserving their command, arguments, environment, ownership, and session attachments. Editing an stdio server performs the same repair. This keeps strict transport validation in place rather than allowing mixed local/remote configurations at runtime.
+Upgrading Agor removes obsolete remote-auth, URL, and header fields from existing stdio rows while preserving their command, arguments, environment, ownership, and session attachments. It also deletes OAuth grants and pending OAuth attempts that cannot apply to an stdio process; credentials for remote servers are unchanged. Editing an stdio server performs the same repair. This keeps strict transport validation in place rather than allowing mixed local/remote configurations at runtime. If you later switch that server to remote OAuth, sign in again.
 
 ## Safe edits, storage, and removal
 
