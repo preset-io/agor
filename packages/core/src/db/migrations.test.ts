@@ -1015,3 +1015,81 @@ describe('MCP catalog install identity migration', () => {
     expect(postgres).toContain('coalesce("owner_user_id",\'\')');
   });
 });
+
+describe('MCP stdio transport repair migrations', () => {
+  it('removes only remote fields from SQLite stdio rows', async () => {
+    const client = createClient({ url: ':memory:' });
+    await client.executeMultiple(`
+      CREATE TABLE mcp_servers (
+        mcp_server_id text PRIMARY KEY,
+        transport text NOT NULL,
+        tenant_id text NOT NULL,
+        data text NOT NULL
+      );
+      INSERT INTO mcp_servers VALUES (
+        'legacy-stdio',
+        'stdio',
+        'tenant-a',
+        '{"command":"mcp-server-shortcut","args":[""],"env":{"SHORTCUT_API_TOKEN":"{{ user.env.SHORTCUT_API_TOKEN }}"},"auth":{"type":"bearer","token":"obsolete"},"url":"https://unused.example","headers":{"X-Unused":"obsolete"},"config_version":7}'
+      );
+      INSERT INTO mcp_servers VALUES (
+        'clean-stdio',
+        'stdio',
+        'tenant-b',
+        '{"command":"other-server","env":{"TOKEN":"{{ user.env.OTHER_TOKEN }}"}}'
+      );
+      INSERT INTO mcp_servers VALUES (
+        'remote',
+        'http',
+        'tenant-a',
+        '{"url":"https://mcp.example.com","headers":{"X-Key":"kept"},"auth":{"type":"bearer","token":"kept"}}'
+      );
+    `);
+
+    const migration = await readFile(
+      new URL('../../drizzle/sqlite/0099_strip_stdio_remote_fields.sql', import.meta.url),
+      'utf8'
+    );
+    await client.executeMultiple(migration.replaceAll('--> statement-breakpoint', ''));
+
+    const rows = await client.execute(
+      'SELECT mcp_server_id, tenant_id, data FROM mcp_servers ORDER BY mcp_server_id'
+    );
+    const decoded = Object.fromEntries(
+      rows.rows.map((row) => [row.mcp_server_id, JSON.parse(row.data as string)])
+    );
+    expect(decoded['legacy-stdio']).toEqual({
+      command: 'mcp-server-shortcut',
+      args: [''],
+      env: { SHORTCUT_API_TOKEN: '{{ user.env.SHORTCUT_API_TOKEN }}' },
+      config_version: 7,
+    });
+    expect(decoded['clean-stdio']).toEqual({
+      command: 'other-server',
+      env: { TOKEN: '{{ user.env.OTHER_TOKEN }}' },
+    });
+    expect(decoded.remote).toEqual({
+      url: 'https://mcp.example.com',
+      headers: { 'X-Key': 'kept' },
+      auth: { type: 'bearer', token: 'kept' },
+    });
+    expect(rows.rows.map((row) => [row.mcp_server_id, row.tenant_id])).toEqual([
+      ['clean-stdio', 'tenant-b'],
+      ['legacy-stdio', 'tenant-a'],
+      ['remote', 'tenant-a'],
+    ]);
+    client.close();
+  });
+
+  it('applies the same transport-bounded repair in PostgreSQL', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0096_strip_stdio_remote_fields.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toContain(`SET "data" = "data" - 'auth' - 'url' - 'headers'`);
+    expect(migration).toContain(`WHERE "transport" = 'stdio'`);
+    expect(migration).not.toMatch(/DELETE\s+FROM/i);
+    expect(migration).not.toContain('tenant_id =');
+  });
+});
