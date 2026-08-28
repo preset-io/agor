@@ -2777,7 +2777,7 @@ describe('GatewayService Discord beta routing', () => {
     }
   );
 
-  it('does not apply Teams queue authority requirements to direct Discord admission', async () => {
+  it('accepts direct Discord with an event identity but rejects missing identity under durable ownership', async () => {
     const { service, promptCreate } = makeGatewayHarness({
       channel: discordChannel,
       existingMapping: null,
@@ -2813,6 +2813,11 @@ describe('GatewayService Discord beta routing', () => {
         gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000099' as never,
       })
     ).resolves.toMatchObject({ success: true, created: true });
+    expect(promptCreate).toHaveBeenCalledOnce();
+
+    await expect(service.create(validDiscordInbound())).rejects.toThrow(
+      'Direct gateway inbound delivery is unsupported on PostgreSQL without a provider event identity'
+    );
     expect(promptCreate).toHaveBeenCalledOnce();
   });
 

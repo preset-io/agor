@@ -2175,11 +2175,7 @@ export class GatewayService {
         'Gateway inbound event authority must be verified by the Teams queue or listener'
       );
     }
-    if (
-      channel.channel_type === 'teams' &&
-      durableListenerOwnership &&
-      !data.gateway_inbound_event_id
-    ) {
+    if (durableListenerOwnership && !data.gateway_inbound_event_id) {
       throw new Error(
         'Direct gateway inbound delivery is unsupported on PostgreSQL without a provider event identity'
       );
