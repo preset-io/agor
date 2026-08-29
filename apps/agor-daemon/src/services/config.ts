@@ -248,7 +248,7 @@ export class ConfigService {
     // comparing it with the Session owner would reject the intended
     // collaborator path. Execution-home Sessions retain the historical owner
     // home and therefore still require the comparison below.
-    if (session?.sdk_home_scope === 'branch') return;
+    if (tool === 'codex' && session?.sdk_home_scope === 'branch') return;
     const ownerUserId = session?.created_by;
     if (!ownerUserId || ownerUserId === promptingUserId) return;
 
