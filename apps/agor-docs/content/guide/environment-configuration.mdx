@@ -82,7 +82,8 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
 | `{{branch.base_ref}}` | Branch | `main` | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
 | `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`. |
-| `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
+| `{{repo.slug}}` | Repo | `superset` | Agor's local repository slug, used in managed paths and UI. It is not guaranteed to include a provider owner. |
+| `{{repo.github_slug}}` | Repo | `apache/superset` | Credential-free GitHub `owner/repository` identity derived from the registered `github.com` remote. Empty for non-GitHub or unknown remotes. |
 | `{{host.ip_address}}` | Auto-detected | `10.0.1.42` | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect. |
 | `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `branch.custom_context`. |
 | `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}` | Repo-wide fallback if the branch doesn't set a key. |

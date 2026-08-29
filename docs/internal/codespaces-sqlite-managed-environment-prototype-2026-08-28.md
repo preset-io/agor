@@ -513,6 +513,12 @@ argv/JSON-stdin transport of shell-looking refs. Its atomic local lock directory
 duplicate-Play window only for processes sharing one launcher state directory and PID namespace;
 it is not a distributed lock.
 
+The variant passes `repo.github_slug`, a credential-free `owner/repository` identity derived at
+render time from Agor's sanitized registered `github.com` remote. It intentionally does not use
+`repo.slug`: that value is Agor's local path/UI identifier and may be only `agor`. Non-GitHub and
+unknown remotes render an empty provider identity, so the launcher fails closed before calling the
+GitHub API instead of targeting a coincidentally same-named GitHub repository.
+
 Command run:
 
 ```text

@@ -272,7 +272,13 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(env).not.toBeNull();
 
     const snapshot = renderBranchSnapshot(
-      { slug: 'preset-io/agor', environment: env! },
+      {
+        // Agor's slug is a local identifier and is not necessarily the
+        // provider's owner/repository identity.
+        slug: 'agor',
+        remote_url: 'https://github.com/preset-io/agor.git',
+        environment: env!,
+      },
       {
         branch_id: '01999999-1111-7222-8333-444444444444',
         branch_unique_id: 42,
@@ -289,6 +295,30 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(snapshot?.start).toContain('--emit-health public-only');
     expect(snapshot?.health).toBeUndefined();
     expect(snapshot?.app).toBe('https://github.com/codespaces');
+  });
+
+  it('does not render a same-named non-GitHub repository as a GitHub target', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    const snapshot = renderBranchSnapshot(
+      {
+        slug: 'agor',
+        remote_url: 'https://gitlab.com/preset-io/agor.git',
+        environment: env!,
+      },
+      {
+        branch_id: '01999999-1111-7222-8333-444444444444',
+        branch_unique_id: 42,
+        name: 'safe-display-name',
+        ref: 'feature/test',
+        path: '/worktree',
+      },
+      'codespaces-sqlite'
+    );
+
+    expect(snapshot?.start).toContain("--repository ''");
+    expect(snapshot?.start).not.toContain('preset-io/agor');
   });
 
   it('renders HA as the auth-resolved multi-tenant development profile', () => {

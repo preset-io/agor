@@ -1079,6 +1079,7 @@ NAME={{replace (uppercase branch.name) "-" "_"}}
         ref: 'refs/heads/my-branch',
         path: '/path/to/branch',
         repo_slug: 'my-repo',
+        repo_github_slug: 'owner/my-repo',
         custom_context: { foo: 'bar' },
       });
 
@@ -1098,6 +1099,7 @@ NAME={{replace (uppercase branch.name) "-" "_"}}
         worktree: expectedBranchEntity,
         repo: {
           slug: 'my-repo',
+          github_slug: 'owner/my-repo',
         },
         host: {
           ip_address: '',
@@ -1178,7 +1180,7 @@ NAME={{replace (uppercase branch.name) "-" "_"}}
         path: '/test',
       });
 
-      expect(context.repo).toEqual({ slug: '' });
+      expect(context.repo).toEqual({ slug: '', github_slug: '' });
     });
 
     it('should handle missing custom_context', () => {

@@ -329,6 +329,9 @@ export function renderTemplate(
  *   (the "Base Branch"/"Base Tag" from the create dialog). Empty string if unknown.
  * - {{branch.ref_type}} - 'branch' | 'tag': whether base_ref names a branch or a tag
  * - {{repo.slug}} - Repository slug
+ * - {{repo.github_slug}} - Credential-free GitHub owner/repository identity
+ *   derived from the registered github.com remote. Empty for other providers
+ *   or when the remote is unknown.
  * - {{host.ip_address}} - Primary non-loopback IPv4 of the daemon host
  *   (for health checks/URLs that must reach the host from inside a container).
  *   Frozen at branch creation time. Empty string if not resolved.
@@ -347,6 +350,7 @@ export function buildBranchContext(branch: {
   ref?: string;
   path: string;
   repo_slug?: string;
+  repo_github_slug?: string;
   custom_context?: Record<string, unknown>;
   host_ip_address?: string;
   base_ref?: string;
@@ -369,6 +373,7 @@ export function buildBranchContext(branch: {
     worktree: branchEntity,
     repo: {
       slug: branch.repo_slug || '',
+      github_slug: branch.repo_github_slug || '',
     },
     host: {
       ip_address: branch.host_ip_address || '',
