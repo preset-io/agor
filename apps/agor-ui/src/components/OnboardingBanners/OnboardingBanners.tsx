@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import {
   BannerDecision,
+  credentialRemediationTarget,
   decideBanner,
   hasConfiguredCredentialFor,
   ProbeState,
@@ -306,11 +307,18 @@ export function OnboardingBanners({
     credentialWarningDismissed:
       credentialWarningSnoozedUntil !== null && credentialWarningSnoozedUntil > Date.now(),
   });
-  const workspaceManagedForMember = credentialOwner === 'tenant' && !canManageWorkspaceCredentials;
+  const remediationTarget = credentialRemediationTarget(
+    credentialOwner,
+    probeSettings?.resolution_policy,
+    canManageWorkspaceCredentials
+  );
+  const workspaceManagedForMember = remediationTarget === 'workspace-admin';
+  const personalOverrideForWorkspaceFallback =
+    credentialOwner === 'tenant' && remediationTarget === 'user';
   const openCredentialSettings = workspaceManagedForMember
     ? undefined
     : () =>
-        credentialOwner === 'tenant'
+        remediationTarget === 'tenant'
           ? onOpenWorkspaceSettings('agentic-tools')
           : onOpenUserSettings(probeAgent);
 
@@ -323,9 +331,17 @@ export function OnboardingBanners({
           message={
             workspaceManagedForMember
               ? `${displayName} is managed by your workspace but isn't connected. Ask a workspace admin to configure it before starting ${displayName} sessions.`
-              : `${displayName} isn't connected. New ${displayName} sessions won't run until you configure it.`
+              : personalOverrideForWorkspaceFallback
+                ? `${displayName} isn't connected through the workspace fallback. Add a personal credential to use for your ${displayName} sessions.`
+                : `${displayName} isn't connected. New ${displayName} sessions won't run until you configure it.`
           }
-          buttonLabel={workspaceManagedForMember ? undefined : `Open ${displayName} settings`}
+          buttonLabel={
+            workspaceManagedForMember
+              ? undefined
+              : personalOverrideForWorkspaceFallback
+                ? `Add personal ${displayName} credential`
+                : `Open ${displayName} settings`
+          }
           onClick={openCredentialSettings}
           docsHref="https://agor.live/guide"
           onDismiss={dismissCredentialWarning}
@@ -338,9 +354,17 @@ export function OnboardingBanners({
           message={
             workspaceManagedForMember
               ? `${displayName} rejected the workspace-managed credential. Ask a workspace admin to update it before starting new ${displayName} sessions.`
-              : `${displayName} rejected the configured credential. New ${displayName} sessions will fail until you update it.`
+              : personalOverrideForWorkspaceFallback
+                ? `${displayName} rejected the workspace fallback credential. Add a personal credential to use for your ${displayName} sessions.`
+                : `${displayName} rejected the configured credential. New ${displayName} sessions will fail until you update it.`
           }
-          buttonLabel={workspaceManagedForMember ? undefined : `Review ${displayName} settings`}
+          buttonLabel={
+            workspaceManagedForMember
+              ? undefined
+              : personalOverrideForWorkspaceFallback
+                ? `Add personal ${displayName} credential`
+                : `Review ${displayName} settings`
+          }
           onClick={openCredentialSettings}
           onDismiss={dismissCredentialWarning}
           dismissLabel={`Snooze ${displayName} warning for 24 hours`}

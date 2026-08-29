@@ -287,6 +287,35 @@ describe('OnboardingBanners probe effect', () => {
     expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
   });
 
+  it('lets a member override a rejected workspace fallback under user-preferred policy', async () => {
+    agorStore.getState().setAgenticToolSettings([
+      {
+        tool: 'claude-code',
+        enabled: true,
+        resolution_policy: 'user_preferred',
+        inline_configuration_allowed: true,
+        connection: { ANTHROPIC_API_KEY: { configured: true } },
+      },
+    ]);
+    const onOpenUserSettings = vi.fn();
+    const onOpenWorkspaceSettings = vi.fn();
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('member-1', { role: 'member', agentic_tools: {} }),
+          onOpenUserSettings,
+          onOpenWorkspaceSettings,
+          onCheckAuth: async () => result('unauthenticated'),
+        })}
+      />
+    );
+
+    expect(await screen.findByText(/rejected the workspace fallback credential/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Add personal Claude Code credential' }));
+    expect(onOpenUserSettings).toHaveBeenCalledWith('claude-code');
+    expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
+  });
+
   it('routes user-preferred credential failures to the selected user tool tab', async () => {
     agorStore.getState().setAgenticToolSettings([
       {

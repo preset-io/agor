@@ -10,11 +10,12 @@
 import type {
   AgenticToolName,
   AuthCheckStatus,
+  ProviderResolutionPolicy,
   TenantAgenticToolName,
   TenantAgenticToolSettings,
   User,
 } from '@agor-live/client';
-import { PROVIDER_CREDENTIAL_FIELDS } from '@agor-live/client';
+import { DEFAULT_PROVIDER_RESOLUTION_POLICY, PROVIDER_CREDENTIAL_FIELDS } from '@agor-live/client';
 import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 
 function credentialFieldsFor(tool: AgenticToolName): readonly string[] {
@@ -91,6 +92,30 @@ export function resolvedCredentialOwner(
     default:
       return hasUserCredential || !hasTenantCredential ? 'user' : 'tenant';
   }
+}
+
+export type CredentialRemediationTarget = 'user' | 'tenant' | 'workspace-admin';
+
+/**
+ * Where the caller can actually repair the selected connection.
+ *
+ * Effective ownership and remediation authority differ for a member using a
+ * workspace fallback under `user_preferred`: the current connection is tenant
+ * owned, but adding a personal credential takes precedence and is actionable.
+ */
+export function credentialRemediationTarget(
+  effectiveOwner: 'user' | 'tenant',
+  resolutionPolicy: ProviderResolutionPolicy | undefined,
+  canManageWorkspaceCredentials: boolean
+): CredentialRemediationTarget {
+  if (effectiveOwner === 'user') return 'user';
+  if (canManageWorkspaceCredentials) return 'tenant';
+  if (
+    (resolutionPolicy ?? DEFAULT_PROVIDER_RESOLUTION_POLICY) === DEFAULT_PROVIDER_RESOLUTION_POLICY
+  ) {
+    return 'user';
+  }
+  return 'workspace-admin';
 }
 
 /**

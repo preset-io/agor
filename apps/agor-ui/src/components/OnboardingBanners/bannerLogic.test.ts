@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BannerDecision,
   type BannerDecisionInput,
+  credentialRemediationTarget,
   decideBanner,
   hasConfiguredCredentialFor,
   ProbeState,
@@ -274,5 +275,15 @@ describe('hasConfiguredCredentialFor — active policy route', () => {
     expect(
       resolvedCredentialOwner(asUser({}), 'claude-code', settings('user_preferred', true))
     ).toBe('tenant');
+  });
+
+  it('separates effective tenant ownership from a user-preferred member override', () => {
+    expect(credentialRemediationTarget('tenant', 'user_preferred', false)).toBe('user');
+    expect(credentialRemediationTarget('tenant', 'tenant_preferred', false)).toBe(
+      'workspace-admin'
+    );
+    expect(credentialRemediationTarget('tenant', 'tenant_required', false)).toBe('workspace-admin');
+    expect(credentialRemediationTarget('tenant', 'user_preferred', true)).toBe('tenant');
+    expect(credentialRemediationTarget('user', 'tenant_preferred', false)).toBe('user');
   });
 });

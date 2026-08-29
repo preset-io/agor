@@ -191,8 +191,10 @@ New copy identifies the affected tool:
 
 The action opens or reviews that tool's user/workspace settings. When the
 active route is workspace-owned and the caller is not an administrator, the
-banner instead explains that a workspace admin must act and does not link to
-personal settings that the resolution policy will ignore. The close
+remediation follows policy rather than ownership alone: `tenant_required` and
+an active `tenant_preferred` credential explain that a workspace admin must
+act, while `user_preferred` offers personal settings because a new personal
+credential takes precedence over the rejected workspace fallback. The close
 button has an agent-specific accessible name and snoozes the warning for 24
 hours. Persistence is local-browser, versioned, and scoped by user ID plus
 tool. Expired/malformed values are removed. A local credential save clears the
