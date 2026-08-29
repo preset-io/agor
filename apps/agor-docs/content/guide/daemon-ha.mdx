@@ -64,7 +64,10 @@ its native credential file cannot currently be separated from its writable XDG
 state. Local Codex subscription auth is supported only with the per-user
 sandbox: each replica opens the exact caller's persistent `auth.json` and
 projects that pinned inode into the branch home for one executor without
-copying it. A delegated substrate owns any equivalent credential overlay. The
+copying it. Credential replacement/logout records a durable termination request
+for every affected actor Task, including Tasks owned by another replica; the
+owning executor cooperatively quiesces through the normal HA termination path.
+A delegated substrate owns any equivalent credential overlay. The
 tree needs the **same shared-storage and
 `cross-replica-flock` guarantee documented above for `homes/`**: a prompt or
 Task dispatched to replica B must see exactly what replica A wrote, and

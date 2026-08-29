@@ -646,4 +646,61 @@ describe('ConfigService.resolveApiKey', () => {
     ).rejects.toBeInstanceOf(Forbidden);
     expect(homeMocks.resolveExecutionCredentialHome).toHaveBeenCalledTimes(2);
   });
+
+  it('uses the foreign Task actor native auth for a branch-scoped Codex Session', async () => {
+    configMocks.resolveApiKey.mockResolvedValue({
+      apiKey: null,
+      source: 'user',
+      useNativeAuth: true,
+    });
+    const service = new ConfigService(
+      {} as never,
+      {
+        multi_tenancy: { mode: 'static' },
+        execution: { unix_user_mode: 'sandbox' },
+      } as never
+    );
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'prompter-1' as UserID,
+              session_id: 'session-1',
+            })),
+          };
+        }
+        if (name === 'sessions') {
+          return {
+            get: vi.fn(async () => ({
+              agentic_tool: 'codex',
+              created_by: 'owner-2',
+              sdk_home_scope: 'branch',
+            })),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+        {
+          provider: 'socketio',
+          user: { user_id: 'prompter-1' },
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              session_id: 'session-1',
+            },
+          },
+        } as never
+      )
+    ).resolves.toMatchObject({ useNativeAuth: true });
+    expect(homeMocks.resolveExecutionCredentialHome).not.toHaveBeenCalled();
+  });
 });

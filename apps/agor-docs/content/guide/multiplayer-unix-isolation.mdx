@@ -77,8 +77,10 @@ an empty `auth.json` mountpoint in the branch Codex home. Codex refreshes the
 caller's credential file in place, while no credential bytes are copied into
 branch-owned storage. This requires `home_mode: per_user`, functional
 `--bind-fd`, and bubblewrap 0.12.0 or newer; Agor fails closed without that
-boundary. A reviewed delegated launcher may provide an equivalent
-caller-scoped overlay.
+boundary. Importing replacement credentials or logging out durably requests
+termination of that actor's live branch-scoped Codex Tasks: their sandboxes
+pin the prior inode, and the next prompt must bind the new pathname. A reviewed
+delegated launcher may provide an equivalent caller-scoped overlay.
 
 ### Web terminals
 

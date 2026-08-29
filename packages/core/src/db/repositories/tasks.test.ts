@@ -983,6 +983,55 @@ describe('TaskRepository.findRunning', () => {
   });
 });
 
+describe('TaskRepository.findExecutingByCreator', () => {
+  dbTest('returns every executing state for only the immutable prompt actor', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const users = new UsersRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const actor = await users.create({ email: `actor-${generateId()}@example.com`, name: 'Actor' });
+    const other = await users.create({ email: `other-${generateId()}@example.com`, name: 'Other' });
+
+    for (const status of [
+      TaskStatus.DISPATCHING,
+      TaskStatus.RUNNING,
+      TaskStatus.STOPPING,
+      TaskStatus.AWAITING_PERMISSION,
+      TaskStatus.AWAITING_INPUT,
+    ]) {
+      await taskRepo.create(
+        createTaskData({ session_id: sessionId, created_by: actor.user_id, status })
+      );
+    }
+    await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        created_by: actor.user_id,
+        status: TaskStatus.COMPLETED,
+      })
+    );
+    await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        created_by: other.user_id,
+        status: TaskStatus.RUNNING,
+      })
+    );
+
+    const executing = await taskRepo.findExecutingByCreator(actor.user_id);
+    expect(executing).toHaveLength(5);
+    expect(executing.every((task) => task.created_by === actor.user_id)).toBe(true);
+    expect(new Set(executing.map((task) => task.status))).toEqual(
+      new Set([
+        TaskStatus.DISPATCHING,
+        TaskStatus.RUNNING,
+        TaskStatus.STOPPING,
+        TaskStatus.AWAITING_PERMISSION,
+        TaskStatus.AWAITING_INPUT,
+      ])
+    );
+  });
+});
+
 // ============================================================================
 // FindByStatus
 // ============================================================================

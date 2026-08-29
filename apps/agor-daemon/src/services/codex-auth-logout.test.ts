@@ -39,8 +39,13 @@ function makeApp(
   return { app: { get: () => loadConfigSyncMock(), service: () => usersService }, usersService };
 }
 
-function service(app: { service: () => unknown }) {
-  const delegate = createCodexAuthLogoutService(app as never, TEST_DB);
+function service(app: { service: () => unknown }, invalidateCredentialBinds = vi.fn()) {
+  const delegate = createCodexAuthLogoutService(
+    app as never,
+    TEST_DB,
+    undefined,
+    invalidateCredentialBinds
+  );
   return {
     create: (...args: Parameters<typeof delegate.create>) =>
       runWithTenantContext('tenant-test', () => delegate.create(...args)),
@@ -64,7 +69,8 @@ describe('codex-auth-logout', () => {
 
   it('deletes the login and clears the codex method for the caller only', async () => {
     const { app, usersService } = makeApp();
-    const result = await service(app).create({}, AUTH_PARAMS);
+    const invalidateCredentialBinds = vi.fn(async () => undefined);
+    const result = await service(app, invalidateCredentialBinds).create({}, AUTH_PARAMS);
 
     expect(deleteCodexAuthCredentialMock).toHaveBeenCalledWith({
       delegatedHomeKey: null,
@@ -81,6 +87,11 @@ describe('codex-auth-logout', () => {
       expect.objectContaining({ authenticated: true })
     );
     expect(result).toEqual({ status: 'removed' });
+    expect(invalidateCredentialBinds).toHaveBeenCalledWith({
+      tenantId: 'tenant-test',
+      userId: 'user-1',
+      reason: 'credentials_removed',
+    });
   });
 
   it('is idempotent — deletes and clears regardless of prior state', async () => {

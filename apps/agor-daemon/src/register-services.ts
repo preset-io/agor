@@ -118,6 +118,7 @@ import {
   resolveBranchSdkHomeLaunch,
   sessionUsesBranchSdkHome,
 } from './branch-sdk-home.js';
+import { invalidateLiveBranchCodexCredentialBinds } from './codex-auth-bind-invalidation.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -776,8 +777,19 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // method to subscription. Token material never leaves the daemon.
   const codexDeviceAttempts =
     ctx.deployment.mode === 'ha' ? new CodexDeviceAuthAttemptAuthority(db) : undefined;
+  const invalidateCodexCredentialBinds = (input: {
+    tenantId: string;
+    userId: UserID;
+    reason: 'credentials_imported' | 'credentials_removed';
+  }) =>
+    hasSecureLocalCredentialOverlay(config)
+      ? invalidateLiveBranchCodexCredentialBinds({ app, db, ...input })
+      : Promise.resolve();
 
-  app.use('/codex-auth/import', createCodexAuthImportService(app, db, codexDeviceAttempts));
+  app.use(
+    '/codex-auth/import',
+    createCodexAuthImportService(app, db, codexDeviceAttempts, invalidateCodexCredentialBinds)
+  );
   app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
 
   // ChatGPT device-code sign-in: create starts an attempt (code + verification
@@ -786,8 +798,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use(
     '/codex-auth/device',
     codexDeviceAttempts
-      ? createDurableCodexDeviceAuthService(app, db, codexDeviceAttempts)
-      : createCodexDeviceAuthService(app, db)
+      ? createDurableCodexDeviceAuthService(
+          app,
+          db,
+          codexDeviceAttempts,
+          undefined,
+          invalidateCodexCredentialBinds
+        )
+      : createCodexDeviceAuthService(app, db, invalidateCodexCredentialBinds)
   );
   app.service('/codex-auth/device').hooks({
     before: { create: [ctx.requireAuth], find: [ctx.requireAuth], remove: [ctx.requireAuth] },
@@ -797,7 +815,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // credential route and clears the stored auth method (emitting `patched` so the
   // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
   // grant, so other machines stay signed in.
-  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db, codexDeviceAttempts));
+  app.use(
+    '/codex-auth/logout',
+    createCodexAuthLogoutService(app, db, codexDeviceAttempts, invalidateCodexCredentialBinds)
+  );
   app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().

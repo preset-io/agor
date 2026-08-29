@@ -237,7 +237,7 @@ function observeExitCallback(
 }
 
 export interface RunExecutorCommandOptions
-  extends Omit<SpawnExecutorOptions, 'onExit' | 'onSpawn'> {
+  extends Omit<SpawnExecutorOptions, 'localSandboxFileBinds' | 'onExit' | 'onSpawn'> {
   /** Built-in call-specific timeout; config `timeout_ms.by_command` may override it. */
   timeoutMs?: number;
   /** Suppress child stdout/stderr logs for credential-sensitive operations. */
@@ -1265,7 +1265,8 @@ function requestExecutorLocal(
     spawnCommand = sandboxLocalExecutorCommand(
       payload,
       { cmd, args, env: envWithDaemonUrl },
-      logPrefix
+      logPrefix,
+      undefined
     );
   } catch (error) {
     response.fail({
