@@ -55,6 +55,7 @@ import {
 } from '../executor-tracking.js';
 import { withResolvedConfig } from './build-resolved-config-slice.js';
 import { buildSandboxWrap, type SandboxRuntimePaths } from './sandbox-wrap.js';
+import { buildTrustedLauncherEnvironment } from './trusted-launcher-environment.js';
 
 let configuredDaemonUrl: string | null = null;
 
@@ -88,20 +89,7 @@ function withDaemonExecutorEnv(
  * daemon-internal secrets stay withheld.
  */
 function resolveTemplateLauncherEnvironment(logLevel: string): Record<string, string> {
-  return {
-    ...buildAllowlistedEnv(),
-    ...launcherCredentialEnvironment(),
-    LOG_LEVEL: logLevel,
-  };
-}
-
-// AGOR_CLOUD_* runtime-service credentials the delegated launcher authenticates with.
-function launcherCredentialEnvironment(): Record<string, string> {
-  const credentials: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value !== undefined && key.startsWith('AGOR_CLOUD_')) credentials[key] = value;
-  }
-  return credentials;
+  return buildTrustedLauncherEnvironment(logLevel);
 }
 
 /** Set the daemon URL for executor payloads. Call once at daemon startup. */
