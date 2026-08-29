@@ -14,6 +14,7 @@ import {
   RepoRepository,
   UsersRepository,
 } from '@agor/core/db';
+import { BadRequest } from '@agor/core/feathers';
 import type { Board, BoardID, BranchID, UUID } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -62,6 +63,17 @@ function createBranchData(overrides?: { branch_id?: BranchID; repo_id?: UUID; na
 }
 
 describe('BoardsService - Custom Methods', () => {
+  dbTest('rejects a client-supplied board id that is not UUIDv7', async ({ db }) => {
+    const service = new BoardsService(db);
+
+    await expect(
+      service.create({
+        board_id: '00000000-0000-4000-8000-000000000001' as BoardID,
+        name: 'Non-canonical board',
+      })
+    ).rejects.toBeInstanceOf(BadRequest);
+  });
+
   dbTest('toBlob should export board to JSON blob', async ({ db }) => {
     const service = new BoardsService(db);
 

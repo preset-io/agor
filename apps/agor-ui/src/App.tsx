@@ -93,14 +93,20 @@ import {
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import type { CreateRepoOptions } from './types';
 import { cloneErrorHint } from './utils/cloneErrorHint';
-import { enrichAuthenticatedUser } from './utils/currentUserAuthority';
+import {
+  enrichAuthenticatedUser,
+  hasObservedOnboardingCompletion,
+} from './utils/currentUserAuthority';
 import { isMobileDevice } from './utils/deviceDetection';
 import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
 import {
   buildDeferredOnboardingPreferences,
+  buildRestartedOnboardingPreferences,
+  buildResumedOnboardingPreferences,
   isOnboardingDeferred,
+  type OnboardingReopenMode,
 } from './utils/onboardingLifecycle';
 import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
@@ -594,6 +600,13 @@ function AppContent() {
     user,
     authenticatedUserCanListUsers ? storedCurrentUser : null
   );
+  // Authentication owns the open gate, but a same-user realtime directory
+  // `true` is safe as a close-only terminal signal from another tab. Directory
+  // `false` can never undo an authenticated completion or open the wizard.
+  const onboardingCompletionObserved = hasObservedOnboardingCompletion(
+    user,
+    authenticatedUserCanListUsers ? storedCurrentUser : null
+  );
   const mcpServerCount = useAgorStore((s) => s.mcpServerById.size);
   // Slack/GitHub connections are gateway channels, a separate store map from MCP
   // servers. Narrow size selector so unrelated channel writes don't re-render the shell.
@@ -647,7 +660,7 @@ function AppContent() {
     authenticationGeneration,
     eligible: canRunOnboarding,
     ready: onboardingReady,
-    completed: currentUser?.onboarding_completed === true,
+    completed: onboardingCompletionObserved,
     deferred: onboardingDeferred,
     isAuthenticationOwnerCurrent,
   });
@@ -1497,9 +1510,12 @@ function AppContent() {
     }
   };
 
-  const handleRestartOnboarding = async (childShouldApply?: () => boolean) => {
+  const handleReopenOnboarding = async (
+    mode: OnboardingReopenMode,
+    childShouldApply?: () => boolean
+  ) => {
     const operation = appAuthorityGuard.begin();
-    if (!currentUser || !canRunOnboarding) return;
+    if (!currentUser || !client || !canRunOnboarding) return;
     const operationUserId = currentUser.user_id;
     const operationAuthenticationGeneration = authenticationGeneration;
     const shouldApply = () =>
@@ -1508,10 +1524,21 @@ function AppContent() {
       (childShouldApply ? childShouldApply() : true);
     if (!shouldApply()) return;
 
-    const preferences = { ...(currentUser.preferences ?? {}) } as NonNullable<User['preferences']>;
-    delete preferences.onboarding;
-
     try {
+      // Resume is distinct from restart: a deferred incomplete run retains its
+      // durable candidate/resource IDs. Completed or non-deferred users who
+      // explicitly choose Restart still get a clean wizard.
+      const latestUser = (await client.service('users').get(currentUser.user_id)) as User;
+      if (!shouldApply()) return;
+      const resumable =
+        latestUser.onboarding_completed !== true && isOnboardingDeferred(latestUser.preferences);
+      if (mode === 'resume' && !resumable) {
+        throw new Error('Saved onboarding progress is no longer available. Reopen Settings.');
+      }
+      const preferences =
+        mode === 'resume'
+          ? buildResumedOnboardingPreferences(latestUser.preferences)
+          : buildRestartedOnboardingPreferences(latestUser.preferences);
       await handleUpdateUser(
         currentUser.user_id,
         { preferences },
@@ -1523,7 +1550,7 @@ function AppContent() {
     } catch (error) {
       if (!shouldApply()) return;
       showError(
-        `Failed to restart onboarding: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to reopen onboarding: ${error instanceof Error ? error.message : String(error)}`
       );
       return;
     }
@@ -2201,7 +2228,7 @@ function AppContent() {
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
       uploadPolicy={featuresConfig?.uploadPolicy}
-      onRestartOnboarding={canRunOnboarding ? handleRestartOnboarding : undefined}
+      onReopenOnboarding={canRunOnboarding ? handleReopenOnboarding : undefined}
     />
   );
 
@@ -2232,7 +2259,7 @@ function AppContent() {
             handleUpdateUser(userId, updates, { shouldApply })
           }
           onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
-          onRestartOnboarding={canRunOnboarding ? handleRestartOnboarding : undefined}
+          onReopenOnboarding={canRunOnboarding ? handleReopenOnboarding : undefined}
           initialTab={userSettingsInitialTab}
         />
       )}

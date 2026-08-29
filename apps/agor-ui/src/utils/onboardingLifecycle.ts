@@ -1,5 +1,7 @@
 import type { OnboardingState, UserPreferences } from '@agor-live/client';
 
+export type OnboardingReopenMode = 'resume' | 'restart';
+
 export function isOnboardingDeferred(preferences: UserPreferences | undefined): boolean {
   const deferredAt = preferences?.onboarding?.deferredAt;
   return typeof deferredAt === 'string' && deferredAt.trim().length > 0;
@@ -19,4 +21,25 @@ export function buildDeferredOnboardingPreferences(
       deferredAt,
     },
   };
+}
+
+/** Remove only the deferral marker so durable onboarding progress can resume. */
+export function buildResumedOnboardingPreferences(
+  latest: UserPreferences | undefined
+): UserPreferences {
+  const onboarding = { ...(latest?.onboarding ?? {}) };
+  delete onboarding.deferredAt;
+  return {
+    ...latest,
+    onboarding,
+  };
+}
+
+/** Clear wizard progress only for an explicit restart-from-beginning action. */
+export function buildRestartedOnboardingPreferences(
+  latest: UserPreferences | undefined
+): UserPreferences {
+  const preferences = { ...(latest ?? {}) };
+  delete preferences.onboarding;
+  return preferences;
 }

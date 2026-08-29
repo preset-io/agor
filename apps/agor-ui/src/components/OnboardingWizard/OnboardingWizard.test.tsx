@@ -33,8 +33,13 @@ import { agorStore } from '../../store/agorStore';
 import { mergeGoalIntegrationRecs } from '../../utils/onboardingGoals';
 import { OnboardingWizard } from './OnboardingWizard';
 
-const TEST_BOARD_ID = '00000000-0000-4000-8000-000000000001';
-vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(TEST_BOARD_ID);
+const { TEST_BOARD_ID } = vi.hoisted(() => ({
+  TEST_BOARD_ID: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+}));
+
+vi.mock('@agor/core/ids/browser', () => ({
+  generateId: () => TEST_BOARD_ID,
+}));
 
 vi.mock('../EmojiPickerInput/EmojiPickerInput', () => ({
   EmojiPickerInput: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
@@ -82,7 +87,11 @@ function renderWizard(
   const effectiveUser = componentOverrides.user ?? makeUser();
 
   const boardsService = {
-    create: vi.fn(async () => ({ board_id: TEST_BOARD_ID, created_by: 'user-1' })),
+    create: vi.fn(async (data: Partial<Board>) => ({
+      ...data,
+      board_id: data.board_id,
+      created_by: 'user-1',
+    })),
     patch: vi.fn(async () => ({ board_id: 'board-1', created_by: 'user-1' })),
   };
   const usersService = {
@@ -576,6 +585,7 @@ describe('OnboardingWizard', () => {
   });
 
   it('surfaces a board-creation failure at COMPLETION as an inline error on the final step', async () => {
+    const user = makeUser();
     const boardsService = {
       create: vi.fn(async () => {
         throw new Error('slug already exists');
@@ -583,7 +593,11 @@ describe('OnboardingWizard', () => {
     };
     const client = {
       io: { on: vi.fn(), off: vi.fn() },
-      service: vi.fn((name: string) => (name === 'boards' ? boardsService : {})),
+      service: vi.fn((name: string) => {
+        if (name === 'boards') return boardsService;
+        if (name === 'users') return { get: vi.fn(async () => user) };
+        return {};
+      }),
     };
 
     renderWizard({ initialStep: 'workspace', client: client as never });
@@ -1077,10 +1091,16 @@ describe('OnboardingWizard', () => {
     expect(boardsService.create).toHaveBeenCalledTimes(1);
     expect(usersService.get).toHaveBeenCalledTimes(1);
     expect(props.onUpdateUser).toHaveBeenCalledTimes(1);
+    expect(props.onUpdateUser.mock.invocationCallOrder[0]).toBeLessThan(
+      boardsService.create.mock.invocationCallOrder[0]
+    );
   });
 
-  it('times out a provisioning attempt, retires its continuation, and retries without a new board', async () => {
-    const firstCompletion = new Promise<void>(() => {});
+  it('does not offer timeout retry until the original provisioning attempt settles', async () => {
+    let rejectFirst!: (error: Error) => void;
+    const firstCompletion = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
     const onComplete = vi
       .fn<NonNullable<ComponentProps<typeof OnboardingWizard>['onComplete']>>()
       .mockReturnValueOnce(firstCompletion)
@@ -1092,16 +1112,36 @@ describe('OnboardingWizard', () => {
     });
 
     clickButton(/open my board/i);
-    expect(
-      await screen.findByText(/setup timed out before completion was confirmed/i)
-    ).toBeVisible();
+    expect(await screen.findByText(/setup is taking longer than expected/i)).toBeVisible();
     expect(onComplete).toHaveBeenCalledTimes(1);
-    expect(onComplete.mock.calls[0][1].isCurrent()).toBe(false);
+    expect(onComplete.mock.calls[0][1].isCurrent()).toBe(true);
+    expect(screen.queryByText(/^try again →$/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/^still finishing…$/i).closest('button')).toBeDisabled();
+
+    rejectFirst(new Error('Provisioning eventually failed'));
+    expect(await screen.findByText('Provisioning eventually failed')).toBeVisible();
 
     clickButton(/^try again →$/i);
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
     expect(boardsService.create).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[1][1].isCurrent()).toBe(true);
+  });
+
+  it('persists the candidate id before create and retries a failed progress write without an orphan', async () => {
+    const onComplete = vi.fn(async () => undefined);
+    const { boardsService, props } = renderWizard({ onComplete, initialStep: 'done' });
+    props.onUpdateUser.mockRejectedValueOnce(new Error('Progress write failed'));
+
+    clickButton(/open my board/i);
+    expect(await screen.findByText('Progress write failed')).toBeInTheDocument();
+    expect(boardsService.create).not.toHaveBeenCalled();
+
+    clickButton(/^try again →$/i);
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(boardsService.create).toHaveBeenCalledOnce();
+    expect(boardsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ board_id: TEST_BOARD_ID })
+    );
   });
 
   it('reuses the board when completion fails and the user retries', async () => {
@@ -1119,6 +1159,31 @@ describe('OnboardingWizard', () => {
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
     expect(boardsService.create).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[1][0].boardId).toBe(TEST_BOARD_ID);
+  });
+
+  it('reuses a persisted candidate after dismiss and remount before board creation', async () => {
+    const onComplete = vi.fn(async () => undefined);
+    const user = makeUser({
+      preferences: {
+        onboarding: {
+          boardId: TEST_BOARD_ID,
+          deferredAt: '2026-08-29T12:00:00.000Z',
+          teammateDisplayName: 'Rusty',
+          teammateEmoji: '⚖️',
+          teammateTemplateId: 'legal-analyst',
+        },
+      },
+    });
+    const { boardsService } = renderWizard({ onComplete, user });
+
+    expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
+    clickButton(/meet rusty/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
+    expect(boardsService.create).toHaveBeenCalledOnce();
+    expect(boardsService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ board_id: TEST_BOARD_ID })
+    );
   });
 
   it('resumes an incomplete setup from its saved, still-visible board', async () => {

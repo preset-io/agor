@@ -12,6 +12,8 @@ import {
   mapBoardExportBlobToCreateData,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { BadRequest } from '@agor/core/feathers';
+import { isValidUUID } from '@agor/core/ids';
 import {
   buildTeammateWelcomeNoteObject,
   TEAMMATE_WELCOME_NOTE_OBJECT_ID,
@@ -225,6 +227,14 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     data: Partial<Board> | Partial<Board>[],
     params?: BoardParams
   ): Promise<Board | Board[]> {
+    for (const candidate of Array.isArray(data) ? data : [data]) {
+      if (
+        candidate.board_id !== undefined &&
+        (typeof candidate.board_id !== 'string' || !isValidUUID(candidate.board_id))
+      ) {
+        throw new BadRequest('board_id must be a canonical UUIDv7');
+      }
+    }
     const result = (await super.create(data, params)) as Board | Board[];
     return result;
   }

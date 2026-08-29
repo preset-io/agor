@@ -4,6 +4,7 @@ import {
   useAuthenticatedAuthorityScope,
   useAuthorityOperationGuard,
 } from '../hooks/useAuthorityOperationGuard';
+import type { OnboardingReopenMode } from '../utils/onboardingLifecycle';
 
 export interface SharedUserSettingsModalProps {
   open: boolean;
@@ -16,7 +17,10 @@ export interface SharedUserSettingsModalProps {
     shouldApply?: () => boolean
   ) => Promise<void>;
   onRefreshCurrentUser: (shouldApply: () => boolean) => Promise<unknown>;
-  onRestartOnboarding?: (shouldApply?: () => boolean) => void | Promise<void>;
+  onReopenOnboarding?: (
+    mode: OnboardingReopenMode,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
   initialTab?: string;
 }
 
@@ -36,7 +40,7 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
   onClose,
   onUpdateUser,
   onRefreshCurrentUser,
-  onRestartOnboarding,
+  onReopenOnboarding,
   initialTab,
 }) => {
   const authority = useAuthenticatedAuthorityScope(
@@ -61,14 +65,14 @@ export const SharedUserSettingsModal: React.FC<SharedUserSettingsModalProps> = (
         await onRefreshCurrentUser(shouldApply);
         if (!shouldApply()) return;
       }}
-      onRestartOnboarding={
-        onRestartOnboarding
-          ? async (childShouldApply) => {
+      onReopenOnboarding={
+        onReopenOnboarding
+          ? async (mode, childShouldApply) => {
               const operation = operationGuard.begin();
               const shouldApply = () =>
                 operation.isCurrent() && (childShouldApply ? childShouldApply() : true);
               if (!shouldApply()) return;
-              await onRestartOnboarding(shouldApply);
+              await onReopenOnboarding(mode, shouldApply);
               if (!shouldApply()) return;
             }
           : undefined

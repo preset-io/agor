@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildDeferredOnboardingPreferences, isOnboardingDeferred } from './onboardingLifecycle';
+import {
+  buildDeferredOnboardingPreferences,
+  buildRestartedOnboardingPreferences,
+  buildResumedOnboardingPreferences,
+  isOnboardingDeferred,
+} from './onboardingLifecycle';
 
 describe('onboarding deferral preferences', () => {
   it('merges into the latest preferences without marking completion or losing progress', () => {
@@ -28,5 +33,38 @@ describe('onboarding deferral preferences', () => {
     expect(isOnboardingDeferred({ onboarding: {} })).toBe(false);
     expect(isOnboardingDeferred({ onboarding: { deferredAt: undefined } })).toBe(false);
     expect(isOnboardingDeferred({ onboarding: { deferredAt: '  ' } })).toBe(false);
+  });
+
+  it('resumes by clearing only deferredAt and preserving resource identity', () => {
+    expect(
+      buildResumedOnboardingPreferences({
+        mainBoardId: 'board-main',
+        onboarding: {
+          deferredAt: '2026-08-28T22:00:00.000Z',
+          boardId: 'board-candidate',
+          branchId: 'branch-existing',
+          teammateDisplayName: 'Ada',
+        },
+      })
+    ).toEqual({
+      mainBoardId: 'board-main',
+      onboarding: {
+        boardId: 'board-candidate',
+        branchId: 'branch-existing',
+        teammateDisplayName: 'Ada',
+      },
+    });
+  });
+
+  it('restarts only when explicitly asked by clearing wizard progress', () => {
+    expect(
+      buildRestartedOnboardingPreferences({
+        mainBoardId: 'board-main',
+        onboarding: {
+          deferredAt: '2026-08-28T22:00:00.000Z',
+          boardId: 'board-candidate',
+        },
+      })
+    ).toEqual({ mainBoardId: 'board-main' });
   });
 });

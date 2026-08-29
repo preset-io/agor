@@ -32,7 +32,8 @@
 3. The wizard restores `preferences.onboarding` and moves through goals,
    teammate, AI, and done. Each of the first three steps can be skipped; back
    and next only alter local/progress state.
-4. Done creates a board once, then persists its ID and selections. Parent
+4. Done persists a canonical UUIDv7 board candidate, creates or discovers that
+   board once, and retains its selections. Parent
    completion best-effort seeds a teammate branch/session, fetches the latest
    user, patches completion plus merged preferences, and navigates.
 5. Before #2555, App then cleared its modal owner. Because the authenticated
@@ -59,18 +60,22 @@ idle --eligible + ready + incomplete + not deferred--> active
 active --X/Escape--> deferred
 active --durable completion write--> completed
 active --role/identity loss--> idle
-deferred/completed --Settings Restart only--> active (explicit)
+deferred --Settings Resume--> active (explicit, progress preserved)
+deferred/completed --Settings Restart--> active (explicit, progress cleared)
 deferred/completed --route/loading/realtime churn--> same terminal state
 ```
 
 An owner is fenced by user ID, authentication generation, and an opaque
 activation generation. Final submit also has a synchronous single-flight guard
 and per-attempt generation. Duplicate native clicks cannot start a second
-board create. Boards use a client-generated ID, and an ambiguous create response
-is resolved with `get(id)`, so uncertainty cannot become a second board.
-Timeout, retry, dismiss, remount, or identity replacement retires late
-continuations, while deferral retains the candidate ID. A retry reuses the
-saved board/branch/session IDs.
+board create. Boards use a browser-safe canonical UUIDv7 generated through the
+shared core encoder. The candidate is persisted before create, and an ambiguous
+create response is resolved with `get(id)`, so reload or response uncertainty
+cannot become a second board. The daemon rejects non-UUIDv7 client board IDs.
+A slow attempt remains the single in-flight operation until it settles; timeout
+observation never starts a second provisioning chain. Dismiss, identity
+replacement, and remount fence late continuations, while deferral retains the
+candidate ID. A retry reuses the saved board/branch/session IDs.
 
 Completion becomes terminal immediately after the durable self-patch and
 navigation. The auth refresh is best-effort and runs only after close; failure
@@ -89,23 +94,23 @@ Expected transition count is one open and one terminal close (`false, true,
 false`) per automatic authority generation. The completion patch count is at
 most one. Resource counts below are per completed onboarding.
 
-| Axis                                  | Cases exercised/reasoned                                                              | Expected result and writes                                                                                                                                                  |
-| ------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Goals                                 | blank/skipped, one, two; back then change                                             | Same lifecycle. Progress may be patched per navigation; completion merges the latest preferences.                                                                           |
-| Teammate                              | blank/skipped; name without template; selected template; stale template ID            | Blank creates one board and no teammate. A valid name creates/discovers at most one branch/session. A stale ID is a visible validation error with zero final writes.        |
-| AI                                    | skipped; selected/authenticated; selected/unverified; auth/save error                 | Skip and authenticated selection can finish. Invalid/unverified state stays recoverable. Credential failure is visible and dismissible.                                     |
-| Final success                         | any skip/selection combination                                                        | One board create or reuse; one progress patch; one completion patch; zero or one discovered/created branch and session; one terminal close; no reopen with stale auth data. |
-| Validation/progress failure           | invalid template, board create rejection/ambiguous response, progress patch rejection | No completion marker. Error remains visible; retry or X/Escape works. The client-generated board ID is retained/discovered rather than duplicated.                          |
-| Partial teammate provisioning failure | repo unavailable, branch/session failure                                              | Existing best-effort warning remains. Completion can commit once because the wizard is optional; retained IDs prevent duplicate retries.                                    |
-| Completion failure                    | latest-user or completion patch rejects                                               | No terminal completion. Error and retry remain; X/Escape defers without lying about completion.                                                                             |
-| Timeout / late resolution             | parent completion exceeds 45 s                                                        | Attempt becomes stale, error is actionable, saved board is reused. A late attempt cannot navigate, patch completion, or provision more resources.                           |
-| Duplicate/double submit               | two same-turn clicks                                                                  | Single-flight ref admits one create/progress/completion chain.                                                                                                              |
-| X / Escape                            | every step and every in-flight/error state                                            | Synchronous terminal defer and one sequenced preferences get/patch. Candidate progress is retained; no reopen. Mask click remains disabled.                                 |
-| Browser back / route change           | before/during/after finish                                                            | Route/readiness churn never reasserts a terminal state. Back does not own the modal.                                                                                        |
-| Refresh/remount                       | fresh, partially saved, deferred, completed                                           | Fresh/partial resumes; deferred/completed stays closed; explicit Settings restart opens.                                                                                    |
-| Realtime user/role update             | preferences/completion churn; member/admin/viewer transitions                         | Scalar gates do not remount. Viewer cannot open/provision. Terminal state survives a same-authority role correction. Identity generation replacement retires old work.      |
-| Viewports                             | desktop, phone, tablet, 667x375 short landscape                                       | Browser project runs the exact skip/final/stale-auth sequence in all configured viewports. X remains reachable.                                                             |
-| Identity                              | local or external identity                                                            | Preferences and completion remain Agor-owned. External claim-owned identity/role/password fields are unchanged.                                                             |
+| Axis                                  | Cases exercised/reasoned                                                              | Expected result and writes                                                                                                                                                      |
+| ------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Goals                                 | blank/skipped, one, two; back then change                                             | Same lifecycle. Progress may be patched per navigation; completion merges the latest preferences.                                                                               |
+| Teammate                              | blank/skipped; name without template; selected template; stale template ID            | Blank creates one board and no teammate. A valid name creates/discovers at most one branch/session. A stale ID is a visible validation error with zero final writes.            |
+| AI                                    | skipped; selected/authenticated; selected/unverified; auth/save error                 | Skip and authenticated selection can finish. Invalid/unverified state stays recoverable. Credential failure is visible and dismissible.                                         |
+| Final success                         | any skip/selection combination                                                        | One board create or reuse; one progress patch; one completion patch; zero or one discovered/created branch and session; one terminal close; no reopen with stale auth data.     |
+| Validation/progress failure           | invalid template, board create rejection/ambiguous response, progress patch rejection | No completion marker. Error remains visible; retry or X/Escape works. The client-generated board ID is retained/discovered rather than duplicated.                              |
+| Partial teammate provisioning failure | repo unavailable, branch/session failure                                              | Existing best-effort warning remains. Completion can commit once because the wizard is optional; retained IDs prevent duplicate retries.                                        |
+| Completion failure                    | latest-user or completion patch rejects                                               | No terminal completion. Error and retry remain; X/Escape defers without lying about completion.                                                                                 |
+| Slow completion / late resolution     | parent completion exceeds 45 s                                                        | A warning appears, X/Escape remain available, and the primary action stays disabled until the one attempt settles. Retry follows only a real rejection.                         |
+| Duplicate/double submit               | two same-turn clicks                                                                  | Single-flight ref admits one create/progress/completion chain.                                                                                                                  |
+| X / Escape                            | every step and every in-flight/error state                                            | Synchronous terminal defer and one sequenced preferences get/patch. Candidate progress is retained; no reopen. Mask click remains disabled.                                     |
+| Browser back / route change           | before/during/after finish                                                            | Route/readiness churn never reasserts a terminal state. Back does not own the modal.                                                                                            |
+| Refresh/remount                       | fresh, partially saved, deferred, completed                                           | Fresh/partial resumes; deferred/completed stays closed; Settings Resume preserves progress and Restart clears it.                                                               |
+| Realtime user/role update             | preferences/completion churn; member/admin/viewer transitions                         | A same-user directory `true` is close-only, so another tab closes the wizard; directory `false` never opens it. Viewer cannot provision. Identity replacement retires old work. |
+| Viewports                             | desktop, phone, tablet, 667x375 short landscape                                       | Browser project runs the exact skip/final/stale-auth sequence in all configured viewports. X remains reachable.                                                                 |
+| Identity                              | local or external identity                                                            | Preferences and completion remain Agor-owned. External claim-owned identity/role/password fields are unchanged.                                                                 |
 
 ## Authority, tenancy, and idempotency
 
@@ -120,25 +125,32 @@ writes while allowing Agor-owned preferences and completion state.
 The completion patch is still the commit point, after provisioning succeeds or
 reaches its documented optional/best-effort outcome. Deferral is not
 completion. Existing persisted board/branch/session IDs and discovery remain
-the retry keys; client-generated board IDs plus the single-flight guard close
-the ambiguous-response and same-turn duplicate-create windows.
+the retry keys; a pre-create durable UUIDv7 board candidate, server validation,
+and the single-flight guard close reload, ambiguous-response, and same-turn
+duplicate-create windows.
 
 ## Validation
 
-- Onboarding component/hook/preference suites: 81/81 passed. These cover
+- Onboarding component/hook/preference/authority suites: 92/92 passed. These cover
   skip-all, selections, stale templates, failed and ambiguous board creation,
-  progress/completion rejection, timeout/late-attempt fencing, same-turn double
-  submit, retry reuse, authority replacement, X/Escape, and dismissal during a
-  hung final attempt.
+  pre-create candidate persistence/remount, progress/completion rejection, slow
+  attempt single-flight behavior, same-turn double submit, retry reuse,
+  cross-tab completion, authority replacement, X/Escape, and dismissal during
+  a hung final attempt. Settings/surface resume-versus-restart behavior also
+  passed 44/44.
 - Real Chromium browser projects: 60/60 passed across the configured desktop,
   phone, tablet, and short-landscape viewports. The skip-all/stale-auth case
   asserted exact modal transitions `[false, true, false]`, one create, one
   progress write, one completion write, no reopen, and an on-screen X.
-- Isolated SQLite `dbTest`: 34/34 user-security tests passed, including external
-  identity persistence of deferral with `onboarding_completed === false`.
-- Workspace typecheck: 21/21 tasks passed. Workspace Biome/design-system lint
-  checked 2,642 files and 330 color fixtures. The multitenancy boundary checker
-  passed.
+- Isolated SQLite `dbTest`: 57/57 board and user-security tests passed, including
+  rejection of client-supplied UUIDv4 board IDs and external identity
+  persistence of deferral with `onboarding_completed === false`.
+- Core ID suites: 63/63 passed, including browser generation without
+  `crypto.randomUUID()`.
+- `pnpm check`: 21/21 typecheck tasks passed. Workspace
+  Biome/design-system lint checked 2,645 files and 330 color fixtures; short-ID,
+  multitenancy, daemon-filesystem, and realtime boundary checks and all 15 build
+  tasks passed.
 - The UI suite completed 2,065 tests; three unrelated Ant Design-heavy tests
   hit the suite's 15-second parallel-load timeout. All three passed (11/11)
   when rerun together, as did the two timeout cases from the preceding run.
@@ -162,5 +174,5 @@ Product decisions still needed from Max:
    reopen it after a defined interval?
 2. Should an entirely blank flow continue to create a board, as current product
    copy promises, or offer a no-provision exit distinct from X?
-3. Is 45 seconds the desired completion deadline, or should telemetry support a
-   different threshold before it becomes user-configurable?
+3. Is 45 seconds the desired “taking longer than expected” warning threshold,
+   or should telemetry support a different threshold before it becomes configurable?

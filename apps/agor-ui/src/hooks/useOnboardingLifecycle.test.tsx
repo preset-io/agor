@@ -68,6 +68,25 @@ describe('useOnboardingLifecycle', () => {
     expect(owner.activationGeneration).toBe(1);
   });
 
+  it('treats another-tab completion as close-only and never reopens from a later stale false', async () => {
+    const input = defaults();
+    const { result, rerender } = renderHook(
+      (props: ReturnType<typeof defaults>) => useOnboardingLifecycle(props),
+      { initialProps: input }
+    );
+
+    await waitFor(() => expect(result.current.open).toBe(true));
+    rerender({ ...input, completed: true });
+    await waitFor(() => expect(result.current.open).toBe(false));
+    expect(result.current.state.phase).toBe('completed');
+
+    // A lagging auth refresh may still publish false. The lifecycle has already
+    // observed a durable terminal true, so false is never an instruction to open.
+    rerender({ ...input, completed: false });
+    expect(result.current.state.phase).toBe('completed');
+    expect(result.current.open).toBe(false);
+  });
+
   it('honors durable terminal gates and viewer restrictions', async () => {
     const input = defaults();
     const { result, rerender } = renderHook(

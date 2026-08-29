@@ -1,7 +1,7 @@
 import { hasMinimumRole, ROLES, type User } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
 import { canAddMcpServer } from '../components/MCPServer/memberPolicy';
-import { enrichAuthenticatedUser } from './currentUserAuthority';
+import { enrichAuthenticatedUser, hasObservedOnboardingCompletion } from './currentUserAuthority';
 
 const user = (role: User['role'], name: string): User =>
   ({
@@ -55,5 +55,28 @@ describe('enrichAuthenticatedUser', () => {
     const other = { ...user('admin', 'Other'), user_id: 'user-2' } as User;
 
     expect(enrichAuthenticatedUser(authenticated, other)).toBe(authenticated);
+  });
+});
+
+describe('hasObservedOnboardingCompletion', () => {
+  it('accepts a same-user directory true as a close-only cross-tab signal', () => {
+    const authenticated = { ...user('member', 'Fresh auth'), onboarding_completed: false };
+    const completedElsewhere = user('member', 'Directory');
+
+    expect(hasObservedOnboardingCompletion(authenticated, completedElsewhere)).toBe(true);
+  });
+
+  it('never lets a directory false undo authenticated completion', () => {
+    const authenticated = user('member', 'Fresh auth');
+    const staleDirectory = { ...user('member', 'Directory'), onboarding_completed: false };
+
+    expect(hasObservedOnboardingCompletion(authenticated, staleDirectory)).toBe(true);
+  });
+
+  it('ignores completion from a different directory identity', () => {
+    const authenticated = { ...user('member', 'Fresh auth'), onboarding_completed: false };
+    const other = { ...user('member', 'Other'), user_id: 'user-2' } as User;
+
+    expect(hasObservedOnboardingCompletion(authenticated, other)).toBe(false);
   });
 });

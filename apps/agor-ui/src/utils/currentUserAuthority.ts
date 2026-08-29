@@ -31,3 +31,17 @@ export function enrichAuthenticatedUser(
     filesystem_home: authenticated.filesystem_home,
   };
 }
+
+/**
+ * Close-only onboarding signal. Authentication remains authoritative for
+ * opening/login gates, while a same-user directory `true` may only make the
+ * state more terminal (for example when another tab completes onboarding).
+ */
+export function hasObservedOnboardingCompletion(
+  authenticated: User | null | undefined,
+  directory: User | null | undefined
+): boolean {
+  if (!authenticated) return false;
+  if (authenticated.onboarding_completed === true) return true;
+  return directory?.user_id === authenticated.user_id && directory.onboarding_completed === true;
+}

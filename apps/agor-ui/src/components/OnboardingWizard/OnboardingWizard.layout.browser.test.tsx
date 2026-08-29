@@ -13,11 +13,12 @@
 import type { User } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { theme as antdTheme, ConfigProvider } from 'antd';
-import { type ComponentProps, useEffect } from 'react';
+import { type ComponentProps, useEffect, useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useOnboardingLifecycle } from '../../hooks/useOnboardingLifecycle';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
+import { hasObservedOnboardingCompletion } from '../../utils/currentUserAuthority';
 import type { WizardStep } from './OnboardingWizard';
 import { OnboardingWizard } from './OnboardingWizard';
 
@@ -110,14 +111,15 @@ describe('OnboardingWizard layout (real browser)', () => {
     const completionWrites = vi.fn(async () => undefined);
 
     function Harness() {
+      const [directoryUser, setDirectoryUser] = useState(user);
       const lifecycle = useOnboardingLifecycle({
         userId: user.user_id,
         authenticationGeneration: 1,
         eligible: true,
         ready: true,
-        // Deliberately stale for the whole test: this reproduced the reopen
-        // loop after the completion write had already succeeded.
-        completed: false,
+        // Authentication remains stale while a realtime directory update from
+        // this/another tab supplies the close-only terminal signal.
+        completed: hasObservedOnboardingCompletion(user, directoryUser),
         deferred: false,
         isAuthenticationOwnerCurrent: () => true,
       });
@@ -127,20 +129,28 @@ describe('OnboardingWizard layout (real browser)', () => {
       const owner = lifecycle.activeOwner;
 
       return (
-        <OnboardingWizard
-          open={lifecycle.open}
-          isCurrent={() => !!owner && lifecycle.isOwnerCurrent(owner)}
-          user={user}
-          client={client as never}
-          onUpdateUser={onUpdateUser}
-          onComplete={async (_result, attempt) => {
-            await completionWrites();
-            if (owner && attempt.isCurrent()) lifecycle.complete(owner);
-          }}
-          onDismiss={() => {
-            if (owner) lifecycle.defer(owner);
-          }}
-        />
+        <>
+          <button
+            type="button"
+            onClick={() => setDirectoryUser({ ...user, onboarding_completed: false })}
+          >
+            Publish stale incomplete user
+          </button>
+          <OnboardingWizard
+            open={lifecycle.open}
+            isCurrent={() => !!owner && lifecycle.isOwnerCurrent(owner)}
+            user={user}
+            client={client as never}
+            onUpdateUser={onUpdateUser}
+            onComplete={async () => {
+              await completionWrites();
+              setDirectoryUser({ ...user, onboarding_completed: true });
+            }}
+            onDismiss={() => {
+              if (owner) lifecycle.defer(owner);
+            }}
+          />
+        </>
       );
     }
 
@@ -164,9 +174,11 @@ describe('OnboardingWizard layout (real browser)', () => {
     fireEvent.click(screen.getByText(/open my board/i).closest('button')!);
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Publish stale incomplete user' }));
     await nextFrame();
     await nextFrame();
 
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(transitions).toEqual([false, true, false]);
     expect(boardsService.create).toHaveBeenCalledTimes(1);
     expect(usersService.get).toHaveBeenCalledTimes(1);

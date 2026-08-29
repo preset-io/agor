@@ -73,6 +73,7 @@ import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { copyToClipboard } from '../../utils/clipboard';
+import { isOnboardingDeferred, type OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import {
   passwordPolicyHelp,
   passwordPolicyRequirements,
@@ -260,7 +261,10 @@ export interface UserSettingsModalProps {
     updates: UpdateUserInput,
     shouldApply?: () => boolean
   ) => void | Promise<void>;
-  onRestartOnboarding?: (shouldApply?: () => boolean) => void | Promise<void>;
+  onReopenOnboarding?: (
+    mode: OnboardingReopenMode,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
   initialTab?: string;
 }
 
@@ -271,7 +275,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   client,
   currentUser,
   onUpdate,
-  onRestartOnboarding,
+  onReopenOnboarding,
   initialTab,
 }) => {
   const { token } = theme.useToken();
@@ -330,6 +334,8 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   const passwordRequirements = passwordPolicyRequirements(authConfig?.passwordPolicy);
   const isEditingOther = !!user && !!currentUser && user.user_id !== currentUser.user_id;
   const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
+  const canResumeOnboarding =
+    isSelf && user?.onboarding_completed !== true && isOnboardingDeferred(user?.preferences);
   const canEditTarget =
     !isEditingOther || (isAdmin && hasRoleAuthorityOver(currentUser?.role, user?.role));
   const callerIdentityKey = currentUser
@@ -1343,9 +1349,9 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         panelKey: 'preferences',
       });
     }
-    if (isSelf && onRestartOnboarding) {
+    if (isSelf && onReopenOnboarding) {
       entries.push({
-        label: 'Restart onboarding',
+        label: canResumeOnboarding ? 'Resume onboarding' : 'Restart onboarding',
         kind: 'setting',
         keywords: 'wizard setup teammate',
         panelKey: 'profile',
@@ -1509,7 +1515,8 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     canAdministerTarget,
     isEditingOther,
     isSelf,
-    onRestartOnboarding,
+    canResumeOnboarding,
+    onReopenOnboarding,
     canWriteExecutionHome,
     canWritePassword,
   ]);
@@ -1643,10 +1650,10 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
     }
   };
 
-  const handleRestartOnboarding = async () => {
+  const handleReopenOnboarding = async (mode: OnboardingReopenMode) => {
     const operation = operationGuard.begin();
-    if (!onRestartOnboarding || !operation.isCurrent()) return;
-    await onRestartOnboarding(operation.isCurrent);
+    if (!onReopenOnboarding || !operation.isCurrent()) return;
+    await onReopenOnboarding(mode, operation.isCurrent);
     // The owner callback may close Settings/open another surface only while
     // this exact authority cycle is still current; stale children do nothing.
     if (!operation.isCurrent()) return;
@@ -1724,22 +1731,38 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         </FieldRow>
       </Form>
 
-      {onRestartOnboarding && isSelf && (
+      {onReopenOnboarding && isSelf && (
         <>
           <SectionDivider label="Onboarding" />
           <Typography.Paragraph type="secondary" style={{ maxWidth: 480 }}>
-            Reopen the AI teammate setup wizard from the beginning. Existing repos, boards,
-            branches, and credentials stay in place.
+            {canResumeOnboarding
+              ? 'Continue the AI teammate setup wizard from your saved progress, or start over.'
+              : 'Reopen the AI teammate setup wizard from the beginning. Existing repos, boards, branches, and credentials stay in place.'}
           </Typography.Paragraph>
-          <Popconfirm
-            title="Restart onboarding?"
-            description="This clears saved wizard progress and opens onboarding again."
-            okText="Restart"
-            cancelText="Cancel"
-            onConfirm={handleRestartOnboarding}
-          >
-            <Button>Restart onboarding</Button>
-          </Popconfirm>
+          <Space wrap>
+            {canResumeOnboarding && (
+              <Popconfirm
+                title="Resume onboarding?"
+                description="This keeps saved wizard progress and opens onboarding again."
+                okText="Resume"
+                cancelText="Cancel"
+                onConfirm={() => handleReopenOnboarding('resume')}
+              >
+                <Button>Resume onboarding</Button>
+              </Popconfirm>
+            )}
+            <Popconfirm
+              title="Restart onboarding?"
+              description="This clears saved wizard progress and opens onboarding again."
+              okText="Restart"
+              cancelText="Cancel"
+              onConfirm={() => handleReopenOnboarding('restart')}
+            >
+              <Button>
+                {canResumeOnboarding ? 'Restart from beginning' : 'Restart onboarding'}
+              </Button>
+            </Popconfirm>
+          </Space>
         </>
       )}
     </>

@@ -130,6 +130,18 @@
       "import": "./dist/lib/validation.js",
       "require": "./dist/lib/validation.cjs"
     },
+    "./ids": {
+      "source": "./src/lib/ids.ts",
+      "types": "./dist/lib/ids.d.ts",
+      "import": "./dist/ids/index.js",
+      "require": "./dist/ids/index.cjs"
+    },
+    "./ids/browser": {
+      "source": "./src/lib/ids.browser.ts",
+      "types": "./dist/lib/ids.browser.d.ts",
+      "import": "./dist/ids/browser.js",
+      "require": "./dist/ids/browser.cjs"
+    },
     "./templates/handlebars-helpers": {
       "source": "./src/templates/handlebars-helpers.ts",
       "types": "./dist/templates/handlebars-helpers.d.ts",

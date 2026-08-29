@@ -3,6 +3,7 @@ import { act, render } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../contexts/ConnectionContext';
+import type { OnboardingReopenMode } from '../utils/onboardingLifecycle';
 
 type CapturedProps = {
   onUpdate: (
@@ -10,7 +11,7 @@ type CapturedProps = {
     updates: UpdateUserInput,
     shouldApply?: () => boolean
   ) => Promise<void>;
-  onRestartOnboarding?: (shouldApply?: () => boolean) => Promise<void>;
+  onReopenOnboarding?: (mode: OnboardingReopenMode, shouldApply?: () => boolean) => Promise<void>;
 };
 
 let captured: CapturedProps | null = null;
@@ -65,7 +66,7 @@ describe('SharedUserSettingsModal authority fencing', () => {
     const restartPending = deferred();
     const onUpdateUser = vi.fn(() => updatePending.promise);
     const onRefreshCurrentUser = vi.fn(async (_shouldApply: () => boolean) => {});
-    const onRestartOnboarding = vi.fn(() => restartPending.promise);
+    const onReopenOnboarding = vi.fn(() => restartPending.promise);
     const modal = (
       <SharedUserSettingsModal
         open
@@ -74,14 +75,15 @@ describe('SharedUserSettingsModal authority fencing', () => {
         onClose={vi.fn()}
         onUpdateUser={onUpdateUser}
         onRefreshCurrentUser={onRefreshCurrentUser}
-        onRestartOnboarding={onRestartOnboarding}
+        onReopenOnboarding={onReopenOnboarding}
       />
     );
     const rendered = render(view(3, modal));
     const pendingUpdate = captured!.onUpdate('member-a', { name: 'A draft' }, () => true);
-    const pendingRestart = captured!.onRestartOnboarding!(() => true);
+    const pendingRestart = captured!.onReopenOnboarding!('restart', () => true);
     expect(onUpdateUser).toHaveBeenCalledOnce();
-    expect(onRestartOnboarding).toHaveBeenCalledOnce();
+    expect(onReopenOnboarding).toHaveBeenCalledOnce();
+    expect(onReopenOnboarding.mock.calls[0]?.[0]).toBe('restart');
 
     rendered.rerender(view(4, modal));
     await act(async () => {
@@ -92,7 +94,7 @@ describe('SharedUserSettingsModal authority fencing', () => {
 
     expect(onRefreshCurrentUser).not.toHaveBeenCalled();
     const updateGuard = onUpdateUser.mock.calls[0]?.[2];
-    const restartGuard = onRestartOnboarding.mock.calls[0]?.[0];
+    const restartGuard = onReopenOnboarding.mock.calls[0]?.[1];
     expect(updateGuard?.()).toBe(false);
     expect(restartGuard?.()).toBe(false);
   });
