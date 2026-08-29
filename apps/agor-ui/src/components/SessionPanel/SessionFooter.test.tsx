@@ -131,6 +131,14 @@ describe('SessionFooter', () => {
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
   });
 
+  it('disables Stop while the daemon connection is unavailable', () => {
+    const { container } = render(
+      <SessionFooter {...baseProps} isRunning={true} connectionDisabled={true} />,
+      { wrapper: Wrapper }
+    );
+    expect(container.querySelector('button.ant-btn-dangerous')).toBeDisabled();
+  });
+
   it('shows stopping feedback immediately while the Stop request is in flight', () => {
     const { container } = render(
       <SessionFooter {...baseProps} isRunning={true} stopRequestInFlight={true} />,

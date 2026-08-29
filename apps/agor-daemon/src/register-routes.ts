@@ -3081,17 +3081,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             const branch = await branchRepository.findById(session.branch_id);
             if (!branch) return null;
             const branchAccess = await branchRepository.resolveUserAccess(branch, stopUserId);
-            return { branch, branchAccess };
+            const { allowed: hasPromptAuthority } = await resolveSessionPromptAccess({
+              branchRepository,
+              branch,
+              session,
+              userId: stopUserId,
+            });
+            return { branchAccess, hasPromptAuthority };
           });
           if (!access) {
             throw new NotFound(`Branch ${session.branch_id} not found`);
           }
-          const { allowed: hasPromptAuthority } = await resolveSessionPromptAccess({
-            branchRepository,
-            branch: access.branch,
-            session,
-            userId: stopUserId,
-          });
+          const { hasPromptAuthority } = access;
           const isManager = access.branchAccess.can === 'all';
           const isGlobalSuperadmin =
             superadminOpts.allowSuperadmin && hasMinimumRole(params.user?.role, ROLES.SUPERADMIN);
@@ -3161,10 +3162,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
               app,
               taskRepo: stopRouteRepositories.taskRepo,
               sessionsService: sessionsServiceWithHooks,
-              findActiveTasks: (stopApp, sessionId, stopParams) =>
-                inCurrentTenantDatabaseScope(() =>
-                  findActiveTasksForSession(stopApp, sessionId, stopParams)
-                ),
+              findActiveTasks: findActiveTasksForSession,
+              runInTenantDatabaseScope: inCurrentTenantDatabaseScope,
               runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
             },
             id as SessionID,

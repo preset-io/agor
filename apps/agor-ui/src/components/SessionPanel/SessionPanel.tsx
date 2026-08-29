@@ -9,6 +9,7 @@ import type {
   PermissionMode,
   Session,
   SessionID,
+  SessionStopResult,
   SpawnConfig,
   Task,
   User,
@@ -100,6 +101,7 @@ import { SessionAttachmentTray } from './SessionAttachmentTray';
 import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
+import { reconcileStopTransportFailure } from './stopReconciliation';
 import { useComposerAttachments } from './useComposerAttachments';
 
 // Re-export PermissionMode from SDK for convenience
@@ -609,6 +611,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
+  const currentClientRef = React.useRef(client);
+  currentClientRef.current = client;
   const [forceFailTarget, setForceFailTarget] = React.useState<{
     taskId: string;
     terminationRequestedAt: string;
@@ -1305,7 +1309,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleStop = async () => {
-    if (!session || !client || stopRequestInFlight) return;
+    if (!session || !client || connectionDisabled || stopRequestInFlight) return;
 
     const unverifiedTask = [...tasks]
       .reverse()
@@ -1328,17 +1332,38 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
 
     setStopRequestInFlight(true);
+    const stopSessionId = session.session_id;
+    const stopTarget = [...tasks]
+      .reverse()
+      .find(
+        (task) =>
+          task.status === TaskStatus.DISPATCHING ||
+          task.status === TaskStatus.RUNNING ||
+          task.status === TaskStatus.STOPPING ||
+          task.status === TaskStatus.AWAITING_PERMISSION ||
+          task.status === TaskStatus.AWAITING_INPUT
+      );
     try {
-      const result = (await client.service(`sessions/${session.session_id}/stop`).create({})) as {
-        success?: boolean;
-        reason?: string;
-      };
+      const result = (await client
+        .service(`sessions/${stopSessionId}/stop`)
+        .create({})) as SessionStopResult;
       if (result.success === false) {
         showInfo(result.reason ?? 'Stop requested; waiting for executor termination.');
       }
     } catch (error) {
       console.error('Failed to stop execution:', error);
-      showError('Failed to stop execution. You can try again.');
+      const reconciliation = stopTarget
+        ? await reconcileStopTransportFailure(
+            () => currentClientRef.current,
+            stopSessionId,
+            stopTarget.task_id
+          )
+        : { outcome: 'unresolved' as const };
+      if (reconciliation.outcome === 'accepted' || reconciliation.outcome === 'ended') {
+        showInfo(reconciliation.reason);
+      } else {
+        showError('Failed to stop execution. You can try again.');
+      }
     } finally {
       setStopRequestInFlight(false);
     }

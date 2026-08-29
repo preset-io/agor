@@ -384,11 +384,31 @@ describe('termination coordinator', () => {
     state.claim({ ...stopping('heartbeat_lost'), executor_mode: 'local' });
 
     await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
-      status: 'unverified',
+      status: 'pending',
       task: { status: TaskStatus.STOPPING },
+      pendingCode: 'non_owner_replica',
       reason: expect.stringContaining('owns the local executor process handle'),
     });
     expect(state.claimTerminationCoordination).not.toHaveBeenCalled();
+    expect(containExecutorProcess).not.toHaveBeenCalled();
+    expect(state.settleTermination).not.toHaveBeenCalled();
+  });
+
+  it('reports a durable containment lease as structured coordination pending', async () => {
+    const state = appDouble();
+    const requested = stopping('user_stop');
+    state.claim(requested);
+    state.claimTerminationCoordination.mockResolvedValueOnce({
+      outcome: 'pending',
+      task: requested,
+    });
+
+    await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
+      status: 'pending',
+      task: { status: TaskStatus.STOPPING },
+      pendingCode: 'coordination_in_progress',
+      reason: expect.stringContaining('Another daemon'),
+    });
     expect(containExecutorProcess).not.toHaveBeenCalled();
     expect(state.settleTermination).not.toHaveBeenCalled();
   });

@@ -5,6 +5,7 @@ import type {
   Params,
   PersistedAgenticToolName,
   SdkFailure,
+  SessionStopPendingCode,
   Task,
   TaskID,
   TerminationCause,
@@ -20,9 +21,10 @@ import {
 } from './executor-tracking.js';
 
 export interface TerminationResult {
-  status: 'terminal' | 'unverified' | 'condition_changed';
+  status: 'terminal' | 'pending' | 'unverified' | 'condition_changed';
   task: Task;
   reason?: string;
+  pendingCode?: SessionStopPendingCode;
 }
 
 export interface TerminationInput {
@@ -303,7 +305,13 @@ async function claimContainmentCoordination(
   task: Task
 ): Promise<
   | { outcome: 'claimed'; task: Task; token: string }
-  | { outcome: 'pending' | 'condition_changed'; task: Task; reason?: string }
+  | {
+      outcome: 'pending';
+      task: Task;
+      reason: string;
+      pendingCode: SessionStopPendingCode;
+    }
+  | { outcome: 'condition_changed'; task: Task }
 > {
   const localMode = task.executor_mode !== 'templated';
   const ownsLocalHandle = !!getTrackedExecutor(task.session_id, input.app);
@@ -317,6 +325,7 @@ async function claimContainmentCoordination(
       outcome: 'pending',
       task,
       reason: 'Waiting for the daemon that owns the local executor process handle.',
+      pendingCode: 'non_owner_replica',
     };
   }
 
@@ -349,6 +358,7 @@ async function claimContainmentCoordination(
     outcome: 'pending',
     task: claim.task,
     reason: 'Another daemon currently coordinates executor containment.',
+    pendingCode: 'coordination_in_progress',
   };
 }
 
@@ -373,7 +383,12 @@ export async function requestExecutorTermination(
     if (coordination.outcome === 'condition_changed') {
       return { status: 'condition_changed', task: coordination.task };
     }
-    return { status: 'unverified', task: coordination.task, reason: coordination.reason };
+    return {
+      status: 'pending',
+      task: coordination.task,
+      reason: coordination.reason,
+      pendingCode: coordination.pendingCode,
+    };
   }
   return startContainment(input, coordination.task, tool, coordination.token);
 }

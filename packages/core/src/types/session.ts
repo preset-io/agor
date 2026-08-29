@@ -35,6 +35,38 @@ export const SessionStatus = {
 
 export type SessionStatus = (typeof SessionStatus)[keyof typeof SessionStatus];
 
+/** Durable outcome reported by the authenticated Session Stop endpoint. */
+export const SESSION_STOP_OUTCOMES = [
+  'stopped',
+  'already_idle',
+  'pending',
+  'unverified',
+  'condition_changed',
+  'not_stoppable',
+] as const;
+
+export type SessionStopOutcome = (typeof SESSION_STOP_OUTCOMES)[number];
+
+/** Why an accepted Stop is waiting for a different HA coordination step. */
+export const SESSION_STOP_PENDING_CODES = [
+  'non_owner_replica',
+  'coordination_in_progress',
+] as const;
+
+export type SessionStopPendingCode = (typeof SESSION_STOP_PENDING_CODES)[number];
+
+export interface SessionStopResult {
+  /** True only when the requested idle postcondition is already durable. */
+  success: boolean;
+  /** Machine-readable result; pending means the Stop claim was durably accepted. */
+  outcome: SessionStopOutcome;
+  status?: SessionStatus;
+  reason?: string;
+  stoppedTaskId?: string;
+  queuedTasksPreserved?: number;
+  pendingCode?: SessionStopPendingCode;
+}
+
 /**
  * Permission mode controls how agentic tools handle execution approvals
  *
