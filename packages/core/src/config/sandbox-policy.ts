@@ -146,6 +146,14 @@ export interface SandboxPathContext {
    * execution home, even if another Session on the branch uses branch state.
    */
   branchSdkHomeDir?: string;
+  /**
+   * Already-open caller credential inodes to mount over files inside
+   * {@link branchSdkHomeDir}. File descriptors are child-process descriptor
+   * numbers, not host paths; this prevents a symlink swap between validation
+   * and bubblewrap setup. Destinations must already exist and stay below the
+   * branch SDK home. Currently used only for Codex `auth.json`.
+   */
+  branchSdkCredentialBinds?: Array<{ fd: number; destination: string }>;
 }
 
 /**
@@ -321,6 +329,7 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
     // re-exposing it here is valid.
     appendBranchSdkHomeBinds(args, ctx);
     for (const p of sandbox.extra_allow_write ?? []) args.push('--bind', p, p);
+    appendBranchSdkCredentialBinds(args, ctx);
     for (const p of sandbox.extra_deny_read ?? []) args.push('--ro-bind', '/dev/null', p);
 
     // Daemon trust-root masks — UNCONDITIONAL (not gated on protect_secrets).
@@ -376,6 +385,7 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
   // of one shared home for all branches and users.
   appendBranchSdkHomeBinds(args, ctx);
   for (const p of sandbox.extra_allow_write ?? []) args.push('--bind', p, p);
+  appendBranchSdkCredentialBinds(args, ctx);
 
   // ── denials LAST so they win over any writable/home bind above ──
   if (protectSecrets) {
@@ -408,6 +418,29 @@ function appendBranchSdkHomeBinds(args: string[], ctx: SandboxPathContext): void
     throw new Error(`Invalid branch SDK home ${ctx.branchSdkHomeDir}: expected an absolute path`);
   }
   args.push('--bind', ctx.branchSdkHomeDir, ctx.branchSdkHomeDir);
+}
+
+/** Mount validated credential inodes after the writable branch home. */
+function appendBranchSdkCredentialBinds(args: string[], ctx: SandboxPathContext): void {
+  if (!ctx.branchSdkCredentialBinds?.length) return;
+  if (!ctx.branchSdkHomeDir || !isAbsolute(ctx.branchSdkHomeDir)) {
+    throw new Error('Branch SDK credential binds require an absolute branch SDK home');
+  }
+  for (const bind of ctx.branchSdkCredentialBinds) {
+    if (!Number.isSafeInteger(bind.fd) || bind.fd < 3) {
+      throw new Error(`Invalid branch SDK credential file descriptor ${bind.fd}`);
+    }
+    if (
+      !isAbsolute(bind.destination) ||
+      relative(ctx.branchSdkHomeDir, bind.destination) === '' ||
+      !isPathWithin(bind.destination, ctx.branchSdkHomeDir)
+    ) {
+      throw new Error(
+        `Branch SDK credential destination ${bind.destination} must stay below ${ctx.branchSdkHomeDir}`
+      );
+    }
+    args.push('--bind-fd', String(bind.fd), bind.destination);
+  }
 }
 
 function isPathWithin(candidate: string, parent: string): boolean {

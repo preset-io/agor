@@ -48,8 +48,10 @@ multi-tenant (use containers/microVMs for that).
 
 ## Prerequisites
 
-1. Linux daemon host with `bubblewrap` installed **and unprivileged user
-   namespaces working** — the #1 thing that silently breaks on hardened kernels.
+1. Linux daemon host with `bubblewrap` 0.12.0 or newer installed **and
+   unprivileged user namespaces working** — the #1 thing that silently breaks
+   on hardened kernels. Agor also functionally verifies `--bind-fd`; both are
+   required security boundaries, not optional Codex features.
    Verify functionally (not just "is bwrap on PATH"):
    ```bash
    agor doctor          # look for a green "unprivileged userns" row

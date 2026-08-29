@@ -1804,5 +1804,61 @@
     "rationale": "Creates the per-tool subdirectories the relocated SDK env vars point at, inside the branch SDK home; daemon-derived paths only (design doc §8, §8A.7).",
     "reviewTarget": null,
     "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-233",
+    "class": "A",
+    "file": "packages/core/src/unix/bwrap.ts",
+    "import": "node:fs",
+    "symbol": "openSync",
+    "local": "openSync",
+    "operation": "call:openSync@probeBwrapBindFd#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local sandbox capability probe",
+    "rationale": "Opens the fixed /dev/null path read-only and no-follow so the daemon can functionally verify bubblewrap --bind-fd support without exposing tenant or credential data.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-234",
+    "class": "A",
+    "file": "packages/core/src/unix/bwrap.ts",
+    "import": "node:child_process",
+    "symbol": "spawnSync",
+    "local": "spawnSync",
+    "operation": "call:spawnSync@probeBwrapBindFd#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local sandbox capability probe",
+    "rationale": "Runs a fixed secret-free bubblewrap command that binds the inherited /dev/null descriptor, proving the TOCTOU-safe descriptor-mount primitive before Agor admits the sandbox runtime.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-235",
+    "class": "A",
+    "file": "packages/core/src/unix/bwrap.ts",
+    "import": "node:fs",
+    "symbol": "closeSync",
+    "local": "closeSync",
+    "operation": "call:closeSync@probeBwrapBindFd#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local sandbox capability probe",
+    "rationale": "Closes only the daemon-owned /dev/null probe descriptor after the fixed --bind-fd capability check.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-236",
+    "class": "A",
+    "file": "packages/core/src/unix/bwrap.ts",
+    "import": "node:child_process",
+    "symbol": "spawnSync",
+    "local": "spawnSync",
+    "operation": "call:spawnSync@probeBwrapSafeSetupPathResolution#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local sandbox capability probe",
+    "rationale": "Runs fixed `bwrap --version` with an empty input and no tenant data so Agor can require the 0.12.0 setup-path security fix before using bubblewrap as a boundary.",
+    "reviewTarget": null,
+    "reviewDate": null
   }
 ]

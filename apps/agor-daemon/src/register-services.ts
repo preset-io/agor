@@ -6,11 +6,13 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
+import { type FileHandle, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { mutateCredentialFile, openCredentialFileForBind } from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
   getBranchHomePath,
@@ -111,7 +113,8 @@ import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
 import {
-  resolveBranchSdkHomeIncompatibility,
+  hasSecureLocalCredentialOverlay,
+  resolveBranchSdkHomeCompatibility,
   resolveBranchSdkHomeLaunch,
   sessionUsesBranchSdkHome,
 } from './branch-sdk-home.js';
@@ -162,6 +165,7 @@ import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeModelsService } from './services/claude-models.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
+import { resolveCodexCredentialRoute } from './services/codex-auth-shared.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { CodexDeviceAuthAttemptAuthority } from './services/codex-device-auth-attempt-authority.js';
 import { createDurableCodexDeviceAuthService } from './services/codex-device-auth-durable.js';
@@ -1192,6 +1196,9 @@ function createExecuteHandler(
     let sandboxBranchSdkHome: string | undefined;
     let branchSdkHomeEnv: Record<string, string> | undefined;
     let branchSdkHomeTemplatePath = '';
+    let branchCodexAuthBind:
+      | { source: string; destination: string; handle?: FileHandle }
+      | undefined;
     const useBranchSdkHome = sessionUsesBranchSdkHome({
       sessionScope: session.sdk_home_scope,
       branchSdkHomeIntent,
@@ -1205,18 +1212,19 @@ function createExecuteHandler(
       // current XDG data home also contains its native credential file. Until
       // its actor credential namespace is split from branch-owned state, a
       // branch home would either lose configured credentials or share them.
-      const unsupportedReason = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
-        resolveBranchSdkHomeIncompatibility({
+      const compatibility = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        resolveBranchSdkHomeCompatibility({
           tool: sdkHomeTool,
           delegated: isDelegatedExecution,
+          secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
           userId,
           db: tenantDb,
         })
       );
-      if (unsupportedReason) {
+      if (compatibility.unsupportedReason) {
         throw new BadRequest(
           `${AGENTIC_TOOL_DISPLAY_NAMES[sdkHomeTool]} cannot run in a branch-scoped session ` +
-            `because ${unsupportedReason}. Use a supported tool or authentication mode.`
+            `because ${compatibility.unsupportedReason}. Use a supported tool or authentication mode.`
         );
       }
       const branchHomeDir = getBranchHomePath(branchId, tenantId ?? undefined);
@@ -1236,6 +1244,36 @@ function createExecuteHandler(
         });
         branchSdkHomeEnv = launch.envVars;
         for (const dir of launch.ensureDirs) await mkdir(dir, { recursive: true });
+        if (compatibility.requiresLocalCodexAuthOverlay) {
+          if (!userId) throw new BadRequest('Codex subscription auth requires a prompt actor');
+          const credentialRoute = await resolveCodexCredentialRoute(
+            userId,
+            (work) => runWithTenantDatabaseScope(db, tenantId, work),
+            config
+          );
+          if (!credentialRoute.ok || !credentialRoute.codexHome) {
+            throw new BadRequest(
+              credentialRoute.ok
+                ? 'Codex subscription auth requires a persistent per-user credential home'
+                : credentialRoute.message
+            );
+          }
+          const branchCodexHome = launch.envVars.CODEX_HOME;
+          if (!branchCodexHome) {
+            throw new Error('Codex branch SDK-home launch is missing CODEX_HOME');
+          }
+          const destination = join(branchCodexHome, 'auth.json');
+          // Bubblewrap requires an existing file mountpoint. Keep the
+          // branch-owned inode deliberately empty: the caller credential is
+          // visible only as a per-executor mount and is never copied into
+          // shared branch state. The capability-based writer refuses symlinked
+          // parent directories and replaces an adversarial final symlink.
+          await mutateCredentialFile({ target: destination, content: '' });
+          branchCodexAuthBind = {
+            source: join(credentialRoute.codexHome, 'auth.json'),
+            destination,
+          };
+        }
         // Bind the branch home into the sandbox (consumed by buildSandboxWrap).
         // Harmless when the sandbox is disabled (buildSandboxWrap returns null).
         sandboxBranchSdkHome = branchHomeDir;
@@ -1435,6 +1473,20 @@ function createExecuteHandler(
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
 
+    // Open as late as possible and keep the capability alive only through
+    // child_process.spawn(). The directory-capability helper rejects every
+    // symlink component and the final file; `--bind-fd` then mounts this exact
+    // inode even if another sandbox renames the pathname concurrently.
+    if (branchCodexAuthBind) {
+      try {
+        branchCodexAuthBind.handle = await openCredentialFileForBind(branchCodexAuthBind.source);
+      } catch {
+        throw new BadRequest(
+          'Codex subscription credentials are missing or unsafe to mount. Reconnect Codex in Agent Setup or use an API key.'
+        );
+      }
+    }
+
     type NativeStateSpawn = {
       fence: OpenCodeNativeStateMutationFence;
       ready: ReturnType<typeof createDeferredSignal>;
@@ -1447,6 +1499,16 @@ function createExecuteHandler(
       delegatedHomeKey: delegatedHomeKeyResolution.delegatedHomeKey || undefined,
       preparedEnv: executorEnv,
       logPrefix,
+      ...(branchCodexAuthBind?.handle
+        ? {
+            localSandboxFileBinds: [
+              {
+                sourceFd: branchCodexAuthBind.handle.fd,
+                destination: branchCodexAuthBind.destination,
+              },
+            ],
+          }
+        : {}),
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
@@ -1613,7 +1675,13 @@ function createExecuteHandler(
       });
       await ready.promise;
     } else {
-      spawnExecutor(executorPayload, executorOptions());
+      try {
+        spawnExecutor(executorPayload, executorOptions());
+      } finally {
+        // The child inherits its own descriptor during synchronous spawn.
+        // Close only the daemon's copy once spawn returns or throws.
+        await branchCodexAuthBind?.handle?.close().catch(() => undefined);
+      }
     }
 
     return {

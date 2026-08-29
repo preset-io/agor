@@ -302,6 +302,8 @@ export interface SchedulerConfig {
   unixUserMode?: UnixUserMode;
   /** Deployment default used only when admitting a fresh scheduled Session. */
   sdkHomeMode?: SdkHomeMode;
+  /** Local executor can project caller auth with a pinned sandbox file bind. */
+  secureLocalCredentialOverlay?: boolean;
   /** Static/single-tenant id used for request-less cron ticks. Undefined means discover due schedule tenants from schedule rows. */
   tenantId?: TenantID | string;
   /** Maximum due schedules read per scan (default: 25). */
@@ -333,6 +335,7 @@ interface ResolvedSchedulerConfig {
   gracePeriod: number;
   unixUserMode: UnixUserMode;
   sdkHomeMode: SdkHomeMode;
+  secureLocalCredentialOverlay: boolean;
   tenantId?: TenantID | string;
   scanBatchSize: number;
   maxIdleInterval: number;
@@ -381,6 +384,7 @@ export class SchedulerService {
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       unixUserMode: config.unixUserMode ?? 'simple',
       sdkHomeMode: config.sdkHomeMode ?? 'inherit',
+      secureLocalCredentialOverlay: config.secureLocalCredentialOverlay ?? false,
       tenantId:
         typeof config.tenantId === 'string' && config.tenantId.trim()
           ? config.tenantId.trim()
@@ -913,6 +917,7 @@ export class SchedulerService {
       resolveBranchSdkHomeIncompatibility({
         tool: resolvedConfig.activeTool,
         delegated: this.config.unixUserMode === 'delegated',
+        secureLocalCredentialOverlay: this.config.secureLocalCredentialOverlay,
         userId: schedule.created_by as import('@agor/core/types').UserID,
         db: this.db,
       })

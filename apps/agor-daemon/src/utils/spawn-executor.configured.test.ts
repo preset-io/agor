@@ -568,6 +568,57 @@ describe('configured executor spawning', () => {
     );
   });
 
+  it('maps a pinned credential source onto child fd 3 without serializing it', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    sandboxWrapMock.mockReturnValue({
+      cmd: 'bwrap',
+      args: ['--bind-fd', '3', '/branch-home/codex/auth.json', '--', 'executor'],
+      extraEnv: {},
+    });
+    const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+    configureExecutor(
+      { sandbox: { enabled: true, fail_if_unavailable: true } },
+      {
+        ...LOCAL_RESPONSE_OPTIONS,
+        sandboxRuntimePaths: {
+          homeDir: '/home/agor',
+          dataHome: '/home/agor/.agor',
+          protectedDataRoots: ['/home/agor/.agor'],
+          worktreesRoot: '/home/agor/.agor/worktrees',
+          agenticToolsPath: '/opt/agor/agentic-tools',
+          agorConfigPath: '/home/agor/.agor/config.yaml',
+        },
+      }
+    );
+
+    spawnExecutor(
+      {
+        command: 'prompt',
+        params: {
+          cwd: '/home/agor/.agor/worktrees/repo/feature',
+          sandboxBranchSdkHome: '/branch-home',
+        },
+      },
+      {
+        localSandboxFileBinds: [{ sourceFd: 47, destination: '/branch-home/codex/auth.json' }],
+      }
+    );
+
+    expect(sandboxWrapMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        branchSdkCredentialBinds: [{ fd: 3, destination: '/branch-home/codex/auth.json' }],
+      })
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'bwrap',
+      expect.any(Array),
+      expect.objectContaining({ stdio: ['pipe', 'inherit', 'inherit', 47] })
+    );
+    expect(proc.written).not.toContain('47');
+    expect(proc.written).not.toContain('localSandboxFileBinds');
+  });
+
   it('waits for asynchronous spawn readiness before sending the executor payload', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);

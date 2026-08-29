@@ -159,6 +159,7 @@ describe('branchSdkHomeAuthUnsupportedReason', () => {
       branchSdkHomeAuthUnsupportedReason({
         tool: 'codex',
         delegated: false,
+        secureLocalCredentialOverlay: false,
         auth: nativeAuth,
       })
     ).toMatch(/subscription auth/);
@@ -169,6 +170,7 @@ describe('branchSdkHomeAuthUnsupportedReason', () => {
       branchSdkHomeAuthUnsupportedReason({
         tool: 'codex',
         delegated: false,
+        secureLocalCredentialOverlay: false,
         auth: { useNativeAuth: false, apiKey: 'configured' },
       })
     ).toBeUndefined();
@@ -176,6 +178,18 @@ describe('branchSdkHomeAuthUnsupportedReason', () => {
       branchSdkHomeAuthUnsupportedReason({
         tool: 'codex',
         delegated: true,
+        secureLocalCredentialOverlay: false,
+        auth: nativeAuth,
+      })
+    ).toBeUndefined();
+  });
+
+  it('allows local Codex subscription auth through the pinned sandbox overlay', () => {
+    expect(
+      branchSdkHomeAuthUnsupportedReason({
+        tool: 'codex',
+        delegated: false,
+        secureLocalCredentialOverlay: true,
         auth: nativeAuth,
       })
     ).toBeUndefined();

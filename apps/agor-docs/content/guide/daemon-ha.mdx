@@ -59,10 +59,13 @@ root's `branch-homes/<branch-id>/` tree carries each branch's relocated SDK
 config/state. Each Session is immutably stamped to use either that tree or its
 historical execution home; every replica and delegated launcher must honor the
 Session stamp rather than inferring the choice from current deployment or
-branch configuration. Local Codex subscription auth and OpenCode are refused
-for branch-scoped Sessions because their credential files cannot currently be
-separated safely from the writable config home. A delegated substrate owns any
-equivalent credential overlay. The tree needs the **same shared-storage and
+branch configuration. OpenCode is refused for branch-scoped Sessions because
+its native credential file cannot currently be separated from its writable XDG
+state. Local Codex subscription auth is supported only with the per-user
+sandbox: each replica opens the exact caller's persistent `auth.json` and
+projects that pinned inode into the branch home for one executor without
+copying it. A delegated substrate owns any equivalent credential overlay. The
+tree needs the **same shared-storage and
 `cross-replica-flock` guarantee documented above for `homes/`**: a prompt or
 Task dispatched to replica B must see exactly what replica A wrote, and
 concurrent writers within one branch home rely on the same cross-client `flock`

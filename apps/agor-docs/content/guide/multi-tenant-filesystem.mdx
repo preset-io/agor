@@ -58,8 +58,10 @@ the immutable branch id, removed when the branch is deleted (archive retains
 it), and — being under the tenant root — is included in tenant export/backup
 and cross-replica shared storage the same way `worktrees/` is. Agor does not
 copy managed credentials here: supported API keys are injected per caller at
-prompt time, while tools whose native auth cannot be separated from writable
-config state are refused. Interactive terminals never mount the branch home.
+prompt time, Codex subscription auth is mounted from the exact caller's pinned
+credential inode for one sandboxed executor, and tools whose native auth cannot
+be separated from writable config state are refused. Interactive terminals
+never mount the branch home.
 
 `uploads.location` is a **base storage location**, not the final upload folder.
 Agor owns and appends the tenant and `uploads/` namespaces beneath it. Local

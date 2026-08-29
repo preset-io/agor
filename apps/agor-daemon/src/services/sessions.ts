@@ -72,6 +72,7 @@ import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import {
   branchSdkHomeUnsupportedReason,
+  hasSecureLocalCredentialOverlay,
   resolveBranchSdkHomeIncompatibility,
   resolveNewSessionSdkHomeScope,
   resolveSdkHomeConfig,
@@ -508,6 +509,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         const unsupportedReason = await resolveBranchSdkHomeIncompatibility({
           tool: agenticTool,
           delegated,
+          secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
           userId: createData.created_by as UserID | undefined,
           db: scoped,
         });

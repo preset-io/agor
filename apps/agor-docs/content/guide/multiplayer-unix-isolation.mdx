@@ -70,10 +70,15 @@ home cannot currently be relocated reliably. OpenCode is also refused because
 its current XDG data home combines native credentials with relocatable state.
 Credentials remain caller-scoped rather than being copied into the shared
 branch home. Codex API keys are injected through the environment; Codex
-subscription auth is refused for local execution because Codex cannot
-independently relocate or safely mount its actor-writable `auth.json`. A
-reviewed delegated launcher may provide its own caller-scoped credential
-overlay.
+subscription auth uses a caller-specific file overlay in local sandbox mode.
+The daemon opens that caller's existing `.codex/auth.json` without following
+symlinks, passes the pinned inode to bubblewrap, and mounts it read/write over
+an empty `auth.json` mountpoint in the branch Codex home. Codex refreshes the
+caller's credential file in place, while no credential bytes are copied into
+branch-owned storage. This requires `home_mode: per_user`, functional
+`--bind-fd`, and bubblewrap 0.12.0 or newer; Agor fails closed without that
+boundary. A reviewed delegated launcher may provide an equivalent
+caller-scoped overlay.
 
 ### Web terminals
 

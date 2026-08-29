@@ -1,10 +1,108 @@
-import { mkdir, mkdtemp, readdir, readFile, rename, symlink, writeFile } from 'node:fs/promises';
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { mutateCredentialFile, readCredentialFile } from './credential-file';
+import { probeBwrapBindFd } from '../unix/bwrap';
+import {
+  mutateCredentialFile,
+  openCredentialFileForBind,
+  readCredentialFile,
+} from './credential-file';
 
 describe('credential file directory capability', () => {
+  it.runIf(process.platform === 'linux' && probeBwrapBindFd())(
+    'persists writes through a bubblewrap fd bind without touching the mountpoint inode',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-credential-bwrap-'));
+      const sourceHome = join(root, 'caller', '.codex');
+      const branchHome = join(root, 'branch', 'codex');
+      const source = join(sourceHome, 'auth.json');
+      const destination = join(branchHome, 'auth.json');
+      await mkdir(sourceHome, { recursive: true });
+      await mkdir(branchHome, { recursive: true });
+      await writeFile(source, 'before');
+      await writeFile(destination, '');
+
+      const handle = await openCredentialFileForBind(source);
+      try {
+        const result = spawnSync(
+          'bwrap',
+          [
+            '--unshare-user',
+            '--ro-bind',
+            '/',
+            '/',
+            '--bind',
+            root,
+            root,
+            '--bind-fd',
+            '3',
+            destination,
+            '--',
+            'sh',
+            '-c',
+            'printf refreshed > "$1"',
+            'sh',
+            destination,
+          ],
+          { stdio: ['ignore', 'pipe', 'pipe', handle.fd] }
+        );
+        expect(result.status, result.stderr.toString()).toBe(0);
+      } finally {
+        await handle.close();
+      }
+
+      await expect(readFile(source, 'utf8')).resolves.toBe('refreshed');
+      await expect(readFile(destination, 'utf8')).resolves.toBe('');
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
+    'pins the validated auth inode across a pathname replacement',
+    async () => {
+      const codexHome = await mkdtemp(join(tmpdir(), 'agor-credential-bind-'));
+      const target = join(codexHome, 'auth.json');
+      const openedTarget = join(codexHome, 'auth.opened.json');
+      await writeFile(target, 'original');
+
+      const handle = await openCredentialFileForBind(target);
+      try {
+        await rename(target, openedTarget);
+        await writeFile(target, 'replacement');
+
+        await expect(handle.readFile('utf8')).resolves.toBe('original');
+        await expect(readFile(target, 'utf8')).resolves.toBe('replacement');
+      } finally {
+        await handle.close();
+      }
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
+    'rejects symlink and multiply-linked bind sources',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-credential-bind-reject-'));
+      const real = join(root, 'real.json');
+      const symlinked = join(root, 'symlink.json');
+      const hardlinked = join(root, 'hardlink.json');
+      await writeFile(real, 'credential');
+      await symlink(real, symlinked);
+      await expect(openCredentialFileForBind(symlinked)).rejects.toThrow();
+
+      await link(real, hardlinked);
+      await expect(openCredentialFileForBind(real)).rejects.toThrow(/hard links/);
+    }
+  );
+
   it.runIf(process.platform === 'linux')(
     'does not let a retry steal the lock from a still-live writer',
     async () => {
@@ -120,3 +218,5 @@ describe('credential file directory capability', () => {
     }
   );
 });
+
+import { spawnSync } from 'node:child_process';

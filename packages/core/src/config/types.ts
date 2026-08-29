@@ -568,9 +568,10 @@ export interface AgorSandboxSettings {
   /** Extra denied-read paths added to `protect_secrets` (escape hatch). */
   extra_deny_read?: string[];
   /**
-   * Hard-fail a task if the sandbox cannot start (missing `bwrap` / unsupported
-   * platform) instead of running unsandboxed. Recommended `true` for
-   * production security gates. Default: false.
+   * Hard-fail a task if the sandbox cannot start (missing bubblewrap 0.12.0+,
+   * unavailable `--bind-fd`, blocked user namespaces, or unsupported platform)
+   * instead of running unsandboxed. Recommended `true` for production security
+   * gates. Default: false.
    */
   fail_if_unavailable?: boolean;
 }

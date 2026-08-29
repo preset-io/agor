@@ -202,6 +202,13 @@ export interface SpawnExecutorOptions {
   onSpawn?: (child: ChildProcess, context: ExecutorSpawnContext) => void | Promise<void>;
   /** Caller-assembled env; bypasses internal curation. Ignored by templated path. */
   preparedEnv?: Record<string, string>;
+  /**
+   * Parent-process descriptors for race-safe local sandbox file mounts. The
+   * caller keeps each descriptor open through this synchronous spawn call and
+   * closes its copy afterwards. Never forwarded to delegated launchers or the
+   * executor payload.
+   */
+  localSandboxFileBinds?: Array<{ sourceFd: number; destination: string }>;
 }
 
 export type { ExecutorCommandResult } from '@agor/core/executor-protocol';
@@ -435,6 +442,9 @@ export function spawnExecutor(
   };
 
   if (executorCommandTemplate) {
+    if (options.localSandboxFileBinds?.length) {
+      throw new Error('Local sandbox file binds cannot be forwarded to a delegated launcher');
+    }
     spawnExecutorWithTemplate(payloadWithConfig, {
       ...options,
       executorCommandTemplate,
@@ -486,8 +496,14 @@ function sendExecutorPayload(
 function sandboxLocalExecutorCommand(
   payload: Record<string, unknown>,
   command: { cmd: string; args: string[]; env: Record<string, string | undefined> },
-  logPrefix: string
-): { cmd: string; args: string[]; env: Record<string, string | undefined> } {
+  logPrefix: string,
+  localSandboxFileBinds: SpawnExecutorOptions['localSandboxFileBinds']
+): {
+  cmd: string;
+  args: string[];
+  env: Record<string, string | undefined>;
+  inheritedFds?: number[];
+} {
   // Sandbox around the WORK directory, never the executor package cwd. The
   // daemon supplies this path and the caller's normalized filesystem access;
   // the executor must not rediscover either from client-controlled data.
@@ -507,7 +523,19 @@ function sandboxLocalExecutorCommand(
       : typeof params?.cwd === 'string' && params.cwd.length > 0
         ? params.cwd
         : undefined;
-  if (!workdir) return command;
+  if (!workdir) {
+    if (localSandboxFileBinds?.length) {
+      throw new Error('Sandbox file binds require an authoritative branch working directory');
+    }
+    return command;
+  }
+
+  const inheritedFds = localSandboxFileBinds?.map((bind) => bind.sourceFd) ?? [];
+  const childCredentialBinds = localSandboxFileBinds?.map((bind, index) => ({
+    // Node maps extra stdio entries to child descriptors starting at 3.
+    fd: 3 + index,
+    destination: bind.destination,
+  }));
 
   const branchAccess =
     params?.principalBranchAccess === 'read' || params?.principalBranchAccess === 'none'
@@ -527,14 +555,21 @@ function sandboxLocalExecutorCommand(
     branchAccess,
     branchSdkHomeDir:
       typeof params?.sandboxBranchSdkHome === 'string' ? params.sandboxBranchSdkHome : undefined,
+    branchSdkCredentialBinds: childCredentialBinds,
     runtimePaths: configuredExecutorDefaults.sandboxRuntimePaths as SandboxRuntimePaths,
   });
-  if (!wrap) return command;
+  if (!wrap) {
+    if (inheritedFds.length > 0) {
+      throw new Error('Credential file binds require the fail-closed filesystem sandbox');
+    }
+    return command;
+  }
   console.log(`${logPrefix} Sandbox: wrapping executor via bwrap (filesystem-only)`);
   return {
     cmd: wrap.cmd,
     args: wrap.args,
     env: { ...command.env, ...wrap.extraEnv },
+    ...(inheritedFds.length > 0 ? { inheritedFds } : {}),
   };
 }
 
@@ -565,7 +600,8 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
     spawnCommand = sandboxLocalExecutorCommand(
       payload,
       { cmd, args, env: envWithDaemonUrl },
-      logPrefix
+      logPrefix,
+      options.localSandboxFileBinds
     );
   } catch (err) {
     console.error(
@@ -587,7 +623,7 @@ function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExec
   const executorProcess = spawn(spawnCommand.cmd, spawnCommand.args, {
     cwd,
     env: { ...spawnCommand.env },
-    stdio: ['pipe', 'inherit', 'inherit'], // stdin: pipe, stdout/stderr: inherit (show in daemon logs)
+    stdio: ['pipe', 'inherit', 'inherit', ...(spawnCommand.inheritedFds ?? [])], // stdin: pipe, stdout/stderr: inherit; extra entries are pinned credential fds
     detached: process.platform !== 'win32',
   });
 

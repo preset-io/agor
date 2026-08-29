@@ -41,7 +41,10 @@ async function fixture(db: TenantScopeAwareDatabase) {
 
 function appWithMode(mode: 'inherit' | 'per_branch'): Application {
   const config = {
-    execution: { sandbox: { sdk_home_mode: mode } },
+    execution: {
+      unix_user_mode: 'sandbox',
+      sandbox: { enabled: true, home_mode: 'per_user', sdk_home_mode: mode },
+    },
   } as AgorConfig;
   return {
     get: (key: string) => (key === 'config' ? config : undefined),
@@ -111,12 +114,46 @@ describe('SessionsService SDK-home admission', () => {
     await expect(new SessionRepository(db).findAll()).resolves.toHaveLength(0);
   });
 
-  dbTest('refuses local Codex native auth before sticky branch adoption', async ({ db }) => {
+  dbTest(
+    'admits local Codex native auth when the pinned sandbox overlay is available',
+    async ({ db }) => {
+      const { user, branch } = await fixture(db);
+      await new UsersRepository(db).update(user.user_id, {
+        agentic_auth_methods: { codex: 'subscription' },
+      });
+      const service = new SessionsService(db, appWithMode('per_branch'));
+
+      await expect(
+        service.create(
+          {
+            branch_id: branch.branch_id,
+            created_by: user.user_id,
+            agentic_tool: 'codex',
+            status: SessionStatus.IDLE,
+          },
+          { _agenticConfigResolved: true } as never
+        )
+      ).resolves.toMatchObject({ sdk_home_scope: 'branch' });
+
+      await expect(new BranchRepository(db).findById(branch.branch_id)).resolves.toMatchObject({
+        sdk_home: 'per_branch',
+      });
+      await expect(new SessionRepository(db).findAll()).resolves.toHaveLength(1);
+    }
+  );
+
+  dbTest('still refuses local Codex native auth without a per-user sandbox', async ({ db }) => {
     const { user, branch } = await fixture(db);
     await new UsersRepository(db).update(user.user_id, {
       agentic_auth_methods: { codex: 'subscription' },
     });
-    const service = new SessionsService(db, appWithMode('per_branch'));
+    const app = {
+      get: (key: string) =>
+        key === 'config'
+          ? ({ execution: { sandbox: { sdk_home_mode: 'per_branch' } } } as AgorConfig)
+          : undefined,
+    } as unknown as Application;
+    const service = new SessionsService(db, app);
 
     await expect(
       service.create(
@@ -128,12 +165,11 @@ describe('SessionsService SDK-home admission', () => {
         },
         { _agenticConfigResolved: true } as never
       )
-    ).rejects.toThrow(/subscription auth cannot separate/i);
+    ).rejects.toThrow(/per-user sandbox credential overlay/i);
 
     await expect(new BranchRepository(db).findById(branch.branch_id)).resolves.toMatchObject({
       sdk_home: undefined,
     });
-    await expect(new SessionRepository(db).findAll()).resolves.toHaveLength(0);
   });
 
   dbTest('rejects caller-controlled scope on create and patch', async ({ db }) => {

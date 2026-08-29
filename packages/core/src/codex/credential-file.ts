@@ -259,6 +259,51 @@ export async function readCredentialFile(
 }
 
 /**
+ * Open one credential file as a stable bind-mount capability.
+ *
+ * Linux bubblewrap's `--bind-fd` is the mount-side counterpart to this
+ * helper: the daemon opens every directory component and the final file with
+ * no-follow semantics, validates the resulting inode, then passes that exact
+ * descriptor to bubblewrap. A sandbox process may rename or replace the
+ * pathname after this function returns, but it cannot change the inode named
+ * by the descriptor. This avoids the check-then-`--bind <path>` race that
+ * would otherwise let an actor-controlled `auth.json` symlink select an
+ * unrelated host file.
+ *
+ * The caller owns the returned handle and must keep it open through
+ * `child_process.spawn()`, then close its parent-side copy.
+ */
+export async function openCredentialFileForBind(target: string): Promise<FileHandle> {
+  if (process.platform !== 'linux') {
+    throw new Error('Credential file descriptor binds require Linux');
+  }
+
+  const directory = await openCredentialDirectory(target, false);
+  try {
+    const handle = await openPath(
+      join(directory.path, basename(resolve(target))),
+      constants.O_RDONLY | constants.O_NOFOLLOW
+    );
+    try {
+      const metadata = await handle.stat();
+      if (!metadata.isFile()) throw new Error('Credential bind source must be a regular file');
+      // A second pathname to this inode would let an otherwise hidden file be
+      // selected without a symlink. Agor's atomic credential writer always
+      // produces a single-link file, so fail closed on unusual manual layouts.
+      if (metadata.nlink !== 1) {
+        throw new Error('Credential bind source must not have additional hard links');
+      }
+      return handle;
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      throw error;
+    }
+  } finally {
+    await directory.handle.close();
+  }
+}
+
+/**
  * Atomic credential mutation with a per-home generation fence. Linux callers
  * mutate through an opened directory capability, so path replacement cannot
  * redirect a daemon/helper into another user's home.

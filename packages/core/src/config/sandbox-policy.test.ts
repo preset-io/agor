@@ -95,6 +95,54 @@ describe('resolveBwrapArgs', () => {
     it('rejects a non-absolute branch SDK home', () => {
       expect(() => resolveBwrapArgs({}, { ...CTX, branchSdkHomeDir: 'relative/path' })).toThrow();
     });
+
+    it('mounts a pinned credential fd after the writable branch home', () => {
+      const destination = `${BRANCH_HOME}/codex/auth.json`;
+      const args = resolveBwrapArgs(
+        { home_mode: 'per_user', extra_allow_write: [`${BRANCH_HOME}/codex`] },
+        {
+          ...CTX,
+          ownerHomeStore: '/home/agor/.agor/homes/owner',
+          branchSdkHomeDir: BRANCH_HOME,
+          branchSdkCredentialBinds: [{ fd: 3, destination }],
+        }
+      );
+      expect(hasTriple(args, '--bind-fd', '3', destination)).toBe(true);
+      const branchIdx = args.findIndex(
+        (value, index) => value === '--bind' && args[index + 1] === BRANCH_HOME
+      );
+      const credentialIdx = args.findIndex(
+        (value, index) => value === '--bind-fd' && args[index + 1] === '3'
+      );
+      expect(credentialIdx).toBeGreaterThan(branchIdx);
+      const extraAllowIdx = args.findIndex(
+        (value, index) => value === '--bind' && args[index + 1] === `${BRANCH_HOME}/codex`
+      );
+      expect(credentialIdx).toBeGreaterThan(extraAllowIdx);
+    });
+
+    it('rejects credential fd destinations outside the branch SDK home', () => {
+      expect(() =>
+        resolveBwrapArgs(
+          {},
+          {
+            ...CTX,
+            branchSdkHomeDir: BRANCH_HOME,
+            branchSdkCredentialBinds: [{ fd: 3, destination: '/home/agor/.agor/config.yaml' }],
+          }
+        )
+      ).toThrow(/must stay below/);
+      expect(() =>
+        resolveBwrapArgs(
+          {},
+          {
+            ...CTX,
+            branchSdkHomeDir: BRANCH_HOME,
+            branchSdkCredentialBinds: [{ fd: 3, destination: BRANCH_HOME }],
+          }
+        )
+      ).toThrow(/must stay below/);
+    });
   });
 
   it('protect_secrets masks daemon secrets + credential dirs', () => {

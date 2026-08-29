@@ -37,6 +37,20 @@ export function resolveSdkHomeConfig(config: Pick<AgorConfig, 'execution'>): {
 }
 
 /**
+ * Whether local execution has the two boundaries required for a caller-scoped
+ * native credential overlay: bubblewrap is enabled, and the caller has a
+ * durable private home from which the daemon can pin `auth.json` by inode.
+ * Functional `--bind-fd` support and bubblewrap's 0.12 setup-path fix are
+ * enforced by the sandbox availability probe at spawn time.
+ */
+export function hasSecureLocalCredentialOverlay(config: Pick<AgorConfig, 'execution'>): boolean {
+  return (
+    config.execution?.sandbox?.enabled === true &&
+    config.execution?.sandbox?.home_mode === 'per_user'
+  );
+}
+
+/**
  * Decide the immutable SDK-state boundary for a newly created session.
  *
  * A genealogical child may explicitly inherit its parent's scope because it
@@ -118,18 +132,21 @@ export function branchSdkHomeUnsupportedReason(tool: AgenticToolName): string | 
 export function branchSdkHomeAuthUnsupportedReason(input: {
   tool: AgenticToolName;
   delegated: boolean;
+  /** Local sandbox can project a caller credential through a pinned fd bind. */
+  secureLocalCredentialOverlay: boolean;
   auth?: { useNativeAuth: boolean; apiKey?: string };
 }): string | undefined {
   if (
     input.tool === 'codex' &&
     !input.delegated &&
     input.auth?.useNativeAuth === true &&
-    !input.auth.apiKey
+    !input.auth.apiKey &&
+    !input.secureLocalCredentialOverlay
   ) {
     return (
-      'local Codex subscription auth cannot separate auth.json from its writable config home ' +
-      'safely; switch Codex to an API key, use a reviewed delegated launcher, or use a branch ' +
-      'without a per-branch SDK home'
+      'local Codex subscription auth requires the fail-closed per-user sandbox credential ' +
+      'overlay; enable sandbox home_mode=per_user, switch Codex to an API key, use a reviewed ' +
+      'delegated launcher, or use a branch without a per-branch SDK home'
     );
   }
   return undefined;
@@ -140,14 +157,19 @@ export function branchSdkHomeAuthUnsupportedReason(input: {
  * or launch boundary. Keeping the credential lookup beside the static tool
  * policy prevents Session, scheduler, and executor paths from drifting.
  */
-export async function resolveBranchSdkHomeIncompatibility(input: {
+export async function resolveBranchSdkHomeCompatibility(input: {
   tool: AgenticToolName;
   delegated: boolean;
+  secureLocalCredentialOverlay: boolean;
   userId?: UserID;
   db: NonNullable<KeyResolutionContext['db']>;
-}): Promise<string | undefined> {
+}): Promise<{
+  unsupportedReason?: string;
+  /** Launch must project this caller's native Codex auth file by pinned fd. */
+  requiresLocalCodexAuthOverlay: boolean;
+}> {
   const toolReason = branchSdkHomeUnsupportedReason(input.tool);
-  if (toolReason) return toolReason;
+  if (toolReason) return { unsupportedReason: toolReason, requiresLocalCodexAuthOverlay: false };
 
   const localCodexAuth =
     input.tool === 'codex' && !input.delegated
@@ -157,11 +179,28 @@ export async function resolveBranchSdkHomeIncompatibility(input: {
           tool: 'codex',
         })
       : undefined;
-  return branchSdkHomeAuthUnsupportedReason({
+  const unsupportedReason = branchSdkHomeAuthUnsupportedReason({
     tool: input.tool,
     delegated: input.delegated,
+    secureLocalCredentialOverlay: input.secureLocalCredentialOverlay,
     auth: localCodexAuth,
   });
+  const requiresLocalCodexAuthOverlay =
+    input.tool === 'codex' &&
+    !input.delegated &&
+    localCodexAuth?.useNativeAuth === true &&
+    !localCodexAuth.apiKey;
+  return {
+    ...(unsupportedReason ? { unsupportedReason } : {}),
+    requiresLocalCodexAuthOverlay,
+  };
+}
+
+/** Reason-only compatibility adapter used by metadata admission paths. */
+export async function resolveBranchSdkHomeIncompatibility(
+  input: Parameters<typeof resolveBranchSdkHomeCompatibility>[0]
+): Promise<string | undefined> {
+  return (await resolveBranchSdkHomeCompatibility(input)).unsupportedReason;
 }
 
 export type BranchSdkHomeLaunch = {
