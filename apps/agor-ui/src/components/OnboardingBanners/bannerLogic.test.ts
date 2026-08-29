@@ -5,7 +5,9 @@ import {
   type BannerDecisionInput,
   decideBanner,
   hasAnyLlmKey,
+  hasConfiguredCredentialFor,
   ProbeState,
+  resolvedCredentialOwner,
   resolveProbeAgent,
   resolveProbeState,
 } from './bannerLogic';
@@ -19,6 +21,7 @@ const baseInput: BannerDecisionInput = {
   gatewayChannelCount: 0,
   integrationsHydrated: true,
   integrationsBannerDismissed: false,
+  credentialWarningDismissed: false,
 };
 
 const asUser = (partial: Partial<User>): User => partial as User;
@@ -50,6 +53,17 @@ describe('decideBanner — fail-safe amber banners', () => {
     expect(
       decideBanner({ ...baseInput, hasLlm: true, probeState: ProbeState.Unauthenticated })
     ).toBe(BannerDecision.KeyInvalid);
+  });
+
+  it('a snoozed credential warning stays hidden without becoming an integrations prompt', () => {
+    expect(
+      decideBanner({
+        ...baseInput,
+        hasLlm: true,
+        probeState: ProbeState.Unauthenticated,
+        credentialWarningDismissed: true,
+      })
+    ).toBe(BannerDecision.None);
   });
 });
 
@@ -170,7 +184,7 @@ describe('resolveProbeAgent', () => {
   });
 });
 
-describe('resolveProbeState — multi-tool fallback', () => {
+describe('resolveProbeState — selected tool only', () => {
   const collect = (map: Partial<Record<AgenticToolName, AuthCheckStatus>>) => {
     const calls: AgenticToolName[] = [];
     const checkStatus = (tool: AgenticToolName): Promise<AuthCheckStatus> => {
@@ -180,50 +194,30 @@ describe('resolveProbeState — multi-tool fallback', () => {
     return { calls, checkStatus };
   };
 
-  it('returns Authenticated on a working primary without any fallback probes', async () => {
+  it('returns Authenticated on a working selected tool', async () => {
     const { calls, checkStatus } = collect({ codex: 'authenticated' });
-    expect(await resolveProbeState(checkStatus, 'codex', false)).toBe(ProbeState.Authenticated);
+    expect(await resolveProbeState(checkStatus, 'codex')).toBe(ProbeState.Authenticated);
     expect(calls).toEqual(['codex']);
   });
 
-  it('returns Unknown (fail safe) when the primary probe is unknown', async () => {
+  it('returns Unknown (fail safe) when the selected probe is unknown', async () => {
     const { checkStatus } = collect({ 'claude-code': 'unknown' });
-    expect(await resolveProbeState(checkStatus, 'claude-code', false)).toBe(ProbeState.Unknown);
+    expect(await resolveProbeState(checkStatus, 'claude-code')).toBe(ProbeState.Unknown);
   });
 
-  it('does NOT fall back when a stored key is present — unauthenticated is key-invalid', async () => {
-    const { calls, checkStatus } = collect({ gemini: 'unauthenticated' });
-    expect(await resolveProbeState(checkStatus, 'gemini', true)).toBe(ProbeState.Unauthenticated);
-    expect(calls).toEqual(['gemini']);
-  });
-
-  it('probes other native tools when primary is unauthenticated and no key; a hit clears the banner', async () => {
-    // gemini (wrong resolved tool) unauthenticated, but claude /login works.
+  it('does not collapse another agent failure into the selected agent verdict', async () => {
     const { calls, checkStatus } = collect({
-      gemini: 'unauthenticated',
       'claude-code': 'authenticated',
-    });
-    expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Authenticated);
-    expect(calls).toContain('claude-code');
-  });
-
-  it('concludes Unauthenticated only when EVERY probe positively says so', async () => {
-    const { checkStatus } = collect({}); // everything defaults to unauthenticated
-    expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Unauthenticated);
-  });
-
-  it('fails safe to Unknown if any fallback probe is unknown', async () => {
-    const { checkStatus } = collect({ gemini: 'unauthenticated', 'claude-code': 'unknown' });
-    expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Unknown);
-  });
-
-  it('does not re-probe the primary tool during fallback', async () => {
-    const { calls, checkStatus } = collect({
-      'claude-code': 'unauthenticated',
       codex: 'unauthenticated',
     });
-    await resolveProbeState(checkStatus, 'claude-code', false);
-    expect(calls.filter((t) => t === 'claude-code')).toHaveLength(1);
+    expect(await resolveProbeState(checkStatus, 'claude-code')).toBe(ProbeState.Authenticated);
+    expect(calls).toEqual(['claude-code']);
+  });
+
+  it('returns Unauthenticated only on a positive rejection for the selected tool', async () => {
+    const { calls, checkStatus } = collect({ gemini: 'unauthenticated' });
+    expect(await resolveProbeState(checkStatus, 'gemini')).toBe(ProbeState.Unauthenticated);
+    expect(calls).toEqual(['gemini']);
   });
 });
 
@@ -264,8 +258,20 @@ describe('hasAnyLlmKey', () => {
     ).toBe(true);
   });
 
-  it('reads keys stored as plain env vars too', () => {
-    expect(hasAnyLlmKey(asUser({ env_vars: { GEMINI_API_KEY: { value: 'g' } } }))).toBe(true);
+  it('counts Claude bearer auth and Codex subscription state', () => {
+    expect(
+      hasAnyLlmKey(
+        asUser({
+          agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: true } },
+          agentic_auth_methods: { 'claude-code': 'api_key' },
+        })
+      )
+    ).toBe(true);
+    expect(hasAnyLlmKey(asUser({ agentic_auth_methods: { codex: 'subscription' } }))).toBe(true);
+  });
+
+  it('does not treat general env vars as provider credentials after managed-env hardening', () => {
+    expect(hasAnyLlmKey(asUser({ env_vars: { GEMINI_API_KEY: { set: true } } }))).toBe(false);
   });
 
   it('ignores non-credential fields — a base-URL-only user has no key', () => {
@@ -274,5 +280,52 @@ describe('hasAnyLlmKey', () => {
         asUser({ agentic_tools: { 'claude-code': { ANTHROPIC_BASE_URL: 'https://x' } } })
       )
     ).toBe(false);
+  });
+});
+
+describe('hasConfiguredCredentialFor — active policy route', () => {
+  const settings = (
+    resolution_policy: 'user_required' | 'user_preferred' | 'tenant_preferred' | 'tenant_required',
+    tenantConfigured: boolean
+  ) => ({
+    tool: 'claude-code' as const,
+    deployment_available: true,
+    enabled: true,
+    inline_configuration_allowed: true,
+    resolution_policy,
+    connection: { ANTHROPIC_API_KEY: { configured: tenantConfigured } },
+  });
+
+  it('ignores inactive Claude API keys while subscription auth is selected', () => {
+    const user = asUser({
+      agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+      agentic_auth_methods: { 'claude-code': 'subscription' },
+    });
+    expect(hasConfiguredCredentialFor(user, 'claude-code', settings('user_required', false))).toBe(
+      false
+    );
+  });
+
+  it('does not count a user key under tenant-required policy', () => {
+    const user = asUser({
+      agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+      agentic_auth_methods: { 'claude-code': 'api_key' },
+    });
+    expect(
+      hasConfiguredCredentialFor(user, 'claude-code', settings('tenant_required', false))
+    ).toBe(false);
+  });
+
+  it('routes preferred policies to the owner that actually supplies the connection', () => {
+    const user = asUser({
+      agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+      agentic_auth_methods: { 'claude-code': 'api_key' },
+    });
+    expect(resolvedCredentialOwner(user, 'claude-code', settings('tenant_preferred', false))).toBe(
+      'user'
+    );
+    expect(
+      resolvedCredentialOwner(asUser({}), 'claude-code', settings('user_preferred', true))
+    ).toBe('tenant');
   });
 });

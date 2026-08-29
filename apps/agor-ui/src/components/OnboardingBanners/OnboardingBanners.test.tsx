@@ -1,6 +1,6 @@
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
 import { OnboardingBanners, type OnboardingBannersProps } from './OnboardingBanners';
 
@@ -23,17 +23,25 @@ const baseProps = (over: Partial<OnboardingBannersProps>): OnboardingBannersProp
   onOpenWorkspaceSettings: vi.fn(),
   onCheckAuth: vi.fn(async () => result('unauthenticated')),
   credentialVersion: 0,
+  connectionReady: true,
   ...over,
 });
 
 describe('OnboardingBanners probe effect', () => {
-  beforeEach(() => agorStore.getState().reset());
+  beforeEach(() => {
+    agorStore.getState().reset();
+    agorStore.getState().setAgenticToolSettings([]);
+    window.localStorage.clear();
+  });
+  afterEach(() => vi.useRealTimers());
 
-  it('shows "No AI" once every probe positively reports unauthenticated', async () => {
+  it('shows an agent-specific missing warning on a positive unauthenticated result', async () => {
     render(
       <OnboardingBanners {...baseProps({ onCheckAuth: async () => result('unauthenticated') })} />
     );
-    await waitFor(() => expect(screen.getByText(/No AI connected/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Claude Code isn't connected/)).toBeInTheDocument()
+    );
   });
 
   it('shows no amber banner when the probe confirms authenticated', async () => {
@@ -41,7 +49,7 @@ describe('OnboardingBanners probe effect', () => {
       <OnboardingBanners {...baseProps({ onCheckAuth: async () => result('authenticated') })} />
     );
     // Give the effect a chance to resolve, then assert nothing scary rendered.
-    await waitFor(() => expect(screen.queryByText(/No AI connected/)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/isn't connected/)).not.toBeInTheDocument());
   });
 
   it('shows no amber banner when the probe throws (fail safe → Unknown)', async () => {
@@ -50,7 +58,39 @@ describe('OnboardingBanners probe effect', () => {
     });
     render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
     await waitFor(() => expect(onCheckAuth).toHaveBeenCalled());
-    expect(screen.queryByText(/No AI connected/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/isn't connected/)).not.toBeInTheDocument();
+  });
+
+  it('stays Unknown until workspace agent policy finishes hydrating', async () => {
+    agorStore.getState().reset();
+    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
+    render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
+
+    expect(onCheckAuth).not.toHaveBeenCalled();
+    expect(screen.queryByText(/isn't connected/)).not.toBeInTheDocument();
+
+    act(() => agorStore.getState().setAgenticToolSettings([]));
+    expect(await screen.findByText(/Claude Code isn't connected/)).toBeVisible();
+  });
+
+  it('does not call a disabled tool a credential failure when no agent is available', () => {
+    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
+    const disabled = ['claude-code', 'codex', 'gemini', 'copilot', 'cursor', 'opencode'].map(
+      (tool) => ({
+        tool,
+        deployment_available: true,
+        enabled: false,
+        resolution_policy: 'user_preferred',
+        inline_configuration_allowed: true,
+        connection: {},
+      })
+    );
+    act(() => agorStore.getState().setAgenticToolSettings(disabled as never));
+
+    render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
+
+    expect(onCheckAuth).not.toHaveBeenCalled();
+    expect(screen.queryByText(/isn't connected|rejected the configured credential/)).toBeNull();
   });
 
   it('re-probes and resets state on a user-identity change', async () => {
@@ -60,7 +100,9 @@ describe('OnboardingBanners probe effect', () => {
 
     onCheckAuth.mockImplementation(async () => result('unauthenticated'));
     rerender(<OnboardingBanners {...baseProps({ user: onboardedUser('user-2'), onCheckAuth })} />);
-    await waitFor(() => expect(screen.getByText(/No AI connected/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Claude Code isn't connected/)).toBeInTheDocument()
+    );
   });
 
   it('re-probes and clears the banner when a Codex subscription login lands via a user patch (no remount)', async () => {
@@ -70,7 +112,9 @@ describe('OnboardingBanners probe effect', () => {
     // the banner stuck until a page refresh.
     const onCheckAuth = vi.fn(async () => result('unauthenticated'));
     const { rerender } = render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
-    await waitFor(() => expect(screen.getByText(/No AI connected/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Claude Code isn't connected/)).toBeInTheDocument()
+    );
     const callsBefore = onCheckAuth.mock.calls.length;
 
     onCheckAuth.mockImplementation(async () => result('authenticated'));
@@ -87,7 +131,7 @@ describe('OnboardingBanners probe effect', () => {
 
     // Same identity → same component instance (no remount); the method-marker
     // dep change re-fires the probe, which now clears the banner.
-    await waitFor(() => expect(screen.queryByText(/No AI connected/)).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText(/isn't connected/)).not.toBeInTheDocument());
     expect(onCheckAuth.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 
@@ -128,22 +172,23 @@ describe('OnboardingBanners probe effect', () => {
     expect(onCheckAuth).toHaveBeenCalledTimes(1);
   });
 
-  it('treats CLAUDE_CODE_OAUTH_TOKEN in user env vars as Claude auth (probes claude-code, no banner)', async () => {
+  it('treats provider-scoped CLAUDE_CODE_OAUTH_TOKEN as Claude auth (probes claude-code, no banner)', async () => {
     const onCheckAuth = vi.fn(async () => result('authenticated'));
     render(
       <OnboardingBanners
         {...baseProps({
           user: onboardedUser('user-1', {
-            env_vars: {
-              CLAUDE_CODE_OAUTH_TOKEN: { set: true, scope: 'global', resource_id: null },
+            agentic_tools: {
+              'claude-code': { CLAUDE_CODE_OAUTH_TOKEN: true },
             },
+            agentic_auth_methods: { 'claude-code': 'subscription' },
           } as Partial<User>),
           onCheckAuth,
         })}
       />
     );
     await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code'));
-    expect(screen.queryByText(/No AI connected/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/isn't connected/)).not.toBeInTheDocument();
   });
 
   it('uses the standard alert action to open AI settings', async () => {
@@ -157,7 +202,7 @@ describe('OnboardingBanners probe effect', () => {
       />
     );
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Connect AI' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Claude Code settings' }));
     expect(onOpenUserSettings).toHaveBeenCalledWith('claude-code');
   });
 
@@ -198,7 +243,7 @@ describe('OnboardingBanners probe effect', () => {
         })}
       />
     );
-    fireEvent.click((await screen.findByText('Reconnect AI')).closest('button')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Review Claude Code settings' }));
     expect(onOpenWorkspaceSettings).toHaveBeenCalledWith('agentic-tools');
     expect(onOpenUserSettings).not.toHaveBeenCalled();
   });
@@ -225,7 +270,7 @@ describe('OnboardingBanners probe effect', () => {
         })}
       />
     );
-    fireEvent.click((await screen.findByText('Reconnect AI')).closest('button')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Review Claude Code settings' }));
     expect(onOpenUserSettings).toHaveBeenCalledWith('claude-code');
     expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
   });
@@ -253,7 +298,171 @@ describe('OnboardingBanners probe effect', () => {
         {...baseProps({ onOpenUserSettings, onCheckAuth: async () => result('unauthenticated') })}
       />
     );
-    fireEvent.click((await screen.findByText('Connect AI')).closest('button')!);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open Codex settings' }));
     expect(onOpenUserSettings).toHaveBeenCalledWith('codex');
+  });
+
+  it('renders Claude bearer-token rejection as Claude-only and never exposes secret data', async () => {
+    const syntheticSecret = 'synthetic-secret-must-not-render';
+    const onCheckAuth = vi.fn(async () => ({
+      ...result('unauthenticated'),
+      hint: syntheticSecret,
+    }));
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('user-1', {
+            primary_agentic_tool: 'claude-code',
+            agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: true } },
+            agentic_auth_methods: { 'claude-code': 'api_key' },
+          }),
+          onCheckAuth,
+        })}
+      />
+    );
+
+    expect(await screen.findByText(/Claude Code rejected the configured credential/)).toBeVisible();
+    expect(screen.getByText(/New Claude Code sessions will fail/)).toBeVisible();
+    expect(screen.queryByText(/Codex rejected/)).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent(syntheticSecret);
+  });
+
+  it('does not probe or surface another-agent-only failure', async () => {
+    const onCheckAuth = vi.fn(async (tool: AgenticToolName) =>
+      result(tool === 'claude-code' ? 'authenticated' : 'unauthenticated')
+    );
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('user-1', { primary_agentic_tool: 'claude-code' }),
+          onCheckAuth,
+        })}
+      />
+    );
+
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(1));
+    expect(onCheckAuth).toHaveBeenCalledWith('claude-code');
+    expect(screen.queryByText(/rejected the configured credential/)).not.toBeInTheDocument();
+  });
+
+  it('resets to Unknown while disconnected, then clears a stale warning after reconnect success', async () => {
+    const onCheckAuth = vi
+      .fn<(tool: AgenticToolName) => Promise<AuthCheckResult>>()
+      .mockResolvedValueOnce(result('unauthenticated'))
+      .mockResolvedValueOnce(result('authenticated'));
+    const props = baseProps({ onCheckAuth });
+    const { rerender } = render(<OnboardingBanners {...props} />);
+    await screen.findByText(/Claude Code isn't connected/);
+
+    rerender(<OnboardingBanners {...props} connectionReady={false} />);
+    await waitFor(() => expect(screen.queryByText(/isn't connected/)).not.toBeInTheDocument());
+    rerender(<OnboardingBanners {...props} connectionReady />);
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/isn't connected/)).not.toBeInTheDocument();
+  });
+
+  it('shows the warning again when a reconnect positively confirms failure', async () => {
+    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
+    const props = baseProps({ onCheckAuth, connectionReady: false });
+    const { rerender } = render(<OnboardingBanners {...props} />);
+    expect(onCheckAuth).not.toHaveBeenCalled();
+
+    rerender(<OnboardingBanners {...props} connectionReady />);
+    expect(await screen.findByText(/Claude Code isn't connected/)).toBeVisible();
+  });
+
+  it('re-probes a same-field credential rotation delivered by realtime updated_at', async () => {
+    const onCheckAuth = vi
+      .fn<(tool: AgenticToolName) => Promise<AuthCheckResult>>()
+      .mockResolvedValueOnce(result('unauthenticated'))
+      .mockResolvedValueOnce(result('authenticated'));
+    const credentialState = {
+      primary_agentic_tool: 'claude-code' as const,
+      agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: true } },
+      agentic_auth_methods: { 'claude-code': 'api_key' as const },
+    };
+    const { rerender } = render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('user-1', {
+            ...credentialState,
+            updated_at: new Date('2026-08-29T10:00:00Z'),
+          }),
+          onCheckAuth,
+        })}
+      />
+    );
+    await screen.findByText(/Claude Code rejected/);
+
+    rerender(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('user-1', {
+            ...credentialState,
+            updated_at: new Date('2026-08-29T10:01:00Z'),
+          }),
+          onCheckAuth,
+        })}
+      />
+    );
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/Claude Code rejected/)).not.toBeInTheDocument();
+  });
+
+  it('persists an accessible 24-hour snooze per user and tool, then reminds again', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const start = new Date('2026-08-29T12:00:00Z');
+    vi.setSystemTime(start);
+    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
+    const props = baseProps({ onCheckAuth });
+    const first = render(<OnboardingBanners {...props} />);
+    const close = await screen.findByRole('button', {
+      name: 'Snooze Claude Code warning for 24 hours',
+    });
+    fireEvent.click(close);
+    await waitFor(() => expect(screen.queryByText(/Claude Code isn't connected/)).toBeNull());
+    first.unmount();
+
+    const second = render(<OnboardingBanners {...props} />);
+    await waitFor(() => expect(screen.queryByText(/Claude Code isn't connected/)).toBeNull());
+    const callsBeforeReminder = onCheckAuth.mock.calls.length;
+
+    await act(() => vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000 + 1));
+    expect(onCheckAuth.mock.calls.length).toBeGreaterThan(callsBeforeReminder);
+    expect(await screen.findByText(/Claude Code isn't connected/)).toBeVisible();
+    second.unmount();
+    vi.useRealTimers();
+  });
+
+  it('does not transfer a dismissed warning across logout or user switch', async () => {
+    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
+    const props = baseProps({ onCheckAuth });
+    const { rerender } = render(<OnboardingBanners {...props} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Snooze Claude Code warning for 24 hours/ })
+    );
+    rerender(<OnboardingBanners {...props} user={null} />);
+    expect(screen.queryByText(/isn't connected/)).not.toBeInTheDocument();
+
+    rerender(<OnboardingBanners {...props} user={onboardedUser('user-2')} />);
+    expect(await screen.findByText(/Claude Code isn't connected/)).toBeVisible();
+  });
+
+  it('clears a snooze after a local credential save so reconnect failure is visible', async () => {
+    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
+    const props = baseProps({
+      user: onboardedUser('user-1', {
+        agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+      }),
+      onCheckAuth,
+    });
+    const { rerender } = render(<OnboardingBanners {...props} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Snooze Claude Code warning for 24 hours/ })
+    );
+    await waitFor(() => expect(screen.queryByText(/Claude Code rejected/)).toBeNull());
+
+    rerender(<OnboardingBanners {...props} credentialVersion={1} />);
+    expect(await screen.findByText(/Claude Code rejected/)).toBeVisible();
   });
 });

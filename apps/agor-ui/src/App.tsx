@@ -2180,6 +2180,7 @@ function AppContent() {
           onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
           onCheckAuth={handleCheckAuth}
           credentialVersion={credentialVersion}
+          connectionReady={connected && !connecting}
         />
       }
       onCreateSession={handleCreateSession}

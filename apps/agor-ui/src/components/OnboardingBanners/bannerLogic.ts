@@ -2,10 +2,9 @@
  * Pure decision logic for the post-onboarding banners.
  *
  * Guiding invariant: FAIL SAFE — never surface a "not connected" / "broken key"
- * banner without POSITIVE proof (`probeState === 'unauthenticated'`). The
- * client `user` object only carries DB-stored keys, so it cannot see
- * executor-filesystem credentials; the amber banners are therefore driven by
- * the server-side check-auth probe, not by a presence check.
+ * banner without POSITIVE proof (`probeState === 'unauthenticated'`) for the
+ * selected, enabled tool. Credential presence only chooses the copy; the
+ * server-side check-auth probe owns the verdict.
  */
 
 import type {
@@ -29,10 +28,11 @@ const CLAUDE_CREDENTIAL_FIELDS = [
  * `primaryAgentForUser`, and `onboardingSelectedAgent` all derive from this so the
  * three lists cannot drift apart.
  *
- * `credentialFields` are the auth-indicating env-var names for each tool (matching
- * both `agentic_tools[tool]` and `env_vars`); base-URL fields are excluded. OpenCode
- * is server-based — no credential field — so it never contributes a stored key, but
- * a user who SELECTED it still resolves to probing `opencode` (always authenticated).
+ * `credentialFields` are provider-scoped fields in `agentic_tools[tool]`;
+ * base-URL fields and general managed env vars are excluded. OpenCode is
+ * server-based — no credential field — so it never contributes a stored key,
+ * but a user who selected it still resolves to probing `opencode` (always
+ * authenticated).
  */
 const SUPPORTED_AGENTIC_TOOLS: readonly {
   tool: AgenticToolName;
@@ -46,39 +46,47 @@ const SUPPORTED_AGENTIC_TOOLS: readonly {
   { tool: 'opencode', credentialFields: [] },
 ];
 
-/** Reliably server-probeable native tools, tried as a fallback before concluding "No AI". */
-const NATIVE_FALLBACK_TOOLS: readonly AgenticToolName[] = ['claude-code', 'codex'];
-
-/** Whether `user` carries a stored (DB or env-var) credential for `tool`. */
-function hasStoredKeyFor(
+/** Whether `user` carries the active, provider-scoped credential for `tool`. */
+function hasStoredCredentialFor(
   user: User,
   tool: AgenticToolName,
   credentialFields: readonly string[]
 ): boolean {
   const toolStatus = user.agentic_tools?.[tool] as Record<string, boolean | undefined> | undefined;
-  const envVars = user.env_vars;
-  return credentialFields.some((field) => !!toolStatus?.[field] || !!envVars?.[field]);
+  const authMethod =
+    tool === 'claude-code' || tool === 'codex' ? user.agentic_auth_methods?.[tool] : undefined;
+
+  if (tool === 'codex' && authMethod === 'subscription') return true;
+
+  return credentialFields.some((field) => {
+    if (tool === 'claude-code') {
+      if (authMethod === 'subscription' && field !== 'CLAUDE_CODE_OAUTH_TOKEN') return false;
+      if (authMethod === 'api_key' && field === 'CLAUDE_CODE_OAUTH_TOKEN') return false;
+    }
+    return !!toolStatus?.[field];
+  });
 }
 
 /**
- * Whether the client `user` object carries any LLM credential. This only sees
- * DB-stored keys — it CANNOT observe executor-filesystem credentials (e.g. a
- * `claude /login` token) or server-based tools, so a `false` result does not
- * mean the user is unconnected.
+ * Whether the client `user` object carries any active, provider-scoped LLM
+ * credential. General `env_vars` intentionally do not count: provider
+ * credentials are resolved only from `agentic_tools` under workspace policy,
+ * and the executor strips ambient provider variables before installing that
+ * resolved connection.
  */
 export function hasAnyLlmKey(user: User | null | undefined): boolean {
   if (!user) return false;
   return SUPPORTED_AGENTIC_TOOLS.some(({ tool, credentialFields }) =>
-    hasStoredKeyFor(user, tool, credentialFields)
+    hasStoredCredentialFor(user, tool, credentialFields)
   );
 }
 
-/** The first supported tool (preference order) with a stored key, if any. */
+/** The first supported tool (preference order) with an active credential, if any. */
 export function primaryAgentForUser(user: User | null | undefined): AgenticToolName | null {
   if (!user) return null;
   return (
     SUPPORTED_AGENTIC_TOOLS.find(({ tool, credentialFields }) =>
-      hasStoredKeyFor(user, tool, credentialFields)
+      hasStoredCredentialFor(user, tool, credentialFields)
     )?.tool ?? null
   );
 }
@@ -123,52 +131,63 @@ export function hasConfiguredCredentialFor(
   tool: AgenticToolName,
   settings?: TenantAgenticToolSettings
 ): boolean {
+  const { hasUserCredential, hasTenantCredential } = credentialPresenceFor(user, tool, settings);
+  if (settings?.resolution_policy === 'user_required') return hasUserCredential;
+  if (settings?.resolution_policy === 'tenant_required') return hasTenantCredential;
+  return hasUserCredential || hasTenantCredential;
+}
+
+function credentialPresenceFor(
+  user: User | null | undefined,
+  tool: AgenticToolName,
+  settings?: TenantAgenticToolSettings
+): { hasUserCredential: boolean; hasTenantCredential: boolean } {
   const spec = SUPPORTED_AGENTIC_TOOLS.find((candidate) => candidate.tool === tool);
-  const hasUserCredential = !!user && !!spec && hasStoredKeyFor(user, tool, spec.credentialFields);
+  const hasUserCredential =
+    !!user && !!spec && hasStoredCredentialFor(user, tool, spec.credentialFields);
   const fields: readonly string[] = Object.hasOwn(PROVIDER_CREDENTIAL_FIELDS, tool)
     ? PROVIDER_CREDENTIAL_FIELDS[tool as keyof typeof PROVIDER_CREDENTIAL_FIELDS]
     : [];
   const hasTenantCredential = fields.some(
     (field) => settings?.connection[field as keyof typeof settings.connection]?.configured
   );
-  return hasUserCredential || hasTenantCredential;
+  return { hasUserCredential, hasTenantCredential };
 }
 
-export function preferredCredentialOwner(settings?: TenantAgenticToolSettings): 'user' | 'tenant' {
-  return settings?.resolution_policy === 'tenant_preferred' ||
-    settings?.resolution_policy === 'tenant_required'
-    ? 'tenant'
-    : 'user';
+/** The owner whose complete connection the resolver will select under policy. */
+export function resolvedCredentialOwner(
+  user: User | null | undefined,
+  tool: AgenticToolName,
+  settings?: TenantAgenticToolSettings
+): 'user' | 'tenant' {
+  const { hasUserCredential, hasTenantCredential } = credentialPresenceFor(user, tool, settings);
+  switch (settings?.resolution_policy) {
+    case 'tenant_required':
+      return 'tenant';
+    case 'user_required':
+      return 'user';
+    case 'tenant_preferred':
+      return hasTenantCredential ? 'tenant' : 'user';
+    default:
+      return hasUserCredential || !hasTenantCredential ? 'user' : 'tenant';
+  }
 }
 
 /**
- * Resolve the probe state for a user, with a bounded multi-tool fallback.
+ * Resolve the probe state for exactly one selected, enabled tool.
  *
- * The primary tool's verdict wins outright unless it is a positive
- * `unauthenticated` AND the user has no stored key: only then do we also probe
- * the reliably-native tools (a working `claude /login` under a stale non-claude
- * default would otherwise false-positive). We show Unauthenticated only if EVERY
- * probe positively says so; any `authenticated` clears it, any `unknown` fails
- * safe to Unknown. Early-exits on the first `authenticated`; at most a couple of
- * extra sequential probes on the already-rare no-key path.
+ * A working credential for a different tool does not make sessions for this
+ * tool runnable, and a failure for a different tool must not produce a global
+ * warning. `unknown` remains fail-safe.
  */
 export async function resolveProbeState(
   checkStatus: (tool: AgenticToolName) => Promise<AuthCheckStatus>,
-  probeAgent: AgenticToolName,
-  hasLlm: boolean
+  probeAgent: AgenticToolName
 ): Promise<ProbeState> {
-  const primary = await checkStatus(probeAgent);
-  if (primary === 'authenticated') return ProbeState.Authenticated;
-  if (primary === 'unknown') return ProbeState.Unknown;
-  if (hasLlm) return ProbeState.Unauthenticated;
-
-  for (const tool of NATIVE_FALLBACK_TOOLS) {
-    if (tool === probeAgent) continue;
-    const status = await checkStatus(tool);
-    if (status === 'authenticated') return ProbeState.Authenticated;
-    if (status === 'unknown') return ProbeState.Unknown;
-  }
-  return ProbeState.Unauthenticated;
+  const status = await checkStatus(probeAgent);
+  if (status === 'authenticated') return ProbeState.Authenticated;
+  if (status === 'unauthenticated') return ProbeState.Unauthenticated;
+  return ProbeState.Unknown;
 }
 
 /**
@@ -205,6 +224,8 @@ export interface BannerDecisionInput {
   /** Whether both integration collections (mcp-servers + gateway-channels) have finished their first hydration. */
   integrationsHydrated: boolean;
   integrationsBannerDismissed: boolean;
+  /** A user-scoped 24-hour snooze of the selected tool's warning. */
+  credentialWarningDismissed: boolean;
 }
 
 /**
@@ -224,6 +245,7 @@ export function decideBanner(input: BannerDecisionInput): BannerDecision {
   if (!input.onboardingCompleted) return BannerDecision.None;
 
   if (input.probeState === ProbeState.Unauthenticated) {
+    if (input.credentialWarningDismissed) return BannerDecision.None;
     return input.hasLlm ? BannerDecision.KeyInvalid : BannerDecision.NoAi;
   }
 
