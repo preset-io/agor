@@ -321,10 +321,11 @@ for (const [label, base] of [
       // (ready OR timeout — both are non-error) rather than the scope failure.
       // Materialization of a synthetic repo may legitimately time out, so we do
       // not assert `ready` specifically; we assert the wait code path ran.
-      const message = result.payload?._readiness?.message ?? '';
+      // Assert the machine-readable outcome rather than user-facing message text.
+      const outcome = result.payload?._readiness?.outcome;
       assert(
-        /ready for session creation|Timed out/i.test(message),
-        `waitForReady did not render a bounded readiness outcome on ${label}: ${result.text}`
+        outcome === 'ready' || outcome === 'timeout',
+        `waitForReady did not render a bounded readiness outcome on ${label} (outcome=${outcome}): ${result.text}`
       );
     }
   }
