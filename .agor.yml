@@ -92,22 +92,22 @@ environment:
       app: http://{{host.ip_address}}:{{add 5000 branch.unique_id}}
     codespaces-sqlite:
       start: >-
-        python3 scripts/managed-environments/codespaces/agor-codespace-launcher.py start
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs start
         --repository {{shellQuote repo.slug}} --ref {{shellQuote branch.ref}}
         --binding {{shellQuote branch.id}}
         --devcontainer-path .devcontainer/agor-managed/devcontainer.json
         --idle-timeout-minutes 30 --retention-period-minutes 1440
         --app-port 5000 --health-port 3000 --health-path /health --emit-health public-only
       stop: >-
-        python3 scripts/managed-environments/codespaces/agor-codespace-launcher.py stop
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs stop
         --repository {{shellQuote repo.slug}} --ref {{shellQuote branch.ref}}
         --binding {{shellQuote branch.id}}
       nuke: >-
-        python3 scripts/managed-environments/codespaces/agor-codespace-launcher.py nuke
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs nuke
         --repository {{shellQuote repo.slug}} --ref {{shellQuote branch.ref}}
         --binding {{shellQuote branch.id}}
       logs: >-
-        python3 scripts/managed-environments/codespaces/agor-codespace-launcher.py logs
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs logs
         --repository {{shellQuote repo.slug}} --ref {{shellQuote branch.ref}}
         --binding {{shellQuote branch.id}}
       app: https://github.com/codespaces
