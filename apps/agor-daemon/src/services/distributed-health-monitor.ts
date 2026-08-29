@@ -42,7 +42,7 @@ export interface DistributedHealthMonitorOptions {
   generateClaimToken?: () => string;
   fetchHealth?: typeof fetch;
   /** Test seam for command/provider-reported public health URLs. */
-  fetchDynamicHealth?: typeof fetch;
+  fetchDynamicHealth?: ReturnType<typeof createPinnedFetch>;
   /** Test seam; production always uses capability-scoped PostgreSQL discovery. */
   discover?: (
     after?: EnvironmentHealthRoutingCursor
@@ -92,7 +92,7 @@ export class DistributedHealthMonitor {
   private readonly random: () => number;
   private readonly generateClaimToken: () => string;
   private readonly fetchHealth: typeof fetch;
-  private readonly fetchDynamicHealth: typeof fetch;
+  private readonly fetchDynamicHealth: ReturnType<typeof createPinnedFetch>;
   private readonly activeClaims = new Map<
     string,
     { tenantId: TenantID; claim: EnvironmentHealthClaim }
