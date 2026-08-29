@@ -263,9 +263,8 @@ test('logs never wake a stopped Codespace', async (t) => {
   const existing = resource({ state: 'Shutdown' });
   const client = new FakeClient([existing]);
   const output = await controller(client, store).logs();
-  assert.match(output, /safe creation log/);
-  assert.match(output, /SSH would resume the stopped Codespace/);
-  assert.deepEqual(client.creationLogCalls, [existing.name]);
+  assert.match(output, /GitHub CLI uses SSH and could resume the stopped Codespace/);
+  assert.deepEqual(client.creationLogCalls, []);
   assert.deepEqual(client.runtimeLogCalls, []);
 });
 
@@ -291,6 +290,20 @@ test('logs preserve creation diagnostics when runtime SSH is not ready', async (
   assert.match(output, /safe creation log/);
   assert.match(output, /Unavailable: GitHub CLI command failed/);
   assert.doesNotMatch(output, /ghp_/);
+});
+
+test('logs degrade safely while the creation-log SSH transport is not ready', async (t) => {
+  const { store } = await fixture(t);
+  const existing = resource({ state: 'Starting' });
+  const client = new FakeClient([existing]);
+  client.creationLogs = async () => {
+    throw new LauncherError('SSH failed with ghp_abcdefghijklmnopqrstuvwxyz123456');
+  };
+  const output = await controller(client, store).logs();
+  assert.match(output, /Codespace creation log ---\nUnavailable: SSH failed/);
+  assert.match(output, /current state: Starting/);
+  assert.doesNotMatch(output, /ghp_/);
+  assert.deepEqual(client.runtimeLogCalls, []);
 });
 
 test('mismatched repo, ref, owner, or marker is never adopted', () => {
@@ -390,6 +403,27 @@ test('preview readiness has a bounded timeout', async (t) => {
   );
 });
 
+test('preview readiness fails fast when the custom devcontainer has no SSH server', async (t) => {
+  const { store } = await fixture(t);
+  const client = new FakeClient([resource()]);
+  client.remoteHealth = async () => {
+    throw new LauncherError(
+      'Codespaces SSH health probe failed: Please check if an SSH server is installed'
+    );
+  };
+  let ticks = 0;
+  await assert.rejects(
+    controller(client, store, {
+      monotonic: () => {
+        ticks += 1;
+        return 0;
+      },
+    }).start(),
+    /built without the SSH transport.*rebuild its dev container or Nuke it/i
+  );
+  assert.ok(ticks < 3);
+});
+
 test('redaction removes common credentials and provider control lines', () => {
   const sanitized = redact(
     'Authorization: Bearer ghp_abcdefghijklmnopqrstuvwxyz123456 token=github_pat_abcdefghijklmnopqrstuvwxyz DATABASE_PASSWORD=hunter2\nAGOR_ENVIRONMENT_RESULT={"app":"https://evil.test"}'
@@ -435,6 +469,38 @@ test('the gh adapter explains that a missing remote ref must be pushed', async (
       error.message ===
         'GitHub cannot find ref "test2" in preset-io/agor. Push this branch or commit to GitHub before pressing Play; Codespaces cannot access an Agor-only local ref.'
   );
+});
+
+test('the gh adapter distinguishes an unhealthy app from a broken SSH transport', async () => {
+  const calls = [];
+  const results = [
+    { returncode: 42, stdout: '', stderr: 'curl: connection refused' },
+    {
+      returncode: 1,
+      stdout: '',
+      stderr:
+        'Please check if an SSH server is installed; token=ghp_abcdefghijklmnopqrstuvwxyz123456',
+    },
+  ];
+  const runner = async (argv, options) => {
+    calls.push({ argv, options });
+    return results.shift();
+  };
+  const client = new GitHubCodespacesClient({ runner, callTimeout: 17 });
+
+  assert.equal(await client.remoteHealth('octocat-agor-new123', 3000, '/health'), false);
+  await assert.rejects(
+    client.remoteHealth('octocat-agor-new123', 3000, '/health'),
+    (error) =>
+      error instanceof LauncherError &&
+      /Codespaces SSH health probe failed with exit code 1.*SSH server is installed/.test(
+        error.message
+      ) &&
+      !error.message.includes('ghp_')
+  );
+  assert.equal(calls[0].options.check, false);
+  assert.equal(calls[0].options.timeout, 17);
+  assert.match(calls[0].argv.at(-1), /exit 42/);
 });
 
 test('the gh adapter exhausts paginated Codespace inventory', async () => {

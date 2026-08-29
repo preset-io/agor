@@ -156,8 +156,8 @@ The bounded implementation adds only the pieces needed to make a local trial obs
   `gh codespace ssh`. If the health port is public, the launcher can return its current URL and
   Agor's normal continuous monitor takes over through a public-only, DNS-pinned fetch path.
 - A repository devcontainer at `.devcontainer/agor-managed/devcontainer.json` uses Docker-in-Docker,
-  forwards private ports 3000/5000, and starts the normal SQLite Compose project on every Codespace
-  start.
+  installs the SSH server required by `gh codespace ssh`, forwards private ports 3000/5000, and
+  starts the normal SQLite Compose project on every Codespace start.
 
 These deltas do **not** add durable lifecycle CAS, provider binding columns, distributed locking,
 an OAuth sponsor, or an authenticated Cloud controller. They therefore do not change the Cloud/HA
@@ -365,7 +365,7 @@ behavior should be confirmed in a disposable account.
 | **Stop**   | Rediscover and validate; stop exact resource; retain Codespace disk and remote SQLite                                                                                                 | Storage remains billed until retention/delete                             |
 | **Nuke**   | Rediscover, re-fetch, validate all identity fields, delete exact resource, clear binding URLs only after current-attempt CAS                                                          | Never wildcard-delete by prefix or stale name                             |
 | **Health** | Reconcile provider state and current URLs; separately report preview readiness                                                                                                        | Private/org port auth may prevent a central HTTP probe                    |
-| **Logs**   | Return bounded sanitized controller audit + Codespaces creation diagnostics and, only while Available, the nested Compose log tail                                                    | Streaming and durable remote logs remain future work                      |
+| **Logs**   | While compute is running, return bounded sanitized Codespaces diagnostics and, only while Available, the nested Compose log tail; skip remote calls while stopped                     | `gh codespace logs` also requires SSH; streaming/durable logs are future  |
 | **App**    | Link the newly observed forwarded UI URL, with visibility/auth indicated                                                                                                              | Experiment consumes it; production still needs attempt-fenced persistence |
 | **SSH**    | Future explicit authorized action using the sponsor grant                                                                                                                             | It is not an access URL and must not be fabricated or persisted as one    |
 
@@ -439,7 +439,7 @@ same operation ID; callbacks compare-and-set generation so Start cannot overwrit
 Stop/Nuke. In-memory serialization, including the prototype lease and PR #2304 sync lock, is not HA
 coordination.
 
-## Disposable manual trial (not performed by this change)
+## Disposable manual trial
 
 Use only a repository/ref whose Codespace can be safely created and deleted:
 
@@ -453,12 +453,14 @@ Use only a repository/ref whose Codespace can be safely created and deleted:
    `.agor.yml`, a command, URL, fact/result, image, or branch data.
 3. Reload/import this branch's `.agor.yml`, stop any current preview, and explicitly re-render the
    branch with `codespaces-sqlite`. The existing branch remains on `sqlite` until that opt-in.
-4. Press Play once. Cold Docker image build and Agor startup occur in the Codespace and can take up
-   to the launcher's ten-minute deadline. The App pill initially links to the Codespaces dashboard,
-   then switches to the current private forwarded-port URL after provider and remote `/health`
-   readiness succeed. During bootstrap, use **Codespaces: View Creation Log**, run
-   `gh codespace logs -c <name> --follow`, or use Agor's Logs action for a bounded creation-log
-   snapshot. Once the workspace is Available, Logs also includes the nested Compose log tail.
+4. Press Play once. Cold Docker image build and Agor startup occur in the Codespace and are given
+   the variant's bounded twenty-minute deadline. The App pill initially links to the Codespaces
+   dashboard, then switches to the current private forwarded-port URL after provider and remote
+   `/health` readiness succeed. During early bootstrap, **Codespaces: View Creation Log** in the
+   browser/VS Code client is authoritative. `gh codespace logs -c <name> --follow` and Agor's Logs
+   action become available after the custom devcontainer SSH server is ready. Once the workspace is
+   Available, Logs also includes the nested Compose log tail. Logs skips a stopped Codespace rather
+   than risking a resume.
 5. Open App while logged into GitHub as the Codespace creator. If GitHub's private-port auth does
    not work for the split UI/daemon origins, stop and Nuke; do not switch the fixed-admin preview to
    public as a workaround.
@@ -471,6 +473,51 @@ The launcher stores only a mode-0600 local binding fence under
 action. Deleting that file does not delete a Codespace; the exact display marker allows same-actor
 rediscovery. If a different GitHub actor is presented while the fence exists, the launcher refuses
 to create or mutate anything.
+
+### First live result and cold-start diagnosis (2026-08-29)
+
+Max used Play to create one disposable Codespace for a pushed test branch. A read-only follow-up
+inspection found the exact marker-bound resource in provider state `Available`, on GitHub's default
+2-core machine, with private ports 3000 and 5000 registered. Start nevertheless reached its 600
+second deadline with `remote Agor /health is not ready`.
+
+That result did **not** establish a ten-minute Docker build. Both `gh codespace ssh` and
+`gh codespace logs` failed with GitHub CLI's explicit instruction to install an SSH server in the
+custom devcontainer. The launcher had collapsed every nonzero SSH result into ordinary unhealthy,
+so it retried a structural transport failure until the generic deadline. The correction in this
+branch:
+
+- adds `ghcr.io/devcontainers/features/sshd:1` to the managed devcontainer;
+- reserves remote exit 42 for a real curl-not-ready result and reports other SSH failures;
+- fails fast with rebuild/Nuke guidance for GitHub's missing-SSH diagnostic;
+- gives a genuine first cold build a bounded twenty minutes instead of ten; and
+- does not call either SSH-backed log command for a stopped Codespace.
+
+An existing Codespace does not gain a new devcontainer feature merely because the Git branch was
+updated. It must be rebuilt after pulling the change, or Nuked and recreated from the updated ref.
+The investigation issued no start, stop, delete, visibility, or repository mutation. The existing
+disposable resource remains the creator's cleanup responsibility.
+
+Cold start may still need optimization after a rebuilt trial produces an actual duration. The
+current Compose path builds Dockerfile target `development` inside Docker-in-Docker. Same-Codespace
+restarts reuse those local layers, but the outer Codespace does not automatically inherit Docker
+Hub or Actions cache. GitHub also documents that Docker-in-Docker is unavailable during Codespaces
+prebuild creation, so moving this exact nested build into `onCreateCommand` is not a working
+prebuild shortcut. Current main CI publishes a private standalone image from target
+`production-source`, not the development dependency layer this Compose service needs.
+
+The smallest explicit levers are therefore:
+
+1. choose a 4-core Codespace instead of GitHub's lowest-valid 2-core default (faster but a direct
+   billing tradeoff); or
+2. publish a dedicated development BuildKit cache/image from trusted main only, consume it by
+   immutable digest with an authenticated/private or deliberately public pull policy, and retain
+   checkout-local source as the final authority.
+
+A nightly is unnecessary for unchanged dependencies and less useful than publishing on trusted
+main changes to the Dockerfile, lockfile, or workspace manifests. This prototype does not alter the
+repository's image publication boundary until that cost, trust, registry, and invalidation policy
+is explicitly chosen.
 
 ## Prototype contract and measured validation
 
@@ -504,19 +551,17 @@ owner/repository/ref/duplicate identity rejection, stale attempt, destructive re
 redaction/bounds, invalid URL rejection, and invalid input. The test provider is fully in-memory; no
 GitHub resource or customer repository was read or mutated by the tests.
 
-Agor's read-only environment status confirms this branch is still rendered with the existing
-`sqlite` variant and has no active environment status during validation. Per the repository's
-watch-mode rule and the no-mutation safety boundary, validation did not start Docker, a background
-development stack, or a real Codespace. The new variant must be explicitly selected/re-rendered
-before a disposable manual trial.
+Initial hermetic validation did not start Docker, a background development stack, or a real
+Codespace. The subsequent user-authorized disposable trial is recorded above; diagnostic
+follow-up was read-only with respect to provider lifecycle and repository resources.
 
 The launcher tests additionally cover create, repeated Play without duplicate creation, stopped
 resume, stale-name/recreated-resource adoption, duplicate-marker freeze, actor change rejection,
 idempotent Stop/Nuke, owner/repository/ref/marker mismatch, dynamic URL allowlisting, redaction, and
-argv/JSON-stdin transport of shell-looking refs. Creation-log access during startup/stopped states
-and safe degradation when runtime SSH logs are not ready are covered separately. Its atomic local
-lock directory closes the duplicate-Play window only for processes sharing one launcher state
-directory and PID namespace; it is not a distributed lock.
+argv/JSON-stdin transport of shell-looking refs. Creation-log access during startup, stopped-resource
+no-wake behavior, missing-SSH fail-fast diagnostics, and safe degradation when log SSH is not ready
+are covered separately. Its atomic local lock directory closes the duplicate-Play window only for
+processes sharing one launcher state directory and PID namespace; it is not a distributed lock.
 
 The variant passes `repo.github_slug`, a credential-free `owner/repository` identity derived at
 render time from Agor's sanitized registered `github.com` remote. It intentionally does not use
@@ -530,8 +575,8 @@ Command run:
 node --test scripts/managed-environments/codespaces/agor-codespace-launcher.test.mjs
 ```
 
-Measured result after the Node adapter implementation: **22/22 launcher tests passed in about 400
-ms**. Combined with the provider-neutral suite, the prototype has 38 hermetic lifecycle/security
+Measured result after the Node adapter implementation: **25/25 launcher tests passed in about 400
+ms**. Combined with the provider-neutral suite, the prototype has 41 hermetic lifecycle/security
 cases.
 Focused Core, executor, daemon, and UI Vitest suites passed **187/187** cases covering command
 rendering, strict result parsing, health generation fencing, DNS-pinned cancellation, branch

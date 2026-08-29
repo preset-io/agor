@@ -165,6 +165,14 @@ if (codespacesWorktreeBuildStarts > 0) {
     /--devcontainer-path \.devcontainer\/agor-managed\/devcontainer\.json/,
     'the Codespaces variant must select the reviewed managed devcontainer'
   );
+  const codespacesDevcontainer = JSON.parse(
+    await readFile(path.join(root, '.devcontainer/agor-managed/devcontainer.json'), 'utf8')
+  );
+  assert.deepEqual(
+    codespacesDevcontainer.features?.['ghcr.io/devcontainers/features/sshd:1'],
+    { version: 'latest' },
+    'the managed devcontainer must install SSH for gh codespace health/log commands'
+  );
   const codespacesBootstrap = await readFile(
     path.join(root, '.devcontainer/agor-managed/start-agor-sqlite.sh'),
     'utf8'

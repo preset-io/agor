@@ -2,7 +2,10 @@
   "name": "Agor managed Codespaces SQLite (experimental)",
   "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
   "features": {
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
   },
   "forwardPorts": [3000, 5000],
   "portsAttributes": {

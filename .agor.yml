@@ -97,6 +97,7 @@ environment:
         --binding {{shellQuote branch.id}}
         --devcontainer-path .devcontainer/agor-managed/devcontainer.json
         --idle-timeout-minutes 30 --retention-period-minutes 1440
+        --wait-seconds 1200
         --app-port 5000 --health-port 3000 --health-path /health --emit-health public-only
       stop: >-
         node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs stop

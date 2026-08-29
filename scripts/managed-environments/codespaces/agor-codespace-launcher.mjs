@@ -328,12 +328,22 @@ export class GitHubCodespacesClient {
 
   async remoteHealth(name, healthPort, healthPath) {
     const healthUrl = `http://127.0.0.1:${healthPort}${healthPath}`;
-    const command = `curl -fsS --max-time 5 ${shellQuote(healthUrl)} >/dev/null`;
+    // Use a reserved exit status for an ordinary not-ready response. That
+    // lets us distinguish curl health failures from a broken Codespaces SSH
+    // transport (for example, a custom devcontainer with no SSH server).
+    const command = `curl -fsS --max-time 5 ${shellQuote(healthUrl)} >/dev/null || exit 42`;
     const result = await this.runner(['gh', 'codespace', 'ssh', '-c', name, '--', command], {
       timeout: this.callTimeout,
       check: false,
     });
-    return result.returncode === 0;
+    if (result.returncode === 0) return true;
+    if (result.returncode === 42) return false;
+
+    let detail = redact((result.stderr || result.stdout).trim());
+    if (detail.length > 2_000) detail = `...${detail.slice(-2_000)}`;
+    throw new LauncherError(
+      `Codespaces SSH health probe failed with exit code ${result.returncode}${detail ? `: ${detail}` : ''}`
+    );
   }
 
   async creationLogs(name) {
@@ -685,6 +695,11 @@ export class CodespaceController {
         else lastError = 'remote Agor /health is not ready';
       } catch (error) {
         if (!(error instanceof LauncherError)) throw error;
+        if (/check if an SSH server is installed/i.test(error.message)) {
+          throw new LauncherError(
+            `${error.message}. This Codespace was built without the SSH transport required by the launcher; rebuild its dev container or Nuke it and press Play again.`
+          );
+        }
         lastError = error.message;
       }
       if (this.monotonic() >= deadline) {
@@ -805,17 +820,24 @@ export class CodespaceController {
     const resource = discovery.resource;
     const summary = JSON.stringify(publicSummary(resource, []));
     const name = resourceName(resource);
-    // Creation logs come from the provider control plane and do not establish
-    // an SSH connection, so they are useful while postCreate/postStart is
-    // running and are safe to read from a stopped Codespace.
-    const creationLogs = await this.client.creationLogs(name);
-    const creationSection = `${summary}\n--- Codespace creation log ---\n${creationLogs}${creationLogs.endsWith('\n') ? '' : '\n'}`;
+    // `gh codespace logs` uses the same SSH transport as runtime logs for a
+    // custom devcontainer. Do not call either command for a stopped resource:
+    // establishing that tunnel can resume billable compute.
+    if (resource.state === 'Shutdown') {
+      return `${summary}\nCodespace logs were skipped because GitHub CLI uses SSH and could resume the stopped Codespace. Press Play before requesting Logs.\n`;
+    }
+
+    let creationSection;
+    try {
+      const creationLogs = await this.client.creationLogs(name);
+      creationSection = `${summary}\n--- Codespace creation log ---\n${creationLogs}${creationLogs.endsWith('\n') ? '' : '\n'}`;
+    } catch (error) {
+      const detail =
+        error instanceof LauncherError ? error.message : 'creation logs are not available yet';
+      creationSection = `${summary}\n--- Codespace creation log ---\nUnavailable: ${redact(detail)}\n`;
+    }
     if (resource.state !== 'Available') {
-      const runtimeReason =
-        resource.state === 'Shutdown'
-          ? 'Agor runtime logs were skipped because SSH would resume the stopped Codespace.'
-          : `Agor runtime logs are not available until the Codespace is Available (current state: ${resource.state || 'unknown'}).`;
-      return `${creationSection}--- Agor runtime log ---\n${runtimeReason}\n`;
+      return `${creationSection}--- Agor runtime log ---\nAgor runtime logs are not available until the Codespace is Available (current state: ${resource.state || 'unknown'}).\n`;
     }
     try {
       const runtimeLogs = await this.client.runtimeLogs(name, this.repository);

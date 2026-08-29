@@ -547,6 +547,7 @@ environment:
         --repository {{shellQuote repo.github_slug}}
         --ref {{shellQuote branch.ref}}
         --binding {{shellQuote branch.id}}
+        --wait-seconds 1200
         --app-port 5000 --health-port 3000 --health-path /health
         --emit-health public-only
       stop: >-
@@ -570,6 +571,13 @@ App URL from live Codespaces port metadata. With `--emit-health public-only`, it
 reports health only when GitHub says that forwarded port is public; private
 Codespaces URLs remain authenticated App links and are not polled by Agor.
 
+The managed devcontainer explicitly installs the
+[Dev Containers `sshd` feature](https://cli.github.com/manual/gh_codespace_ssh).
+This is required for the launcher's authenticated `/health` check and runtime
+logs: the official `gh codespace ssh` command cannot connect to a custom image
+that has no SSH server. If a Codespace was created from an older version of the
+devcontainer, rebuild its container or Nuke it and press Play again.
+
 While a Codespace is building, use **Cmd/Ctrl+Shift+P → Codespaces: View Creation
 Log** in the browser/VS Code client, or follow the same provider log from another
 authenticated machine:
@@ -578,15 +586,30 @@ authenticated machine:
 gh codespace logs -c <codespace-name> --follow
 ```
 
-Agor's Logs action returns a bounded snapshot of that creation log even while
-`postStartCommand` is running. Once the Codespace is available, it also retrieves
-the nested Compose log tail over authenticated SSH. From a Codespace terminal,
-you can inspect the stack directly:
+`gh codespace logs` also relies on the Codespaces SSH transport for a custom
+devcontainer. Agor's Logs action therefore returns a bounded snapshot when that
+transport is ready, reports it as temporarily unavailable earlier in creation,
+and skips all remote log commands for a stopped Codespace so a log read cannot
+resume billable compute. Once the Codespace is available, Logs also retrieves the
+nested Compose log tail. From a Codespace terminal, you can inspect the stack
+directly:
 
 ```bash
 docker compose -p agor-codespaces-sqlite ps
 docker compose -p agor-codespaces-sqlite logs --tail=100 --follow
 ```
+
+The first Play builds Agor's development image inside the Codespace. Later
+starts of the same Codespace reuse its Docker layers unless dependency inputs
+changed, so this does not require a nightly job for normal stop/start cycles.
+The reference variant gives the cold path a bounded 20 minutes; missing-SSH
+configuration errors fail immediately rather than consuming that deadline.
+GitHub Codespaces prebuilds can accelerate the outer devcontainer, but
+[GitHub does not make Docker-in-Docker available during prebuild creation](https://docs.github.com/en/codespaces/reference/allowing-your-codespace-to-access-a-private-registry),
+so a prebuild cannot absorb this nested image build. A future faster cold path
+should publish a dedicated development cache/image only from trusted main and
+consume it by immutable identity; the current production image is not that
+development cache.
 
 This reference is deliberately narrower than a production shared controller: it
 uses the controller's current GitHub actor, a process-local lock/state directory,
