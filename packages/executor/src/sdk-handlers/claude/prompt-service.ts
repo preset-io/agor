@@ -5,7 +5,7 @@
  * Automatically loads CLAUDE.md and uses preset system prompts matching Claude Code CLI.
  */
 
-import { projectContextUsageSnapshot } from '@agor/core';
+import { projectClaudeResultResponse, projectContextUsageSnapshot } from '@agor/core';
 import { shortId } from '@agor/core/db';
 import { isMCPAbortError, sanitizeMCPExternalError } from '@agor/core/mcp';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
@@ -192,7 +192,7 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     }
 
-    const { query: result, getStderr } = await setupQuery(
+    const { query: result, getStderrMetadata } = await setupQuery(
       sessionId,
       prompt,
       {
@@ -299,16 +299,15 @@ If you continue to see authentication errors, please contact your Agor administr
             // credentials, or reflected provider payloads (the catch-path below
             // documents the same policy).
             {
-              const raw = event.raw_sdk_message as {
-                subtype?: string;
-                is_error?: boolean;
-                num_turns?: number;
-              };
-              if (raw?.is_error || (raw?.subtype && raw.subtype !== 'success')) {
+              const safeResult = projectClaudeResultResponse(event.raw_sdk_message);
+              if (!safeResult || safeResult.is_error === true || safeResult.subtype !== 'success') {
+                const stderr = getStderrMetadata();
                 console.error(
                   `❌ [claude-code] error result for session ${shortId(sessionId)} ` +
-                    `subtype=${raw.subtype} is_error=${raw.is_error} num_turns=${raw.num_turns} ` +
-                    `stderr_bytes=${getStderr().length}`
+                    `subtype=${safeResult?.subtype ?? 'unknown'} ` +
+                    `is_error=${safeResult?.is_error ?? 'unknown'} ` +
+                    `num_turns=${safeResult?.num_turns ?? 'unknown'} ` +
+                    `stderr_bytes=${stderr.byteLength}`
                 );
               }
             }
@@ -391,14 +390,14 @@ If you continue to see authentication errors, please contact your Agor administr
 
       // stderr and SDK exceptions can contain MCP URLs, headers, or reflected
       // provider payloads. Retain only presence + closed failure metadata.
-      const stderrOutput = getStderr();
+      const stderr = getStderrMetadata();
       const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
       console.error(`❌ SDK iteration failed:`, {
         sessionId: shortId(sessionId),
         messageCount: state.messageCount,
         category: safe.category,
         type: safe.diagnostic.type,
-        hasStderr: Boolean(stderrOutput),
+        hasStderr: stderr.hasStderr,
       });
       throw new Error(safe.message);
     }

@@ -200,7 +200,7 @@ describe('configured executor spawning', () => {
         '-c',
         expect.stringMatching(/^kubectl run executor-[0-9a-f]{8} --user agor-exec -- prompt$/),
       ],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
     expect(JSON.parse(proc.written)).toMatchObject({
       command: 'prompt',
@@ -251,8 +251,13 @@ describe('configured executor spawning', () => {
       });
       spawnExecutor({ command: 'prompt', env: sessionEnv }, { preparedEnv: sessionEnv });
 
+      const streamCanary = launcherCredentials.AGOR_CLOUD_RUNTIME_SIGNING_KEY;
+      proc.stdout.emit('data', Buffer.from(`launcher stdout ${streamCanary}`));
+      proc.stderr.emit('data', Buffer.from(`launcher stderr ${streamCanary}`));
+
       const launcherOptions = spawnMock.mock.calls[0][2] as {
         env: Record<string, string>;
+        stdio: string[];
       };
       const executorPayload = JSON.parse(proc.written) as {
         env: Record<string, string>;
@@ -260,8 +265,11 @@ describe('configured executor spawning', () => {
 
       expect(launcherOptions.env.PATH).toBe(process.env.PATH);
       expect(launcherOptions.env).toMatchObject(launcherCredentials);
+      expect(launcherOptions.stdio).toEqual(['pipe', 'ignore', 'ignore']);
       expect(launcherOptions.env.SYNTHETIC_SESSION_SETTING).toBeUndefined();
       expect(executorPayload.env.SYNTHETIC_SESSION_SETTING).toBe('ordinary-session-value');
+      expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain(streamCanary);
+      expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(streamCanary);
 
       for (const [name, value] of Object.entries(withheldDaemonEnvironment)) {
         expect(launcherOptions.env, `${name} reached the templated launcher`).not.toHaveProperty(
@@ -311,7 +319,7 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', 'explicit explicit-user git.clone'],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
   });
 
@@ -347,8 +355,66 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', 'launch --user alice -- branch.files.browse'],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
+  });
+
+  it('keeps trusted credentials out of request payloads and launcher output logs', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const ambient = {
+      AGOR_CLOUD_RUNTIME_SIGNING_KEY: 'synthetic-request-launcher-signing-key',
+      AGOR_CLOUD_FUTURE_REQUEST_CREDENTIAL: 'synthetic-request-launcher-future-key',
+      DATABASE_URL: 'postgres://synthetic-request-daemon.invalid/agor',
+      AGOR_MASTER_SECRET: 'synthetic-request-master-secret',
+      OPENAI_API_KEY: 'synthetic-request-provider-secret',
+    } as const;
+    const previous = Object.fromEntries(Object.keys(ambient).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, ambient);
+
+    try {
+      const { requestExecutor } = await import('./spawn-executor');
+      const promise = requestExecutor(
+        {
+          command: 'branch.files.browse',
+          env: { SYNTHETIC_REQUEST_SETTING: 'ordinary-request-value' },
+        },
+        { executorCommandTemplate: 'launch {command}' }
+      );
+      proc.stdout.emit('data', Buffer.from(ambient.AGOR_CLOUD_RUNTIME_SIGNING_KEY));
+      proc.stderr.emit('data', Buffer.from(ambient.AGOR_CLOUD_FUTURE_REQUEST_CREDENTIAL));
+
+      const options = spawnMock.mock.calls[0][2] as {
+        env: Record<string, string>;
+        stdio: string[];
+      };
+      const executorPayload = JSON.parse(proc.written) as { env: Record<string, string> };
+      expect(options.env).toMatchObject({
+        AGOR_CLOUD_RUNTIME_SIGNING_KEY: ambient.AGOR_CLOUD_RUNTIME_SIGNING_KEY,
+        AGOR_CLOUD_FUTURE_REQUEST_CREDENTIAL: ambient.AGOR_CLOUD_FUTURE_REQUEST_CREDENTIAL,
+      });
+      expect(options.stdio).toEqual(['pipe', 'ignore', 'ignore']);
+      expect(executorPayload.env).toEqual({
+        SYNTHETIC_REQUEST_SETTING: 'ordinary-request-value',
+      });
+      for (const [name, value] of Object.entries(ambient)) {
+        if (!name.startsWith('AGOR_CLOUD_')) expect(options.env).not.toHaveProperty(name);
+        expect(executorPayload.env).not.toHaveProperty(name);
+        expect(proc.written).not.toContain(value);
+        expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain(value);
+        expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(value);
+      }
+
+      await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
+      proc.emit('exit', 0);
+      await expect(promise).resolves.toEqual({ success: true, data: { files: [] } });
+    } finally {
+      for (const key of Object.keys(ambient)) {
+        const value = previous[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it('calls onExit for templated spawns', async () => {
@@ -405,7 +471,7 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', 'injected injected-user prompt'],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
   });
 
@@ -449,7 +515,7 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', "launch --tenant-id 'tenant-'\\''abc' -- git.clone"],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
   });
 
@@ -486,7 +552,7 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', "launch --tenant-id 'trusted-tenant' -- git.clone"],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
   });
 
@@ -514,7 +580,7 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', "launch --tenant-id 'tenant-run' -- git.repo.inspect"],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
   });
 

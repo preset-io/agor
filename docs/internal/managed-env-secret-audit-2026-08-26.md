@@ -79,13 +79,14 @@ Where code, old exploration text, and current product copy disagreed, this docum
 - Gateway sessions use their configured Agor execution owner plus explicit channel env. They are not an implicit grant to some other profile.
 - Prompting another user's existing session is currently a mixed-identity operation: task generic env/provider credentials come from the durable prompter, while branch mounts and per-user home remain session-creator-bound. This is documented as high trust but still needs a final product decision.
 
-### Reserved delegated-launcher environment
+### Reserved ambient delegated-launcher environment
 
-`AGOR_CLOUD_*` is the one operator-controlled exception to the templated
-launcher's minimal ambient environment. In delegated mode, the daemon copies
-that reserved prefix only into the trusted `sh -c <executor_command_template>`
-launcher process. The Agor Cloud launcher uses the namespace for its
-runtime-service endpoint and credentials; see
+Ambient daemon values named `AGOR_CLOUD_*` are the one operator-controlled
+exception to the templated launcher's minimal environment. In delegated mode,
+the daemon copies that reserved ambient prefix only into the trusted
+`sh -c <executor_command_template>` launcher process and the separately
+configured trusted executor-heartbeat helper. The Agor Cloud helpers use the
+namespace for their runtime-service endpoint and credentials; see
 [`preset-io/agor-cloud#198`](https://github.com/preset-io/agor-cloud/issues/198).
 
 The boundary is deliberately a prefix rather than a field list so the trusted
@@ -97,15 +98,30 @@ the reserved namespace. `DATABASE_URL`, `AGOR_MASTER_SECRET`,
 daemon/internal ambient values remain outside the launcher environment by
 default.
 
-The exception is launcher-only: ambient `AGOR_CLOUD_*` values are not added to
-the actor's resolved session environment or the authenticated executor payload
-on stdin. Executor payload env remains actor/session data assembled through
-`createUserProcessEnvironment`; the executor then preserves the delegated
-pod's own process identity and loader policy. `AGOR_CLOUD_*` is system/global
-operator configuration, not tenant-owned session configuration. Trusted
-tenant/user/template variables and the authenticated payload continue to carry
-execution authority across the boundary, and the external launcher remains
-responsible for binding them to the correct isolated workload.
+The exception is launcher-only at Agor's process boundary: ambient
+`AGOR_CLOUD_*` values are not added to the actor's resolved session environment,
+the authenticated executor payload on stdin, or heartbeat JSON. Executor
+payload env remains actor/session data assembled through
+`createUserProcessEnvironment`; the executor then preserves the delegated pod's
+own process identity and loader policy. The helper's stdout/stderr are discarded
+rather than relayed into daemon logs; only closed spawn/exit metadata is logged.
+
+This namespace qualification is specifically about **ambient daemon
+configuration**. The generic managed-env store does not currently reserve
+identically named user mappings semantically; such a mapping is user data and
+does not grant access to the operator's ambient value. Ambient `AGOR_CLOUD_*` is
+system/global operator configuration, not tenant-owned session configuration.
+Trusted tenant/user/template variables and the authenticated payload continue
+to carry execution authority across the boundary, and the external launcher
+remains responsible for binding them to the correct isolated workload.
+
+The grant is non-transitive. A trusted launcher that starts another process
+must construct that descendant's environment explicitly and remove every
+`AGOR_CLOUD_*` entry before executing the workload. In particular, a wrapper
+must not pass its complete `process.env` to the executor. This descendant scrub
+is an Agor Cloud helper contract tracked in the explicitly linked design issue
+above; Agor cannot enforce it after handing control to an opaque external
+launcher.
 
 ## Storage and cryptography inventory
 
@@ -338,7 +354,7 @@ Deleting a row removes live references and selection metadata but cannot erase b
 
 ### Operational residual — delegated substrate environment
 
-Agor now prevents the daemon environment from becoming an external helper's environment, except for the documented operator-controlled `AGOR_CLOUD_*` launcher namespace on two trusted paths: templated executor launch and the executor-heartbeat callback. Those credentials terminate at the trusted launcher/helper and are not included in executor payload/session env or heartbeat JSON. Configuring either command therefore designates that operator-authored process as part of the launcher trust boundary; arbitrary user-authored commands must never use this policy. After the launcher crosses into an external substrate, that substrate owns the executor's initial process environment and containment. Executor commands overlay ordinary authenticated payload variables but preserve substrate-owned `HOME`, `PATH`, identity, `LD_*`, and `DYLD_*` values. Certification must prove that workload identity and pod-owned credentials are non-exportable or otherwise safe for child processes; Agor cannot sanitize an opaque external launcher without an explicit descriptor contract.
+Agor now prevents the daemon environment from becoming an external helper's environment, except for the documented operator-controlled `AGOR_CLOUD_*` launcher namespace on two trusted paths: templated executor launch and the executor-heartbeat callback. Agor includes those credentials only in the immediate trusted launcher/helper environment; it does not include them in executor payload/session env or heartbeat JSON, and it discards helper output instead of treating it as a logging channel. Configuring either command therefore designates that operator-authored process as part of the launcher trust boundary; arbitrary user-authored commands must never use this policy. A conforming helper must terminate the credential grant there by scrubbing the reserved prefix from every workload descendant. After the launcher crosses into an external substrate, that substrate owns the executor's initial process environment and containment. Executor commands overlay ordinary authenticated payload variables but preserve substrate-owned `HOME`, `PATH`, identity, `LD_*`, and `DYLD_*` values. Certification must prove both the descendant scrub and that workload identity and pod-owned credentials are non-exportable or otherwise safe for child processes; Agor cannot sanitize an opaque external launcher without an explicit descriptor contract.
 
 ### Low residual — decryption timing oracle is not a public boundary
 
@@ -352,7 +368,7 @@ Malformed legacy envelopes are rejected before scrypt while well-formed wrong-ke
 - **Projection/include tricks:** env values live inside repository `users.data`, but every service read maps through `rowToUser`; external queries cannot request raw JSON. Raw database access is deployment compromise.
 - **Realtime replacement events:** User events are tenant-routed and strip self-only fields; session env selection publication is disabled; gateway events pass the transport redactor.
 - **MCP:** Users tools consume normal User DTOs. MCP server/gateway tools use centralized redactors. Executor/task tokens carry tenant/user/session/task authority and do not expose a general User secret-read method.
-- **Errors/logs:** decryption errors carry no ciphertext/plaintext and now normalize malformed versus wrong-key detail. Rejection logs contain variable names/counts only. User-authored lifecycle/agent/Git commands can always print values legitimately present in their own process; this is within the ambient-env threat model, not a redaction guarantee.
+- **Errors/logs:** decryption errors carry no ciphertext/plaintext and now normalize malformed versus wrong-key detail. Rejection logs contain variable names/counts only. Secret-bearing launcher/helper stdout and stderr are discarded. Claude result diagnostics use the centralized closed runtime projection plus stderr presence/byte count; raw provider result fields and raw stderr are not logged or retained for logging. User-authored lifecycle/agent/Git commands can always print values legitimately present in their own process; this is within the ambient-env threat model, not a redaction guarantee.
 - **Import/export:** tenant portability never invokes a secret DTO or decryptor; it moves raw ciphertext. The master key is not included, so an archive alone cannot decrypt generic managed values, but the archive must still be protected.
 - **HA:** PostgreSQL refresh/executor authority is generation/fingerprint fenced. Env resolution is read-at-launch; no decrypted env cache or cross-replica realtime payload exists.
 
@@ -483,5 +499,5 @@ No user-managed development server was started.
 8. Concurrent users cannot overlap compatibility `process.env` mutation, and concurrent User JSON patches cannot silently replace each other.
 9. Gateway credentials have one encrypt-on-write boundary; unreadable stored representations never become runtime credentials.
 10. Selection names do not travel on realtime channels; values never travel in analytics.
-11. Decrypted task env exists only in the daemon launch scope, authenticated executor payload/stdin, and intended child process; it is not cached or written to a task/session row. Ambient launcher credentials exist only in the daemon and the two trusted external launcher/helper environments, never in task/session env, executor payload, or heartbeat JSON.
+11. Decrypted task env exists only in the daemon launch scope, authenticated executor payload/stdin, and intended child process; it is not cached or written to a task/session row. Ambient launcher credentials exist only in the daemon and the two immediate trusted external launcher/helper environments, never in task/session env, executor payload, heartbeat JSON, helper output logs, or a conforming helper's workload descendants.
 12. These invariants do not claim defense from the host/daemon administrator, an intentionally secret-bearing process, user-authored commands that print their own env, physical historical backups, or the unresolved legacy-envelope swapping/rotation limitations above.
