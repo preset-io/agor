@@ -290,6 +290,26 @@ If you continue to see authentication errors, please contact your Agor administr
           // stdin.  We must release it afterward regardless of success/failure.
           if (event.type === 'result') {
             sdkResults.push(event.raw_sdk_message);
+            // DIAGNOSTIC: the normal path masks any error result (notably a
+            // zero-turn `error_during_execution`) with a generic
+            // "provider ended the request" message and never reads the CLI's
+            // captured stderr. Surface both here so the real cause is visible.
+            {
+              const raw = event.raw_sdk_message as {
+                subtype?: string;
+                is_error?: boolean;
+                num_turns?: number;
+              };
+              if (raw?.is_error || (raw?.subtype && raw.subtype !== 'success')) {
+                const stderrOut = getStderr();
+                console.error(
+                  `❌ [claude-code] ERROR RESULT for session ${shortId(sessionId)} ` +
+                    `subtype=${raw.subtype} is_error=${raw.is_error} num_turns=${raw.num_turns}\n` +
+                    `raw_result=${JSON.stringify(event.raw_sdk_message)}\n` +
+                    `--- CLI stderr (${stderrOut.length} bytes) ---\n${stderrOut || '(empty)'}`
+                );
+              }
+            }
             if (resultDisposition === 'await-background-tasks') {
               console.log(
                 `⏳ Parent turn ended with ${backgroundTasks.activeTaskCount} background task(s) still active; keeping SDK query alive`
