@@ -146,7 +146,7 @@ const localWorktreeBuildStarts = [
   ...managedEnvironments.matchAll(/\bup -d(?:\s+--build|[\s\S]{0,120}?\s+--build)\b/g),
 ].length;
 const codespacesWorktreeBuildStarts = [
-  ...managedEnvironments.matchAll(/agor-codespace-launcher\.py start\b/g),
+  ...managedEnvironments.matchAll(/agor-codespace-launcher\.mjs start\b/g),
 ].length;
 assert.equal(
   explicitStarts,
