@@ -32,6 +32,7 @@ import {
   resolveExecutorResponseTimeoutMs,
 } from '@agor/core/config';
 import { getCurrentTenantId } from '@agor/core/db';
+import { PROVIDER_CONNECTION_FIELDS } from '@agor/core/types';
 import {
   EXECUTOR_RESPONSE_PROTOCOL,
   type ExecutorCommandResult,
@@ -402,6 +403,30 @@ export function findExecutorPath(): string {
  * @param payload - JSON payload matching ExecutorPayload schema
  * @param options - Spawn options
  */
+// Provider credential/endpoint keys (e.g. claude-code → ANTHROPIC_*,
+// CLAUDE_CODE_OAUTH_TOKEN). Never the daemon's infra env (DAEMON_URL,
+// AGOR_DATA_HOME, response origin), which the ephemeral pod sets itself.
+const PROVIDER_ENV_KEYS: ReadonlySet<string> = new Set(
+  Object.values(PROVIDER_CONNECTION_FIELDS).flat()
+);
+
+// The templated (ephemeral-pod) executor inherits no daemon env — it only
+// applies the payload the executor CLI reads. spawnExecutorLocal passes the
+// resolved `preparedEnv` to the subprocess directly; the templated path must
+// instead forward the agent's resolved provider credentials through the payload
+// (persisted as a per-run Secret) or the delegated agent cannot authenticate.
+function forwardedProviderCredentialEnv(
+  source: Record<string, string> | undefined
+): Record<string, string> {
+  const forwarded: Record<string, string> = {};
+  if (!source) return forwarded;
+  for (const key of PROVIDER_ENV_KEYS) {
+    const value = source[key];
+    if (typeof value === 'string' && value.length > 0) forwarded[key] = value;
+  }
+  return forwarded;
+}
+
 export function spawnExecutor(
   payload: Record<string, unknown>,
   options: SpawnExecutorOptions = {}
@@ -419,7 +444,20 @@ export function spawnExecutor(
   };
 
   if (executorCommandTemplate) {
-    spawnExecutorWithTemplate(payloadWithConfig, {
+    const providerCredentialEnv = forwardedProviderCredentialEnv(
+      options.preparedEnv ?? options.env
+    );
+    const templatedPayload =
+      Object.keys(providerCredentialEnv).length > 0
+        ? {
+            ...payloadWithConfig,
+            env: {
+              ...(payloadWithConfig.env as Record<string, string> | undefined),
+              ...providerCredentialEnv,
+            },
+          }
+        : payloadWithConfig;
+    spawnExecutorWithTemplate(templatedPayload, {
       ...options,
       executorCommandTemplate,
       templateVariables: {
