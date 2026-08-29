@@ -13,8 +13,8 @@ keeping the Agor-native controller as the production recommendation
 The product is feasible. Unmodified `main` cannot represent it safely as a truthful shared/HA
 variant, but a bounded current-branch adapter can make a useful local experiment: expose exact
 branch identity/ref to templates with POSIX quoting, accept one tiny nonsecret lifecycle result,
-show its runtime App URL, and treat a completed no-static-health Start as running. A standard-library
-Python bridge then creates or resumes a Codespace through `gh`, validates it, waits for private
+show its runtime App URL, and treat a completed no-static-health Start as running. A dependency-free
+Node bridge then creates or resumes a Codespace through `gh`, validates it, waits for private
 forwarded ports plus an in-Codespace `/health` probe, and reports the current URL.
 
 PR #2304 adds useful generic facts, sync, readiness, and health behavior. It does not provide a
@@ -24,7 +24,7 @@ this first prototype.
 
 This branch contains both the unconnected, generation-aware model at
 `scripts/managed-environments/codespaces/bridge-core.mjs` and the deliberately narrower executable
-prototype at `agor-codespace-launcher.py`. `.agor.yml` advertises the latter as **EXPERIMENTAL,
+prototype at `agor-codespace-launcher.mjs`. `.agor.yml` advertises the latter as **EXPERIMENTAL,
 single-GitHub-actor, pushed-ref-only, not Cloud/HA**. The selected devcontainer starts the existing
 Compose SQLite stack and keeps ports GitHub-private. Tests use fake clients, no network mutation,
 and no credentials. The variant was not started during validation.
@@ -443,10 +443,12 @@ Use only a repository/ref whose Codespace can be safely created and deleted:
 
 1. Push the branch ref to GitHub. Local/uncommitted changes are not copied; Codespaces clones the
    GitHub ref.
-2. Ensure the **same GitHub user** will perform Play, Stop, Logs, and Nuke. For a local trusted Agor,
-   that can be the daemon account's existing `gh auth login`. Prefer a caller-owned saved global
-   `GH_TOKEN`/`GITHUB_TOKEN` with Codespaces read/write permission; never add it to `.agor.yml`, a
-   command, URL, fact/result, image, or branch data.
+2. Ensure the lifecycle execution host has Node and the official `gh` CLI. Both are already present
+   in Agor's development container; the variant therefore adds no language runtime or package at
+   Play time. Ensure the **same GitHub user** will perform Play, Stop, Logs, and Nuke. For a local
+   trusted Agor, that can be the daemon account's existing `gh auth login`. Prefer a caller-owned
+   saved global `GH_TOKEN`/`GITHUB_TOKEN` with Codespaces read/write permission; never add it to
+   `.agor.yml`, a command, URL, fact/result, image, or branch data.
 3. Reload/import this branch's `.agor.yml`, stop any current preview, and explicitly re-render the
    branch with `codespaces-sqlite`. The existing branch remains on `sqlite` until that opt-in.
 4. Press Play once. Cold Docker image build and Agor startup occur in the Codespace and can take up
@@ -507,17 +509,19 @@ before a disposable manual trial.
 The launcher tests additionally cover create, repeated Play without duplicate creation, stopped
 resume, stale-name/recreated-resource adoption, duplicate-marker freeze, actor change rejection,
 idempotent Stop/Nuke, owner/repository/ref/marker mismatch, dynamic URL allowlisting, redaction, and
-argv/JSON-stdin transport of shell-looking refs. Its local `flock` closes the duplicate-Play window
-only for processes sharing one launcher state directory; it is not a distributed lock.
+argv/JSON-stdin transport of shell-looking refs. Its atomic local lock directory closes the
+duplicate-Play window only for processes sharing one launcher state directory and PID namespace;
+it is not a distributed lock.
 
 Command run:
 
 ```text
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -q scripts/managed-environments/codespaces/test_agor_codespace_launcher.py
+node --test scripts/managed-environments/codespaces/agor-codespace-launcher.test.mjs
 ```
 
-Measured result after the runtime-result implementation: **17/17 launcher tests passed in 38 ms**.
-Combined with the provider-neutral suite, the prototype has 33 hermetic lifecycle/security cases.
+Measured result after the Node adapter implementation: **19/19 launcher tests passed in about 400
+ms**. Combined with the provider-neutral suite, the prototype has 35 hermetic lifecycle/security
+cases.
 Focused Core, executor, daemon, and UI Vitest suites passed **187/187** cases covering command
 rendering, strict result parsing, health generation fencing, DNS-pinned cancellation, branch
 dispatch, webhook parity, HA health selection, and runtime URL consumption.
