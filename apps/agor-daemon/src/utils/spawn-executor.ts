@@ -83,15 +83,24 @@ function withDaemonExecutorEnv(
  * The executor's authenticated payload is sent over stdin; the intermediate
  * `sh -c <launcher>` must not inherit the daemon's database URL, JWT/master
  * secrets, provider credentials, or other ambient deployment configuration.
- * Operators that need launcher authentication must arrange it outside the
- * daemon environment (for example through the delegated substrate's workload
- * identity) rather than implicitly exporting the daemon's credential bag.
+ * The one exception is the launcher's own `AGOR_CLOUD_*` runtime-service
+ * credentials (issue #198); daemon-internal secrets stay withheld.
  */
 function resolveTemplateLauncherEnvironment(logLevel: string): Record<string, string> {
   return {
     ...buildAllowlistedEnv(),
+    ...launcherCredentialEnvironment(),
     LOG_LEVEL: logLevel,
   };
+}
+
+// AGOR_CLOUD_* runtime-service credentials the delegated launcher authenticates with.
+function launcherCredentialEnvironment(): Record<string, string> {
+  const credentials: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && key.startsWith('AGOR_CLOUD_')) credentials[key] = value;
+  }
+  return credentials;
 }
 
 /** Set the daemon URL for executor payloads. Call once at daemon startup. */
