@@ -207,7 +207,26 @@ export class GitHubCodespacesClient {
   }
 
   async resolveRef(repository, ref) {
-    const response = await this.api(`repos/${repository}/commits/${encodeURIComponent(ref)}`);
+    let response;
+    try {
+      response = await this.api(`repos/${repository}/commits/${encodeURIComponent(ref)}`);
+    } catch (error) {
+      // Discovery has already proven that this actor can read the repository.
+      // GitHub reports an unknown commit/ref from this endpoint as 404 or as
+      // "No commit found for SHA" with 422. Explain the local-vs-remote
+      // boundary instead of leaking the provider's SHA-oriented wording.
+      if (
+        error instanceof LauncherError &&
+        /\bHTTP (?:404|422)\b/.test(error.message) &&
+        /(?:No commit found for SHA|Not Found)/i.test(error.message)
+      ) {
+        throw new LauncherError(
+          `GitHub cannot find ref ${JSON.stringify(ref)} in ${repository}. Push this branch or commit to GitHub before pressing Play; Codespaces cannot access an Agor-only local ref.`,
+          { cause: error }
+        );
+      }
+      throw error;
+    }
     if (typeof response?.sha !== 'string' || !SHA_PATTERN.test(response.sha)) {
       throw new LauncherError(`GitHub did not resolve ref ${JSON.stringify(ref)} to a commit`);
     }

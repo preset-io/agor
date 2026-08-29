@@ -401,6 +401,8 @@ short-lived signed callback or a controller that runs the probe inside the Codes
 Codespaces clone from GitHub, not from `~/.agor/worktrees`. For v0:
 
 1. Require a pushed ref and resolve it to a commit SHA before creation.
+   If GitHub cannot resolve the ref, fail before Codespace creation with an explicit instruction to
+   push it; never silently fall back to the base/default branch.
 2. Persist the expected SHA and verify the created Codespace initially resolves to it. If a user
    changes branches inside the Codespace, subsequent mutation fails closed until explicit rebind.
 3. A repository-owned, reviewed devcontainer bootstrap starts the same standalone SQLite preview

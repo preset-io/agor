@@ -394,6 +394,23 @@ test('the gh adapter uses argv and JSON stdin for create', async () => {
   assert.equal(calls[0].check, true);
 });
 
+test('the gh adapter explains that a missing remote ref must be pushed', async () => {
+  const runner = async () => {
+    throw new LauncherError(
+      'GitHub CLI command failed with exit code 1: gh: No commit found for SHA: test2 (HTTP 422)'
+    );
+  };
+  const client = new GitHubCodespacesClient({ runner });
+
+  await assert.rejects(
+    client.resolveRef(REPOSITORY, 'test2'),
+    (error) =>
+      error instanceof LauncherError &&
+      error.message ===
+        'GitHub cannot find ref "test2" in preset-io/agor. Push this branch or commit to GitHub before pressing Play; Codespaces cannot access an Agor-only local ref.'
+  );
+});
+
 test('the gh adapter exhausts paginated Codespace inventory', async () => {
   const calls = [];
   const runner = async (argv) => {
