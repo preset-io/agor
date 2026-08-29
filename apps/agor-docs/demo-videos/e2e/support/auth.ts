@@ -4,8 +4,8 @@
 // test, and it's cheap (one real form fill).
 
 import type { Page } from '@playwright/test';
-import { installCursor, moveToElement } from './cursor';
-import type { DEMO_USERS } from './harness';
+import { installCursor, moveToElement } from './cursor.ts';
+import type { DEMO_USERS } from './harness.ts';
 
 export async function loginAs(
   page: Page,

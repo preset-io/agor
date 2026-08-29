@@ -1,5 +1,5 @@
-import { teardownHarness } from './harness';
+import { teardownHarness } from './harness.ts';
 
-export default function globalTeardown(): void {
-  teardownHarness();
+export default async function globalTeardown(): Promise<void> {
+  await teardownHarness();
 }
