@@ -290,10 +290,14 @@ If you continue to see authentication errors, please contact your Agor administr
           // stdin.  We must release it afterward regardless of success/failure.
           if (event.type === 'result') {
             sdkResults.push(event.raw_sdk_message);
-            // DIAGNOSTIC: the normal path masks any error result (notably a
-            // zero-turn `error_during_execution`) with a generic
-            // "provider ended the request" message and never reads the CLI's
-            // captured stderr. Surface both here so the real cause is visible.
+            // The normal path masks any error result (notably a zero-turn
+            // `error_during_execution`) with a generic "provider ended the
+            // request" message. Emit a BOUNDED, sanitized breadcrumb so the
+            // failure is visible in logs — subtype, error flag, turn count, and
+            // the stderr byte length only. The raw result and raw CLI stderr are
+            // deliberately NOT logged here: they can carry MCP URLs/headers,
+            // credentials, or reflected provider payloads (the catch-path below
+            // documents the same policy).
             {
               const raw = event.raw_sdk_message as {
                 subtype?: string;
@@ -301,12 +305,10 @@ If you continue to see authentication errors, please contact your Agor administr
                 num_turns?: number;
               };
               if (raw?.is_error || (raw?.subtype && raw.subtype !== 'success')) {
-                const stderrOut = getStderr();
                 console.error(
-                  `❌ [claude-code] ERROR RESULT for session ${shortId(sessionId)} ` +
-                    `subtype=${raw.subtype} is_error=${raw.is_error} num_turns=${raw.num_turns}\n` +
-                    `raw_result=${JSON.stringify(event.raw_sdk_message)}\n` +
-                    `--- CLI stderr (${stderrOut.length} bytes) ---\n${stderrOut || '(empty)'}`
+                  `❌ [claude-code] error result for session ${shortId(sessionId)} ` +
+                    `subtype=${raw.subtype} is_error=${raw.is_error} num_turns=${raw.num_turns} ` +
+                    `stderr_bytes=${getStderr().length}`
                 );
               }
             }

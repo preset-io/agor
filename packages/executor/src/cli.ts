@@ -243,15 +243,21 @@ async function handlePromptPayload(
       'LOGNAME',
       'SHELL',
       'NODE_OPTIONS',
-      'LD_PRELOAD',
-      'LD_LIBRARY_PATH',
       'BASH_ENV',
       'ENV',
       'AGOR_MASTER_SECRET',
     ]);
+    // Loader-injection families are denied by prefix so no variant slips through
+    // (LD_PRELOAD, LD_AUDIT, LD_PROFILE, LD_DEBUG, DYLD_INSERT_LIBRARIES, …).
+    const isDeniedPayloadEnv = (key: string): boolean => {
+      const upper = key.toUpperCase();
+      return (
+        PAYLOAD_IDENTITY_DENY.has(upper) || upper.startsWith('LD_') || upper.startsWith('DYLD_')
+      );
+    };
     const identityDenied: string[] = [];
     for (const [key, value] of Object.entries(safeEnv)) {
-      if (PAYLOAD_IDENTITY_DENY.has(key.toUpperCase())) {
+      if (isDeniedPayloadEnv(key)) {
         identityDenied.push(key);
         continue;
       }
