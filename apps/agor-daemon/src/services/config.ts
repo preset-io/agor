@@ -101,6 +101,7 @@ export class ConfigService {
     // user/API-key auth must not resolve raw configured keys. The former
     // general-purpose /config read endpoint no longer exists.
     const executorScope = authenticatedTaskExecutorRuntimeScope(params);
+    const executorPrincipalUserId = (params as AuthenticatedParams | undefined)?.user?.user_id;
     if (params?.provider) {
       const caller = (params as AuthenticatedParams | undefined)?.user;
       const isServiceAccount = caller?._isServiceAccount === true;
@@ -141,6 +142,7 @@ export class ConfigService {
       executorScope &&
       (!userId ||
         !sessionId ||
+        executorPrincipalUserId !== userId ||
         !matchesTaskExecutorRuntimeScope(executorScope, {
           task_id: taskId,
           session_id: sessionId,

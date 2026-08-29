@@ -370,6 +370,32 @@ export async function resolveQueuedTaskActor(
   return (await findUser(task.created_by)) ?? null;
 }
 
+/**
+ * Bind an executor launch to the immutable actor recorded on the Task.
+ *
+ * A branch-scoped Session may be promptable by several collaborators, but an
+ * existing Task is not transferable between them: `Task.created_by` selects
+ * provider credentials, private MCP grants, and audit attribution. Callers
+ * who want to run their own prompt must use the Session prompt endpoint so it
+ * creates a Task in their identity. Keeping this check at the shared launch
+ * boundary also protects queue and internal call paths from identity drift.
+ */
+export function assertTaskExecutorPrincipal(
+  task: Pick<Task, 'created_by'>,
+  params: Pick<RouteParams, 'user'>
+): UserID {
+  const principalUserId = params.user?.user_id as UserID | undefined;
+  if (!principalUserId) {
+    throw new NotAuthenticated('Authentication required to run tasks');
+  }
+  if (task.created_by !== principalUserId) {
+    throw new Forbidden(
+      'Only the user who created this task can run it. Submit a new prompt to run as yourself.'
+    );
+  }
+  return principalUserId;
+}
+
 /** Compatibility tombstone retained for stale Claude CLI restart clients. */
 export function rejectRemovedClaudeCliRestart(): never {
   throw new BadRequest(REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE);
@@ -1632,6 +1658,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return task;
     }
 
+    // The token minted below authenticates the executor as params.user, while
+    // credential services resolve secrets from Task.created_by. Those must be
+    // the same durable actor; Session/branch prompt authority alone must never
+    // authorize consuming somebody else's provider credential.
+    assertTaskExecutorPrincipal(task, params);
+
     const {
       agenticToolEnabled,
       messageStartIndex,
@@ -2257,6 +2289,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const isInternalCall = !params.provider;
         const isServiceAccount =
           (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
+        if (!isInternalCall && !isServiceAccount) {
+          // A collaborator may prompt this Session, but cannot take over a
+          // pre-created Task whose credential/audit identity belongs to a
+          // different user. `/sessions/:id/prompt` creates a caller-owned Task.
+          assertTaskExecutorPrincipal(task, params);
+        }
         if (branchRbacEnabled && task.session_id && !isInternalCall && !isServiceAccount) {
           const session = await sessionsService.get(task.session_id, params);
           if (!session.branch_id) {

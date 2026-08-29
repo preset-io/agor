@@ -75,13 +75,13 @@ export function sessionPromptDeniedMessage(
     case 'execution_home_sharing_disabled':
       return (
         "This session uses its owner's execution home and cannot be prompted through branch " +
-        'sharing. Start a new session on this branch; branch-home sessions can be prompted by ' +
-        'Collaborators and Managers.'
+        'sharing. Start a separate session you own. When branch SDK homes are enabled, a new ' +
+        'session on this branch can instead be prompted by Collaborators and Managers.'
       );
     case 'owner_grant_required':
       return (
         'The session owner has not shared this execution-home session with you. Ask the owner ' +
-        'to share it, or start a new branch-home session.'
+        'to share it, or start a separate session you own.'
       );
     default:
       return (
