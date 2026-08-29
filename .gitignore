@@ -57,3 +57,6 @@ apps/agor-desktop/out/
 
 # Playwright MCP tool artifacts
 .playwright-mcp/
+
+# Real-Agor E2E/video-capture scratch environment (db, worktrees, secrets)
+.e2e-runtime/
