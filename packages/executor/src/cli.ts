@@ -230,13 +230,38 @@ async function handlePromptPayload(
       // Log key only — never the value, which is attacker-controlled.
       executorCliDebug(`[executor] Rejected invalid env var from payload: ${key}`);
     });
-    executorCliDebug(
-      `[executor] Applying ${Object.keys(safeEnv).length} env vars from payload` +
-        (rejected.length > 0 ? ` (${rejected.length} rejected)` : '')
-    );
+    // System-identity / process-hijacking vars must come from the pod, never
+    // from the daemon-built payload. Under HA the daemon forwards its own
+    // HOME (=/home/agor); applying it would override the ephemeral pod's mounted
+    // per-user HOME (…/home/<segment>), so the agentic-tool CLI would look for
+    // its ~/.claude session state in the wrong (ephemeral) home and every
+    // session resume fails with "No conversation found".
+    const PAYLOAD_IDENTITY_DENY = new Set([
+      'HOME',
+      'PATH',
+      'USER',
+      'LOGNAME',
+      'SHELL',
+      'NODE_OPTIONS',
+      'LD_PRELOAD',
+      'LD_LIBRARY_PATH',
+      'BASH_ENV',
+      'ENV',
+      'AGOR_MASTER_SECRET',
+    ]);
+    const identityDenied: string[] = [];
     for (const [key, value] of Object.entries(safeEnv)) {
+      if (PAYLOAD_IDENTITY_DENY.has(key.toUpperCase())) {
+        identityDenied.push(key);
+        continue;
+      }
       process.env[key] = value;
     }
+    executorCliDebug(
+      `[executor] Applying ${Object.keys(safeEnv).length - identityDenied.length} env vars from payload` +
+        (rejected.length > 0 ? ` (${rejected.length} invalid)` : '') +
+        (identityDenied.length > 0 ? ` (identity-denied: ${identityDenied.join(',')})` : '')
+    );
   }
 
   // Validate tool using registry

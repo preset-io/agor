@@ -275,17 +275,6 @@ export async function setupQuery(
     queryOptions.extraArgs = extraArgs;
   }
 
-  // DIAGNOSTIC: force the Claude CLI into verbose debug mode so its startup /
-  // turn-0 failure reasoning is written to stderr (captured by the `stderr`
-  // option above). The CLI is invoked with `--output-format stream-json` on
-  // stdout, so `--debug` diagnostics go to stderr and cannot corrupt the
-  // protocol stream.
-  {
-    const extraArgs = (queryOptions.extraArgs as Record<string, string | null> | undefined) ?? {};
-    extraArgs.debug = null;
-    queryOptions.extraArgs = extraArgs;
-  }
-
   // Add optional apiKey if provided
   // NOTE: Don't require API key - user may have used `claude login` (OAuth)
   // API keys are already resolved by base-executor with proper precedence (user → config → env)
