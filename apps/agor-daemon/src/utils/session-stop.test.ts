@@ -378,6 +378,49 @@ describe('stopSessionPreserveQueue', () => {
     expect(requestTermination).toHaveBeenCalledOnce();
   });
 
+  it('does not claim a successor task when the expected execution generation changed', async () => {
+    const sessionId = 'session-generation-changed';
+    const runningTask = {
+      task_id: 'task-successor',
+      session_id: sessionId,
+      status: 'running',
+      created_at: '2026-01-01T00:00:01.000Z',
+    };
+    const requestTermination = vi.fn();
+
+    await expect(
+      stopSessionPreserveQueue(
+        {
+          app: {} as never,
+          taskRepo: { findQueued: vi.fn().mockResolvedValue([]) } as never,
+          sessionsService: {
+            get: vi.fn().mockResolvedValue({
+              session_id: sessionId,
+              agentic_tool: 'codex',
+              status: 'running',
+              ready_for_prompt: false,
+              tasks: [runningTask.task_id],
+            }),
+            patch: vi.fn(),
+          } as never,
+          findActiveTasks: vi.fn().mockResolvedValue([runningTask]) as never,
+          requestTermination: requestTermination as never,
+          runInTenantDatabaseScope,
+          runInFreshTenantWriteDatabase,
+        },
+        sessionId as never,
+        {},
+        { expectedTaskId: 'task-original' as never }
+      )
+    ).resolves.toEqual({
+      success: false,
+      outcome: 'condition_changed',
+      reason: 'Execution changed before Stop could be claimed. Review the current state and retry.',
+      queuedTasksPreserved: 0,
+    });
+    expect(requestTermination).not.toHaveBeenCalled();
+  });
+
   it('does not silently report success if the session idle patch fails after stopping the task', async () => {
     const sessionId = 'session-patch-fails';
     const runningTask = {

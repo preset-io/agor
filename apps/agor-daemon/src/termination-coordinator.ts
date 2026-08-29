@@ -5,10 +5,10 @@ import type {
   Params,
   PersistedAgenticToolName,
   SdkFailure,
-  SessionStopPendingCode,
   Task,
   TaskID,
   TerminationCause,
+  TerminationCoordinationPendingCode,
 } from '@agor/core/types';
 import { isAgenticToolName, isTerminalTaskStatus, TaskStatus } from '@agor/core/types';
 import type { TasksServiceImpl } from './declarations.js';
@@ -20,12 +20,15 @@ import {
   untrackExecutorProcess,
 } from './executor-tracking.js';
 
-export interface TerminationResult {
-  status: 'terminal' | 'pending' | 'unverified' | 'condition_changed';
-  task: Task;
-  reason?: string;
-  pendingCode?: SessionStopPendingCode;
-}
+export type TerminationResult =
+  | { status: 'terminal' | 'condition_changed'; task: Task }
+  | { status: 'unverified'; task: Task; reason: string }
+  | {
+      status: 'pending';
+      task: Task;
+      reason: string;
+      pendingCode: TerminationCoordinationPendingCode;
+    };
 
 export interface TerminationInput {
   app: Application;
@@ -309,7 +312,7 @@ async function claimContainmentCoordination(
       outcome: 'pending';
       task: Task;
       reason: string;
-      pendingCode: SessionStopPendingCode;
+      pendingCode: TerminationCoordinationPendingCode;
     }
   | { outcome: 'condition_changed'; task: Task }
 > {

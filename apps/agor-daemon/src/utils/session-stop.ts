@@ -1,6 +1,6 @@
 import { shortId, type TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Params, SessionID, SessionStopResult } from '@agor/core/types';
+import type { Params, SessionID, SessionStopResult, TaskID } from '@agor/core/types';
 import { isSessionExecuting, SessionStatus } from '@agor/core/types';
 import type { SessionsServiceImpl } from '../declarations.js';
 import {
@@ -68,7 +68,7 @@ export async function stopSessionPreserveQueue(
   deps: StopSessionDeps,
   sessionId: SessionID,
   params: Params = {},
-  options: { reason?: string } = {}
+  options: { reason?: string; expectedTaskId?: TaskID } = {}
 ): Promise<SessionStopResult> {
   const session = await deps.runInTenantDatabaseScope(() =>
     deps.sessionsService.get(sessionId, params)
@@ -118,6 +118,14 @@ export async function stopSessionPreserveQueue(
   }
 
   const latestTask = targetTasksArray[0];
+  if (options.expectedTaskId && latestTask.task_id !== options.expectedTaskId) {
+    return {
+      success: false,
+      outcome: 'condition_changed',
+      reason: 'Execution changed before Stop could be claimed. Review the current state and retry.',
+      queuedTasksPreserved: queuedTasks.length,
+    };
+  }
 
   console.log(
     `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${shortId(sessionId)}${options.reason ? ` (reason: ${options.reason})` : ''}`
@@ -134,22 +142,35 @@ export async function stopSessionPreserveQueue(
     params,
     runInFreshTenantWriteDatabase: deps.runInFreshTenantWriteDatabase,
   });
-  if (termination.status !== 'terminal') {
+  if (termination.status === 'pending') {
     return {
       success: false,
-      outcome: termination.status,
-      ...(termination.status === 'pending' || termination.status === 'unverified'
-        ? { status: SessionStatus.STOPPING }
-        : {}),
-      reason:
-        termination.status === 'pending'
-          ? (termination.reason ?? 'Stop was accepted and is awaiting HA coordination.')
-          : (termination.task.error_message ??
-            termination.reason ??
-            'Task state changed before Stop could be completed.'),
+      outcome: 'pending',
+      status: SessionStatus.STOPPING,
+      reason: termination.reason,
       stoppedTaskId: latestTask.task_id,
       queuedTasksPreserved: queuedTasks.length,
-      ...(termination.status === 'pending' ? { pendingCode: termination.pendingCode } : {}),
+      pendingCode: termination.pendingCode,
+    };
+  }
+  if (termination.status === 'unverified') {
+    return {
+      success: false,
+      outcome: 'unverified',
+      status: SessionStatus.STOPPING,
+      reason: termination.task.error_message ?? termination.reason,
+      stoppedTaskId: latestTask.task_id,
+      queuedTasksPreserved: queuedTasks.length,
+    };
+  }
+  if (termination.status === 'condition_changed') {
+    return {
+      success: false,
+      outcome: 'condition_changed',
+      reason:
+        termination.task.error_message ?? 'Task state changed before Stop could be completed.',
+      stoppedTaskId: latestTask.task_id,
+      queuedTasksPreserved: queuedTasks.length,
     };
   }
 

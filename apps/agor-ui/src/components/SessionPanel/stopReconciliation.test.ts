@@ -1,6 +1,11 @@
+import { EventEmitter } from 'node:events';
 import type { AgorClient, Task } from '@agor-live/client';
 import { describe, expect, it, vi } from 'vitest';
-import { reconcileStopTransportFailure } from './stopReconciliation';
+import {
+  isStopTransportAmbiguous,
+  reconcileStopTransportFailure,
+  requestSessionStop,
+} from './stopReconciliation';
 
 const sessionId = '018f0000-0000-7000-8000-000000000001' as never;
 const taskId = '018f0000-0000-7000-8000-000000000002' as never;
@@ -73,5 +78,46 @@ describe('reconcileStopTransportFailure', () => {
     await expect(
       reconcileStopTransportFailure(() => client, sessionId, taskId, 50)
     ).resolves.toEqual({ outcome: 'unresolved' });
+  });
+});
+
+describe('requestSessionStop', () => {
+  function stopClient(create: ReturnType<typeof vi.fn>) {
+    const socket = Object.assign(new EventEmitter(), {
+      connected: true,
+      timeout: vi.fn(),
+    });
+    socket.timeout.mockReturnValue(socket);
+    const client = {
+      io: socket,
+      service: () => ({ create }),
+    } as unknown as AgorClient;
+    return { client, socket };
+  }
+
+  it('rejects a sent Stop as transport-ambiguous when Socket.IO disconnects before ack', async () => {
+    const create = vi.fn(() => new Promise(() => undefined));
+    const { client, socket } = stopClient(create);
+
+    const request = requestSessionStop(client, sessionId, taskId, 100);
+    socket.emit('disconnect', 'transport close');
+
+    const error = await request.catch((caught) => caught);
+    expect(isStopTransportAmbiguous(error)).toBe(true);
+    expect(create).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledWith({ expected_task_id: taskId });
+    expect(socket.timeout).toHaveBeenCalledWith(100);
+  });
+
+  it('does not classify a definite Feathers error response as transport-ambiguous', async () => {
+    const responseError = Object.assign(new Error('Forbidden'), { code: 403 });
+    const create = vi.fn().mockRejectedValue(responseError);
+    const { client } = stopClient(create);
+
+    const error = await requestSessionStop(client, sessionId, taskId, 100).catch(
+      (caught) => caught
+    );
+    expect(error).toBe(responseError);
+    expect(isStopTransportAmbiguous(error)).toBe(false);
   });
 });

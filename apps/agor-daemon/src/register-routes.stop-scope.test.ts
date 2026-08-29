@@ -30,6 +30,9 @@ describe('Stop route transaction scope', () => {
       'runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase'
     );
     expect(stop).toContain('runInTenantDatabaseScope: inCurrentTenantDatabaseScope');
+    expect(stop).toContain("body.expected_task_id === 'string'");
+    expect(stop).toContain('{ reason: stopReason, expectedTaskId }');
+    expect(stop).toContain("outcome: 'force_failed' as const");
     expect(stop).toMatch(
       /const failedTask = await runInFreshTerminationTenantWriteDatabase\(\(\) =>\s+forceFailUnverifiedTask\(\{/
     );

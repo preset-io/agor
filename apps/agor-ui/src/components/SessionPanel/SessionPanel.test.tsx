@@ -106,6 +106,16 @@ const branch = {
   archived: false,
 } as unknown as Branch;
 
+function stopIo() {
+  const socket = {
+    connected: true,
+    timeout: vi.fn(() => socket),
+    once: vi.fn(),
+    off: vi.fn(),
+  };
+  return socket;
+}
+
 function renderPanel({
   onOpenTerminal = vi.fn(),
   onChooseAgenticTool,
@@ -296,12 +306,14 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
         status: 'running',
       } as Task,
     ];
-    const create = vi.fn().mockRejectedValue(new Error('database scope missing'));
+    const create = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('database scope missing'), { code: 500 }));
     const get = vi.fn().mockRejectedValue(new Error('task read unavailable'));
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     renderPanel({
       client: {
-        io: { connected: true },
+        io: stopIo(),
         service: (path: string) =>
           path === 'tasks'
             ? ({ get, on: vi.fn(), off: vi.fn() } as never)
@@ -317,7 +329,12 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
 
     fireEvent.click(await screen.findByRole('button', { name: /stop/i }));
 
-    await waitFor(() => expect(create).toHaveBeenCalledWith({}));
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        expected_task_id: '018f0000-0000-7000-8000-000000000010',
+      })
+    );
+    expect(get).not.toHaveBeenCalled();
     expect(await screen.findByText('Failed to stop execution. You can try again.')).toBeVisible();
   });
 
@@ -343,7 +360,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     renderPanel({
       client: {
-        io: { connected: true },
+        io: stopIo(),
         service: (path: string) =>
           path === 'tasks'
             ? ({ get, on: vi.fn(), off: vi.fn() } as never)
@@ -358,6 +375,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
       await screen.findByText('Stop was accepted; waiting for executor termination.')
     ).toBeVisible();
     expect(create).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledWith({ expected_task_id: taskId });
     expect(get).toHaveBeenCalledWith(taskId);
     expect(
       screen.queryByText('Failed to stop execution. You can try again.')
@@ -378,6 +396,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     });
     renderPanel({
       client: {
+        io: stopIo(),
         service: () => ({
           create,
           find: vi.fn().mockResolvedValue({ data: [] }),

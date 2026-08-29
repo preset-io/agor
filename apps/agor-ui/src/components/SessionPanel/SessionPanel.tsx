@@ -101,7 +101,11 @@ import { SessionAttachmentTray } from './SessionAttachmentTray';
 import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
-import { reconcileStopTransportFailure } from './stopReconciliation';
+import {
+  isStopTransportAmbiguous,
+  reconcileStopTransportFailure,
+  requestSessionStop,
+} from './stopReconciliation';
 import { useComposerAttachments } from './useComposerAttachments';
 
 // Re-export PermissionMode from SDK for convenience
@@ -1331,7 +1335,6 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       showInfo('Retrying stop request...');
     }
 
-    setStopRequestInFlight(true);
     const stopSessionId = session.session_id;
     const stopTarget = [...tasks]
       .reverse()
@@ -1343,16 +1346,24 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
           task.status === TaskStatus.AWAITING_PERMISSION ||
           task.status === TaskStatus.AWAITING_INPUT
       );
+    if (!stopTarget) {
+      showError('Execution state is still syncing. Try again.');
+      return;
+    }
+
+    setStopRequestInFlight(true);
     try {
-      const result = (await client
-        .service(`sessions/${stopSessionId}/stop`)
-        .create({})) as SessionStopResult;
+      const result: SessionStopResult = await requestSessionStop(
+        client,
+        stopSessionId,
+        stopTarget.task_id
+      );
       if (result.success === false) {
         showInfo(result.reason ?? 'Stop requested; waiting for executor termination.');
       }
     } catch (error) {
       console.error('Failed to stop execution:', error);
-      const reconciliation = stopTarget
+      const reconciliation = isStopTransportAmbiguous(error)
         ? await reconcileStopTransportFailure(
             () => currentClientRef.current,
             stopSessionId,

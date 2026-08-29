@@ -85,6 +85,7 @@ import type {
   SessionMCPServer,
   StreamingEventType,
   Task,
+  TaskID,
   TaskMetadata,
   User,
   UserID,
@@ -3147,6 +3148,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             );
             return {
               success: true,
+              outcome: 'force_failed' as const,
               status: failedTask.status,
               stoppedTaskId: failedTask.task_id,
             };
@@ -3156,6 +3158,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
 
         const stopReason = typeof body.reason === 'string' ? body.reason : undefined;
+        const expectedTaskId =
+          typeof body.expected_task_id === 'string' ? (body.expected_task_id as TaskID) : undefined;
         const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () =>
           stopSessionPreserveQueue(
             {
@@ -3168,7 +3172,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             },
             id as SessionID,
             params,
-            { reason: stopReason }
+            { reason: stopReason, expectedTaskId }
           )
         );
 
