@@ -209,38 +209,82 @@ describe('configured executor spawning', () => {
     });
   });
 
-  it('does not expose daemon or user secrets to the templated launcher environment', async () => {
+  it('keeps reserved launcher credentials in the trusted template process only', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
-    const previousDatabaseUrl = process.env.DATABASE_URL;
-    const previousMasterSecret = process.env.AGOR_MASTER_SECRET;
-    process.env.DATABASE_URL = 'postgres://daemon-secret';
-    process.env.AGOR_MASTER_SECRET = 'deployment-secret';
+    const launcherCredentials = {
+      AGOR_CLOUD_API_BASE_URL: 'https://synthetic-launcher.invalid/api',
+      AGOR_CLOUD_RUNTIME_CREDENTIAL_ID: 'synthetic-launcher-credential-id',
+      AGOR_CLOUD_RUNTIME_SIGNING_KEY: 'synthetic-launcher-signing-key',
+      // A future launcher field is covered by the reserved prefix contract,
+      // not an allowlist that can silently fall behind the launcher.
+      AGOR_CLOUD_FUTURE_LAUNCHER_CREDENTIAL: 'synthetic-future-launcher-credential',
+    } as const;
+    const withheldDaemonEnvironment = {
+      DATABASE_URL: 'postgres://synthetic-daemon.invalid/agor',
+      AGOR_MASTER_SECRET: 'synthetic-deployment-master-secret',
+      AGOR_JWT_SECRET: 'synthetic-daemon-jwt-secret',
+      AGOR_ADMIN_PASSWORD: 'synthetic-bootstrap-password',
+      REDIS_URL: 'redis://synthetic-daemon.invalid',
+      OPENAI_API_KEY: 'synthetic-openai-provider-credential',
+      ANTHROPIC_API_KEY: 'synthetic-anthropic-provider-credential',
+      GEMINI_API_KEY: 'synthetic-gemini-provider-credential',
+      GOOGLE_APPLICATION_CREDENTIALS: '/synthetic/daemon/google-credentials.json',
+      AWS_SECRET_ACCESS_KEY: 'synthetic-object-store-credential',
+      SYNTHETIC_DAEMON_INTERNAL_SECRET: 'synthetic-unknown-future-daemon-secret',
+    } as const;
+    const ambient = { ...launcherCredentials, ...withheldDaemonEnvironment };
+    const previous = Object.fromEntries(Object.keys(ambient).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, ambient);
     try {
+      const { createUserProcessEnvironment } = await import('@agor/core/config');
       const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
       configureExecutor(
         { executor_command_template: 'launch -- {command}' },
         LOCAL_RESPONSE_OPTIONS
       );
 
-      spawnExecutor(
-        { command: 'prompt', env: { USER_SECRET: 'payload-only' } },
-        { preparedEnv: { USER_SECRET: 'payload-only' } }
-      );
+      // Exercise the real session-env assembly boundary rather than handing a
+      // made-up env object directly to spawnExecutor.
+      const sessionEnv = await createUserProcessEnvironment(undefined, undefined, {
+        SYNTHETIC_SESSION_SETTING: 'ordinary-session-value',
+      });
+      spawnExecutor({ command: 'prompt', env: sessionEnv }, { preparedEnv: sessionEnv });
 
       const launcherOptions = spawnMock.mock.calls[0][2] as {
         env: Record<string, string>;
       };
+      const executorPayload = JSON.parse(proc.written) as {
+        env: Record<string, string>;
+      };
+
       expect(launcherOptions.env.PATH).toBe(process.env.PATH);
-      expect(launcherOptions.env.DATABASE_URL).toBeUndefined();
-      expect(launcherOptions.env.AGOR_MASTER_SECRET).toBeUndefined();
-      expect(launcherOptions.env.USER_SECRET).toBeUndefined();
-      expect(JSON.parse(proc.written).env).toEqual({ USER_SECRET: 'payload-only' });
+      expect(launcherOptions.env).toMatchObject(launcherCredentials);
+      expect(launcherOptions.env.SYNTHETIC_SESSION_SETTING).toBeUndefined();
+      expect(executorPayload.env.SYNTHETIC_SESSION_SETTING).toBe('ordinary-session-value');
+
+      for (const [name, value] of Object.entries(withheldDaemonEnvironment)) {
+        expect(launcherOptions.env, `${name} reached the templated launcher`).not.toHaveProperty(
+          name
+        );
+        expect(executorPayload.env, `${name} reached the executor payload`).not.toHaveProperty(
+          name
+        );
+        expect(proc.written).not.toContain(value);
+      }
+      for (const [name, value] of Object.entries(launcherCredentials)) {
+        expect(sessionEnv, `${name} reached the resolved session env`).not.toHaveProperty(name);
+        expect(executorPayload.env, `${name} reached the executor payload`).not.toHaveProperty(
+          name
+        );
+        expect(proc.written).not.toContain(value);
+      }
     } finally {
-      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = previousDatabaseUrl;
-      if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
-      else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+      for (const key of Object.keys(ambient)) {
+        const value = previous[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 

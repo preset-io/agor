@@ -84,7 +84,8 @@ function withDaemonExecutorEnv(
  * `sh -c <launcher>` must not inherit the daemon's database URL, JWT/master
  * secrets, provider credentials, or other ambient deployment configuration.
  * The one exception is the launcher's own `AGOR_CLOUD_*` runtime-service
- * credentials (issue #198); daemon-internal secrets stay withheld.
+ * credentials (https://github.com/preset-io/agor-cloud/issues/198);
+ * daemon-internal secrets stay withheld.
  */
 function resolveTemplateLauncherEnvironment(logLevel: string): Record<string, string> {
   return {
