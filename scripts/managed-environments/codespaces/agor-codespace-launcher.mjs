@@ -805,12 +805,28 @@ export class CodespaceController {
     const resource = discovery.resource;
     const summary = JSON.stringify(publicSummary(resource, []));
     const name = resourceName(resource);
-    if (resource.state !== 'Available') {
-      return `${summary}\nCodespace logs were not fetched because GitHub CLI would resume a stopped Codespace. Press Play before requesting Logs.\n`;
-    }
+    // Creation logs come from the provider control plane and do not establish
+    // an SSH connection, so they are useful while postCreate/postStart is
+    // running and are safe to read from a stopped Codespace.
     const creationLogs = await this.client.creationLogs(name);
-    const runtimeLogs = await this.client.runtimeLogs(name, this.repository);
-    return `${summary}\n--- Codespace creation log ---\n${creationLogs}--- Agor runtime log ---\n${runtimeLogs}`;
+    const creationSection = `${summary}\n--- Codespace creation log ---\n${creationLogs}${creationLogs.endsWith('\n') ? '' : '\n'}`;
+    if (resource.state !== 'Available') {
+      const runtimeReason =
+        resource.state === 'Shutdown'
+          ? 'Agor runtime logs were skipped because SSH would resume the stopped Codespace.'
+          : `Agor runtime logs are not available until the Codespace is Available (current state: ${resource.state || 'unknown'}).`;
+      return `${creationSection}--- Agor runtime log ---\n${runtimeReason}\n`;
+    }
+    try {
+      const runtimeLogs = await this.client.runtimeLogs(name, this.repository);
+      return `${creationSection}--- Agor runtime log ---\n${runtimeLogs}`;
+    } catch (error) {
+      const detail =
+        error instanceof LauncherError
+          ? error.message
+          : 'remote runtime logs are not available yet';
+      return `${creationSection}--- Agor runtime log ---\nUnavailable: ${redact(detail)}\n`;
+    }
   }
 }
 

@@ -456,7 +456,9 @@ Use only a repository/ref whose Codespace can be safely created and deleted:
 4. Press Play once. Cold Docker image build and Agor startup occur in the Codespace and can take up
    to the launcher's ten-minute deadline. The App pill initially links to the Codespaces dashboard,
    then switches to the current private forwarded-port URL after provider and remote `/health`
-   readiness succeed.
+   readiness succeed. During bootstrap, use **Codespaces: View Creation Log**, run
+   `gh codespace logs -c <name> --follow`, or use Agor's Logs action for a bounded creation-log
+   snapshot. Once the workspace is Available, Logs also includes the nested Compose log tail.
 5. Open App while logged into GitHub as the Codespace creator. If GitHub's private-port auth does
    not work for the split UI/daemon origins, stop and Nuke; do not switch the fixed-admin preview to
    public as a workaround.
@@ -511,9 +513,10 @@ before a disposable manual trial.
 The launcher tests additionally cover create, repeated Play without duplicate creation, stopped
 resume, stale-name/recreated-resource adoption, duplicate-marker freeze, actor change rejection,
 idempotent Stop/Nuke, owner/repository/ref/marker mismatch, dynamic URL allowlisting, redaction, and
-argv/JSON-stdin transport of shell-looking refs. Its atomic local lock directory closes the
-duplicate-Play window only for processes sharing one launcher state directory and PID namespace;
-it is not a distributed lock.
+argv/JSON-stdin transport of shell-looking refs. Creation-log access during startup/stopped states
+and safe degradation when runtime SSH logs are not ready are covered separately. Its atomic local
+lock directory closes the duplicate-Play window only for processes sharing one launcher state
+directory and PID namespace; it is not a distributed lock.
 
 The variant passes `repo.github_slug`, a credential-free `owner/repository` identity derived at
 render time from Agor's sanitized registered `github.com` remote. It intentionally does not use
@@ -527,8 +530,8 @@ Command run:
 node --test scripts/managed-environments/codespaces/agor-codespace-launcher.test.mjs
 ```
 
-Measured result after the Node adapter implementation: **19/19 launcher tests passed in about 400
-ms**. Combined with the provider-neutral suite, the prototype has 35 hermetic lifecycle/security
+Measured result after the Node adapter implementation: **22/22 launcher tests passed in about 400
+ms**. Combined with the provider-neutral suite, the prototype has 38 hermetic lifecycle/security
 cases.
 Focused Core, executor, daemon, and UI Vitest suites passed **187/187** cases covering command
 rendering, strict result parsing, health generation fencing, DNS-pinned cancellation, branch

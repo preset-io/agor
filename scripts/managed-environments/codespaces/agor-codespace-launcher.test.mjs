@@ -260,11 +260,37 @@ test('destructive actions refetch and freeze on identity drift', async (t) => {
 
 test('logs never wake a stopped Codespace', async (t) => {
   const { store } = await fixture(t);
-  const client = new FakeClient([resource({ state: 'Shutdown' })]);
+  const existing = resource({ state: 'Shutdown' });
+  const client = new FakeClient([existing]);
   const output = await controller(client, store).logs();
-  assert.match(output, /would resume a stopped Codespace/);
-  assert.deepEqual(client.creationLogCalls, []);
+  assert.match(output, /safe creation log/);
+  assert.match(output, /SSH would resume the stopped Codespace/);
+  assert.deepEqual(client.creationLogCalls, [existing.name]);
   assert.deepEqual(client.runtimeLogCalls, []);
+});
+
+test('logs expose creation progress while the Codespace is starting', async (t) => {
+  const { store } = await fixture(t);
+  const existing = resource({ state: 'Starting' });
+  const client = new FakeClient([existing]);
+  const output = await controller(client, store).logs();
+  assert.match(output, /--- Codespace creation log ---\nsafe creation log/);
+  assert.match(output, /not available until the Codespace is Available.*Starting/);
+  assert.deepEqual(client.creationLogCalls, [existing.name]);
+  assert.deepEqual(client.runtimeLogCalls, []);
+});
+
+test('logs preserve creation diagnostics when runtime SSH is not ready', async (t) => {
+  const { store } = await fixture(t);
+  const existing = resource();
+  const client = new FakeClient([existing]);
+  client.runtimeLogs = async () => {
+    throw new LauncherError('GitHub CLI command failed with ghp_abcdefghijklmnopqrstuvwxyz123456');
+  };
+  const output = await controller(client, store).logs();
+  assert.match(output, /safe creation log/);
+  assert.match(output, /Unavailable: GitHub CLI command failed/);
+  assert.doesNotMatch(output, /ghp_/);
 });
 
 test('mismatched repo, ref, owner, or marker is never adopted', () => {

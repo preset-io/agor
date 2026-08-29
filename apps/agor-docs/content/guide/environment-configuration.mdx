@@ -570,6 +570,24 @@ App URL from live Codespaces port metadata. With `--emit-health public-only`, it
 reports health only when GitHub says that forwarded port is public; private
 Codespaces URLs remain authenticated App links and are not polled by Agor.
 
+While a Codespace is building, use **Cmd/Ctrl+Shift+P → Codespaces: View Creation
+Log** in the browser/VS Code client, or follow the same provider log from another
+authenticated machine:
+
+```bash
+gh codespace logs -c <codespace-name> --follow
+```
+
+Agor's Logs action returns a bounded snapshot of that creation log even while
+`postStartCommand` is running. Once the Codespace is available, it also retrieves
+the nested Compose log tail over authenticated SSH. From a Codespace terminal,
+you can inspect the stack directly:
+
+```bash
+docker compose -p agor-codespaces-sqlite ps
+docker compose -p agor-codespaces-sqlite logs --tail=100 --follow
+```
+
 This reference is deliberately narrower than a production shared controller: it
 uses the controller's current GitHub actor, a process-local lock/state directory,
 and is not a Cloud/HA credential-sponsorship or distributed-leasing design. Never
