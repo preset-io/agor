@@ -72,7 +72,9 @@ Services differ in how they defend themselves:
 
 The outliers are services whose custom methods touch `this.db` **without** an internal
 helper and rely purely on the caller's ambient scope: **`ReposService`**,
-**`BoardsService.archive/unarchive`**, and **`BoardObjectsService.findByBranchId`**.
+**`BoardsService.archive/unarchive`**, **`BoardObjectsService.findByBranchId`**, and
+**`CardsService.getWithType`** (the other `cards.ts` custom-method calls were already
+wrapped; `getWithType` was the one that had been missed).
 
 ## Fix
 
@@ -89,9 +91,16 @@ Sites fixed:
 | `apps/agor-daemon/src/mcp/tools/branches.ts` | `agor_branches_create`               | `reposService.createBranch`               |
 | `apps/agor-daemon/src/mcp/tools/branches.ts` | `agor_branches_set_zone`             | `boardObjectsService.findByBranchId` (×2) |
 | `apps/agor-daemon/src/mcp/tools/repos.ts`    | `agor_repos_clone`                   | `reposService.cloneRepository`            |
-| `apps/agor-daemon/src/mcp/tools/repos.ts`    | `agor_repos_create_local`            | `reposService.addLocalRepository`         |
 | `apps/agor-daemon/src/mcp/tools/repos.ts`    | `agor_repos_update`                  | `reposService.updateMetadata`             |
 | `apps/agor-daemon/src/mcp/tools/boards.ts`   | `agor_boards_archive` / `_unarchive` | `boardsService.archive` / `unarchive`     |
+| `apps/agor-daemon/src/mcp/tools/cards.ts`    | `agor_cards_get`                     | `cardsService.getWithType`                |
+
+**Deliberately NOT wrapped: `agor_repos_create_local` (`addLocalRepository`).** That
+service method rejects with `BadRequest` in `required_from_auth` mode _before_ any DB
+touch, so the scope guard can never fire there in a scope-requiring deployment. It also
+`await`s a `git.repo.inspect` executor round-trip before its DB writes — so wrapping the
+whole call would risk holding a Postgres transaction across that network I/O if the HA
+guard were ever lifted. Local-repo registration stays a static/single-tenant path.
 
 This matches the established codebase pattern (identity at the tool boundary, short DB
 units at the call site) and the multitenancy cheat sheet's rule: _"Long-lived work should
@@ -123,10 +132,14 @@ missing). Nothing weakens the existing negative boundaries.
 
 ## Durable follow-up (recommended, not done here)
 
-`ReposService`, `BoardsService`, and `BoardObjectsService` should grow the same private
-`withTenantDatabase(params, work)` helper that `BranchesService` already has, and wrap
-their custom methods internally. That makes the services defend themselves regardless of
-caller (HTTP route, MCP, gateway, scheduler) rather than relying on every call site to
-remember the wrapper — the same defense-in-depth the branches/sessions/gateway services
-already apply. The static guard in `register-services.mcp-tenant-scope.test.ts` is the
-model for a lint that would catch a new unguarded custom-method call site.
+`ReposService`, `BoardsService`, `BoardObjectsService`, and `CardsService` should grow the
+same private `withTenantDatabase(params, work)` helper that `BranchesService` already has,
+and wrap their custom methods internally. That makes the services defend themselves
+regardless of caller (HTTP route, MCP, gateway, scheduler) rather than relying on every
+call site to remember the wrapper — the same defense-in-depth the branches/sessions/gateway
+services already apply, and it removes the drift risk that let `agor_cards_get` slip through
+this first pass. A lighter alternative is a static audit (modeled on the source-scanning
+`register-services.mcp-tenant-scope.test.ts`) over `mcp/tools/*` that flags any direct
+custom-method service call not wrapped in `runWithMcpTenantDatabaseScope`, with a small
+explicit allow-list for methods that scope internally (e.g. branches/sessions/gateway) or
+are intentionally unwrapped (e.g. `addLocalRepository`). Either closes the gap durably.

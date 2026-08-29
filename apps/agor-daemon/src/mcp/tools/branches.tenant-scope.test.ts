@@ -27,11 +27,6 @@ vi.mock('../../utils/executor-delegated-home.js', () => ({
   resolveDelegatedExecutionHomeKey: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../utils/spawn-executor.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../utils/spawn-executor.js')>();
-  return { ...actual };
-});
-
 type ToolHandler = (
   args: Record<string, unknown>,
   requestContext?: ServerContext
@@ -50,6 +45,9 @@ function makeFixture(options: {
   tenantId?: string;
   requireScope?: boolean;
   branchesGet?: () => Promise<unknown>;
+  /** Runs inside createBranch's tenant scope (after the guarded-db touch,
+   *  before the observation is recorded) — used to interleave concurrent calls. */
+  onCreate?: () => Promise<void>;
 }) {
   // A `.run` marker makes `isPostgresDatabase` treat this as the SQLite-like
   // handle, so `runWithTenantDatabaseScope` enters an identity-only tenant scope
@@ -75,6 +73,8 @@ function makeFixture(options: {
     // Touch the guarded proxy — throws MissingTenantDatabaseScopeError unless a
     // tenant/system database scope is active.
     void (guardedDb as unknown as Record<string, unknown>).select;
+    // Optional interleave point (still inside the tenant scope).
+    if (options.onCreate) await options.onCreate();
     const scope = getCurrentTenantDatabaseScope();
     observations.push({
       tenantIdInContext: getCurrentTenantId(),
@@ -166,14 +166,19 @@ describe('agor_branches_create tenant database scope (HA regression)', () => {
 
   it('does not hold the tenant database scope across the readiness wait (waitForReady=true)', async () => {
     // Wait mode reads the branch through a *separate* Feathers get; the create
-    // scope must not still be open while polling. We assert the scope was active
-    // during createBranch and fully cleaned up after the tool returns.
-    const branchesGet = vi.fn(async () => ({
-      branch_id: 'branch-new',
-      name: 'feature',
-      board_id: 'board-1',
-      filesystem_status: 'ready',
-    }));
+    // scope must be closed by the time polling runs. Capture the ambient scope
+    // *inside* the poll — the assertion below would fail if polling happened
+    // while the create transaction was still open.
+    let scopeDuringPoll: unknown = 'not-called';
+    const branchesGet = vi.fn(async () => {
+      scopeDuringPoll = getCurrentTenantDatabaseScope();
+      return {
+        branch_id: 'branch-new',
+        name: 'feature',
+        board_id: 'board-1',
+        filesystem_status: 'ready',
+      };
+    });
     const { handler, observations } = makeFixture({ tenantId: 'tenant-a', branchesGet });
 
     const result = await handler(
@@ -187,19 +192,55 @@ describe('agor_branches_create tenant database scope (HA regression)', () => {
       scopeKind: 'tenant',
       scopeTenantId: 'tenant-a',
     });
-    // Scope cleanup: nothing leaks past the tool boundary.
+    // The readiness poll ran with NO create scope active...
+    expect(branchesGet).toHaveBeenCalled();
+    expect(scopeDuringPoll).toBeUndefined();
+    // ...and nothing leaks past the tool boundary either.
     expect(getCurrentTenantDatabaseScope()).toBeUndefined();
   });
 
-  it('keeps tenant A and tenant B on their own scopes (no cross-tenant leakage)', async () => {
-    const a = makeFixture({ tenantId: 'tenant-a' });
-    const b = makeFixture({ tenantId: 'tenant-b' });
+  it('keeps concurrent tenant A and tenant B requests on their own scopes (no cross-tenant leakage)', async () => {
+    // Interleave: both createBranch calls suspend inside their own tenant scope
+    // simultaneously, then each records its ambient tenant *after* the barrier.
+    // AsyncLocalStorage must keep the two concurrent contexts separate.
+    let enterA!: () => void;
+    let enterB!: () => void;
+    const aInside = new Promise<void>((resolve) => {
+      enterA = resolve;
+    });
+    const bInside = new Promise<void>((resolve) => {
+      enterB = resolve;
+    });
+    const a = makeFixture({
+      tenantId: 'tenant-a',
+      onCreate: async () => {
+        enterA();
+        await bInside;
+      },
+    });
+    const b = makeFixture({
+      tenantId: 'tenant-b',
+      onCreate: async () => {
+        enterB();
+        await aInside;
+      },
+    });
 
-    await a.handler(createArgs({ branchName: 'a-feature' }), requestContext());
-    await b.handler(createArgs({ branchName: 'b-feature' }), requestContext());
+    await Promise.all([
+      a.handler(createArgs({ branchName: 'a-feature' }), requestContext()),
+      b.handler(createArgs({ branchName: 'b-feature' }), requestContext()),
+    ]);
 
-    expect(a.observations[0]?.scopeTenantId).toBe('tenant-a');
-    expect(b.observations[0]?.scopeTenantId).toBe('tenant-b');
+    expect(a.observations[0]).toEqual({
+      tenantIdInContext: 'tenant-a',
+      scopeKind: 'tenant',
+      scopeTenantId: 'tenant-a',
+    });
+    expect(b.observations[0]).toEqual({
+      tenantIdInContext: 'tenant-b',
+      scopeKind: 'tenant',
+      scopeTenantId: 'tenant-b',
+    });
   });
 
   it('rejects a tenant scope that conflicts with an active foreign tenant context (fail closed)', async () => {

@@ -49,7 +49,7 @@
     "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs",
     "test:sandbox-migration": "node --test scripts/strict-to-sandbox-migration.test.mjs",
     "check:agentic-tool-packages": "node scripts/check-agentic-tool-packages.mjs",
-    "test:ha:docker": "node --test docker/ha/dev-launcher.test.mjs && node scripts/test-daemon-ha.mjs"
+    "test:ha:docker": "node --test docker/ha/dev-launcher.test.mjs && node scripts/test-daemon-ha.mjs && node scripts/test-ha-mcp-branch-create.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",

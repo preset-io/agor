@@ -15,6 +15,7 @@
  *   - MCP agor_branches_create succeeds on daemon A and daemon B (replica routing).
  *   - waitForReady=false AND waitForReady=true both succeed.
  *   - Concurrent MCP creates all succeed (no tenant-scope bleed across requests).
+ *   - agor_cards_get (CardsService.getWithType, same failure class) runs under scope.
  *   - A tenant-B MCP token cannot create against a tenant-A repo (RLS isolation).
  *
  * Gated like scripts/test-daemon-ha.mjs — requires a running Compose stack.
@@ -166,7 +167,13 @@ async function mcpCreateBranch(base, token, sid, args) {
     `tools/call returned no result at ${base}: ${JSON.stringify(res.messages).slice(0, 300)}`
   );
   const text = (result.content ?? []).map((c) => c.text).join(' ');
-  return { isError: result.isError === true, text };
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = undefined;
+  }
+  return { isError: result.isError === true, text, payload };
 }
 
 async function registerRepo(base, headers, slug) {
@@ -212,6 +219,41 @@ async function createSession(base, headers, branchId) {
   const body = await res.text();
   assert.equal(res.status, 201, `session create failed: ${res.status} ${body}`);
   return JSON.parse(body).session_id;
+}
+
+async function createCardType(base, headers, name) {
+  const res = await fetch(`${base}/card-types`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ name }),
+  });
+  const body = await res.text();
+  assert.equal(res.status, 201, `card-type create failed: ${res.status} ${body}`);
+  return JSON.parse(body).card_type_id;
+}
+
+/** Call an arbitrary MCP tool and return { isError, text, payload }. */
+async function mcpToolCall(base, token, sid, name, args) {
+  const res = await mcpCall(
+    base,
+    token,
+    { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name, arguments: args } },
+    sid ? { 'mcp-session-id': sid } : {}
+  );
+  assert.equal(res.status, 200, `${name} HTTP status at ${base}: ${res.status}`);
+  const result = res.messages.map((m) => m.result).find(Boolean);
+  assert(
+    result,
+    `${name} returned no result at ${base}: ${JSON.stringify(res.messages).slice(0, 300)}`
+  );
+  const text = (result.content ?? []).map((c) => c.text).join(' ');
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = undefined;
+  }
+  return { isError: result.isError === true, text, payload };
 }
 
 const stamp = Date.now();
@@ -260,17 +302,35 @@ for (const [label, base] of [
       ...(waitForReady ? { waitTimeoutMs: 8000 } : {}),
     };
     const result = await mcpCreateBranch(base, aToken, sid, args);
+    // Primary regression guard: the scope error must be gone in both modes.
+    assert(
+      !/Missing tenant database scope/i.test(result.text),
+      `tenant scope regression on ${label} (waitForReady=${waitForReady}): ${result.text}`
+    );
     assert.equal(
       result.isError,
       false,
       `MCP agor_branches_create failed on ${label} (waitForReady=${waitForReady}): ${result.text}`
     );
     assert(
-      !/Missing tenant database scope/i.test(result.text),
-      `tenant scope regression on ${label} (waitForReady=${waitForReady}): ${result.text}`
+      typeof result.payload?.branch_id === 'string',
+      `MCP agor_branches_create returned no branch on ${label} (waitForReady=${waitForReady}): ${result.text}`
     );
+    if (waitForReady) {
+      // The wait path executed and produced a *bounded* readiness outcome
+      // (ready OR timeout — both are non-error) rather than the scope failure.
+      // Materialization of a synthetic repo may legitimately time out, so we do
+      // not assert `ready` specifically; we assert the wait code path ran.
+      const message = result.payload?._readiness?.message ?? '';
+      assert(
+        /ready for session creation|Timed out/i.test(message),
+        `waitForReady did not render a bounded readiness outcome on ${label}: ${result.text}`
+      );
+    }
   }
-  console.log(`ok - MCP agor_branches_create succeeds on ${label} for waitForReady false and true`);
+  console.log(
+    `ok - MCP agor_branches_create runs with no scope regression on ${label} (waitForReady false and true)`
+  );
 }
 
 // Concurrent creates share the pooled Postgres connections; each must open and
@@ -290,6 +350,31 @@ for (const [i, result] of concurrent.entries()) {
   assert.equal(result.isError, false, `concurrent create ${i} failed: ${result.text}`);
 }
 console.log('ok - concurrent MCP branch creates all succeed with no tenant-scope bleed');
+
+// agor_cards_get exercises CardsService.getWithType — a custom, non-transport
+// method that reads the card repository over `this.db` directly, the same
+// failure class as branch create. It must also run under an active tenant scope.
+const aCardTypeId = await createCardType(daemonA, aHeaders, `ha-type-${stamp}`);
+// Cards must be created via createWithPlacement (already wrapped) — use the MCP
+// tool so this stays a pure MCP-path check.
+const cardCreate = await mcpToolCall(daemonA, aToken, sidConcurrent, 'agor_cards_create', {
+  boardId: aBoardId,
+  cardTypeId: aCardTypeId,
+  title: `ha-card-${stamp}`,
+});
+assert.equal(cardCreate.isError, false, `agor_cards_create failed: ${cardCreate.text}`);
+const aCardId = cardCreate.payload?.card?.card_id;
+assert(typeof aCardId === 'string', `agor_cards_create returned no card id: ${cardCreate.text}`);
+
+const cardGet = await mcpToolCall(daemonA, aToken, sidConcurrent, 'agor_cards_get', {
+  cardId: aCardId,
+});
+assert(
+  !/Missing tenant database scope/i.test(cardGet.text),
+  `tenant scope regression in agor_cards_get: ${cardGet.text}`
+);
+assert.equal(cardGet.isError, false, `agor_cards_get failed: ${cardGet.text}`);
+console.log('ok - MCP agor_cards_get runs under tenant scope (no regression)');
 
 // ---- Tenant B: cross-tenant negative ---------------------------------------
 const beatrice = await loginPersona({ tenant: 'globex', persona: 'globex-beatrice' }, daemonB);
