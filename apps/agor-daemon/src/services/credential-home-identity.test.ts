@@ -1,9 +1,11 @@
+import { homedir } from 'node:os';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const dbMocks = vi.hoisted(() => ({ UsersRepository: vi.fn() }));
 vi.mock('@agor/core/db', () => dbMocks);
 
 import type { UserID } from '@agor/core/types';
+import { resolveSimpleCodexHome } from '../utils/codex-credential-namespace.js';
 import {
   resolveExecutionCredentialHome,
   sameExecutionCredentialHome,
@@ -24,12 +26,18 @@ beforeEach(() => {
 });
 
 const withTenantDatabase = <T>(work: (db: unknown) => Promise<T>) => work({});
-const homeFor = (userId: UserID, config: unknown) =>
+const homeFor = (
+  userId: UserID,
+  config: unknown,
+  agenticTool?: 'codex' | 'claude-code',
+  tenantId = 'tenant-1'
+) =>
   resolveExecutionCredentialHome({
     userId,
-    tenantId: 'tenant-1',
+    tenantId,
     config: config as never,
     withTenantDatabase: withTenantDatabase as never,
+    agenticTool,
   });
 
 describe('native credential home identity', () => {
@@ -75,6 +83,42 @@ describe('native credential home identity', () => {
         await homeFor(BOB, { execution: { unix_user_mode: 'delegated' } })
       )
     ).toBe(false);
+  });
+
+  it('separates built-in simple Codex state by tenant and user only for Codex', async () => {
+    const localSimple = { execution: { unix_user_mode: 'simple' } };
+    const alice = await homeFor(ALICE, localSimple, 'codex');
+    const bob = await homeFor(BOB, localSimple, 'codex');
+    const otherTenantAlice = await homeFor(ALICE, localSimple, 'codex', 'tenant-2');
+
+    expect(alice.codexHome).toBe(
+      resolveSimpleCodexHome({
+        tenantId: 'tenant-1',
+        subjectUserId: ALICE,
+        homeDir: homedir(),
+      })
+    );
+    expect(sameExecutionCredentialHome(alice, bob)).toBe(false);
+    expect(sameExecutionCredentialHome(alice, otherTenantAlice)).toBe(false);
+    expect(
+      sameExecutionCredentialHome(
+        await homeFor(ALICE, localSimple, 'claude-code'),
+        await homeFor(BOB, localSimple, 'claude-code')
+      )
+    ).toBe(true);
+  });
+
+  it('leaves templated simple Codex home selection to the external substrate', async () => {
+    const templatedSimple = {
+      execution: {
+        unix_user_mode: 'simple',
+        executor_command_template: 'launcher -- agor-executor --stdin',
+      },
+    };
+    const alice = await homeFor(ALICE, templatedSimple, 'codex');
+    const bob = await homeFor(BOB, templatedSimple, 'codex');
+    expect(alice.codexHome).toBeUndefined();
+    expect(sameExecutionCredentialHome(alice, bob)).toBe(true);
   });
 
   it('returns one typed failure when delegated home identity is missing', async () => {

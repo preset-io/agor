@@ -256,6 +256,7 @@ import {
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
+import { applySimpleCodexTaskHome } from './utils/codex-credential-namespace.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
 import { emitMarketplaceInvalidation } from './utils/marketplace-invalidation.js';
@@ -1288,6 +1289,19 @@ function createExecuteHandler(
     });
 
     executorEnv.DAEMON_URL = daemonUrl;
+
+    // Trusted local simple mode has one Unix home for every executor. Give
+    // Codex sessions a stable tenant+owner namespace so native ChatGPT auth and
+    // Codex runtime state are not accidentally shared between Agor users. This
+    // is state separation only; simple mode still provides no filesystem
+    // security boundary because all executors run as the daemon uid.
+    applySimpleCodexTaskHome(executorEnv, {
+      mode: unixUserMode,
+      executorCommandTemplate: config.execution?.executor_command_template,
+      tenantId: tenantId ? String(tenantId) : undefined,
+      session,
+      homeDir: executorHomeDir,
+    });
 
     const openCodeLaunch = (() => {
       if (session.agentic_tool !== 'opencode') return undefined;
