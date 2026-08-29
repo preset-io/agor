@@ -1,7 +1,7 @@
 import type { UUID } from '@agor-live/client';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { useOnboardingLifecycle } from './useOnboardingLifecycle';
+import { type OnboardingOperationOwner, useOnboardingLifecycle } from './useOnboardingLifecycle';
 
 const USER_ID = 'user-1' as UUID;
 
@@ -81,7 +81,7 @@ describe('useOnboardingLifecycle', () => {
     await waitFor(() => expect(result.current.open).toBe(false));
     expect(result.current.state.phase).toBe('completed');
 
-    // A same-authority completion operation may still be unwinding after its
+    // The same activation's completion operation may still be unwinding after its
     // PATCH triggered that realtime terminal update. Its terminal ack remains
     // current so post-commit navigation can run exactly once.
     expect(result.current.complete(owner)).toBe(true);
@@ -104,6 +104,41 @@ describe('useOnboardingLifecycle', () => {
     expect(result.current.complete(owner)).toBe(false);
     expect(result.current.state.phase).toBe('deferred');
   });
+
+  it.each(['completed', 'deferred'] as const)(
+    'never revalidates an old %s activation after a newer activation completes',
+    async (firstTerminalPhase) => {
+      const input = defaults();
+      const { result, rerender } = renderHook(
+        (props: ReturnType<typeof defaults>) => useOnboardingLifecycle(props),
+        { initialProps: input }
+      );
+
+      await waitFor(() => expect(result.current.open).toBe(true));
+      const firstOwner = result.current.activeOwner!;
+
+      if (firstTerminalPhase === 'completed') {
+        // Model the completion PATCH's realtime event arriving while its
+        // response remains pending.
+        rerender({ ...input, completed: true });
+        await waitFor(() => expect(result.current.state.phase).toBe('completed'));
+      } else {
+        act(() => expect(result.current.defer(firstOwner)).toBe(true));
+      }
+
+      let secondOwner: OnboardingOperationOwner | null = null;
+      act(() => {
+        secondOwner = result.current.activate(USER_ID, 7, true);
+      });
+      expect(secondOwner?.activationGeneration).toBe(2);
+      act(() => expect(result.current.complete(secondOwner!)).toBe(true));
+
+      // The terminal state belongs to activation B. A's delayed response must
+      // not navigate to A's board/session behind the newer activation.
+      expect(result.current.complete(firstOwner)).toBe(false);
+      expect(result.current.state).toEqual({ phase: 'completed', owner: secondOwner });
+    }
+  );
 
   it('honors durable terminal gates and viewer restrictions', async () => {
     const input = defaults();

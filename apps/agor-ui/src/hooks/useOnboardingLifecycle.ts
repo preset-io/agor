@@ -20,7 +20,7 @@ interface OnboardingAuthorityOwner {
 export type OnboardingLifecycleState =
   | { phase: 'idle' }
   | { phase: 'active'; owner: OnboardingOperationOwner; explicit: boolean }
-  | { phase: 'deferred' | 'completed'; authority: OnboardingAuthorityOwner };
+  | { phase: 'deferred' | 'completed'; owner: OnboardingOperationOwner };
 
 interface UseOnboardingLifecycleInput {
   userId?: UUID | null;
@@ -101,7 +101,7 @@ export function useOnboardingLifecycle({
         }
         if (
           (current.phase === 'deferred' || current.phase === 'completed') &&
-          sameAuthority(current.authority, authority)
+          sameAuthority(current.owner, authority)
         ) {
           return null;
         }
@@ -133,22 +133,18 @@ export function useOnboardingLifecycle({
   const transitionTo = useCallback(
     (owner: OnboardingOperationOwner, phase: 'deferred' | 'completed') => {
       const current = stateRef.current;
-      const authority = {
-        userId: owner.userId,
-        authenticationGeneration: owner.authenticationGeneration,
-      };
-
-      // Terminal acknowledgement is idempotent for the same authenticated
-      // authority. In particular, the users realtime `onboarding_completed`
-      // event can close an automatically-opened wizard while the completion
-      // PATCH promise is still resolving. The caller that issued that PATCH
-      // must still be allowed to finish its post-commit navigation. A different
-      // terminal phase (explicit dismissal) remains authoritative and returns
-      // false, so closing during an in-flight write never navigates behind the
-      // user's back.
+      // Terminal acknowledgement is idempotent for the exact activation. In
+      // particular, the users realtime `onboarding_completed` event can close
+      // an automatically-opened wizard while that activation's completion
+      // PATCH promise is still resolving. The caller that issued the PATCH must
+      // still be allowed to finish its post-commit navigation. Retaining and
+      // comparing activationGeneration prevents an older continuation from
+      // becoming current again after an explicit restart. A different terminal
+      // phase (dismissal) likewise returns false, so closing during an in-flight
+      // write never navigates behind the user's back.
       if (
         current.phase === phase &&
-        sameAuthority(current.authority, authority) &&
+        sameOperationOwner(current.owner, owner) &&
         isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)
       ) {
         return true;
@@ -156,7 +152,7 @@ export function useOnboardingLifecycle({
       if (!isOwnerCurrent(owner)) return false;
       commitState({
         phase,
-        authority,
+        owner,
       });
       return true;
     },
@@ -193,7 +189,7 @@ export function useOnboardingLifecycle({
       if (
         !(
           (current.phase === 'deferred' || current.phase === 'completed') &&
-          sameAuthority(current.authority, authority)
+          sameAuthority(current.owner, authority)
         )
       ) {
         reset();

@@ -79,10 +79,12 @@ candidate ID. A retry reuses the saved board/branch/session IDs.
 
 Completion becomes terminal immediately after the durable self-patch, before
 navigation. The PATCH's realtime user event is allowed to win that race: a
-same-authority `completed` terminal acknowledgement is idempotent, so the
+same-activation `completed` terminal acknowledgement is idempotent, so the
 completion continuation still navigates to its created board after the PATCH
-promise resolves. A `deferred` terminal state is deliberately not interchangeable
-with completion, so X/Escape during that write still suppresses navigation. The
+promise resolves. Terminal state retains the activation generation, preventing
+an older continuation from becoming current again after an explicit restart. A
+`deferred` terminal state is deliberately not interchangeable with completion,
+so X/Escape during that write still suppresses navigation. The
 auth refresh is best-effort and runs only after close/navigation; failure shows
 a reload warning instead of converting success into an error. Dismissal becomes
 terminal synchronously, then writes `preferences.onboarding.deferredAt` from the

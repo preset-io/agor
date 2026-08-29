@@ -1010,8 +1010,9 @@ function AppContent() {
     // The successful preference write is the commit point. Its realtime user
     // event may have already moved this lifecycle to `completed`, retiring the
     // active wizard owner before the PATCH promise resolves. Completion is an
-    // idempotent terminal acknowledgement for the same authentication
-    // generation, so that expected ordering still proceeds to navigation. An
+    // idempotent terminal acknowledgement for this exact activation, so that
+    // expected ordering still proceeds to navigation without revalidating an
+    // older activation after a restart. An
     // explicit X/Escape dismissal transitions to `deferred` instead and keeps
     // this false, preserving the user's decision not to navigate.
     if (!completeOnboardingWizard(owner)) return;
