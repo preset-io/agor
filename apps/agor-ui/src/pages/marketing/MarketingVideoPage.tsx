@@ -11,11 +11,16 @@ import { App as AntdApp, ConfigProvider, Layout, theme } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ReactFlowProvider, useReactFlow, useViewport } from 'reactflow';
 import { AppHeader } from '../../components/AppHeader';
+import { ForkSpawnModal } from '../../components/ForkSpawnModal';
+import { NewBranchModal } from '../../components/NewBranchModal';
 import { SessionCanvas } from '../../components/SessionCanvas';
 import type { StaticRemoteCursor } from '../../components/SessionCanvas/canvas/RemoteCursorLayer';
 import { SessionSettingsModal } from '../../components/SessionSettingsModal';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { agorStore } from '../../store/agorStore';
+import { DemoKnowledgeStage } from './DemoKnowledgeStage';
+import { DemoMarketplaceStage } from './DemoMarketplaceStage';
+import { DemoScheduleStage } from './DemoScheduleStage';
 import { DemoSessionStage, type StageVariant } from './DemoSessionStage';
 import { DemoSlackStage } from './DemoSlackStage';
 import {
@@ -24,16 +29,29 @@ import {
   demoBoard,
   demoBoardId,
   demoBranches,
+  demoRepo,
   demoSessions,
   demoUsers,
 } from './fixtureData';
 import { artifactScene } from './scenes/artifact';
+import { autoAdvanceScene } from './scenes/autoAdvance';
 import { boardsScene } from './scenes/boards';
+import { canvasHoverPreviewScene } from './scenes/canvasHoverPreview';
 import { GATEWAY_PROMPT, gatewayScene } from './scenes/gateway';
+import { genealogyTreeScene } from './scenes/genealogyTree';
+import { knowledgeScene } from './scenes/knowledge';
+import { leaderboardScene } from './scenes/leaderboard';
+import { marketplaceScene } from './scenes/marketplace';
+import { multiAgentRaceScene } from './scenes/multiAgentRace';
 import { multiplayerScene } from './scenes/multiplayer';
+import { newBranchScene } from './scenes/newBranch';
+import { scheduleFiringScene } from './scenes/scheduleFiring';
 import { sessionScene } from './scenes/session';
 import { sessionsLoopScene } from './scenes/sessionsLoop';
 import { settingsScene } from './scenes/settings';
+import { teammateRevealScene } from './scenes/teammateReveal';
+import { worktreePrScene } from './scenes/worktreePr';
+import { zoneDropScene } from './scenes/zoneDrop';
 import { ActionRunner, type SceneDefinition, type Track } from './timeline';
 import './MarketingVideoPage.css';
 
@@ -46,12 +64,26 @@ const SCENES: Record<string, SceneDefinition> = {
   boards: boardsScene,
   sessions: sessionsLoopScene,
   gateway: gatewayScene,
+  // Booth-loop candidates (apps/agor-docs/demo-videos README "Adding a scene").
+  multiAgentRace: multiAgentRaceScene,
+  genealogyTree: genealogyTreeScene,
+  zoneDrop: zoneDropScene,
+  marketplace: marketplaceScene,
+  teammateReveal: teammateRevealScene,
+  scheduleFiring: scheduleFiringScene,
+  leaderboard: leaderboardScene,
+  newBranch: newBranchScene,
+  worktreePr: worktreePrScene,
+  knowledge: knowledgeScene,
+  autoAdvance: autoAdvanceScene,
+  canvasHoverPreview: canvasHoverPreviewScene,
 };
 
 // Which DemoSessionStage story each scene tells (default: 'coding').
 const STAGE_VARIANT_BY_SCENE: Record<string, StageVariant> = {
   gateway: 'gateway',
   multiplayer: 'collab',
+  worktreePr: 'worktree',
 };
 
 declare global {
@@ -290,6 +322,46 @@ const DemoScreenCursors = ({ scene, t }: { scene: SceneDefinition; t: number }) 
   );
 };
 
+/** Screen-space hover-preview tooltip: a small card near the fake pointer
+ * showing a couple of "live" lines (diff/log-style text), for the wide-shot
+ * "hover a card, see what it's doing" beat. Position and content are plain
+ * scene state — no real hover/DOM measurement involved, matching how every
+ * other screen-space overlay in this file works. */
+const DemoHoverPreview = ({ scene, t }: { scene: SceneDefinition; t: number }) => {
+  if (!scene.uiFlags.hoverPreviewVisible) return null;
+  const visible = sampleFlag(scene.uiFlags, 'hoverPreviewVisible', t);
+  if (visible < 0.5) return null;
+  const x = sampleFlag(scene.uiFlags, 'hoverPreviewX', t);
+  const y = sampleFlag(scene.uiFlags, 'hoverPreviewY', t);
+  const line1 = scene.textTracks?.hoverPreviewLine1?.sample(t) ?? '';
+  const line2 = scene.textTracks?.hoverPreviewLine2?.sample(t) ?? '';
+
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: 0,
+        top: 0,
+        transform: `translate3d(${x}px, ${y}px, 0)`,
+        zIndex: 99_997,
+        pointerEvents: 'none',
+        background: '#0b1220',
+        border: '1px solid #14b8a6',
+        borderRadius: 8,
+        padding: '8px 12px',
+        boxShadow: '0 12px 30px rgba(0, 0, 0, 0.45)',
+        fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+        fontSize: 12,
+        lineHeight: 1.6,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <div style={{ color: '#4ade80' }}>{line1}</div>
+      <div style={{ color: '#f87171' }}>{line2}</div>
+    </div>
+  );
+};
+
 /** Full-frame loop-closure veil: fades the ENTIRE page to its background
  * color while scene state (transcript, comments, cursors) resets to the
  * establish beat, then lifts — the whole-composition analog of
@@ -315,6 +387,21 @@ const DemoGlobalVeil = ({ scene, t }: { scene: SceneDefinition; t: number }) => 
 // Session shown in the settings scene: landing-hero-polish's claude-code session.
 const settingsSession = demoSessions.find(
   (session) => session.session_id === '019ee88d-demo-branch-0000-000000000101-session-1'
+);
+
+// NewBranchModal is entirely prop/store-driven (no client dependency) — see
+// scenes/newBranch.ts.
+const NEW_BRANCH_REPO_BY_ID = new Map([[demoRepo.repo_id, demoRepo]]);
+const NEW_BRANCH_BOARD_BY_ID = new Map([[demoBoardId, demoBoard]]);
+
+// Session shown in the genealogyTree scene's fork modal: the real "fork"
+// edge in that branch's tree is session-2 ("reproduce with a stress test")
+// forking into session-3 ("patch the race with a mutex") — see
+// GENEALOGY_OVERRIDES in fixtureData.ts. `action: 'fork'` never renders
+// AgentSelectionGrid (only 'spawn' does), so this needs no client — same
+// null-safe pattern AutocompleteTextarea already uses when client is null.
+const GENEALOGY_FORK_SESSION = demoSessions.find(
+  (session) => session.session_id === '019ee88d-demo-branch-0000-000000000107-session-2'
 );
 
 export const MarketingVideoPage = () => {
@@ -452,6 +539,8 @@ export const MarketingVideoPage = () => {
   });
 
   const settingsOpen = sampleFlag(scene.uiFlags, 'settingsOpen', t) > 0.5;
+  const newBranchOpen = sampleFlag(scene.uiFlags, 'newBranchOpen', t) > 0.5;
+  const forkSpawnOpen = sampleFlag(scene.uiFlags, 'forkSpawnOpen', t) > 0.5;
 
   return (
     <ConfigProvider
@@ -518,6 +607,15 @@ export const MarketingVideoPage = () => {
               {scene.uiFlags.slackPhase && (
                 <DemoSlackStage scene={scene} t={t} prompt={GATEWAY_PROMPT} />
               )}
+              {/* Scene "marketplace": staged MCP catalog panel */}
+              {scene.uiFlags.marketplaceOpen &&
+                sampleFlag(scene.uiFlags, 'marketplaceOpen', t) > 0.5 && <DemoMarketplaceStage />}
+              {/* Scene "knowledge": staged doc reader + graph view */}
+              {scene.uiFlags.knowledgeOpen &&
+                sampleFlag(scene.uiFlags, 'knowledgeOpen', t) > 0.5 && <DemoKnowledgeStage />}
+              {/* Scene "scheduleFiring": staged real ScheduleTab (cron config) */}
+              {scene.uiFlags.scheduleTabOpen &&
+                sampleFlag(scene.uiFlags, 'scheduleTabOpen', t) > 0.5 && <DemoScheduleStage />}
             </main>
             {settingsSession && scene.uiFlags.settingsOpen && (
               <SessionSettingsModal
@@ -528,8 +626,30 @@ export const MarketingVideoPage = () => {
                 currentUser={demoUsers[0]}
               />
             )}
+            {scene.uiFlags.newBranchOpen && (
+              <NewBranchModal
+                open={newBranchOpen}
+                onClose={() => undefined}
+                onCreate={() => undefined}
+                repoById={NEW_BRANCH_REPO_BY_ID}
+                boardById={NEW_BRANCH_BOARD_BY_ID}
+                currentBoardId={demoBoardId}
+              />
+            )}
+            {scene.uiFlags.forkSpawnOpen && GENEALOGY_FORK_SESSION && (
+              <ForkSpawnModal
+                open={forkSpawnOpen}
+                action="fork"
+                session={GENEALOGY_FORK_SESSION}
+                client={null}
+                userById={new Map()}
+                onConfirm={() => Promise.resolve()}
+                onCancel={() => undefined}
+              />
+            )}
             <DemoScreenPointer scene={scene} t={t} />
             <DemoScreenCursors scene={scene} t={t} />
+            <DemoHoverPreview scene={scene} t={t} />
             <DemoGlobalVeil scene={scene} t={t} />
           </Layout>
         </ConnectionProvider>
