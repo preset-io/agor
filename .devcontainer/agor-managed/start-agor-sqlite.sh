@@ -20,6 +20,7 @@ ui_url="https://${CODESPACE_NAME}-5000.${port_domain}"
 
 # The nested Compose project owns a SQLite volume inside this Codespace. Ports
 # remain GitHub-private; the launcher never changes their visibility to public.
+echo "[agor-codespaces] Building and starting the SQLite Compose stack..."
 env \
   UID="$(id -u)" \
   GID="$(id -g)" \
@@ -32,3 +33,7 @@ env \
   AGOR_MIGRATION_OFFLINE_CUTOVER=true \
   SEED=true \
   docker compose -p agor-codespaces-sqlite up -d --build
+
+echo "[agor-codespaces] Compose launch finished. Current service state:"
+docker compose -p agor-codespaces-sqlite ps
+echo "[agor-codespaces] Bootstrap complete; the launcher is waiting for the remote /health endpoint."
