@@ -81,11 +81,12 @@ Branch roles are cumulative:
 | Collaborator | Viewer + `sessions.create`, `sessions.prompt_own`                                           |
 | Manager      | Collaborator + session lifecycle, branch/environment management, and `branch.policy.manage` |
 
-Manager does not imply permission to prompt another person's session or use
-their home. Filesystem access is a separate `none | read | write` dimension.
+Manager may prompt a branch-home Session but never implies access to another
+person's execution home; that compatibility path still requires personal
+sharing. Filesystem access is a separate `none | read | write` dimension.
 Terminal access is derived: Collaborator or Manager plus non-`none` filesystem
 access. Sandbox mounts and `{branch_fs_access}` for delegated executors use the
-actual prompt actor's effective filesystem access, never the session owner's.
+actual prompt actor's effective filesystem access, never the Session owner's.
 
 ### Principal resolution
 

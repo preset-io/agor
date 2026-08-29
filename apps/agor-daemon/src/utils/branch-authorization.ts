@@ -1300,7 +1300,7 @@ export async function assertSessionUnixIdentityUnchanged(
 }
 
 /**
- * Validate session unix_username before prompting
+ * Validate an execution-home Session's unix_username before prompting.
  *
  * DEFENSIVE CHECK: Before allowing operations that execute code (create tasks/messages),
  * verify that the session creator's current unix_username matches the session's stamped unix_username.
@@ -1347,6 +1347,11 @@ export function validateSessionUnixUsername(
       return context;
     }
 
+    // Branch-scoped Sessions use the current prompt actor's home key and the
+    // branch-owned SDK state. The creator's historical stamp is intentionally
+    // irrelevant, just as it is at executor startup.
+    if ((session.sdk_home_scope ?? 'execution_home') === 'branch') return context;
+
     await assertSessionUnixIdentityUnchanged(session, (userId) => userRepo.findById(userId));
 
     return context;
@@ -1359,8 +1364,8 @@ export function validateSessionUnixUsername(
  * Standalone helper (not a Feathers hook) — usable from MCP tools, service hooks, or anywhere
  * with access to the app and branch repository. Resolves branch ownership internally.
  *
- * Respects the 'session' tier: users with 'session' permission can prompt their own sessions
- * but not sessions created by other users.
+ * Respects Session scope: Collaborators may prompt branch-home Sessions, while
+ * a foreign execution-home Session additionally requires personal sharing.
  *
  * Use case: validating callback targets ("can this user queue a prompt to that session?").
  *
