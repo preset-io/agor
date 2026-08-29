@@ -4,11 +4,10 @@ import {
   BannerDecision,
   type BannerDecisionInput,
   decideBanner,
-  hasAnyLlmKey,
   hasConfiguredCredentialFor,
   ProbeState,
   resolvedCredentialOwner,
-  resolveProbeAgent,
+  resolveGovernedProbeAgent,
   resolveProbeState,
 } from './bannerLogic';
 
@@ -142,45 +141,55 @@ describe('decideBanner — onboarding gate', () => {
   });
 });
 
-describe('resolveProbeAgent', () => {
+describe('resolveGovernedProbeAgent — matches session creation', () => {
+  const setting = (tool: AgenticToolName, enabled: boolean) => ({
+    tool,
+    revision: 0,
+    deployment_available: true,
+    enabled,
+    resolution_policy: 'user_preferred' as const,
+    inline_configuration_allowed: true,
+    connection: {},
+  });
+
   it('prefers the explicit primary coding agent', () => {
     expect(
-      resolveProbeAgent(
+      resolveGovernedProbeAgent(
         asUser({
           primary_agentic_tool: 'gemini',
           agentic_tools: { codex: { OPENAI_API_KEY: 'sk' } },
-        })
+        }),
+        new Map([['gemini', setting('gemini', true)]])
       )
     ).toBe('gemini');
   });
 
-  it('prefers the tool a stored DB key points at', () => {
-    expect(resolveProbeAgent(asUser({ agentic_tools: { codex: { OPENAI_API_KEY: 'sk' } } }))).toBe(
-      'codex'
-    );
-  });
-
-  it('resolves the tool a Cursor / Copilot stored key points at', () => {
-    expect(resolveProbeAgent(asUser({ agentic_tools: { cursor: { CURSOR_API_KEY: 'k' } } }))).toBe(
-      'cursor'
-    );
+  it('does not let another tool credential/default override the creation default', () => {
+    const settings = new Map([
+      ['claude-code', setting('claude-code', true)],
+      ['codex', setting('codex', true)],
+    ]);
     expect(
-      resolveProbeAgent(asUser({ agentic_tools: { copilot: { COPILOT_GITHUB_TOKEN: 't' } } }))
-    ).toBe('copilot');
+      resolveGovernedProbeAgent(
+        asUser({
+          agentic_tools: { codex: { OPENAI_API_KEY: 'sk' } },
+          default_agentic_config: { codex: {} },
+        }),
+        settings
+      )
+    ).toBe('claude-code');
   });
 
-  it('falls back to the onboarding-selected agent when no DB key is present', () => {
-    expect(resolveProbeAgent(asUser({ default_agentic_config: { gemini: {} } }))).toBe('gemini');
-    // OpenCode is server-based (no credential field) — a user who selected it must
-    // still resolve to probing opencode, not fall through to claude-code.
-    expect(resolveProbeAgent(asUser({ default_agentic_config: { opencode: {} } }))).toBe(
-      'opencode'
-    );
-  });
-
-  it('falls back to claude-code when nothing is known', () => {
-    expect(resolveProbeAgent(null)).toBe('claude-code');
-    expect(resolveProbeAgent(asUser({}))).toBe('claude-code');
+  it('uses the canonical creation order when the preferred tools are disabled', () => {
+    const settings = new Map([
+      ['claude-code', setting('claude-code', false)],
+      ['codex', setting('codex', false)],
+      ['gemini', setting('gemini', false)],
+      ['opencode', setting('opencode', true)],
+      ['cursor', setting('cursor', true)],
+      ['copilot', setting('copilot', true)],
+    ]);
+    expect(resolveGovernedProbeAgent(asUser({}), settings)).toBe('opencode');
   });
 });
 
@@ -218,68 +227,6 @@ describe('resolveProbeState — selected tool only', () => {
     const { calls, checkStatus } = collect({ gemini: 'unauthenticated' });
     expect(await resolveProbeState(checkStatus, 'gemini')).toBe(ProbeState.Unauthenticated);
     expect(calls).toEqual(['gemini']);
-  });
-});
-
-describe('other-tool false positives (Cursor / Copilot / OpenCode)', () => {
-  it('a Cursor-connected user probes cursor and, once authenticated, sees no "No AI" banner', () => {
-    const user = asUser({ agentic_tools: { cursor: { CURSOR_API_KEY: 'k' } } });
-    expect(resolveProbeAgent(user)).toBe('cursor');
-    // hasLlm is true (stored key) → an unauthenticated probe would word as key-invalid,
-    // but an authenticated probe shows no amber banner at all.
-    expect(
-      decideBanner({ ...baseInput, hasLlm: true, probeState: ProbeState.Authenticated })
-    ).not.toBe(BannerDecision.KeyInvalid);
-  });
-
-  it('an OpenCode user (no DB key) probes opencode; authenticated → no "No AI" banner', () => {
-    const user = asUser({ default_agentic_config: { opencode: {} } });
-    expect(resolveProbeAgent(user)).toBe('opencode');
-    expect(hasAnyLlmKey(user)).toBe(false);
-    expect(
-      decideBanner({ ...baseInput, hasLlm: false, probeState: ProbeState.Authenticated })
-    ).not.toBe(BannerDecision.NoAi);
-  });
-});
-
-describe('hasAnyLlmKey', () => {
-  it('is false for a user with no stored keys (executor-filesystem creds are invisible here)', () => {
-    expect(hasAnyLlmKey(asUser({}))).toBe(false);
-    expect(hasAnyLlmKey(null)).toBe(false);
-  });
-
-  it('is true for any supported tool with a stored key, including Cursor / Copilot', () => {
-    expect(
-      hasAnyLlmKey(asUser({ agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: 'sk' } } }))
-    ).toBe(true);
-    expect(hasAnyLlmKey(asUser({ agentic_tools: { cursor: { CURSOR_API_KEY: 'k' } } }))).toBe(true);
-    expect(
-      hasAnyLlmKey(asUser({ agentic_tools: { copilot: { COPILOT_GITHUB_TOKEN: 't' } } }))
-    ).toBe(true);
-  });
-
-  it('counts Claude bearer auth and Codex subscription state', () => {
-    expect(
-      hasAnyLlmKey(
-        asUser({
-          agentic_tools: { 'claude-code': { ANTHROPIC_AUTH_TOKEN: true } },
-          agentic_auth_methods: { 'claude-code': 'api_key' },
-        })
-      )
-    ).toBe(true);
-    expect(hasAnyLlmKey(asUser({ agentic_auth_methods: { codex: 'subscription' } }))).toBe(true);
-  });
-
-  it('does not treat general env vars as provider credentials after managed-env hardening', () => {
-    expect(hasAnyLlmKey(asUser({ env_vars: { GEMINI_API_KEY: { set: true } } }))).toBe(false);
-  });
-
-  it('ignores non-credential fields — a base-URL-only user has no key', () => {
-    expect(
-      hasAnyLlmKey(
-        asUser({ agentic_tools: { 'claude-code': { ANTHROPIC_BASE_URL: 'https://x' } } })
-      )
-    ).toBe(false);
   });
 });
 

@@ -142,7 +142,11 @@ vi.mock('../AgenticConfigChipRow', () => ({
 
 vi.mock('../../store/agorStore', () => ({
   useAgorStore: (selector: (state: unknown) => unknown) =>
-    selector({ userById: new Map(), mcpServerById: new Map() }),
+    selector({
+      userById: new Map(),
+      mcpServerById: new Map(),
+      agenticToolSettingsByName: new Map(),
+    }),
 }));
 vi.mock('../../utils/message', () => ({
   useThemedMessage: () => ({ showError: vi.fn() }),

@@ -29,8 +29,8 @@ Authority is layered and tool-specific:
 
 | Question                                                         | Authoritative source                                                                                      | Notes                                                                                                                                                                                                      |
 | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Which tool will a new session use?                               | `User.primary_agentic_tool`, then user/default agentic config and the session's selected agent            | `packages/core/src/types/user.ts`; `bannerLogic.ts` mirrors the app's selected-tool precedence for the shell warning.                                                                                      |
-| Is a tool deployed and enabled, and which credential owner wins? | `agentic-tool-settings` plus `TenantAgenticToolSettingsRepository`                                        | Includes deployment availability, workspace enablement, `user_*`/`tenant_*` resolution policy, and boolean-only workspace field status.                                                                    |
+| Which tool will a new session use?                               | `resolveUserPrimaryAgenticTool`, then `resolveAvailableUserAgenticTool` against `AVAILABLE_AGENTS`        | The New Session and navbar creation flows, picker fallback, and shell credential warning share this resolver. Stored credentials do not silently change the selected tool.                                 |
+| Is a tool deployed and enabled, and which credential owner wins? | `agentic-tool-settings` plus `TenantAgenticToolSettingsRepository`                                        | Includes deployment availability, workspace enablement, `user_*`/`tenant_*` resolution policy, boolean-only workspace field status, and a durable non-secret revision incremented on every settings patch. |
 | Does the user have a provider credential recorded?               | Encrypted `users.data.agentic_tools[tool]` and `agentic_auth_methods`                                     | `apps/agor-daemon/src/services/users.ts` returns field-presence booleans only. Secret fields are never returned. General `env_vars` are not a provider-credential fallback after #2561.                    |
 | What complete connection will execution receive?                 | `resolveProviderConnection` / `resolveApiKey`                                                             | `packages/core/src/config/tenant-agentic-tool-resolver.ts` chooses one complete user or workspace connection atomically and honors the selected Claude/Codex auth family.                                  |
 | Is the selected resolved credential usable now?                  | Authenticated `POST /check-auth`                                                                          | `apps/agor-daemon/src/services/check-auth.ts` resolves in trusted tenant/user context, then returns `authenticated`, `unauthenticated`, or `unknown`. It does not persist or cache a result.               |
@@ -103,6 +103,8 @@ The banner had secondary stale/global defects:
   those values from provider resolution;
 - same-field credential rotations keep the same public `true` presence bit, so
   the probe effect could remain stale after a realtime patch;
+- the selected-tool fallback order was independently duplicated and could drift
+  from the New Session picker;
 - reconnect did not explicitly reset the verdict to `unknown` and re-probe;
 - workspace policy could still be loading when the first probe ran;
 - there was no dismiss control.
@@ -174,6 +176,12 @@ can run. If the selected tool is disabled, the first enabled tool is selected;
 if no tool is available, a credential-failure banner is not shown. Workspace
 policy hydration is a prerequisite, so startup does not guess.
 
+“Selected” is the same effective tool as session creation: the persisted
+primary tool (or Claude default), followed by the first enabled entry in
+`AVAILABLE_AGENTS`. Credential presence and an old per-tool onboarding config
+do not silently replace that selection. This also keeps OpenCode ahead of the
+beta Cursor/Copilot fallbacks when earlier tools are disabled.
+
 New copy identifies the affected tool:
 
 - missing: **“Claude Code isn't connected. New Claude Code sessions won't run
@@ -181,13 +189,19 @@ New copy identifies the affected tool:
 - rejected: **“Claude Code rejected the configured credential. New Claude Code
   sessions will fail until you update it.”**
 
-The action opens or reviews that tool's user/workspace settings. The close
+The action opens or reviews that tool's user/workspace settings. When the
+active route is workspace-owned and the caller is not an administrator, the
+banner instead explains that a workspace admin must act and does not link to
+personal settings that the resolution policy will ignore. The close
 button has an agent-specific accessible name and snoozes the warning for 24
 hours. Persistence is local-browser, versioned, and scoped by user ID plus
 tool. Expired/malformed values are removed. A local credential save clears the
-snooze immediately; a different user or selected tool never inherits it. If
-storage is unavailable, only the current mount is snoozed, so persistence
-failure cannot hide a continuing error indefinitely.
+snooze immediately; a durable workspace revision does the same for workspace
+rotations, including same-field replacements whose public presence stays
+`true`. Storage events synchronize snooze/clear state across tabs. A different
+user or selected tool never inherits it. If storage is unavailable, only the
+current mount is snoozed, so persistence failure cannot hide a continuing error
+indefinitely.
 
 ## Deterministic reproduction and request/event sequence
 
@@ -217,10 +231,18 @@ authenticate/hydrate user (boolean field status only)
 → reset Unknown and issue a fresh selected-agent probe
 ```
 
+Every workspace agentic-tool patch increments a generation stored atomically
+with the encrypted settings JSON. The public DTO exposes only that number and
+field-presence booleans. Realtime upserts and reconnect hydration therefore
+carry the same durable revision across replicas without revealing a credential.
+An older in-flight probe is cancelled when the revision changes.
+
 Focused component tests cover valid configured Claude, rejected/expired Claude,
 loading/unknown, another-agent-only failure, policy-loading and disabled-agent
-states, reconnect success and failure, same-field realtime rotation, logout and
-user switch, snooze persistence/expiry, and snooze invalidation after save.
+states, creation-order fallback, reconnect success and failure, same-field user
+and workspace realtime rotation (settled and in-flight), logout and user switch,
+snooze persistence/expiry, cross-tab synchronization, and snooze invalidation
+after save.
 Real-browser coverage runs the warning at desktop, tablet, phone, and short
 landscape viewports and exercises keyboard focus and the close action. Synthetic
 provider hints are asserted absent from the DOM.
@@ -241,8 +263,10 @@ provider hints are asserted absent from the DOM.
 
 ## Rollout, rollback, and residual risk
 
-This is a code-only rollout with no schema/config migration. Existing browsers
-have no snooze record and will see a real selected-agent rejection normally.
+This is a code-only rollout with no schema/config migration. Legacy encrypted
+workspace settings read as revision `0`; their next patch atomically persists
+revision `1`. Existing browsers have no snooze record and will see a real
+selected-agent rejection normally.
 Monitor `/check-auth` status mix/provider latency and credential-related session
 start failures by tool; do not log credentials or request headers.
 

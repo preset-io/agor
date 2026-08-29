@@ -7,7 +7,7 @@ interface CredentialWarningDismissal {
   snoozedUntil: number;
 }
 
-function storageKey(userId: string, tool: AgenticToolName): string {
+export function credentialWarningSnoozeStorageKey(userId: string, tool: AgenticToolName): string {
   return `agor:credential-warning:v1:${userId}:${tool}`;
 }
 
@@ -18,7 +18,7 @@ export function readCredentialWarningSnooze(
   tool: AgenticToolName,
   now = Date.now()
 ): number | null {
-  const key = storageKey(userId, tool);
+  const key = credentialWarningSnoozeStorageKey(userId, tool);
   try {
     const raw = storage.getItem(key);
     if (!raw) return null;
@@ -55,7 +55,7 @@ export function writeCredentialWarningSnooze(
   const snoozedUntil = now + CREDENTIAL_WARNING_SNOOZE_MS;
   try {
     storage.setItem(
-      storageKey(userId, tool),
+      credentialWarningSnoozeStorageKey(userId, tool),
       JSON.stringify({ version: 1, snoozedUntil } satisfies CredentialWarningDismissal)
     );
   } catch {
@@ -71,7 +71,7 @@ export function clearCredentialWarningSnooze(
   tool: AgenticToolName
 ): void {
   try {
-    storage.removeItem(storageKey(userId, tool));
+    storage.removeItem(credentialWarningSnoozeStorageKey(userId, tool));
   } catch {
     // Best effort only.
   }

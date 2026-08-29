@@ -2,6 +2,10 @@ import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agorStore } from '../../store/agorStore';
+import {
+  CREDENTIAL_WARNING_SNOOZE_MS,
+  credentialWarningSnoozeStorageKey,
+} from './credentialWarningDismissal';
 import { OnboardingBanners, type OnboardingBannersProps } from './OnboardingBanners';
 
 const onboardedUser = (userId: string, overrides: Partial<User> = {}): User =>
@@ -111,10 +115,15 @@ describe('OnboardingBanners probe effect', () => {
     // stored key and no credentialVersion bump — the case that previously left
     // the banner stuck until a page refresh.
     const onCheckAuth = vi.fn(async () => result('unauthenticated'));
-    const { rerender } = render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
-    await waitFor(() =>
-      expect(screen.getByText(/Claude Code isn't connected/)).toBeInTheDocument()
+    const { rerender } = render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('user-1', { primary_agentic_tool: 'codex' }),
+          onCheckAuth,
+        })}
+      />
     );
+    await waitFor(() => expect(screen.getByText(/Codex isn't connected/)).toBeInTheDocument());
     const callsBefore = onCheckAuth.mock.calls.length;
 
     onCheckAuth.mockImplementation(async () => result('authenticated'));
@@ -122,6 +131,7 @@ describe('OnboardingBanners probe effect', () => {
       <OnboardingBanners
         {...baseProps({
           user: onboardedUser('user-1', {
+            primary_agentic_tool: 'codex',
             agentic_auth_methods: { codex: 'subscription' },
           } as Partial<User>),
           onCheckAuth,
@@ -135,7 +145,7 @@ describe('OnboardingBanners probe effect', () => {
     expect(onCheckAuth.mock.calls.length).toBeGreaterThan(callsBefore);
   });
 
-  it('does not re-probe on an unrelated user-record patch (e.g. a name edit)', async () => {
+  it('does not re-probe solely because a nested auth-method object has new identity', async () => {
     const onCheckAuth = vi.fn(async () => result('authenticated'));
     // Seed a codex method so the effect's method deps are non-empty in BOTH
     // renders (each a FRESH object). This pins the object-identity hazard: the
@@ -154,9 +164,9 @@ describe('OnboardingBanners probe effect', () => {
     );
     await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(1));
 
-    // A field that touches neither identity, stored keys, nor auth methods must
-    // NOT spawn another ~5–10s probe — even though the whole user object (and its
-    // agentic_auth_methods) is a fresh reference from the patch.
+    // This intentionally omits a new server `updated_at`: production user
+    // patches carry that durable revision and do re-probe. The assertion here
+    // is only that a freshly allocated nested object is not itself a dependency.
     rerender(
       <OnboardingBanners
         {...baseProps({
@@ -248,7 +258,7 @@ describe('OnboardingBanners probe effect', () => {
     expect(onOpenUserSettings).not.toHaveBeenCalled();
   });
 
-  it('routes members to user settings when tenant credentials are preferred', async () => {
+  it('directs members to an admin instead of unusable personal settings for a tenant credential', async () => {
     agorStore.getState().setAgenticToolSettings([
       {
         tool: 'claude-code',
@@ -270,8 +280,10 @@ describe('OnboardingBanners probe effect', () => {
         })}
       />
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Review Claude Code settings' }));
-    expect(onOpenUserSettings).toHaveBeenCalledWith('claude-code');
+    expect(await screen.findByText(/rejected the workspace-managed credential/)).toBeVisible();
+    expect(screen.getByText(/Ask a workspace admin to update it/)).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Review Claude Code settings' })).toBeNull();
+    expect(onOpenUserSettings).not.toHaveBeenCalled();
     expect(onOpenWorkspaceSettings).not.toHaveBeenCalled();
   });
 
@@ -409,6 +421,73 @@ describe('OnboardingBanners probe effect', () => {
     expect(screen.queryByText(/Claude Code rejected/)).not.toBeInTheDocument();
   });
 
+  it('re-probes and clears a snooze on a durable same-presence workspace rotation', async () => {
+    const workspaceSettings = (revision: number) => ({
+      tool: 'claude-code' as const,
+      revision,
+      deployment_available: true,
+      enabled: true,
+      resolution_policy: 'tenant_preferred' as const,
+      inline_configuration_allowed: true,
+      connection: { ANTHROPIC_AUTH_TOKEN: { configured: true } },
+    });
+    act(() => agorStore.getState().setAgenticToolSettings([workspaceSettings(1)]));
+    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
+    const props = baseProps({
+      user: onboardedUser('admin-1', { role: 'admin' }),
+      onCheckAuth,
+    });
+    render(<OnboardingBanners {...props} />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Snooze Claude Code warning for 24 hours/ })
+    );
+    await waitFor(() => expect(screen.queryByText(/Claude Code rejected/)).toBeNull());
+
+    act(() => agorStore.getState().upsertAgenticToolSetting(workspaceSettings(2)));
+
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/Claude Code rejected/)).toBeVisible();
+    expect(
+      window.localStorage.getItem(credentialWarningSnoozeStorageKey('admin-1', 'claude-code'))
+    ).toBeNull();
+  });
+
+  it('ignores an older in-flight probe after a same-presence workspace rotation', async () => {
+    const workspaceSettings = (revision: number) => ({
+      tool: 'claude-code' as const,
+      revision,
+      deployment_available: true,
+      enabled: true,
+      resolution_policy: 'tenant_preferred' as const,
+      inline_configuration_allowed: true,
+      connection: { ANTHROPIC_AUTH_TOKEN: { configured: true } },
+    });
+    act(() => agorStore.getState().setAgenticToolSettings([workspaceSettings(1)]));
+    let settleOldProbe!: (value: AuthCheckResult) => void;
+    const oldProbe = new Promise<AuthCheckResult>((resolve) => {
+      settleOldProbe = resolve;
+    });
+    const onCheckAuth = vi
+      .fn<(tool: AgenticToolName) => Promise<AuthCheckResult>>()
+      .mockReturnValueOnce(oldProbe)
+      .mockResolvedValueOnce(result('authenticated'));
+    render(
+      <OnboardingBanners
+        {...baseProps({
+          user: onboardedUser('admin-1', { role: 'admin' }),
+          onCheckAuth,
+        })}
+      />
+    );
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(1));
+
+    act(() => agorStore.getState().upsertAgenticToolSetting(workspaceSettings(2)));
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(2));
+    act(() => settleOldProbe(result('unauthenticated')));
+
+    await waitFor(() => expect(screen.queryByText(/Claude Code rejected/)).toBeNull());
+  });
+
   it('persists an accessible 24-hour snooze per user and tool, then reminds again', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const start = new Date('2026-08-29T12:00:00Z');
@@ -464,5 +543,31 @@ describe('OnboardingBanners probe effect', () => {
 
     rerender(<OnboardingBanners {...props} credentialVersion={1} />);
     expect(await screen.findByText(/Claude Code rejected/)).toBeVisible();
+  });
+
+  it('synchronizes snooze and clear events across browser tabs', async () => {
+    const onCheckAuth = vi.fn(async () => result('unauthenticated'));
+    render(<OnboardingBanners {...baseProps({ onCheckAuth })} />);
+    await screen.findByText(/Claude Code isn't connected/);
+    const key = credentialWarningSnoozeStorageKey('user-1', 'claude-code');
+    const snoozedUntil = Date.now() + CREDENTIAL_WARNING_SNOOZE_MS;
+    const serialized = JSON.stringify({ version: 1, snoozedUntil });
+
+    window.localStorage.setItem(key, serialized);
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent('storage', { key, newValue: serialized, storageArea: window.localStorage })
+      )
+    );
+    await waitFor(() => expect(screen.queryByText(/Claude Code isn't connected/)).toBeNull());
+
+    window.localStorage.removeItem(key);
+    act(() =>
+      window.dispatchEvent(
+        new StorageEvent('storage', { key, oldValue: serialized, storageArea: window.localStorage })
+      )
+    );
+    await waitFor(() => expect(onCheckAuth).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/Claude Code isn't connected/)).toBeVisible();
   });
 });

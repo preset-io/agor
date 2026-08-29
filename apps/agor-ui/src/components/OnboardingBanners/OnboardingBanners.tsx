@@ -26,6 +26,7 @@ import {
 } from './bannerLogic';
 import {
   clearCredentialWarningSnooze,
+  credentialWarningSnoozeStorageKey,
   readCredentialWarningSnooze,
   writeCredentialWarningSnooze,
 } from './credentialWarningDismissal';
@@ -61,12 +62,13 @@ function AmberBanner({
   dismissLabel,
 }: {
   message: string;
-  buttonLabel: string;
-  onClick: () => void;
+  buttonLabel?: string;
+  onClick?: () => void;
   docsHref?: string;
   onDismiss: () => void;
   dismissLabel: string;
 }) {
+  const hasAction = !!docsHref || (!!buttonLabel && !!onClick);
   return (
     <Alert
       banner
@@ -75,22 +77,26 @@ function AmberBanner({
       title={message}
       closable={{ closeIcon: true, onClose: onDismiss, 'aria-label': dismissLabel }}
       action={
-        <Space size="small">
-          {docsHref && (
-            <Button
-              type="link"
-              size="small"
-              href={docsHref}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Documentation
-            </Button>
-          )}
-          <Button type="primary" size="small" onClick={onClick}>
-            {buttonLabel}
-          </Button>
-        </Space>
+        hasAction ? (
+          <Space size="small">
+            {docsHref && (
+              <Button
+                type="link"
+                size="small"
+                href={docsHref}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Documentation
+              </Button>
+            )}
+            {buttonLabel && onClick && (
+              <Button type="primary" size="small" onClick={onClick}>
+                {buttonLabel}
+              </Button>
+            )}
+          </Space>
+        ) : undefined
       }
     />
   );
@@ -117,7 +123,11 @@ export function OnboardingBanners({
     null
   );
   const [probeRefreshVersion, setProbeRefreshVersion] = useState(0);
-  const priorCredentialVersion = useRef<{ owner: string | null; version: number } | null>(null);
+  const priorCredentialRevision = useRef<{
+    owner: string;
+    userVersion: number;
+    workspaceRevision: number;
+  } | null>(null);
   const agenticToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
   const agenticToolSettingsHydrated = useAgorStore((state) => state.agenticToolSettingsHydrated);
 
@@ -133,17 +143,16 @@ export function OnboardingBanners({
   const displayName = AGENTIC_TOOL_DISPLAY_NAMES[probeAgent] ?? probeAgent;
   const dismissalOwner = userId ? `${userId}:${probeAgent}` : null;
   const userCredentialRevision = user?.updated_at ? String(user.updated_at) : '';
+  const workspaceCredentialRevision = probeSettings?.revision ?? 0;
 
-  // Auth-method markers for the subscription/native paths (ChatGPT device
-  // sign-in, imported Codex login, Claude subscription token). These land
-  // server-side via their own services and flow back on the users `patched`
-  // event WITHOUT a stored key or a credentialVersion bump — so hasLlm alone
-  // can't see them. They are primitives ('api_key' | 'subscription' |
-  // undefined) that change only on a genuine method flip, never on unrelated
-  // user-record patches, keeping the ~5–10s probe from firing on name/emoji
-  // edits. `agentic_auth_methods` only ever carries these two tools.
-  const codexAuthMethod = user?.agentic_auth_methods?.codex;
-  const claudeAuthMethod = user?.agentic_auth_methods?.['claude-code'];
+  // Auth-method marker for the selected tool's subscription/native path. It
+  // lands server-side via its own service and can change without a stored key
+  // or credentialVersion bump. Keep only the selected primitive in the probe
+  // key so a login for an unrelated tool does not re-probe this one.
+  const probeAuthMethod =
+    probeAgent === 'codex' || probeAgent === 'claude-code'
+      ? user?.agentic_auth_methods?.[probeAgent]
+      : undefined;
   const probeOwner = JSON.stringify([
     userId,
     userCredentialRevision,
@@ -155,8 +164,7 @@ export function OnboardingBanners({
     probeSettings,
     credentialVersion,
     probeRefreshVersion,
-    codexAuthMethod,
-    claudeAuthMethod,
+    probeAuthMethod,
   ]);
   // Never render an old user's/tool's verdict for one frame while the effect
   // below is scheduling its replacement.
@@ -168,9 +176,9 @@ export function OnboardingBanners({
   // credential rotation delivered by realtime (presence stays `true`, so a
   // boolean-only dependency would be stale). userId resets state on a switch;
   // credentialVersion covers the local save path before realtime lands;
-  // codexAuthMethod/claudeAuthMethod re-probe after a subscription/native login
+  // probeAuthMethod re-probes after a selected-tool subscription/native login
   // lands server-side (device sign-in, auth.json import) — paths that bump
-  // neither hasLlm nor credentialVersion — and cover a second browser tab too.
+  // neither hasLlm nor credentialVersion — and covers a second browser tab too.
   useEffect(() => {
     if (!onboardingCompleted || !connectionReady || !agenticToolSettingsHydrated || !probeEnabled) {
       setProbeResult({ owner: probeOwner, state: ProbeState.Unknown });
@@ -199,20 +207,32 @@ export function OnboardingBanners({
   ]);
 
   // A warning can be snoozed for 24 hours, scoped to one user + one selected
-  // tool. A local credential save clears the snooze so failed reconnects are
-  // immediately actionable; successful reconnects disappear through the probe.
+  // tool. Local user saves and durable workspace-settings revisions clear it,
+  // so failed reconnects are immediately actionable; successful reconnects
+  // disappear through the probe. Wait for policy hydration before recording
+  // the workspace revision, otherwise an initial 0 -> persisted revision load
+  // would incorrectly erase a snooze on every page refresh.
   useEffect(() => {
-    const previous = priorCredentialVersion.current;
+    if (!agenticToolSettingsHydrated) return;
+
+    const previous = priorCredentialRevision.current;
     const credentialChanged =
       !!dismissalOwner &&
       previous?.owner === dismissalOwner &&
-      previous.version !== credentialVersion;
-    priorCredentialVersion.current = { owner: dismissalOwner, version: credentialVersion };
+      (previous.userVersion !== credentialVersion ||
+        previous.workspaceRevision !== workspaceCredentialRevision);
 
     if (!userId || !dismissalOwner || typeof window === 'undefined') {
+      priorCredentialRevision.current = null;
       setCredentialWarningSnoozedUntil(null);
       return;
     }
+
+    priorCredentialRevision.current = {
+      owner: dismissalOwner,
+      userVersion: credentialVersion,
+      workspaceRevision: workspaceCredentialRevision,
+    };
 
     if (credentialChanged) {
       clearCredentialWarningSnooze(window.localStorage, userId, probeAgent);
@@ -221,7 +241,36 @@ export function OnboardingBanners({
       ? null
       : readCredentialWarningSnooze(window.localStorage, userId, probeAgent);
     setCredentialWarningSnoozedUntil(snoozedUntil);
-  }, [credentialVersion, dismissalOwner, probeAgent, userId]);
+  }, [
+    agenticToolSettingsHydrated,
+    credentialVersion,
+    dismissalOwner,
+    probeAgent,
+    userId,
+    workspaceCredentialRevision,
+  ]);
+
+  // localStorage changes are not delivered back to the tab that made them,
+  // but other tabs receive a storage event. Mirror those changes so a snooze
+  // or credential-save clear has browser-wide semantics. Clearing starts from
+  // Unknown and re-probes rather than briefly resurfacing a day-old rejection.
+  useEffect(() => {
+    if (!userId || typeof window === 'undefined') return;
+    const key = credentialWarningSnoozeStorageKey(userId, probeAgent);
+    const handleStorage = (event: StorageEvent) => {
+      if (
+        event.key !== key ||
+        (event.storageArea !== null && event.storageArea !== window.localStorage)
+      ) {
+        return;
+      }
+      const snoozedUntil = readCredentialWarningSnooze(window.localStorage, userId, probeAgent);
+      setCredentialWarningSnoozedUntil(snoozedUntil);
+      if (snoozedUntil === null) setProbeRefreshVersion((version) => version + 1);
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [probeAgent, userId]);
 
   useEffect(() => {
     if (!credentialWarningSnoozedUntil || typeof window === 'undefined') return;
@@ -257,6 +306,13 @@ export function OnboardingBanners({
     credentialWarningDismissed:
       credentialWarningSnoozedUntil !== null && credentialWarningSnoozedUntil > Date.now(),
   });
+  const workspaceManagedForMember = credentialOwner === 'tenant' && !canManageWorkspaceCredentials;
+  const openCredentialSettings = workspaceManagedForMember
+    ? undefined
+    : () =>
+        credentialOwner === 'tenant'
+          ? onOpenWorkspaceSettings('agentic-tools')
+          : onOpenUserSettings(probeAgent);
 
   switch (decision) {
     case BannerDecision.None:
@@ -264,13 +320,13 @@ export function OnboardingBanners({
     case BannerDecision.NoAi:
       return (
         <AmberBanner
-          message={`${displayName} isn't connected. New ${displayName} sessions won't run until you configure it.`}
-          buttonLabel={`Open ${displayName} settings`}
-          onClick={() =>
-            credentialOwner === 'tenant' && canManageWorkspaceCredentials
-              ? onOpenWorkspaceSettings('agentic-tools')
-              : onOpenUserSettings(probeAgent)
+          message={
+            workspaceManagedForMember
+              ? `${displayName} is managed by your workspace but isn't connected. Ask a workspace admin to configure it before starting ${displayName} sessions.`
+              : `${displayName} isn't connected. New ${displayName} sessions won't run until you configure it.`
           }
+          buttonLabel={workspaceManagedForMember ? undefined : `Open ${displayName} settings`}
+          onClick={openCredentialSettings}
           docsHref="https://agor.live/guide"
           onDismiss={dismissCredentialWarning}
           dismissLabel={`Snooze ${displayName} warning for 24 hours`}
@@ -279,13 +335,13 @@ export function OnboardingBanners({
     case BannerDecision.KeyInvalid:
       return (
         <AmberBanner
-          message={`${displayName} rejected the configured credential. New ${displayName} sessions will fail until you update it.`}
-          buttonLabel={`Review ${displayName} settings`}
-          onClick={() =>
-            credentialOwner === 'tenant' && canManageWorkspaceCredentials
-              ? onOpenWorkspaceSettings('agentic-tools')
-              : onOpenUserSettings(probeAgent)
+          message={
+            workspaceManagedForMember
+              ? `${displayName} rejected the workspace-managed credential. Ask a workspace admin to update it before starting new ${displayName} sessions.`
+              : `${displayName} rejected the configured credential. New ${displayName} sessions will fail until you update it.`
           }
+          buttonLabel={workspaceManagedForMember ? undefined : `Review ${displayName} settings`}
+          onClick={openCredentialSettings}
           onDismiss={dismissCredentialWarning}
           dismissLabel={`Snooze ${displayName} warning for 24 hours`}
         />
