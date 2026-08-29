@@ -29,6 +29,10 @@ services:
       - AGOR_UNIX_USER_MODE=${AGOR_UNIX_USER_MODE:-sandbox}
       - AGOR_SANDBOX_ENABLED=${AGOR_SANDBOX_ENABLED:-true}
       - AGOR_SANDBOX_HOME_MODE=${AGOR_SANDBOX_HOME_MODE:-per_user}
+      # Rich/full is the advanced RBAC fixture, so new compatible Sessions use
+      # branch-owned SDK state by default. Operators can still override this
+      # with AGOR_SANDBOX_SDK_HOME_MODE=inherit for compatibility testing.
+      - AGOR_SANDBOX_SDK_HOME_MODE=${AGOR_SANDBOX_SDK_HOME_MODE:-per_branch}
 
       # Create test principals (alice, bob) on startup
       - CREATE_RBAC_TEST_USERS=${CREATE_RBAC_TEST_USERS:-true}

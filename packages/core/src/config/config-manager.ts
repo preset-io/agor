@@ -394,6 +394,14 @@ function parseOptionalPortEnvironmentValue(
   return port;
 }
 
+function parseOptionalSdkHomeModeEnvironmentValue(
+  value: string | undefined
+): 'inherit' | 'per_branch' | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (value === 'inherit' || value === 'per_branch') return value;
+  throw new Error('Config error: AGOR_SANDBOX_SDK_HOME_MODE must be one of: inherit, per_branch');
+}
+
 /**
  * Policy for config keys the daemon does not recognize.
  *
@@ -1473,6 +1481,7 @@ export function resolveEffectiveConfig(
     env.AGOR_SANDBOX_HOME_MODE === 'per_user' || env.AGOR_SANDBOX_HOME_MODE === 'shared'
       ? env.AGOR_SANDBOX_HOME_MODE
       : undefined;
+  const envSdkHomeMode = parseOptionalSdkHomeModeEnvironmentValue(env.AGOR_SANDBOX_SDK_HOME_MODE);
   let resolvedSandbox = config.execution?.sandbox;
   if (sandboxIsolation) {
     resolvedSandbox = {
@@ -1488,6 +1497,13 @@ export function resolveEffectiveConfig(
       ...(envSandboxEnabled ? { enabled: true } : {}),
       ...(envHomeMode ? { home_mode: envHomeMode } : {}),
     };
+  }
+  // SDK-home relocation is an independent rollout control: setting it must
+  // not implicitly enable or weaken the filesystem sandbox. The rich/full
+  // development profile opts in explicitly, while ordinary deployments keep
+  // the legacy-safe `inherit` default when neither YAML nor env names a mode.
+  if (envSdkHomeMode) {
+    resolvedSandbox = { ...resolvedSandbox, sdk_home_mode: envSdkHomeMode };
   }
   const resolvedExecutorResponse =
     defaults.execution?.executor_response ||
