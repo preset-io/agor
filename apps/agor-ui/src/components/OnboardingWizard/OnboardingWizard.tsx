@@ -354,7 +354,7 @@ export interface OnboardingCompletionResult {
 }
 
 export interface OnboardingCompletionAttempt {
-  /** False after timeout, dismissal, remount, or authenticated-owner replacement. */
+  /** False after dismissal, remount, rejection retirement, or authenticated-owner replacement. */
   isCurrent: () => boolean;
 }
 
@@ -378,19 +378,19 @@ export interface OnboardingWizardProps {
 
   /** Re-open wizard starting at a specific step (used by tests / future callers). */
   initialStep?: WizardStep;
-  /** Override only for deterministic timeout tests. */
-  completionTimeoutMs?: number;
+  /** Override only for deterministic slow-operation tests. */
+  completionSlowThresholdMs?: number;
 }
 
 const ALWAYS_CURRENT = () => true;
-export const ONBOARDING_COMPLETION_TIMEOUT_MS = 45_000;
+export const ONBOARDING_COMPLETION_SLOW_THRESHOLD_MS = 45_000;
 
 async function observeSlowCompletion<T>(
   promise: Promise<T>,
-  timeoutMs: number,
+  thresholdMs: number,
   onSlow: () => void
 ): Promise<T> {
-  const timer = window.setTimeout(onSlow, timeoutMs);
+  const timer = window.setTimeout(onSlow, thresholdMs);
   try {
     return await promise;
   } finally {
@@ -434,7 +434,7 @@ export function OnboardingWizard({
   onUpdateUser,
   onCheckAuth,
   initialStep,
-  completionTimeoutMs = ONBOARDING_COMPLETION_TIMEOUT_MS,
+  completionSlowThresholdMs = ONBOARDING_COMPLETION_SLOW_THRESHOLD_MS,
 }: OnboardingWizardProps) {
   const { token } = useToken();
   const savedOnboarding = user?.preferences?.onboarding;
@@ -1075,11 +1075,11 @@ export function OnboardingWizard({
                 completionAttempt
               )
             ),
-            completionTimeoutMs,
+            completionSlowThresholdMs,
             () => {
-              // A client timeout cannot cancel already-issued daemon writes.
-              // Keep this attempt single-flight until it really settles; X and
-              // Escape remain available if the user wants to finish later.
+              // A slow-operation warning cannot cancel already-issued daemon
+              // writes. Keep this attempt single-flight until it really settles;
+              // X and Escape remain available if the user wants to finish later.
               if (completionAttempt.isCurrent()) setCompletionSlow(true);
             }
           );
@@ -1124,7 +1124,7 @@ export function OnboardingWizard({
     createdBoardId,
     saveOnboardingProgress,
     onComplete,
-    completionTimeoutMs,
+    completionSlowThresholdMs,
     goToStep,
   ]);
 

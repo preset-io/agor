@@ -1096,7 +1096,7 @@ describe('OnboardingWizard', () => {
     );
   });
 
-  it('does not offer timeout retry until the original provisioning attempt settles', async () => {
+  it('does not offer retry after the slow warning until provisioning settles', async () => {
     let rejectFirst!: (error: Error) => void;
     const firstCompletion = new Promise<void>((_resolve, reject) => {
       rejectFirst = reject;
@@ -1108,7 +1108,7 @@ describe('OnboardingWizard', () => {
     const { boardsService } = renderWizard({
       onComplete,
       initialStep: 'done',
-      completionTimeoutMs: 20,
+      completionSlowThresholdMs: 20,
     });
 
     clickButton(/open my board/i);
