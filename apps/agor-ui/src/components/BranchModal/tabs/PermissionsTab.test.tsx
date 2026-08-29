@@ -12,7 +12,7 @@ const common = {
   permissionUsers: [makeUser()],
   capabilityPolicy: makeBranchPolicy(),
   onCapabilityPolicyChange: vi.fn(),
-  workspacePreferences: { personal_session_sharing_enabled: true },
+  workspacePreferences: { session_sharing_enabled: true },
 } as const;
 
 describe('PermissionsTab', () => {

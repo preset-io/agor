@@ -447,7 +447,7 @@ describe('agor_branches_update', () => {
           entries: [],
           others: { preset: 'none', capabilities: [], fs_access: 'none' },
         },
-        session_sharing: { owner_rules: [] },
+        allow_shared_session_prompts: false,
       },
     };
     const permissionsPatch = vi.fn(async (_id, data) => data);

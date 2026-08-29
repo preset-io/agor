@@ -147,7 +147,7 @@ export function useBranchModalForm({
     null
   );
   const [workspacePreferences, setWorkspacePreferences] =
-    useState<CapabilityPolicyWorkspacePreferences>({ personal_session_sharing_enabled: false });
+    useState<CapabilityPolicyWorkspacePreferences>({ session_sharing_enabled: false });
   const [permissionsLoadError, setPermissionsLoadError] = useState<Error | null>(null);
   const [boardAttachChecking, setBoardAttachChecking] = useState(false);
   const [boardAttachError, setBoardAttachError] = useState<string | null>(null);
@@ -236,7 +236,7 @@ export function useBranchModalForm({
       setEffectiveAccess(null);
       setAllUsers([]);
       setAllGroups([]);
-      setWorkspacePreferences({ personal_session_sharing_enabled: false });
+      setWorkspacePreferences({ session_sharing_enabled: false });
       return;
     }
     let cancelled = false;
@@ -268,7 +268,7 @@ export function useBranchModalForm({
         setWorkspacePreferences(
           preferencesResult.status === 'fulfilled'
             ? preferencesResult.value
-            : { personal_session_sharing_enabled: false }
+            : { session_sharing_enabled: false }
         );
       } catch (error) {
         if (cancelled) return;

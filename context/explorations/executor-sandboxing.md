@@ -253,9 +253,8 @@ tool state:
   warns at startup if `unix_user_mode: sandbox` is set on a non-Linux host.
 - **Per-task, branch-scoped.** Wraps prompts/terminals/commands that carry a branch work dir;
   repo-level ops (e.g. `git.repo.realign-origin`) run unwrapped (Agor's own trusted code).
-- **Prompting another user's session runs against the OWNER's home** — carry strict's warning
-  ("allowing others to prompt your session gives them your home"); env-level credentials still come
-  from the prompter via the env-resolver, not the owner.
+- **Prompting another user's Session** is branch-home-only and runs with the
+  caller's home and credentials; execution-home Sessions fail closed.
 - **Not yet deleted:** the sudoers / `user-manager` sudo paths / password-sync code still SHIP as the
   `strict`/`insulated` fallback (soft-deprecated with a startup warning). Removing them is the
   fast-follow once `sandbox` has prod miles (§7 step 8).

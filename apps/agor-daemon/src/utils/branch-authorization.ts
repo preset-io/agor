@@ -40,9 +40,9 @@ import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js
  * access is needed.
  *
  * Note: This does NOT grant automatic prompt access. Superadmins must add
- * explicit branch access. Foreign branch-home Sessions then follow that
- * branch policy; foreign execution-home Sessions additionally require an
- * owner-authored personal-sharing grant.
+ * explicit branch access. Foreign branch-home Sessions then follow the
+ * tenant and branch sharing switches; execution-home Sessions are never
+ * shareable.
  *
  * The allow_superadmin config flag gates this. When false, superadmins
  * are treated as regular admins (no branch RBAC bypass).
@@ -74,14 +74,15 @@ export function sessionPromptDeniedMessage(
   switch (authority.denial_reason) {
     case 'execution_home_sharing_disabled':
       return (
-        "This session uses its owner's execution home and cannot be prompted through branch " +
-        'sharing. Start a separate session you own. When branch SDK homes are enabled, a new ' +
-        'session on this branch can instead be prompted by Collaborators and Managers.'
+        "This session uses its owner's execution home and cannot be shared. Start a separate " +
+        'session you own, or start a new branch-home session on this branch.'
       );
-    case 'owner_grant_required':
+    case 'workspace_session_sharing_disabled':
+      return 'Session sharing is disabled for this workspace. Start a separate session you own.';
+    case 'branch_session_sharing_disabled':
       return (
-        'The session owner has not shared this execution-home session with you. Ask the owner ' +
-        'to share it, or start a separate session you own.'
+        'This branch does not allow shared session prompting. Ask a Branch Manager to enable it, ' +
+        'or start a separate session you own.'
       );
     default:
       return (
@@ -285,9 +286,9 @@ export function resolveBranchPermission(
 
 /**
  * Resolve the one prompt-level policy shared by hooks and custom routes.
- * Branch-scoped sessions run as the caller, so branch Collaborator/Manager
- * access is sufficient. Execution-home sessions retain the historical,
- * owner-authored personal sharing gate because they expose the owner's home.
+ * Branch-scoped sessions run as the caller and require Collaborator/Manager
+ * access plus both explicit sharing switches. Execution-home sessions are an
+ * immutable compatibility boundary and are never shareable.
  */
 export async function resolveSessionPromptAccess(input: {
   branchRepository: Pick<
@@ -1137,39 +1138,6 @@ export function ensureSessionImmutability() {
 }
 
 /**
- * Decide which `unix_username` to stamp on a child session created via
- * fork() or spawn(). Pure function — no DB, no context — so it can be unit
- * tested directly and kept aligned with {@link determineSpawnIdentity}.
- *
- * Rules:
- * - Personal Session sharing → inherit the parent execution-home key. The
- *   genealogy stays in the Session owner's home while Task credentials still
- *   resolve from the human prompter.
- * - Otherwise (including the common same-user path) → use the caller's CURRENT
- *   `unix_username`. We must NOT fall back to `parent.unix_username` just because
- *   caller and parent owner share an id: the user's unix_username may have drifted
- *   since the parent was created, and `validateSessionUnixUsername` would then
- *   reject every prompt on the child.
- *
- * @param parentUnixUsername  - `parent.unix_username` from the parent session (may be null)
- * @param callerUnixUsername  - Caller's CURRENT unix_username (loaded fresh via
- *                              {@link loadUnixUsernameForUser}); may be null
- * @param usesSharedHome      - Whether an owner-authored sharing grant permits
- *                              use of the parent Session owner's home
- * @returns The unix_username to stamp on the child (string or null)
- */
-export function resolveChildUnixUsername(
-  parentUnixUsername: string | null | undefined,
-  callerUnixUsername: string | null,
-  usesSharedHome: boolean
-): string | null {
-  if (usesSharedHome) {
-    return parentUnixUsername ?? null;
-  }
-  return callerUnixUsername;
-}
-
-/**
  * Load a user's current `unix_username` by user id.
  *
  * Single source of truth used by both the `setSessionUnixUsername` hook
@@ -1364,8 +1332,8 @@ export function validateSessionUnixUsername(
  * Standalone helper (not a Feathers hook) — usable from MCP tools, service hooks, or anywhere
  * with access to the app and branch repository. Resolves branch ownership internally.
  *
- * Respects Session scope: Collaborators may prompt branch-home Sessions, while
- * a foreign execution-home Session additionally requires personal sharing.
+ * Respects Session scope and both sharing switches. Foreign execution-home
+ * Sessions are always denied.
  *
  * Use case: validating callback targets ("can this user queue a prompt to that session?").
  *
@@ -1895,59 +1863,45 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
  * fork (sessions service: spawn() / fork(), or MCP tools agor_sessions_spawn /
  * agor_sessions_prompt(mode:"fork"|"subsession")).
  *
- * An execution-home child admitted by personal sharing remains attributed to
- * the parent owner. A child of a branch-scoped session is instead attributed
- * to the caller because its SDK lineage is branch-owned and does not borrow
- * the parent's execution home.
+ * A cross-user child can only come from a branch-home Session and is attributed
+ * to the caller. Historical execution-home Sessions are never shareable.
  *
  * Pure function — no DB, no FeathersJS context — so it can be unit tested
  * directly and invoked from both service methods and MCP tool handlers.
  *
  * @param parent  - Parent session (must include created_by)
  * @param caller  - Authenticated caller (MCP-authenticated user / Feathers user)
- * @param sharing - Resolved branch-session or owner-authored sharing decision
+ * @param sharing - Resolved branch-session sharing decision
  * @returns The created_by UUID to stamp on the child session
  */
 export function determineSpawnIdentity(
   parent: { created_by: string },
   caller: { user_id?: string; role?: string; _isServiceAccount?: boolean },
-  sharing:
-    | { branch_id: string; share_owner_home: boolean; allow_caller_identity?: boolean }
-    | undefined
-): { created_by: string; usesSharedHome: boolean } {
+  sharing: { allow_caller_identity?: boolean } | undefined
+): { created_by: string } {
   const callerId = caller.user_id;
 
   // Service accounts (executor, internal jobs) preserve parent attribution.
   // They have no human user_id to attribute to, and their callers (the
   // scheduler, callbacks) already ran their own RBAC checks.
   if (caller._isServiceAccount) {
-    return { created_by: parent.created_by, usesSharedHome: false };
+    return { created_by: parent.created_by };
   }
 
   // Same user spawning their own session → attribute to caller (same value
   // as parent.created_by, but explicit).
   if (callerId && parent.created_by === callerId) {
-    return { created_by: callerId, usesSharedHome: false };
-  }
-
-  if (callerId && sharing?.share_owner_home === true) {
-    console.warn('[SECURITY] personal_session_sharing', {
-      event: 'personal_session_sharing',
-      caller_id: callerId ?? null,
-      session_owner_id: parent.created_by,
-      branch_id: sharing.branch_id,
-    });
-    return { created_by: parent.created_by, usesSharedHome: true };
+    return { created_by: callerId };
   }
 
   if (callerId && sharing?.allow_caller_identity === true) {
-    return { created_by: callerId, usesSharedHome: false };
+    return { created_by: callerId };
   }
 
   if (!callerId) {
     throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
   }
-  throw new Forbidden('The session owner has not shared their sessions with you.');
+  throw new Forbidden('This branch does not allow shared session prompting.');
 }
 
 // ============================================================================

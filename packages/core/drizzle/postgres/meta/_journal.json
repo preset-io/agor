@@ -687,6 +687,13 @@
       "when": 1788120000000,
       "tag": "0098_session_sdk_home_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1788206400000,
+      "tag": "0099_shared_session_prompting",
+      "breakpoints": true
     }
   ]
 }

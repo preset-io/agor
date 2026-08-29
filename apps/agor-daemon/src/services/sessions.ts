@@ -83,7 +83,6 @@ import {
   isSuperAdmin,
   loadUnixUsernameForUser,
   PERMISSION_RANK,
-  resolveChildUnixUsername,
   sessionPromptDeniedMessage,
 } from '../utils/branch-authorization.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
@@ -692,11 +691,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    * being created via spawn / fork / btw. See {@link determineSpawnIdentity}
    * for the rules.
    *
-   * Same-owner children stay with their owner. A cross-user child of an
-   * execution-home session is accepted only through the owner's personal
-   * sharing rule and keeps that owner/home. A branch-scoped child may instead
-   * be attributed to an authorized caller because its SDK state is not in the
-   * parent's execution home.
+   * Same-owner children stay with their owner. Cross-user children are allowed
+   * only for shareable branch-home Sessions and are attributed to the caller.
    *
    * Internal calls (`params.provider == null`) preserve parent attribution —
    * they're service-to-service or scheduler-driven and have no human caller
@@ -713,7 +709,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    * - Internal call (no provider) → inherit parent.unix_username. The scheduler /
    *   service-to-service callers have no human caller to attribute to, and the
    *   parent's stamped value is the closest thing to ground truth.
-   * - Personal session sharing → inherit the parent's execution-home key.
    * - Branch-scoped sharing → load the prompt caller's current key.
    * - Otherwise (including the common same-user path) → load the attributed
    *   caller's CURRENT unix_username via {@link loadUnixUsernameForUser}. We
@@ -748,12 +743,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
     }
 
-    // Resolve the personal, owner-authored session-sharing grant. This is the
-    // only path that may preserve the parent owner's home for a cross-user
-    // child; branch managers and filesystem access never imply it.
-    let sharing:
-      | { branch_id: string; share_owner_home: boolean; allow_caller_identity: boolean }
-      | undefined;
+    let sharing: { allow_caller_identity: boolean } | undefined;
     try {
       const wt = await this.app.service('branches').get(parent.branch_id, { provider: undefined });
       if (caller.user_id) {
@@ -764,8 +754,6 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
           parent.sdk_home_scope
         );
         sharing = {
-          branch_id: (wt as Branch).branch_id,
-          share_owner_home: authority.source === 'personal_session_sharing',
           allow_caller_identity: authority.source === 'branch_session',
         };
         if (!authority.allowed) {
@@ -780,36 +768,21 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const result = determineSpawnIdentity(parent, caller, sharing);
     const createdBy = result.created_by as Session['created_by'];
 
-    // Personal sharing → inherit the session owner's execution-home key.
-    // Otherwise (including same-user) → resolve the attributed user's CURRENT
-    // unix_username. Same-user forks must NOT inherit stale parent.unix_username,
-    // because validateSessionUnixUsername would later reject prompts when the
-    // user's unix_username drifts. The decision is delegated to the pure helper
-    // `resolveChildUnixUsername` so it can be unit tested without DB mocks.
-    let callerUnixUsername: string | null = null;
-    if (!result.usesSharedHome) {
-      try {
-        callerUnixUsername = await loadUnixUsernameForUser(this.usersRepo, createdBy as string);
-      } catch (err) {
-        // If we can't load the caller user, fail closed rather than silently
-        // creating a session with no unix_username (which would hang forever
-        // in delegated mode).
-        throw new Forbidden(
-          `Cannot resolve unix_username for caller ${createdBy}: ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
+    // Always resolve the attributed user's CURRENT execution-home key. A
+    // branch-home child never borrows the parent owner's home, and same-user
+    // forks must not inherit a stale key after an administrator changes it.
+    let unixUsername: string | null;
+    try {
+      unixUsername = await loadUnixUsernameForUser(this.usersRepo, createdBy as string);
+    } catch (err) {
+      throw new Forbidden(
+        `Cannot resolve unix_username for caller ${createdBy}: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
-
-    const unixUsername = resolveChildUnixUsername(
-      parent.unix_username,
-      callerUnixUsername,
-      result.usesSharedHome
-    ) as Session['unix_username'];
 
     // In delegated mode, a child stamped null would fail at prompt time (or
     // silently share an identity in hosted deployments) — reject at fork/spawn
-    // time with an actionable error instead. Also covers shared-home children
-    // inheriting a null stamp from a pre-migration parent.
+    // time with an actionable error instead.
     assertExecutionHomeKeySatisfiesMode(
       unixUsername,
       resolveExecutionSecurityMode().unixUserMode,
@@ -832,8 +805,8 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const parent = await this.get(id, params);
     const parentTool = requireActiveAgenticTool(parent.agentic_tool);
 
-    // Cross-user genealogy is allowed only by the Session owner's personal
-    // sharing rule and remains attributed to that owner.
+    // Cross-user genealogy is allowed only for an explicitly shareable branch
+    // Session and is attributed to the caller.
     const { created_by, unix_username } = await this.resolveChildIdentity(parent, params);
     const inherited = await materializeAgenticToolConfiguration(this.db, {
       tool: parentTool,

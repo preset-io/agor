@@ -2567,7 +2567,6 @@ describe('BranchesService.create permission defaults', () => {
         created_by: owner.user_id,
         default_others_can: 'prompt',
         default_others_fs_access: 'write',
-        default_dangerously_allow_session_sharing: true,
       });
 
       const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
@@ -2592,7 +2591,7 @@ describe('BranchesService.create permission defaults', () => {
         preset: 'collaborator',
         fs_access: 'write',
       });
-      expect(policy.inherited_config?.session_sharing.owner_rules).toEqual([]);
+      expect(policy.inherited_config?.allow_shared_session_prompts).toBe(false);
     }
   );
 

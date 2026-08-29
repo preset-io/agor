@@ -228,7 +228,9 @@ function makeHookContext(overrides: {
 describe('ensureCanPromptInSession', () => {
   const hookWithAuthority = (
     allowed: boolean,
-    denialReason: 'branch_access_required' | 'owner_grant_required' = 'owner_grant_required'
+    denialReason:
+      | 'branch_access_required'
+      | 'branch_session_sharing_disabled' = 'branch_session_sharing_disabled'
   ) =>
     ensureCanPromptInSession({
       branchRepository: {
@@ -252,7 +254,7 @@ describe('ensureCanPromptInSession', () => {
       await expect(hook(ctx)).resolves.toBe(ctx);
     });
 
-    it('denies prompting another user session without an owner grant', async () => {
+    it('denies prompting another user session when branch sharing is disabled', async () => {
       const hook = hookWithAuthority(false);
       const wt = makeBranch({ others_can: 'session' });
       const ctx = makeHookContext({
@@ -260,7 +262,7 @@ describe('ensureCanPromptInSession', () => {
         session: { created_by: OTHER_USER_ID },
         userId: USER_ID,
       });
-      await expect(hook(ctx)).rejects.toThrow(/owner has not shared/i);
+      await expect(hook(ctx)).rejects.toThrow(/branch does not allow shared session prompting/i);
     });
 
     it('allows prompting another user session when canonical authority allows it', async () => {

@@ -147,21 +147,22 @@ Branch file access is selected separately as `none`, `read`, or `read/write`. Co
 
 Each entry names exactly one person or group. A person's direct entry overrides their group memberships; otherwise group permissions combine and the highest file access wins. **Others** is a fallback only for active members of the same workspace who match no person or group entry.
 
-Collaborators and Managers may prompt another person's **branch-home** Session;
-the task runs as the actual caller while native SDK state remains branch-owned.
-An **execution-home** Session retains the stricter historical rule: prompting
-it requires a workspace administrator to enable personal session sharing and
-the Session owner to name trusted people or groups. That path uses the owner's
-home to preserve native agent-tool state, so review [the session-sharing
-warning](/faq#session-sharing-home-access) first. When the gate is disabled,
-Agor and connected gateway channels return an actionable denial rather than
-silently changing execution identity.
+Collaborators and Managers may prompt another person's **branch-home** Session
+only when the workspace preference and effective branch permission package both
+enable shared session prompting. The task runs as the actual caller while the
+conversation and native SDK state remain branch-owned. An **execution-home**
+Session is never shareable; create a new branch-home Session instead. When a
+gate is disabled, Agor and connected gateway channels return an actionable,
+terminal denial rather than silently changing execution identity or retrying.
 
 ## Capability-policy upgrade
 
 The normalized board/branch permission migration is a coordinated offline cutover. Stop every daemon, take and test a complete database backup, then run the migration with only the new version installed.
 
-The migration maps legacy rules conservatively. Where an exact mapping is impossible, it grants equal or less access; foreign-session sharing starts empty and disabled. Some users may therefore have less access after the upgrade. Review important board and branch permission screens before resuming normal work.
+The migration maps legacy access conservatively. Personal sharing grants are
+not broadened into branch-wide access: the new workspace and branch switches
+start off. Some users may therefore have less access after the upgrade. Review
+important board and branch permission screens before resuming normal work.
 
 If a board or branch cannot be attributed to a primary owner, migration stops and lists the affected IDs. Resolve those resources manually rather than assigning an arbitrary owner. Old daemon versions cannot run against the migrated authority model. Rollback requires restoring the complete pre-migration database backup.
 

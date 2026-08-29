@@ -1,6 +1,6 @@
 import type { BranchPermissionLevel, Group, User } from '@agor-live/client';
-import { UserOutlined, WarningOutlined } from '@ant-design/icons';
-import { Alert, Form, Radio, Select, Space, Switch, Typography } from 'antd';
+import { UserOutlined } from '@ant-design/icons';
+import { Alert, Form, Radio, Select, Space, Typography } from 'antd';
 import { useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
 import {
@@ -26,7 +26,6 @@ export interface RbacPermissionValue {
   groupGrants: RbacGroupGrantValue[];
   othersCan: BranchPermissionLevel;
   othersFsAccess: FsAccessLevel;
-  allowSessionSharing: boolean;
 }
 
 interface RbacPermissionFieldsProps {
@@ -48,7 +47,6 @@ interface RbacPermissionFieldsProps {
   visibilityLabel?: string;
   othersCanLabel?: string;
   othersFsAccessLabel?: string;
-  showLegacySessionSharing?: boolean;
   /** Boards expose private/shared visibility; branch overrides expose grants and fallback directly. */
   showVisibility?: boolean;
 }
@@ -96,7 +94,6 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
   visibilityLabel = 'Visibility',
   othersCanLabel = 'Others Can',
   othersFsAccessLabel = 'Filesystem Access',
-  showLegacySessionSharing = true,
   showVisibility = true,
 }) => {
   const { showError } = useThemedMessage();
@@ -133,7 +130,6 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
       if (ownerId) onChange('ownerIds', [ownerId]);
       onChange('groupGrants', []);
       onChange('othersFsAccess', 'none');
-      onChange('allowSessionSharing', false);
     }
   };
 
@@ -309,18 +305,6 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
             </Space>
           </Form.Item>
 
-          {value.othersCan === 'prompt' && (
-            <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
-              <Alert
-                type="warning"
-                showIcon
-                icon={<WarningOutlined />}
-                message="Cross-user execution risk"
-                description="Allows prompting sessions in another creator's immutable execution and credential context; use only with trusted collaborators."
-              />
-            </Form.Item>
-          )}
-
           <Form.Item
             label={othersFsAccessLabel}
             labelCol={{ span: 8 }}
@@ -338,35 +322,6 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
               ]}
             />
           </Form.Item>
-
-          {showLegacySessionSharing && (
-            <Form.Item
-              label="Allow legacy session sharing"
-              labelCol={{ span: 8 }}
-              wrapperCol={{ span: 16 }}
-              help="When on, spawned/forked sessions keep the original creator's identity."
-            >
-              <Switch
-                checked={value.allowSessionSharing}
-                onChange={(allowSessionSharing) =>
-                  onChange('allowSessionSharing', allowSessionSharing)
-                }
-                disabled={!canEdit}
-              />
-            </Form.Item>
-          )}
-
-          {showLegacySessionSharing && value.allowSessionSharing && (
-            <Form.Item wrapperCol={{ offset: 8, span: 16 }}>
-              <Alert
-                type="error"
-                showIcon
-                icon={<WarningOutlined />}
-                message="Dangerous: identity borrowing"
-                description="Use only for trusted collaborators or legacy automation."
-              />
-            </Form.Item>
-          )}
         </>
       )}
 

@@ -92,7 +92,7 @@ export async function deliverPermissionDecision(options: {
   const session = (await app.service('sessions').get(sessionId, params)) as Session;
 
   // Viewing a Session is not sufficient to control its executor. Permission
-  // decisions use the same owner-authored sharing policy as prompting.
+  // decisions use the same branch-session sharing authority as prompting.
   if (authorization.branchRbacEnabled) {
     const branch = await authorization.branchRepository.findById(session.branch_id);
     if (!branch) throw new NotFound(`Branch ${session.branch_id} not found`);

@@ -11,7 +11,6 @@ import type {
   BoardID,
   BranchCapabilityPolicy,
   BranchID,
-  BranchSessionSharingOwnerRule,
   CapabilityPolicyWorkspacePreferences,
   Params,
   UserID,
@@ -67,36 +66,6 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function rulesByOwner(rules: BranchSessionSharingOwnerRule[]) {
-  return new Map(rules.map((rule) => [rule.session_owner_user_id, rule]));
-}
-
-function assertForeignRulesUnchanged(
-  before: BranchSessionSharingOwnerRule[],
-  after: BranchSessionSharingOwnerRule[],
-  currentUserId: UserID
-): void {
-  const oldRules = rulesByOwner(before);
-  const newRules = rulesByOwner(after);
-  const owners = new Set([...oldRules.keys(), ...newRules.keys()]);
-  for (const ownerId of owners) {
-    if (ownerId === currentUserId) continue;
-    if (stable(oldRules.get(ownerId)) !== stable(newRules.get(ownerId))) {
-      throw new Forbidden('You can change only your own session sharing rule');
-    }
-  }
-}
-
-function ownRuleWasEnabled(
-  before: BranchSessionSharingOwnerRule[],
-  after: BranchSessionSharingOwnerRule[],
-  currentUserId: UserID
-): boolean {
-  const oldRule = rulesByOwner(before).get(currentUserId);
-  const newRule = rulesByOwner(after).get(currentUserId);
-  return newRule?.enabled === true && stable(oldRule) !== stable(newRule);
-}
-
 function mapRepositoryError(error: unknown): never {
   if (error instanceof Error && error.message.includes('reload before saving')) {
     throw new Conflict(error.message);
@@ -139,27 +108,13 @@ export function setupCapabilityPolicyServices(
             const managesPolicy =
               hasMinimumRole(current?.role, ROLES.ADMIN) ||
               access.capabilities.includes('board.policy.manage');
-            assertForeignRulesUnchanged(
-              existing.branch_template.session_sharing.owner_rules,
-              value.branch_template.session_sharing.owner_rules,
-              current!.user_id
-            );
             if (!managesPolicy) {
-              const onlyOwnSharingChanged =
-                stable(existing.board_access) === stable(value.board_access) &&
-                stable(existing.branch_template.access) === stable(value.branch_template.access);
-              if (!onlyOwnSharingChanged || !access.capabilities.includes('board.view')) {
-                throw new Forbidden('You cannot manage this board permission policy');
-              }
+              throw new Forbidden('You cannot manage this board permission policy');
             }
             const preferences = await operationRepository.getWorkspacePreferences();
             if (
-              !preferences.personal_session_sharing_enabled &&
-              ownRuleWasEnabled(
-                existing.branch_template.session_sharing.owner_rules,
-                value.branch_template.session_sharing.owner_rules,
-                current!.user_id
-              )
+              value.branch_template.allow_shared_session_prompts &&
+              !preferences.session_sharing_enabled
             ) {
               throw new Forbidden('Session sharing is disabled for this workspace');
             }
@@ -224,15 +179,6 @@ export function setupCapabilityPolicyServices(
               value.binding_mode === 'inherit' ? value.inherited_config : value.override_config;
             if (!oldConfig || !newConfig)
               throw new BadRequest('A complete permission configuration is required');
-            // Binding is monolithic, but changing it must not become an indirect
-            // way for a Manager to erase or rewrite another user's personal
-            // home-sharing decision. Equivalent rules may move between the
-            // board template and an override; semantic changes remain owner-only.
-            assertForeignRulesUnchanged(
-              oldConfig.session_sharing.owner_rules,
-              newConfig.session_sharing.owner_rules,
-              current!.user_id
-            );
             if (value.binding_mode === 'inherit') {
               const boardTemplate = existing.inherited_config;
               if (!boardTemplate || stable(newConfig) !== stable(boardTemplate)) {
@@ -240,22 +186,10 @@ export function setupCapabilityPolicyServices(
               }
             }
             if (!managesPolicy) {
-              const onlyOwnSharingChanged =
-                existing.binding_mode === value.binding_mode &&
-                stable(oldConfig.access) === stable(newConfig.access);
-              if (!onlyOwnSharingChanged || !access.capabilities.includes('branch.view')) {
-                throw new Forbidden('You cannot manage this branch permission policy');
-              }
+              throw new Forbidden('You cannot manage this branch permission policy');
             }
             const preferences = await operationRepository.getWorkspacePreferences();
-            if (
-              !preferences.personal_session_sharing_enabled &&
-              ownRuleWasEnabled(
-                oldConfig.session_sharing.owner_rules,
-                newConfig.session_sharing.owner_rules,
-                current!.user_id
-              )
-            ) {
+            if (newConfig.allow_shared_session_prompts && !preferences.session_sharing_enabled) {
               throw new Forbidden('Session sharing is disabled for this workspace');
             }
           }
@@ -303,7 +237,7 @@ export function setupCapabilityPolicyServices(
             current.user_id
           );
           console.info(
-            `[rbac.workspace_preferences] updated personal_session_sharing_enabled=${saved.personal_session_sharing_enabled}`
+            `[rbac.workspace_preferences] updated session_sharing_enabled=${saved.session_sharing_enabled}`
           );
           return saved;
         });

@@ -3098,11 +3098,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           app.service('sessions').get(id, params)
         );
 
-        // Stop is session lifecycle control. Managers may stop any session on
-        // the branch without gaining prompt authority over its owner's home;
-        // collaborators may stop a foreign session only when that owner has
-        // explicitly shared it with them. Force-fail deliberately skips this
-        // check and applies its narrower owner-or-admin policy below.
+        // Stop is Session lifecycle control. Managers may stop any Session on
+        // the branch; collaborators may stop a foreign branch Session only
+        // when the workspace and branch sharing switches allow them to prompt
+        // it. Force-fail deliberately skips this check and applies its narrower
+        // owner-or-admin policy below.
         if (
           body.force_unverified !== true &&
           branchRbacEnabled &&

@@ -104,8 +104,8 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       const toolParams = normalizeEnvVarsParams(envVarsParamsSchema.parse(args));
 
       // MCP session tokens are minted for the current prompt's actor. Use that
-      // same identity for environment variables even when personal sharing
-      // lets the actor prompt a Session owned by someone else.
+      // same identity for environment variables even when the actor is
+      // prompting a shared Session owned by someone else.
       const promptActor = (await ctx.app
         .service('users')
         .get(ctx.userId, ctx.baseServiceParams)) as User;

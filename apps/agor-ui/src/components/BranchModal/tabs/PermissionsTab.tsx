@@ -34,7 +34,7 @@ export const PermissionsTab: React.FC<PermissionsTabProps> = ({
   permissionUsers = [],
   capabilityPolicy,
   onCapabilityPolicyChange,
-  workspacePreferences = { personal_session_sharing_enabled: false },
+  workspacePreferences = { session_sharing_enabled: false },
 }) => {
   if (error) {
     return <Alert type="error" showIcon description={error.message} />;

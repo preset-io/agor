@@ -41,7 +41,7 @@ export interface StubClientOptions {
   namespaces?: KnowledgeNamespace[];
   capabilityPolicy?: BranchCapabilityPolicy;
   failPermissionsFind?: boolean;
-  workspacePreferences?: { personal_session_sharing_enabled: boolean };
+  workspacePreferences?: { session_sharing_enabled: boolean };
   /** Response for `boards/:id/effective-access`, keyed by the requested board id. */
   boardEffectiveAccessById?: Record<string, unknown>;
 }
@@ -104,7 +104,7 @@ export function makeStubClient(opts: StubClientOptions = {}): {
             return opts.capabilityPolicy ?? makeBranchPolicy();
           }
           if (path === 'workspace-preferences') {
-            return opts.workspacePreferences ?? { personal_session_sharing_enabled: false };
+            return opts.workspacePreferences ?? { session_sharing_enabled: false };
           }
           if (path === 'kb/namespaces') {
             return opts.namespaces ?? [];
@@ -205,7 +205,6 @@ export function makeBranch(overrides: Partial<Branch> = {}): Branch {
     mcp_server_ids: [],
     others_can: 'session',
     others_fs_access: 'read',
-    dangerously_allow_session_sharing: false,
     ...overrides,
   } as unknown as Branch;
 }
@@ -229,7 +228,7 @@ export function makeBranchPolicy(
           fs_access: 'read',
         },
       },
-      session_sharing: { owner_rules: [] },
+      allow_shared_session_prompts: false,
     },
     ...overrides,
   } as BranchCapabilityPolicy;

@@ -63,7 +63,7 @@ export interface WidgetResolverDeps {
   resolutionStore: WidgetResolutionStore;
   /** Tenant-scoped custom-event publisher; production must not emit globally. */
   publishResolved?(payload: Record<string, unknown>): void;
-  /** Canonical branch capability + personal session-sharing authorization. */
+  /** Canonical branch capability + shared-session authorization. */
   resolveSessionPromptAuthority(
     branchId: string,
     callerUserId: UserID,
@@ -267,8 +267,8 @@ async function doResolveWidget(
   // reopen it and replay an already-completed external effect.
   let autoResumeQueued = false;
   if (widget.auto_resume !== false && autoResumePrompt) {
-    // Re-evaluate at Task admission. The owner may revoke personal sharing or
-    // the caller may lose Collaborator access while a submit handler performs
+    // Re-evaluate at Task admission. A sharing switch may be revoked or the
+    // caller may lose Collaborator access while a submit handler performs
     // external work. The durable widget claim remains `resolving` on denial so
     // the already-completed side effect is never replayed.
     const promptAuthority = await deps.resolveSessionPromptAuthority(
@@ -292,9 +292,9 @@ async function doResolveWidget(
         },
       },
       {
-        // The Session keeps its owner's home. The Task records the actual
-        // resolver so prompts, credentials, and managed environment variables
-        // are attributed to the caller rather than borrowed from the owner.
+        // The Task records the actual resolver so prompts, credentials, and
+        // managed environment variables are attributed to the caller rather
+        // than borrowed from the Session owner.
         user: { user_id: caller.user_id },
         route: { id: message.session_id },
       }

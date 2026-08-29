@@ -6,14 +6,12 @@ import {
   boardAccessPolicies as pgBoardAccessPolicies,
   branchPermissionConfigs as pgBranchPermissionConfigs,
   branchPermissionEntries as pgBranchPermissionEntries,
-  branchSessionSharingGrants as pgBranchSessionSharingGrants,
 } from './schema.postgres';
 import {
   boardAccessEntries as sqliteBoardAccessEntries,
   boardAccessPolicies as sqliteBoardAccessPolicies,
   branchPermissionConfigs as sqliteBranchPermissionConfigs,
   branchPermissionEntries as sqliteBranchPermissionEntries,
-  branchSessionSharingGrants as sqliteBranchSessionSharingGrants,
 } from './schema.sqlite';
 
 const policyTables = [
@@ -46,11 +44,6 @@ const policyTables = [
       'branch_permission_entries_principal_check',
     ],
   },
-  {
-    sqlite: sqliteBranchSessionSharingGrants,
-    postgres: pgBranchSessionSharingGrants,
-    checks: ['branch_session_sharing_grants_principal_check'],
-  },
 ] as const;
 
 describe('capability-policy schema constraints', () => {
@@ -70,5 +63,10 @@ describe('capability-policy schema constraints', () => {
       );
       for (const name of table.checks) expect(actual).toContain(name);
     }
+  });
+
+  it('stores the shared-session opt-in on the complete permission package', () => {
+    expect(sqliteBranchPermissionConfigs.allow_shared_session_prompts).toBeDefined();
+    expect(pgBranchPermissionConfigs.allow_shared_session_prompts).toBeDefined();
   });
 });

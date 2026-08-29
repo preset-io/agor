@@ -24,7 +24,6 @@ import {
   type AnySQLiteColumn,
   blob,
   check,
-  foreignKey,
   index,
   integer,
   primaryKey,
@@ -587,7 +586,6 @@ export const boards = sqliteTable(
         access_mode?: 'private' | 'shared';
         default_others_can?: import('@agor/core/types').BranchPermissionLevel;
         default_others_fs_access?: 'none' | 'read' | 'write';
-        default_dangerously_allow_session_sharing?: boolean;
         color?: string;
         icon?: string;
         background_color?: string; // Background color for the board canvas
@@ -853,10 +851,6 @@ export const branches = sqliteTable(
         mcp_server_ids?: string[];
 
         // DANGEROUS: opt-in to legacy session-spawn identity borrowing.
-        // When true, agor_sessions_spawn / agor_sessions_prompt(mode:"fork"|"subsession")
-        // attribute the new child session to the parent owner instead of the
-        // MCP-authenticated caller. See packages/core/src/types/branch.ts.
-        dangerously_allow_session_sharing?: boolean;
       }>()
       .notNull(),
   },
@@ -1336,6 +1330,7 @@ export const branchPermissionConfigs = sqliteTable(
     others_fs_access: text('others_fs_access', { enum: ['none', 'read', 'write'] })
       .notNull()
       .default('none'),
+    allow_shared_session_prompts: t.bool('allow_shared_session_prompts').notNull().default(false),
     revision: integer('revision').notNull().default(1),
     updated_by: text('updated_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
@@ -1409,70 +1404,6 @@ export const branchPermissionEntries = sqliteTable(
     ),
     principalCheck: check(
       'branch_permission_entries_principal_check',
-      sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
-    ),
-  })
-);
-
-/** Personal, owner-authored opt-in to prompt sessions from the owner's home. */
-export const branchSessionSharingRules = sqliteTable(
-  'branch_session_sharing_rules',
-  {
-    config_id: text('config_id', { length: 36 })
-      .notNull()
-      .references(() => branchPermissionConfigs.config_id, { onDelete: 'cascade' }),
-    session_owner_user_id: text('session_owner_user_id', { length: 36 })
-      .notNull()
-      .references(() => users.user_id, { onDelete: 'cascade' }),
-    enabled: t.bool('enabled').notNull().default(false),
-    updated_at: t.timestamp('updated_at').notNull(),
-  },
-  (table) => ({
-    pk: primaryKey({ columns: [table.config_id, table.session_owner_user_id] }),
-    ownerIdx: index('branch_session_sharing_rules_owner_idx').on(table.session_owner_user_id),
-  })
-);
-
-export const branchSessionSharingGrants = sqliteTable(
-  'branch_session_sharing_grants',
-  {
-    grant_id: text('grant_id', { length: 36 }).primaryKey(),
-    config_id: text('config_id', { length: 36 }).notNull(),
-    session_owner_user_id: text('session_owner_user_id', { length: 36 }).notNull(),
-    user_id: text('user_id', { length: 36 }).references(() => users.user_id, {
-      onDelete: 'cascade',
-    }),
-    group_id: text('group_id', { length: 36 }).references(() => groups.group_id, {
-      onDelete: 'cascade',
-    }),
-    created_at: t.timestamp('created_at').notNull(),
-  },
-  (table) => ({
-    ruleFk: foreignKey({
-      columns: [table.config_id, table.session_owner_user_id],
-      foreignColumns: [
-        branchSessionSharingRules.config_id,
-        branchSessionSharingRules.session_owner_user_id,
-      ],
-    }).onDelete('cascade'),
-    ruleIdx: index('branch_session_sharing_grants_rule_idx').on(
-      table.config_id,
-      table.session_owner_user_id
-    ),
-    userIdx: index('branch_session_sharing_grants_user_idx').on(table.user_id, table.config_id),
-    groupIdx: index('branch_session_sharing_grants_group_idx').on(table.group_id, table.config_id),
-    ruleUserUnique: uniqueIndex('branch_session_sharing_grants_rule_user_unique').on(
-      table.config_id,
-      table.session_owner_user_id,
-      table.user_id
-    ),
-    ruleGroupUnique: uniqueIndex('branch_session_sharing_grants_rule_group_unique').on(
-      table.config_id,
-      table.session_owner_user_id,
-      table.group_id
-    ),
-    principalCheck: check(
-      'branch_session_sharing_grants_principal_check',
       sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
     ),
   })
@@ -3040,8 +2971,6 @@ export type BoardAccessPolicyRow = typeof boardAccessPolicies.$inferSelect;
 export type BoardAccessEntryRow = typeof boardAccessEntries.$inferSelect;
 export type BranchPermissionConfigRow = typeof branchPermissionConfigs.$inferSelect;
 export type BranchPermissionEntryRow = typeof branchPermissionEntries.$inferSelect;
-export type BranchSessionSharingRuleRow = typeof branchSessionSharingRules.$inferSelect;
-export type BranchSessionSharingGrantRow = typeof branchSessionSharingGrants.$inferSelect;
 export type BranchGroupGrantRow = typeof branchGroupGrants.$inferSelect;
 export type BoardGroupGrantRow = typeof boardGroupGrants.$inferSelect;
 export type BoardOwnerRow = typeof boardOwners.$inferSelect;

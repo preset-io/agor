@@ -69,7 +69,6 @@ function createBranchData(overrides?: {
   permission_source?: 'board' | 'override';
   others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
   others_fs_access?: 'none' | 'read' | 'write';
-  dangerously_allow_session_sharing?: boolean;
 }) {
   const name = overrides?.name ?? 'feature-branch';
   const repoId = overrides?.repo_id ?? (generateId() as UUID);
@@ -105,7 +104,6 @@ function createBranchData(overrides?: {
     permission_source: overrides?.permission_source,
     others_can: overrides?.others_can,
     others_fs_access: overrides?.others_fs_access,
-    dangerously_allow_session_sharing: overrides?.dangerously_allow_session_sharing,
   } as const;
 }
 

@@ -245,7 +245,7 @@ function makeGatewayHarness(args: {
         execution_user_id: args.sessionOwnerUserId ?? executionUser.user_id,
         source:
           args.sessionOwnerUserId && args.sessionOwnerUserId !== executionUser.user_id
-            ? 'personal_session_sharing'
+            ? 'branch_session'
             : 'own_session',
       }
   );
@@ -524,37 +524,6 @@ describe('GatewayService inbound permission admission', () => {
       )
     );
     expect(promptCreate).not.toHaveBeenCalled();
-  });
-
-  it('rechecks an owner-authored sharing grant before prompting a mapped foreign session', async () => {
-    const sessionOwnerUserId = 'session-owner' as UserID;
-    const { service, promptCreate, resolveSessionPromptAuthority } = makeGatewayHarness({
-      existingMapping: makeMapping(),
-      sessionOwnerUserId,
-      sessionSdkHomeScope: 'execution_home',
-      promptAuthority: {
-        allowed: true,
-        execution_user_id: sessionOwnerUserId,
-        source: 'personal_session_sharing',
-      },
-    });
-
-    await expect(
-      service.create({
-        channel_key: 'slack-key',
-        thread_id: 'C123-100.000000',
-        text: 'continue',
-        metadata: {
-          channel: 'C123',
-          channel_type: 'channel',
-          slack_has_mention: true,
-          slack_message_ts: '103.000000',
-        },
-      })
-    ).resolves.toMatchObject({ success: true, sessionId: 'sess-1', created: false });
-
-    expect(resolveSessionPromptAuthority).toHaveBeenCalledTimes(2);
-    expect(promptCreate).toHaveBeenCalledOnce();
   });
 
   it('allows a foreign collaborator to prompt a branch-scoped mapped session', async () => {

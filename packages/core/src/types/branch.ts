@@ -439,30 +439,6 @@ export interface Branch {
    * transitioning; it never strands accumulated Claude/Codex/… history.
    */
   sdk_home?: 'per_branch' | null;
-
-  // ===== Session Sharing (legacy identity-borrow opt-in) =====
-
-  /**
-   * DANGEROUS: Allow legacy "identity borrowing" on session spawn/fork.
-   *
-   * Default (false / undefined): When user A calls `agor_sessions_spawn` or
-   * `agor_sessions_prompt(mode:"fork"|"subsession")` against user B's session,
-   * the new child session is attributed to A — `child.created_by = A.id` —
-   * and uses A's execution-home, credentials, and env vars.
-   *
-   * When true: legacy behavior is preserved — the child inherits
-   * `parent.created_by`, so it executes under the *parent owner's* identity
-   * even when spawned by a different caller. This effectively lets a
-   * collaborator run code as the session creator (similar to what
-   * `others_can: 'prompt'` already permits for direct prompts), and is
-   * preserved only for parity with pre-existing automation that relies on it.
-   *
-   * Admins (role >= admin) are *always* attributed to themselves regardless
-   * of this flag.
-   *
-   * Cross-user spawns under this flag are logged loudly by the daemon.
-   */
-  dangerously_allow_session_sharing?: boolean;
 }
 
 export type BranchFilesystemReadinessState = 'pending' | 'ready' | 'failed' | 'unavailable';

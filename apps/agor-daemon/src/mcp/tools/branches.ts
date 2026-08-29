@@ -1206,7 +1206,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_permissions_update',
     {
       description:
-        'Replace a branch permission package, including its inherit/override binding and personal session sharing rules. ' +
+        'Replace a branch permission package, including its inherit/override binding and shared-session switch. ' +
         'Read the current revision with agor_branches_get first. Primary ownership is immutable.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({

@@ -68,11 +68,13 @@ Board access and branch access are separate. A board has one policy for who can 
 
 Filesystem access is configured separately as `none`, `read`, or `write`. Terminal access requires Collaborator or Manager plus filesystem access. Manager does not grant access to another person's sessions, home, or credentials.
 
-### Personal session sharing
+### Shared session prompting
 
-Personal session sharing is a workspace-gated, owner-controlled exception. It starts disabled and empty. When enabled, each session owner may name trusted users or groups that can prompt sessions owned by that person. A Manager cannot grant themselves this access or edit another person's sharing rule.
+Shared session prompting starts off at two levels. A workspace admin must enable it in **Settings → Workspace → Preferences**, then a Board or Branch Manager can enable **Allow shared session prompting** in branch defaults or an individual branch override. Only Collaborators and Managers can use it.
 
-A shared prompt keeps the session owner's native conversation and home, but records the actual caller on the task and uses the caller's Agor-managed environment variables, connector credentials, and branch filesystem projection. Home sharing is still a high-trust boundary because native tool histories, dotfiles, subscription credentials, and files from other sessions can live in the same home. See [What should I know before sharing my sessions?](/faq#session-sharing-home-access).
+Only branch-home Sessions are shareable. Historical or explicitly opted-out Sessions that use their creator's execution home remain private and fail closed. An admitted shared prompt continues the same conversation and branch SDK state, but records the actual caller on the task and uses that caller's execution home, Agor-managed variables, provider and connector credentials, private MCP visibility, and branch filesystem projection. It never borrows the Session creator's home.
+
+People who can prompt a Session can read its conversation and influence its future context. Disabling the workspace preference also clears every board and branch opt-in so re-enabling cannot reopen stale permissions.
 
 ---
 
@@ -134,7 +136,7 @@ Agor distinguishes two environment sources:
 - **Daemon process environment:** executors inherit only explicit runtime metadata (`PATH`/home/identity, temp, locale/terminal, log/daemon routing, managed-tool paths, and the daemon-resolved Git safety policy). Ambient provider keys, proxy URLs, Git identity, XDG paths, and arbitrary variables exported by the account that started the daemon are excluded.
 - **User settings:** the authenticated user's configured mapping flows to that user's executor after structural name, NUL, and 10 KiB value checks. There is no semantic deny-list for this source; terminal access already lets that user export the same names. Narrow consumers such as managed Git use a typed subset rather than the generic map.
 
-For a shared session, each task uses the **prompter's global** managed variables and credentials. It does not implicitly use either the owner's secrets or the guest's session-scoped variables. Session-scoped variables and widget selections remain owner-only; a guest can save a requested widget value globally to their own profile.
+For a shared session, each task uses the **prompter's global** managed variables and credentials. It does not implicitly use the Session creator's secrets or another person's session-scoped variables. A guest can save a requested widget value globally to their own profile.
 
 This process-environment rule does not suppress filesystem startup files. An interactive shell may still read the dotfiles present in its projected `HOME`; in `simple` mode that is part of the documented daemon-account trust boundary.
 

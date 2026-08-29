@@ -1947,10 +1947,9 @@ export class GatewayService {
   /**
    * Resolve the target Session again immediately before prompt admission.
    * This both binds a durable thread mapping to its configured branch and
-   * applies the Session's immutable sharing boundary: branch Sessions follow
-   * Collaborator access, while execution-home Sessions require the owner's
-   * personal-sharing grant. A Manager role alone never grants authority over
-   * another user's execution home.
+   * applies the Session's immutable sharing boundary: branch Sessions require
+   * Collaborator access and both sharing switches, while execution-home
+   * Sessions are never shareable.
    */
   private async requireInboundPromptAuthority(
     channel: GatewayChannel,

@@ -608,13 +608,9 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
       );
     }
     if (
-      [
-        'permission_binding',
-        'permission_source',
-        'others_can',
-        'others_fs_access',
-        'dangerously_allow_session_sharing',
-      ].some((field) => Object.hasOwn(updates, field))
+      ['permission_binding', 'permission_source', 'others_can', 'others_fs_access'].some((field) =>
+        Object.hasOwn(updates, field)
+      )
     ) {
       throw new RepositoryError(
         'Branch permissions must be changed through the branch permission policy service'

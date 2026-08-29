@@ -1110,8 +1110,8 @@ function createExecuteHandler(
 
     // Get branch path (+ authoritative base repo path for the sandbox) and, for
     // RBAC-aware mounting, the current PROMPT ACTOR's effective filesystem
-    // access to the branch. Personal session sharing keeps the owner's home,
-    // but it must not upgrade the caller's branch mounts to the owner's access.
+    // access to the branch. A shared branch Session still must not upgrade the
+    // caller's branch mounts to the Session owner's access.
     // The filesystem sandbox binds `<baseRepoPath>/.git` writable so
     // worktree commits work; we resolve `repo.local_path` from Agor's own DB
     // state rather than parsing the on-disk `.git` pointer (deterministic, and
@@ -1191,7 +1191,7 @@ function createExecuteHandler(
       if (!executionHomeUserId) {
         throw new Error(
           'sandbox home_mode=per_user requires a resolvable execution user; refusing to spawn ' +
-            'with a shared home (fail closed).'
+            'without a caller-scoped home (fail closed).'
         );
       }
       const executionFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
@@ -4709,10 +4709,9 @@ export async function registerMCPServices(
               globalServers: await new MCPServerRepository(db).findAll({
                 scope: 'global',
                 enabled: true,
-                // The task token is issued to the actual prompter. Even when
-                // personal sharing keeps the session owner's home, connector
-                // credentials and private server visibility stay with the
-                // prompter rather than silently borrowing the owner identity.
+                // The task token is issued to the actual prompter. Connector
+                // credentials and private server visibility stay with that
+                // caller rather than silently borrowing the Session owner.
                 usableByUserId: userId,
               }),
             };

@@ -49,7 +49,7 @@ function makeClient(getBoard: () => Board): AgorClient {
         entries: [],
         others: { preset: 'none', capabilities: [], fs_access: 'none' },
       },
-      session_sharing: { owner_rules: [] },
+      allow_shared_session_prompts: false,
     },
   };
   return {
@@ -62,7 +62,7 @@ function makeClient(getBoard: () => Board): AgorClient {
         };
       }
       if (name === 'workspace-preferences') {
-        return { find: vi.fn().mockResolvedValue({ personal_session_sharing_enabled: false }) };
+        return { find: vi.fn().mockResolvedValue({ session_sharing_enabled: false }) };
       }
       return { findAll: vi.fn().mockResolvedValue([]) };
     },
