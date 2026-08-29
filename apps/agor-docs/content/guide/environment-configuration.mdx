@@ -463,6 +463,122 @@ process map as evidence that it is healthy.
 
 ---
 
+## Remote development environments
+
+Sometimes Agor can manage the branch but cannot host its development stack. The
+daemon may run in a locked-down container without Docker, the application may
+need more CPU or memory than the Agor host has, or the runtime may need access to
+a cloud-only network. A managed environment does not have to be a local process:
+its lifecycle commands can bridge to a remote development environment such as a
+GitHub Codespace, Coder or Gitpod workspace, DevPod target, Kubernetes namespace,
+or dedicated VM.
+
+Agor does not ship native controllers for all of those providers. Instead, the
+current primitives support two integration shapes:
+
+- In `hybrid` mode, a small repository-owned shell bridge calls the provider API
+  or CLI and prints a structured Start result.
+- In `webhook-only` mode, lifecycle URLs call a trusted external controller. The
+  current webhook contract has the GET-only and authentication limitations
+  described above, so it is not by itself a production-grade provider control
+  plane.
+
+### Provider-neutral lifecycle pattern
+
+A remote bridge should treat **Start as reconciliation**, not as unconditional
+creation:
+
+1. Render a stable binding from trusted context such as `branch.id`, the exact
+   pushed `branch.ref`, and a provider repository identity.
+2. Rediscover provider state on every action. Do not rely on a permanent resource
+   name or forwarded URL: remote workspaces can be stopped, renamed, deleted, or
+   recreated outside Agor.
+3. Validate the provider owner, repository, ref, and binding marker before
+   resuming, stopping, deleting, or reading logs from a resource.
+4. Create or resume the workspace, wait with a bounded timeout, then report the
+   current access URLs.
+5. Make Stop and Nuke idempotent. Stop normally retains remote disk; Nuke deletes
+   only the rediscovered and revalidated resource.
+
+Source transfer is a separate concern. If the remote provider clones from a Git
+host, the branch or commit must be pushed before Start. Do not silently fall back
+to the default branch, and do not make a lifecycle bridge auto-push under an
+ambiguous shared credential.
+
+### Reporting the App and health endpoints
+
+Forwarded hostnames are often assigned only after the remote workspace starts.
+A shell bridge can publish them by emitting one control line on stdout:
+
+```text
+AGOR_ENVIRONMENT_RESULT={"app":"https://preview.example.test","health":"https://preview.example.test/health"}
+```
+
+This is the same [Runtime URLs from Start](#runtime-urls-from-start) contract
+described above. The JSON schema is intentionally only `{app?, health?}`. Either
+key may be omitted:
+
+- `app` is the browser destination. It may require the provider's login.
+- `health` is polled by the Agor daemon and should be returned only if that daemon
+  can reach it. If it is omitted, Agor shows **Started; health unavailable**
+  rather than claiming the environment is healthy.
+
+A static `app` such as the provider dashboard is useful while Start is still
+running. A successful dynamic result replaces that fallback for the current
+lifecycle attempt. Stop, Nuke, or another Start clears/reconciles runtime URLs so
+Agor does not retain an old forwarded hostname.
+
+### GitHub Codespaces reference implementation
+
+Agor's own repository includes an experimental, opt-in Codespaces example:
+
+- [the `codespaces-sqlite` `.agor.yml` variant](https://github.com/preset-io/agor/blob/main/.agor.yml)
+- [`agor-codespace-launcher.mjs`](https://github.com/preset-io/agor/blob/main/scripts/managed-environments/codespaces/agor-codespace-launcher.mjs), a dependency-free Node bridge over the official `gh` CLI
+- [the managed Codespaces devcontainer](https://github.com/preset-io/agor/blob/main/.devcontainer/agor-managed/devcontainer.json) and [SQLite bootstrap](https://github.com/preset-io/agor/blob/main/.devcontainer/agor-managed/start-agor-sqlite.sh)
+
+The essential variant shape is:
+
+```yaml
+environment:
+  variants:
+    codespaces-sqlite:
+      start: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs start
+        --repository {{shellQuote repo.github_slug}}
+        --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+        --app-port 5000 --health-port 3000 --health-path /health
+        --emit-health public-only
+      stop: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs stop
+        --repository {{shellQuote repo.github_slug}}
+        --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      nuke: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs nuke
+        --repository {{shellQuote repo.github_slug}}
+        --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      app: https://github.com/codespaces
+```
+
+Use `shellQuote` for every rendered value embedded in a shell command; it quotes
+the value as one POSIX shell argument instead of treating branch text as syntax.
+The reference launcher requires Node, an authenticated `gh` CLI with Codespaces
+access, a registered `github.com` remote, and a pushed branch ref. It derives the
+App URL from live Codespaces port metadata. With `--emit-health public-only`, it
+reports health only when GitHub says that forwarded port is public; private
+Codespaces URLs remain authenticated App links and are not polled by Agor.
+
+This reference is deliberately narrower than a production shared controller: it
+uses the controller's current GitHub actor, a process-local lock/state directory,
+and is not a Cloud/HA credential-sponsorship or distributed-leasing design. Never
+put a GitHub token in `.agor.yml`, template overrides, branch data, URLs, or
+launcher output. A production integration should use a tenant- and actor-scoped
+credential store plus a durable provider binding and lifecycle lease.
+
+---
+
 ## See also
 
 - [Containerized execution](/guide/containerized-execution) runs the rendered commands inside isolated containers.
