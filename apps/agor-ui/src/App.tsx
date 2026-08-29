@@ -1006,7 +1006,15 @@ function AppContent() {
         onboardingCompletionWriteRef.current = null;
       }
     }
-    if (!isCurrentUser()) return;
+
+    // The successful preference write is the commit point. Its realtime user
+    // event may have already moved this lifecycle to `completed`, retiring the
+    // active wizard owner before the PATCH promise resolves. Completion is an
+    // idempotent terminal acknowledgement for the same authentication
+    // generation, so that expected ordering still proceeds to navigation. An
+    // explicit X/Escape dismissal transitions to `deferred` instead and keeps
+    // this false, preserving the user's decision not to navigate.
+    if (!completeOnboardingWizard(owner)) return;
 
     // Always land the user on a board — never the homepage. Prefer the seeded
     // session, then the board the wizard created, then the user's main board,
@@ -1025,11 +1033,6 @@ function AppContent() {
     } else if (targetBoardId) {
       navigate(boardPath(targetBoardId as BoardID, boardById.get(targetBoardId)?.slug));
     }
-
-    // The durable completion write is the terminal transition. Close from this
-    // explicit state rather than relying on the auth user object to update in
-    // the same render; readiness/route/realtime churn cannot reopen it.
-    if (!completeOnboardingWizard(owner)) return;
 
     // `currentUser` keeps login gates from the authenticated principal rather
     // than accepting a possibly-stale directory row. Synchronize it after the

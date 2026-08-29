@@ -76,15 +76,33 @@ describe('useOnboardingLifecycle', () => {
     );
 
     await waitFor(() => expect(result.current.open).toBe(true));
+    const owner = result.current.activeOwner!;
     rerender({ ...input, completed: true });
     await waitFor(() => expect(result.current.open).toBe(false));
     expect(result.current.state.phase).toBe('completed');
+
+    // A same-authority completion operation may still be unwinding after its
+    // PATCH triggered that realtime terminal update. Its terminal ack remains
+    // current so post-commit navigation can run exactly once.
+    expect(result.current.complete(owner)).toBe(true);
 
     // A lagging auth refresh may still publish false. The lifecycle has already
     // observed a durable terminal true, so false is never an instruction to open.
     rerender({ ...input, completed: false });
     expect(result.current.state.phase).toBe('completed');
     expect(result.current.open).toBe(false);
+  });
+
+  it('does not turn an explicit dismissal into completion for post-commit navigation', async () => {
+    const input = defaults();
+    const { result } = renderHook(() => useOnboardingLifecycle(input));
+
+    await waitFor(() => expect(result.current.open).toBe(true));
+    const owner = result.current.activeOwner!;
+    act(() => expect(result.current.defer(owner)).toBe(true));
+
+    expect(result.current.complete(owner)).toBe(false);
+    expect(result.current.state.phase).toBe('deferred');
   });
 
   it('honors durable terminal gates and viewer restrictions', async () => {

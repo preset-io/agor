@@ -132,17 +132,35 @@ export function useOnboardingLifecycle({
 
   const transitionTo = useCallback(
     (owner: OnboardingOperationOwner, phase: 'deferred' | 'completed') => {
+      const current = stateRef.current;
+      const authority = {
+        userId: owner.userId,
+        authenticationGeneration: owner.authenticationGeneration,
+      };
+
+      // Terminal acknowledgement is idempotent for the same authenticated
+      // authority. In particular, the users realtime `onboarding_completed`
+      // event can close an automatically-opened wizard while the completion
+      // PATCH promise is still resolving. The caller that issued that PATCH
+      // must still be allowed to finish its post-commit navigation. A different
+      // terminal phase (explicit dismissal) remains authoritative and returns
+      // false, so closing during an in-flight write never navigates behind the
+      // user's back.
+      if (
+        current.phase === phase &&
+        sameAuthority(current.authority, authority) &&
+        isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)
+      ) {
+        return true;
+      }
       if (!isOwnerCurrent(owner)) return false;
       commitState({
         phase,
-        authority: {
-          userId: owner.userId,
-          authenticationGeneration: owner.authenticationGeneration,
-        },
+        authority,
       });
       return true;
     },
-    [commitState, isOwnerCurrent]
+    [commitState, isAuthenticationOwnerCurrent, isOwnerCurrent]
   );
 
   const defer = useCallback(

@@ -10,10 +10,11 @@
  *
  * Run: pnpm vitest run --config vitest.browser.config.ts
  */
-import type { User } from '@agor-live/client';
+import { type BoardID, boardPath, type User } from '@agor-live/client';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { theme as antdTheme, ConfigProvider } from 'antd';
 import { type ComponentProps, useEffect, useState } from 'react';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useOnboardingLifecycle } from '../../hooks/useOnboardingLifecycle';
 import { EMPTY_MAPS } from '../../store/agorMaps';
@@ -89,9 +90,13 @@ afterEach(() => {
 });
 
 describe('OnboardingWizard layout (real browser)', () => {
-  it('closes once after skip-all completion and never reopens from a stale user gate', async () => {
+  it('closes once and opens the created board when realtime completion wins the PATCH race', async () => {
     const user = makeUser();
     const transitions: boolean[] = [];
+    let resolveCompletionWrite!: () => void;
+    const completionWrite = new Promise<void>((resolve) => {
+      resolveCompletionWrite = resolve;
+    });
     const boardsService = {
       create: vi.fn(async (data: { board_id?: string }) => ({
         board_id: data.board_id,
@@ -108,10 +113,12 @@ describe('OnboardingWizard layout (real browser)', () => {
       }),
     };
     const onUpdateUser = vi.fn(async () => undefined);
-    const completionWrites = vi.fn(async () => undefined);
+    const completionWrites = vi.fn(() => completionWrite);
 
     function Harness() {
       const [directoryUser, setDirectoryUser] = useState(user);
+      const navigate = useNavigate();
+      const location = useLocation();
       const lifecycle = useOnboardingLifecycle({
         userId: user.user_id,
         authenticationGeneration: 1,
@@ -136,15 +143,26 @@ describe('OnboardingWizard layout (real browser)', () => {
           >
             Publish stale incomplete user
           </button>
+          <button
+            type="button"
+            onClick={() => setDirectoryUser({ ...user, onboarding_completed: true })}
+          >
+            Publish completed user
+          </button>
+          <output aria-label="Current path">{location.pathname}</output>
           <OnboardingWizard
             open={lifecycle.open}
             isCurrent={() => !!owner && lifecycle.isOwnerCurrent(owner)}
             user={user}
             client={client as never}
             onUpdateUser={onUpdateUser}
-            onComplete={async () => {
+            onComplete={async (result) => {
               await completionWrites();
-              setDirectoryUser({ ...user, onboarding_completed: true });
+              // Mirrors App's post-commit sequence: realtime may have already
+              // closed the automatic wizard before the PATCH promise resolves.
+              if (owner && lifecycle.complete(owner)) {
+                navigate(boardPath(result.boardId as BoardID));
+              }
             }}
             onDismiss={() => {
               if (owner) lifecycle.defer(owner);
@@ -156,7 +174,9 @@ describe('OnboardingWizard layout (real browser)', () => {
 
     render(
       <ConfigProvider theme={{ algorithm: antdTheme.darkAlgorithm, token: { motion: false } }}>
-        <Harness />
+        <MemoryRouter initialEntries={['/']}>
+          <Harness />
+        </MemoryRouter>
       </ConfigProvider>
     );
     await screen.findByText(/what do you want to get done/i);
@@ -173,7 +193,16 @@ describe('OnboardingWizard layout (real browser)', () => {
     expect(closeRect.bottom).toBeLessThanOrEqual(window.innerHeight);
     fireEvent.click(screen.getByText(/open my board/i).closest('button')!);
 
+    await waitFor(() => expect(completionWrites).toHaveBeenCalledTimes(1));
+    const createdBoardId = boardsService.create.mock.calls[0][0].board_id as BoardID;
+    expect(screen.getByLabelText('Current path')).toHaveTextContent('/');
+    fireEvent.click(screen.getByRole('button', { name: 'Publish completed user' }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    act(() => resolveCompletionWrite());
+    await waitFor(() =>
+      expect(screen.getByLabelText('Current path')).toHaveTextContent(boardPath(createdBoardId))
+    );
+
     fireEvent.click(screen.getByRole('button', { name: 'Publish stale incomplete user' }));
     await nextFrame();
     await nextFrame();

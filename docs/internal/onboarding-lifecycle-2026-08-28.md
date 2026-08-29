@@ -77,16 +77,21 @@ observation never starts a second provisioning chain. Dismiss, identity
 replacement, and remount fence late continuations, while deferral retains the
 candidate ID. A retry reuses the saved board/branch/session IDs.
 
-Completion becomes terminal immediately after the durable self-patch and
-navigation. The auth refresh is best-effort and runs only after close; failure
-shows a reload warning instead of converting success into an error. Dismissal
-becomes terminal synchronously, then writes `preferences.onboarding.deferredAt`
-from the latest user snapshot. It never sets `onboarding_completed`. Failure to
-persist deferral is visible, but cannot reopen the modal in the same authority
-generation. X/Escape work on every step and throughout credential saves, board
-creation, progress persistence, and cancellable provisioning. Dismissal waits
-for any already-issued wizard/completion preference write before its latest-user
-read so a stale whole-preferences patch cannot erase completion or deferral.
+Completion becomes terminal immediately after the durable self-patch, before
+navigation. The PATCH's realtime user event is allowed to win that race: a
+same-authority `completed` terminal acknowledgement is idempotent, so the
+completion continuation still navigates to its created board after the PATCH
+promise resolves. A `deferred` terminal state is deliberately not interchangeable
+with completion, so X/Escape during that write still suppresses navigation. The
+auth refresh is best-effort and runs only after close/navigation; failure shows
+a reload warning instead of converting success into an error. Dismissal becomes
+terminal synchronously, then writes `preferences.onboarding.deferredAt` from the
+latest user snapshot. It never sets `onboarding_completed`. Failure to persist
+deferral is visible, but cannot reopen the modal in the same authority generation.
+X/Escape work on every step and throughout credential saves, board creation,
+progress persistence, and cancellable provisioning. Dismissal waits for any
+already-issued wizard/completion preference write before its latest-user read so
+a stale whole-preferences patch cannot erase completion or deferral.
 
 ## Deterministic interaction matrix
 
@@ -94,23 +99,23 @@ Expected transition count is one open and one terminal close (`false, true,
 false`) per automatic authority generation. The completion patch count is at
 most one. Resource counts below are per completed onboarding.
 
-| Axis                                  | Cases exercised/reasoned                                                              | Expected result and writes                                                                                                                                                      |
-| ------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Goals                                 | blank/skipped, one, two; back then change                                             | Same lifecycle. Progress may be patched per navigation; completion merges the latest preferences.                                                                               |
-| Teammate                              | blank/skipped; name without template; selected template; stale template ID            | Blank creates one board and no teammate. A valid name creates/discovers at most one branch/session. A stale ID is a visible validation error with zero final writes.            |
-| AI                                    | skipped; selected/authenticated; selected/unverified; auth/save error                 | Skip and authenticated selection can finish. Invalid/unverified state stays recoverable. Credential failure is visible and dismissible.                                         |
-| Final success                         | any skip/selection combination                                                        | One board create or reuse; one progress patch; one completion patch; zero or one discovered/created branch and session; one terminal close; no reopen with stale auth data.     |
-| Validation/progress failure           | invalid template, board create rejection/ambiguous response, progress patch rejection | No completion marker. Error remains visible; retry or X/Escape works. The client-generated board ID is retained/discovered rather than duplicated.                              |
-| Partial teammate provisioning failure | repo unavailable, branch/session failure                                              | Existing best-effort warning remains. Completion can commit once because the wizard is optional; retained IDs prevent duplicate retries.                                        |
-| Completion failure                    | latest-user or completion patch rejects                                               | No terminal completion. Error and retry remain; X/Escape defers without lying about completion.                                                                                 |
-| Slow completion / late resolution     | parent completion exceeds 45 s                                                        | A warning appears, X/Escape remain available, and the primary action stays disabled until the one attempt settles. Retry follows only a real rejection.                         |
-| Duplicate/double submit               | two same-turn clicks                                                                  | Single-flight ref admits one create/progress/completion chain.                                                                                                                  |
-| X / Escape                            | every step and every in-flight/error state                                            | Synchronous terminal defer and one sequenced preferences get/patch. Candidate progress is retained; no reopen. Mask click remains disabled.                                     |
-| Browser back / route change           | before/during/after finish                                                            | Route/readiness churn never reasserts a terminal state. Back does not own the modal.                                                                                            |
-| Refresh/remount                       | fresh, partially saved, deferred, completed                                           | Fresh/partial resumes; deferred/completed stays closed; Settings Resume preserves progress and Restart clears it.                                                               |
-| Realtime user/role update             | preferences/completion churn; member/admin/viewer transitions                         | A same-user directory `true` is close-only, so another tab closes the wizard; directory `false` never opens it. Viewer cannot provision. Identity replacement retires old work. |
-| Viewports                             | desktop, phone, tablet, 667x375 short landscape                                       | Browser project runs the exact skip/final/stale-auth sequence in all configured viewports. X remains reachable.                                                                 |
-| Identity                              | local or external identity                                                            | Preferences and completion remain Agor-owned. External claim-owned identity/role/password fields are unchanged.                                                                 |
+| Axis                                  | Cases exercised/reasoned                                                              | Expected result and writes                                                                                                                                                                                                                           |
+| ------------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Goals                                 | blank/skipped, one, two; back then change                                             | Same lifecycle. Progress may be patched per navigation; completion merges the latest preferences.                                                                                                                                                    |
+| Teammate                              | blank/skipped; name without template; selected template; stale template ID            | Blank creates one board and no teammate. A valid name creates/discovers at most one branch/session. A stale ID is a visible validation error with zero final writes.                                                                                 |
+| AI                                    | skipped; selected/authenticated; selected/unverified; auth/save error                 | Skip and authenticated selection can finish. Invalid/unverified state stays recoverable. Credential failure is visible and dismissible.                                                                                                              |
+| Final success                         | any skip/selection combination                                                        | One board create or reuse; one progress patch; one completion patch; zero or one discovered/created branch and session; one terminal close; navigate to that session/board even if realtime completion closes first; no reopen with stale auth data. |
+| Validation/progress failure           | invalid template, board create rejection/ambiguous response, progress patch rejection | No completion marker. Error remains visible; retry or X/Escape works. The client-generated board ID is retained/discovered rather than duplicated.                                                                                                   |
+| Partial teammate provisioning failure | repo unavailable, branch/session failure                                              | Existing best-effort warning remains. Completion can commit once because the wizard is optional; retained IDs prevent duplicate retries.                                                                                                             |
+| Completion failure                    | latest-user or completion patch rejects                                               | No terminal completion. Error and retry remain; X/Escape defers without lying about completion.                                                                                                                                                      |
+| Slow completion / late resolution     | parent completion exceeds 45 s                                                        | A warning appears, X/Escape remain available, and the primary action stays disabled until the one attempt settles. Retry follows only a real rejection.                                                                                              |
+| Duplicate/double submit               | two same-turn clicks                                                                  | Single-flight ref admits one create/progress/completion chain.                                                                                                                                                                                       |
+| X / Escape                            | every step and every in-flight/error state                                            | Synchronous terminal defer and one sequenced preferences get/patch. Candidate progress is retained; no reopen. Mask click remains disabled.                                                                                                          |
+| Browser back / route change           | before/during/after finish                                                            | Route/readiness churn never reasserts a terminal state. Back does not own the modal.                                                                                                                                                                 |
+| Refresh/remount                       | fresh, partially saved, deferred, completed                                           | Fresh/partial resumes; deferred/completed stays closed; Settings Resume preserves progress and Restart clears it.                                                                                                                                    |
+| Realtime user/role update             | preferences/completion churn; member/admin/viewer transitions                         | A same-user directory `true` is close-only, so another tab closes the wizard; directory `false` never opens it. Viewer cannot provision. Identity replacement retires old work.                                                                      |
+| Viewports                             | desktop, phone, tablet, 667x375 short landscape                                       | Browser project runs the exact skip/final/stale-auth sequence in all configured viewports. X remains reachable.                                                                                                                                      |
+| Identity                              | local or external identity                                                            | Preferences and completion remain Agor-owned. External claim-owned identity/role/password fields are unchanged.                                                                                                                                      |
 
 ## Authority, tenancy, and idempotency
 
@@ -141,7 +146,9 @@ duplicate-create windows.
 - Real Chromium browser projects: 60/60 passed across the configured desktop,
   phone, tablet, and short-landscape viewports. The skip-all/stale-auth case
   asserted exact modal transitions `[false, true, false]`, one create, one
-  progress write, one completion write, no reopen, and an on-screen X.
+  progress write, one completion write, no reopen, an on-screen X, and navigation
+  to the created board when the realtime completion event arrives before the
+  completion PATCH promise settles.
 - Isolated SQLite `dbTest`: 57/57 board and user-security tests passed, including
   rejection of client-supplied UUIDv4 board IDs and external identity
   persistence of deferral with `onboarding_completed === false`.
@@ -167,12 +174,13 @@ Rollback is the code revert; existing `deferredAt` is an additive preferences
 field ignored by older clients. If rolling back, remove that marker for users
 who should see the older automatic wizard again.
 
+Product decision recorded: a completely skipped flow still creates a board, and
+the final “Open my board” action must navigate to that newly created board.
+
 Product decisions still needed from Max:
 
 1. Should “finish later” suppress onboarding indefinitely (the implemented,
    safety-first behavior) or should a separate, explicitly designed reminder
    reopen it after a defined interval?
-2. Should an entirely blank flow continue to create a board, as current product
-   copy promises, or offer a no-provision exit distinct from X?
-3. Is 45 seconds the desired “taking longer than expected” warning threshold,
+2. Is 45 seconds the desired “taking longer than expected” warning threshold,
    or should telemetry support a different threshold before it becomes configurable?
