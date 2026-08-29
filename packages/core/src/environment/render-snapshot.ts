@@ -14,6 +14,7 @@
  * See docs/designs/env-command-variants.md.
  */
 
+import { extractGitHubSlugFromUrl } from '../config/repo-reference';
 import { resolveVariantOrThrow } from '../config/variant-resolver';
 import { buildBranchContext, renderTemplate } from '../templates/handlebars-helpers';
 import type { RepoEnvironment } from '../types/branch';
@@ -44,6 +45,8 @@ export interface RenderedEnvironmentSnapshot {
  */
 export interface RenderRepoInput {
   slug?: string;
+  /** Sanitized registered git remote; only derived identities enter templates. */
+  remote_url?: string;
   environment?: RepoEnvironment;
 }
 
@@ -139,6 +142,7 @@ export function renderBranchSnapshot(
     ref: branch.ref,
     path: branch.path,
     repo_slug: repo.slug,
+    repo_github_slug: repo.remote_url ? extractGitHubSlugFromUrl(repo.remote_url) : undefined,
     custom_context: branch.custom_context,
     host_ip_address: branch.host_ip_address,
     base_ref: branch.base_ref,
