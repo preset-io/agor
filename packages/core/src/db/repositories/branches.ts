@@ -686,6 +686,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         options?.invalidateEnvironmentObservation === true ||
         currentStatus !== mergedStatus ||
         current.health_check_url !== merged.health_check_url ||
+        current.environment_instance?.health_url !== merged.environment_instance?.health_url ||
         Boolean(current.archived) !== Boolean(merged.archived);
       const environmentCoordinationUpdate = invalidatesEnvironmentObservation
         ? {

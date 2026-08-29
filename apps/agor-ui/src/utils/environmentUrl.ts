@@ -28,3 +28,11 @@ export function getEnvironmentAccessUrl(branch: Branch): string | undefined {
     safeHttpUrl(branch.app_url, true)
   );
 }
+
+/** Prefer the health URL reported by the latest Start over static configuration. */
+export function getEnvironmentHealthUrl(branch: Branch): string | undefined {
+  return (
+    safeHttpUrl(branch.environment_instance?.health_url) ??
+    safeHttpUrl(branch.health_check_url, true)
+  );
+}

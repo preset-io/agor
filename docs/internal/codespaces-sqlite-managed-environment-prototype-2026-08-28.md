@@ -38,7 +38,7 @@ operation lease. Do not use a repository shell script as the long-term security 
 | Item                                                      | Exact revision/status on 2026-08-28                                                                                       |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `preset-io/agor` `main` at task start                     | `f1ba9474846c703639db71cb5a8cea1edfa73cf1`                                                                                |
-| `preset-io/agor` current `main` at final recheck          | `200eefb66e0d1d4cc6b439536e7a0010e79d9ac5` (one later, unrelated PostgreSQL migration fix)                                |
+| `preset-io/agor` current `main` at final recheck          | `92ebbd443097bf78fbe1415dcac7db1b1bfaa0e3` (2026-08-29; branch intentionally not rebased during the bounded prototype)    |
 | This branch at task start                                 | `f1ba9474846c703639db71cb5a8cea1edfa73cf1`, branch `codespaces-sqlite-variant`                                            |
 | PR #2304                                                  | draft/open, head `1608be0d6d19f0ee7edc0fbee01d44954a6918e9`, 40 commits, 105 changed files, +6072/-57, merge status dirty |
 | PR #2304 original design baseline                         | `47882bd9` (recorded in its design note, 2026-07-30)                                                                      |
@@ -143,14 +143,18 @@ The bounded implementation adds only the pieces needed to make a local trial obs
 
 - `branch.id` and `branch.ref` template values plus `{{shellQuote ...}}`; lifecycle arguments remain
   discrete after the shell parses the rendered command.
-- One exact `AGOR_ENVIRONMENT_RESULT=<JSON>` line with only validated HTTP(S) `access_urls`. It is
-  removed from persisted command output. This is intentionally smaller than PR #2304 facts and is
-  not a provider binding or credential channel.
+- One exact `AGOR_ENVIRONMENT_RESULT={"app":"...","health":"..."}` line. Both URL keys are
+  optional, `{}` is valid, and unknown fields or credential-bearing URLs fail closed. The same
+  object is accepted from JSON Start webhooks. The shell control line is withheld from operational
+  and persisted command output. This is intentionally smaller than PR #2304 facts and is not a
+  provider binding or credential channel.
 - `EnvironmentPill` and `BranchHeaderPill` prefer validated runtime access URLs over the rendered
   static URL.
-- A successful executor Start with no static health URL becomes `running`. The launcher has already
+- A successful Start with no static or returned health URL becomes `running` with health `unknown`
+  and a question-mark UI state. The launcher has already
   checked provider `Available`, registered ports 3000/5000, and the daemon `/health` over authenticated
-  `gh codespace ssh`. There is no continuous health monitor after that command exits.
+  `gh codespace ssh`. If the health port is public, the launcher can return its current URL and
+  Agor's normal continuous monitor takes over through a public-only, DNS-pinned fetch path.
 - A repository devcontainer at `.devcontainer/agor-managed/devcontainer.json` uses Docker-in-Docker,
   forwards private ports 3000/5000, and starts the normal SQLite Compose project on every Codespace
   start.
@@ -413,9 +417,10 @@ Codespaces clone from GitHub, not from `~/.agor/worktrees`. For v0:
 
 A shell bridge can be proven on a trusted single-daemon installation if it receives a per-user
 token through the prepared environment and passes all repository/ref values as structured data to
-a non-shell API client. It must never print raw child output. Even then, current Agor cannot
-atomically fence the executor callback or surface the dynamic App URL in the UI. Treat this only as
-a developer experiment, not the shipping backend.
+a non-shell API client. It must never print raw child output. This branch surfaces the dynamic App
+URL and fences late shell-Start publication with an opaque attempt ID, but it does not make remote
+provider mutation and lifecycle state one atomic transaction. Treat this only as a developer
+experiment, not the shipping backend.
 
 ### Cloud/HA
 
@@ -445,8 +450,9 @@ Use only a repository/ref whose Codespace can be safely created and deleted:
 3. Reload/import this branch's `.agor.yml`, stop any current preview, and explicitly re-render the
    branch with `codespaces-sqlite`. The existing branch remains on `sqlite` until that opt-in.
 4. Press Play once. Cold Docker image build and Agor startup occur in the Codespace and can take up
-   to the launcher's ten-minute deadline. The App pill appears only after current private port
-   metadata and remote `/health` succeed.
+   to the launcher's ten-minute deadline. The App pill initially links to the Codespaces dashboard,
+   then switches to the current private forwarded-port URL after provider and remote `/health`
+   readiness succeed.
 5. Open App while logged into GitHub as the Codespace creator. If GitHub's private-port auth does
    not work for the split UI/daemon origins, stop and Nuke; do not switch the fixed-admin preview to
    public as a workaround.
@@ -510,10 +516,11 @@ Command run:
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -q scripts/managed-environments/codespaces/test_agor_codespace_launcher.py
 ```
 
-Measured result: **15/15 launcher tests passed in 35 ms**. Combined with the provider-neutral suite,
-the prototype has 31 hermetic lifecycle/security cases. Focused Core, executor, daemon, and UI
-Vitest suites cover command rendering, result parsing/no-health completion, branch dispatch, and
-runtime URL consumption.
+Measured result after the runtime-result implementation: **17/17 launcher tests passed in 38 ms**.
+Combined with the provider-neutral suite, the prototype has 33 hermetic lifecycle/security cases.
+Focused Core, executor, daemon, and UI Vitest suites passed **187/187** cases covering command
+rendering, strict result parsing, health generation fencing, DNS-pinned cancellation, branch
+dispatch, webhook parity, HA health selection, and runtime URL consumption.
 
 The prototype current-attempt callback demonstrates the required boundary but cannot make the
 check and remote API mutation atomic. Only the durable controller operation/lease described above
@@ -532,8 +539,8 @@ can close that race.
    never today's generic GET webhook.
 4. **GitHub user OAuth grant:** minimal permissions, encrypted storage, revoke/reauthorize UX, and
    explicit credential sponsor policy.
-5. **Dynamic result contract:** replace the experimental access-URL-only stdout line with typed,
-   generation-bound provider state, visibility metadata, and attempt-fenced realtime persistence.
+5. **Provider state contract:** keep the implemented `{app?, health?}` lifecycle result small; add a
+   separate typed, generation-bound binding for provider identity/state and visibility metadata.
 6. **Readiness channel:** distinguish GitHub VM state from preview Agor readiness without making a
    private port public.
 7. **Reconciler/cleanup:** retry orphan cleanup, enforce retention, inventory verified bindings,

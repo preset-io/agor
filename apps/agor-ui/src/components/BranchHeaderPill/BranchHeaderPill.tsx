@@ -120,6 +120,7 @@ export function BranchHeaderPill({
   const isStarting = status === 'starting';
   const isStopping = status === 'stopping';
   const canStop = status === 'running' || status === 'starting';
+  const canOpenEnvironment = (isRunning || isStarting) && Boolean(environmentUrl);
   const startDisabled =
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
@@ -203,7 +204,9 @@ export function BranchHeaderPill({
           ? `Unhealthy - ${environmentUrl}${healthMessage}`
           : `Unhealthy${healthMessage}`;
       case 'running':
-        return environmentUrl ? `Running - ${environmentUrl}` : 'Running (no health check)';
+        return environmentUrl
+          ? `Started - ${environmentUrl} (health unavailable${healthMessage})`
+          : `Started (health unavailable${healthMessage})`;
       case 'starting':
         return 'Starting...';
       case 'stopping':
@@ -306,8 +309,8 @@ export function BranchHeaderPill({
         >
           {hasConfig ? (
             <>
-              {/* Env label — clickable to env URL when running, otherwise opens env tab */}
-              {isRunning && environmentUrl ? (
+              {/* Keep a static provider fallback clickable while Start discovers the runtime URL. */}
+              {canOpenEnvironment && environmentUrl ? (
                 <Tooltip title={`${variantPrefix}Open ${environmentUrl}`}>
                   <a
                     href={environmentUrl}

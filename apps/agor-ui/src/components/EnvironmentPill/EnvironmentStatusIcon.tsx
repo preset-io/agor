@@ -2,6 +2,7 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   LoadingOutlined,
+  QuestionCircleOutlined,
   StopOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
@@ -37,7 +38,12 @@ export function EnvironmentStatusIcon({ state, size = 12 }: EnvironmentStatusIco
     case 'unhealthy':
       return <WarningOutlined style={{ color: token.colorWarning, fontSize: size }} />;
     case 'running':
-      return <CheckCircleOutlined style={{ color: token.colorInfo, fontSize: size }} />;
+      return (
+        <QuestionCircleOutlined
+          aria-label="Health unavailable"
+          style={{ color: token.colorInfo, fontSize: size }}
+        />
+      );
     case 'error':
       return <CloseCircleOutlined style={{ color: token.colorError, fontSize: size }} />;
     default:

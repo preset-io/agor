@@ -11,8 +11,9 @@ from agor_codespace_launcher import (
     GitHubCodespacesClient,
     LauncherError,
     StateStore,
-    access_urls,
+    environment_result,
     marker_for,
+    parse_args,
     redact,
     validate_resource,
 )
@@ -109,7 +110,7 @@ class FakeClient:
     def list_ports(self, name):
         return ports(name)
 
-    def remote_health(self, _name, _port):
+    def remote_health(self, _name, _port, _path):
         return True
 
     def creation_logs(self, name):
@@ -141,6 +142,7 @@ class LauncherTests(unittest.TestCase):
             retention_period_minutes=1440,
             app_port=5000,
             health_port=3000,
+            health_path="/health",
             wait_seconds=30,
             sleep=lambda _seconds: None,
             **({"monotonic": monotonic} if monotonic is not None else {}),
@@ -282,22 +284,78 @@ class LauncherTests(unittest.TestCase):
                         marker=marker_for(REPOSITORY, BINDING),
                     )
 
-    def test_dynamic_app_and_editor_urls_come_from_validated_resource(self):
+    def test_dynamic_app_url_comes_from_validated_port_metadata(self):
         existing = resource()
         self.assertEqual(
-            access_urls(existing, ports(existing["name"]), 5000),
-            [
-                {
-                    "name": "App",
-                    "url": f"https://{existing['name']}-5000.app.github.dev",
-                },
-                {"name": "Codespace", "url": existing["web_url"]},
-            ],
+            environment_result(
+                existing,
+                ports(existing["name"]),
+                app_port=5000,
+                health_port=3000,
+                health_path="/health",
+                emit_health="public-only",
+            ),
+            {"app": f"https://{existing['name']}-5000.app.github.dev"},
         )
         bad_ports = ports(existing["name"])
         bad_ports[1]["browseUrl"] = "https://evil.example.test/steal"
         with self.assertRaisesRegex(LauncherError, "safe browse URL"):
-            access_urls(existing, bad_ports, 5000)
+            environment_result(
+                existing,
+                bad_ports,
+                app_port=5000,
+                health_port=3000,
+                health_path="/health",
+                emit_health="public-only",
+            )
+
+    def test_health_url_is_emitted_only_under_the_selected_visibility_policy(self):
+        existing = resource()
+        public_ports = ports(existing["name"])
+        public_ports[0]["visibility"] = "public"
+
+        public_result = environment_result(
+            existing,
+            public_ports,
+            app_port=5000,
+            health_port=3000,
+            health_path="/ready",
+            emit_health="public-only",
+        )
+        self.assertEqual(
+            public_result["health"],
+            f"https://{existing['name']}-3000.app.github.dev/ready",
+        )
+        self.assertNotIn(
+            "health",
+            environment_result(
+                existing,
+                public_ports,
+                app_port=5000,
+                health_port=3000,
+                health_path="/ready",
+                emit_health="never",
+            ),
+        )
+
+    def test_health_path_rejects_urls_queries_and_shell_metacharacter_payloads(self):
+        base = [
+            "start",
+            "--repository",
+            REPOSITORY,
+            "--ref",
+            REF,
+            "--binding",
+            BINDING,
+        ]
+        for value in (
+            "https://evil.test",
+            "//evil.test/path",
+            "/health?token=x",
+            "/health; rm -rf /",
+        ):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                parse_args([*base, "--health-path", value])
 
     def test_preview_readiness_has_a_bounded_timeout(self):
         existing = resource()

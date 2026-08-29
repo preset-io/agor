@@ -283,12 +283,12 @@ class GitHubCodespacesClient:
             raise LauncherError("GitHub CLI did not return a port list")
         return [item for item in ports if isinstance(item, dict)]
 
-    def remote_health(self, name: str, health_port: int) -> bool:
-        # The command is fixed except for a validated integer and never invokes
-        # a remote shell with repository/ref/user-controlled text.
-        command = (
-            f"curl -fsS --max-time 5 http://127.0.0.1:{health_port}/health >/dev/null"
-        )
+    def remote_health(self, name: str, health_port: int, health_path: str) -> bool:
+        # The URL is assembled only from a validated integer and path, then
+        # quoted as one remote-shell argument. Repository/ref text never enters
+        # this command.
+        health_url = f"http://127.0.0.1:{health_port}{health_path}"
+        command = f"curl -fsS --max-time 5 {shlex.quote(health_url)} >/dev/null"
         result = self._run(
             ["gh", "codespace", "ssh", "-c", name, "--", command],
             timeout=self._call_timeout,
@@ -455,6 +455,7 @@ class CodespaceController:
         retention_period_minutes: int,
         app_port: int,
         health_port: int,
+        health_path: str,
         wait_seconds: int,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
@@ -470,6 +471,7 @@ class CodespaceController:
         self.retention_period_minutes = retention_period_minutes
         self.app_port = app_port
         self.health_port = health_port
+        self.health_path = health_path
         self.wait_seconds = wait_seconds
         self.sleep = sleep
         self.monotonic = monotonic
@@ -612,7 +614,9 @@ class CodespaceController:
                 missing = sorted(expected_ports - actual_ports)
                 if missing:
                     last_error = f"forwarded ports not registered: {missing}"
-                elif self.client.remote_health(name, self.health_port):
+                elif self.client.remote_health(
+                    name, self.health_port, self.health_path
+                ):
                     return ports
                 else:
                     last_error = "remote Agor /health is not ready"
@@ -718,8 +722,10 @@ class CodespaceController:
                 f"Codespace is not available (state: {resource.get('state')})"
             )
         ports = self.client.list_ports(resource_name(resource))
-        if not self.client.remote_health(resource_name(resource), self.health_port):
-            raise LauncherError("remote Agor /health is unhealthy")
+        if not self.client.remote_health(
+            resource_name(resource), self.health_port, self.health_path
+        ):
+            raise LauncherError(f"remote Agor {self.health_path} is unhealthy")
         return resource, ports
 
     def logs(self) -> str:
@@ -766,27 +772,45 @@ def validated_http_url(value: Any, *, codespace_name: str | None = None) -> str 
     return value
 
 
-def access_urls(
-    resource: Mapping[str, Any], ports: Sequence[Mapping[str, Any]], app_port: int
-) -> list[dict[str, str]]:
+def port_url(
+    resource: Mapping[str, Any], ports: Sequence[Mapping[str, Any]], port: int
+) -> str:
     name = resource_name(resource)
-    app = next(
+    url = next(
         (
             validated_http_url(item.get("browseUrl"), codespace_name=name)
             for item in ports
-            if item.get("sourcePort") == app_port
+            if item.get("sourcePort") == port
         ),
         None,
     )
-    editor = validated_http_url(resource.get("web_url"), codespace_name=name)
-    if not app:
-        raise LauncherError(
-            f"GitHub did not report a safe browse URL for port {app_port}"
+    if not url:
+        raise LauncherError(f"GitHub did not report a safe browse URL for port {port}")
+    return url
+
+
+def environment_result(
+    resource: Mapping[str, Any],
+    ports: Sequence[Mapping[str, Any]],
+    *,
+    app_port: int,
+    health_port: int,
+    health_path: str,
+    emit_health: str,
+) -> dict[str, str]:
+    result = {"app": port_url(resource, ports, app_port)}
+    health_metadata = next(
+        (item for item in ports if item.get("sourcePort") == health_port), None
+    )
+    visibility = str((health_metadata or {}).get("visibility") or "").lower()
+    should_emit_health = emit_health == "always" or (
+        emit_health == "public-only" and visibility == "public"
+    )
+    if should_emit_health:
+        result["health"] = (
+            port_url(resource, ports, health_port).rstrip("/") + health_path
         )
-    urls = [{"name": "App", "url": app}]
-    if editor:
-        urls.append({"name": "Codespace", "url": editor})
-    return urls
+    return result
 
 
 def public_summary(
@@ -800,14 +824,12 @@ def public_summary(
             "repository": (resource.get("repository") or {}).get("full_name"),
             "ref": (resource.get("git_status") or {}).get("ref"),
             "state": resource.get("state"),
-            "web_url": resource.get("web_url"),
         },
         "ports": [
             {
                 "sourcePort": item.get("sourcePort"),
                 "visibility": item.get("visibility"),
                 "label": item.get("label"),
-                "browseUrl": item.get("browseUrl"),
             }
             for item in ports
         ],
@@ -828,6 +850,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--retention-period-minutes", type=int, default=1440)
     parser.add_argument("--app-port", type=int, default=5000)
     parser.add_argument("--health-port", type=int, default=3000)
+    parser.add_argument("--health-path", default="/health")
+    parser.add_argument(
+        "--emit-health",
+        choices=("never", "public-only", "always"),
+        default="public-only",
+        help="publish a continuous health URL only under the selected port-visibility policy",
+    )
     parser.add_argument("--wait-seconds", type=int, default=600)
     parser.add_argument("--provider-call-timeout", type=int, default=30)
     parser.add_argument(
@@ -859,6 +888,20 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     for field in ("app_port", "health_port"):
         if not 1 <= getattr(args, field) <= 65_535:
             parser.error(f"--{field.replace('_', '-')} must be a valid TCP port")
+    health_path = urllib.parse.urlsplit(args.health_path)
+    if (
+        len(args.health_path) > 1_024
+        or not args.health_path.startswith("/")
+        or args.health_path.startswith("//")
+        or not re.fullmatch(r"/[A-Za-z0-9._~%/-]*", args.health_path)
+        or health_path.scheme
+        or health_path.netloc
+        or health_path.query
+        or health_path.fragment
+    ):
+        parser.error(
+            "--health-path must be an absolute URL path without query or fragment"
+        )
     if not 30 <= args.wait_seconds <= 1_800:
         parser.error("--wait-seconds must be between 30 and 1800")
     if not 5 <= args.provider_call_timeout <= 120:
@@ -881,6 +924,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         retention_period_minutes=args.retention_period_minutes,
         app_port=args.app_port,
         health_port=args.health_port,
+        health_path=args.health_path,
         wait_seconds=args.wait_seconds,
     )
 
@@ -892,7 +936,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(
                     RESULT_PREFIX
                     + json.dumps(
-                        {"access_urls": access_urls(resource, ports, args.app_port)},
+                        environment_result(
+                            resource,
+                            ports,
+                            app_port=args.app_port,
+                            health_port=args.health_port,
+                            health_path=args.health_path,
+                            emit_health=args.emit_health,
+                        ),
                         separators=(",", ":"),
                     )
                 )

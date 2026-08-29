@@ -97,6 +97,7 @@ environment:
         --binding {{shellQuote branch.id}}
         --devcontainer-path .devcontainer/agor-managed/devcontainer.json
         --idle-timeout-minutes 30 --retention-period-minutes 1440
+        --app-port 5000 --health-port 3000 --health-path /health --emit-health public-only
       stop: >-
         python3 scripts/managed-environments/codespaces/agor-codespace-launcher.py stop
         --repository {{shellQuote repo.slug}} --ref {{shellQuote branch.ref}}
@@ -109,6 +110,7 @@ environment:
         python3 scripts/managed-environments/codespaces/agor-codespace-launcher.py logs
         --repository {{shellQuote repo.slug}} --ref {{shellQuote branch.ref}}
         --binding {{shellQuote branch.id}}
+      app: https://github.com/codespaces
       description: >-
         EXPERIMENTAL, opt-in, single-GitHub-actor Codespaces preview. The remote Agor daemon uses
         SQLite; GitHub-private ports require the creator's login. Requires gh Codespaces access and

@@ -12,11 +12,13 @@ import {
   MinusCircleOutlined,
   PlayCircleOutlined,
   PoweroffOutlined,
+  QuestionCircleOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import type { GlobalToken } from 'antd';
-import { Badge, Button, Space, Tooltip } from 'antd';
+import { Button, Space, Tooltip } from 'antd';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
+import { getEnvironmentHealthUrl } from '../../utils/environmentUrl';
 
 /** Render environment status icon for a branch */
 export function renderEnvStatusIcon(branch: Branch, token: GlobalToken) {
@@ -67,8 +69,8 @@ export function renderEnvStatusIcon(branch: Branch, token: GlobalToken) {
       );
     }
     return (
-      <Tooltip title="Running">
-        <Badge status="processing" />
+      <Tooltip title="Started; health unavailable">
+        <QuestionCircleOutlined style={{ color: token.colorInfo }} />
       </Tooltip>
     );
   }
@@ -98,7 +100,7 @@ export function renderEnvCell(
   // (rendered at branch creation, then user-editable via the branch
   // modal) rather than re-rendering the repo template at click time. This
   // honours user edits and avoids a daemon round-trip.
-  const healthUrl = branch.health_check_url;
+  const healthUrl = getEnvironmentHealthUrl(branch);
 
   return (
     <Space size={4}>

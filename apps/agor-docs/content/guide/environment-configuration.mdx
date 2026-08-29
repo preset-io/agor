@@ -141,6 +141,40 @@ always URL templates, not shell commands.
 
 `nuke`, `logs`, `health`, and `app` are optional. The corresponding UI buttons simply hide or no-op when absent.
 
+### Runtime URLs from Start
+
+Some providers choose a different URL each time they create or resume an
+environment. A successful `start` may therefore return this deliberately tiny,
+optional JSON object:
+
+```json
+{"app":"https://preview.example.test","health":"https://preview.example.test/health"}
+```
+
+Both keys are optional, so `{}` is valid. Unknown keys, non-HTTP(S) URLs,
+embedded credentials, query strings, and fragments are rejected. Omitted keys
+fall back to the rendered static `app` or `health` value. Runtime values last
+until the next Start/Stop/Nuke lifecycle boundary; Start is the reconciliation
+point rather than a permanent provider-name lookup.
+
+- A shell Start emits exactly one line:
+  `AGOR_ENVIRONMENT_RESULT={"app":"https://...","health":"https://..."}`.
+  Agor removes that control line from captured command output.
+- A webhook Start returns the same object with an `application/json` (or
+  `application/*+json`) content type. Non-JSON webhook bodies retain their
+  legacy meaning and are ignored as lifecycle results.
+
+`app` is an optimistic browser link and may point to an authenticated/private
+provider page. `health` is different: the daemon polls it continuously. A
+runtime health URL must resolve only to public IP space, is connected through a
+DNS-pinned no-redirect request, and should be returned only when the endpoint is
+actually reachable by the Agor daemon. Static operator-authored health URLs may
+still target localhost or private infrastructure.
+
+When Start completes without either a runtime or static health URL, the
+environment becomes **Started; health unavailable** rather than remaining on a
+spinner or claiming to be healthy. The App link remains available when known.
+
 ### `extends` (single-level only)
 
 A variant may extend **one** base variant. The base variant itself must **not** have an `extends` key. Chains (`full → postgres → lean`) are rejected at save time with:

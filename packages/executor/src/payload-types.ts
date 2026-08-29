@@ -609,6 +609,9 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
 
       /** Static health URL rendered by the daemon/branch snapshot. */
       healthCheckUrl: z.string().optional(),
+
+      /** Opaque daemon-issued ID that fences late Start callbacks. */
+      lifecycleAttemptId: z.string().uuid().optional(),
     })
     .superRefine((params, ctx) => {
       if ((params.action === 'start' || params.action === 'restart') && !params.startCommand) {

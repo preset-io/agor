@@ -127,6 +127,24 @@ describe('EnvironmentPill', () => {
     );
 
     expect(screen.getByRole('link')).toHaveAttribute('href', 'https://dynamic.example.test');
+    expect(screen.getByLabelText('Health unavailable')).toBeInTheDocument();
+  });
+
+  it('links to the static provider fallback while Start is still discovering runtime URLs', () => {
+    render(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={
+          {
+            ...branch,
+            app_url: 'https://github.com/codespaces',
+            environment_instance: { status: 'starting' },
+          } as Branch
+        }
+      />
+    );
+
+    expect(screen.getByRole('link')).toHaveAttribute('href', 'https://github.com/codespaces');
   });
 
   it('shows a pointer only for an enabled configure control', () => {
