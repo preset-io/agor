@@ -421,6 +421,51 @@ describe('stopSessionPreserveQueue', () => {
     expect(requestTermination).not.toHaveBeenCalled();
   });
 
+  it('does not describe a terminal settlement race as a still-stopping unverified result', async () => {
+    const sessionId = 'session-terminal-race';
+    const runningTask = {
+      task_id: 'task-terminal-race',
+      session_id: sessionId,
+      status: 'running',
+      created_at: '2026-01-01T00:00:00.000Z',
+    };
+    const requestTermination = vi.fn().mockResolvedValue({
+      status: 'unverified',
+      task: { ...runningTask, status: 'stopped' },
+      reason: 'Containment could not be verified after the Task settled.',
+    });
+
+    await expect(
+      stopSessionPreserveQueue(
+        {
+          app: {} as never,
+          taskRepo: { findQueued: vi.fn().mockResolvedValue([]) } as never,
+          sessionsService: {
+            get: vi.fn().mockResolvedValue({
+              session_id: sessionId,
+              agentic_tool: 'codex',
+              status: 'running',
+              ready_for_prompt: false,
+              tasks: [runningTask.task_id],
+            }),
+            patch: vi.fn(),
+          } as never,
+          findActiveTasks: vi.fn().mockResolvedValue([runningTask]) as never,
+          requestTermination: requestTermination as never,
+          runInTenantDatabaseScope,
+          runInFreshTenantWriteDatabase,
+        },
+        sessionId as never
+      )
+    ).resolves.toEqual({
+      success: false,
+      outcome: 'condition_changed',
+      reason: 'Containment could not be verified after the Task settled.',
+      stoppedTaskId: runningTask.task_id,
+      queuedTasksPreserved: 0,
+    });
+  });
+
   it('does not silently report success if the session idle patch fails after stopping the task', async () => {
     const sessionId = 'session-patch-fails';
     const runningTask = {

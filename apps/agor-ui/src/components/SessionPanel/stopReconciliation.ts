@@ -1,4 +1,11 @@
-import type { AgorClient, SessionID, SessionStopResult, Task, TaskID } from '@agor-live/client';
+import type {
+  AgorClient,
+  SessionID,
+  SessionStopRequest,
+  SessionStopResult,
+  Task,
+  TaskID,
+} from '@agor-live/client';
 import { isTerminalTaskStatus, TaskStatus } from '@agor-live/client';
 
 export type StopTransportReconciliation =
@@ -73,9 +80,10 @@ export function requestSessionStop(
       // error-aware acknowledgement callback. This also lets Socket.IO retire
       // the callback if the server never acknowledges.
       socket.timeout(timeoutMs);
+      const request: SessionStopRequest = { expected_task_id: expectedTaskId };
       void client
         .service(`sessions/${sessionId}/stop`)
-        .create({ expected_task_id: expectedTaskId })
+        .create(request)
         .then(
           (result) => finish(() => resolve(result as SessionStopResult)),
           (error) => {

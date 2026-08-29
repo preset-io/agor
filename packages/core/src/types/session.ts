@@ -49,6 +49,25 @@ export const SESSION_STOP_OUTCOMES = [
 
 export type SessionStopOutcome = (typeof SESSION_STOP_OUTCOMES)[number];
 
+/** Authenticated Session Stop endpoint request. */
+export type SessionStopRequest =
+  | {
+      force_unverified?: false;
+      reason?: string;
+      expected_task_id?: TaskID;
+      task_id?: never;
+      termination_requested_at?: never;
+      confirmation?: never;
+    }
+  | {
+      force_unverified: true;
+      task_id: TaskID;
+      termination_requested_at: string;
+      confirmation: string;
+      reason?: never;
+      expected_task_id?: never;
+    };
+
 interface SessionStopResultBase {
   reason?: string;
   stoppedTaskId?: TaskID;

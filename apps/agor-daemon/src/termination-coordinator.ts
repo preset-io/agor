@@ -438,13 +438,17 @@ export async function beginExecutorTermination(input: TerminationInput): Promise
   return coordination.task;
 }
 
+export type ForceFailUnverifiedResult =
+  | { outcome: 'force_failed'; task: Task }
+  | { outcome: 'already_terminal'; task: Task };
+
 export async function forceFailUnverifiedTask(input: {
   app: Application;
   taskId: TaskID | string;
   terminationRequestedAt: string;
   confirmation: string;
   params?: Params;
-}): Promise<Task> {
+}): Promise<ForceFailUnverifiedResult> {
   const tasks = input.app.service('tasks') as unknown as TasksServiceImpl;
   const current = await tasks.get(input.taskId, input.params);
   if (input.confirmation !== 'STOP') {
@@ -460,9 +464,6 @@ export async function forceFailUnverifiedTask(input: {
       'The Task termination state changed. Review the current Task before force-failing.'
     );
   }
-  console.warn(
-    `[SECURITY] Force-failing Task ${shortId(current.task_id)} without verified executor termination`
-  );
   const settlement = await tasks.settleTermination(
     {
       taskId: current.task_id,
@@ -472,9 +473,19 @@ export async function forceFailUnverifiedTask(input: {
     },
     { ...internalParams(input.params), suppressTerminalQueueProcessing: true } as Params
   );
-  if (settlement.outcome !== 'transitioned' && settlement.outcome !== 'terminal') {
+  if (settlement.outcome === 'terminal') {
+    untrackExecutorProcess(settlement.task.session_id, settlement.task.task_id, input.app);
+    return { outcome: 'already_terminal', task: settlement.task };
+  }
+  if (settlement.outcome !== 'transitioned') {
     throw new Conflict('Task termination state changed before force-fail could be applied.');
   }
+  if (settlement.task.status !== TaskStatus.FAILED) {
+    throw new Conflict('Task termination state changed before force-fail could be applied.');
+  }
+  console.warn(
+    `[SECURITY] Force-failing Task ${shortId(current.task_id)} without verified executor termination`
+  );
   untrackExecutorProcess(settlement.task.session_id, settlement.task.task_id, input.app);
-  return settlement.task;
+  return { outcome: 'force_failed', task: settlement.task };
 }

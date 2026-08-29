@@ -1,7 +1,7 @@
 import { shortId, type TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Params, SessionID, SessionStopResult, TaskID } from '@agor/core/types';
-import { isSessionExecuting, SessionStatus } from '@agor/core/types';
+import { isSessionExecuting, isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { SessionsServiceImpl } from '../declarations.js';
 import {
   requestExecutorTermination,
@@ -154,6 +154,15 @@ export async function stopSessionPreserveQueue(
     };
   }
   if (termination.status === 'unverified') {
+    if (isTerminalTaskStatus(termination.task.status)) {
+      return {
+        success: false,
+        outcome: 'condition_changed',
+        reason: termination.reason,
+        stoppedTaskId: latestTask.task_id,
+        queuedTasksPreserved: queuedTasks.length,
+      };
+    }
     return {
       success: false,
       outcome: 'unverified',

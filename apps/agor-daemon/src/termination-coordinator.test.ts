@@ -562,12 +562,14 @@ describe('termination coordinator', () => {
       })
     ).rejects.toThrow('termination state changed');
     state.settle(task(TaskStatus.FAILED));
-    await forceFailUnverifiedTask({
-      app: state.app,
-      taskId,
-      terminationRequestedAt: '2026-01-01T00:00:01.000Z',
-      confirmation: 'STOP',
-    });
+    await expect(
+      forceFailUnverifiedTask({
+        app: state.app,
+        taskId,
+        terminationRequestedAt: '2026-01-01T00:00:01.000Z',
+        confirmation: 'STOP',
+      })
+    ).resolves.toMatchObject({ outcome: 'force_failed', task: { status: TaskStatus.FAILED } });
     expect(state.settleTermination).toHaveBeenCalledTimes(2);
     expect(state.settleTermination).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -576,5 +578,29 @@ describe('termination coordinator', () => {
       }),
       expect.objectContaining({ suppressTerminalQueueProcessing: true })
     );
+  });
+
+  it('reports a concurrent terminal settlement instead of claiming force-fail won', async () => {
+    const state = appDouble();
+    state.setCurrent(
+      task(TaskStatus.STOPPING, {
+        termination_request: stopping('user_stop').termination_request,
+        sdk_failure: { termination: 'unverified' },
+      })
+    );
+    state.settle(task(TaskStatus.STOPPED), 'terminal');
+    const securityLog = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(
+      forceFailUnverifiedTask({
+        app: state.app,
+        taskId,
+        terminationRequestedAt: '2026-01-01T00:00:01.000Z',
+        confirmation: 'STOP',
+      })
+    ).resolves.toMatchObject({ outcome: 'already_terminal', task: { status: TaskStatus.STOPPED } });
+    expect(securityLog).not.toHaveBeenCalled();
+    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, state.app);
+    securityLog.mockRestore();
   });
 });
