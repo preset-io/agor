@@ -6,6 +6,7 @@ const runtime = vi.hoisted(() => ({
   close: vi.fn(async () => undefined),
   ensureDataHome: vi.fn(async () => undefined),
   readAuthFile: vi.fn(),
+  resolveBinary: vi.fn(),
   start: vi.fn(),
   verifyAuthFileBoundary: vi.fn(async () => undefined),
   sanitizeError: vi.fn((value: unknown) =>
@@ -34,6 +35,7 @@ const runtimeDependencies = {
   ensureOpenCodeDataHome: runtime.ensureDataHome,
   startManagedOpenCodeServer: runtime.start,
   verifyOpenCodeAuthFileBoundary: runtime.verifyAuthFileBoundary,
+  resolveOpenCodeBinary: runtime.resolveBinary,
 };
 
 function executeCommand(payload: OpenCodeAuthPayload, options: OpenCodeCommandOptions = {}) {
@@ -114,6 +116,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   runtime.clients = [];
   runtime.readAuthFile.mockResolvedValue('{}');
+  runtime.resolveBinary.mockResolvedValue({ executable: 'opencode', argsPrefix: [] });
   runtime.start.mockImplementation(async () => ({
     baseUrl: 'http://127.0.0.1:1234',
     authorization: 'Basic synthetic',
@@ -164,6 +167,40 @@ describe('opencode.auth executor command', () => {
       }),
     });
     expect(JSON.stringify(result)).not.toContain('must-not-cross');
+  });
+
+  it('reports an unresolved pinned binary as runtime-unavailable before any server work', async () => {
+    runtime.resolveBinary.mockRejectedValue(
+      new Error("OpenCode CLI 1.18.20 is incompatible with Agor's pinned SDK 1.14.33.")
+    );
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'discover' },
+    } as never);
+
+    expect(result).toEqual({
+      success: false,
+      error: {
+        code: 'OPENCODE_RUNTIME_UNAVAILABLE',
+        message: "OpenCode CLI 1.18.20 is incompatible with Agor's pinned SDK 1.14.33.",
+      },
+    });
+    expect(runtime.start).not.toHaveBeenCalled();
+  });
+
+  it('serves the known model catalog even when the pinned binary is unresolved', async () => {
+    runtime.resolveBinary.mockRejectedValue(new Error('no binary'));
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'read-model-catalog' },
+    });
+
+    expect(result).toMatchObject({ success: true });
+    expect(runtime.start).not.toHaveBeenCalled();
   });
 
   it('returns one secret-safe branch-scoped configuration snapshot from one server', async () => {

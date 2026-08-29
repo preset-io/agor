@@ -126,6 +126,25 @@ function deviceCodeAttempt(attemptId: string) {
 }
 
 describe('OpenCodeProviderSettings', () => {
+  it('surfaces the server-provided load failure message instead of the generic fallback', async () => {
+    const service = createAuthService({
+      find: vi
+        .fn()
+        .mockRejectedValue(
+          new Error("OpenCode CLI 1.18.20 is incompatible with Agor's pinned SDK 1.14.33.")
+        ),
+    });
+
+    renderSettings(service);
+
+    expect(
+      await screen.findByText(
+        "OpenCode CLI 1.18.20 is incompatible with Agor's pinned SDK 1.14.33."
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText('OpenCode provider settings could not be loaded.')).toBeNull();
+  });
+
   it('keeps the selected provider credential draft isolated from visible runtime providers', async () => {
     const providers: Settings = {
       ...initial,

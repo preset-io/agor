@@ -132,6 +132,41 @@ describe('OpenCode provider auth service', () => {
     }
   });
 
+  it('propagates the managed agentic-tool runtime markers to the native auth executor', async () => {
+    vi.stubEnv('AGOR_MANAGED_AGENTIC_TOOLS', '1');
+    vi.stubEnv('AGOR_VERSION', '0.25.2');
+    vi.stubEnv('AGOR_AGENTIC_TOOLS_DIR', '/srv/agor/agentic-tools');
+    vi.stubEnv('AGOR_OPENCODE_PATH', '/srv/agor/opencode-bin');
+    try {
+      await runWithTenantContext('tenant-a', () => service().find(params));
+      const options = runCommand.mock.calls[0]?.[1] as { env?: Record<string, string> };
+      expect(options?.env).toMatchObject({
+        AGOR_MANAGED_AGENTIC_TOOLS: '1',
+        AGOR_VERSION: '0.25.2',
+        AGOR_AGENTIC_TOOLS_DIR: '/srv/agor/agentic-tools',
+        AGOR_OPENCODE_PATH: '/srv/agor/opencode-bin',
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('surfaces the runtime-unavailable resolver message instead of the generic failure', async () => {
+    runCommand.mockResolvedValueOnce({
+      success: false,
+      error: {
+        code: 'OPENCODE_RUNTIME_UNAVAILABLE',
+        message:
+          "OpenCode CLI 1.18.20 is incompatible with Agor's pinned SDK 1.14.33. " +
+          'Install OpenCode 1.14.33, or point AGOR_OPENCODE_PATH to that version.',
+      },
+    });
+
+    await runWithTenantContext('tenant-a', async () => {
+      await expect(service().find(params)).rejects.toThrow(/1\.18\.20 is incompatible/);
+    });
+  });
+
   it('authorizes branch-aware discovery and forwards only the resolved directory', async () => {
     loadConfig.mockReturnValue({
       execution: { unix_user_mode: 'simple', branch_rbac: true },

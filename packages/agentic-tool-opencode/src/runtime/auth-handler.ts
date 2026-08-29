@@ -9,8 +9,10 @@ import type {
   OpenCodeProviderDiscovery,
 } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk/v2';
+import { OPENCODE_RUNTIME_UNAVAILABLE_ERROR_CODE } from '../shared/index.js';
 import { createOpenCodeKnownModelCatalog } from '../shared/known-models.js';
 import type { OpenCodeAuthPayload } from './auth-payload.js';
+import { resolvePackagedOpenCodeBinary } from './binary.js';
 import {
   ensureOpenCodeDataHome as defaultEnsureOpenCodeDataHome,
   startManagedOpenCodeServer as defaultStartManagedOpenCodeServer,
@@ -29,13 +31,38 @@ export interface OpenCodeAuthRuntimeDependencies {
   ensureOpenCodeDataHome: typeof defaultEnsureOpenCodeDataHome;
   startManagedOpenCodeServer: typeof defaultStartManagedOpenCodeServer;
   verifyOpenCodeAuthFileBoundary: typeof defaultVerifyOpenCodeAuthFileBoundary;
+  resolveOpenCodeBinary: typeof resolvePackagedOpenCodeBinary;
 }
 
 const DEFAULT_AUTH_RUNTIME: OpenCodeAuthRuntimeDependencies = {
   ensureOpenCodeDataHome: defaultEnsureOpenCodeDataHome,
   startManagedOpenCodeServer: defaultStartManagedOpenCodeServer,
   verifyOpenCodeAuthFileBoundary: defaultVerifyOpenCodeAuthFileBoundary,
+  resolveOpenCodeBinary: resolvePackagedOpenCodeBinary,
 };
+
+/**
+ * Resolves the pinned OpenCode binary before any credential or server work.
+ * Failing here is a host-configuration problem, not an auth outcome, so the
+ * resolver's message is returned verbatim under a dedicated error code
+ * instead of the deliberately opaque OPENCODE_AUTH_FAILED envelope.
+ */
+async function runtimeUnavailableFailure(
+  runtime: OpenCodeAuthRuntimeDependencies
+): Promise<{ success: false; error: { code: string; message: string } } | undefined> {
+  try {
+    await runtime.resolveOpenCodeBinary();
+    return undefined;
+  } catch (error) {
+    return {
+      success: false,
+      error: {
+        code: OPENCODE_RUNTIME_UNAVAILABLE_ERROR_CODE,
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}
 
 type V2Client = ReturnType<typeof createOpencodeClient>;
 type ProviderAuthMethods = NonNullable<Awaited<ReturnType<V2Client['provider']['auth']>>['data']>;
@@ -297,6 +324,13 @@ export async function handleOpenCodeAuth(
   }
 
   try {
+    if (payload.params.operation === 'read-model-catalog') {
+      return { success: true, data: await discoverModels(payload.dataHome, runtime) };
+    }
+
+    const unavailable = await runtimeUnavailableFailure(runtime);
+    if (unavailable) return unavailable;
+
     if (payload.params.operation === 'discover') {
       return {
         success: true,
@@ -306,10 +340,6 @@ export async function handleOpenCodeAuth(
           runtime
         ),
       };
-    }
-
-    if (payload.params.operation === 'read-model-catalog') {
-      return { success: true, data: await discoverModels(payload.dataHome, runtime) };
     }
 
     if (payload.params.operation === 'connect-oauth') {
@@ -414,6 +444,9 @@ export async function handleOpenCodeOAuth(
       data: { dryRun: true, operation: payload.params.operation },
     };
   }
+
+  const unavailable = await runtimeUnavailableFailure(runtime);
+  if (unavailable) return unavailable;
 
   const { providerId, method, inputs } = payload.params;
   try {

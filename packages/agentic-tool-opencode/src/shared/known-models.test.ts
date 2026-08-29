@@ -92,4 +92,36 @@ describe('OpenCode known model catalog', () => {
       ]),
     });
   });
+
+  it('offers curated OpenCode Go models only with saved credential evidence', () => {
+    const disconnected = createOpenCodeKnownModelCatalog(new Set());
+    const configured = createOpenCodeKnownModelCatalog(new Set(['opencode-go']));
+
+    expect(disconnected.providers.find(({ id }) => id === 'opencode-go')).toMatchObject({
+      name: 'OpenCode Go',
+      availableForSelection: false,
+    });
+    expect(configured.suggestedSelection).toEqual({
+      providerId: 'opencode-go',
+      modelId: 'gpt-5.6-luna',
+    });
+    expect(configured.providers.find(({ id }) => id === 'opencode-go')).toMatchObject({
+      availableForSelection: true,
+      suggestedModel: 'gpt-5.6-luna',
+      models: expect.arrayContaining([
+        expect.objectContaining({ id: 'gpt-5.6-luna', status: 'active' }),
+        expect.objectContaining({ id: 'kimi-k3' }),
+        expect.objectContaining({ id: 'qwen3.8-max' }),
+      ]),
+    });
+  });
+
+  it('prefers a credentialed Go subscription over credentialed free Zen', () => {
+    const catalog = createOpenCodeKnownModelCatalog(new Set(['opencode-go', 'opencode']));
+
+    expect(catalog.suggestedSelection).toEqual({
+      providerId: 'opencode-go',
+      modelId: 'gpt-5.6-luna',
+    });
+  });
 });
