@@ -18,7 +18,7 @@ import {
 import type { GlobalToken } from 'antd';
 import { Button, Space, Tooltip } from 'antd';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
-import { getEnvironmentHealthUrl } from '../../utils/environmentUrl';
+import { getEnvironmentHealthUrl } from '../../utils/environmentHealthUrl';
 
 /** Render environment status icon for a branch */
 export function renderEnvStatusIcon(branch: Branch, token: GlobalToken) {

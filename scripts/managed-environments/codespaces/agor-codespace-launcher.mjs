@@ -326,6 +326,22 @@ export class GitHubCodespacesClient {
     return ports.filter(isRecord);
   }
 
+  async setPortVisibility(name, ports, visibility) {
+    const targets = [...new Set(ports)].sort((left, right) => left - right);
+    await this.runner(
+      [
+        'gh',
+        'codespace',
+        'ports',
+        'visibility',
+        ...targets.map((port) => `${port}:${visibility}`),
+        '-c',
+        name,
+      ],
+      { timeout: this.callTimeout, check: true }
+    );
+  }
+
   async remoteHealth(name, healthPort, healthPath) {
     const healthUrl = `http://127.0.0.1:${healthPort}${healthPath}`;
     // Use a reserved exit status for an ordinary not-ready response. That
@@ -545,6 +561,7 @@ export class CodespaceController {
     appPort,
     healthPort,
     healthPath,
+    portVisibility,
     waitSeconds,
     sleep = delay,
     monotonic = () => performance.now() / 1_000,
@@ -561,6 +578,7 @@ export class CodespaceController {
     this.appPort = appPort;
     this.healthPort = healthPort;
     this.healthPath = healthPath;
+    this.portVisibility = portVisibility;
     this.waitSeconds = waitSeconds;
     this.sleep = sleep;
     this.monotonic = monotonic;
@@ -711,6 +729,42 @@ export class CodespaceController {
     }
   }
 
+  async reconcilePortVisibility(name, ports) {
+    if (this.portVisibility === 'preserve') return ports;
+
+    const expectedPorts = [...new Set([this.appPort, this.healthPort])].sort(
+      (left, right) => left - right
+    );
+    const byPort = new Map(ports.map((item) => [item.sourcePort, item]));
+    const mismatched = expectedPorts.filter(
+      (port) => String(byPort.get(port)?.visibility ?? '').toLowerCase() !== this.portVisibility
+    );
+    if (mismatched.length === 0) return ports;
+
+    try {
+      await this.client.setPortVisibility(name, mismatched, this.portVisibility);
+    } catch (error) {
+      const detail = error instanceof LauncherError ? `: ${error.message}` : '';
+      throw new LauncherError(
+        `could not set Codespace ports ${mismatched.join(', ')} to ${this.portVisibility}; the repository or organization Codespaces policy may prohibit that visibility${detail}`,
+        { cause: error }
+      );
+    }
+
+    const refreshed = await this.client.listPorts(name);
+    const refreshedByPort = new Map(refreshed.map((item) => [item.sourcePort, item]));
+    const unchanged = expectedPorts.filter(
+      (port) =>
+        String(refreshedByPort.get(port)?.visibility ?? '').toLowerCase() !== this.portVisibility
+    );
+    if (unchanged.length > 0) {
+      throw new LauncherError(
+        `GitHub did not apply ${this.portVisibility} visibility to Codespace ports ${unchanged.join(', ')}`
+      );
+    }
+    return refreshed;
+  }
+
   async start() {
     const discovery = await this.discover();
     let resource = discovery.resource;
@@ -747,7 +801,8 @@ export class CodespaceController {
     }
 
     resource = await this.waitForState(discovery.owner, discovery.repositoryId, name, 'Available');
-    const ports = await this.waitForPreview(name);
+    const readyPorts = await this.waitForPreview(name);
+    const ports = await this.reconcilePortVisibility(name, readyPorts);
     await this.saveBinding(discovery.owner, resource, { resolvedSha });
     return { resource, ports };
   }
@@ -953,6 +1008,7 @@ export function parseArgs(argv) {
     '--app-port',
     '--health-port',
     '--health-path',
+    '--port-visibility',
     '--emit-health',
     '--wait-seconds',
     '--provider-call-timeout',
@@ -977,6 +1033,7 @@ export function parseArgs(argv) {
     appPort: integerArgument(values, '--app-port', 5_000),
     healthPort: integerArgument(values, '--health-port', 3_000),
     healthPath: values['--health-path'] ?? '/health',
+    portVisibility: values['--port-visibility'] ?? 'preserve',
     emitHealth: values['--emit-health'] ?? 'public-only',
     waitSeconds: integerArgument(values, '--wait-seconds', 600),
     providerCallTimeout: integerArgument(values, '--provider-call-timeout', 30),
@@ -1016,6 +1073,9 @@ export function parseArgs(argv) {
   }
   if (!['never', 'public-only', 'always'].includes(args.emitHealth)) {
     throw new LauncherError('--emit-health must be one of: never, public-only, always');
+  }
+  if (!['preserve', 'private', 'org', 'public'].includes(args.portVisibility)) {
+    throw new LauncherError('--port-visibility must be one of: preserve, private, org, public');
   }
   assertRange(args.waitSeconds, 30, 1_800, '--wait-seconds must be between 30 and 1800');
   assertRange(
@@ -1116,7 +1176,7 @@ function delay(milliseconds) {
 }
 
 function helpText() {
-  return `Usage: node agor-codespace-launcher.mjs <start|stop|nuke|health|logs> [options]\n\nRequired:\n  --repository OWNER/REPO\n  --ref REF\n  --binding UUID\n\nThe launcher uses the authenticated official gh CLI and emits ${RESULT_PREFIX}{...} on Start.\n`;
+  return `Usage: node agor-codespace-launcher.mjs <start|stop|nuke|health|logs> [options]\n\nRequired:\n  --repository OWNER/REPO\n  --ref REF\n  --binding UUID\n\nStart options:\n  --port-visibility preserve|private|org|public (default: preserve)\n\nThe launcher uses the authenticated official gh CLI and emits ${RESULT_PREFIX}{...} on Start.\n`;
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : undefined;

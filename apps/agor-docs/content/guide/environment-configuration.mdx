@@ -177,7 +177,7 @@ environment. A successful `start` may therefore return this deliberately tiny,
 optional JSON object:
 
 ```json
-{"app":"https://preview.example.test","health":"https://preview.example.test/health"}
+{ "app": "https://preview.example.test", "health": "https://preview.example.test/health" }
 ```
 
 Both keys are optional, so `{}` is valid. Unknown keys, non-HTTP(S) URLs,
@@ -711,6 +711,7 @@ environment:
         --binding {{shellQuote branch.id}}
         --wait-seconds 1200
         --app-port 5000 --health-port 3000 --health-path /health
+        --port-visibility public
         --emit-health public-only
       stop: >-
         node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs stop
@@ -732,6 +733,44 @@ access, a registered `github.com` remote, and a pushed branch ref. It derives th
 App URL from live Codespaces port metadata. With `--emit-health public-only`, it
 reports health only when GitHub says that forwarded port is public; private
 Codespaces URLs remain authenticated App links and are not polled by Agor.
+
+The repository's experimental variant explicitly passes `--port-visibility
+public`, so after the SSH readiness probe succeeds the launcher asks GitHub to
+make both 3000 and 5000 public. GitHub may reject that request under an
+organization or repository policy, in which case Start fails with a policy
+diagnostic instead of pretending the preview is reachable. Public forwarded
+ports are available to anyone who knows their URLs, without GitHub
+authentication, and [GitHub resets them to private when a Codespace
+restarts](https://docs.github.com/en/codespaces/reference/security-in-github-codespaces).
+Start therefore re-reads and reapplies the requested visibility every time.
+
+This is safe only as an explicit disposable-preview choice, not merely because
+the source repository is public. Port 3000 exposes the whole Agor daemon, not
+just `/health`. The Codespaces bootstrap avoids the repository-wide
+`admin`/`admin` development credential by generating a different mode-0600
+password per Codespace. Retrieve it from that Codespace, sign in, and change it
+immediately:
+
+```bash
+cat ~/.agor-managed/bootstrap-admin-password
+```
+
+The value never enters `.agor.yml`, launcher output, dynamic URLs, or the Git
+workspace. An older Codespace/SQLite volume created before this behavior still
+has its old credential: rebuilding does not reset an existing user. Change that
+password before public exposure, or Nuke and recreate the disposable Codespace.
+
+Every invocation of the launcher's Start action is a reconcile, not an
+unconditional Create. This matters after a timed-out/failed Agor Start: press
+Start again and the launcher attaches to the still-existing marker-bound
+Codespace. It validates owner/repository ID/ref, resumes it if stopped, waits
+for SSH and `/health`, reapplies port visibility, and returns fresh URLs. A
+deleted resource is recreated and a duplicate or identity drift fails closed.
+Once Agor records the environment as `running`, its Start control is disabled;
+Restart deliberately runs Stop then Start, retaining and resuming the same
+Codespace rather than creating a second one. Neither path pulls newer Git
+commits into an already-running workspace or rebuilds its devcontainer; source
+synchronization remains a separate explicit operation.
 
 The managed devcontainer explicitly installs the
 [Dev Containers `sshd` feature](https://cli.github.com/manual/gh_codespace_ssh).

@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 
 import {
   CodespaceController,
@@ -19,6 +21,7 @@ import {
 const REPOSITORY = 'preset-io/agor';
 const REF = 'codespaces-sqlite-variant';
 const BINDING = '01999999-1111-7222-8333-444444444444';
+const execFileAsync = promisify(execFile);
 
 function resource({
   name = 'octocat-agor-new123',
@@ -39,17 +42,17 @@ function resource({
   };
 }
 
-function ports(name = 'octocat-agor-new123') {
+function ports(name = 'octocat-agor-new123', visibility = 'private') {
   return [
     {
       sourcePort: 3000,
-      visibility: 'private',
+      visibility,
       label: 'Agor daemon',
       browseUrl: `https://${name}-3000.app.github.dev`,
     },
     {
       sourcePort: 5000,
-      visibility: 'private',
+      visibility,
       label: 'Agor UI',
       browseUrl: `https://${name}-5000.app.github.dev`,
     },
@@ -65,6 +68,8 @@ class FakeClient {
     this.deleted = [];
     this.creationLogCalls = [];
     this.runtimeLogCalls = [];
+    this.portVisibility = 'private';
+    this.visibilityCalls = [];
   }
 
   async viewer() {
@@ -110,7 +115,12 @@ class FakeClient {
   }
 
   async listPorts(name) {
-    return ports(name);
+    return ports(name, this.portVisibility);
+  }
+
+  async setPortVisibility(name, targetPorts, visibility) {
+    this.visibilityCalls.push({ name, ports: [...targetPorts], visibility });
+    this.portVisibility = visibility;
   }
 
   async remoteHealth() {
@@ -135,7 +145,11 @@ async function fixture(t) {
   return { directory, store };
 }
 
-function controller(client, store, { monotonic = () => performance.now() / 1_000 } = {}) {
+function controller(
+  client,
+  store,
+  { monotonic = () => performance.now() / 1_000, portVisibility = 'preserve' } = {}
+) {
   return new CodespaceController({
     client,
     store,
@@ -148,6 +162,7 @@ function controller(client, store, { monotonic = () => performance.now() / 1_000
     appPort: 5000,
     healthPort: 3000,
     healthPath: '/health',
+    portVisibility,
     waitSeconds: 30,
     sleep: async () => {},
     monotonic,
@@ -186,6 +201,39 @@ test('a stopped Codespace is resumed and revalidated', async (t) => {
   const result = await controller(client, store).start();
   assert.deepEqual(client.started, [existing.name]);
   assert.equal(result.resource.state, 'Available');
+});
+
+test('Start can make both preview ports public and reconcile a restart reset', async (t) => {
+  const { store } = await fixture(t);
+  const existing = resource();
+  const client = new FakeClient([existing]);
+  const instance = controller(client, store, { portVisibility: 'public' });
+
+  const first = await instance.start();
+  assert.deepEqual(client.visibilityCalls, [
+    { name: existing.name, ports: [3000, 5000], visibility: 'public' },
+  ]);
+  assert.ok(first.ports.every((item) => item.visibility === 'public'));
+
+  // GitHub resets public forwarded ports to private when a Codespace restarts.
+  client.portVisibility = 'private';
+  const second = await instance.start();
+  assert.equal(client.created, 0);
+  assert.equal(client.visibilityCalls.length, 2);
+  assert.ok(second.ports.every((item) => item.visibility === 'public'));
+});
+
+test('a provider port-visibility policy failure is explicit and bounded', async (t) => {
+  const { store } = await fixture(t);
+  const client = new FakeClient([resource()]);
+  client.setPortVisibility = async () => {
+    throw new LauncherError('GitHub refused the visibility change');
+  };
+
+  await assert.rejects(
+    controller(client, store, { portVisibility: 'public' }).start(),
+    /organization Codespaces policy may prohibit.*GitHub refused/
+  );
 });
 
 test('a recreated resource replaces a stale stored name after discovery', async (t) => {
@@ -386,6 +434,13 @@ test('health paths reject URLs, queries, and shell metacharacters', () => {
   }
 });
 
+test('port visibility is explicit and defaults to preserving provider state', () => {
+  const base = ['start', '--repository', REPOSITORY, '--ref', REF, '--binding', BINDING];
+  assert.equal(parseArgs(base).portVisibility, 'preserve');
+  assert.equal(parseArgs([...base, '--port-visibility', 'public']).portVisibility, 'public');
+  assert.throws(() => parseArgs([...base, '--port-visibility', 'internet']), /--port-visibility/);
+});
+
 test('refs preserve shell-looking text but reject control characters', () => {
   const base = ['start', '--repository', REPOSITORY, '--binding', BINDING, '--ref'];
   assert.equal(parseArgs([...base, "feature/quote'$(noop)"]).ref, "feature/quote'$(noop)");
@@ -503,6 +558,30 @@ test('the gh adapter distinguishes an unhealthy app from a broken SSH transport'
   assert.match(calls[0].argv.at(-1), /exit 42/);
 });
 
+test('the gh adapter changes only the requested Codespace port visibility', async () => {
+  const calls = [];
+  const runner = async (argv, options) => {
+    calls.push({ argv, options });
+    return { returncode: 0, stdout: '', stderr: '' };
+  };
+  const client = new GitHubCodespacesClient({ runner, callTimeout: 17 });
+
+  await client.setPortVisibility('octocat-agor-new123', [5000, 3000, 5000], 'public');
+
+  assert.deepEqual(calls[0].argv, [
+    'gh',
+    'codespace',
+    'ports',
+    'visibility',
+    '3000:public',
+    '5000:public',
+    '-c',
+    'octocat-agor-new123',
+  ]);
+  assert.equal(calls[0].options.timeout, 17);
+  assert.equal(calls[0].options.check, true);
+});
+
 test('the gh adapter exhausts paginated Codespace inventory', async () => {
   const calls = [];
   const runner = async (argv) => {
@@ -543,4 +622,41 @@ test('the local lock serializes concurrent lifecycle callbacks', async (t) => {
   releaseFirst();
   await Promise.all([first, second]);
   assert.deepEqual(order, ['first-start', 'first-end', 'second']);
+});
+
+test('the Codespaces bootstrap persists a non-default secret without logging it', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'agor-codespaces-bootstrap-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const binDirectory = join(directory, 'bin');
+  await mkdir(binDirectory);
+  const fakeDocker = join(binDirectory, 'docker');
+  await writeFile(
+    fakeDocker,
+    `#!/bin/sh
+if [ "$*" != "compose -p agor-codespaces-sqlite ps" ]; then
+  [ "\${AGOR_ADMIN_PASSWORD:-}" != "admin" ] || exit 91
+  [ "\${AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN:-}" = "false" ] || exit 92
+fi
+printf '%s\\n' 'fake docker ok'
+`
+  );
+  await chmod(fakeDocker, 0o755);
+  const script = join(process.cwd(), '.devcontainer/agor-managed/start-agor-sqlite.sh');
+  const env = {
+    ...process.env,
+    HOME: directory,
+    PATH: `${binDirectory}:${process.env.PATH ?? ''}`,
+    CODESPACE_NAME: 'agor-cs-test123',
+    GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: 'app.github.dev',
+  };
+
+  const first = await execFileAsync('bash', [script], { env });
+  const passwordPath = join(directory, '.agor-managed/bootstrap-admin-password');
+  const password = (await readFile(passwordPath, 'utf8')).trim();
+  assert.match(password, /^[a-f0-9]{48}$/);
+  assert.notEqual(password, 'admin');
+  assert.doesNotMatch(`${first.stdout}${first.stderr}`, new RegExp(password));
+
+  await execFileAsync('bash', [script], { env });
+  assert.equal((await readFile(passwordPath, 'utf8')).trim(), password);
 });

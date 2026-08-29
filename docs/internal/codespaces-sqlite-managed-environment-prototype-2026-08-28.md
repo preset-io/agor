@@ -15,7 +15,8 @@ variant, but a bounded current-branch adapter can make a useful local experiment
 branch identity/ref to templates with POSIX quoting, accept one tiny nonsecret lifecycle result,
 show its runtime App URL, and treat a completed no-static-health Start as running. A dependency-free
 Node bridge then creates or resumes a Codespace through `gh`, validates it, waits for private
-forwarded ports plus an in-Codespace `/health` probe, and reports the current URL.
+forwarded ports plus an in-Codespace `/health` probe, applies an explicit visibility policy, and
+reports the current URL.
 
 PR #2304 adds useful generic facts, sync, readiness, and health behavior. It does not provide a
 Codespaces controller or the durable authorization/binding/fencing contract this product needs. It
@@ -26,8 +27,10 @@ This branch contains both the unconnected, generation-aware model at
 `scripts/managed-environments/codespaces/bridge-core.mjs` and the deliberately narrower executable
 prototype at `agor-codespace-launcher.mjs`. `.agor.yml` advertises the latter as **EXPERIMENTAL,
 single-GitHub-actor, pushed-ref-only, not Cloud/HA**. The selected devcontainer starts the existing
-Compose SQLite stack and keeps ports GitHub-private. Tests use fake clients, no network mutation,
-and no credentials. The variant was not started during validation.
+Compose SQLite stack. The checked-in experiment publishes ports 3000/5000 only after readiness,
+while the reusable launcher defaults to preserving provider visibility. It also replaces the fixed
+development admin credential with a per-Codespace mode-0600 bootstrap secret. Tests use fake
+clients, no network mutation, and no credentials.
 
 The shortest **production** path remains an **Agor-native Codespaces controller**, initially restricted to
 the GitHub user who authorized the resource, plus a small durable remote-environment binding and
@@ -156,8 +159,9 @@ The bounded implementation adds only the pieces needed to make a local trial obs
   `gh codespace ssh`. If the health port is public, the launcher can return its current URL and
   Agor's normal continuous monitor takes over through a public-only, DNS-pinned fetch path.
 - A repository devcontainer at `.devcontainer/agor-managed/devcontainer.json` uses Docker-in-Docker,
-  installs the SSH server required by `gh codespace ssh`, forwards private ports 3000/5000, and
-  starts the normal SQLite Compose project on every Codespace start.
+  installs the SSH server required by `gh codespace ssh`, forwards ports 3000/5000, and starts the
+  normal SQLite Compose project on every Codespace start. Ports begin private; the experiment's
+  `--port-visibility public` policy is applied only after authenticated SSH health succeeds.
 
 These deltas do **not** add durable lifecycle CAS, provider binding columns, distributed locking,
 an OAuth sponsor, or an authenticated Cloud controller. They therefore do not change the Cloud/HA
@@ -456,14 +460,17 @@ Use only a repository/ref whose Codespace can be safely created and deleted:
 4. Press Play once. Cold Docker image build and Agor startup occur in the Codespace and are given
    the variant's bounded twenty-minute deadline. The App pill initially links to the Codespaces
    dashboard, then switches to the current private forwarded-port URL after provider and remote
-   `/health` readiness succeed. During early bootstrap, **Codespaces: View Creation Log** in the
+   `/health` readiness succeed and the requested public visibility is confirmed. During early bootstrap, **Codespaces: View Creation Log** in the
    browser/VS Code client is authoritative. `gh codespace logs -c <name> --follow` and Agor's Logs
    action become available after the custom devcontainer SSH server is ready. Once the workspace is
    Available, Logs also includes the nested Compose log tail. Logs skips a stopped Codespace rather
    than risking a resume.
-5. Open App while logged into GitHub as the Codespace creator. If GitHub's private-port auth does
-   not work for the split UI/daemon origins, stop and Nuke; do not switch the fixed-admin preview to
-   public as a workaround.
+5. Public exposure is a deliberate experiment here, not an inference from repository visibility.
+   Anyone with the URLs can reach both the UI and the entire daemon API. The bootstrap creates a
+   random per-Codespace admin credential at `~/.agor-managed/bootstrap-admin-password`; use it for
+   first login and change it immediately. It is never emitted by the launcher or stored in Git.
+   An older SQLite volume retains its existing password, so change that password or Nuke before
+   exposing the resource.
 6. Stop retains the Codespace and its SQLite volume. Nuke deletes the validated Codespace. The
    create request also asks GitHub for a 30-minute idle timeout and 1-day stopped retention as an
    orphan backstop.
@@ -497,6 +504,30 @@ An existing Codespace does not gain a new devcontainer feature merely because th
 updated. It must be rebuilt after pulling the change, or Nuked and recreated from the updated ref.
 The investigation issued no start, stop, delete, visibility, or repository mutation. The existing
 disposable resource remains the creator's cleanup responsibility.
+
+### Successful preview and repeat-Start/visibility follow-up (2026-08-29)
+
+The disposable preview subsequently became reachable at its live 5000 URL. A read-only provider
+check showed ports 3000 and 5000 public, while `gh codespace ssh` still reported that the already
+created custom image had no SSH server. That is expected for a resource built before the `sshd`
+feature reached its checkout: the current resource must pull and rebuild, or be Nuked and
+recreated, before authenticated health/log commands work.
+
+The launcher now exposes `--port-visibility preserve|private|org|public` with a safe `preserve`
+default. The repository variant explicitly selects `public`. After provider/SSH/app readiness,
+Start changes only the configured app/health ports with `gh codespace ports visibility`, re-reads
+their metadata, and fails if GitHub policy refused the request. This step runs on every Start
+because GitHub documents that a public forwarded port reverts to private on Codespace restart.
+Mock validation covers first Start, an Available reattach, a simulated restart visibility reset,
+policy refusal, refreshed URLs, and the exact non-shell `gh` argv.
+
+Repeated launcher Start remains idempotent with respect to creation: it rediscovers the
+deterministic marker, validates actor/repository ID/ref, resumes only `Shutdown`, waits, reconciles
+visibility, and refreshes URLs. This is the path used when Agor recorded a prior Start as error or
+timed out even though the resource survived. Once Agor records `running`, its Start endpoint/control
+rejects a second Start; Restart runs the configured Stop then Start and therefore stops/resumes the
+same Codespace. Neither path pulls Git or rebuilds a running Codespace. Deleted resources are
+recreated; multiple marker matches or identity drift freeze rather than guess.
 
 Cold start may still need optimization after a rebuilt trial produces an actual duration. The
 current Compose path builds Dockerfile target `development` inside Docker-in-Docker. Same-Codespace
