@@ -16,6 +16,7 @@
  *   - waitForReady=false AND waitForReady=true both succeed.
  *   - Concurrent MCP creates all succeed (no tenant-scope bleed across requests).
  *   - agor_cards_get (CardsService.getWithType, same failure class) runs under scope.
+ *   - agor_sessions_archive (SessionsService.setArchiveStateForTree) runs under scope.
  *   - A tenant-B MCP token cannot create against a tenant-A repo (RLS isolation).
  *
  * Gated like scripts/test-daemon-ha.mjs — requires a running Compose stack.
@@ -376,6 +377,21 @@ assert(
 );
 assert.equal(cardGet.isError, false, `agor_cards_get failed: ${cardGet.text}`);
 console.log('ok - MCP agor_cards_get runs under tenant scope (no regression)');
+
+// agor_sessions_archive exercises SessionsService.setArchiveStateForTree — raw
+// this.db reads/writes with no internal scope, the same failure class. Archive a
+// throwaway target session.
+const targetSessionId = await createSession(daemonA, aHeaders, controlBranch.branch_id);
+const archiveRes = await mcpToolCall(daemonA, aToken, sidConcurrent, 'agor_sessions_archive', {
+  sessionId: targetSessionId,
+  includeChildren: false,
+});
+assert(
+  !/Missing tenant database scope/i.test(archiveRes.text),
+  `tenant scope regression in agor_sessions_archive: ${archiveRes.text}`
+);
+assert.equal(archiveRes.isError, false, `agor_sessions_archive failed: ${archiveRes.text}`);
+console.log('ok - MCP agor_sessions_archive runs under tenant scope (no regression)');
 
 // ---- Tenant B: cross-tenant negative ---------------------------------------
 const beatrice = await loginPersona({ tenant: 'globex', persona: 'globex-beatrice' }, daemonB);

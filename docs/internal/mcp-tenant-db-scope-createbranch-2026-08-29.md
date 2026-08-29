@@ -72,9 +72,14 @@ Services differ in how they defend themselves:
 
 The outliers are services whose custom methods touch `this.db` **without** an internal
 helper and rely purely on the caller's ambient scope: **`ReposService`**,
-**`BoardsService.archive/unarchive`**, **`BoardObjectsService.findByBranchId`**, and
-**`CardsService.getWithType`** (the other `cards.ts` custom-method calls were already
-wrapped; `getWithType` was the one that had been missed).
+**`BoardsService.archive/unarchive`**, **`BoardObjectsService.findByBranchId`**,
+**`CardsService.getWithType`**, and **`SessionsService.archive/unarchive`** (via
+`setArchiveStateForTree`). The last two were pre-existing misses surfaced by the static
+audit test described below, not by the original report.
+
+By contrast, `SessionsService`'s _other_ DB work and `GatewayService` (identity-only, with
+`bindRepositoryToTenantUnitOfWork`-bound repos) do self-scope — only the archive tree walk
+had been left relying on an ambient scope.
 
 ## Fix
 
@@ -86,14 +91,15 @@ the scope, so no transaction is held across polls.
 
 Sites fixed:
 
-| File                                         | Tool                                 | Custom method                             |
-| -------------------------------------------- | ------------------------------------ | ----------------------------------------- |
-| `apps/agor-daemon/src/mcp/tools/branches.ts` | `agor_branches_create`               | `reposService.createBranch`               |
-| `apps/agor-daemon/src/mcp/tools/branches.ts` | `agor_branches_set_zone`             | `boardObjectsService.findByBranchId` (×2) |
-| `apps/agor-daemon/src/mcp/tools/repos.ts`    | `agor_repos_clone`                   | `reposService.cloneRepository`            |
-| `apps/agor-daemon/src/mcp/tools/repos.ts`    | `agor_repos_update`                  | `reposService.updateMetadata`             |
-| `apps/agor-daemon/src/mcp/tools/boards.ts`   | `agor_boards_archive` / `_unarchive` | `boardsService.archive` / `unarchive`     |
-| `apps/agor-daemon/src/mcp/tools/cards.ts`    | `agor_cards_get`                     | `cardsService.getWithType`                |
+| File                                         | Tool                                   | Custom method                             |
+| -------------------------------------------- | -------------------------------------- | ----------------------------------------- |
+| `apps/agor-daemon/src/mcp/tools/branches.ts` | `agor_branches_create`                 | `reposService.createBranch`               |
+| `apps/agor-daemon/src/mcp/tools/branches.ts` | `agor_branches_set_zone`               | `boardObjectsService.findByBranchId` (×2) |
+| `apps/agor-daemon/src/mcp/tools/repos.ts`    | `agor_repos_clone`                     | `reposService.cloneRepository`            |
+| `apps/agor-daemon/src/mcp/tools/repos.ts`    | `agor_repos_update`                    | `reposService.updateMetadata`             |
+| `apps/agor-daemon/src/mcp/tools/boards.ts`   | `agor_boards_archive` / `_unarchive`   | `boardsService.archive` / `unarchive`     |
+| `apps/agor-daemon/src/mcp/tools/cards.ts`    | `agor_cards_get`                       | `cardsService.getWithType`                |
+| `apps/agor-daemon/src/mcp/tools/sessions.ts` | `agor_sessions_archive` / `_unarchive` | `sessionsService.archive` / `unarchive`   |
 
 **Deliberately NOT wrapped: `agor_repos_create_local` (`addLocalRepository`).** That
 service method rejects with `BadRequest` in `required_from_auth` mode _before_ any DB
@@ -137,9 +143,15 @@ same private `withTenantDatabase(params, work)` helper that `BranchesService` al
 and wrap their custom methods internally. That makes the services defend themselves
 regardless of caller (HTTP route, MCP, gateway, scheduler) rather than relying on every
 call site to remember the wrapper — the same defense-in-depth the branches/sessions/gateway
-services already apply, and it removes the drift risk that let `agor_cards_get` slip through
-this first pass. A lighter alternative is a static audit (modeled on the source-scanning
-`register-services.mcp-tenant-scope.test.ts`) over `mcp/tools/*` that flags any direct
-custom-method service call not wrapped in `runWithMcpTenantDatabaseScope`, with a small
-explicit allow-list for methods that scope internally (e.g. branches/sessions/gateway) or
-are intentionally unwrapped (e.g. `addLocalRepository`). Either closes the gap durably.
+services already apply, and it removes the drift risk that let `agor_cards_get` and `agor_sessions_archive` slip
+through the first pass.
+
+**The static audit is now implemented** as
+`apps/agor-daemon/src/mcp/tools/tenant-scope-audit.test.ts`: it scans every `mcp/tools/*.ts`
+for `<x>Service.<method>()` calls to non-transport methods and fails unless the call is
+wrapped in `runWithMcpTenantDatabaseScope` (balanced-span aware, so multi-statement `async
+(db) => { … }` wrappers count) or is on an explicit, per-token allow-list with a documented
+reason (branches env methods + `unarchive` via `withTenantDatabase`; `gatewayService.emitMessage`
+via unit-of-work-bound repos; `reposService.addLocalRepository` as intentionally unwrapped).
+Running it during this change is what surfaced the `sessions` miss. The service-side
+`withTenantDatabase` refactor remains the heavier, more thorough follow-up.

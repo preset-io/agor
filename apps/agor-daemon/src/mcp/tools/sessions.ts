@@ -1459,10 +1459,12 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const includeChildren = args.includeChildren !== false;
       const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
-      const result = await sessionsService.archive(
-        args.sessionId,
-        { includeChildren },
-        ctx.baseServiceParams
+      // archive() -> setArchiveStateForTree touches this.db (this.get,
+      // sessionRepo writes) directly and is not a Feathers transport method, so
+      // enter the tenant DB scope here (the HTTP archive route enters it via its
+      // around hook). The whole tree update is DB-only — no network held.
+      const result = await runWithMcpTenantDatabaseScope(ctx, () =>
+        sessionsService.archive(args.sessionId, { includeChildren }, ctx.baseServiceParams)
       );
 
       return textResult({
@@ -1494,10 +1496,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
     async (args) => {
       const includeChildren = args.includeChildren !== false;
       const sessionsService = ctx.app.service('sessions') as unknown as SessionsServiceImpl;
-      const result = await sessionsService.unarchive(
-        args.sessionId,
-        { includeChildren },
-        ctx.baseServiceParams
+      // Same as archive: enter the tenant DB scope around the (DB-only) tree walk.
+      const result = await runWithMcpTenantDatabaseScope(ctx, () =>
+        sessionsService.unarchive(args.sessionId, { includeChildren }, ctx.baseServiceParams)
       );
 
       return textResult({
