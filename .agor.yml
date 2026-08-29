@@ -98,7 +98,8 @@ environment:
         --devcontainer-path .devcontainer/agor-managed/devcontainer.json
         --idle-timeout-minutes 30 --retention-period-minutes 1440
         --wait-seconds 1200
-        --app-port 5000 --health-port 3000 --health-path /health --emit-health public-only
+        --app-port 5000 --health-port 3000 --health-path /health
+        --port-visibility public --emit-health public-only
       stop: >-
         node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs stop
         --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
@@ -114,8 +115,8 @@ environment:
       app: https://github.com/codespaces
       description: >-
         EXPERIMENTAL, opt-in, single-GitHub-actor Codespaces preview. The remote Agor daemon uses
-        SQLite; GitHub-private ports require the creator's login. Requires gh Codespaces access and
-        a pushed branch ref. Not for Cloud/HA or shared production use.
+        SQLite; ports 3000/5000 are deliberately public after readiness, subject to GitHub policy.
+        Requires gh Codespaces access and a pushed branch ref. Not for Cloud/HA or production use.
     sandbox:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000

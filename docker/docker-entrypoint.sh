@@ -249,7 +249,13 @@ fi
 
 # Always create/update admin user (safe: only upserts)
 echo "👤 Ensuring development admin user exists..."
-ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts local create-admin --dev-default 2>&1)
+if [ "${AGOR_ADMIN_PASSWORD:-}" = "admin" ] && [ "${AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN:-}" = "true" ]; then
+  ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts local create-admin --dev-default 2>&1)
+else
+  # The CLI reads AGOR_ADMIN_PASSWORD directly so the credential never appears
+  # in argv, shell history, or Compose logs.
+  ADMIN_OUTPUT=$(pnpm --filter @agor/cli exec tsx bin/dev.ts local create-admin 2>&1)
+fi
 echo "$ADMIN_OUTPUT"
 
 # Get FULL admin user UUID from database (the CLI only shows short ID)

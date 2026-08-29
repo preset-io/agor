@@ -293,6 +293,7 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(snapshot?.start).toContain("--ref 'feature/it'\"'\"'s-$(not-a-command)'");
     expect(snapshot?.start).toContain("--binding '01999999-1111-7222-8333-444444444444'");
     expect(snapshot?.start).toContain('--wait-seconds 1200');
+    expect(snapshot?.start).toContain('--port-visibility public');
     expect(snapshot?.start).toContain('--emit-health public-only');
     expect(snapshot?.health).toBeUndefined();
     expect(snapshot?.app).toBe('https://github.com/codespaces');
