@@ -17,6 +17,7 @@ import {
 } from '@agor/core/config';
 import {
   assertTenantWritable,
+  type CurrentTaskExecutorSessionTokenAuthority,
   type ExecutorLaunchAuthority,
   type ExecutorLaunchAuthorityOptions,
   enqueueTenantDatabasePostCommitCallback,
@@ -89,14 +90,7 @@ import type { SessionsService } from './sessions';
 
 export interface TaskExecutorCredentialRevoker {
   revokeTaskTokens(taskId: string): Promise<number>;
-  isTaskTokenAuthorityCurrent?(input: {
-    tenantId: string;
-    tokenFingerprint: string;
-    sessionId: string;
-    taskId: string;
-    branchId: string;
-    userId: string;
-  }): Promise<boolean>;
+  isTaskTokenAuthorityCurrent?(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean>;
 }
 
 export type TaskRuntimeAuthorityOptions = ExecutorLaunchAuthorityOptions;
