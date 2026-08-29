@@ -5,7 +5,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   branchSdkHomeAuthUnsupportedReason,
   resolveBranchSdkHomeLaunch,
+  resolveNewSessionSdkHomeScope,
   resolveSdkHomeConfig,
+  sessionUsesBranchSdkHome,
 } from './branch-sdk-home.js';
 
 // getBranchHomePath derives from AGOR_DATA_HOME → make the root deterministic.
@@ -13,6 +15,68 @@ const DATA_HOME = mkdtempSync(join(tmpdir(), 'agor-sdk-home-test-'));
 const priorDataHome = process.env.AGOR_DATA_HOME;
 beforeAll(() => {
   process.env.AGOR_DATA_HOME = DATA_HOME;
+});
+
+describe('sessionUsesBranchSdkHome', () => {
+  it('keeps a historical session in its execution home on an adopted branch', () => {
+    expect(
+      sessionUsesBranchSdkHome({
+        sessionScope: 'execution_home',
+        branchSdkHomeIntent: 'per_branch',
+      })
+    ).toBe(false);
+  });
+
+  it('mounts only for a branch-scoped session with matching branch intent', () => {
+    expect(
+      sessionUsesBranchSdkHome({ sessionScope: 'branch', branchSdkHomeIntent: 'per_branch' })
+    ).toBe(true);
+  });
+
+  it('fails closed instead of falling back when the two durable stamps disagree', () => {
+    expect(() =>
+      sessionUsesBranchSdkHome({ sessionScope: 'branch', branchSdkHomeIntent: null })
+    ).toThrow(/refusing fallback/);
+  });
+});
+
+describe('resolveNewSessionSdkHomeScope', () => {
+  it('backfills compatibility by keeping fresh sessions in the execution home by default', () => {
+    expect(
+      resolveNewSessionSdkHomeScope({
+        branchSdkHomeIntent: null,
+        enabledForNewSessions: false,
+      })
+    ).toEqual({ scope: 'execution_home', adoptBranch: false });
+  });
+
+  it('atomically adopts an unadopted branch for a fresh opted-in session', () => {
+    expect(
+      resolveNewSessionSdkHomeScope({
+        branchSdkHomeIntent: null,
+        enabledForNewSessions: true,
+      })
+    ).toEqual({ scope: 'branch', adoptBranch: true });
+  });
+
+  it('keeps new sessions branch-scoped after deployment opt-out once the branch adopted', () => {
+    expect(
+      resolveNewSessionSdkHomeScope({
+        branchSdkHomeIntent: 'per_branch',
+        enabledForNewSessions: false,
+      })
+    ).toEqual({ scope: 'branch', adoptBranch: false });
+  });
+
+  it("lets a child retain its parent's historical execution-home lineage", () => {
+    expect(
+      resolveNewSessionSdkHomeScope({
+        branchSdkHomeIntent: 'per_branch',
+        enabledForNewSessions: true,
+        inheritedScope: 'execution_home',
+      })
+    ).toEqual({ scope: 'execution_home', adoptBranch: false });
+  });
 });
 afterAll(() => {
   if (priorDataHome === undefined) delete process.env.AGOR_DATA_HOME;
@@ -23,10 +87,10 @@ const BRANCH_ID = '0193b1c2-3d4e-7f00-9abc-def012345678';
 
 describe('resolveSdkHomeConfig (design §9.1)', () => {
   it('defaults to inherit and disables new-branch adoption (inert)', () => {
-    expect(resolveSdkHomeConfig({})).toEqual({ mode: 'inherit', enabledForNewBranches: false });
+    expect(resolveSdkHomeConfig({})).toEqual({ mode: 'inherit', enabledForNewSessions: false });
     expect(resolveSdkHomeConfig({ execution: {} })).toEqual({
       mode: 'inherit',
-      enabledForNewBranches: false,
+      enabledForNewSessions: false,
     });
     expect(resolveSdkHomeConfig({ execution: { sandbox: {} } }).mode).toBe('inherit');
   });
@@ -34,10 +98,10 @@ describe('resolveSdkHomeConfig (design §9.1)', () => {
   it('enables new-branch adoption only under per_branch', () => {
     expect(
       resolveSdkHomeConfig({ execution: { sandbox: { sdk_home_mode: 'per_branch' } } })
-    ).toEqual({ mode: 'per_branch', enabledForNewBranches: true });
+    ).toEqual({ mode: 'per_branch', enabledForNewSessions: true });
     expect(
       resolveSdkHomeConfig({ execution: { sandbox: { sdk_home_mode: 'inherit' } } })
-        .enabledForNewBranches
+        .enabledForNewSessions
     ).toBe(false);
   });
 });

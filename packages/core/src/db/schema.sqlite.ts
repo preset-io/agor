@@ -64,6 +64,15 @@ export const sessions = sqliteTable(
     // This ensures SDK session data remains accessible in the original home directory
     unix_username: text('unix_username'),
 
+    // Immutable SDK-state boundary. Existing sessions keep using their
+    // historical execution home; only newly admitted sessions may use the
+    // branch-owned SDK home.
+    sdk_home_scope: text('sdk_home_scope', {
+      enum: ['execution_home', 'branch'],
+    })
+      .notNull()
+      .default('execution_home'),
+
     // Materialized for filtering/joins (cross-DB compatible)
     status: text('status', {
       enum: [

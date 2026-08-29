@@ -482,8 +482,26 @@ describe('CapabilityPolicyRepository', () => {
           branch_id: value.branchId,
           caller_user_id: value.direct,
           session_owner_user_id: value.owner,
+          session_sdk_home_scope: 'execution_home',
         })
-      ).resolves.toEqual({ allowed: false, source: 'denied' });
+      ).resolves.toEqual({
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      });
+
+      await expect(
+        policies.resolveSessionPromptAuthority({
+          branch_id: value.branchId,
+          caller_user_id: value.direct,
+          session_owner_user_id: value.owner,
+          session_sdk_home_scope: 'branch',
+        })
+      ).resolves.toEqual({
+        allowed: true,
+        execution_user_id: value.direct,
+        source: 'branch_session',
+      });
 
       await policies.setWorkspacePreferences(
         { personal_session_sharing_enabled: true },
@@ -494,6 +512,7 @@ describe('CapabilityPolicyRepository', () => {
           branch_id: value.branchId,
           caller_user_id: value.direct,
           session_owner_user_id: value.owner,
+          session_sdk_home_scope: 'execution_home',
         })
       ).resolves.toEqual({
         allowed: true,
@@ -505,8 +524,13 @@ describe('CapabilityPolicyRepository', () => {
           branch_id: value.branchId,
           caller_user_id: value.viewer,
           session_owner_user_id: value.owner,
+          session_sdk_home_scope: 'branch',
         })
-      ).resolves.toEqual({ allowed: false, source: 'denied' });
+      ).resolves.toEqual({
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'branch_access_required',
+      });
     }
   );
 

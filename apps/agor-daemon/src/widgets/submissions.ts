@@ -36,6 +36,7 @@ import type {
   UserID,
   WidgetMessageMetadata,
 } from '@agor/core/types';
+import { sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
 import { widgetAutoResumeTaskId } from '../utils/durable-task-id.js';
 import { structuredLogErrorCode } from '../utils/structured-log.js';
 import { getWidget, type WidgetSubmitCtx } from './registry.js';
@@ -66,7 +67,8 @@ export interface WidgetResolverDeps {
   resolveSessionPromptAuthority(
     branchId: string,
     callerUserId: UserID,
-    sessionOwnerUserId: UserID
+    sessionOwnerUserId: UserID,
+    sessionSdkHomeScope: Session['sdk_home_scope']
   ): Promise<SessionPromptAuthority>;
 }
 
@@ -166,12 +168,11 @@ async function doResolveWidget(
   const authority = await deps.resolveSessionPromptAuthority(
     branch.branch_id,
     caller.user_id,
-    session.created_by as UserID
+    session.created_by as UserID,
+    session.sdk_home_scope
   );
   if (!canResolveWidget(authority)) {
-    throw new Forbidden(
-      `Collaborator access and permission from the session owner are required to resolve this widget.`
-    );
+    throw new Forbidden(sessionPromptDeniedMessage(authority));
   }
 
   // 3. Idempotency: only 'pending' widgets can be resolved.
@@ -273,12 +274,11 @@ async function doResolveWidget(
     const promptAuthority = await deps.resolveSessionPromptAuthority(
       branch.branch_id,
       caller.user_id,
-      session.created_by as UserID
+      session.created_by as UserID,
+      session.sdk_home_scope
     );
     if (!canResolveWidget(promptAuthority)) {
-      throw new Forbidden(
-        'Collaborator access and permission from the session owner are required to resume this widget.'
-      );
+      throw new Forbidden(sessionPromptDeniedMessage(promptAuthority));
     }
     await deps.app.service('/sessions/:id/prompt').create(
       {

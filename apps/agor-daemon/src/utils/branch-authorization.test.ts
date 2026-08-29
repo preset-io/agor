@@ -226,12 +226,16 @@ function makeHookContext(overrides: {
 }
 
 describe('ensureCanPromptInSession', () => {
-  const hookWithAuthority = (allowed: boolean) =>
+  const hookWithAuthority = (
+    allowed: boolean,
+    denialReason: 'branch_access_required' | 'owner_grant_required' = 'owner_grant_required'
+  ) =>
     ensureCanPromptInSession({
       branchRepository: {
         resolveSessionPromptAuthority: vi.fn().mockResolvedValue({
           allowed,
-          reason: allowed ? 'own_session' : 'session_owner_did_not_share',
+          source: allowed ? 'own_session' : 'denied',
+          ...(allowed ? {} : { denial_reason: denialReason }),
         }),
       } as unknown as BranchRepository,
     });
@@ -271,14 +275,14 @@ describe('ensureCanPromptInSession', () => {
     });
 
     it('denies prompting an own session without Collaborator access', async () => {
-      const hook = hookWithAuthority(false);
+      const hook = hookWithAuthority(false, 'branch_access_required');
       const wt = makeBranch({ others_can: 'view' });
       const ctx = makeHookContext({
         branch: wt,
         session: { created_by: USER_ID },
         userId: USER_ID,
       });
-      await expect(hook(ctx)).rejects.toThrow(/Collaborator access is required/i);
+      await expect(hook(ctx)).rejects.toThrow(/Only Collaborators and Managers/i);
     });
 
     it('accepts repository-authorized primary-owner access', async () => {

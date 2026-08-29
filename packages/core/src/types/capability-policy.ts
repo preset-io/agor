@@ -20,6 +20,10 @@ export const BOARD_POLICY_CAPABILITIES = [
 export const BRANCH_POLICY_CAPABILITIES = [
   'branch.view',
   'sessions.create',
+  // Historical identifier retained in the persisted policy contract. It
+  // authorizes the caller's own execution-home Sessions and every
+  // branch-home Session; foreign execution-home Sessions still require the
+  // separate owner-authored personal-sharing grant.
   'sessions.prompt_own',
   'sessions.manage_others',
   'branch.manage',
@@ -151,7 +155,12 @@ export interface SessionPromptAuthority {
   allowed: boolean;
   /** Identity/home that the executor must use when allowed. */
   execution_user_id?: UserID;
-  source: 'own_session' | 'personal_session_sharing' | 'denied';
+  source: 'own_session' | 'branch_session' | 'personal_session_sharing' | 'denied';
+  /** Stable reason used to render safe, actionable denials across transports. */
+  denial_reason?:
+    | 'branch_access_required'
+    | 'execution_home_sharing_disabled'
+    | 'owner_grant_required';
 }
 
 export interface BranchSessionSharingValidationIssue {

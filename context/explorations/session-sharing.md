@@ -1,11 +1,12 @@
 # Personal session sharing
 
-**Status:** normalized owner-authored policy implemented; workspace opt-in is
-off by default.
+**Status:** branch-home Sessions use ordinary branch collaboration;
+execution-home Sessions retain the normalized owner-authored compatibility
+policy, with workspace opt-in off by default.
 
 ## Why sharing is dangerous
 
-Native Claude Code, Codex, Gemini, and similar conversations are not portable
+Historical native Claude Code, Codex, Gemini, and similar conversations are not portable
 database records. Their conversation state lives in files below the session
 owner's home, such as `~/.claude/` and `~/.codex/`. Continuing a native
 conversation therefore requires the executor to keep using that owner's home.
@@ -38,7 +39,20 @@ where it stopped.” Per-session homes are the long-term direction.
 
 ## Authorization model
 
-Sharing has two independent gates:
+Every Session has an immutable `sdk_home_scope`:
+
+- `branch`: a caller with `sessions.prompt_own` (normally Collaborator or
+  Manager) may prompt it. Execution uses the actual caller's identity and
+  caller-scoped credentials while SDK state comes from the branch home.
+- `execution_home`: the compatibility rules below apply because resuming the
+  conversation requires access to the Session owner's home.
+
+The scope is stamped when an independent Session is admitted. Existing
+Sessions are backfilled to `execution_home`; forked and spawned children inherit
+their parent's scope. This explicit seam avoids guessing from creation dates or
+the live deployment flag.
+
+Execution-home sharing has two independent gates:
 
 1. The tenant-managed Workspace Preference
    `personal_session_sharing_enabled`, which defaults to false.
@@ -55,17 +69,17 @@ Only that owner may change the rule. Managers and other owners see foreign
 rules read-only and cannot erase them by changing a branch binding. Group
 membership is resolved at authorization time.
 
-To prompt a foreign session, the caller must both:
+To prompt a foreign execution-home Session, the caller must both:
 
 - have `sessions.prompt_own` through the effective branch policy; and
 - match an enabled rule belonging to that session's owner while the workspace
   gate is on.
 
-Branch Manager never implies foreign-session authority.
+Branch Manager alone never implies authority over an execution-home Session.
 
 ## Runtime identity split
 
-For an allowed shared prompt:
+For an allowed shared execution-home prompt:
 
 | Concern                              | Identity used |
 | ------------------------------------ | ------------- |

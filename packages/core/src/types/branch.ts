@@ -431,10 +431,12 @@ export interface Branch {
    * cannot set or clear it.
    *
    * STICKY: once set, this value — not the live
-   * `execution.sandbox.sdk_home_mode` deployment flag — governs whether the
-   * branch keeps being mounted with its home. Flipping the flag back to
-   * `inherit` only stops NEW branches from adopting one; it never strands an
-   * existing branch's accumulated Claude/Codex/… history (design §8B.3).
+   * `execution.sandbox.sdk_home_mode` deployment flag — is the default for
+   * future independent Sessions and owns the directory lifecycle. Each
+   * Session's immutable `sdk_home_scope` governs its actual mount, so older
+   * Sessions deliberately continue using their historical execution home.
+   * Flipping the flag back to `inherit` only stops unadopted branches from
+   * transitioning; it never strands accumulated Claude/Codex/… history.
    */
   sdk_home?: 'per_branch' | null;
 

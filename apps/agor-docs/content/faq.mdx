@@ -544,7 +544,18 @@ Zone triggers act on the branch you drop into the zone: the prompt runs against 
 
 ## What should I know before sharing my sessions?
 
-**Session sharing also shares the session owner's execution home (`~/`).** Agor keeps a shared session attached to its owner's home so the underlying agentic tool can continue its native conversation. Each prompt is still attributed to the person who sent it, and Agor injects that caller's managed environment variables and credentials—not the session owner's.
+This warning applies to an **execution-home Session**. Agor keeps such a
+Session attached to its owner's home so the underlying agentic tool can
+continue its native conversation. Prompting it therefore requires both the
+workspace personal-sharing opt-in and an owner-authored grant. Each prompt is
+still attributed to the person who sent it, and Agor injects that caller's
+managed environment variables and credentials—not the Session owner's.
+
+A **branch-home Session** does not share the owner's execution home. Any
+Collaborator or Manager on the branch may prompt it; the task executes as the
+actual caller while the native SDK state comes from the branch-owned home.
+Existing Sessions keep their execution-home behavior when a branch adopts a
+branch SDK home, so create a new independent Session to use the safer boundary.
 
 That identity separation does **not** make the home private. Agentic tools store native session state in home directories such as `.claude/` and `.codex/`. Your home may also contain shell dotfiles, caches, scripts, checkouts, and anything you or your agents wrote there. Someone prompting from that home—or an agent acting for them—may be able to inspect or change those files, including low-level metadata from unrelated sessions.
 
@@ -562,11 +573,14 @@ Agor makes the choice explicit instead of assuming every workspace has the same 
 
 ### Safer alternative
 
-Give your colleague read access to the original session and have them create a new session under their own identity and home. They can ask their agent something like:
+Give your colleague read access to the original Session and have them create a
+new branch-home Session. They can ask their agent something like:
 
 > Read the sibling session that implemented the feature, then pick up from where it stopped in this new session.
 
-This preserves access to the prior reasoning without sharing the original execution home. Per-session homes are on the roadmap; until they exist, continuing another person's native agentic-tool session requires sharing that session owner's home.
+This preserves access to the prior reasoning without sharing the original
+execution home. Continuing the original execution-home conversation still
+requires its owner's explicit personal-sharing grant.
 
 ---
 

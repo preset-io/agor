@@ -62,7 +62,11 @@ export async function prepareSessionForExecutorStart(
   return runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
     const session = await sessionsService.get(sessionId, params);
     if (!session) throw new Error(`Session ${sessionId} not found`);
-    if (unixIdentityGuard) {
+    // Only historical execution-home sessions resume through the creator's
+    // immutable home stamp. Branch-scoped sessions use the current prompt
+    // actor's delegated key and branch-owned SDK state, so creator drift is
+    // irrelevant and must not prevent legitimate branch sharing.
+    if (unixIdentityGuard && (session.sdk_home_scope ?? 'execution_home') === 'execution_home') {
       await assertSessionUnixIdentityUnchanged(session, unixIdentityGuard.loadCreator(tenantDb));
     }
     const agenticTool = requireActiveAgenticTool(session.agentic_tool);

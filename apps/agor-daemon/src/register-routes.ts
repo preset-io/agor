@@ -208,6 +208,7 @@ import {
   ensureBranchPermission,
   loadScheduleAndBranch,
   resolveSessionPromptAccess,
+  sessionPromptDeniedMessage,
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
@@ -1974,18 +1975,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (!branch) {
             throw new NotFound(`Branch ${currentSession.branch_id} not found`);
           }
-          const { allowed } = await resolveSessionPromptAccess({
+          const { allowed, denialReason } = await resolveSessionPromptAccess({
             branchRepository: scopedBranchRepository,
             branch,
             session: currentSession,
             userId: promptUserId,
           });
           if (!allowed) {
-            throw new Forbidden(
-              currentSession.created_by === promptUserId
-                ? `Collaborator access is required to prompt this session.`
-                : `The session owner has not shared their sessions with you.`
-            );
+            throw new Forbidden(sessionPromptDeniedMessage({ denial_reason: denialReason }));
           }
         };
         if (branchRbacEnabled && !isPromptServiceAccount && promptBranchId) {
@@ -2273,7 +2270,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             if (!wt) {
               throw new NotFound(`Branch ${session.branch_id} not found`);
             }
-            const { allowed, effectiveLevel } = await resolveSessionPromptAccess({
+            const { allowed, effectiveLevel, denialReason } = await resolveSessionPromptAccess({
               branchRepository,
               branch: wt,
               session,
@@ -2281,9 +2278,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             });
             if (!allowed) {
               throw new Forbidden(
-                `You have '${effectiveLevel}' permission on this branch, which does not ` +
-                  `allow running tasks. Collaborator access is required, and foreign ` +
-                  `sessions must be shared by their owner.`
+                `${sessionPromptDeniedMessage({ denial_reason: denialReason })} ` +
+                  `(Current branch permission: '${effectiveLevel}'.)`
               );
             }
           }
@@ -3546,12 +3542,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     resolveSessionPromptAuthority: async (
       branchId: string,
       callerUserId: UUID,
-      sessionOwnerUserId: UUID
+      sessionOwnerUserId: UUID,
+      sessionSdkHomeScope: import('@agor/core/types').SessionSdkHomeScope
     ) =>
       widgetResolutionBranches.resolveSessionPromptAuthority(
         branchId as import('@agor/core/types').BranchID,
         callerUserId,
-        sessionOwnerUserId
+        sessionOwnerUserId,
+        sessionSdkHomeScope
       ),
   };
 

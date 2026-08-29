@@ -161,12 +161,13 @@ export interface ExecutorTemplateVariables {
   log_level?: string;
   executor_type?: string;
   /**
-   * Absolute path of the per-branch SDK home for this prompt, or empty when the
-   * branch has none (design §7.4). In `delegated` mode Agor mounts nothing, so
-   * the external launcher owns enforcement: it must relocate the tool's SDK home
-   * and provide any safe caller-scoped credential overlay. Shell-escaped during
-   * substitution like {tenant_id}; always rendered (empty string when unused)
-   * so the placeholder never survives into the command.
+   * Absolute path of the per-branch SDK home for a branch-scoped Session, or
+   * empty for an execution-home Session (design §7.4). In `delegated` mode
+   * Agor mounts nothing, so the external launcher owns enforcement: it must
+   * relocate the tool's SDK home and provide any safe caller-scoped credential
+   * overlay. Shell-escaped during substitution like {tenant_id}; always
+   * rendered (empty string when unused) so the placeholder never survives into
+   * the command.
    */
   branch_sdk_home?: string;
   /**

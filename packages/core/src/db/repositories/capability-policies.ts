@@ -15,6 +15,7 @@ import type {
   EffectiveCapabilityPolicyAccess,
   GroupID,
   SessionPromptAuthority,
+  SessionSdkHomeScope,
   UserID,
   UUID,
 } from '@agor/core/types';
@@ -1072,19 +1073,33 @@ export class CapabilityPolicyRepository {
     branch_id: BranchID;
     caller_user_id: UserID;
     session_owner_user_id: UserID;
+    session_sdk_home_scope: SessionSdkHomeScope;
   }): Promise<SessionPromptAuthority> {
     const access = await this.resolveBranchAccess(input.branch_id, input.caller_user_id);
     const canPromptOwn = access.capabilities.includes('sessions.prompt_own');
     if (input.caller_user_id === input.session_owner_user_id) {
       return canPromptOwn
         ? { allowed: true, execution_user_id: input.caller_user_id, source: 'own_session' }
-        : { allowed: false, source: 'denied' };
+        : { allowed: false, source: 'denied', denial_reason: 'branch_access_required' };
     }
     if (!access.capabilities.includes('sessions.prompt_own')) {
-      return { allowed: false, source: 'denied' };
+      return { allowed: false, source: 'denied', denial_reason: 'branch_access_required' };
+    }
+    if (input.session_sdk_home_scope === 'branch') {
+      return {
+        allowed: true,
+        execution_user_id: input.caller_user_id,
+        source: 'branch_session',
+      };
     }
     const preferences = await this.getWorkspacePreferences();
-    if (!preferences.personal_session_sharing_enabled) return { allowed: false, source: 'denied' };
+    if (!preferences.personal_session_sharing_enabled) {
+      return {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      };
+    }
     const policy = await this.getBranchPolicy(input.branch_id);
     const config =
       policy.binding_mode === 'inherit' ? policy.inherited_config : policy.override_config;
@@ -1092,7 +1107,9 @@ export class CapabilityPolicyRepository {
       (candidate) =>
         candidate.session_owner_user_id === input.session_owner_user_id && candidate.enabled
     );
-    if (!rule) return { allowed: false, source: 'denied' };
+    if (!rule) {
+      return { allowed: false, source: 'denied', denial_reason: 'owner_grant_required' };
+    }
     const callerGroups = new Set(await this.activeGroupIds(input.caller_user_id));
     const granted = rule.grantees.some((grant) =>
       grant.principal.principal_type === 'user'
@@ -1105,7 +1122,7 @@ export class CapabilityPolicyRepository {
           execution_user_id: input.session_owner_user_id,
           source: 'personal_session_sharing',
         }
-      : { allowed: false, source: 'denied' };
+      : { allowed: false, source: 'denied', denial_reason: 'owner_grant_required' };
   }
 
   /** Batch read used by inventory/export surfaces that need only private/shared state. */

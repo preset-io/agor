@@ -12,6 +12,7 @@ import type {
   EffectiveBranchAccess,
   GroupID,
   SessionPromptAuthority,
+  SessionSdkHomeScope,
   SessionStatus,
   UUID,
 } from '@agor/core/types';
@@ -723,7 +724,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
    * This is deliberately separate from generic branch CRUD: clients may not
    * opt a branch in or clear an adopted home through create/patch, and the
    * only supported transition is the idempotent null -> per_branch adoption
-   * performed by supported-tool prompt admission.
+   * performed by supported-tool session admission.
    */
   async adoptSdkHome(id: string): Promise<Branch> {
     const existing = await this.findById(id);
@@ -858,12 +859,14 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
   async resolveSessionPromptAuthority(
     branchId: BranchID,
     callerUserId: UUID,
-    sessionOwnerUserId: UUID
+    sessionOwnerUserId: UUID,
+    sessionSdkHomeScope: SessionSdkHomeScope
   ): Promise<SessionPromptAuthority> {
     return new CapabilityPolicyRepository(this.db).resolveSessionPromptAuthority({
       branch_id: branchId,
       caller_user_id: callerUserId as import('@agor/core/types').UserID,
       session_owner_user_id: sessionOwnerUserId as import('@agor/core/types').UserID,
+      session_sdk_home_scope: sessionSdkHomeScope,
     });
   }
 

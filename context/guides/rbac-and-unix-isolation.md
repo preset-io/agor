@@ -109,13 +109,21 @@ active-state column, database authorization can distinguish only an existing
 same-tenant user from a deleted one. Its cutover must add the active-user
 predicate to both the point resolver and the set-based SQL below.
 
-## Personal session sharing
+## Session prompting and personal sharing
 
-Personal session sharing is disabled by default at workspace level. When an
-administrator enables it, each session owner may grant named users/groups
-permission to prompt sessions that owner owns. Nobody, including a branch
-Manager, may edit or discard another owner's rule; those rules are read-only in
-the form.
+Branch-home Sessions can be prompted by any caller with the branch's
+`sessions.prompt_own` capability (normally Collaborator or Manager). The task
+is attributed to the caller, uses the caller's personal home/managed
+credentials, and shares only the branch-owned SDK state. The capability name is
+retained for policy compatibility even though its branch-home meaning is now
+broader than “own.”
+
+Execution-home Sessions retain the historical high-trust path. Personal
+session sharing is disabled by default at workspace level. When an
+administrator enables it, each Session owner may grant named users/groups
+permission to prompt execution-home Sessions that owner owns. Nobody,
+including a branch Manager, may edit or discard another owner's rule; those
+rules are read-only in the form.
 
 An allowed shared prompt preserves:
 
@@ -125,9 +133,9 @@ An allowed shared prompt preserves:
   environment variables, connector credentials, and private MCP visibility;
 - the caller's branch filesystem projection.
 
-The shared home remains a high-trust boundary. Home-resident tool credentials
-such as `~/.codex/auth.json`, native histories, dotfiles, and any files left by
-users or agents can still be read or changed by an agent operating there. See
+That shared execution home remains a high-trust boundary. Home-resident tool
+credentials such as `~/.codex/auth.json`, native histories, dotfiles, and any
+files left by users or agents can still be read or changed by an agent operating there. See
 [`context/explorations/session-sharing.md`](../explorations/session-sharing.md).
 
 ## Listing and point checks
@@ -138,7 +146,7 @@ same normalized policies through `CapabilityPolicyRepository`:
 
 - `resolveBoardAccess(boardId, userId)`
 - `resolveBranchAccess(branchId, userId)`
-- `resolveSessionPromptAuthority({ branch_id, caller_user_id, session_owner_user_id })`
+- `resolveSessionPromptAuthority({ branch_id, caller_user_id, session_owner_user_id, session_sdk_home_scope })`
 
 `BranchRepository.resolveUserAccess` is the compatibility projection used by
 existing hooks; it is backed exclusively by the normalized resolver. SQL list
@@ -169,7 +177,8 @@ unavailable.
 
 Delegated mode requires an explicit `executor_command_template`. Prefer
 `{tenant_id}`, `{user_id}`, `{branch_fs_access}`, and `{branch_sdk_home}` (an
-absolute, shell-escaped branch SDK-home path, or the empty string when unused).
+absolute, shell-escaped branch SDK-home path only for a branch-scoped Session,
+or the empty string for an execution-home Session, even on an adopted branch).
 `{unix_user}` remains an opaque compatibility home key. The launcher owns
 runtime identity, storage, credentials, branch SDK-home mounting, containment,
 cancellation, and tenant isolation.

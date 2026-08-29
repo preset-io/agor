@@ -49,11 +49,20 @@ execution:
 ```
 
 The default is `inherit`, which preserves the existing home layout. With
-`per_branch`, the first supported-tool prompt on a branch stickily records the
-intent and creates `<tenantDataRoot>/branch-homes/<branchId>`. Disabling the
-deployment setting later stops new adoption but does not strand an existing
-branch's state. Archiving retains the directory; permanently deleting the
-branch removes it.
+`per_branch`, admission of the first supported independent Session on a branch
+stickily records branch intent. Its directory at
+`<tenantDataRoot>/branch-homes/<branchId>` is still created lazily when that
+Session first runs. Disabling the deployment setting later stops new adoption
+but does not strand an adopted branch's state. Archiving retains the directory;
+permanently deleting the branch removes it.
+
+Each Session also records an immutable SDK-home scope. Existing Sessions keep
+using their historical execution home even after their branch is adopted; a
+new independent Session is the deliberate migration point. Forked and spawned
+children inherit their parent's scope so one native conversation lineage never
+moves between homes. Branch intent selects the default for future independent
+Sessions, while the Session stamp selects the home used when a conversation is
+resumed.
 
 Agor sets each supported tool's config-home environment variables and mounts
 the branch directory at its real path. Cursor is refused because its config
@@ -100,9 +109,11 @@ Agor does not claim to prove an external launcher's isolation. The operator must
 - network access is explicitly controlled.
 
 Prefer `{tenant_id}`, `{user_id}`, `{branch_fs_access}`, and
-`{branch_sdk_home}`. The branch-home value is shell-escaped and is empty when
-the branch has not adopted one; the launcher owns its mount and tool-environment
-policy. `{unix_user}` remains temporarily as an opaque, validated home key for
+`{branch_sdk_home}`. The branch-home value is shell-escaped and is present only
+for a branch-scoped Session; it is empty for execution-home Sessions even when
+their branch has since been adopted. The launcher must make the same
+Session-scoped mount decision and owns its tool-environment policy.
+`{unix_user}` remains temporarily as an opaque, validated home key for
 compatible hosted launchers; it is not a Unix account and is never passed to
 sudo.
 
@@ -122,14 +133,22 @@ Board roles are **Viewer**, **Editor**, and **Manager**. Branch roles are:
 | Role         | Meaning                                                                                    |
 | ------------ | ------------------------------------------------------------------------------------------ |
 | Viewer       | View the branch and its conversations                                                      |
-| Collaborator | View, create sessions, and prompt their own sessions                                       |
+| Collaborator | View, create Sessions, and prompt branch-home Sessions                                     |
 | Manager      | Collaborator access plus branch, environment, session-lifecycle, and permission management |
 
 Branch file access is selected separately as `none`, `read`, or `read/write`. Collaborator and Manager can open a terminal only when file access is not `none`.
 
 Each entry names exactly one person or group. A person's direct entry overrides their group memberships; otherwise group permissions combine and the highest file access wins. **Others** is a fallback only for active members of the same workspace who match no person or group entry.
 
-Manager access never grants permission to prompt another person's session. Personal session sharing requires a workspace administrator to enable the feature and the session owner to name trusted people or groups. Shared prompts use the owner's home to preserve native agent-tool state, so review [the session-sharing warning](/faq#session-sharing-home-access) first.
+Collaborators and Managers may prompt another person's **branch-home** Session;
+the task runs as the actual caller while native SDK state remains branch-owned.
+An **execution-home** Session retains the stricter historical rule: prompting
+it requires a workspace administrator to enable personal session sharing and
+the Session owner to name trusted people or groups. That path uses the owner's
+home to preserve native agent-tool state, so review [the session-sharing
+warning](/faq#session-sharing-home-access) first. When the gate is disabled,
+Agor and connected gateway channels return an actionable denial rather than
+silently changing execution identity.
 
 ## Capability-policy upgrade
 

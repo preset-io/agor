@@ -524,30 +524,33 @@ export interface AgorSandboxSettings {
    * How the executor's `$HOME` is presented inside the sandbox:
    *  - `shared` (default): the daemon user's real home, with tool state/cache
    *    dirs writable and the daemon trust-root + credential dirs masked.
-   *  - `per_user`: overlay a **per-owner home store**
-   *    (`<data_home>/tenants/<tenant>/homes/<owner_id>`) at the passwd home, so
-   *    `~` is a private, persistent home per session owner. The overlay hides
-   *    the entire daemon `.agor` tree (config, db, worktrees, repos) and every
-   *    other user's home by construction. When the data root lives outside the
-   *    passwd home, Agor masks that root explicitly. Symlink aliases of the
-   *    home and data root are masked as well. The branch, base repo, and
-   *    managed agentic-tools are re-exposed on top. This is the substrate that
-   *    lets per-user isolation work without host accounts. Default: `shared`.
+   *  - `per_user`: overlay a **per-execution-user home store**
+   *    (`<data_home>/tenants/<tenant>/homes/<user_id>`) at the passwd home, so
+   *    `~` is a private, persistent home. Historical execution-home sessions
+   *    select their owner; branch-home sessions select the current prompt
+   *    actor. The overlay hides the entire daemon `.agor` tree (config, db,
+   *    worktrees, repos) and every other user's home by construction. When the
+   *    data root lives outside the passwd home, Agor masks that root explicitly.
+   *    Symlink aliases of the home and data root are masked as well. The branch,
+   *    base repo, and managed agentic-tools are re-exposed on top. This is the
+   *    substrate that lets per-user isolation work without host accounts.
+   *    Default: `shared`.
    */
   home_mode?: 'shared' | 'per_user';
   /**
-   * Whether new branches receive their own per-branch SDK home (relocating the
-   * agentic tool's config/state dir — `.claude`/`.codex`/… — to a branch-keyed
-   * directory under `<tenantDataRoot>/branch-homes/<branchId>`) instead of
-   * inheriting the session-owner's home:
-   *  - `inherit` (default): today's behavior — SDK state lives in whatever home
-   *    `home_mode` presents. No branch SDK homes are created. Byte-for-byte
-   *    identical to a deployment that never set this key.
-   *  - `per_branch`: a branch prompted for the first time under this mode gets a
-   *    branch SDK home, recorded stickily on the branch. See §8B.3: the branch
-   *    record — not the live value of this flag — governs whether an existing
-   *    branch keeps its home, so flipping back to `inherit` only stops NEW
-   *    branches from getting one; it never strands an existing branch's history.
+   * Whether fresh sessions on an unadopted branch receive a per-branch SDK
+   * home (relocating the agentic tool's config/state dir —
+   * `.claude`/`.codex`/… — to a branch-keyed directory under
+   * `<tenantDataRoot>/branch-homes/<branchId>`) instead of inheriting the
+   * session-owner's home:
+   *  - `inherit` (default): an unadopted branch creates execution-home sessions.
+   *    Existing sessions and previously adopted branches retain their durable
+   *    behavior. Byte-for-byte identical to a deployment that never set this key.
+   *  - `per_branch`: the first supported independent session on an unadopted
+   *    branch records branch intent and is stamped to use the branch SDK home.
+   *    The branch record governs future independent sessions; the immutable
+   *    Session stamp governs resume. Flipping back to `inherit` stops adoption
+   *    of other branches without moving any existing SDK conversation.
    * Default: `inherit`.
    */
   sdk_home_mode?: 'inherit' | 'per_branch';
@@ -690,7 +693,8 @@ export interface AgorExecutionSettings {
    * - {branch_id} - Branch ID (if available)
    * - {user_id} - Trusted authenticated Agor user UUID (if available)
    * - {branch_fs_access} - Actor's branch projection: none, read, or write
-   * - {branch_sdk_home} - Absolute branch SDK-home path, or empty when unused
+   * - {branch_sdk_home} - Absolute path for a branch-home Session, or empty for
+   *   an execution-home Session
    * - {tenant_id} - Trusted ambient tenant ID (shell-escaped; fails if unavailable)
    *
    * The template command receives JSON payload via stdin and should pipe it

@@ -142,8 +142,8 @@ export interface SandboxPathContext {
    * resolve to the same location inside and outside the sandbox. The daemon
    * guarantees the source exists before spawn (bwrap aborts on a missing
    * `--bind` source; `dropMasksForMissingTargets` only drops tmpfs/ro-bind,
-   * never `--bind` — design §7.2). Unset ⇒ no branch SDK home (feature off or
-   * branch never adopted one) ⇒ byte-for-byte today's behavior.
+   * never `--bind` — design §7.2). Unset means this Session is stamped for its
+   * execution home, even if another Session on the branch uses branch state.
    */
   branchSdkHomeDir?: string;
 }
@@ -400,7 +400,7 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
 /**
  * Append the per-branch SDK home binds (design §7). Shared by both home modes so
  * the mount is identical regardless of overlay. The branch home is bound at its
- * own real path. No-op when the branch has no SDK home — the inert default path.
+ * own real path. No-op for an execution-home Session — the inert default path.
  */
 function appendBranchSdkHomeBinds(args: string[], ctx: SandboxPathContext): void {
   if (!ctx.branchSdkHomeDir) return;

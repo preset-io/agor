@@ -407,7 +407,7 @@ describe('resolveWidget', () => {
           resolveSessionPromptAuthority: denyPrompt,
         }
       )
-    ).rejects.toThrow(/permission from the session owner/);
+    ).rejects.toThrow(/don't have permission to prompt this branch/i);
   });
 
   it('rechecks prompt authority after submit effects and fails closed before auto-resume', async () => {
@@ -436,7 +436,7 @@ describe('resolveWidget', () => {
           resolveSessionPromptAuthority,
         }
       )
-    ).rejects.toThrow(/required to resume this widget/);
+    ).rejects.toThrow(/don't have permission to prompt this branch/i);
 
     expect(resolveSessionPromptAuthority).toHaveBeenCalledTimes(2);
     expect(applySubmit).toHaveBeenCalledOnce();

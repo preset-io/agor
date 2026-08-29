@@ -1,17 +1,17 @@
 import path from 'node:path';
 
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
-import type { AgorConfig } from '@agor/core/config';
-import { getBranchHomePath } from '@agor/core/config';
-import type { AgenticToolName } from '@agor/core/types';
+import type { AgorConfig, KeyResolutionContext } from '@agor/core/config';
+import { getBranchHomePath, resolveApiKey } from '@agor/core/config';
+import type { AgenticToolName, SessionSdkHomeScope, UserID } from '@agor/core/types';
 
 /**
  * Per-branch SDK home resolution (design §6/§7/§8/§9).
  *
  * The deployment flag `execution.sandbox.sdk_home_mode` decides whether NEW
- * branches adopt an SDK home; once a branch has one it is sticky (recorded on
- * the branch record — see design §8B.3), so the *live* value of this flag never
- * strands an existing branch's accumulated state. This module owns:
+ * sessions on an unadopted branch use a branch SDK home. Branch intent and the
+ * session's immutable scope are both sticky, so the *live* value of this flag
+ * never moves an existing SDK conversation between homes. This module owns:
  *   1. the deployment-level policy read (`resolveSdkHomeConfig`);
  *   2. the per-tool env-var wiring that points a tool at the branch home.
  *
@@ -29,11 +29,60 @@ export type SdkHomeMode = 'inherit' | 'per_branch';
  */
 export function resolveSdkHomeConfig(config: Pick<AgorConfig, 'execution'>): {
   mode: SdkHomeMode;
-  /** Whether a branch prompted for the first time should adopt an SDK home. */
-  enabledForNewBranches: boolean;
+  /** Whether a fresh session on an unadopted branch should use a branch home. */
+  enabledForNewSessions: boolean;
 } {
   const mode: SdkHomeMode = config.execution?.sandbox?.sdk_home_mode ?? 'inherit';
-  return { mode, enabledForNewBranches: mode === 'per_branch' };
+  return { mode, enabledForNewSessions: mode === 'per_branch' };
+}
+
+/**
+ * Decide the immutable SDK-state boundary for a newly created session.
+ *
+ * A genealogical child may explicitly inherit its parent's scope because it
+ * continues the parent's SDK lineage. Every independent Session follows the
+ * branch's sticky intent first, then the live deployment default. `adoptBranch`
+ * lets the caller persist branch intent in the same transaction as Session
+ * creation.
+ */
+export function resolveNewSessionSdkHomeScope(input: {
+  branchSdkHomeIntent: 'per_branch' | null;
+  enabledForNewSessions: boolean;
+  inheritedScope?: SessionSdkHomeScope;
+}): { scope: SessionSdkHomeScope; adoptBranch: boolean } {
+  if (input.inheritedScope) {
+    return { scope: input.inheritedScope, adoptBranch: false };
+  }
+  if (input.branchSdkHomeIntent === 'per_branch') {
+    return { scope: 'branch', adoptBranch: false };
+  }
+  return input.enabledForNewSessions
+    ? { scope: 'branch', adoptBranch: true }
+    : { scope: 'execution_home', adoptBranch: false };
+}
+
+/**
+ * Resolve the executor-time compatibility seam.
+ *
+ * Branch intent owns lifecycle and is the default for future sessions, while
+ * the session stamp owns resume behavior. Therefore an execution-home session
+ * deliberately ignores an adopted branch. A branch-scoped session without
+ * matching branch intent is corrupt metadata and must fail closed rather than
+ * silently resuming from a different home.
+ */
+export function sessionUsesBranchSdkHome(input: {
+  sessionScope: SessionSdkHomeScope | undefined;
+  branchSdkHomeIntent: 'per_branch' | null;
+}): boolean {
+  // Undefined is tolerated only as a defensive rolling-upgrade/test-fixture
+  // fallback and chooses the non-sharing historical behavior.
+  if ((input.sessionScope ?? 'execution_home') === 'execution_home') return false;
+  if (input.branchSdkHomeIntent !== 'per_branch') {
+    throw new Error(
+      'Branch-scoped session references a branch without branch SDK-home intent; refusing fallback.'
+    );
+  }
+  return true;
 }
 
 /**
@@ -84,6 +133,35 @@ export function branchSdkHomeAuthUnsupportedReason(input: {
     );
   }
   return undefined;
+}
+
+/**
+ * Resolve the complete actor-sensitive compatibility policy at an admission
+ * or launch boundary. Keeping the credential lookup beside the static tool
+ * policy prevents Session, scheduler, and executor paths from drifting.
+ */
+export async function resolveBranchSdkHomeIncompatibility(input: {
+  tool: AgenticToolName;
+  delegated: boolean;
+  userId?: UserID;
+  db: NonNullable<KeyResolutionContext['db']>;
+}): Promise<string | undefined> {
+  const toolReason = branchSdkHomeUnsupportedReason(input.tool);
+  if (toolReason) return toolReason;
+
+  const localCodexAuth =
+    input.tool === 'codex' && !input.delegated
+      ? await resolveApiKey('OPENAI_API_KEY', {
+          userId: input.userId,
+          db: input.db,
+          tool: 'codex',
+        })
+      : undefined;
+  return branchSdkHomeAuthUnsupportedReason({
+    tool: input.tool,
+    delegated: input.delegated,
+    auth: localCodexAuth,
+  });
 }
 
 export type BranchSdkHomeLaunch = {

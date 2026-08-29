@@ -7,6 +7,11 @@ const ALICE = 'user-alice';
 const BOB = 'user-bob';
 const SHARED = { branch_id: 'branch-shared', share_owner_home: true };
 const NOT_SHARED = { branch_id: 'branch-private', share_owner_home: false };
+const BRANCH_SCOPED = {
+  branch_id: 'branch-shared-state',
+  share_owner_home: false,
+  allow_caller_identity: true,
+};
 
 describe('determineSpawnIdentity', () => {
   it('keeps a same-owner child in the owner genealogy without shared-home audit', () => {
@@ -37,6 +42,16 @@ describe('determineSpawnIdentity', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it('attributes a branch-scoped cross-user child to the caller', () => {
+    expect(
+      determineSpawnIdentity(
+        { created_by: BOB },
+        { user_id: ALICE, role: ROLES.MEMBER },
+        BRANCH_SCOPED
+      )
+    ).toEqual({ created_by: ALICE, usesSharedHome: false });
   });
 
   it.each([ROLES.MEMBER, ROLES.ADMIN, ROLES.SUPERADMIN])(

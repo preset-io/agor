@@ -130,6 +130,17 @@ export function getDefaultPermissionMode(agenticTool: AgenticToolName): Permissi
   }
 }
 
+/**
+ * Durable SDK-state boundary for a session.
+ *
+ * This is stamped once when the session is created. It is deliberately not
+ * derived from the branch or the live deployment flag at prompt time: doing
+ * so would silently move a resumable SDK conversation between homes after an
+ * upgrade or configuration change.
+ */
+export const SESSION_SDK_HOME_SCOPES = ['execution_home', 'branch'] as const;
+export type SessionSdkHomeScope = (typeof SESSION_SDK_HOME_SCOPES)[number];
+
 export interface Session {
   /** Unique session identifier (UUIDv7) */
   session_id: SessionID;
@@ -162,9 +173,22 @@ export interface Session {
    * - Changing it would break access to existing SDK session state
    * - If the delegated home key changes or disappears, resumable state may be unreachable
    *
-   * Before prompting, the creator's current key is checked against the stamp.
+   * Before prompting an execution-home Session, the creator's current key is
+   * checked against the stamp. Branch-home Sessions execute as the current
+   * prompt actor and do not consult this historical compatibility key.
    */
   unix_username: string | null;
+
+  /**
+   * Immutable owner of this session's resumable SDK/config state.
+   *
+   * `execution_home` preserves the historical behavior: the session resumes
+   * from the execution home stamped by `unix_username`. `branch` uses the
+   * branch-owned SDK home and the current prompt actor's execution identity.
+   * Existing rows are backfilled to `execution_home`; only newly admitted
+   * sessions may opt into `branch`.
+   */
+  sdk_home_scope: SessionSdkHomeScope;
 
   /** Branch ID - all sessions must be associated with an Agor-managed branch */
   branch_id: BranchID;
@@ -521,7 +545,7 @@ export type SchedulerInitializationFailureCode =
 /** Session data accepted before defaults and configuration references are materialized. */
 export type CreateSessionInput = Omit<
   Partial<Session>,
-  'agentic_tool' | 'agentic_tool_preset_id' | 'model_config'
+  'agentic_tool' | 'agentic_tool_preset_id' | 'model_config' | 'sdk_home_scope'
 > & {
   agentic_tool?: AgenticToolName;
   agentic_tool_preset_id?: AgenticToolConfigurationReference | null;
@@ -529,7 +553,7 @@ export type CreateSessionInput = Omit<
 };
 
 /** Session patch semantics: omit/undefined preserves, string sets, null clears. */
-export type SessionUpdate = Omit<Partial<Session>, 'sdk_session_id'> & {
+export type SessionUpdate = Omit<Partial<Session>, 'sdk_session_id' | 'sdk_home_scope'> & {
   sdk_session_id?: string | null;
 };
 

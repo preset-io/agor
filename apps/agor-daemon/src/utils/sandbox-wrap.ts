@@ -107,7 +107,7 @@ export function buildSandboxWrap(params: {
   branchAccess?: 'write' | 'read' | 'none';
   /**
    * Per-branch SDK home to bind into the sandbox (design §7). Absolute host
-   * path of `branch-homes/<branchId>`; unset ⇒ no branch SDK home ⇒ inert.
+   * path of `branch-homes/<branchId>`; unset for an execution-home Session.
    */
   branchSdkHomeDir?: string;
   /** Immutable deployment paths injected by configureExecutor at startup. */

@@ -46,6 +46,7 @@ function makeParent(unixUsername: string | null): Session {
     branch_id: 'branch-1' as Session['branch_id'],
     created_by: 'parent-owner' as UUID,
     unix_username: unixUsername,
+    sdk_home_scope: 'execution_home',
   } as Session;
 }
 
@@ -106,6 +107,15 @@ describe('resolveChildIdentity — internal (provider-less) calls', () => {
       unix_username: null,
     });
   });
+
+  it('does not require the old owner stamp for a branch-scoped child', async () => {
+    mockMode('delegated');
+    const parent = { ...makeParent(null), sdk_home_scope: 'branch' as const };
+    await expect(resolveInternalChildIdentity(makeService(), parent)).resolves.toEqual({
+      created_by: 'parent-owner',
+      unix_username: null,
+    });
+  });
 });
 
 describe('resolveChildIdentity — external calls', () => {
@@ -116,6 +126,7 @@ describe('resolveChildIdentity — external calls', () => {
     const resolveSessionPromptAuthority = vi.fn(async () => ({
       allowed: false,
       source: 'denied' as const,
+      denial_reason: 'branch_access_required' as const,
     }));
     Object.assign(service as unknown as Record<string, unknown>, {
       app: {
@@ -131,7 +142,43 @@ describe('resolveChildIdentity — external calls', () => {
 
     await expect(
       resolveExternalChildIdentity(service, makeParent('alice'), ownerId)
-    ).rejects.toThrow(/Collaborator access is required/);
-    expect(resolveSessionPromptAuthority).toHaveBeenCalledWith('branch-1', ownerId, ownerId);
+    ).rejects.toThrow(/Only Collaborators and Managers/);
+    expect(resolveSessionPromptAuthority).toHaveBeenCalledWith(
+      'branch-1',
+      ownerId,
+      ownerId,
+      'execution_home'
+    );
+  });
+
+  it('attributes a branch-scoped cross-user child to the caller', async () => {
+    mockMode('delegated');
+    const callerId = 'branch-collaborator' as UUID;
+    const service = makeService();
+    const parent = { ...makeParent(null), sdk_home_scope: 'branch' as const };
+    const resolveSessionPromptAuthority = vi.fn(async () => ({
+      allowed: true,
+      execution_user_id: callerId,
+      source: 'branch_session' as const,
+    }));
+    Object.assign(service as unknown as Record<string, unknown>, {
+      app: {
+        service: (name: string) => {
+          if (name === 'branches') {
+            return { get: vi.fn(async () => ({ branch_id: 'branch-1' }) as Branch) };
+          }
+          throw new Error(`Unexpected service: ${name}`);
+        },
+      },
+      branchRepo: { resolveSessionPromptAuthority },
+      usersRepo: {
+        findById: vi.fn(async () => ({ user_id: callerId, unix_username: 'caller-home' })),
+      },
+    });
+
+    await expect(resolveExternalChildIdentity(service, parent, callerId)).resolves.toEqual({
+      created_by: callerId,
+      unix_username: 'caller-home',
+    });
   });
 });

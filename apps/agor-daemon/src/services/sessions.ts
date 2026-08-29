@@ -57,8 +57,10 @@ import type {
   QueryParams,
   Session,
   SessionID,
+  SessionSdkHomeScope,
   SessionUpdate,
   TaskID,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import {
@@ -68,6 +70,12 @@ import {
 } from '@agor/core/types';
 import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import {
+  branchSdkHomeUnsupportedReason,
+  resolveBranchSdkHomeIncompatibility,
+  resolveNewSessionSdkHomeScope,
+  resolveSdkHomeConfig,
+} from '../branch-sdk-home.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
 import {
   determineSpawnIdentity,
@@ -75,6 +83,7 @@ import {
   loadUnixUsernameForUser,
   PERMISSION_RANK,
   resolveChildUnixUsername,
+  sessionPromptDeniedMessage,
 } from '../utils/branch-authorization.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
@@ -161,6 +170,11 @@ export type SessionParams = QueryParams<{
      * Root-level service params are server-controlled; transport query/data cannot set this marker.
      */
     _agenticConfigResolved?: boolean;
+    /**
+     * Trusted session-admission override. Genealogical children inherit their
+     * parent's SDK lineage; independent creates resolve branch intent + config.
+     */
+    _sdkHomeScope?: SessionSdkHomeScope;
   };
 
 /**
@@ -348,6 +362,19 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (!existing || existing.agentic_tool === nextTool) return;
     requireActiveAgenticTool(existing.agentic_tool);
 
+    // A branch-scoped session cannot be switched to a tool whose native state
+    // cannot honor the branch-state/caller-credential split. Enforce this at
+    // the mutation boundary rather than waiting for a confusing launch-time
+    // refusal.
+    if (existing.sdk_home_scope === 'branch') {
+      const unsupportedReason = branchSdkHomeUnsupportedReason(nextTool);
+      if (unsupportedReason) {
+        throw new BadRequest(
+          `${nextTool} cannot use this session's branch SDK home because ${unsupportedReason}.`
+        );
+      }
+    }
+
     const taskCount = await this.taskRepo.countBySession(sessionId);
     if (taskCount > 0) {
       // Conflict (409), not Forbidden (403): nothing about the caller's identity
@@ -371,6 +398,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
   ): Promise<Session | Session[]> {
     if (Array.isArray(data)) {
       return Promise.all(data.map((session) => this.create(session, params) as Promise<Session>));
+    }
+    if (Object.hasOwn(data, 'sdk_home_scope')) {
+      throw new BadRequest('sdk_home_scope is server-managed and cannot be set by clients');
     }
     const agenticTool = requireActiveAgenticTool(data.agentic_tool ?? 'claude-code');
     this.assertDeploymentToolConfigured(agenticTool);
@@ -440,7 +470,61 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       throw new BadRequest('model_config must be resolved before session creation');
     }
     this.assertSupportedModelConfig(agenticTool, createData.model_config);
-    const created = await super.create(createData, params);
+    if (!createData.branch_id) {
+      throw new BadRequest('Session must have a branch_id');
+    }
+
+    // Session scope, branch adoption, and the row itself form one metadata
+    // decision. This prevents a crash from leaving an adopted branch without
+    // the session that caused adoption (or the inverse). The live deployment
+    // flag is consulted only here; executor startup reads the immutable stamp.
+    const tenantId = params?.tenant?.tenant_id ?? getCurrentTenantId();
+    const created = await runWithTenantDatabaseTransaction(this.db, tenantId, async (scoped) => {
+      const branchRepo = new BranchRepository(scoped);
+      const branch = await branchRepo.findById(createData.branch_id as BranchID);
+      if (!branch) throw new NotFound(`Branch ${createData.branch_id} not found`);
+
+      // Minimal service harnesses predate application configuration. Treat an
+      // absent getter as the product default (`inherit`); production always
+      // supplies the resolved application config.
+      const config =
+        typeof (this.app as { get?: unknown }).get === 'function'
+          ? this.app.get('config')
+          : ({} as import('@agor/core/config').AgorConfig);
+      const sdkHomeConfig = resolveSdkHomeConfig(config);
+      const admission = resolveNewSessionSdkHomeScope({
+        branchSdkHomeIntent: branch.sdk_home ?? null,
+        enabledForNewSessions: sdkHomeConfig.enabledForNewSessions,
+        inheritedScope: params?._sdkHomeScope,
+      });
+      if (admission.scope === 'branch') {
+        // Admission must reject credential/state combinations before it
+        // performs the sticky branch transition. Otherwise a failed first
+        // Codex-native Session would permanently adopt the branch even though
+        // no usable branch-scoped conversation was created. Launch repeats
+        // this actor-sensitive check because a later shared prompt may have a
+        // different caller and therefore a different credential mode.
+        const delegated = config.execution?.unix_user_mode === 'delegated';
+        const unsupportedReason = await resolveBranchSdkHomeIncompatibility({
+          tool: agenticTool,
+          delegated,
+          userId: createData.created_by as UserID | undefined,
+          db: scoped,
+        });
+        if (unsupportedReason) {
+          throw new BadRequest(
+            `${agenticTool} cannot use a branch SDK home because ${unsupportedReason}. ` +
+              'Choose a supported tool or authentication mode.'
+          );
+        }
+      }
+      if (admission.adoptBranch) await branchRepo.adoptSdkHome(branch.branch_id);
+
+      return new SessionRepository(scoped).create({
+        ...createData,
+        sdk_home_scope: admission.scope,
+      });
+    });
     if (Array.isArray(created)) {
       throw new Error('Single-session creation returned multiple sessions');
     }
@@ -606,9 +690,11 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    * being created via spawn / fork / btw. See {@link determineSpawnIdentity}
    * for the rules.
    *
-   * Same-owner children stay with their owner. A cross-user child is accepted
-   * only through the Session owner's personal sharing rule and stays in that
-   * owner's genealogy and execution home.
+   * Same-owner children stay with their owner. A cross-user child of an
+   * execution-home session is accepted only through the owner's personal
+   * sharing rule and keeps that owner/home. A branch-scoped child may instead
+   * be attributed to an authorized caller because its SDK state is not in the
+   * parent's execution home.
    *
    * Internal calls (`params.provider == null`) preserve parent attribution —
    * they're service-to-service or scheduler-driven and have no human caller
@@ -626,6 +712,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
    *   service-to-service callers have no human caller to attribute to, and the
    *   parent's stamped value is the closest thing to ground truth.
    * - Personal session sharing → inherit the parent's execution-home key.
+   * - Branch-scoped sharing → load the prompt caller's current key.
    * - Otherwise (including the common same-user path) → load the attributed
    *   caller's CURRENT unix_username via {@link loadUnixUsernameForUser}. We
    *   do NOT inherit parent.unix_username on same-user forks, because the user's
@@ -642,11 +729,13 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // parent must fail here, not later at prompt time.
     if (!params?.provider) {
       const inheritedUnixUsername = parent.unix_username ?? null;
-      assertExecutionHomeKeySatisfiesMode(
-        inheritedUnixUsername,
-        resolveExecutionSecurityMode().unixUserMode,
-        `the parent session's owner (${parent.created_by})`
-      );
+      if ((parent.sdk_home_scope ?? 'execution_home') === 'execution_home') {
+        assertExecutionHomeKeySatisfiesMode(
+          inheritedUnixUsername,
+          resolveExecutionSecurityMode().unixUserMode,
+          `the parent session's owner (${parent.created_by})`
+        );
+      }
       return { created_by: parent.created_by, unix_username: inheritedUnixUsername };
     }
 
@@ -660,25 +749,25 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     // Resolve the personal, owner-authored session-sharing grant. This is the
     // only path that may preserve the parent owner's home for a cross-user
     // child; branch managers and filesystem access never imply it.
-    let sharing: { branch_id: string; share_owner_home: boolean } | undefined;
+    let sharing:
+      | { branch_id: string; share_owner_home: boolean; allow_caller_identity: boolean }
+      | undefined;
     try {
       const wt = await this.app.service('branches').get(parent.branch_id, { provider: undefined });
       if (caller.user_id) {
         const authority = await this.branchRepo.resolveSessionPromptAuthority(
           (wt as Branch).branch_id,
           caller.user_id as UUID,
-          parent.created_by as UUID
+          parent.created_by as UUID,
+          parent.sdk_home_scope
         );
         sharing = {
           branch_id: (wt as Branch).branch_id,
           share_owner_home: authority.source === 'personal_session_sharing',
+          allow_caller_identity: authority.source === 'branch_session',
         };
         if (!authority.allowed) {
-          throw new Forbidden(
-            caller.user_id === parent.created_by
-              ? 'Collaborator access is required to fork or spawn from this session.'
-              : 'The session owner has not shared their sessions with you.'
-          );
+          throw new Forbidden(sessionPromptDeniedMessage(authority));
         }
       }
     } catch (error) {
@@ -777,7 +866,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         tasks: [],
         // Don't copy sdk_session_id - fork will get its own via forkSession:true
       },
-      { ...params, _agenticConfigResolved: true }
+      { ...params, _agenticConfigResolved: true, _sdkHomeScope: parent.sdk_home_scope }
     );
 
     // Cast forkedSession to Session to handle return type
@@ -956,7 +1045,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         callback_config: callbackConfig,
         // Don't copy sdk_session_id - spawn will get its own via forkSession:true
       },
-      { ...params, _agenticConfigResolved: true }
+      { ...params, _agenticConfigResolved: true, _sdkHomeScope: parent.sdk_home_scope }
     );
 
     // Cast spawnedSession to Session to handle return type (create returns Session | Session[])
@@ -1386,6 +1475,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     data: SessionUpdate,
     params?: SessionParams
   ): Promise<Session | Session[]> {
+    if (Object.hasOwn(data, 'sdk_home_scope')) {
+      throw new BadRequest('sdk_home_scope is immutable and server-managed');
+    }
     let replaceAgenticConfig = false;
     if (
       (id === null || Array.isArray(id)) &&

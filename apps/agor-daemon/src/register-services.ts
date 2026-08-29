@@ -18,7 +18,6 @@ import {
   MESSAGE_PAGINATION,
   type ResolvedDeploymentConfig,
   requirePublicBaseUrl,
-  resolveApiKey,
   resolveDeploymentAgenticToolPolicy,
   resolveExecutionSecurityMode,
   resolveMultiTenancyConfig,
@@ -112,10 +111,9 @@ import type express from 'express';
 import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
 import {
-  branchSdkHomeAuthUnsupportedReason,
-  branchSdkHomeUnsupportedReason,
+  resolveBranchSdkHomeIncompatibility,
   resolveBranchSdkHomeLaunch,
-  resolveSdkHomeConfig,
+  sessionUsesBranchSdkHome,
 } from './branch-sdk-home.js';
 import type {
   BoardsServiceImpl,
@@ -1151,103 +1149,96 @@ function createExecuteHandler(
       }
     }
 
-    // Per-owner home store for `sandbox.home_mode: per_user` — a private,
-    // persistent home overlaid at the passwd home inside the sandbox. Keyed by
-    // the SESSION OWNER (not the prompter): the home carries the owner's tool
-    // auth/state, so prompting another user's session runs against the owner's
-    // home. The SOURCE is the owner's `filesystem_home`
+    // Per-execution home store for `sandbox.home_mode: per_user` — a private,
+    // persistent home overlaid at the passwd home inside the sandbox. Legacy
+    // `execution_home` sessions keep using their immutable owner identity.
+    // Branch-scoped sessions instead use the prompt actor's home: resumable SDK
+    // state comes from the branch overlay, so exposing the session owner's
+    // arbitrary files would be both unnecessary and unsafe. The SOURCE is the
+    // selected user's `filesystem_home`
     // if set (the migration points it at their existing /home/<user> so no files
     // move), else the canonical store (see resolveOwnerHomeStore). Only computed
     // when the mode is active — and FAIL CLOSED if the owner can't be resolved.
     let sandboxHomeStore: string | undefined;
     if (sandboxCfg?.enabled === true && sandboxCfg?.home_mode === 'per_user') {
-      if (!session.created_by) {
+      const executionHomeUserId =
+        session.sdk_home_scope === 'branch' ? userId : (session.created_by as UserID | undefined);
+      if (!executionHomeUserId) {
         throw new Error(
-          'sandbox home_mode=per_user requires a resolvable session owner; refusing to spawn ' +
+          'sandbox home_mode=per_user requires a resolvable execution user; refusing to spawn ' +
             'with a shared home (fail closed).'
         );
       }
-      const ownerFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+      const executionFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
         new UsersRepository(tenantDb)
-          .findById(session.created_by as string)
+          .findById(executionHomeUserId as string)
           .then((u) => u?.filesystem_home?.trim() || undefined)
       );
       sandboxHomeStore = resolveOwnerHomeStore({
         config,
         tenantId,
-        ownerUserId: session.created_by,
-        filesystemHome: ownerFilesystemHome,
+        ownerUserId: executionHomeUserId,
+        filesystemHome: executionFilesystemHome,
       });
     }
 
     // ── Per-branch SDK home (design §7/§8/§11) ─────────────────────────────
-    // Decide whether THIS prompt runs against a per-branch SDK home, adopt one
-    // stickily for a new branch under `per_branch`, and refuse tools that cannot
-    // relocate their config home. Inert by default: with `sdk_home_mode` unset
-    // AND no branch-record intent, nothing here changes behavior.
+    // Executor startup follows the SESSION stamp, never today's deployment
+    // flag or branch intent alone. This is the compatibility seam that lets an
+    // old, resumable session keep its historical execution home while a fresh
+    // session on the same adopted branch uses branch-owned SDK state.
     const sdkHomeTool = session.agentic_tool as AgenticToolName;
-    const sdkHomePolicy = resolveSdkHomeConfig(config);
     const isDelegatedExecution = (config.execution?.unix_user_mode ?? 'simple') === 'delegated';
     let sandboxBranchSdkHome: string | undefined;
     let branchSdkHomeEnv: Record<string, string> | undefined;
     let branchSdkHomeTemplatePath = '';
-    if (session.branch_id) {
+    const useBranchSdkHome = sessionUsesBranchSdkHome({
+      sessionScope: session.sdk_home_scope,
+      branchSdkHomeIntent,
+    });
+    if (useBranchSdkHome) {
+      if (!session.branch_id) {
+        throw new Error(`Branch-scoped session ${session.session_id} has no branch`);
+      }
       const branchId = session.branch_id as string;
-      const alreadyHasHome = branchSdkHomeIntent === 'per_branch';
-      const adoptHome = !alreadyHasHome && sdkHomePolicy.enabledForNewBranches;
-      if (alreadyHasHome || adoptHome) {
-        // A relocatable directory is necessary but not sufficient: OpenCode's
-        // current XDG data home also contains its native credential file. Until
-        // its actor credential namespace is split from branch-owned state, a
-        // branch home would either lose configured credentials or share them.
-        const localCodexAuth =
-          sdkHomeTool === 'codex' && !isDelegatedExecution
-            ? await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
-                resolveApiKey('OPENAI_API_KEY', { userId, db: tenantDb, tool: 'codex' })
-              )
-            : undefined;
-        const unsupportedReason =
-          branchSdkHomeUnsupportedReason(sdkHomeTool) ??
-          branchSdkHomeAuthUnsupportedReason({
-            tool: sdkHomeTool,
-            delegated: isDelegatedExecution,
-            auth: localCodexAuth,
-          });
-        if (unsupportedReason) {
-          throw new BadRequest(
-            `${AGENTIC_TOOL_DISPLAY_NAMES[sdkHomeTool]} cannot run on a branch with a per-branch ` +
-              `SDK home because ${unsupportedReason}. Use a supported tool, or ` +
-              `run this tool on a branch without a per-branch SDK home.`
-          );
-        }
-        // Sticky adoption: record the intent once so later prompts keep the home
-        // regardless of the global flag's future value (§8B.3).
-        if (adoptHome) {
-          await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
-            new BranchRepository(tenantDb).adoptSdkHome(branchId)
-          );
-        }
-        const branchHomeDir = getBranchHomePath(branchId, tenantId ?? undefined);
-        // Delegated mode: Agor mounts nothing; the external launcher owns
-        // enforcement and is told the path via `{branch_sdk_home}` (§7.4). We do
-        // not inject env, create dirs, or mount here.
-        branchSdkHomeTemplatePath = branchHomeDir;
-        if (!isDelegatedExecution) {
-          // Lazy-create the branch home + per-tool subdirs on first prompt
-          // (§6.2); idempotent, and the bwrap --bind source must exist pre-spawn
-          // (§7.2 — dropMasksForMissingTargets never drops a --bind).
-          await mkdir(branchHomeDir, { recursive: true });
-          const launch = resolveBranchSdkHomeLaunch({
-            tool: sdkHomeTool,
-            branchId,
-            tenantId: tenantId ?? undefined,
-          });
-          branchSdkHomeEnv = launch.envVars;
-          for (const dir of launch.ensureDirs) await mkdir(dir, { recursive: true });
-          // Bind the branch home into the sandbox (consumed by buildSandboxWrap).
-          // Harmless when the sandbox is disabled (buildSandboxWrap returns null).
-          sandboxBranchSdkHome = branchHomeDir;
-        }
+      // A relocatable directory is necessary but not sufficient: OpenCode's
+      // current XDG data home also contains its native credential file. Until
+      // its actor credential namespace is split from branch-owned state, a
+      // branch home would either lose configured credentials or share them.
+      const unsupportedReason = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        resolveBranchSdkHomeIncompatibility({
+          tool: sdkHomeTool,
+          delegated: isDelegatedExecution,
+          userId,
+          db: tenantDb,
+        })
+      );
+      if (unsupportedReason) {
+        throw new BadRequest(
+          `${AGENTIC_TOOL_DISPLAY_NAMES[sdkHomeTool]} cannot run in a branch-scoped session ` +
+            `because ${unsupportedReason}. Use a supported tool or authentication mode.`
+        );
+      }
+      const branchHomeDir = getBranchHomePath(branchId, tenantId ?? undefined);
+      // Delegated mode: Agor mounts nothing; the external launcher owns
+      // enforcement and is told the path via `{branch_sdk_home}` (§7.4). We do
+      // not inject env, create dirs, or mount here.
+      branchSdkHomeTemplatePath = branchHomeDir;
+      if (!isDelegatedExecution) {
+        // Lazy-create the branch home + per-tool subdirs on first prompt
+        // (§6.2); idempotent, and the bwrap --bind source must exist pre-spawn
+        // (§7.2 — dropMasksForMissingTargets never drops a --bind).
+        await mkdir(branchHomeDir, { recursive: true });
+        const launch = resolveBranchSdkHomeLaunch({
+          tool: sdkHomeTool,
+          branchId,
+          tenantId: tenantId ?? undefined,
+        });
+        branchSdkHomeEnv = launch.envVars;
+        for (const dir of launch.ensureDirs) await mkdir(dir, { recursive: true });
+        // Bind the branch home into the sandbox (consumed by buildSandboxWrap).
+        // Harmless when the sandbox is disabled (buildSandboxWrap returns null).
+        sandboxBranchSdkHome = branchHomeDir;
       }
     }
 
@@ -1256,11 +1247,19 @@ function createExecuteHandler(
     const { resolveDelegatedHomeKey } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
-    const sessionUnixUser = session.unix_username;
+    let executionHomeKey = session.unix_username;
+    if (unixUserMode === 'delegated' && session.sdk_home_scope === 'branch') {
+      if (!userId) throw new Error('Missing prompt actor for delegated branch-scoped execution');
+      executionHomeKey = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        new UsersRepository(tenantDb)
+          .findById(userId)
+          .then((user) => user?.unix_username?.trim() || null)
+      );
+    }
 
     const delegatedHomeKeyResolution = resolveDelegatedHomeKey({
       mode: unixUserMode,
-      executionHomeKey: sessionUnixUser,
+      executionHomeKey,
     });
 
     const executorHomeDir = homedir();
@@ -1428,8 +1427,8 @@ function createExecuteHandler(
         sandboxWorktreesRoot,
         principalBranchAccess,
         // Per-branch SDK home to bind into the sandbox (design §7). Undefined
-        // when the feature is off, the branch never adopted one, or in delegated
-        // mode (where the launcher mounts it via the {branch_sdk_home} template).
+        // for execution-home sessions and in delegated mode (where the launcher
+        // mounts it via the {branch_sdk_home} template).
         sandboxBranchSdkHome,
       },
     };
@@ -1454,8 +1453,8 @@ function createExecuteHandler(
         branch_id: session.branch_id,
         user_id: userId,
         branch_fs_access: principalBranchAccess,
-        // Delegated launchers own SDK-home enforcement (§7.4): absolute path when
-        // this branch has an SDK home, empty string otherwise.
+        // Delegated launchers own SDK-home enforcement (§7.4): absolute path for
+        // a branch-scoped session, empty string for an execution-home session.
         branch_sdk_home: branchSdkHomeTemplatePath,
       },
       onSpawn: (child, spawnContext) => {
