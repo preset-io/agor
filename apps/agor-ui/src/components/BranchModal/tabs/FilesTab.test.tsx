@@ -25,7 +25,6 @@ vi.mock('../../FileCollection/FileCollection', () => ({
 }));
 
 vi.mock('../../CodePreviewModal/CodePreviewModal', () => ({ CodePreviewModal: () => null }));
-vi.mock('../../MarkdownModal/MarkdownModal', () => ({ MarkdownModal: () => null }));
 
 import { FilesTab } from './FilesTab';
 
