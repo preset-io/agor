@@ -544,29 +544,30 @@ Zone triggers act on the branch you drop into the zone: the prompt runs against 
 
 ## What should I know before sharing my sessions?
 
-**Session sharing also shares the session owner's execution home (`~/`).** Agor keeps a shared session attached to its owner's home so the underlying agentic tool can continue its native conversation. Each prompt is still attributed to the person who sent it, and Agor injects that caller's managed environment variables and credentials—not the session owner's.
+Session sharing applies only to **branch-home Sessions**. A workspace admin
+first enables it in **Settings → Workspace → Preferences**; a Board or Branch
+Manager then enables **Allow shared session prompting** in branch defaults or
+an individual branch override. Collaborators and Managers may then continue
+another person's Session.
 
-That identity separation does **not** make the home private. Agentic tools store native session state in home directories such as `.claude/` and `.codex/`. Your home may also contain shell dotfiles, caches, scripts, checkouts, and anything you or your agents wrote there. Someone prompting from that home—or an agent acting for them—may be able to inspect or change those files, including low-level metadata from unrelated sessions.
+The shared boundary is the conversation and branch SDK state—not the creator's
+home or identity. Every prompt records and executes as its actual caller, using
+that person's execution home, managed variables, provider and connector
+credentials, and private MCP visibility.
 
-### Home-resident credentials are especially sensitive
+People who can prompt a Session can read its conversation and influence its
+future context. That can be useful for handoffs and collaborative debugging,
+but it also means prompts and tool results become part of context that later
+participants and agents may rely on.
 
-Some tools store credentials as ordinary files. For example, Codex subscription authentication uses `~/.codex/auth.json`, which contains credential material that can provide access to the associated subscription. Sharing the home can make that file readable or usable even though Agor does not inject the session owner's Agor-managed secrets into the caller's prompt. Other agentic tools may keep similarly sensitive state in their own home directories.
+**Execution-home Sessions are never shareable.** This includes historical
+Sessions created before a branch adopted branch SDK homes and new Sessions
+created while the deployment opts out. Start a new independent branch-home
+Session when collaborators need to continue the work.
 
-Session sharing does not grant a browser terminal, but that is not a complete security boundary: an agent running a shared prompt can still use its tools against files exposed in the session owner's home. Before enabling sharing, inspect what the home contains and assume that listed people and their agents may gain low-level access to it. Use this feature only where there is substantial trust and a shared understanding of the risk.
-
-### Why allow it at all?
-
-In a high-trust team, continuing the same native conversation can be useful enough to justify the shared context. A workspace may also use a dedicated, deliberately non-sensitive identity—for example, a team service account or a Slack-facing assistant whose sessions are intentionally treated as shared. In those cases, the home can be scoped and maintained as shared infrastructure rather than a person's private workspace.
-
-Agor makes the choice explicit instead of assuming every workspace has the same trust model. Session owners control their own sharing rules, and a workspace administrator can disable the feature globally.
-
-### Safer alternative
-
-Give your colleague read access to the original session and have them create a new session under their own identity and home. They can ask their agent something like:
-
-> Read the sibling session that implemented the feature, then pick up from where it stopped in this new session.
-
-This preserves access to the prior reasoning without sharing the original execution home. Per-session homes are on the roadmap; until they exist, continuing another person's native agentic-tool session requires sharing that session owner's home.
+Both switches default off. Disabling the workspace preference also clears all
+board and branch opt-ins, so turning it back on cannot silently reopen old
+sharing choices.
 
 ---
 

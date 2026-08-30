@@ -121,7 +121,7 @@ export async function setupQuery(
 ): Promise<{
   query: InterruptibleQuery;
   resolvedModel: string;
-  getStderr: () => string;
+  getStderrMetadata: () => { hasStderr: boolean; byteLength: number };
 }> {
   const { taskId, permissionMode, resume = true, abortController } = options;
 
@@ -204,8 +204,10 @@ export async function setupQuery(
 
   // Get Claude Code path
 
-  // Buffer to capture stderr for better error messages
-  let stderrBuffer = '';
+  // Provider stderr may contain MCP URLs/headers, credentials, or reflected
+  // payloads. Retain only bounded scalar metadata; raw bytes never cross this
+  // callback or become available to later logging code.
+  let stderrByteLength = 0;
 
   // Append static Agor orientation. Dynamic context is available through Agor MCP.
   const agorSystemPrompt = await renderAgorSystemPrompt();
@@ -225,9 +227,14 @@ export async function setupQuery(
     additionalDirectories: ['/tmp', '/var/tmp'],
     // Enable token-level streaming (yields partial messages as tokens arrive)
     includePartialMessages: true,
-    // Capture stderr to get actual error messages (not just "exit code 1")
-    stderr: (data: string) => {
-      stderrBuffer += data;
+    stderr: (data: unknown) => {
+      const chunkByteLength =
+        typeof data === 'string'
+          ? Buffer.byteLength(data)
+          : Buffer.isBuffer(data)
+            ? data.length
+            : 0;
+      stderrByteLength = Math.min(Number.MAX_SAFE_INTEGER, stderrByteLength + chunkByteLength);
     },
   };
 
@@ -642,8 +649,10 @@ export async function setupQuery(
     throw new Error(safe.message);
   }
 
-  // Store stderr buffer getter for error reporting
-  const getStderr = () => stderrBuffer;
+  const getStderrMetadata = () => ({
+    hasStderr: stderrByteLength > 0,
+    byteLength: stderrByteLength,
+  });
 
   // Attach releaseInput() so callers can signal when post-result control requests are done.
   // The SDK's query() returns an AsyncGenerator with interrupt()/getContextUsage() methods.
@@ -655,6 +664,6 @@ export async function setupQuery(
   return {
     query: queryObj,
     resolvedModel: model,
-    getStderr,
+    getStderrMetadata,
   };
 }

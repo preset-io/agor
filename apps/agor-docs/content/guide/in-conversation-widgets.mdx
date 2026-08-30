@@ -121,9 +121,9 @@ If a particular request is sensitive enough that even the name shouldn't appear 
 
 ## Multi-user behavior
 
-When personal session sharing allows someone other than the session owner to resolve a widget, the env var is saved to the **submitter's** identity. The retry keeps the original session and home, while its new task records the submitter and uses that person's Agor-managed environment variables and credentials. The submitter is also recorded in `result_meta.submitted_by` for audit.
+When shared session prompting allows someone other than the Session creator to resolve a widget, the env var is saved to the **submitter's** identity. The retry keeps the branch-owned conversation and SDK state, while its new task records the submitter and uses that person's execution home, Agor-managed variables, and credentials. The submitter is also recorded in `result_meta.submitted_by` for audit.
 
-Permission is checked before the side effect and again before the automatic retry is admitted, so a revoked branch or sharing grant fails closed. For the full multi-user story see [Multiplayer Execution Isolation](./multiplayer-unix-isolation.mdx).
+Permission is checked before the side effect and again before the automatic retry is admitted, so a revoked branch or sharing switch fails closed. For the full multi-user story see [Multiplayer Execution Isolation](./multiplayer-unix-isolation.mdx).
 
 ---
 

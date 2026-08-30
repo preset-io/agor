@@ -68,9 +68,6 @@ export function extractBoardFormValues(
           default_others_can:
             values.access_mode === 'private' ? 'none' : values.default_others_can || 'session',
           default_others_fs_access: values.default_others_fs_access || 'read',
-          default_dangerously_allow_session_sharing: Boolean(
-            values.default_dangerously_allow_session_sharing
-          ),
         }),
     custom_context: values.custom_context ? JSON.parse(values.custom_context) : null,
   } as unknown as Partial<Board>;
@@ -166,9 +163,6 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
     []) as RbacPermissionValue['groupGrants'];
   const defaultOthersCan = Form.useWatch('default_others_can', watchOptions) || 'session';
   const defaultOthersFsAccess = Form.useWatch('default_others_fs_access', watchOptions) || 'read';
-  const defaultSessionSharing = Boolean(
-    Form.useWatch('default_dangerously_allow_session_sharing', watchOptions)
-  );
 
   const permissionValue: RbacPermissionValue = {
     visibility: boardVisibility,
@@ -176,7 +170,6 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
     groupGrants,
     othersCan: boardVisibility === 'private' ? 'none' : defaultOthersCan,
     othersFsAccess: defaultOthersFsAccess,
-    allowSessionSharing: defaultSessionSharing,
   };
 
   const setPermissionField = <K extends keyof RbacPermissionValue>(
@@ -188,9 +181,6 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
     if (key === 'groupGrants') form.setFieldsValue({ board_group_grants: value });
     if (key === 'othersCan') form.setFieldsValue({ default_others_can: value });
     if (key === 'othersFsAccess') form.setFieldsValue({ default_others_fs_access: value });
-    if (key === 'allowSessionSharing') {
-      form.setFieldsValue({ default_dangerously_allow_session_sharing: value });
-    }
   };
 
   const legacyPermissionsFields = (

@@ -12,7 +12,6 @@ import {
   DEFAULT_AGENTIC_TOOL_NAME,
   getDefaultPermissionMode,
   mapToCodexPermissionConfig,
-  resolveUserPrimaryAgenticTool,
 } from '@agor-live/client';
 import { DownOutlined } from '@ant-design/icons';
 import { Button, Collapse, Flex, Form, Input, Modal, Tooltip, Typography, theme } from 'antd';
@@ -37,6 +36,7 @@ import {
   type AgenticToolOption,
   AgentSelectionGrid,
 } from '../AgentSelectionGrid/AgentSelectionGrid';
+import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { CodexSettingsForm } from '../CodexSettingsForm';
 import { SessionEnvVarsSelector } from '../SessionEnvVarsSelector';
@@ -76,6 +76,7 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   // the App shell doesn't have to forward them into every modal.
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userById = useAgorStore(selectUserById);
+  const agenticToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
   const [form] = Form.useForm();
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
@@ -120,7 +121,11 @@ export const NewSessionModal: React.FC<NewSessionModalProps> = ({
   useEffect(() => {
     if (!open) return;
 
-    const primaryTool = resolveUserPrimaryAgenticTool(currentUser);
+    const primaryTool = resolveAvailableUserAgenticTool(
+      currentUser,
+      agenticToolSettings,
+      availableAgents
+    );
     setSelectedAgent(primaryTool);
     setIsCreating(false); // Reset creating state when modal opens
     setEnvVarNames([]);

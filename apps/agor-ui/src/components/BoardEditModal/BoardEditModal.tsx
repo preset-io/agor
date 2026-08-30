@@ -48,7 +48,7 @@ export function BoardEditModal({
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [policy, setPolicy] = useState<BoardCapabilityPolicies | null>(null);
   const [workspacePreferences, setWorkspacePreferences] =
-    useState<CapabilityPolicyWorkspacePreferences>({ personal_session_sharing_enabled: false });
+    useState<CapabilityPolicyWorkspacePreferences>({ session_sharing_enabled: false });
   const [effectiveAccess, setEffectiveAccess] = useState<EffectiveCapabilityPolicyAccess | null>(
     null
   );
@@ -123,7 +123,7 @@ export function BoardEditModal({
           );
         } else {
           setPolicy(null);
-          setWorkspacePreferences({ personal_session_sharing_enabled: false });
+          setWorkspacePreferences({ session_sharing_enabled: false });
           setEffectiveAccess(null);
         }
         if (cancelled) return;
@@ -140,9 +140,6 @@ export function BoardEditModal({
           access_mode: fresh.access_mode || 'shared',
           default_others_can: fresh.default_others_can || 'session',
           default_others_fs_access: fresh.default_others_fs_access || 'read',
-          default_dangerously_allow_session_sharing: Boolean(
-            fresh.default_dangerously_allow_session_sharing
-          ),
           owner_ids: fresh.created_by ? [fresh.created_by] : [],
           board_group_grants: [],
           custom_context: fresh.custom_context ? JSON.stringify(fresh.custom_context, null, 2) : '',

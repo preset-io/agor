@@ -6,12 +6,16 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
+import { type FileHandle, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
-
+import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { mutateCredentialFile, openCredentialFileForBind } from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
+  getBranchHomePath,
   isDeploymentAgenticToolAvailable,
   MESSAGE_PAGINATION,
   type ResolvedDeploymentConfig,
@@ -73,6 +77,7 @@ import type {
 import { OAuthConfigurationError } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { RefreshAndPersistDeps } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
+  AgenticToolName,
   AuthenticatedParams,
   HookContext,
   MCPAuth,
@@ -105,7 +110,15 @@ import {
 import type { UnixUserMode } from '@agor/core/unix';
 import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
+import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
+import {
+  hasSecureLocalCredentialOverlay,
+  resolveBranchSdkHomeCompatibility,
+  resolveBranchSdkHomeLaunch,
+  sessionUsesBranchSdkHome,
+} from './branch-sdk-home.js';
+import { invalidateLiveBranchCodexCredentialBinds } from './codex-auth-bind-invalidation.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -153,6 +166,7 @@ import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeModelsService } from './services/claude-models.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
+import { resolveCodexCredentialRoute } from './services/codex-auth-shared.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { CodexDeviceAuthAttemptAuthority } from './services/codex-device-auth-attempt-authority.js';
 import { createDurableCodexDeviceAuthService } from './services/codex-device-auth-durable.js';
@@ -764,8 +778,19 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // method to subscription. Token material never leaves the daemon.
   const codexDeviceAttempts =
     ctx.deployment.mode === 'ha' ? new CodexDeviceAuthAttemptAuthority(db) : undefined;
+  const invalidateCodexCredentialBinds = (input: {
+    tenantId: string;
+    userId: UserID;
+    reason: 'credentials_imported' | 'credentials_removed';
+  }) =>
+    hasSecureLocalCredentialOverlay(config)
+      ? invalidateLiveBranchCodexCredentialBinds({ app, db, ...input })
+      : Promise.resolve();
 
-  app.use('/codex-auth/import', createCodexAuthImportService(app, db, codexDeviceAttempts));
+  app.use(
+    '/codex-auth/import',
+    createCodexAuthImportService(app, db, codexDeviceAttempts, invalidateCodexCredentialBinds)
+  );
   app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
 
   // ChatGPT device-code sign-in: create starts an attempt (code + verification
@@ -774,8 +799,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use(
     '/codex-auth/device',
     codexDeviceAttempts
-      ? createDurableCodexDeviceAuthService(app, db, codexDeviceAttempts)
-      : createCodexDeviceAuthService(app, db)
+      ? createDurableCodexDeviceAuthService(
+          app,
+          db,
+          codexDeviceAttempts,
+          undefined,
+          invalidateCodexCredentialBinds
+        )
+      : createCodexDeviceAuthService(app, db, invalidateCodexCredentialBinds)
   );
   app.service('/codex-auth/device').hooks({
     before: { create: [ctx.requireAuth], find: [ctx.requireAuth], remove: [ctx.requireAuth] },
@@ -785,7 +816,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // credential route and clears the stored auth method (emitting `patched` so the
   // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
   // grant, so other machines stay signed in.
-  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db, codexDeviceAttempts));
+  app.use(
+    '/codex-auth/logout',
+    createCodexAuthLogoutService(app, db, codexDeviceAttempts, invalidateCodexCredentialBinds)
+  );
   app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
@@ -1077,8 +1111,8 @@ function createExecuteHandler(
 
     // Get branch path (+ authoritative base repo path for the sandbox) and, for
     // RBAC-aware mounting, the current PROMPT ACTOR's effective filesystem
-    // access to the branch. Personal session sharing keeps the owner's home,
-    // but it must not upgrade the caller's branch mounts to the owner's access.
+    // access to the branch. A shared branch Session still must not upgrade the
+    // caller's branch mounts to the Session owner's access.
     // The filesystem sandbox binds `<baseRepoPath>/.git` writable so
     // worktree commits work; we resolve `repo.local_path` from Agor's own DB
     // state rather than parsing the on-disk `.git` pointer (deterministic, and
@@ -1087,6 +1121,8 @@ function createExecuteHandler(
     const rbacOn = config.execution?.branch_rbac === true;
     let cwd = process.cwd();
     let sandboxBaseRepoPath: string | undefined;
+    // Per-branch SDK home intent read from the branch record (design §9.2/§8B.3).
+    let branchSdkHomeIntent: 'per_branch' | null = null;
     const sandboxWorktreesRoot =
       sandboxCfg?.enabled === true
         ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
@@ -1119,13 +1155,14 @@ function createExecuteHandler(
           fsAccess =
             access.fs_access === 'write' ? 'write' : access.fs_access === 'read' ? 'read' : 'none';
         }
-        return { path: branch.path, baseRepoPath, fsAccess };
+        return { path: branch.path, baseRepoPath, fsAccess, sdkHome: branch.sdk_home ?? null };
       });
       if (!branchMounts)
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);
       cwd = branchMounts.path;
       sandboxBaseRepoPath = branchMounts.baseRepoPath;
       principalBranchAccess = branchMounts.fsAccess;
+      branchSdkHomeIntent = branchMounts.sdkHome;
       // Under the sandbox, 'none' means the branch would not be mounted at all,
       // so the task cannot operate on it. Fail fast with a clear message rather
       // than letting bwrap abort on a missing chdir target.
@@ -1138,33 +1175,131 @@ function createExecuteHandler(
       }
     }
 
-    // Per-owner home store for `sandbox.home_mode: per_user` — a private,
-    // persistent home overlaid at the passwd home inside the sandbox. Keyed by
-    // the SESSION OWNER (not the prompter): the home carries the owner's tool
-    // auth/state, so prompting another user's session runs against the owner's
-    // home. The SOURCE is the owner's `filesystem_home`
+    // Per-execution home store for `sandbox.home_mode: per_user` — a private,
+    // persistent home overlaid at the passwd home inside the sandbox. Legacy
+    // `execution_home` sessions keep using their immutable owner identity.
+    // Branch-scoped sessions instead use the prompt actor's home: resumable SDK
+    // state comes from the branch overlay, so exposing the session owner's
+    // arbitrary files would be both unnecessary and unsafe. The SOURCE is the
+    // selected user's `filesystem_home`
     // if set (the migration points it at their existing /home/<user> so no files
     // move), else the canonical store (see resolveOwnerHomeStore). Only computed
     // when the mode is active — and FAIL CLOSED if the owner can't be resolved.
     let sandboxHomeStore: string | undefined;
     if (sandboxCfg?.enabled === true && sandboxCfg?.home_mode === 'per_user') {
-      if (!session.created_by) {
+      const executionHomeUserId =
+        session.sdk_home_scope === 'branch' ? userId : (session.created_by as UserID | undefined);
+      if (!executionHomeUserId) {
         throw new Error(
-          'sandbox home_mode=per_user requires a resolvable session owner; refusing to spawn ' +
-            'with a shared home (fail closed).'
+          'sandbox home_mode=per_user requires a resolvable execution user; refusing to spawn ' +
+            'without a caller-scoped home (fail closed).'
         );
       }
-      const ownerFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+      const executionFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
         new UsersRepository(tenantDb)
-          .findById(session.created_by as string)
+          .findById(executionHomeUserId as string)
           .then((u) => u?.filesystem_home?.trim() || undefined)
       );
       sandboxHomeStore = resolveOwnerHomeStore({
         config,
         tenantId,
-        ownerUserId: session.created_by,
-        filesystemHome: ownerFilesystemHome,
+        ownerUserId: executionHomeUserId,
+        filesystemHome: executionFilesystemHome,
       });
+    }
+
+    // ── Per-branch SDK home (design §7/§8/§11) ─────────────────────────────
+    // Executor startup follows the SESSION stamp, never today's deployment
+    // flag or branch intent alone. This is the compatibility seam that lets an
+    // old, resumable session keep its historical execution home while a fresh
+    // session on the same adopted branch uses branch-owned SDK state.
+    const sdkHomeTool = session.agentic_tool as AgenticToolName;
+    const isDelegatedExecution = (config.execution?.unix_user_mode ?? 'simple') === 'delegated';
+    let sandboxBranchSdkHome: string | undefined;
+    let branchSdkHomeEnv: Record<string, string> | undefined;
+    let branchSdkHomeTemplatePath = '';
+    let branchCodexAuthBind:
+      | { source: string; destination: string; handle?: FileHandle }
+      | undefined;
+    const useBranchSdkHome = sessionUsesBranchSdkHome({
+      sessionScope: session.sdk_home_scope,
+      branchSdkHomeIntent,
+    });
+    if (useBranchSdkHome) {
+      if (!session.branch_id) {
+        throw new Error(`Branch-scoped session ${session.session_id} has no branch`);
+      }
+      const branchId = session.branch_id as string;
+      // A relocatable directory is necessary but not sufficient: OpenCode's
+      // current XDG data home also contains its native credential file. Until
+      // its actor credential namespace is split from branch-owned state, a
+      // branch home would either lose configured credentials or share them.
+      const compatibility = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        resolveBranchSdkHomeCompatibility({
+          tool: sdkHomeTool,
+          delegated: isDelegatedExecution,
+          secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
+          userId,
+          db: tenantDb,
+        })
+      );
+      if (compatibility.unsupportedReason) {
+        throw new BadRequest(
+          `${AGENTIC_TOOL_DISPLAY_NAMES[sdkHomeTool]} cannot run in a branch-scoped session ` +
+            `because ${compatibility.unsupportedReason}. Use a supported tool or authentication mode.`
+        );
+      }
+      const branchHomeDir = getBranchHomePath(branchId, tenantId ?? undefined);
+      // Delegated mode: Agor mounts nothing; the external launcher owns
+      // enforcement and is told the path via `{branch_sdk_home}` (§7.4). We do
+      // not inject env, create dirs, or mount here.
+      branchSdkHomeTemplatePath = branchHomeDir;
+      if (!isDelegatedExecution) {
+        // Lazy-create the branch home + per-tool subdirs on first prompt
+        // (§6.2); idempotent, and the bwrap --bind source must exist pre-spawn
+        // (§7.2 — dropMasksForMissingTargets never drops a --bind).
+        await mkdir(branchHomeDir, { recursive: true });
+        const launch = resolveBranchSdkHomeLaunch({
+          tool: sdkHomeTool,
+          branchId,
+          tenantId: tenantId ?? undefined,
+        });
+        branchSdkHomeEnv = launch.envVars;
+        for (const dir of launch.ensureDirs) await mkdir(dir, { recursive: true });
+        if (compatibility.requiresLocalCodexAuthOverlay) {
+          if (!userId) throw new BadRequest('Codex subscription auth requires a prompt actor');
+          const credentialRoute = await resolveCodexCredentialRoute(
+            userId,
+            (work) => runWithTenantDatabaseScope(db, tenantId, work),
+            config
+          );
+          if (!credentialRoute.ok || !credentialRoute.codexHome) {
+            throw new BadRequest(
+              credentialRoute.ok
+                ? 'Codex subscription auth requires a persistent per-user credential home'
+                : credentialRoute.message
+            );
+          }
+          const branchCodexHome = launch.envVars.CODEX_HOME;
+          if (!branchCodexHome) {
+            throw new Error('Codex branch SDK-home launch is missing CODEX_HOME');
+          }
+          const destination = join(branchCodexHome, 'auth.json');
+          // Bubblewrap requires an existing file mountpoint. Keep the
+          // branch-owned inode deliberately empty: the caller credential is
+          // visible only as a per-executor mount and is never copied into
+          // shared branch state. The capability-based writer refuses symlinked
+          // parent directories and replaces an adversarial final symlink.
+          await mutateCredentialFile({ target: destination, content: '' });
+          branchCodexAuthBind = {
+            source: join(credentialRoute.codexHome, 'auth.json'),
+            destination,
+          };
+        }
+        // Bind the branch home into the sandbox (consumed by buildSandboxWrap).
+        // Harmless when the sandbox is disabled (buildSandboxWrap returns null).
+        sandboxBranchSdkHome = branchHomeDir;
+      }
     }
 
     // Resolve the optional delegated home key reported to an external launcher.
@@ -1172,11 +1307,19 @@ function createExecuteHandler(
     const { resolveDelegatedHomeKey } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
-    const sessionUnixUser = session.unix_username;
+    let executionHomeKey = session.unix_username;
+    if (unixUserMode === 'delegated' && session.sdk_home_scope === 'branch') {
+      if (!userId) throw new Error('Missing prompt actor for delegated branch-scoped execution');
+      executionHomeKey = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        new UsersRepository(tenantDb)
+          .findById(userId)
+          .then((user) => user?.unix_username?.trim() || null)
+      );
+    }
 
     const delegatedHomeKeyResolution = resolveDelegatedHomeKey({
       mode: unixUserMode,
-      executionHomeKey: sessionUnixUser,
+      executionHomeKey,
     });
 
     const executorHomeDir = homedir();
@@ -1288,26 +1431,45 @@ function createExecuteHandler(
       scrubMCPSecretsFromExecutorEnv(executorEnv, [...usableAttached, ...global]);
     });
 
+    // Point the tool's SDK/config-home env var(s) at the per-branch SDK home
+    // (design §8). These are relocations, NOT credentials — so the MCP scrub
+    // above leaves them alone, and they compose with the caller-scoped
+    // credential env injected by createUserProcessEnvironment (#2555): different
+    // keys, no collision (verified — the branch home never carries a credential,
+    // §8A.3). Skipped in delegated mode (the launcher owns the environment).
+    if (branchSdkHomeEnv) {
+      Object.assign(executorEnv, branchSdkHomeEnv);
+    }
+
     executorEnv.DAEMON_URL = daemonUrl;
 
     // Trusted local simple mode has one Unix home for every executor. Give
     // Codex sessions a stable tenant+owner namespace so native ChatGPT auth and
     // Codex runtime state are not accidentally shared between Agor users. This
     // is state separation only; simple mode still provides no filesystem
-    // security boundary because all executors run as the daemon uid.
-    applySimpleCodexTaskHome(executorEnv, {
-      mode: unixUserMode,
-      executorCommandTemplate: config.execution?.executor_command_template,
-      tenantId: tenantId ? String(tenantId) : undefined,
-      session,
-      homeDir: executorHomeDir,
-    });
+    // security boundary because all executors run as the daemon uid. A
+    // branch-scoped session must retain the branch home selected above rather
+    // than being moved back into its owner's execution-home namespace.
+    if (!useBranchSdkHome) {
+      applySimpleCodexTaskHome(executorEnv, {
+        mode: unixUserMode,
+        executorCommandTemplate: config.execution?.executor_command_template,
+        tenantId: tenantId ? String(tenantId) : undefined,
+        session,
+        homeDir: executorHomeDir,
+      });
+    }
 
-    const openCodeLaunch = (() => {
-      if (session.agentic_tool !== 'opencode') return undefined;
-      if (!tenantId) throw new Error('Missing active tenant context for OpenCode execution');
-      if (!executorHomeDir) throw new Error('Missing executor home for OpenCode execution');
-      return OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch({
+    // Generalized executor-launch hook (design §4/§13 Phase 2). Every tool has a
+    // daemon contribution; only OpenCode implements getExecutorLaunch today, so
+    // this stays a no-op for all other tools and preserves prior behavior.
+    const executorLaunch = (() => {
+      const contribution = getAgenticToolDaemonContribution(session.agentic_tool);
+      if (!contribution?.getExecutorLaunch) return undefined;
+      // These guards fire for any tool with a launch hook (currently OpenCode).
+      if (!tenantId) throw new Error('Missing active tenant context for executor-launch hook');
+      if (!executorHomeDir) throw new Error('Missing executor home for executor-launch hook');
+      return contribution.getExecutorLaunch({
         tenantId,
         session,
         homeDir: executorHomeDir,
@@ -1319,7 +1481,7 @@ function createExecuteHandler(
       command: 'prompt' as const,
       sessionToken,
       daemonUrl,
-      ...(openCodeLaunch?.executorPayload ?? {}),
+      ...(executorLaunch?.executorPayload ?? {}),
       env: executorEnv,
       params: {
         sessionId,
@@ -1341,10 +1503,28 @@ function createExecuteHandler(
         sandboxHomeStore,
         sandboxWorktreesRoot,
         principalBranchAccess,
+        // Per-branch SDK home to bind into the sandbox (design §7). Undefined
+        // for execution-home sessions and in delegated mode (where the launcher
+        // mounts it via the {branch_sdk_home} template).
+        sandboxBranchSdkHome,
       },
     };
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
+
+    // Open as late as possible and keep the capability alive only through
+    // child_process.spawn(). The directory-capability helper rejects every
+    // symlink component and the final file; `--bind-fd` then mounts this exact
+    // inode even if another sandbox renames the pathname concurrently.
+    if (branchCodexAuthBind) {
+      try {
+        branchCodexAuthBind.handle = await openCredentialFileForBind(branchCodexAuthBind.source);
+      } catch {
+        throw new BadRequest(
+          'Codex subscription credentials are missing or unsafe to mount. Reconnect Codex in Agent Setup or use an API key.'
+        );
+      }
+    }
 
     type NativeStateSpawn = {
       fence: OpenCodeNativeStateMutationFence;
@@ -1358,12 +1538,25 @@ function createExecuteHandler(
       delegatedHomeKey: delegatedHomeKeyResolution.delegatedHomeKey || undefined,
       preparedEnv: executorEnv,
       logPrefix,
+      ...(branchCodexAuthBind?.handle
+        ? {
+            localSandboxFileBinds: [
+              {
+                sourceFd: branchCodexAuthBind.handle.fd,
+                destination: branchCodexAuthBind.destination,
+              },
+            ],
+          }
+        : {}),
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
         branch_id: session.branch_id,
         user_id: userId,
         branch_fs_access: principalBranchAccess,
+        // Delegated launchers own SDK-home enforcement (§7.4): absolute path for
+        // a branch-scoped session, empty string for an execution-home session.
+        branch_sdk_home: branchSdkHomeTemplatePath,
       },
       onSpawn: (child, spawnContext) => {
         metrics.increment('executor.launches', 1, { mode: spawnContext.mode });
@@ -1498,11 +1691,11 @@ function createExecuteHandler(
       },
     });
 
-    if (openCodeLaunch) {
+    if (executorLaunch) {
       const ready = createDeferredSignal();
       const finished = createDeferredSignal();
       let spawned = false;
-      const slot = inOpenCodeNativeStateMutationSlot(openCodeLaunch.namespaceKey, async (fence) => {
+      const slot = inOpenCodeNativeStateMutationSlot(executorLaunch.namespaceKey, async (fence) => {
         try {
           spawnExecutor(
             executorPayload,
@@ -1521,7 +1714,13 @@ function createExecuteHandler(
       });
       await ready.promise;
     } else {
-      spawnExecutor(executorPayload, executorOptions());
+      try {
+        spawnExecutor(executorPayload, executorOptions());
+      } finally {
+        // The child inherits its own descriptor during synchronous spawn.
+        // Close only the daemon's copy once spawn returns or throws.
+        await branchCodexAuthBind?.handle?.close().catch(() => undefined);
+      }
     }
 
     return {
@@ -4528,10 +4727,9 @@ export async function registerMCPServices(
               globalServers: await new MCPServerRepository(db).findAll({
                 scope: 'global',
                 enabled: true,
-                // The task token is issued to the actual prompter. Even when
-                // personal sharing keeps the session owner's home, connector
-                // credentials and private server visibility stay with the
-                // prompter rather than silently borrowing the owner identity.
+                // The task token is issued to the actual prompter. Connector
+                // credentials and private server visibility stay with that
+                // caller rather than silently borrowing the Session owner.
                 usableByUserId: userId,
               }),
             };

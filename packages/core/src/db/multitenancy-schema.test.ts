@@ -20,9 +20,10 @@ function postgresSchemaTenantTables(): string[] {
 }
 
 function retiredTenantTables(): Set<string> {
-  const migration = readRepoFile(
-    'packages/core/drizzle/postgres/0067_drop_serialized_sessions.sql'
-  );
+  const migration = [
+    readRepoFile('packages/core/drizzle/postgres/0067_drop_serialized_sessions.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0099_shared_session_prompting.sql'),
+  ].join('\n');
   return new Set(
     [...migration.matchAll(/DROP TABLE(?: IF EXISTS)? "([^"]+)"/g)].map((match) => match[1])
   );

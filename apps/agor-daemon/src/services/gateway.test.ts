@@ -16,6 +16,8 @@ import type {
   GatewayChannel,
   GatewayOutboundMessage,
   SessionID,
+  SessionPromptAuthority,
+  SessionSdkHomeScope,
   ThreadSessionMap,
   User,
   UserID,
@@ -164,8 +166,10 @@ function makeGatewayHarness(args: {
   promptAuthority?: {
     allowed: boolean;
     execution_user_id?: UserID;
-    source: 'own_session' | 'personal_session_sharing' | 'denied';
+    source: SessionPromptAuthority['source'];
+    denial_reason?: SessionPromptAuthority['denial_reason'];
   };
+  sessionSdkHomeScope?: SessionSdkHomeScope;
   sessionOwnerUserId?: UserID;
   outboundSeed?: GatewayOutboundMessage | null;
   setMCPServers?: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
@@ -241,7 +245,7 @@ function makeGatewayHarness(args: {
         execution_user_id: args.sessionOwnerUserId ?? executionUser.user_id,
         source:
           args.sessionOwnerUserId && args.sessionOwnerUserId !== executionUser.user_id
-            ? 'personal_session_sharing'
+            ? 'branch_session'
             : 'own_session',
       }
   );
@@ -256,6 +260,7 @@ function makeGatewayHarness(args: {
       branch_id: channel.target_branch_id,
       created_by: args.sessionOwnerUserId ?? executionUser.user_id,
       status: SessionStatus.IDLE,
+      sdk_home_scope: args.sessionSdkHomeScope ?? 'execution_home',
     })),
   };
   const threadMapRepo = {
@@ -477,12 +482,18 @@ describe('GatewayService inbound permission admission', () => {
     expect(promptCreate).not.toHaveBeenCalled();
   });
 
-  it('rejects a mapped foreign session unless its owner shared their sessions', async () => {
+  it('surfaces a mapped execution-home denial without retrying the gateway event', async () => {
     const sessionOwnerUserId = 'session-owner' as UserID;
+    const sendMessage = vi.fn(async () => undefined);
     const { service, promptCreate, resolveSessionPromptAuthority } = makeGatewayHarness({
       existingMapping: makeMapping(),
       sessionOwnerUserId,
-      promptAuthority: { allowed: false, source: 'denied' },
+      connector: { sendMessage },
+      promptAuthority: {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      },
     });
 
     await expect(
@@ -497,25 +508,34 @@ describe('GatewayService inbound permission admission', () => {
           slack_message_ts: '103.000000',
         },
       })
-    ).rejects.toThrow(/session owner has not shared their sessions/);
+    ).resolves.toEqual({ success: false, sessionId: '', created: false });
 
     expect(resolveSessionPromptAuthority).toHaveBeenCalledWith(
       slackChannel.target_branch_id,
       user.user_id,
-      sessionOwnerUserId
+      sessionOwnerUserId,
+      'execution_home'
+    );
+    await vi.waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringMatching(/uses its owner's execution home/i),
+        })
+      )
     );
     expect(promptCreate).not.toHaveBeenCalled();
   });
 
-  it('rechecks an owner-authored sharing grant before prompting a mapped foreign session', async () => {
+  it('allows a foreign collaborator to prompt a branch-scoped mapped session', async () => {
     const sessionOwnerUserId = 'session-owner' as UserID;
     const { service, promptCreate, resolveSessionPromptAuthority } = makeGatewayHarness({
       existingMapping: makeMapping(),
       sessionOwnerUserId,
+      sessionSdkHomeScope: 'branch',
       promptAuthority: {
         allowed: true,
-        execution_user_id: sessionOwnerUserId,
-        source: 'personal_session_sharing',
+        execution_user_id: user.user_id,
+        source: 'branch_session',
       },
     });
 
@@ -533,8 +553,51 @@ describe('GatewayService inbound permission admission', () => {
       })
     ).resolves.toMatchObject({ success: true, sessionId: 'sess-1', created: false });
 
-    expect(resolveSessionPromptAuthority).toHaveBeenCalledTimes(2);
+    expect(resolveSessionPromptAuthority).toHaveBeenCalledWith(
+      slackChannel.target_branch_id,
+      user.user_id,
+      sessionOwnerUserId,
+      'branch'
+    );
     expect(promptCreate).toHaveBeenCalledOnce();
+  });
+
+  it('edits a GitHub processing acknowledgement with the execution-home denial', async () => {
+    const githubChannel = {
+      ...slackChannel,
+      id: 'chan-github-denial',
+      channel_type: 'github',
+      channel_key: 'github-denial-key',
+      config: {},
+    } as GatewayChannel;
+    const sendMessage = vi.fn(async () => undefined);
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: githubChannel,
+      existingMapping: makeMapping(),
+      sessionOwnerUserId: 'session-owner' as UserID,
+      connector: { sendMessage },
+      promptAuthority: {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      },
+    });
+
+    await expect(
+      service.create({
+        channel_key: githubChannel.channel_key,
+        thread_id: 'preset-io/agor#2587',
+        text: '@agor continue',
+        metadata: { processing_comment_id: 42 },
+      })
+    ).resolves.toEqual({ success: false, sessionId: '', created: false });
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      threadId: 'preset-io/agor#2587',
+      text: expect.stringMatching(/uses its owner's execution home/i),
+      metadata: { edit_comment_id: 42 },
+    });
+    expect(promptCreate).not.toHaveBeenCalled();
   });
 });
 

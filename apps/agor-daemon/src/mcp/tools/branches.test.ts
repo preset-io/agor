@@ -74,7 +74,10 @@ function registerAndCaptureHandler(
 
   registerBranchTools(fakeServer, {
     app: ctx.app as Parameters<typeof registerBranchTools>[1]['app'],
-    db: {} as Parameters<typeof registerBranchTools>[1]['db'],
+    // A `.run` marker makes runWithMcpTenantDatabaseScope treat this as the
+    // SQLite-like handle (identity scope, no native transaction to fake) when a
+    // tenant is present in baseServiceParams.
+    db: { run: () => undefined } as unknown as Parameters<typeof registerBranchTools>[1]['db'],
     userId: ctx.userId as Parameters<typeof registerBranchTools>[1]['userId'],
     sessionId: ctx.sessionId as Parameters<typeof registerBranchTools>[1]['sessionId'],
     authenticatedUser: (ctx.authenticatedUser ?? {
@@ -115,7 +118,10 @@ function registerAndCaptureConfig(
 
   registerBranchTools(fakeServer, {
     app: ctx.app as Parameters<typeof registerBranchTools>[1]['app'],
-    db: {} as Parameters<typeof registerBranchTools>[1]['db'],
+    // A `.run` marker makes runWithMcpTenantDatabaseScope treat this as the
+    // SQLite-like handle (identity scope, no native transaction to fake) when a
+    // tenant is present in baseServiceParams.
+    db: { run: () => undefined } as unknown as Parameters<typeof registerBranchTools>[1]['db'],
     userId: ctx.userId as Parameters<typeof registerBranchTools>[1]['userId'],
     sessionId: ctx.sessionId as Parameters<typeof registerBranchTools>[1]['sessionId'],
     authenticatedUser: (ctx.authenticatedUser ?? {
@@ -447,7 +453,7 @@ describe('agor_branches_update', () => {
           entries: [],
           others: { preset: 'none', capabilities: [], fs_access: 'none' },
         },
-        session_sharing: { owner_rules: [] },
+        allow_shared_session_prompts: false,
       },
     };
     const permissionsPatch = vi.fn(async (_id, data) => data);

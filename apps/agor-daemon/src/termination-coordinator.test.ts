@@ -384,11 +384,31 @@ describe('termination coordinator', () => {
     state.claim({ ...stopping('heartbeat_lost'), executor_mode: 'local' });
 
     await expect(request(state.app, 'heartbeat_lost')).resolves.toMatchObject({
-      status: 'unverified',
+      status: 'pending',
       task: { status: TaskStatus.STOPPING },
+      pendingCode: 'non_owner_replica',
       reason: expect.stringContaining('owns the local executor process handle'),
     });
     expect(state.claimTerminationCoordination).not.toHaveBeenCalled();
+    expect(containExecutorProcess).not.toHaveBeenCalled();
+    expect(state.settleTermination).not.toHaveBeenCalled();
+  });
+
+  it('reports a durable containment lease as structured coordination pending', async () => {
+    const state = appDouble();
+    const requested = stopping('user_stop');
+    state.claim(requested);
+    state.claimTerminationCoordination.mockResolvedValueOnce({
+      outcome: 'pending',
+      task: requested,
+    });
+
+    await expect(request(state.app, 'user_stop')).resolves.toMatchObject({
+      status: 'pending',
+      task: { status: TaskStatus.STOPPING },
+      pendingCode: 'coordination_in_progress',
+      reason: expect.stringContaining('Another daemon'),
+    });
     expect(containExecutorProcess).not.toHaveBeenCalled();
     expect(state.settleTermination).not.toHaveBeenCalled();
   });
@@ -542,12 +562,14 @@ describe('termination coordinator', () => {
       })
     ).rejects.toThrow('termination state changed');
     state.settle(task(TaskStatus.FAILED));
-    await forceFailUnverifiedTask({
-      app: state.app,
-      taskId,
-      terminationRequestedAt: '2026-01-01T00:00:01.000Z',
-      confirmation: 'STOP',
-    });
+    await expect(
+      forceFailUnverifiedTask({
+        app: state.app,
+        taskId,
+        terminationRequestedAt: '2026-01-01T00:00:01.000Z',
+        confirmation: 'STOP',
+      })
+    ).resolves.toMatchObject({ outcome: 'force_failed', task: { status: TaskStatus.FAILED } });
     expect(state.settleTermination).toHaveBeenCalledTimes(2);
     expect(state.settleTermination).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -556,5 +578,29 @@ describe('termination coordinator', () => {
       }),
       expect.objectContaining({ suppressTerminalQueueProcessing: true })
     );
+  });
+
+  it('reports a concurrent terminal settlement instead of claiming force-fail won', async () => {
+    const state = appDouble();
+    state.setCurrent(
+      task(TaskStatus.STOPPING, {
+        termination_request: stopping('user_stop').termination_request,
+        sdk_failure: { termination: 'unverified' },
+      })
+    );
+    state.settle(task(TaskStatus.STOPPED), 'terminal');
+    const securityLog = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    await expect(
+      forceFailUnverifiedTask({
+        app: state.app,
+        taskId,
+        terminationRequestedAt: '2026-01-01T00:00:01.000Z',
+        confirmation: 'STOP',
+      })
+    ).resolves.toMatchObject({ outcome: 'already_terminal', task: { status: TaskStatus.STOPPED } });
+    expect(securityLog).not.toHaveBeenCalled();
+    expect(untrackExecutorProcess).toHaveBeenCalledWith(sessionId, taskId, state.app);
+    securityLog.mockRestore();
   });
 });

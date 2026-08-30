@@ -1302,11 +1302,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     </fieldset>
   );
 
-  const stopTooltip = stopRequestInFlight
-    ? 'Stopping...'
-    : isStopping
-      ? 'Stopping... (Click again to retry if stuck)'
-      : 'Stop Execution';
+  const stopTooltip = connectionDisabled
+    ? 'Disconnected from daemon'
+    : stopRequestInFlight
+      ? 'Stopping...'
+      : isStopping
+        ? 'Stopping... (Click again to retry if stuck)'
+        : 'Stop Execution';
 
   const showStop = isRunning || stopRequestInFlight;
 
@@ -1717,7 +1719,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
                   }
                   onClick={onStop}
-                  disabled={!isRunning || stopRequestInFlight}
+                  disabled={connectionDisabled || !isRunning || stopRequestInFlight}
                 >
                   Stop
                 </Button>

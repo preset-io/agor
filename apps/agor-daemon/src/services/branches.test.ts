@@ -701,6 +701,59 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
+  it('forwards resolved sandbox mount inputs into the env-logs executor params', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-sbx' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-sbx',
+      path: '/tmp/wt-sbx',
+      created_by: 'user-1' as UUID,
+      primary_owner_user_id: 'owner-2' as UUID,
+      branch_unique_id: 2,
+      logs_command: 'tail -n 100 dev.log',
+    };
+
+    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
+      kind: 'shell',
+      command: branch.logs_command,
+    } as never);
+    // Under the fail-closed per_user sandbox this context resolves an owner
+    // home store; the executor payload MUST carry it or buildSandboxWrap
+    // refuses to spawn (the ENOTDIR-adjacent "no owner home store" failure).
+    vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+      env: { PATH: '/usr/bin:/bin' },
+      delegatedHomeKey: undefined,
+      executionUserId: 'owner-2',
+      branchFsAccess: 'write',
+      sandboxMounts: {
+        sandboxHomeStore: '/data/homes/owner-2',
+        sandboxWorktreesRoot: '/data/worktrees',
+        sandboxBaseRepoPath: undefined,
+      },
+    } as never);
+    mockedRequestExecutor.mockResolvedValue({
+      success: true,
+      data: { logs: 'ok', timestamp: '2026-06-19T00:00:00.000Z' },
+    });
+
+    await service.getLogs(branch.branch_id);
+
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'environment.logs',
+        params: expect.objectContaining({
+          sandboxHomeStore: '/data/homes/owner-2',
+          sandboxWorktreesRoot: '/data/worktrees',
+          logsCommand: branch.logs_command,
+        }),
+      }),
+      expect.anything()
+    );
+  });
+
   it('resolves lifecycle credentials for the authenticated actor, not the branch creator', async () => {
     const { service } = createServiceHarness();
     const app = (service as unknown as { app: Application }).app as unknown as {
@@ -1060,6 +1113,20 @@ describe('BranchesService environment start async behavior', () => {
 });
 
 describe('BranchesService.patch primary teammate invariants', () => {
+  it('rejects attempts to change server-managed SDK-home intent', async () => {
+    const branchId = 'sdk-home-managed' as BranchID;
+    const { service, repository } = createPatchHarness({
+      current: { branch_id: branchId, board_id: 'board-a' as BoardID },
+      updated: { branch_id: branchId, board_id: 'board-a' as BoardID },
+    });
+
+    await expect(service.patch(branchId, { sdk_home: 'per_branch' })).rejects.toThrow(
+      /server-managed/
+    );
+    await expect(service.patch(branchId, { sdk_home: null })).rejects.toThrow(/server-managed/);
+    expect(repository.update).not.toHaveBeenCalled();
+  });
+
   it('rejects changing the trusted template remote after creation', async () => {
     const branchId = 'teammate-template-remote' as BranchID;
     const { service, repository } = createPatchHarness({
@@ -1485,6 +1552,9 @@ describe('BranchesService.archiveOrDelete', () => {
 
   it('delegates filesystem deletion with authoritative paths and no daemon bearer', async () => {
     const { service, sessionTokenService } = createServiceHarness();
+    const removeSdkHome = vi
+      .spyOn(service as never, 'removeBranchSdkHomeAfterDelete')
+      .mockImplementation(() => undefined);
     const branchId = 'wt-delete-files' as BranchID;
     const branch = {
       branch_id: branchId,
@@ -1531,6 +1601,7 @@ describe('BranchesService.archiveOrDelete', () => {
     expect(payload).not.toHaveProperty('sessionToken');
     expect(payload).not.toHaveProperty('daemonUrl');
     expect(sessionTokenService.generateCommandToken).not.toHaveBeenCalled();
+    expect(removeSdkHome).not.toHaveBeenCalled();
   });
 
   it('rejects filesystem cleanup when a Manager has no write grant', async () => {
@@ -1590,6 +1661,9 @@ describe('BranchesService.archiveOrDelete', () => {
     } as never);
     vi.spyOn(branchRepo, 'findRealtimeViewUserIds').mockResolvedValue(['user-1' as UUID]);
     const repositoryDelete = vi.spyOn(branchRepo, 'delete').mockResolvedValue();
+    const removeSdkHome = vi
+      .spyOn(service as never, 'removeBranchSdkHomeAfterDelete')
+      .mockImplementation(() => undefined);
     markBranchArchiveDeleteAuthorized(params, branchId, 'delete');
 
     await service.archiveOrDelete(
@@ -1614,6 +1688,8 @@ describe('BranchesService.archiveOrDelete', () => {
         params,
       })
     );
+    expect(removeSdkHome).toHaveBeenCalledOnce();
+    expect(removeSdkHome).toHaveBeenCalledWith(removedBranch, 'tenant-a');
   });
 
   it('refuses metadata deletion while a descendant task is unfinished', async () => {
@@ -2510,6 +2586,18 @@ describe('BranchesService teammate home Knowledge namespace guard', () => {
 });
 
 describe('BranchesService.create permission defaults', () => {
+  it('rejects client-supplied SDK-home intent before repository creation', async () => {
+    const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+
+    await expect(
+      service.create({
+        board_id: 'board-a' as BoardID,
+        sdk_home: 'per_branch',
+      })
+    ).rejects.toThrow(/server-managed/);
+  });
+
   dbTest(
     'defaults new board branches to board permissions when no explicit branch permissions are provided',
     async ({ db }) => {
@@ -2532,7 +2620,6 @@ describe('BranchesService.create permission defaults', () => {
         created_by: owner.user_id,
         default_others_can: 'prompt',
         default_others_fs_access: 'write',
-        default_dangerously_allow_session_sharing: true,
       });
 
       const app = { get: () => ({}), service: vi.fn() } as unknown as Application;
@@ -2557,7 +2644,7 @@ describe('BranchesService.create permission defaults', () => {
         preset: 'collaborator',
         fs_access: 'write',
       });
-      expect(policy.inherited_config?.session_sharing.owner_rules).toEqual([]);
+      expect(policy.inherited_config?.allow_shared_session_prompts).toBe(false);
     }
   );
 

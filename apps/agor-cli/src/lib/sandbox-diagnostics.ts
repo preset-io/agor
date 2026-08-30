@@ -11,9 +11,19 @@ import { join } from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 // Shared with the daemon so CLI + daemon never drift on what "sandbox
 // available" means (functional userns probe, not just PATH presence).
-import { probeBwrapPidNamespace, probeBwrapUserns } from '@agor/core/unix';
+import {
+  probeBwrapBindFd,
+  probeBwrapPidNamespace,
+  probeBwrapSafeSetupPathResolution,
+  probeBwrapUserns,
+} from '@agor/core/unix';
 
-export { probeBwrapPidNamespace, probeBwrapUserns };
+export {
+  probeBwrapBindFd,
+  probeBwrapPidNamespace,
+  probeBwrapSafeSetupPathResolution,
+  probeBwrapUserns,
+};
 
 export interface SandboxDepStatus {
   name: string;
@@ -51,7 +61,9 @@ export function diagnoseSandbox(
   platform: NodeJS.Platform = process.platform,
   // Injectable for tests. Only invoked when bwrap is present on Linux.
   probeUserns: () => boolean = probeBwrapUserns,
-  probePidNs: () => boolean = probeBwrapPidNamespace
+  probePidNs: () => boolean = probeBwrapPidNamespace,
+  probeSafeSetup: () => boolean = probeBwrapSafeSetupPathResolution,
+  probeBindFd: () => boolean = probeBwrapBindFd
 ): SandboxDiagnosis {
   const enabled = config.execution?.sandbox?.enabled === true;
 
@@ -65,10 +77,22 @@ export function diagnoseSandbox(
     deps = [{ name: 'bwrap', required: true, present: bwrapPresent, note: 'bubblewrap' }];
     if (bwrapPresent) {
       deps.push({
+        name: 'safe setup paths',
+        required: true,
+        present: probeSafeSetup(),
+        note: 'bubblewrap 0.12.0+ (GHSA-pxhw-h44j-8pfx fix)',
+      });
+      deps.push({
         name: 'unprivileged userns',
         required: true,
         present: probeUserns(),
         note: 'bwrap --unshare-user smoke test (fails on hardened kernels)',
+      });
+      deps.push({
+        name: 'descriptor binds',
+        required: true,
+        present: probeBindFd(),
+        note: 'functional bwrap --bind-fd smoke test',
       });
       // PID namespace is a best-effort hardening, NOT required: it closes the
       // /proc process-side vector but is commonly blocked in containers.
@@ -93,7 +117,7 @@ export function diagnoseSandbox(
 export function sandboxInstallHint(platform: NodeJS.Platform = process.platform): string | null {
   if (platform === 'linux') {
     return (
-      'Debian/Ubuntu: sudo apt-get install -y bubblewrap' +
+      'Install bubblewrap 0.12.0 or newer' +
       '  (Ubuntu 24.04+: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0)'
     );
   }

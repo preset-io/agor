@@ -85,6 +85,15 @@ export type TerminationCause =
   | 'heartbeat_lost'
   | 'sdk_health_failure';
 
+/** Why a durable termination request is waiting for another HA coordinator. */
+export const TERMINATION_COORDINATION_PENDING_CODES = [
+  'non_owner_replica',
+  'coordination_in_progress',
+] as const;
+
+export type TerminationCoordinationPendingCode =
+  (typeof TERMINATION_COORDINATION_PENDING_CODES)[number];
+
 /**
  * Expiring, database-fenced ownership of one containment attempt.
  *

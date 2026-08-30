@@ -48,8 +48,10 @@ multi-tenant (use containers/microVMs for that).
 
 ## Prerequisites
 
-1. Linux daemon host with `bubblewrap` installed **and unprivileged user
-   namespaces working** — the #1 thing that silently breaks on hardened kernels.
+1. Linux daemon host with `bubblewrap` 0.12.0 or newer installed **and
+   unprivileged user namespaces working** — the #1 thing that silently breaks
+   on hardened kernels. Agor also functionally verifies `--bind-fd`; both are
+   required security boundaries, not optional Codex features.
    Verify functionally (not just "is bwrap on PATH"):
    ```bash
    agor doctor          # look for a green "unprivileged userns" row
@@ -186,10 +188,10 @@ inside a session, confirm:
   a branch whose `others_fs_access` is `read` will mount the branch **read-only**;
   `none` rejects the spawn with a clear error. Owners are unaffected (`write`).
   Decide up front whether shared branches should default to `write`.
-- **Prompting another user's session** runs against the **owner's** home (their
-  tool auth/state) — carry the same warning as before ("letting others prompt
-  your session gives them your home"). Env-level credentials still come from the
-  prompter via the env-resolver, not the owner.
+- **Prompting another user's Session** is allowed only for a branch-home
+  Session when both sharing switches permit it. The conversation and branch
+  SDK state are shared, while execution home and credentials come from the
+  actual prompter. Execution-home Sessions are never shareable.
 - **Terminals** get the same sandbox treatment as prompts: per-user home overlay
   (keyed by the terminal user), RBAC-aware branch mount (ro / refused without
   write), and masked daemon secrets.

@@ -18,11 +18,23 @@ describe('Stop route transaction scope', () => {
 
     expect(stop).toContain('resolveSessionPromptAccess({');
     expect(stop).toContain('body.force_unverified !== true');
+    const stopAccessScope = stop.slice(
+      stop.indexOf('const access = await inCurrentTenantDatabaseScope'),
+      stop.indexOf(
+        'if (!access)',
+        stop.indexOf('const access = await inCurrentTenantDatabaseScope')
+      )
+    );
+    expect(stopAccessScope).toContain('resolveSessionPromptAccess({');
     expect(stop).toContain(
       'runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase'
     );
+    expect(stop).toContain('runInTenantDatabaseScope: inCurrentTenantDatabaseScope');
+    expect(stop).toContain('!isCanonicalFullUuid(body.expected_task_id)');
+    expect(stop).toContain('{ reason: stopReason, expectedTaskId }');
+    expect(stop).toContain("outcome: 'force_failed' as const");
     expect(stop).toMatch(
-      /const failedTask = await runInFreshTerminationTenantWriteDatabase\(\(\) =>\s+forceFailUnverifiedTask\(\{/
+      /const forceFail = await runInFreshTerminationTenantWriteDatabase\(\(\) =>\s+forceFailUnverifiedTask\(\{/
     );
   });
 

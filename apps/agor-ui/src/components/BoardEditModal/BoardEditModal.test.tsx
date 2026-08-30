@@ -72,7 +72,7 @@ const policy = {
       entries: [],
       others: { preset: 'collaborator', capabilities: ['branch.view'], fs_access: 'read' },
     },
-    session_sharing: { owner_rules: [] },
+    allow_shared_session_prompts: false,
   },
 } as BoardCapabilityPolicies;
 
@@ -98,7 +98,7 @@ function makeClient(metadataError: { code?: number; message?: string } = { code:
           };
         }
         if (name === 'workspace-preferences') {
-          return { find: vi.fn().mockResolvedValue({ personal_session_sharing_enabled: false }) };
+          return { find: vi.fn().mockResolvedValue({ session_sharing_enabled: false }) };
         }
         if (name === 'boards/:id/effective-access') {
           return {
@@ -255,7 +255,7 @@ describe('BoardEditModal', () => {
           };
         }
         if (name === 'workspace-preferences') {
-          return { find: vi.fn().mockResolvedValue({ personal_session_sharing_enabled: false }) };
+          return { find: vi.fn().mockResolvedValue({ session_sharing_enabled: false }) };
         }
         if (name === 'boards/:id/effective-access') {
           return {

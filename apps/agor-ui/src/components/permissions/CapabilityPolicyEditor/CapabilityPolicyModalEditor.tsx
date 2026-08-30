@@ -109,10 +109,7 @@ export const BoardCapabilityPolicyModalEditor: React.FC<{
         principals={directory.principals}
         subjects={directory.subjects}
         sampleBranchOwnerUserId={value.primary_owner_user_id}
-        currentUserId={currentUserId}
-        personalSessionSharingWorkspaceEnabled={
-          workspacePreferences.personal_session_sharing_enabled
-        }
+        sessionSharingWorkspaceEnabled={workspacePreferences.session_sharing_enabled}
         canManageAccess={canManageAccess}
       />
     </Frame>
@@ -161,10 +158,7 @@ export const BranchCapabilityPolicyModalEditor: React.FC<{
         onChange={onChange}
         principals={directory.principals}
         subjects={directory.subjects}
-        currentUserId={currentUserId}
-        personalSessionSharingWorkspaceEnabled={
-          workspacePreferences.personal_session_sharing_enabled
-        }
+        sessionSharingWorkspaceEnabled={workspacePreferences.session_sharing_enabled}
         canManageAccess={canManageAccess}
       />
     </Frame>

@@ -222,7 +222,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     it('repairs every tenant, removes stdio OAuth state, and preserves remote state', async () => {
       if (!db) throw new Error('PostgreSQL test database was not initialized');
 
-      await runMigrations(db);
+      // This upgrade proof deliberately advances from 0095 through the full
+      // current journal, which now includes the coordinated sharing-model
+      // cutover. The test database is isolated and has no concurrent daemon.
+      await runMigrations(db, { allowOfflineCutover: true });
 
       for (const fixture of FIXTURES) {
         await runWithTenantDatabaseScope(db, fixture.tenantId, async (scoped) => {

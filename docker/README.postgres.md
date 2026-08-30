@@ -39,10 +39,12 @@ The checked-in `.agor.yml` variants provide the usual branch-specific ports and
 project names. The `postgres` variant selects the smaller
 `docker-compose.override.postgres.yml` overlay for database parity with RBAC and
 Agor's sandbox off. The `rich` variant selects the overlay above; it requires
-bubblewrap/user-namespace support and fails closed if the sandbox cannot start.
+bubblewrap 0.12.0+/user-namespace support and fails closed if the sandbox cannot start.
 The deprecated `full` variant is a compatibility alias for `rich`. Both
 capability profiles are standalone source-mode development stacks; HA remains
-a separate variant.
+a separate variant. The rich/full profile also defaults
+`AGOR_SANDBOX_SDK_HOME_MODE=per_branch` so its multi-user fixtures exercise
+branch-owned SDK state; set it to `inherit` to test legacy execution homes.
 
 ## Relevant environment overrides
 
@@ -51,6 +53,7 @@ AGOR_DB_DIALECT=postgresql
 DATABASE_URL=postgresql://...
 AGOR_RBAC_ENABLED=true
 AGOR_UNIX_USER_MODE=simple|sandbox|delegated
+AGOR_SANDBOX_SDK_HOME_MODE=inherit|per_branch
 CREATE_RBAC_TEST_USERS=true
 SEED=true
 ```

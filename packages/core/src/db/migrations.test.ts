@@ -741,6 +741,59 @@ describe('Board and branch capability-policy migration', () => {
       'FOREIGN KEY ("tenant_id","config_id","session_owner_user_id") REFERENCES "branch_session_sharing_rules"("tenant_id","config_id","session_owner_user_id")'
     );
   });
+
+  it('replaces personal grants with closed shared-session switches in SQLite', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-session-sharing-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+    try {
+      await client.executeMultiple(`
+        CREATE TABLE branch_permission_configs (config_id text PRIMARY KEY NOT NULL);
+        CREATE TABLE branch_session_sharing_rules (
+          config_id text NOT NULL, session_owner_user_id text NOT NULL,
+          PRIMARY KEY (config_id,session_owner_user_id)
+        );
+        CREATE TABLE branch_session_sharing_grants (grant_id text PRIMARY KEY NOT NULL);
+        CREATE TABLE app_variables (namespace text NOT NULL, key text NOT NULL);
+        CREATE TABLE branches (branch_id text PRIMARY KEY NOT NULL, data text NOT NULL);
+        CREATE TABLE boards (board_id text PRIMARY KEY NOT NULL, data text NOT NULL);
+        INSERT INTO branch_permission_configs VALUES ('config-1');
+        INSERT INTO branch_session_sharing_rules VALUES ('config-1','owner-1');
+        INSERT INTO branch_session_sharing_grants VALUES ('grant-1');
+        INSERT INTO app_variables VALUES ('workspace_preferences','personal_session_sharing_enabled');
+        INSERT INTO branches VALUES ('branch-1','{"dangerously_allow_session_sharing":true,"keep":1}');
+        INSERT INTO boards VALUES ('board-1','{"default_dangerously_allow_session_sharing":true,"keep":1}');
+      `);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0102_shared_session_prompting.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const config = await client.execute(
+        'SELECT allow_shared_session_prompts FROM branch_permission_configs'
+      );
+      expect(config.rows).toEqual([{ allow_shared_session_prompts: 0 }]);
+      const tables = await client.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'branch_session_sharing_%'"
+      );
+      expect(tables.rows).toEqual([]);
+      const preference = await client.execute('SELECT count(*) AS count FROM app_variables');
+      expect(Number(preference.rows[0]?.count)).toBe(0);
+      const legacyJson = await client.execute(`
+        SELECT json_extract(data,'$.dangerously_allow_session_sharing') AS branch_sharing,
+               json_extract((SELECT data FROM boards WHERE board_id='board-1'),
+                            '$.default_dangerously_allow_session_sharing') AS board_sharing,
+               json_extract(data,'$.keep') AS kept
+        FROM branches WHERE branch_id='branch-1'
+      `);
+      expect(legacyJson.rows[0]).toEqual({ branch_sharing: null, board_sharing: null, kept: 1 });
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('Executor session token authority migrations', () => {

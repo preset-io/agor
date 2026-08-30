@@ -105,7 +105,12 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
-      const cardWithType = await cardsService.getWithType(args.cardId);
+      // getWithType() reads the card repository over `this.db` directly and is
+      // not a Feathers transport method, so enter the tenant DB scope here (the
+      // other cards custom-method calls in this file do the same).
+      const cardWithType = await runWithMcpTenantDatabaseScope(ctx, () =>
+        cardsService.getWithType(args.cardId)
+      );
       if (!cardWithType) throw new Error(`Card ${args.cardId} not found`);
       return textResult(cardWithType);
     }

@@ -83,8 +83,10 @@ import type {
   Session,
   SessionID,
   SessionMCPServer,
+  SessionStopResult,
   StreamingEventType,
   Task,
+  TaskID,
   TaskMetadata,
   User,
   UserID,
@@ -94,6 +96,7 @@ import {
   boardCommentZoneParentObjectKey,
   hasMinimumRole,
   isBranchArchiveOrDeleteOptions,
+  isCanonicalFullUuid,
   isTaskPendingDispatch,
   MCP_MEMBER_POLICIES,
   MCP_MEMBER_POLICY_CHANGED_EVENT,
@@ -208,6 +211,7 @@ import {
   ensureBranchPermission,
   loadScheduleAndBranch,
   resolveSessionPromptAccess,
+  sessionPromptDeniedMessage,
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
@@ -367,6 +371,32 @@ export async function resolveQueuedTaskActor(
 ): Promise<User | null> {
   if (!task.created_by) return null;
   return (await findUser(task.created_by)) ?? null;
+}
+
+/**
+ * Bind an executor launch to the immutable actor recorded on the Task.
+ *
+ * A branch-scoped Session may be promptable by several collaborators, but an
+ * existing Task is not transferable between them: `Task.created_by` selects
+ * provider credentials, private MCP grants, and audit attribution. Callers
+ * who want to run their own prompt must use the Session prompt endpoint so it
+ * creates a Task in their identity. Keeping this check at the shared launch
+ * boundary also protects queue and internal call paths from identity drift.
+ */
+export function assertTaskExecutorPrincipal(
+  task: Pick<Task, 'created_by'>,
+  params: Pick<RouteParams, 'user'>
+): UserID {
+  const principalUserId = params.user?.user_id as UserID | undefined;
+  if (!principalUserId) {
+    throw new NotAuthenticated('Authentication required to run tasks');
+  }
+  if (task.created_by !== principalUserId) {
+    throw new Forbidden(
+      'Only the user who created this task can run it. Submit a new prompt to run as yourself.'
+    );
+  }
+  return principalUserId;
 }
 
 /** Compatibility tombstone retained for stale Claude CLI restart clients. */
@@ -1631,6 +1661,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       return task;
     }
 
+    // The token minted below authenticates the executor as params.user, while
+    // credential services resolve secrets from Task.created_by. Those must be
+    // the same durable actor; Session/branch prompt authority alone must never
+    // authorize consuming somebody else's provider credential.
+    assertTaskExecutorPrincipal(task, params);
+
     const {
       agenticToolEnabled,
       messageStartIndex,
@@ -1815,6 +1851,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         );
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
+        // This is a daemon-owned lifecycle transition. Preserve the authenticated
+        // actor and trusted tenant context for hooks/publication, but do not send
+        // the originating transport provider back through server-managed write
+        // guards: external callers cannot finalize Task or Message state.
+        const failureParams = { ...params, provider: undefined };
         console.error(
           `❌ [Daemon] Executor spawn failed for session=${shortId(sessionId)} task=${shortId(taskId)} agent=${session.agentic_tool} unix_username=${session.unix_username ?? 'null'}: ${errorMessage}`,
           error
@@ -1829,7 +1870,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             error_message: errorMessage,
           },
           'Task',
-          params
+          failureParams
         );
 
         // Synthesize a system message so the chat surfaces *why* the agent
@@ -1851,7 +1892,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             content: errorContent,
             role: MessageRole.ASSISTANT,
             metadata: { is_meta: true },
-            params,
+            params: failureParams,
           });
         } catch (sysErr) {
           console.warn(
@@ -1969,18 +2010,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           if (!branch) {
             throw new NotFound(`Branch ${currentSession.branch_id} not found`);
           }
-          const { allowed } = await resolveSessionPromptAccess({
+          const { allowed, denialReason } = await resolveSessionPromptAccess({
             branchRepository: scopedBranchRepository,
             branch,
             session: currentSession,
             userId: promptUserId,
           });
           if (!allowed) {
-            throw new Forbidden(
-              currentSession.created_by === promptUserId
-                ? `Collaborator access is required to prompt this session.`
-                : `The session owner has not shared their sessions with you.`
-            );
+            throw new Forbidden(sessionPromptDeniedMessage({ denial_reason: denialReason }));
           }
         };
         if (branchRbacEnabled && !isPromptServiceAccount && promptBranchId) {
@@ -2255,6 +2292,12 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const isInternalCall = !params.provider;
         const isServiceAccount =
           (params.user as { _isServiceAccount?: boolean } | undefined)?._isServiceAccount === true;
+        if (!isInternalCall && !isServiceAccount) {
+          // A collaborator may prompt this Session, but cannot take over a
+          // pre-created Task whose credential/audit identity belongs to a
+          // different user. `/sessions/:id/prompt` creates a caller-owned Task.
+          assertTaskExecutorPrincipal(task, params);
+        }
         if (branchRbacEnabled && task.session_id && !isInternalCall && !isServiceAccount) {
           const session = await sessionsService.get(task.session_id, params);
           if (!session.branch_id) {
@@ -2268,7 +2311,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             if (!wt) {
               throw new NotFound(`Branch ${session.branch_id} not found`);
             }
-            const { allowed, effectiveLevel } = await resolveSessionPromptAccess({
+            const { allowed, effectiveLevel, denialReason } = await resolveSessionPromptAccess({
               branchRepository,
               branch: wt,
               session,
@@ -2276,9 +2319,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             });
             if (!allowed) {
               throw new Forbidden(
-                `You have '${effectiveLevel}' permission on this branch, which does not ` +
-                  `allow running tasks. Collaborator access is required, and foreign ` +
-                  `sessions must be shared by their owner.`
+                `${sessionPromptDeniedMessage({ denial_reason: denialReason })} ` +
+                  `(Current branch permission: '${effectiveLevel}'.)`
               );
             }
           }
@@ -3047,7 +3089,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/sessions/:id/stop',
     {
-      async create(data: unknown, params: RouteParams) {
+      async create(data: unknown, params: RouteParams): Promise<SessionStopResult> {
         const id = params.route?.id;
         if (!id) throw new Error('Session ID required');
         const body = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
@@ -3059,11 +3101,11 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           app.service('sessions').get(id, params)
         );
 
-        // Stop is session lifecycle control. Managers may stop any session on
-        // the branch without gaining prompt authority over its owner's home;
-        // collaborators may stop a foreign session only when that owner has
-        // explicitly shared it with them. Force-fail deliberately skips this
-        // check and applies its narrower owner-or-admin policy below.
+        // Stop is Session lifecycle control. Managers may stop any Session on
+        // the branch; collaborators may stop a foreign branch Session only
+        // when the workspace and branch sharing switches allow them to prompt
+        // it. Force-fail deliberately skips this check and applies its narrower
+        // owner-or-admin policy below.
         if (
           body.force_unverified !== true &&
           branchRbacEnabled &&
@@ -3081,17 +3123,18 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             const branch = await branchRepository.findById(session.branch_id);
             if (!branch) return null;
             const branchAccess = await branchRepository.resolveUserAccess(branch, stopUserId);
-            return { branch, branchAccess };
+            const { allowed: hasPromptAuthority } = await resolveSessionPromptAccess({
+              branchRepository,
+              branch,
+              session,
+              userId: stopUserId,
+            });
+            return { branchAccess, hasPromptAuthority };
           });
           if (!access) {
             throw new NotFound(`Branch ${session.branch_id} not found`);
           }
-          const { allowed: hasPromptAuthority } = await resolveSessionPromptAccess({
-            branchRepository,
-            branch: access.branch,
-            session,
-            userId: stopUserId,
-          });
+          const { hasPromptAuthority } = access;
           const isManager = access.branchAccess.can === 'all';
           const isGlobalSuperadmin =
             superadminOpts.allowSuperadmin && hasMinimumRole(params.user?.role, ROLES.SUPERADMIN);
@@ -3135,7 +3178,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                   stopRouteRepositories.branchRepo.isOwner(branchId, userId),
               });
             });
-            const failedTask = await runInFreshTerminationTenantWriteDatabase(() =>
+            const forceFail = await runInFreshTerminationTenantWriteDatabase(() =>
               forceFailUnverifiedTask({
                 app,
                 taskId: target.task.task_id,
@@ -3144,10 +3187,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
                 params,
               })
             );
+            if (forceFail.outcome === 'already_terminal') {
+              return {
+                success: false as const,
+                outcome: 'condition_changed' as const,
+                reason: 'Task completed before force-fail could be applied.',
+                stoppedTaskId: forceFail.task.task_id,
+              };
+            }
             return {
-              success: true,
-              status: failedTask.status,
-              stoppedTaskId: failedTask.task_id,
+              success: true as const,
+              outcome: 'force_failed' as const,
+              status: TaskStatus.FAILED,
+              stoppedTaskId: forceFail.task.task_id,
             };
           });
           triggerPreservedQueue();
@@ -3155,21 +3207,23 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
 
         const stopReason = typeof body.reason === 'string' ? body.reason : undefined;
+        if (body.expected_task_id !== undefined && !isCanonicalFullUuid(body.expected_task_id)) {
+          throw new BadRequest('expected_task_id must be a canonical Task ID.');
+        }
+        const expectedTaskId = body.expected_task_id as TaskID | undefined;
         const result = await withSessionTurnLock(sessionTurnLocks, id as SessionID, async () =>
           stopSessionPreserveQueue(
             {
               app,
               taskRepo: stopRouteRepositories.taskRepo,
               sessionsService: sessionsServiceWithHooks,
-              findActiveTasks: (stopApp, sessionId, stopParams) =>
-                inCurrentTenantDatabaseScope(() =>
-                  findActiveTasksForSession(stopApp, sessionId, stopParams)
-                ),
+              findActiveTasks: findActiveTasksForSession,
+              runInTenantDatabaseScope: inCurrentTenantDatabaseScope,
               runInFreshTenantWriteDatabase: runInFreshTerminationTenantWriteDatabase,
             },
             id as SessionID,
             params,
-            { reason: stopReason }
+            { reason: stopReason, expectedTaskId }
           )
         );
 
@@ -3541,12 +3595,14 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     resolveSessionPromptAuthority: async (
       branchId: string,
       callerUserId: UUID,
-      sessionOwnerUserId: UUID
+      sessionOwnerUserId: UUID,
+      sessionSdkHomeScope: import('@agor/core/types').SessionSdkHomeScope
     ) =>
       widgetResolutionBranches.resolveSessionPromptAuthority(
         branchId as import('@agor/core/types').BranchID,
         callerUserId,
-        sessionOwnerUserId
+        sessionOwnerUserId,
+        sessionSdkHomeScope
       ),
   };
 

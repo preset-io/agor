@@ -2966,9 +2966,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // SessionsService.update delegates straight to patch, so both verbs mutate a
   // session the same way and must clear the same authorization chain.
   const sessionWriteGuards = [
-    // created_by and unix_username bind the immutable principal, execution home,
-    // credentials, and resumable SDK state. Their immutability is independent
-    // of branch RBAC and remains load-bearing for delegated execution.
+    // created_by and unix_username remain immutable identity/history stamps.
+    // unix_username is load-bearing for delegated execution-home Sessions;
+    // branch-home Sessions deliberately use the current prompt actor instead.
     ensureSessionImmutability(),
     ...(executionMode.appRbacEnabled
       ? [

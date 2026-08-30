@@ -40,7 +40,6 @@ function createBoardData(overrides?: Partial<Board>): Partial<Board> {
     access_mode: overrides?.access_mode,
     default_others_can: overrides?.default_others_can,
     default_others_fs_access: overrides?.default_others_fs_access,
-    default_dangerously_allow_session_sharing: overrides?.default_dangerously_allow_session_sharing,
   };
   if (overrides && Object.hasOwn(overrides, 'primary_teammate_id')) {
     data.primary_teammate_id = overrides.primary_teammate_id;

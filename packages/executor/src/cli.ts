@@ -30,6 +30,7 @@ import {
   isPromptPayload,
   type PromptPayload,
 } from './payload-types.js';
+import { applyPromptPayloadEnvironment } from './prompt-payload-env.js';
 
 const DEBUG_EXECUTOR_CLI =
   process.env.AGOR_DEBUG_EXECUTOR_CLI === '1' || process.env.DEBUG?.includes('executor-cli');
@@ -223,20 +224,27 @@ async function handlePromptPayload(
   // daemon passes approved env vars in the payload and we apply them here.
   // =========================================================================
   if (payload.env && Object.keys(payload.env).length > 0) {
-    // Recheck process-map structure for delegated/imported payloads. Names are
-    // not semantically denied: this is the authenticated user's executor.
-    const { filterEnv } = await import('@agor/core/config');
-    const { env: safeEnv, rejected } = filterEnv(payload.env as Record<string, string>, (key) => {
-      // Log key only — never the value, which is attacker-controlled.
-      executorCliDebug(`[executor] Rejected invalid env var from payload: ${key}`);
-    });
-    executorCliDebug(
-      `[executor] Applying ${Object.keys(safeEnv).length} env vars from payload` +
-        (rejected.length > 0 ? ` (${rejected.length} rejected)` : '')
+    // System-identity / process-hijacking vars must come from the pod, never
+    // from the daemon-built payload. Under HA the daemon forwards its own
+    // HOME (=/home/agor); applying it would override the ephemeral pod's mounted
+    // per-user HOME (…/home/<segment>), so the agentic-tool CLI would look for
+    // its ~/.claude session state in the wrong (ephemeral) home and every
+    // session resume fails with "No conversation found".
+    // Loader-injection families are denied by prefix so no variant slips through
+    // (LD_PRELOAD, LD_AUDIT, LD_PROFILE, LD_DEBUG, DYLD_INSERT_LIBRARIES, …).
+    const { applied, rejected, identityDenied } = applyPromptPayloadEnvironment(
+      payload.env,
+      process.env,
+      (key) => {
+        // Log key only — never the value, which is attacker-controlled.
+        executorCliDebug(`[executor] Rejected invalid env var from payload: ${key}`);
+      }
     );
-    for (const [key, value] of Object.entries(safeEnv)) {
-      process.env[key] = value;
-    }
+    executorCliDebug(
+      `[executor] Applying ${applied.length} env vars from payload` +
+        (rejected.length > 0 ? ` (${rejected.length} invalid)` : '') +
+        (identityDenied.length > 0 ? ` (identity-denied: ${identityDenied.join(',')})` : '')
+    );
   }
 
   // Validate tool using registry

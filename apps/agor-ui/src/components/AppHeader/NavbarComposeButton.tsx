@@ -13,7 +13,6 @@ import {
   getDefaultPermissionMode,
   getTeammateConfig,
   mapToCodexPermissionConfig,
-  resolveUserPrimaryAgenticTool,
 } from '@agor-live/client';
 import { BulbOutlined, CloseOutlined, EditOutlined, RobotOutlined } from '@ant-design/icons';
 import {
@@ -43,6 +42,7 @@ import {
   getUserDefaultConfigurationSource,
 } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { SessionComposerDropZone } from '../SessionPanel/SessionComposerDropZone';
@@ -102,6 +102,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
 
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userById = useAgorStore(selectUserById);
+  const agenticToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
 
   const [open, setOpen] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -186,7 +187,11 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     if (!open) return;
     mcpEditedRef.current = false;
     mcpInitializedBranchIdRef.current = null;
-    const primaryTool = resolveUserPrimaryAgenticTool(currentUser);
+    const primaryTool = resolveAvailableUserAgenticTool(
+      currentUser,
+      agenticToolSettings,
+      AVAILABLE_AGENTS
+    );
     setSelectedAgent(primaryTool);
     const agentDefaults = getUserAgenticToolDefault(currentUser, primaryTool).configuration;
     form.resetFields();

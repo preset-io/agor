@@ -733,6 +733,25 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
+  /** Active executor turns attributed to one immutable prompt actor. */
+  async findExecutingByCreator(userId: string): Promise<Task[]> {
+    try {
+      const rows = await select(this.db)
+        .from(tasks)
+        .where(
+          and(eq(tasks.created_by, userId), inArray(tasks.status, [...EXECUTING_TASK_STATUSES]))
+        )
+        .all();
+
+      return rows.map((row: TaskRow) => this.rowToTask(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find executing tasks for creator: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   /**
    * Find orphaned tasks (dispatching, running, stopping, awaiting permission, or awaiting input)
    * These are tasks that were interrupted when daemon stopped.

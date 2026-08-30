@@ -407,7 +407,7 @@ describe('resolveWidget', () => {
           resolveSessionPromptAuthority: denyPrompt,
         }
       )
-    ).rejects.toThrow(/permission from the session owner/);
+    ).rejects.toThrow(/don't have permission to prompt this branch/i);
   });
 
   it('rechecks prompt authority after submit effects and fails closed before auto-resume', async () => {
@@ -420,7 +420,7 @@ describe('resolveWidget', () => {
       .mockResolvedValueOnce({
         allowed: true,
         execution_user_id: 'session-owner',
-        source: 'personal_session_sharing',
+        source: 'branch_session',
       })
       .mockResolvedValueOnce({ allowed: false, source: 'denied' });
 
@@ -436,7 +436,7 @@ describe('resolveWidget', () => {
           resolveSessionPromptAuthority,
         }
       )
-    ).rejects.toThrow(/required to resume this widget/);
+    ).rejects.toThrow(/don't have permission to prompt this branch/i);
 
     expect(resolveSessionPromptAuthority).toHaveBeenCalledTimes(2);
     expect(applySubmit).toHaveBeenCalledOnce();
@@ -446,7 +446,7 @@ describe('resolveWidget', () => {
     expect(harness.currentMessage.metadata?.widget?.status).toBe('resolving');
   });
 
-  it('allows a submission with an owner-authored sharing grant', async () => {
+  it('allows a submission when shared-session prompting is authorized', async () => {
     registerTestWidget();
     const fixtures = makeFixtures({ branchOthersCan: 'prompt' });
     const { app, calls, resolutionStore } = makeApp(fixtures);

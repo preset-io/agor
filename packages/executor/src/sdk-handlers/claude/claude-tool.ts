@@ -208,8 +208,12 @@ export class ClaudeTool implements ITool {
 
   async checkInstalled(): Promise<boolean> {
     try {
-      // Check if ~/.claude directory exists
-      const claudeDir = path.join(os.homedir(), '.claude');
+      // Check the SAME dir the Claude SDK uses. CLAUDE_CONFIG_DIR IS the config
+      // dir (config-dir semantics), so honor it when a per-branch SDK home
+      // relocates it (design §8 item 3); else fall back to `~/.claude`. Without
+      // this, Agor would probe the old location while the SDK wrote to the
+      // relocated branch home (silent split-brain).
+      const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
       const stats = await fs.stat(claudeDir);
       return stats.isDirectory();
     } catch {

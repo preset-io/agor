@@ -174,7 +174,6 @@ export const RbacPolicyPrototypePage: React.FC = () => {
                   principals={PROTOTYPE_PRINCIPALS}
                   subjects={EFFECTIVE_ACCESS_SUBJECTS}
                   sampleBranchOwnerUserId={PROTOTYPE_USERS.leo}
-                  currentUserId={PROTOTYPE_USERS.kasia}
                 />
               ) : (
                 <BranchCapabilityPolicyForm
@@ -182,7 +181,6 @@ export const RbacPolicyPrototypePage: React.FC = () => {
                   onChange={setBranchDraft}
                   principals={PROTOTYPE_PRINCIPALS}
                   subjects={EFFECTIVE_ACCESS_SUBJECTS}
-                  currentUserId={PROTOTYPE_USERS.kasia}
                 />
               )}
             </section>

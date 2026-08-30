@@ -74,6 +74,37 @@ function service() {
 describe('ClaudePromptService background task query lifetime', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('logs only projected result and stderr metadata for a hostile error result', async () => {
+    const sentinel = 'SENTINEL_HOSTILE_RESULT_AND_STDERR_8f31';
+    const query = fakeQuery([
+      {
+        ...sdkResult('hostile-result'),
+        subtype: sentinel,
+        is_error: true,
+        result: sentinel,
+      } as unknown as SDKMessage,
+    ]);
+    vi.mocked(setupQuery).mockResolvedValue({
+      query: query as never,
+      resolvedModel: 'claude-sonnet-4-6',
+      getStderrMetadata: () => ({ hasStderr: true, byteLength: 37 }),
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      for await (const _event of service().promptSessionStreaming(sessionId, 'prompt')) {
+        // Drain the real prompt-service result boundary.
+      }
+
+      const logged = JSON.stringify(error.mock.calls);
+      expect(logged).toContain('subtype=unknown');
+      expect(logged).toContain('stderr_bytes=37');
+      expect(logged).not.toContain(sentinel);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('retains the parent result and releases input only after the continuation result', async () => {
     const query = fakeQuery([
       {
@@ -100,7 +131,7 @@ describe('ClaudePromptService background task query lifetime', () => {
     vi.mocked(setupQuery).mockResolvedValue({
       query: query as never,
       resolvedModel: 'claude-sonnet-4-6',
-      getStderr: () => '',
+      getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
     });
     const activity = vi.fn();
 
@@ -163,7 +194,7 @@ describe('ClaudePromptService background task query lifetime', () => {
     vi.mocked(setupQuery).mockResolvedValue({
       query: query as never,
       resolvedModel: 'claude-sonnet-4-6',
-      getStderr: () => '',
+      getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
     });
     const activity = vi.fn();
 
@@ -196,7 +227,7 @@ describe('ClaudePromptService background task query lifetime', () => {
       vi.mocked(setupQuery).mockResolvedValue({
         query: query as never,
         resolvedModel: 'claude-sonnet-4-6',
-        getStderr: () => '',
+        getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
       });
 
       const events: Array<{ type: string }> = [];
@@ -238,7 +269,7 @@ describe('ClaudePromptService background task query lifetime', () => {
     vi.mocked(setupQuery).mockResolvedValue({
       query: query as never,
       resolvedModel: 'claude-sonnet-4-6',
-      getStderr: () => '',
+      getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
     });
     const activity = vi.fn();
 
