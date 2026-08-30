@@ -1,4 +1,4 @@
-// Lesson 02 — Connect your AI.
+// Lesson 03 — Connect your AI.
 //
 // The amber "No AI connected" banner has been telling the truth since first
 // run: sessions open, but nothing runs. This lesson follows its Connect AI
@@ -24,23 +24,23 @@ const agentMode = resolveAgentMode();
 
 function loadOAuthToken(): string {
   if (!existsSync(SECRETS_FILE)) {
-    throw new Error(`lesson 02: no secrets file at ${SECRETS_FILE} — add CLAUDE_CODE_OAUTH_TOKEN.`);
+    throw new Error(`lesson 03: no secrets file at ${SECRETS_FILE} — add CLAUDE_CODE_OAUTH_TOKEN.`);
   }
   for (const line of readFileSync(SECRETS_FILE, 'utf-8').split('\n')) {
     if (line.startsWith('CLAUDE_CODE_OAUTH_TOKEN='))
       return line.slice('CLAUDE_CODE_OAUTH_TOKEN='.length).trim();
   }
-  throw new Error(`lesson 02: CLAUDE_CODE_OAUTH_TOKEN not found in ${SECRETS_FILE}.`);
+  throw new Error(`lesson 03: CLAUDE_CODE_OAUTH_TOKEN not found in ${SECRETS_FILE}.`);
 }
 
 test.skip(!agentMode, 'set AGOR_E2E_AGENT_MODE=live|replay for the AI lessons');
 
-test('lesson 02: connect your AI', async ({ page }) => {
+test('lesson 03: connect your AI', async ({ page }) => {
   // In replay mode the proxy never touches the network, so a placeholder is
   // enough — the recorded probe response vouches for it.
   const token = agentMode === 'live' ? loadOAuthToken() : 'sk-ant-oat01-replay-placeholder';
 
-  await openLesson(page, '/');
+  await openLesson(page, '/', '03-connect-your-ai');
   await expect(page.locator('text=No AI connected').first()).toBeVisible({ timeout: 30_000 });
 
   await openConnectAi(page);

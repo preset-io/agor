@@ -50,18 +50,7 @@ _Point Agor at the code — clone a URL or register a local checkout_
 
 **Ends with:** preset-io/donut-shop registered ("Local repository added successfully!")
 
-### 02 · Connect your AI
-
-_One credential, verified for real — the amber banner tells the truth_ · _agent lesson_
-
-1. The "No AI connected" banner has been honest since first run — follow its Connect AI button
-1. Settings → Claude Code: paste a credential and a base URL
-1. The daemon probes the provider with the saved credential
-1. Both amber banners clear — sessions can actually run now
-
-**Ends with:** A verified Claude Code credential; no credential warnings anywhere
-
-### 03 · Your first branch
+### 02 · Your first branch
 
 _An isolated worktree with a card on the board_
 
@@ -71,6 +60,17 @@ _An isolated worktree with a card on the board_
 1. The card lands on the canvas and the worktree materializes — error-free
 
 **Ends with:** A ready branch card offering "New Session"
+
+### 03 · Connect your AI
+
+_One credential, verified for real — the amber banner tells the truth_ · _agent lesson_
+
+1. The "No AI connected" banner has been honest since first run — follow its Connect AI button
+1. Settings → Claude Code: paste a credential and a base URL
+1. The daemon probes the provider with the saved credential
+1. Both amber banners clear — sessions can actually run now
+
+**Ends with:** A verified Claude Code credential; no credential warnings anywhere
 
 ### 04 · Your first session
 

@@ -19,7 +19,7 @@
 // Set AGOR_E2E_KEEP_SCRATCH=1 to skip the wipe for faster iteration on a
 // single later lesson (the earlier lessons' state must already exist).
 
-import { spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +70,11 @@ export const DATABASE_URL = `file:${DB_PATH}`;
 // The development default admin the daemon bootstraps on first run
 // (packages/core/src/db/user-utils.ts DEVELOPMENT_DEFAULT_ADMIN_USER).
 export const ADMIN_USER = { email: 'admin@agor.live', password: 'admin' } as const;
+
+// The board the onboarding wizard creates for the admin in lesson 00
+// ("Admin's board" -> slug). Later lessons open it directly — the reel
+// starts each lesson where its activity starts, not on the Home screen.
+export const BOARD_PATH = '/b/admin-s-board/';
 
 // Committed (not gitignored): recorded cassettes are what makes replay mode
 // work without live credentials or network — see cassette-proxy.ts. One
@@ -213,11 +218,41 @@ async function writeStorageState(): Promise<string> {
   return auth.accessToken;
 }
 
+/**
+ * Kill anything still listening on the suite's dedicated ports. An aborted
+ * run can orphan its daemon/vite/proxy (teardown never fires on SIGKILL),
+ * and a stale daemon on 3131 is worse than a crash: the new daemon dies on
+ * EADDRINUSE while the old one keeps answering with last run's database —
+ * every lesson then records against polluted state.
+ */
+function reapStalePorts(): void {
+  for (const port of [DAEMON_PORT, UI_PORT, PROXY_PORT]) {
+    let pids = '';
+    try {
+      pids = execFileSync('lsof', ['-ti', `:${port}`])
+        .toString()
+        .trim();
+    } catch {
+      continue; // lsof exits non-zero when the port is free
+    }
+    for (const pid of pids.split('\n').filter(Boolean)) {
+      console.warn(`[harness] port ${port} held by stale pid ${pid} from a previous run — killing`);
+      try {
+        process.kill(Number(pid), 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
+  }
+}
+
 /** Global setup: reset scratch env from zero, spawn daemon + UI, mint auth state. */
 export async function setupHarness(): Promise<void> {
   const keepScratch = process.env.AGOR_E2E_KEEP_SCRATCH === '1';
   const secrets = loadSecrets();
   const agentMode = resolveAgentMode();
+
+  reapStalePorts();
 
   if (!keepScratch || !existsSync(DB_PATH)) {
     rmSync(SCRATCH_DIR, { recursive: true, force: true });

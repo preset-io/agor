@@ -8,6 +8,7 @@
 // heading becomes the page title — and saves.
 
 import { expect, test } from '@playwright/test';
+import { BOARD_PATH } from '../../support/harness.ts';
 import { beat, glideAndClick, openLesson, settle } from '../../support/pacing.ts';
 
 const DOC_BODY = [
@@ -21,7 +22,7 @@ const DOC_BODY = [
 ].join('\n');
 
 test('lesson 06: capture knowledge', async ({ page }) => {
-  await openLesson(page, '/');
+  await openLesson(page, BOARD_PATH, '06-capture-knowledge');
 
   // Knowledge lives one click away in the header.
   await glideAndClick(page, page.locator('[aria-label="Knowledge Base"]').first());

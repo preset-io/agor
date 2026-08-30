@@ -1,4 +1,4 @@
-// Lesson 03 — Your first branch.
+// Lesson 02 — Your first branch.
 //
 // Branches are the primary card on a board: an isolated git working
 // directory with its own dev environment, where sessions do their work.
@@ -8,6 +8,7 @@
 // card materialize on the canvas, error-free.
 
 import { expect, test } from '@playwright/test';
+import { BOARD_PATH } from '../../support/harness.ts';
 import {
   beat,
   glideAndClick,
@@ -20,9 +21,8 @@ import {
 
 const BRANCH_NAME = 'glaze-menu-refresh';
 
-test('lesson 03: your first branch', async ({ page }) => {
-  await openLesson(page, '/');
-  await glideAndClick(page, page.getByRole('button', { name: "Admin's board" }).first());
+test('lesson 02: your first branch', async ({ page }) => {
+  await openLesson(page, BOARD_PATH, '02-your-first-branch');
   await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 30_000 });
   await beat(page);
 

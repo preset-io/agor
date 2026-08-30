@@ -11,7 +11,7 @@ import { expect, test } from '@playwright/test';
 import { beat, glideAndClick, openLesson, settle, spotlight } from '../../support/pacing.ts';
 
 test('lesson 00: first run — tour and complete the onboarding wizard', async ({ page }) => {
-  await openLesson(page, '/');
+  await openLesson(page, '/', '00-first-run');
 
   // The wizard greets the fresh workspace's first user.
   const wizardHeading = page.locator('text=what do you want to get done');

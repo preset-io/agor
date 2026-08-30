@@ -26,9 +26,17 @@
 //     (and made the old crossfades look like a fade-to-white).
 
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SCRATCH_DIR } from '../support/harness.ts';
 import { DONE_LESSONS } from '../support/syllabus.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -43,9 +51,46 @@ const FONT = path.join(ASSETS_DIR, 'SpaceGrotesk.ttf');
 const INTRO = path.join(E2E_ROOT, '..', 'animated_agor_logo', 'agor_logo_reveal_4k.mp4');
 
 const FADE = 0.7; // fade-through-black seconds between segments
-const TRIM_HEAD = 0.6; // cut each clip's leading white paint-in flash
+const TRIM_HEAD = 0.6; // fallback trim: at least the white paint-in flash
 const TITLE_IN = 0.8; // overlay fade-in start offset into each clip
-const TITLE_HOLD = 4.5; // seconds the overlay stays fully visible
+const TITLE_HOLD = 4.0; // seconds the overlay stays fully visible
+// Output framerate. Frames are duplicated/dropped to hit it — timestamps
+// are authoritative, so playback SPEED never changes with this knob (e.g.
+// AGOR_E2E_REEL_FPS=60 for a smoother-capable target).
+const REEL_FPS = Number(process.env.AGOR_E2E_REEL_FPS ?? 25);
+
+// Per-lesson trim marks written by openLesson (support/pacing.ts): seconds
+// of app-boot to cut so each lesson opens on the settled UI where its
+// story starts — never the "Loading workspace data..." screen. The marks
+// ride along into reel/clips/ so --dir restitches keep working.
+const TRIM_MARKS_RUNTIME = path.join(SCRATCH_DIR, 'trim-marks.jsonl');
+const TRIM_MARKS_SNAPSHOT = path.join(CLIPS_DIR, 'trim-marks.jsonl');
+
+function loadTrimMarks(sourceDir: string | null): Map<string, number> {
+  const file =
+    sourceDir && existsSync(path.join(sourceDir, 'trim-marks.jsonl'))
+      ? path.join(sourceDir, 'trim-marks.jsonl')
+      : existsSync(TRIM_MARKS_RUNTIME)
+        ? TRIM_MARKS_RUNTIME
+        : existsSync(TRIM_MARKS_SNAPSHOT)
+          ? TRIM_MARKS_SNAPSHOT
+          : null;
+  const marks = new Map<string, number>();
+  if (!file) return marks;
+  for (const line of readFileSync(file, 'utf-8').split('\n')) {
+    if (!line.trim()) continue;
+    const { lessonId, trimSeconds } = JSON.parse(line) as {
+      lessonId: string;
+      trimSeconds: number;
+    };
+    marks.set(lessonId, trimSeconds); // last write wins
+  }
+  writeFileSync(
+    TRIM_MARKS_SNAPSHOT,
+    [...marks].map(([l, t]) => JSON.stringify({ lessonId: l, trimSeconds: t })).join('\n')
+  );
+  return marks;
+}
 
 function ensureAssets(): void {
   if (!existsSync(FONT)) {
@@ -149,7 +194,11 @@ function main(): void {
   }
   if (clips.length === 0) throw new Error('[reel] no lesson videos found');
 
-  const durations = clips.map((clip) => ffprobeDuration(clip.file) - TRIM_HEAD);
+  // Each clip's head trim: its recorded loading time when openLesson marked
+  // it, never less than the paint-in flash floor.
+  const marks = loadTrimMarks(sourceDir);
+  const trims = clips.map((clip) => Math.max(TRIM_HEAD, marks.get(clip.id) ?? TRIM_HEAD));
+  const durations = clips.map((clip, i) => ffprobeDuration(clip.file) - trims[i]);
 
   const inputs: string[] = [];
   const filters: string[] = [];
@@ -161,7 +210,7 @@ function main(): void {
   filters.push(
     `[0:v]scale=1920:1080,` +
       `${drawText({ text: 'From zero to a working agent team', size: 46, x: '(w-text_w)/2', y: 'h-150', t0: introSeconds - 2.2, hold: 2.2, color: '0xd8e6e3' })},` +
-      `settb=AVTB,fps=25,setpts=PTS-STARTPTS[card]`
+      `settb=AVTB,fps=${REEL_FPS},setpts=PTS-STARTPTS[card]`
   );
 
   // Lesson inputs, each trimmed past the paint-in flash and carrying its
@@ -173,10 +222,10 @@ function main(): void {
     const lesson = lessonByIndex[i];
     inputs.push('-i', clip.file);
     filters.push(
-      `[${i + 1}:v]trim=start=${TRIM_HEAD},setpts=PTS-STARTPTS,scale=1920:1080,` +
+      `[${i + 1}:v]trim=start=${trims[i].toFixed(3)},setpts=PTS-STARTPTS,scale=1920:1080,` +
         `${drawText({ text: lesson.title, size: 48, x: '64', y: 'h-180', t0: TITLE_IN, hold: TITLE_HOLD, box: true })},` +
         `${drawText({ text: lesson.tagline, size: 30, x: '64', y: 'h-110', t0: TITLE_IN + 0.25, hold: TITLE_HOLD - 0.25, color: '0xd8e6e3', box: true })},` +
-        `settb=AVTB,fps=25[v${i}]`
+        `settb=AVTB,fps=${REEL_FPS}[v${i}]`
     );
   });
 
@@ -195,23 +244,41 @@ function main(): void {
   const total = allDurations.reduce((sum, d) => sum + d, 0) - FADE * clips.length;
   filters.push(`[reel]fade=t=out:st=${(total - 0.9).toFixed(3)}:d=0.9,format=yuv420p[out]`);
 
+  // A silent stereo track rides along: some TV media players (the Roku USB
+  // player included) are unhappy with video-only files.
+  const silentAudioIndex = clips.length + 1;
   const args = [
     '-y',
     ...inputs,
+    '-f',
+    'lavfi',
+    '-i',
+    'anullsrc=channel_layout=stereo:sample_rate=48000',
     '-filter_complex',
     filters.join(';'),
     '-map',
     '[out]',
+    '-map',
+    `${silentAudioIndex}:a`,
+    '-shortest',
     '-r',
-    '25',
+    String(REEL_FPS),
     '-fps_mode',
     'cfr',
     '-c:v',
     'libx264',
+    '-profile:v',
+    'high',
+    '-level:v',
+    '4.2',
     '-crf',
     '20',
     '-preset',
     'medium',
+    '-c:a',
+    'aac',
+    '-b:a',
+    '128k',
     '-movflags',
     '+faststart',
     OUT_FILE,

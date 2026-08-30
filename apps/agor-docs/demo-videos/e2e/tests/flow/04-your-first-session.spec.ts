@@ -10,7 +10,7 @@
 // replay: the recorded turn plays back — no network, no cost.
 
 import { expect, test } from '@playwright/test';
-import { resolveAgentMode } from '../../support/harness.ts';
+import { BOARD_PATH, resolveAgentMode } from '../../support/harness.ts';
 import {
   beat,
   glideAndClick,
@@ -33,8 +33,7 @@ test.skip(!agentMode, 'set AGOR_E2E_AGENT_MODE=live|replay for the AI lessons');
 test('lesson 04: your first session', async ({ page }) => {
   // Two real model turns, each of which may read the repo at length.
   test.setTimeout(420_000);
-  await openLesson(page, '/');
-  await glideAndClick(page, page.getByRole('button', { name: "Admin's board" }).first());
+  await openLesson(page, BOARD_PATH, '04-your-first-session');
   await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 30_000 });
   await beat(page);
 

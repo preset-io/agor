@@ -18,7 +18,7 @@ import {
 } from '../../support/pacing.ts';
 
 test('lesson 01: connect your repository', async ({ page }) => {
-  await openLesson(page, '/');
+  await openLesson(page, '/', '01-connect-your-repository');
 
   // Home → open the board the wizard made for us.
   await glideAndClick(page, page.getByRole('button', { name: "Admin's board" }).first());

@@ -7,7 +7,7 @@
 // ends wide on a board with two live branch cards.
 
 import { expect, test } from '@playwright/test';
-import { resolveAgentMode } from '../../support/harness.ts';
+import { BOARD_PATH, resolveAgentMode } from '../../support/harness.ts';
 import {
   beat,
   glideAndClick,
@@ -28,8 +28,7 @@ test.skip(!agentMode, 'set AGOR_E2E_AGENT_MODE=live|replay for the AI lessons');
 
 test('lesson 07: parallel work on isolated worktrees', async ({ page }) => {
   test.setTimeout(420_000);
-  await openLesson(page, '/');
-  await glideAndClick(page, page.getByRole('button', { name: "Admin's board" }).first());
+  await openLesson(page, BOARD_PATH, '07-parallel-worktrees');
   await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 30_000 });
   await beat(page);
 

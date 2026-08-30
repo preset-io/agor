@@ -7,11 +7,13 @@
 // donut-shop branch card into "In Progress".
 
 import { expect, test } from '@playwright/test';
+import { BOARD_PATH } from '../../support/harness.ts';
 import {
   beat,
   glideAndClick,
   glideTo,
   openLesson,
+  pacedMove,
   settle,
   spotlight,
 } from '../../support/pacing.ts';
@@ -26,9 +28,9 @@ async function drawRect(
   x2: number,
   y2: number
 ): Promise<void> {
-  await page.mouse.move(x1, y1, { steps: 20 });
+  await pacedMove(page, x1, y1);
   await page.mouse.down();
-  await page.mouse.move(x2, y2, { steps: 30 });
+  await pacedMove(page, x2, y2, 900);
   await page.mouse.up();
   await page.waitForTimeout(400);
 }
@@ -45,8 +47,7 @@ async function renameNewZone(page: import('@playwright/test').Page, name: string
 }
 
 test('lesson 05: organize your board with zones', async ({ page }) => {
-  await openLesson(page, '/');
-  await glideAndClick(page, page.getByRole('button', { name: "Admin's board" }).first());
+  await openLesson(page, BOARD_PATH, '05-organize-your-board');
   await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 30_000 });
   await beat(page);
 
@@ -84,11 +85,9 @@ test('lesson 05: organize your board with zones', async ({ page }) => {
   const zoneBox = await zone.boundingBox();
   if (!cardBox || !zoneBox) throw new Error('card or zone not on screen');
 
-  await page.mouse.move(cardBox.x + cardBox.width / 2, cardBox.y + 10, { steps: 25 });
+  await pacedMove(page, cardBox.x + cardBox.width / 2, cardBox.y + 10);
   await page.mouse.down();
-  await page.mouse.move(zoneBox.x + zoneBox.width / 2, zoneBox.y + zoneBox.height / 2, {
-    steps: 40,
-  });
+  await pacedMove(page, zoneBox.x + zoneBox.width / 2, zoneBox.y + zoneBox.height / 2, 1100);
   await page.mouse.up();
   await settle(page);
 
