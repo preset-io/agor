@@ -1542,20 +1542,31 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       });
     }
 
-    const report = await this.taskRepo.reportRuntimeTelemetry(
-      data.task_id,
-      {
-        token_fingerprint: authority.tokenFingerprint,
-        principal_user_id: authority.userId,
-        session_id: authority.sessionId,
-        branch_id: authority.branchId,
-        ...this.runtimeAuthorityOptions,
-        ...(standaloneTokenCurrent === undefined
-          ? {}
-          : { standalone_token_current: standaloneTokenCurrent }),
-      },
-      data.pulse
-    );
+    const persistTelemetry = () =>
+      this.taskRepo.reportRuntimeTelemetry(
+        data.task_id,
+        {
+          token_fingerprint: authority.tokenFingerprint,
+          principal_user_id: authority.userId,
+          session_id: authority.sessionId,
+          branch_id: authority.branchId,
+          ...this.runtimeAuthorityOptions,
+          ...(standaloneTokenCurrent === undefined
+            ? {}
+            : { standalone_token_current: standaloneTokenCurrent }),
+        },
+        data.pulse
+      );
+
+    // PostgreSQL tenant-owned services run inside a request transaction. The
+    // repository takes the Task row lock while deciding whether this heartbeat
+    // may refresh liveness. Commit that short unit before a denial enters the
+    // termination coordinator, whose fresh claim must lock the same Task row.
+    // SQLite services carry tenant identity only, so their repository mutation
+    // already commits before this method continues.
+    const report = isPostgresDatabaseHandle(this.db)
+      ? await withFreshTenantWrite(this.db, authority.tenantId, persistTelemetry)
+      : await persistTelemetry();
 
     if (report.outcome === 'scope_mismatch') {
       // Do not let a wrong-scope credential stop somebody else's runtime.

@@ -4,10 +4,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const { beginExecutorTermination } = vi.hoisted(() => ({
   beginExecutorTermination: vi.fn(),
 }));
+const withFreshTenantWrite = vi.hoisted(() =>
+  vi.fn(async (_db: unknown, _tenantId: string, work: () => Promise<unknown>) => work())
+);
 
 vi.mock('../termination-coordinator.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../termination-coordinator.js')>()),
   beginExecutorTermination,
+}));
+vi.mock('../utils/tenant-db-scope.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/tenant-db-scope.js')>()),
+  withFreshTenantWrite,
 }));
 
 import { TasksService } from './tasks.js';
@@ -47,6 +54,7 @@ function serviceHarness(input: {
   report: Record<string, unknown>;
   tokenCurrent?: boolean;
   tokenFailure?: Error;
+  postgres?: boolean;
 }) {
   const service = Object.create(TasksService.prototype) as TasksService;
   const reportRuntimeTelemetry = vi.fn().mockResolvedValue(input.report);
@@ -54,19 +62,21 @@ function serviceHarness(input: {
     ? vi.fn().mockRejectedValue(input.tokenFailure)
     : vi.fn().mockResolvedValue(input.tokenCurrent ?? true);
   Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry });
-  Reflect.set(service, 'db', { run() {} });
+  const db = input.postgres ? { transaction() {} } : { run() {} };
+  Reflect.set(service, 'db', db);
   Reflect.set(service, 'runtimeAuthorityOptions', {
     branchRbacEnabled: true,
   });
   Reflect.set(service, 'executorCredentialRevoker', { isTaskTokenAuthorityCurrent });
   Reflect.set(service, 'heartbeatCallbackRunner', { isConfigured: () => false });
   Reflect.set(service, 'app', { service: () => ({ emit: vi.fn() }) });
-  return { service, reportRuntimeTelemetry, isTaskTokenAuthorityCurrent };
+  return { service, db, reportRuntimeTelemetry, isTaskTokenAuthorityCurrent };
 }
 
 describe('TasksService heartbeat authority control', () => {
   beforeEach(() => {
     beginExecutorTermination.mockReset();
+    withFreshTenantWrite.mockClear();
   });
 
   it('claims the existing fenced STOPPING path with one sanitized revoked cause', async () => {
@@ -97,6 +107,40 @@ describe('TasksService heartbeat authority control', () => {
         cause: 'authorization_revoked',
         errorMessage: AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
       })
+    );
+  });
+
+  it('commits the PostgreSQL heartbeat unit before claiming revoked termination', async () => {
+    const stopping = {
+      ...task,
+      status: TaskStatus.STOPPING,
+      termination_request: {
+        cause: 'authorization_revoked',
+        requested_at: '2026-08-28T00:00:10.000Z',
+        error_message: AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+      },
+    };
+    beginExecutorTermination.mockResolvedValue(stopping);
+    const { service, db, reportRuntimeTelemetry } = serviceHarness({
+      postgres: true,
+      report: {
+        outcome: 'authorization_revoked',
+        task,
+        reason: 'branch_capability_revoked',
+      },
+    });
+
+    await expect(
+      service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams())
+    ).resolves.toBe(stopping);
+
+    expect(withFreshTenantWrite).toHaveBeenCalledWith(db, 'tenant-a', expect.any(Function));
+    expect(reportRuntimeTelemetry).toHaveBeenCalledOnce();
+    expect(withFreshTenantWrite.mock.invocationCallOrder[0]).toBeLessThan(
+      beginExecutorTermination.mock.invocationCallOrder[0]
+    );
+    expect(reportRuntimeTelemetry.mock.invocationCallOrder[0]).toBeLessThan(
+      beginExecutorTermination.mock.invocationCallOrder[0]
     );
   });
 

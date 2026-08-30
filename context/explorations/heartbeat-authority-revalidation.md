@@ -50,6 +50,20 @@ and the token check adds one statement, so the steady-state net is **one SQL
 statement per 10-second heartbeat**. Denial omits the final update. No policy
 list is materialized and there is no N+1 query.
 
+The PostgreSQL service runs those five statements in one short fresh tenant
+write transaction. This is deliberate rather than a second authority path:
+the normal tenant-owned request transaction remains open until the service
+returns, while an authorization denial must commit the repository's Task row
+lock before the existing termination coordinator claims that same row in its
+own transaction. Besides the five domain statements, PostgreSQL therefore sees
+bounded transaction/RLS scaffolding (`BEGIN`, tenant `set_config`, the constant
+tenant write-gate point read, a repository savepoint, and `COMMIT`). Request
+authentication contributes one current-user PK read. The outer tenant-owned
+request scope contributes a second current-user PK read and one constant
+write-gate point read; the fresh unit contributes one more write-gate point
+read. SQLite has no outer transaction and keeps its existing single repository
+mutation transaction.
+
 The access projection is one statement with a constant number of indexed
 point/correlated probes:
 
@@ -75,10 +89,25 @@ On 2026-08-28, a local file-backed LibSQL focused run of 100 sequential
 successful repository heartbeats took **1.219 s total (12.2 ms/heartbeat)** on
 the development container, excluding fixture creation and migrations. This is
 not a production latency claim; it is a reproducible order-of-magnitude check
-that includes transaction and three-statement overhead. PostgreSQL statement
-count and index selection above are code/schema estimates; the gated two-client
-PostgreSQL tests exercise the same query under RLS when a test database is
-available.
+that includes transaction and three-statement overhead.
+
+On 2026-08-30, a live PostgreSQL/RLS executor run captured the successful
+heartbeat's five domain statement execution times as **0.025 ms** (Task lock),
+**0.016 ms** (Task read), **0.057 ms** (access projection), **0.011 ms** (exact
+token authority), and **0.162 ms** (Task update): **0.271 ms total database
+execution time** before transaction scaffolding. The fresh transaction commit
+took 1.086 ms on that local container. Parse/bind/network/application time is
+not included, so this is evidence of query shape and order of magnitude, not a
+production latency promise.
+
+The same live run revoked a write grant during a 90-second command. The next
+scheduled heartbeat began about 1.28 seconds after revocation, omitted the
+token read and liveness update after access denial, committed its short
+authority unit, and claimed termination without waiting on its own Task lock.
+The Task reached its sanitized failed state 1.41 seconds after revocation; its
+last durable heartbeat remained the pre-revocation value and the executor
+exited with code 0 through the existing fenced path. The environment had no
+Redis service, so PostgreSQL alone supplied the decision.
 
 ## Correctness and residual boundary
 
@@ -116,6 +145,11 @@ New concepts are limited to:
 - one closed runtime-access projection beside existing capability SQL;
 - one exact current-token repository method; and
 - one new termination cause consumed by the existing coordinator.
+
+The PostgreSQL service also reuses the existing `withFreshTenantWrite` helper
+to make the heartbeat decision's commit precede a denied termination claim. It
+adds no module, protocol, state, or watchdog; it only makes the row-lock
+ownership boundary explicit.
 
 The launch path no longer separately asks `BranchRepository.resolveUserAccess`
 or trusts request-user identity for token/mount/template inputs. Standalone
