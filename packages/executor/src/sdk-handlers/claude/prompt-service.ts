@@ -68,26 +68,40 @@ export class ClaudePromptService {
   static readonly CONTEXT_USAGE_TIMEOUT_MS = 15_000;
 
   /**
-   * Upper bound on how long the streaming query is held open after the model
-   * turn's `result` while waiting for a still-active background task to settle.
+   * Upper bound on how long the streaming query is held open, after the model
+   * turn's `result`, waiting for background-task activity that would wake a
+   * continuation turn on the same query.
    *
-   * A background task (SDK `system/task_started`) can wake another model turn on
-   * the same query, so we intentionally keep the query alive after the parent
-   * `result` until every active task settles. But if a task never emits a
-   * terminal `task_notification`/`task_updated` — the subprocess dies, the task
-   * is a long-lived/never-ending process, or the SDK simply drops the
-   * settlement — the wait would otherwise be unbounded. The SDK watchdog is
-   * *paused* for the background-task lifetime (see the `background_task.start`
-   * activity below), so nothing else can catch this: the Task would stay
-   * `running` forever and the only escape is a manual Stop, which corrupts the
-   * session's resume state and makes the *next* prompt return a zero-turn
-   * "provider ended the request without returning a model response" result.
+   * A background task (SDK `system/task_started`) can wake another model turn,
+   * so we intentionally keep the query alive after the parent `result` until a
+   * continuation `result` arrives. This bounds two otherwise-unbounded silent
+   * states:
+   *   1. a task stays `task_started` and never reports terminal (the subprocess
+   *      dies, it is a long-lived/never-ending process, or the SDK drops the
+   *      settlement), and
+   *   2. every active task settled but no continuation `result` ever follows.
+   * In both, the SDK watchdog is *paused* for the background-task lifetime (see
+   * the `background_task.start` activity below), so nothing else can catch the
+   * stall: the Task would stay `running` forever and the only escape is a manual
+   * Stop, which corrupts the session's resume state and makes the *next* prompt
+   * return a zero-turn "provider ended the request without returning a model
+   * response" result.
    *
    * The timer is reset on every SDK message, so a genuinely active background
    * task that streams progress is never cut off; only a fully silent, wedged
    * wait trips it. On timeout we settle the turn as the successful completion it
    * already is (the model turn's `result` was captured) rather than wedge. */
-  static readonly BACKGROUND_TASK_SETTLE_TIMEOUT_MS = 120_000;
+  static readonly POST_RESULT_IDLE_TIMEOUT_MS = 120_000;
+
+  /**
+   * Bounded budget for finalizing the SDK query iterator during teardown.
+   *
+   * Driving the iterator manually (instead of `for await`) means we own the
+   * cleanup that `for await` performed automatically on `break`: closing the SDK
+   * generator so its transport/subprocess is torn down. `iterator.return()` can
+   * queue behind a stuck `next()`, so it must be bounded to guarantee the turn
+   * still settles even if the subprocess never answers. */
+  static readonly QUERY_CLOSE_TIMEOUT_MS = 5_000;
 
   /** Serialize permission checks per session to prevent duplicate prompts for concurrent tool calls */
   private permissionLocks = new Map<SessionID, Promise<void>>();
@@ -265,36 +279,41 @@ If you continue to see authentication errors, please contact your Agor administr
     // When abortController.abort() is called, SDK throws AbortError which we catch below.
 
     // Drive the query iterator manually (instead of `for await`) so the
-    // post-`result` background-task wait can be bounded. While a background task
-    // is holding the query open, each `next()` is raced against
-    // BACKGROUND_TASK_SETTLE_TIMEOUT_MS; a fully silent wait settles the turn
-    // rather than wedging the Task in `running` forever.
+    // post-`result` wait for a background-task continuation can be bounded. While
+    // the query is held open past the model turn's `result`, each `next()` is
+    // raced against POST_RESULT_IDLE_TIMEOUT_MS; a fully silent wait settles the
+    // turn rather than wedging the Task in `running` forever. Because we own the
+    // iteration, we also own the iterator finalization `for await` did on break
+    // (see the `finally` below).
     const iterator = result[Symbol.asyncIterator]();
-    let awaitingBackgroundTasks = false;
+    let awaitingPostResultContinuation = false;
     try {
       while (true) {
         let iteration: Awaited<ReturnType<typeof iterator.next>> | typeof AWAIT_TIMEOUT;
-        if (awaitingBackgroundTasks) {
+        if (awaitingPostResultContinuation) {
           iteration = await awaitWithTimeout(
             iterator.next(),
-            ClaudePromptService.BACKGROUND_TASK_SETTLE_TIMEOUT_MS
+            ClaudePromptService.POST_RESULT_IDLE_TIMEOUT_MS
           );
         } else {
           iteration = await iterator.next();
         }
 
         if (iteration === AWAIT_TIMEOUT) {
-          // The model turn's `result` was already captured, but a background
-          // task never emitted its terminal notification and the SDK watchdog is
-          // paused for its lifetime. Settle the turn as the successful
+          // The model turn's `result` was already captured, but the query went
+          // silent while held open for a background-task continuation — either a
+          // task never reported terminal, or every task settled with no
+          // continuation `result`. The SDK watchdog is paused for the
+          // background-task lifetime, so settle the turn as the successful
           // completion it already is instead of holding the query (and Task)
-          // open forever. Rebalance the paused watchdog for the abandoned tasks.
+          // open forever. Rebalance the paused watchdog for any abandoned tasks.
           console.warn(
-            `⚠️  ${backgroundTasks.activeTaskCount} background task(s) did not settle within ${ClaudePromptService.BACKGROUND_TASK_SETTLE_TIMEOUT_MS}ms after the model turn ended; settling turn and abandoning the background wait`
+            `⚠️  No SDK activity for ${ClaudePromptService.POST_RESULT_IDLE_TIMEOUT_MS}ms while awaiting a background-task continuation (activeBackgroundTasks=${backgroundTasks.activeTaskCount}); settling the turn without waiting further`
           );
           clearBackgroundTaskActivity();
           try {
-            // Best-effort cancellation of the still-running subprocess work.
+            // Best-effort cancellation of the still-running subprocess work so
+            // the held `next()` can resolve and the iterator can finalize.
             // Swallow both sync throws and async rejection (and tolerate a mock
             // that returns void) so teardown never surfaces as a turn failure.
             result.interrupt?.()?.catch(() => {});
@@ -302,6 +321,17 @@ If you continue to see authentication errors, please contact your Agor administr
             // ignore — interrupt is advisory here
           }
           result.releaseInput();
+          // If continuation results were collected before the wait went silent,
+          // re-emit their aggregate so the terminal patch keeps cumulative
+          // usage/cost. A single result was already yielded raw and is its own
+          // aggregate, so only the multi-result case needs this.
+          if (sdkResults.length > 1) {
+            yield {
+              type: 'result',
+              raw_sdk_message: aggregateClaudeResults(sdkResults),
+              agentSessionId: processor.getState().capturedAgentSessionId,
+            } as ProcessedEvent;
+          }
           break;
         }
 
@@ -362,14 +392,14 @@ If you continue to see authentication errors, please contact your Agor administr
             sdkResults.push(event.raw_sdk_message);
             if (resultDisposition === 'await-background-tasks') {
               // Bound the wait: from here every `next()` is raced against the
-              // settle timeout so a task that never reports terminal cannot
-              // wedge the query open indefinitely.
-              awaitingBackgroundTasks = true;
+              // idle timeout so a continuation that never arrives cannot wedge
+              // the query open indefinitely.
+              awaitingPostResultContinuation = true;
               console.log(
                 `⏳ Parent turn ended with ${backgroundTasks.activeTaskCount} background task(s) still active; keeping SDK query alive`
               );
             } else {
-              awaitingBackgroundTasks = false;
+              awaitingPostResultContinuation = false;
               event.raw_sdk_message = aggregateClaudeResults(sdkResults);
               try {
                 // Bounded: a subprocess that never answers this control request
@@ -452,6 +482,20 @@ If you continue to see authentication errors, please contact your Agor administr
         hasStderr: Boolean(stderrOutput),
       });
       throw new Error(safe.message);
+    } finally {
+      // Manual iteration means we own the finalization `for await` did on break:
+      // close the SDK generator so its transport/subprocess is torn down and no
+      // stray query is left alive to race the next resume. Bounded because
+      // `return()` can queue behind a stuck `next()`; the preceding `interrupt()`
+      // + `releaseInput()` are what let that pending read resolve so it can run.
+      try {
+        const closing = iterator.return?.();
+        if (closing) {
+          await awaitWithTimeout(closing, ClaudePromptService.QUERY_CLOSE_TIMEOUT_MS);
+        }
+      } catch {
+        // best-effort — teardown must never turn a settled turn into a failure
+      }
     }
   }
 
