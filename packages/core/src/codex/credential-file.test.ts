@@ -172,6 +172,37 @@ describe('credential file directory capability', () => {
   );
 
   it.runIf(process.platform === 'linux')(
+    'tolerates a static symlinked home but still refuses a symlinked credential leaf',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-credential-home-alias-'));
+      const realHome = join(root, 'real-home');
+      const codexHome = join(realHome, '.codex');
+      await mkdir(codexHome, { recursive: true });
+      await writeFile(join(codexHome, 'auth.json'), 'caller-secret');
+
+      // A static, admin-owned home alias (e.g. /home/<user> ->
+      // /var/lib/.../<user>). Reading and binding through it must succeed —
+      // the old full-path O_NOFOLLOW walk failed closed here with ENOTDIR.
+      const aliasHome = join(root, 'alias-home');
+      await symlink(realHome, aliasHome);
+      const aliasedAuth = join(aliasHome, '.codex', 'auth.json');
+      await expect(readCredentialFile(aliasedAuth)).resolves.toBe('caller-secret');
+      const handle = await openCredentialFileForBind(aliasedAuth);
+      await handle.close();
+
+      // ...but a symlinked LEAF `.codex` (the sandbox-writable component) is
+      // still rejected, preserving the anti-cross-home-symlink guarantee.
+      const swappedHome = join(root, 'swapped-home');
+      const otherCodex = join(root, 'other', '.codex');
+      await mkdir(swappedHome, { recursive: true });
+      await mkdir(otherCodex, { recursive: true });
+      await writeFile(join(otherCodex, 'auth.json'), 'other-secret');
+      await symlink(otherCodex, join(swappedHome, '.codex'));
+      await expect(readCredentialFile(join(swappedHome, '.codex', 'auth.json'))).rejects.toThrow();
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
     'keeps mutation attached to the opened directory during a path swap',
     async () => {
       const root = await mkdtemp(join(tmpdir(), 'agor-credential-swap-'));
