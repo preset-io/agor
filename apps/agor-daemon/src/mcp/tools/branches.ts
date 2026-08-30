@@ -53,7 +53,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, sessionContextRequiredResult, textResult } from '../server.js';
-import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
+import { runWithMcpTenantDatabaseScope, runWithMcpTenantDatabaseWrite } from '../tenant-scope.js';
 import { assertValidVariant } from './_environment-helpers.js';
 
 const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
@@ -977,7 +977,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       // the authenticated tenant scope here so the metadata writes join one
       // tenant transaction — exactly like the HTTP route — while the readiness
       // wait below stays outside it and never holds a transaction across polls.
-      const branch = await runWithMcpTenantDatabaseScope(ctx, () =>
+      const branch = await runWithMcpTenantDatabaseWrite(ctx, () =>
         reposService.createBranch(
           repoId,
           {

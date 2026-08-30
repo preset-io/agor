@@ -23,7 +23,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
-import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
+import { runWithMcpTenantDatabaseScope, runWithMcpTenantDatabaseWrite } from '../tenant-scope.js';
 
 const BOARD_OBJECT_TYPES = [
   'zone',
@@ -425,7 +425,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       // archive() is a custom (non-transport) method that reads/patches over
       // `this.db` without an internal scope helper, so re-enter the tenant DB
       // scope here (the HTTP archive route enters it via its around hook).
-      const result = await runWithMcpTenantDatabaseScope(ctx, () =>
+      const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
         boardsService.archive(boardId, ctx.baseServiceParams)
       );
       return textResult({
@@ -450,7 +450,7 @@ export function registerBoardTools(server: McpServer, ctx: McpContext): void {
       const boardsService = ctx.app.service('boards') as unknown as BoardsServiceImpl;
       // Custom (non-transport) method — enter the tenant DB scope like the HTTP
       // unarchive route's around hook would.
-      const result = await runWithMcpTenantDatabaseScope(ctx, () =>
+      const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
         boardsService.unarchive(boardId, ctx.baseServiceParams)
       );
       return textResult({

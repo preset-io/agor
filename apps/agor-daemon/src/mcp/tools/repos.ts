@@ -13,7 +13,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
-import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
+import { runWithMcpTenantDatabaseWrite } from '../tenant-scope.js';
 
 export function registerRepoTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_repos_list
@@ -140,7 +140,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       // scope for HTTP callers. Re-enter it here so its `this.db` reads/writes
       // join one short tenant unit — the executor clone itself is fire-and-forget
       // and runs outside this scope. See mcp/tenant-scope.ts.
-      const result = await runWithMcpTenantDatabaseScope(ctx, () =>
+      const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
         reposService.cloneRepository(
           { url, slug, name, ...(defaultBranch ? { default_branch: defaultBranch } : {}) },
           ctx.baseServiceParams
@@ -239,7 +239,7 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       // Custom (non-transport) method: its `this.get`/`this.patch`/`findBySlug`
       // touch the guarded daemon DB directly, so enter the tenant scope here to
       // match the HTTP route's around hook.
-      const updated = await runWithMcpTenantDatabaseScope(ctx, () =>
+      const updated = await runWithMcpTenantDatabaseWrite(ctx, () =>
         reposService.updateMetadata(repoId, patch, ctx.baseServiceParams)
       );
       return textResult(updated);
