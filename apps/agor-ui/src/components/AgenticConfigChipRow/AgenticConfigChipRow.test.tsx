@@ -29,10 +29,16 @@ vi.mock('../ModelSelector', async () => {
     ModelSelector: ({
       onChange,
       onCommit,
+      onReasoningEffortLevelsChange,
       agentic_tool,
     }: {
       onChange: (v: unknown) => void;
-      onCommit?: () => void;
+      onCommit?: (value: { mode: 'exact'; provider: string; model: string }) => void;
+      onReasoningEffortLevelsChange?: (availability: {
+        provider: string;
+        model: string;
+        levels: readonly string[] | undefined;
+      }) => void;
       agentic_tool?: AgenticToolName;
     }) => (
       <>
@@ -41,7 +47,11 @@ vi.mock('../ModelSelector', async () => {
           data-testid="model-change"
           onClick={() => {
             onChange({ mode: 'alias', model: 'claude-haiku-4-5' });
-            onCommit?.();
+            onCommit?.({
+              mode: 'exact',
+              provider: 'anthropic',
+              model: 'claude-haiku-4-5',
+            });
           }}
         >
           change model
@@ -54,15 +64,37 @@ vi.mock('../ModelSelector', async () => {
           type exact model
         </button>
         {agentic_tool === 'opencode' && (
-          <button
-            type="button"
-            data-testid="model-suggest"
-            onClick={() =>
-              onChange({ mode: 'exact', provider: 'openai', model: 'suggested-model' })
-            }
-          >
-            suggest model
-          </button>
+          <>
+            <button
+              type="button"
+              data-testid="model-suggest"
+              onClick={() =>
+                onChange({ mode: 'exact', provider: 'openai', model: 'suggested-model' })
+              }
+            >
+              suggest model
+            </button>
+            <button
+              type="button"
+              data-testid="model-qwen"
+              onClick={() => {
+                const next = {
+                  mode: 'exact' as const,
+                  provider: 'opencode-go',
+                  model: 'qwen3.8-flash',
+                };
+                onChange(next);
+                onReasoningEffortLevelsChange?.({
+                  provider: next.provider,
+                  model: next.model,
+                  levels: [],
+                });
+                onCommit?.(next);
+              }}
+            >
+              choose qwen
+            </button>
+          </>
         )}
       </>
     ),
@@ -137,6 +169,7 @@ function Harness({
   tool = 'claude-code',
   collapsibleChips,
   validateModelSelection,
+  initialValues,
 }: {
   user: User;
   client?: AgorClient | null;
@@ -144,10 +177,11 @@ function Harness({
   tool?: AgenticToolName;
   collapsibleChips?: boolean;
   validateModelSelection?: boolean;
+  initialValues?: Record<string, unknown>;
 }) {
   const [form] = Form.useForm();
   return (
-    <Form form={form} initialValues={{ agenticToolPresetId: initialSource }}>
+    <Form form={form} initialValues={{ agenticToolPresetId: initialSource, ...initialValues }}>
       <AgenticConfigChipRow
         tool={tool}
         client={client}
@@ -376,6 +410,43 @@ describe('AgenticConfigChipRow', () => {
     render(<Harness user={{ user_id: 'gemini-user' } as User} tool="gemini" />);
     await screen.findByTestId('permission-chip');
     expect(screen.queryByTestId('effort-chip')).not.toBeInTheDocument();
+  });
+
+  it('uses per-model OpenCode effort levels and clears an incompatible effort on model commit', async () => {
+    render(
+      <Harness
+        user={{ user_id: 'opencode-user' } as User}
+        client={null}
+        tool="opencode"
+        initialSource="__inline__"
+        initialValues={{
+          modelConfig: {
+            mode: 'exact',
+            provider: 'opencode-go',
+            model: 'gpt-5.6-luna',
+          },
+          effort: 'high',
+        }}
+      />
+    );
+
+    expect(await screen.findByTestId('effort-chip')).toHaveTextContent('Effort: High');
+    fireEvent.click(screen.getByTestId('model-chip'));
+    fireEvent.click(await screen.findByTestId('model-qwen'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('effort-chip')).toHaveTextContent('Effort: Inherited')
+    );
+    expect(JSON.parse(screen.getByTestId('state').textContent || '{}')).toMatchObject({
+      model: 'qwen3.8-flash',
+    });
+    expect(JSON.parse(screen.getByTestId('state').textContent || '{}')).not.toHaveProperty(
+      'effort'
+    );
+
+    fireEvent.click(screen.getByTestId('effort-chip'));
+    expect(await screen.findByText(/no explicit effort.*use inherited/i)).toBeInTheDocument();
+    expect(screen.getByTestId('effort-select').textContent).toBe('Inherited|clearable|');
   });
 
   it('collapses the chip row behind a one-line summary when collapsibleChips is set', async () => {

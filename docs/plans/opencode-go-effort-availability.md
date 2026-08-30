@@ -1,6 +1,6 @@
 # Plan: OpenCode Go effort availability
 
-**Status:** investigation and implementation plan only. This branch must not contain the fix.
+**Status:** implemented on this branch for PR #2619.
 
 ## Symptom and concrete reproduction
 
@@ -333,11 +333,9 @@ pre-prompt runtime validation remains the authoritative fail-closed boundary.
   its catalog addition is not duplicated or lost during rebase onto current
   main.
 
-## Explicitly out of scope
+## Implementation boundaries
 
-- No production-code, catalog, UI, MCP, runtime, or test implementation on this
-  planning branch.
-- No commit, push, PR, deployment, or modification of the failing session.
+- No deployment or modification of the original failing session.
 - No automatic effort mapping, silent fallback, or change to the shared five
   `EffortLevel` values.
 - No OpenCode CLI/SDK upgrade or adoption of newer model-catalog semantics.

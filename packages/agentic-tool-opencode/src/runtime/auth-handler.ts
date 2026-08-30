@@ -228,15 +228,17 @@ async function readConfigurationSnapshot(
           : {}),
         models: modelProvider
           ? Object.values(modelProvider.models)
-              .map((model) => ({
-                id: model.id,
-                name: model.name,
-                status: model.status,
-                reasoningEffortLevels:
-                  filterOpenCodeReasoningEffortLevels(
-                    (model as { variants?: Record<string, unknown> }).variants ?? {}
-                  ) ?? [],
-              }))
+              .map((model) => {
+                const reasoningEffortLevels = filterOpenCodeReasoningEffortLevels(
+                  (model as { variants?: Record<string, unknown> }).variants
+                );
+                return {
+                  id: model.id,
+                  name: model.name,
+                  status: model.status,
+                  ...(reasoningEffortLevels !== undefined ? { reasoningEffortLevels } : {}),
+                };
+              })
               .sort((left, right) => left.id.localeCompare(right.id))
           : [],
       };

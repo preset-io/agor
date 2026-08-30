@@ -273,18 +273,20 @@ describe('OpenCodeModelSelector', () => {
   });
 
   it('keeps a foreign owner stored compact pair private without calling it unavailable', () => {
-    const { client, find } = clientWithCatalog();
+    const { client, find, liveFind } = clientWithCatalog();
 
     render(
       <OpenCodeModelSelector
         value={{ provider: 'private-provider', model: 'private-model' }}
         client={client as never}
+        branchId="private-branch"
         catalogEnabled={false}
         compact
       />
     );
 
     expect(find).not.toHaveBeenCalled();
+    expect(liveFind).not.toHaveBeenCalled();
     expect(screen.getByText('private-provider/private-model')).toBeInTheDocument();
     expect(screen.queryByText(/\(unavailable\)/i)).not.toBeInTheDocument();
   });

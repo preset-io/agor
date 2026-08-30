@@ -1,4 +1,7 @@
-import { OPENCODE_UI_CONTRIBUTION } from '@agor/agentic-tool-opencode/ui';
+import {
+  OPENCODE_UI_CONTRIBUTION,
+  useOpenCodeReasoningEffortLevels,
+} from '@agor/agentic-tool-opencode/ui';
 import type { AgorClient } from '@agor/core/client';
 import type { AgenticToolName, EffortLevel, PermissionMode } from '@agor/core/types';
 import type { ComponentType, ReactNode } from 'react';
@@ -79,4 +82,27 @@ export function getAgenticToolUIIntegration(
   tool: AgenticToolName
 ): AgenticToolUIIntegration | undefined {
   return UI_INTEGRATIONS[tool];
+}
+
+/**
+ * Returns exact-model effort metadata owned by an agent integration. Missing
+ * means the tool has no model-level contract, or the exact pair must be
+ * validated by the runtime; an empty list is an authoritative unsupported set.
+ */
+export function useAgenticToolReasoningEffortLevels(input: {
+  tool: AgenticToolName;
+  selection?: AgenticToolModelSelection;
+  client?: AgorClient | null;
+  branchId?: string;
+  catalogEnabled?: boolean;
+}): readonly EffortLevel[] | undefined {
+  const { tool, selection, client, branchId, catalogEnabled = true } = input;
+  const { levels } = useOpenCodeReasoningEffortLevels({
+    client,
+    branchId,
+    catalogEnabled: tool === 'opencode' && catalogEnabled,
+    provider: selection?.provider,
+    model: selection?.model,
+  });
+  return tool === 'opencode' ? levels : undefined;
 }

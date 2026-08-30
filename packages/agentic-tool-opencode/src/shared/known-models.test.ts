@@ -115,5 +115,40 @@ describe('OpenCode known model catalog', () => {
     expect(provider?.models.find(({ id }) => id === 'qwen3.8-flash')).toMatchObject({
       reasoningEffortLevels: [],
     });
+    expect(
+      Object.fromEntries(
+        Object.entries(
+          Object.groupBy(
+            provider?.models ?? [],
+            (model) => model.reasoningEffortLevels?.join(',') || 'none'
+          )
+        ).map(([levels, models]) => [levels, models?.map(({ id }) => id)])
+      )
+    ).toEqual({
+      'low,medium,high,xhigh': ['gpt-5.6-luna', 'muse-spark-1.2-contributor'],
+      'low,medium,high,max': [
+        'deepseek-v4-flash',
+        'deepseek-v4-flash-vision-exp',
+        'deepseek-v4-pro',
+      ],
+      'low,medium,high': ['hy3', 'hy4-preview', 'longcat-2.0', 'mimo-v2.5', 'mimo-v2.5-pro'],
+      none: [
+        'glm-5.1',
+        'glm-5.2',
+        'glm-5.3',
+        'glm-5.3-flash',
+        'grok-4.6',
+        'kimi-k2.6',
+        'kimi-k2.7-code',
+        'kimi-k3',
+        'minimax-m2.7',
+        'minimax-m3',
+        'qwen3.6-plus',
+        'qwen3.7-max',
+        'qwen3.7-plus',
+        'qwen3.8-flash',
+        'qwen3.8-max',
+      ],
+    });
   });
 });

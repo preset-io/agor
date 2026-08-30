@@ -1,9 +1,5 @@
 import type { AgorClient } from '@agor/core/client';
-import type {
-  EffortLevel,
-  OpenCodeModelCatalog,
-  OpenCodeProviderDiscovery,
-} from '@agor/core/types';
+import type { EffortLevel, OpenCodeModelCatalog } from '@agor/core/types';
 import {
   InfoCircleOutlined,
   ReloadOutlined,
@@ -11,8 +7,9 @@ import {
   WarningOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Flex, Input, Popover, Select, Space, Tooltip, Typography } from 'antd';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useOpenCodeModelCatalog } from './useOpenCodeModelCatalog';
+import { useOpenCodeReasoningEffortLevels } from './useOpenCodeReasoningEffortLevels';
 
 const { Text } = Typography;
 
@@ -226,12 +223,27 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   const [model, setModel] = useState(value?.model ?? '');
   const [manualOpen, setManualOpen] = useState(!catalogEnabled && !compact);
   const [compactManualOpen, setCompactManualOpen] = useState(false);
-  const [liveEffortLevels, setLiveEffortLevels] = useState<
-    Map<string, readonly EffortLevel[]> | undefined
-  >();
   const appliedSuggestionRef = useRef<string | null>(null);
   const { catalog, availabilityResolved, loading, refreshFailed, refresh } =
     useOpenCodeModelCatalog({ client, catalogEnabled });
+  const {
+    levels: selectedReasoningEffortLevels,
+    resolve: resolveReasoningEffortLevels,
+    liveLoading,
+    liveFailed,
+    retry: retryLiveDiscovery,
+  } = useOpenCodeReasoningEffortLevels({
+    client,
+    branchId,
+    catalogEnabled,
+    provider,
+    model,
+  });
+  const refreshAll = useCallback(async () => {
+    await Promise.all([refresh(), retryLiveDiscovery()]);
+  }, [refresh, retryLiveDiscovery]);
+  const discoveryLoading = loading || liveLoading;
+  const discoveryFailed = refreshFailed || liveFailed;
 
   useEffect(() => {
     setProvider(value?.provider ?? '');
@@ -242,31 +254,6 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     if (!catalogEnabled) setManualOpen(!compact);
   }, [catalogEnabled, compact]);
 
-  useEffect(() => {
-    setLiveEffortLevels(undefined);
-    if (!client || !catalogEnabled || !branchId) return;
-    let cancelled = false;
-    void client
-      .service('opencode-auth')
-      .find({ query: { branch_id: branchId } })
-      .then((configuration: OpenCodeProviderDiscovery) => {
-        if (cancelled || configuration.runtime !== 'available') return;
-        const levels = new Map<string, readonly EffortLevel[]>();
-        for (const entry of configuration.providers) {
-          for (const candidate of entry.models) {
-            if (candidate.reasoningEffortLevels !== undefined) {
-              levels.set(modelPairValue(entry.id, candidate.id), candidate.reasoningEffortLevels);
-            }
-          }
-        }
-        setLiveEffortLevels(levels);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [branchId, catalogEnabled, client]);
-
   const storedCatalogState = useMemo<StoredCatalogState>(() => {
     if (!value || !catalog) return 'unknown';
     const storedProvider = catalog.providers.find((entry) => entry.id === value.provider);
@@ -276,15 +263,6 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     if (!availabilityResolved) return 'unknown';
     return storedProvider.availableForSelection ? 'available' : 'unavailable';
   }, [availabilityResolved, catalog, value]);
-
-  const selectedReasoningEffortLevels = useMemo(() => {
-    if (!catalogEnabled || !provider || !model) return undefined;
-    const liveLevels = liveEffortLevels?.get(modelPairValue(provider, model));
-    if (liveLevels !== undefined) return liveLevels;
-    return catalog?.providers
-      .find((entry) => entry.id === provider)
-      ?.models.find((candidate) => candidate.id === model)?.reasoningEffortLevels;
-  }, [catalog, catalogEnabled, liveEffortLevels, model, provider]);
 
   useEffect(() => {
     if (!provider || !model) return;
@@ -307,11 +285,16 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
 
   const selectPair = (nextProvider: string, nextModel: string) => {
     const selection = { provider: nextProvider, model: nextModel };
+    const reasoningEffortLevels = resolveReasoningEffortLevels(nextProvider, nextModel);
     setProvider(nextProvider);
     setModel(nextModel);
     setManualOpen(false);
     setCompactManualOpen(false);
     onChange?.(selection);
+    onReasoningEffortLevelsChange?.({
+      ...selection,
+      levels: reasoningEffortLevels,
+    });
     onCommit?.(selection);
   };
 
@@ -397,14 +380,14 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
         catalog={catalog}
         catalogEnabled={catalogEnabled}
         client={client}
-        loading={loading}
+        loading={discoveryLoading}
         availabilityResolved={availabilityResolved}
-        refreshFailed={refreshFailed}
+        refreshFailed={discoveryFailed}
         storedCatalogState={storedCatalogState}
         manualFields={manualFields}
         manualOpen={compactManualOpen}
         setManualOpen={setCompactManualOpen}
-        refresh={refresh}
+        refresh={refreshAll}
         selectPair={selectPair}
         getPopupContainer={getPopupContainer}
       />
@@ -422,14 +405,14 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
         />
       )}
 
-      {refreshFailed && (
+      {discoveryFailed && (
         <Alert
           type="warning"
           showIcon
           title="Could not load configured OpenCode providers"
           description="The stored selection was not changed. Retry or enter an exact provider/model pair manually."
           action={
-            <Button size="small" loading={loading} onClick={() => void refresh()}>
+            <Button size="small" loading={discoveryLoading} onClick={() => void refreshAll()}>
               Retry
             </Button>
           }

@@ -24,6 +24,8 @@ import {
   type AgenticToolName,
   type Board,
   getSessionType,
+  type OpenCodeModelCatalog,
+  type OpenCodeProviderSettings,
   type Session,
   type SessionType,
   type ZoneBoardObject,
@@ -1685,9 +1687,9 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   // Tool 13: agor_models_list
   //
   // Discovery tool so MCP-driven agents can find valid `model` strings without
-  // having to scrape tool descriptions. Sourced from the same in-process model
-  // registries the UI uses (packages/core/src/models/*). This reads the
-  // registry loaded by the running daemon; it is not provider discovery.
+  // having to scrape tool descriptions. Most tools use the same in-process
+  // registries as the UI. OpenCode also returns its safe provider/model catalog
+  // and can perform owner-scoped live discovery when a branch is supplied.
   //
   // Caveats:
   //   - Gemini's authoritative list is fetched live from the Google API per
@@ -1695,8 +1697,8 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
   //     best-effort starter list.
   //   - Copilot and Cursor have dynamic discovery exposed via /copilot-models
   //     and /cursor-models in the daemon. Static fallbacks are exposed here.
-  //   - OpenCode is a provider+model matrix and doesn't have a single static
-  //     list. Its entry explains that discovery happens after provider choice.
+  //   - OpenCode is a provider+model matrix. Its entry includes flattened exact
+  //     pairs plus the provider groups and model-specific effort metadata.
   server.registerTool(
     'agor_models_list',
     {
@@ -1716,7 +1718,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      let openCodeCatalog = null;
+      let openCodeCatalog: OpenCodeModelCatalog | OpenCodeProviderSettings | null = null;
       if (args.agenticTool === undefined || args.agenticTool === 'opencode') {
         try {
           openCodeCatalog = args.branchId
