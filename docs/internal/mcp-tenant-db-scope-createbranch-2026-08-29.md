@@ -122,6 +122,24 @@ transaction-locally so RLS policies enforce isolation. A tenant-B caller still c
 tenant-A repos/branches (verified: a foreign `repoId` reads as 404, indistinguishable from
 missing). Nothing weakens the existing negative boundaries.
 
+### Write-freeze gate parity (mutations)
+
+Entering the tenant DB scope is not sufficient for **mutations**. HTTP custom routes wrap
+`[tenantDatabaseScopeAround, tenantWriteGateAround]`, so a write during a tenant freeze
+(deletion/export/import/verify window) is rejected with `Unavailable`. Standard Feathers
+methods get the same via the `writeGateBefore` hook. But a custom (non-transport) service
+method that writes `this.db` directly (`ReposService.updateMetadata` → `this.patch`,
+`SessionsService.setArchiveStateForTree` → `sessionRepo` writes, etc.) has neither on the
+MCP path. So `runWithMcpTenantDatabaseScope` alone would let an MCP mutation slip past a
+freeze that HTTP enforces.
+
+`runWithMcpTenantDatabaseWrite` closes that: it enters the scope **and** calls
+`assertTenantWritable` inside it, translating `TenantWriteGateActiveError` → `Unavailable`
+exactly like the route hook. It is used for the mutating call sites (createBranch,
+cloneRepository, updateMetadata, boards/sessions archive+unarchive); reads keep the
+read-only helper. On SQLite/static the gate read short-circuits (`readTenantWriteGate`
+returns inactive for non-Postgres), so single-tenant behavior is unchanged.
+
 ## Tests
 
 - `apps/agor-daemon/src/mcp/tools/branches.tenant-scope.test.ts` — exercises the **real**
