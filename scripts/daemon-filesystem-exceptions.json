@@ -1666,6 +1666,20 @@
     "operation": "call:open@openPath#1"
   },
   {
+    "id": "DAEMON-FS-CAP-237",
+    "class": "A",
+    "file": "packages/core/src/codex/credential-file.ts",
+    "import": "node:fs/promises",
+    "owner": "Codex credential authority",
+    "boundary": "canonical tenant/user credential-store capability",
+    "rationale": "Canonicalizes only the credential directory's trusted parent home — an admin/daemon-owned anchor whose ancestors are not sandbox-writable and which may legitimately be reached through a static, root-owned symlink alias on non-standard hosts. Never applied to the sandbox-writable credential leaf (.codex), which retains its no-follow open, so a concurrent path swap still cannot redirect access across homes.",
+    "reviewTarget": null,
+    "reviewDate": null,
+    "symbol": "realpath",
+    "local": "realpath",
+    "operation": "call:realpath@resolveCanonicalDirectory#1"
+  },
+  {
     "id": "DAEMON-FS-CAP-211",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
