@@ -316,6 +316,9 @@ Preserve these invariants:
     external effects.
 11. Daemon startup is non-destructive in shared PostgreSQL policy; queues and
     Session projection change only from authoritative Task outcomes.
+12. Completion subscriptions project terminal Task truth into durable callback
+    delivery; they never become a second execution lifecycle or infer
+    completion from genealogy alone.
 
 ## Code map
 
@@ -331,6 +334,7 @@ Preserve these invariants:
 | Runtime discovery and recovery                         | `apps/agor-daemon/src/services/task-runtime-reconciler.ts`                                     |
 | Termination claims and containment settlement          | `apps/agor-daemon/src/termination-coordinator.ts`, `apps/agor-daemon/src/executor-tracking.ts` |
 | Startup orphan reconciliation                          | `apps/agor-daemon/src/startup.ts`                                                              |
+| Transitive completion projection and delivery          | `apps/agor-daemon/src/services/completion-subscription-worker.ts`                              |
 | Full HA kill-point audit                               | `docs/internal/task-runtime-ha-reconciliation-2026-08-06.md`                                   |
 
 ## Why the architecture has this shape

@@ -26,6 +26,7 @@ export type SystemDatabaseCapability =
   | 'environment_health_discovery'
   | 'gateway_listener_discovery'
   | 'discord_message_delivery_discovery'
+  | 'completion_callback_discovery'
   | 'knowledge_embedding_discovery'
   | 'scheduler_discovery'
   | 'task_queue_discovery'

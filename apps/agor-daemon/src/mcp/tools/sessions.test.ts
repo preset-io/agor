@@ -17,6 +17,11 @@ import { AGENTIC_TOOL_NAMES } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const completionMocks = vi.hoisted(() => ({
+  tasks: [] as Array<Record<string, unknown>>,
+  subscription: null as Record<string, unknown> | null,
+}));
+
 vi.mock('../resolve-ids.js', () => ({
   resolveBoardId: async (_ctx: unknown, id: string) => id,
   resolveSessionId: async (_ctx: unknown, id: string) => id,
@@ -32,6 +37,18 @@ vi.mock('@agor/core/db', () => ({
   enqueueAfterTenantDatabaseCommit: () => false,
   getCurrentTenantId: () => undefined,
   BranchRepository: class FakeBranchRepository {},
+  TaskRepository: class FakeTaskRepository {
+    findBySession = vi.fn(async () => completionMocks.tasks);
+  },
+  CompletionSubscriptionRepository: class FakeCompletionSubscriptionRepository {
+    resolveId = vi.fn(async (id: string) => id);
+    get = vi.fn(async () => {
+      if (!completionMocks.subscription) throw new Error('subscription not found');
+      return completionMocks.subscription;
+    });
+    findActiveForTask = vi.fn(async () => completionMocks.subscription);
+  },
+  generateId: () => '018f0000-0000-7000-8000-000000000999',
   SessionRelationshipRepository: class FakeSessionRelationshipRepository {
     create = vi.fn(async (data: Record<string, unknown>) => ({
       relationship_id: 'rel-1',
@@ -1472,6 +1489,8 @@ describe('agor_sessions_prompt (subsession mode)', () => {
 
 describe('agor_sessions_prompt task callback', () => {
   afterEach(() => {
+    completionMocks.tasks = [];
+    completionMocks.subscription = null;
     vi.resetModules();
     vi.clearAllMocks();
   });
@@ -1515,6 +1534,125 @@ describe('agor_sessions_prompt task callback', () => {
     );
   });
 
+  it('binds root propagation to the executing caller task and returns its durable ID', async () => {
+    completionMocks.tasks = [
+      { task_id: 'task-old', status: 'completed' },
+      { task_id: 'task-origin', status: 'running' },
+      { task_id: 'task-queued', status: 'queued' },
+    ];
+    const promptCalls: any[] = [];
+    const app = makeFakeApp({
+      sessions: {
+        get: async () => ({
+          session_id: 'sess-caller',
+          branch_id: 'branch-caller',
+          tasks: ['task-old', 'task-origin', 'task-queued'],
+        }),
+      },
+      '/sessions/:id/prompt': {
+        create: async (...args: unknown[]) => {
+          promptCalls.push(args);
+          return { task_id: 'task-downstream', status: 'queued', queue_position: 1 };
+        },
+      },
+    });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_prompt']
+    );
+
+    const response = await agor_sessions_prompt({
+      sessionId: 'sess-target',
+      prompt: 'delegate this requested unit of work',
+      mode: 'continue',
+      callbackPropagation: 'root',
+    });
+
+    expect(promptCalls[0][1]).toMatchObject({
+      route: { id: 'sess-target' },
+      _completionSubscriptionRequest: {
+        subscription_id: '018f0000-0000-7000-8000-000000000999',
+        origin_session_id: 'sess-caller',
+        origin_task_id: 'task-origin',
+        callback_session_id: 'sess-caller',
+        requested_by_user_id: 'user-1',
+      },
+    });
+    expect(JSON.parse(response.content[0].text)).toMatchObject({
+      taskId: 'task-downstream',
+      completionSubscriptionId: '018f0000-0000-7000-8000-000000000999',
+    });
+  });
+
+  it('rejects ambiguous root and direct callback routing', async () => {
+    const promptCreate = vi.fn();
+    const app = makeFakeApp({ '/sessions/:id/prompt': { create: promptCreate } });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_prompt']
+    );
+
+    await expect(
+      agor_sessions_prompt({
+        sessionId: 'sess-target',
+        prompt: 'ambiguous work',
+        mode: 'continue',
+        callback: true,
+        callbackPropagation: 'root',
+      })
+    ).rejects.toThrow('Root and direct completion callbacks cannot be requested together');
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('can preserve a direct parent callback while continuing the root request', async () => {
+    completionMocks.tasks = [{ task_id: 'task-current', status: 'running' }];
+    completionMocks.subscription = {
+      subscription_id: 'subscription-root',
+      active_session_id: 'sess-caller',
+      active_task_id: 'task-current',
+      state: 'running_downstream',
+    };
+    const promptCreate = vi.fn(async () => ({ task_id: 'task-child', status: 'running' }));
+    const app = makeFakeApp({
+      sessions: {
+        get: vi.fn(async () => ({
+          session_id: 'sess-caller',
+          branch_id: 'branch-caller',
+          tasks: ['task-current'],
+        })),
+      },
+      '/sessions/:id/prompt': { create: promptCreate },
+    });
+    const { agor_sessions_prompt } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'sess-caller' },
+      ['agor_sessions_prompt']
+    );
+
+    await agor_sessions_prompt({
+      sessionId: 'sess-child',
+      prompt: 'continue the root work',
+      mode: 'continue',
+      continueCompletion: true,
+      callback: true,
+    });
+
+    expect(promptCreate).toHaveBeenCalledWith(
+      { prompt: 'continue the root work', stream: true },
+      expect.objectContaining({
+        route: { id: 'sess-child' },
+        _completionContinuation: {
+          subscription_id: 'subscription-root',
+          from_task_id: 'task-current',
+        },
+        _taskCompletionCallback: {
+          target_session_id: 'sess-caller',
+          requested_from_session_id: 'sess-caller',
+          requested_by_user_id: 'user-1',
+        },
+      })
+    );
+  });
+
   it('rejects callback:true when the caller cannot prompt its callback session', async () => {
     const { ensureCanPromptTargetSession } = await import('../../utils/branch-authorization.js');
     vi.mocked(ensureCanPromptTargetSession).mockRejectedValueOnce(
@@ -1554,6 +1692,75 @@ describe('agor_sessions_prompt task callback', () => {
 
     expect(result.isError).toBe(true);
     expect(promptCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('agor_completion_subscriptions_get', () => {
+  afterEach(() => {
+    completionMocks.tasks = [];
+    completionMocks.subscription = null;
+    vi.resetModules();
+    vi.clearAllMocks();
+  });
+
+  it('returns aggregate state while redacting an inaccessible active descendant', async () => {
+    completionMocks.subscription = {
+      subscription_id: 'subscription-1',
+      requested_by_user_id: 'user-1',
+      state: 'running_downstream',
+      terminal_status: null,
+      origin_session_id: 'origin-session',
+      origin_task_id: 'origin-task',
+      join_policy: 'designated_child',
+      propagation_mode: 'root',
+      max_depth: 8,
+      delivery_attempt_count: 0,
+      last_delivery_error_code: null,
+      created_at: '2026-08-26T00:00:00.000Z',
+      updated_at: '2026-08-26T00:01:00.000Z',
+      terminal_at: null,
+      delivered_at: null,
+      active_session_id: 'private-session',
+      active_task_id: 'private-task',
+      path: [{ session_id: 'private-session', task_id: 'private-task' }],
+      terminal_snapshot: null,
+    };
+    const app = makeFakeApp({
+      sessions: { get: vi.fn(async () => Promise.reject(new Error('forbidden'))) },
+    });
+    const { agor_completion_subscriptions_get } = await registerAndCaptureHandlers(
+      { app, userId: 'user-1', sessionId: 'origin-session' },
+      ['agor_completion_subscriptions_get']
+    );
+
+    const response = await agor_completion_subscriptions_get({
+      subscriptionId: 'subscription-1',
+    });
+    const result = JSON.parse(response.content[0].text);
+
+    expect(result).toMatchObject({
+      subscription_id: 'subscription-1',
+      state: 'running_downstream',
+      downstream_details_redacted: true,
+    });
+    expect(result).not.toHaveProperty('active_session_id');
+    expect(result).not.toHaveProperty('active_task_id');
+    expect(result).not.toHaveProperty('path');
+  });
+
+  it('rejects a user other than the original requester', async () => {
+    completionMocks.subscription = {
+      subscription_id: 'subscription-1',
+      requested_by_user_id: 'user-1',
+    };
+    const { agor_completion_subscriptions_get } = await registerAndCaptureHandlers(
+      { app: makeFakeApp({}), userId: 'user-2', sessionId: 'other-session' },
+      ['agor_completion_subscriptions_get']
+    );
+
+    await expect(
+      agor_completion_subscriptions_get({ subscriptionId: 'subscription-1' })
+    ).rejects.toThrow('Only the original requesting user');
   });
 });
 

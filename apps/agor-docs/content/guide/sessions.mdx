@@ -117,6 +117,30 @@ When spawning, you can override:
 - **MCP servers**: Different tool sets (Codex MCP support pending)
 - **Callback content**: Include last message (default on), include original prompt (default off), extra formatting instructions
 
+### Completion that follows delegation
+
+An ordinary callback reports when the exact child task finishes. For an
+orchestrator that may hand the requested work to another session, agents can
+request durable root propagation:
+
+```text
+A prompts B with callbackPropagation: "root"
+B prompts or creates C with continueCompletion: true
+C finishes -> A receives one terminal callback
+```
+
+The handoff is tracked as `delegated`, not completed. Only one child is the
+designated continuation at each hop; other parallel children are helpers. The
+designated child can hand off again, up to the request's maximum depth. Failure,
+cancellation, and timeout propagate as distinct terminal outcomes.
+
+The initial tool response includes a `completionSubscriptionId`. Use
+`agor_completion_subscriptions_get` for one authoritative aggregate status
+without walking the descendant tree. Delivery survives daemon restarts and
+queues behind any newer input in the requesting session. Final messages and
+downstream links are included only while the requesting user remains authorized
+to see them.
+
 ### Comparison with Claude Code's native subagents
 
 If you've used [Claude Code's subagent feature](https://docs.claudecode.com/subagents), Agor's subsessions go further:

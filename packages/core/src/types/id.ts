@@ -244,6 +244,7 @@ export function findByShortIdPrefix<T extends { id: AnyShortId }>(
  */
 export type SessionID = UUID;
 export type SessionRelationshipID = UUID;
+export type CompletionSubscriptionID = UUID;
 
 /**
  * Task identifier

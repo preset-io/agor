@@ -438,6 +438,99 @@ export const tasks = pgTable(
   })
 );
 
+/** Durable designated-child completion propagation and callback outbox. */
+export const completionSubscriptions = pgTable(
+  'completion_subscriptions',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    subscription_id: varchar('subscription_id', { length: 36 }).primaryKey(),
+    propagation_mode: text('propagation_mode', { enum: ['root'] })
+      .notNull()
+      .default('root'),
+    join_policy: text('join_policy', { enum: ['designated_child'] })
+      .notNull()
+      .default('designated_child'),
+    state: text('state', {
+      enum: [
+        'pending',
+        'delegated',
+        'running_downstream',
+        'terminal_pending',
+        'delivered',
+        'delivery_failed',
+      ],
+    })
+      .notNull()
+      .default('pending'),
+    requested_by_user_id: varchar('requested_by_user_id', { length: 36 }).notNull(),
+    // Immutable audit identities: no FK, so deletion cannot erase provenance.
+    origin_session_id: varchar('origin_session_id', { length: 36 }).notNull(),
+    origin_task_id: varchar('origin_task_id', { length: 36 }).notNull(),
+    callback_session_id: varchar('callback_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      { onDelete: 'set null' }
+    ),
+    root_session_id: varchar('root_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      { onDelete: 'set null' }
+    ),
+    root_task_id: varchar('root_task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'set null',
+    }),
+    active_session_id: varchar('active_session_id', { length: 36 }).references(
+      () => sessions.session_id,
+      { onDelete: 'set null' }
+    ),
+    active_task_id: varchar('active_task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'set null',
+    }),
+    path: t
+      .json<import('../types/completion-subscription').CompletionDelegationHop[]>('path')
+      .notNull(),
+    max_depth: integer('max_depth').notNull().default(8),
+    terminal_status: text('terminal_status', {
+      enum: ['completed', 'failed', 'cancelled', 'timed_out'],
+    }),
+    terminal_snapshot:
+      t.json<import('../types/completion-subscription').CompletionTerminalSnapshot>(
+        'terminal_snapshot'
+      ),
+    delivery_task_id: varchar('delivery_task_id', { length: 36 }).references(() => tasks.task_id, {
+      onDelete: 'set null',
+    }),
+    delivery_attempt_count: integer('delivery_attempt_count').notNull().default(0),
+    next_delivery_at: t.timestamp('next_delivery_at'),
+    last_delivery_error_code: text('last_delivery_error_code'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    delegated_at: t.timestamp('delegated_at'),
+    terminal_at: t.timestamp('terminal_at'),
+    delivered_at: t.timestamp('delivered_at'),
+  },
+  (table) => ({
+    tenantIdx: index('completion_subscriptions_tenant_id_idx').on(table.tenant_id),
+    rootTaskUnique: uniqueIndex('completion_subscriptions_root_task_unique').on(
+      table.tenant_id,
+      table.root_task_id
+    ),
+    activeTaskIdx: index('completion_subscriptions_active_task_idx').on(
+      table.tenant_id,
+      table.active_task_id,
+      table.state
+    ),
+    callbackIdx: index('completion_subscriptions_callback_idx').on(
+      table.tenant_id,
+      table.callback_session_id
+    ),
+    deliveryDueIdx: index('completion_subscriptions_delivery_due_idx').on(
+      table.tenant_id,
+      table.state,
+      table.next_delivery_at,
+      table.subscription_id
+    ),
+  })
+);
+
 /**
  * Durable authority for executor-session JWTs in shared PostgreSQL deployments.
  *
@@ -3292,6 +3385,8 @@ export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
 export type DiscordMessageDeliveryRow = typeof discordMessageDeliveries.$inferSelect;
 export type DiscordMessageDeliveryInsert = typeof discordMessageDeliveries.$inferInsert;
+export type CompletionSubscriptionRow = typeof completionSubscriptions.$inferSelect;
+export type CompletionSubscriptionInsert = typeof completionSubscriptions.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;

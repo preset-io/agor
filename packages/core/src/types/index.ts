@@ -10,6 +10,7 @@ export * from './board-comment';
 export * from './branch';
 export * from './capability-policy';
 export * from './card';
+export * from './completion-subscription';
 export * from './context';
 export * from './feathers';
 export * from './file';

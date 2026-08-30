@@ -17,6 +17,7 @@ import {
 } from '@agor/core/config';
 import {
   assertTenantWritable,
+  CompletionSubscriptionRepository,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   runWithTenantDatabaseScope,
@@ -540,6 +541,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       if (result.outcome === 'unverified') return;
 
       this.trackTaskCompleted(result.task);
+      this.wakeCompletionSubscriptionWorker();
       const internalParams = { ...(params ?? {}), provider: undefined } as TaskParams;
       const isStop = result.task.status === TaskStatus.STOPPED;
       const completionParams = {
@@ -647,6 +649,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     await this.runAfterTenantDatabaseCommit('dispatchCompletionCallbacks', () =>
       this.dispatchCompletionCallbacks(task, session, params)
     );
+  }
+
+  private wakeCompletionSubscriptionWorker(): void {
+    const worker = this.app.get?.('completionSubscriptionWorker') as { wake(): void } | undefined;
+    worker?.wake();
   }
 
   private projectTerminalSession(
@@ -824,6 +831,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 
     if (isRunningTransition && !Array.isArray(result)) {
       this.trackTaskStarted(result as Task);
+      if (result.metadata?.completion_subscription_id) {
+        await new CompletionSubscriptionRepository(this.db).markRunningForTask(result.task_id);
+      }
+      this.wakeCompletionSubscriptionWorker();
     }
 
     // Emit analytics for terminal task transitions, including timeouts that do not
@@ -831,6 +842,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     if (isAnalyticsTerminalTransition) {
       const task = result as Task;
       this.trackTaskCompleted(task);
+      // The durable worker reconciles the Task fact into the subscription
+      // outbox. A wake is only a latency hint; startup/interval scans recover
+      // a crash between this terminal commit and reconciliation.
+      this.wakeCompletionSubscriptionWorker();
     }
 
     // Run completion side effects only for statuses that historically completed
@@ -1001,6 +1016,20 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       ...new Set([sessionTargetId, taskTargetId].filter(Boolean)),
     ] as SessionID[];
 
+    // A root-propagated request owns delivery to its original requester. An
+    // intermediary may still have a persistent legacy callback to that same
+    // session; allowing it to fire here would make delegation look terminal.
+    // Preserve callbacks to other targets (for example C -> B), while the
+    // durable completion worker alone delivers the eventual terminal result
+    // to A.
+    const rootCompletionRoute = await this.resolveRootCompletionRoute(task);
+    if (rootCompletionRoute?.targetSessionId) {
+      const index = targetSessionIds.indexOf(rootCompletionRoute.targetSessionId);
+      if (index >= 0) targetSessionIds.splice(index, 1);
+    } else if (rootCompletionRoute?.suppressAll) {
+      targetSessionIds.splice(0);
+    }
+
     for (const targetSessionId of targetSessionIds) {
       const dispatchResult = await this.dispatchCompletionCallbackOnce(
         task,
@@ -1056,6 +1085,26 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
           console.warn(`⚠️  [TasksService] Failed to auto-disable callback:`, error);
         }
       }
+    }
+  }
+
+  private async resolveRootCompletionRoute(
+    task: Task
+  ): Promise<{ targetSessionId?: SessionID; suppressAll?: boolean } | undefined> {
+    const subscriptionId = task.metadata?.completion_subscription_id;
+    if (!subscriptionId) return undefined;
+    try {
+      const subscription = await new CompletionSubscriptionRepository(this.db).get(subscriptionId);
+      return { targetSessionId: subscription.callback_session_id ?? undefined };
+    } catch (error) {
+      // Failure to read the durable routing record must fail closed: emitting a
+      // legacy callback here can falsely claim completion. The worker will
+      // reconcile and report any durable delivery failure.
+      console.warn(
+        `⚠️  [TasksService] Suppressing legacy completion callback because root completion routing could not be resolved for task ${shortId(task.task_id)}:`,
+        error
+      );
+      return { suppressAll: true };
     }
   }
 
