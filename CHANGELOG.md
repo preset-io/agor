@@ -33,6 +33,8 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+## 0.26.0 (2026-08-30)
+
 ### Breaking
 
 - **Board and branch permissions use a normalized capability model** — the upgrade is a coordinated offline, big-bang migration; old daemons cannot run against the migrated authority model. Legacy rules are mapped conservatively, so some access may become more restrictive; review important board and branch permissions after upgrading. Rollback requires restoring the complete pre-migration database backup. ([#2555](https://github.com/preset-io/agor/pull/2555))
@@ -50,6 +52,10 @@ Every release-version bump PR must include its finalized changelog section; a ve
   - GitHub, MongoDB, Box, HubSpot, Slack, Prisma, PagerDuty, and Kagi are no longer advertised because the read-only OAuth audit could not reach a safely bound client-registration boundary. Existing saved rows are not deleted.
   - Existing strict grants retain their binding. Moving an install into or out of marketplace compatibility invalidates the old grant and requires authorization again.
   - Standalone SQLite callbacks now bind the saved server through provider exchange, and Settings shows catalog-managed Marketplace policy instead of labeling it Strict.
+
+### Chores
+
+- **Align the 0.26.0 release train** — `agor-live`, the CLI, client, and version-aligned agentic-tool packages now share the release version. Agent SDK versions remain unchanged after a conservative compatibility review. ([#2623](https://github.com/preset-io/agor/pull/2623))
 
 ## 0.25.2 (2026-08-18)
 
