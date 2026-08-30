@@ -58,8 +58,10 @@ apps/agor-desktop/out/
 # Playwright MCP tool artifacts
 .playwright-mcp/
 
-# Real-Agor E2E/video-capture scratch environment (db, worktrees) and
-# persistent per-machine secrets (kept out of .e2e-runtime/ deliberately —
-# that dir gets wiped on every "reset to stock" harness run).
+# Real-Agor E2E/video-capture scratch environment (db, worktrees), persistent
+# per-machine secrets, and the cached demo-repo mirror (both kept out of
+# .e2e-runtime/ deliberately — that dir gets wiped on every "reset to stock"
+# harness run).
 .e2e-runtime/
 .e2e-secrets/
+.e2e-cache/

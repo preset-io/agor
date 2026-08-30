@@ -7,8 +7,8 @@
   "scripts": {
     "test": "playwright test",
     "test:headed": "playwright test --headed",
-    "test:live": "AGOR_E2E_AGENT_MODE=live playwright test tests/live-agent-session.spec.ts",
-    "test:replay": "AGOR_E2E_AGENT_MODE=replay playwright test tests/live-agent-session.spec.ts"
+    "test:live": "AGOR_E2E_AGENT_MODE=live playwright test",
+    "test:replay": "AGOR_E2E_AGENT_MODE=replay playwright test"
   },
   "dependencies": {
     "@playwright/test": "^1.62.1"
