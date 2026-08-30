@@ -1,9 +1,10 @@
 // Stitches the recorded lesson videos into one continuous reel:
-// a logo title card up front, a lower-third title overlay (lesson title +
-// tagline, in the website's Space Grotesk display face) fading in at the
-// top of each lesson, and fade-through-black transitions. Everything
-// textual comes from support/syllabus.ts — the reel is a rendering of the
-// same metadata that generates SYLLABUS.md.
+// the animated Agor logo reveal up front (../animated_agor_logo/ — an
+// animated-SVG page captured to video), a lower-third title overlay
+// (lesson title + tagline, in the website's Space Grotesk display face)
+// fading in at the top of each lesson, and fade-through-black
+// transitions. Everything textual comes from support/syllabus.ts — the
+// reel is a rendering of the same metadata that generates SYLLABUS.md.
 //
 //   npm run reel                # reads test-results/ from the last run
 //   npm run reel -- --dir PATH  # read lesson .webm files from PATH instead
@@ -13,11 +14,10 @@
 // plays anywhere a conference monitor does). Snapshots the per-lesson
 // clips into reel/clips/ so a later test run can't destroy the sources.
 //
-// Assets (cached in .e2e-cache/reel-assets/):
-//   - SpaceGrotesk.ttf — the site's display face (fetched once from
-//     Google Fonts; any Space Grotesk TTF works)
-//   - logo.png — rasterized from apps/agor-docs/public/logo.svg
-//     (regenerated automatically when rsvg-convert is available)
+// Assets:
+//   - ../animated_agor_logo/agor_logo_reveal_4k.mp4 — the intro (checked in)
+//   - .e2e-cache/reel-assets/SpaceGrotesk.ttf — the site's display face
+//     (fetched once from Google Fonts; any Space Grotesk TTF works)
 //
 // Timing gotchas this file already learned the hard way:
 //   - xfade needs every branch on the SAME timebase; mixing lavfi and webm
@@ -40,14 +40,12 @@ const OUT_FILE = path.join(REEL_DIR, 'agor-syllabus-reel.mp4');
 
 const ASSETS_DIR = path.join(REPO_ROOT, '.e2e-cache', 'reel-assets');
 const FONT = path.join(ASSETS_DIR, 'SpaceGrotesk.ttf');
-const LOGO = path.join(ASSETS_DIR, 'logo.png');
-const LOGO_SVG = path.join(REPO_ROOT, 'apps/agor-docs/public/logo.svg');
+const INTRO = path.join(E2E_ROOT, '..', 'animated_agor_logo', 'agor_logo_reveal_4k.mp4');
 
 const FADE = 0.7; // fade-through-black seconds between segments
 const TRIM_HEAD = 0.6; // cut each clip's leading white paint-in flash
 const TITLE_IN = 0.8; // overlay fade-in start offset into each clip
 const TITLE_HOLD = 4.5; // seconds the overlay stays fully visible
-const CARD_SECONDS = 3.5; // opening title card
 
 function ensureAssets(): void {
   if (!existsSync(FONT)) {
@@ -56,15 +54,8 @@ function ensureAssets(): void {
         `  curl -sL -A "Mozilla/5.0 (X11; Linux x86_64)" "https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500" | grep -o 'https://[^)]*\\.ttf' | head -1 | xargs curl -sL -o ${FONT}`
     );
   }
-  if (!existsSync(LOGO)) {
-    try {
-      mkdirSync(ASSETS_DIR, { recursive: true });
-      execFileSync('rsvg-convert', ['-w', '480', '-h', '480', LOGO_SVG, '-o', LOGO]);
-    } catch {
-      throw new Error(
-        `[reel] missing ${LOGO} and rsvg-convert unavailable — rasterize ${LOGO_SVG} to a 480x480 PNG there.`
-      );
-    }
+  if (!existsSync(INTRO)) {
+    throw new Error(`[reel] missing intro video: ${INTRO}`);
   }
 }
 
@@ -163,14 +154,14 @@ function main(): void {
   const inputs: string[] = [];
   const filters: string[] = [];
 
-  // Input 0: title-card background; input 1: the Agor logo mark.
-  inputs.push('-f', 'lavfi', '-i', `color=c=0x0d1a1a:s=1920x1080:r=25:d=${CARD_SECONDS}`);
-  inputs.push('-loop', '1', '-t', String(CARD_SECONDS), '-i', LOGO);
+  // Input 0: the animated logo reveal (4K/30fps -> reel format), with the
+  // tagline fading in under the settled mark near the end.
+  const introSeconds = ffprobeDuration(INTRO);
+  inputs.push('-i', INTRO);
   filters.push(
-    `[1:v]scale=360:360[logo];` +
-      `[0:v][logo]overlay=(W-w)/2:H/2-300:format=auto,` +
-      `${drawText({ text: 'From zero to a working agent team', size: 46, x: '(w-text_w)/2', y: 'h/2+120', t0: 0.5, hold: CARD_SECONDS, color: '0xd8e6e3' })},` +
-      `fade=t=in:st=0:d=0.6,settb=AVTB,fps=25,setpts=PTS-STARTPTS[card]`
+    `[0:v]scale=1920:1080,` +
+      `${drawText({ text: 'From zero to a working agent team', size: 46, x: '(w-text_w)/2', y: 'h-150', t0: introSeconds - 2.2, hold: 2.2, color: '0xd8e6e3' })},` +
+      `settb=AVTB,fps=25,setpts=PTS-STARTPTS[card]`
   );
 
   // Lesson inputs, each trimmed past the paint-in flash and carrying its
@@ -182,15 +173,15 @@ function main(): void {
     const lesson = lessonByIndex[i];
     inputs.push('-i', clip.file);
     filters.push(
-      `[${i + 2}:v]trim=start=${TRIM_HEAD},setpts=PTS-STARTPTS,scale=1920:1080,` +
+      `[${i + 1}:v]trim=start=${TRIM_HEAD},setpts=PTS-STARTPTS,scale=1920:1080,` +
         `${drawText({ text: lesson.title, size: 48, x: '64', y: 'h-180', t0: TITLE_IN, hold: TITLE_HOLD, box: true })},` +
         `${drawText({ text: lesson.tagline, size: 30, x: '64', y: 'h-110', t0: TITLE_IN + 0.25, hold: TITLE_HOLD - 0.25, color: '0xd8e6e3', box: true })},` +
         `settb=AVTB,fps=25[v${i}]`
     );
   });
 
-  // Fade-through-black chain: card -> v0 -> v1 -> ...
-  const allDurations = [CARD_SECONDS, ...durations];
+  // Fade-through-black chain: intro -> v0 -> v1 -> ...
+  const allDurations = [introSeconds, ...durations];
   let chainLabel = '[card]';
   let elapsed = 0;
   clips.forEach((clip, i) => {
