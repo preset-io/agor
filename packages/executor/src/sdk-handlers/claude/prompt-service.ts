@@ -67,6 +67,28 @@ export class ClaudePromptService {
    * snapshot rather than wedge the query. */
   static readonly CONTEXT_USAGE_TIMEOUT_MS = 15_000;
 
+  /**
+   * Upper bound on how long the streaming query is held open after the model
+   * turn's `result` while waiting for a still-active background task to settle.
+   *
+   * A background task (SDK `system/task_started`) can wake another model turn on
+   * the same query, so we intentionally keep the query alive after the parent
+   * `result` until every active task settles. But if a task never emits a
+   * terminal `task_notification`/`task_updated` — the subprocess dies, the task
+   * is a long-lived/never-ending process, or the SDK simply drops the
+   * settlement — the wait would otherwise be unbounded. The SDK watchdog is
+   * *paused* for the background-task lifetime (see the `background_task.start`
+   * activity below), so nothing else can catch this: the Task would stay
+   * `running` forever and the only escape is a manual Stop, which corrupts the
+   * session's resume state and makes the *next* prompt return a zero-turn
+   * "provider ended the request without returning a model response" result.
+   *
+   * The timer is reset on every SDK message, so a genuinely active background
+   * task that streams progress is never cut off; only a fully silent, wedged
+   * wait trips it. On timeout we settle the turn as the successful completion it
+   * already is (the model turn's `result` was captured) rather than wedge. */
+  static readonly BACKGROUND_TASK_SETTLE_TIMEOUT_MS = 120_000;
+
   /** Serialize permission checks per session to prevent duplicate prompts for concurrent tool calls */
   private permissionLocks = new Map<SessionID, Promise<void>>();
 
@@ -242,8 +264,55 @@ If you continue to see authentication errors, please contact your Agor administr
     // With AbortController passed to SDK, cancellation is handled natively.
     // When abortController.abort() is called, SDK throws AbortError which we catch below.
 
+    // Drive the query iterator manually (instead of `for await`) so the
+    // post-`result` background-task wait can be bounded. While a background task
+    // is holding the query open, each `next()` is raced against
+    // BACKGROUND_TASK_SETTLE_TIMEOUT_MS; a fully silent wait settles the turn
+    // rather than wedging the Task in `running` forever.
+    const iterator = result[Symbol.asyncIterator]();
+    let awaitingBackgroundTasks = false;
     try {
-      for await (const msg of result) {
+      while (true) {
+        let iteration: Awaited<ReturnType<typeof iterator.next>> | typeof AWAIT_TIMEOUT;
+        if (awaitingBackgroundTasks) {
+          iteration = await awaitWithTimeout(
+            iterator.next(),
+            ClaudePromptService.BACKGROUND_TASK_SETTLE_TIMEOUT_MS
+          );
+        } else {
+          iteration = await iterator.next();
+        }
+
+        if (iteration === AWAIT_TIMEOUT) {
+          // The model turn's `result` was already captured, but a background
+          // task never emitted its terminal notification and the SDK watchdog is
+          // paused for its lifetime. Settle the turn as the successful
+          // completion it already is instead of holding the query (and Task)
+          // open forever. Rebalance the paused watchdog for the abandoned tasks.
+          console.warn(
+            `⚠️  ${backgroundTasks.activeTaskCount} background task(s) did not settle within ${ClaudePromptService.BACKGROUND_TASK_SETTLE_TIMEOUT_MS}ms after the model turn ended; settling turn and abandoning the background wait`
+          );
+          clearBackgroundTaskActivity();
+          try {
+            // Best-effort cancellation of the still-running subprocess work.
+            // Swallow both sync throws and async rejection (and tolerate a mock
+            // that returns void) so teardown never surfaces as a turn failure.
+            result.interrupt?.()?.catch(() => {});
+          } catch {
+            // ignore — interrupt is advisory here
+          }
+          result.releaseInput();
+          break;
+        }
+
+        if (iteration.done) {
+          // Generator closed on its own (e.g. subprocess exited). Release the
+          // held input so nothing downstream waits on stdin, then settle.
+          result.releaseInput();
+          break;
+        }
+
+        const msg = iteration.value;
         reportSdkActivity(onActivity, 'claude-code', msg.type);
         const lifecycleTransition = backgroundTasks.observe(msg);
         const { resultDisposition } = lifecycleTransition;
@@ -265,6 +334,7 @@ If you continue to see authentication errors, please contact your Agor administr
         // Process message through processor
         const events = await processor.process(msg);
 
+        let ended = false;
         // Handle each event from processor
         for (const event of events) {
           if (event.type === 'tool_start') onActivity?.('progress', 'tool.start');
@@ -291,10 +361,15 @@ If you continue to see authentication errors, please contact your Agor administr
           if (event.type === 'result') {
             sdkResults.push(event.raw_sdk_message);
             if (resultDisposition === 'await-background-tasks') {
+              // Bound the wait: from here every `next()` is raced against the
+              // settle timeout so a task that never reports terminal cannot
+              // wedge the query open indefinitely.
+              awaitingBackgroundTasks = true;
               console.log(
                 `⏳ Parent turn ended with ${backgroundTasks.activeTaskCount} background task(s) still active; keeping SDK query alive`
               );
             } else {
+              awaitingBackgroundTasks = false;
               event.raw_sdk_message = aggregateClaudeResults(sdkResults);
               try {
                 // Bounded: a subprocess that never answers this control request
@@ -335,18 +410,16 @@ If you continue to see authentication errors, please contact your Agor administr
               continue;
             }
             console.log(`🏁 Conversation ended: ${event.reason}`);
-            break; // Exit for-await loop
+            ended = true;
+            break; // Stop processing this batch of events
           }
 
           // Yield all events including result (for token usage capture)
           yield event;
         }
 
-        // If we got an end event, break the outer loop
-        if (
-          resultDisposition !== 'await-background-tasks' &&
-          events.some((e) => e.type === 'end')
-        ) {
+        // A terminal `end` (outside the background-task hold) closes the query.
+        if (ended) {
           break;
         }
       }

@@ -221,6 +221,76 @@ describe('ClaudePromptService background task query lifetime', () => {
     }
   });
 
+  it('settles the turn when a background task never emits a terminal notification', async () => {
+    // Production hang (#2288 follow-up): the model turn produced its `result`,
+    // but a background task stayed `task_started` forever with no
+    // task_notification/task_updated. The SDK watchdog is paused for the
+    // background-task lifetime, so nothing bounds the wait — the Task would stay
+    // `running` until a manual Stop, which then corrupts resume state and makes
+    // the next prompt zero-turn. The bounded wait must settle the turn instead.
+    vi.useFakeTimers();
+    try {
+      const query = fakeQuery(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'task_started',
+          task_id: 'task-1',
+          description: 'Never-settling background Bash',
+          uuid: 'start',
+          session_id: 'sdk-session',
+        };
+        yield sdkResult('parent-result');
+        // The background task never reports terminal, and no continuation result
+        // ever arrives. Hold the query open exactly as the wedged subprocess did.
+        await new Promise<void>(() => {});
+      });
+      vi.mocked(setupQuery).mockResolvedValue({
+        query: query as never,
+        resolvedModel: 'claude-sonnet-4-6',
+        getStderr: () => '',
+      });
+      const activity = vi.fn();
+
+      const events: Array<{ type: string; raw_sdk_message?: { uuid?: string } }> = [];
+      const drained = (async () => {
+        for await (const event of service().promptSessionStreaming(
+          sessionId,
+          'prompt',
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          activity
+        )) {
+          events.push(event);
+        }
+      })();
+
+      // Advance past the bounded background-task settle budget; without the
+      // timeout the generator would await the never-yielding next() forever.
+      await vi.advanceTimersByTimeAsync(ClaudePromptService.BACKGROUND_TASK_SETTLE_TIMEOUT_MS + 10);
+      await drained;
+
+      // The parent turn's success result is the terminal response; the turn
+      // settles as a normal completion (no `stopped`, no error).
+      expect(
+        events
+          .filter((event) => event.type === 'result')
+          .map((event) => event.raw_sdk_message?.uuid)
+      ).toEqual(['parent-result']);
+      expect(events.some((event) => event.type === 'stopped')).toBe(false);
+      // Input is released so the subprocess can close stdin and exit, and the
+      // subprocess work is cancelled best-effort.
+      expect(query.releaseInput).toHaveBeenCalledTimes(1);
+      expect(query.interrupt).toHaveBeenCalledTimes(1);
+      // The paused SDK watchdog is rebalanced for the abandoned background task.
+      expect(activity).toHaveBeenCalledWith('progress', 'background_task.start');
+      expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('releases input and balances watchdog activity when cancellation interrupts a task', async () => {
     const query = fakeQuery(async function* () {
       yield {
