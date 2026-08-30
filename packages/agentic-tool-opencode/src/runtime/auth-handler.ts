@@ -10,7 +10,10 @@ import type {
 } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk/v2';
 import { OPENCODE_RUNTIME_UNAVAILABLE_ERROR_CODE } from '../shared/index.js';
-import { createOpenCodeKnownModelCatalog } from '../shared/known-models.js';
+import {
+  createOpenCodeKnownModelCatalog,
+  knownActiveOpenCodeModels,
+} from '../shared/known-models.js';
 import type { OpenCodeAuthPayload } from './auth-payload.js';
 import { resolvePackagedOpenCodeBinary } from './binary.js';
 import {
@@ -191,6 +194,23 @@ async function discoverModels(
   };
 }
 
+/**
+ * A fresh server can serve a stale bundled catalog for its whole lifetime
+ * (the models.dev refresh only reaches the next server), so a connected
+ * curated provider's snapshot is completed with the curated active models the
+ * pinned runtime is known to support. Admission applies the same witness.
+ */
+function withKnownActiveModels(
+  providerId: string,
+  liveModels: OpenCodeProviderConnection['models']
+): OpenCodeProviderConnection['models'] {
+  const present = new Set(liveModels.map((model) => model.id));
+  return [
+    ...liveModels,
+    ...knownActiveOpenCodeModels(providerId).filter((model) => !present.has(model.id)),
+  ];
+}
+
 function configuredPair(model: string | undefined): OpenCodeModelPair | undefined {
   if (!model) return undefined;
   const separator = model.indexOf('/');
@@ -243,6 +263,16 @@ async function readConfigurationSnapshot(
     .map((providerId): OpenCodeProviderConnection => {
       const modelProvider = modelProviders.get(providerId);
       const runtimeProvider = runtimeProviders.get(providerId);
+      const liveModels = modelProvider
+        ? Object.values(modelProvider.models).map((model) => ({
+            id: model.id,
+            name: model.name,
+            status: model.status,
+          }))
+        : [];
+      const models = runtimeAvailable.has(providerId)
+        ? withKnownActiveModels(providerId, liveModels)
+        : liveModels;
       return {
         id: providerId,
         name: modelProvider?.name ?? runtimeProvider?.name ?? providerId,
@@ -252,15 +282,7 @@ async function readConfigurationSnapshot(
         ...(modelsResponse.data.default[providerId]
           ? { suggestedModel: modelsResponse.data.default[providerId] }
           : {}),
-        models: modelProvider
-          ? Object.values(modelProvider.models)
-              .map((model) => ({
-                id: model.id,
-                name: model.name,
-                status: model.status,
-              }))
-              .sort((left, right) => left.id.localeCompare(right.id))
-          : [],
+        models: models.sort((left, right) => left.id.localeCompare(right.id)),
       };
     })
     .sort((left, right) => left.id.localeCompare(right.id));

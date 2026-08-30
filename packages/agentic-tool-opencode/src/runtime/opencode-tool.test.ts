@@ -128,6 +128,44 @@ function assertExplicitModelAvailable(model: Record<string, unknown>, effort?: E
   ).assertExplicitModelAvailable(client, '/workspace', 'openai', 'gpt-test', effort);
 }
 
+function assertPairAvailable(input: {
+  providerId: string;
+  modelId: string;
+  connected: string[];
+  catalogProviders: Array<{ id: string; models: Record<string, unknown> }>;
+  effort?: EffortLevel;
+}) {
+  const tool = new OpenCodeTool({});
+  const client = {
+    config: {
+      providers: vi.fn(async () => ({
+        data: { providers: input.catalogProviders },
+        error: undefined,
+      })),
+    },
+    provider: {
+      list: vi.fn(async () => ({ data: { connected: input.connected }, error: undefined })),
+    },
+  };
+  return (
+    tool as unknown as {
+      assertExplicitModelAvailable(
+        client: unknown,
+        directory: string,
+        provider: string,
+        model: string,
+        effort?: EffortLevel
+      ): Promise<void>;
+    }
+  ).assertExplicitModelAvailable(
+    client,
+    '/workspace',
+    input.providerId,
+    input.modelId,
+    input.effort
+  );
+}
+
 describe('OpenCodeTool abort cleanup', () => {
   it('keeps the managed server alive until active-session abort settles', async () => {
     const activeSessionAbort = deferred<void>();
@@ -226,5 +264,64 @@ describe('OpenCodeTool prompt variants', () => {
 
     expect(request?.body).not.toHaveProperty('variant');
     expect(request?.body?.system).toContain('Agor Session Context');
+  });
+});
+
+describe('OpenCodeTool stale-catalog admission', () => {
+  // A fresh server can serve a stale bundled catalog for its whole lifetime;
+  // the curated pinned-runtime catalog acts as the secondary witness.
+  const staleGoCatalog = [
+    {
+      id: 'opencode-go',
+      models: { 'kimi-k3': { id: 'kimi-k3', options: { apiKey: 'must-not-cross' } } },
+    },
+  ];
+
+  it('admits a curated pinned-runtime pair missing from a connected provider stale snapshot', async () => {
+    await expect(
+      assertPairAvailable({
+        providerId: 'opencode-go',
+        modelId: 'qwen3.8-flash',
+        connected: ['opencode-go'],
+        catalogProviders: staleGoCatalog,
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it('still requires live connection evidence for a curated pair', async () => {
+    const error = await assertPairAvailable({
+      providerId: 'opencode-go',
+      modelId: 'qwen3.8-flash',
+      connected: [],
+      catalogProviders: staleGoCatalog,
+    }).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/provider\/model is not available/i);
+  });
+
+  it('rejects a genuinely absent pair deterministically without exposing catalog secrets', async () => {
+    const error = await assertPairAvailable({
+      providerId: 'opencode-go',
+      modelId: 'no-such-model',
+      connected: ['opencode-go'],
+      catalogProviders: staleGoCatalog,
+    }).catch((failure: unknown) => failure);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/provider\/model is not available/i);
+    expect((error as Error).message).not.toContain('must-not-cross');
+  });
+
+  it('defers effort validation to the runtime for a witness-admitted pair', async () => {
+    await expect(
+      assertPairAvailable({
+        providerId: 'opencode-go',
+        modelId: 'qwen3.8-flash',
+        connected: ['opencode-go'],
+        catalogProviders: staleGoCatalog,
+        effort: 'max',
+      })
+    ).resolves.toBeUndefined();
   });
 });

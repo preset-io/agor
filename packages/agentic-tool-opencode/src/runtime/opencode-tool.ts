@@ -25,7 +25,7 @@ import {
   type ToolUse,
 } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk';
-import { OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '../shared/index.js';
+import { isKnownActiveOpenCodeModel, OPENCODE_MODEL_CONFIG_PAIR_ERROR } from '../shared/index.js';
 import type { OpenCodeCommand } from './binary.js';
 import {
   createOpenCodeEventTranslator,
@@ -889,15 +889,25 @@ export class OpenCodeTool {
             ([candidateId, model]) => candidateId === modelId || model.id === modelId
           )?.[1]
         : undefined;
-      modelAvailable =
+      const providerConnected =
         !catalogResponse.error &&
         !runtimeResponse.error &&
-        Boolean(runtimeResponse.data?.connected.includes(providerId)) &&
-        Boolean(selectedModel);
-      if (modelAvailable && effort) {
+        Boolean(runtimeResponse.data?.connected.includes(providerId));
+      modelAvailable = providerConnected && Boolean(selectedModel);
+      if (modelAvailable && effort && selectedModel) {
         // OpenCode returns native variants here; the generated SDK model type currently omits them.
         const variants = (selectedModel as { variants?: Record<string, unknown> }).variants;
         effortAvailable = Boolean(variants && Object.hasOwn(variants, effort));
+      }
+      if (!modelAvailable && providerConnected && isKnownActiveOpenCodeModel(providerId, modelId)) {
+        // A fresh server can serve a stale bundled catalog for its whole
+        // lifetime (the models.dev refresh only reaches the next server), so
+        // a connected provider's curated pinned-runtime pair is admitted.
+        // Connection evidence is never substituted; the model request itself
+        // stays the authority, including for effort variants the stale
+        // snapshot cannot describe.
+        modelAvailable = true;
+        effortAvailable = true;
       }
     } catch {
       // Public failure stays independent of raw provider objects and SDK details.

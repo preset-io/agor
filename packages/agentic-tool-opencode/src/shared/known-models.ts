@@ -137,6 +137,19 @@ function hasActiveSuggestedModel(provider: KnownProvider): boolean {
   );
 }
 
+/** True when the curated catalog lists the exact pair as an active model. */
+export function isKnownActiveOpenCodeModel(providerId: string, modelId: string): boolean {
+  return knownActiveOpenCodeModels(providerId).some((model) => model.id === modelId);
+}
+
+/** Curated active models for one provider; empty for uncurated providers. */
+export function knownActiveOpenCodeModels(providerId: string): OpenCodeCatalogModel[] {
+  const provider = KNOWN_PROVIDERS.find((entry) => entry.id === providerId);
+  return (provider?.models ?? [])
+    .filter((model) => model.status === 'active')
+    .map((model) => ({ ...model }));
+}
+
 /**
  * Returns immediate OpenCode choices without starting its native server.
  * Configured providers outside the curated list remain visible for exact entry.

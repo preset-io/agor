@@ -190,6 +190,69 @@ describe('opencode.auth executor command', () => {
     expect(runtime.start).not.toHaveBeenCalled();
   });
 
+  it('completes a connected curated provider stale snapshot with curated active models', async () => {
+    runtime.readAuthFile.mockResolvedValue(
+      JSON.stringify({ 'opencode-go': { type: 'api', key: 'must-not-cross' } })
+    );
+    const discoveryClient = client(['opencode-go'], { 'opencode-go': [] });
+    discoveryClient.provider.list.mockResolvedValue({
+      data: {
+        all: [
+          { id: 'opencode-go', name: 'OpenCode Go' },
+          { id: 'anthropic', name: 'Anthropic' },
+        ],
+        connected: ['opencode-go'],
+        default: {},
+      },
+    });
+    // The stale bundled snapshot a fresh server can serve for its whole
+    // lifetime: connected, but missing curated models such as qwen3.8-flash.
+    discoveryClient.config.providers.mockResolvedValue({
+      data: {
+        providers: [
+          {
+            id: 'opencode-go',
+            name: 'OpenCode Go',
+            models: {
+              'kimi-k3': {
+                id: 'kimi-k3',
+                name: 'Kimi K3',
+                status: 'active',
+                options: { apiKey: 'must-not-cross' },
+              },
+            },
+          },
+          { id: 'anthropic', name: 'Anthropic', models: {} },
+        ],
+        default: {},
+      },
+    });
+    discoveryClient.config.get.mockResolvedValue({ data: {} });
+    runtime.clients.push(discoveryClient);
+
+    const result = await executeCommand({
+      command: 'opencode.auth',
+      dataHome: '/home/alice/.local/share/agor/opencode/opaque',
+      params: { operation: 'discover' },
+    } as never);
+
+    expect(result.success).toBe(true);
+    const providers = (result.data as { providers: Array<Record<string, unknown>> }).providers;
+    const go = providers.find((provider) => provider.id === 'opencode-go') as {
+      models: Array<{ id: string }>;
+    };
+    const goModelIds = go.models.map((model) => model.id);
+    expect(goModelIds).toContain('kimi-k3');
+    expect(goModelIds).toContain('qwen3.8-flash');
+    expect(goModelIds).toContain('gpt-5.6-luna');
+    expect(new Set(goModelIds).size).toBe(goModelIds.length);
+    const anthropic = providers.find((provider) => provider.id === 'anthropic') as {
+      models: unknown[];
+    };
+    expect(anthropic.models).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain('must-not-cross');
+  });
+
   it('serves the known model catalog even when the pinned binary is unresolved', async () => {
     runtime.resolveBinary.mockRejectedValue(new Error('no binary'));
 
@@ -274,7 +337,12 @@ describe('opencode.auth executor command', () => {
             credentialPresence: 'present',
             authMethods: [],
             suggestedModel: 'gpt-next',
-            models: [{ id: 'gpt-next', name: 'GPT Next', status: 'active' }],
+            // The live snapshot model plus the curated pinned-runtime models
+            // merged for connected curated providers.
+            models: expect.arrayContaining([
+              { id: 'gpt-next', name: 'GPT Next', status: 'active' },
+              { id: 'gpt-5.6-terra-pro', name: 'GPT-5.6 Terra Pro', status: 'active' },
+            ]),
           },
         ],
       },

@@ -3,7 +3,12 @@ export {
   type OpenCodeExecutorContext,
   parseOpenCodeExecutorContext,
 } from './executor-context.js';
-export { createOpenCodeKnownModelCatalog, OPENCODE_VERSION } from './known-models.js';
+export {
+  createOpenCodeKnownModelCatalog,
+  isKnownActiveOpenCodeModel,
+  knownActiveOpenCodeModels,
+  OPENCODE_VERSION,
+} from './known-models.js';
 
 /**
  * Executor error code for "the pinned OpenCode binary could not be resolved".
