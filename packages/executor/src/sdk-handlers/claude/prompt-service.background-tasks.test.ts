@@ -37,7 +37,19 @@ function sdkResult(uuid: string): SDKMessage {
   };
 }
 
-function fakeQuery(messages: SDKMessage[] | (() => AsyncGenerator<SDKMessage>)) {
+/**
+ * Models the installed SDK Query as a wrapper distinct from its inner message
+ * generator. Iterating the Query returns the inner generator
+ * (`[Symbol.asyncIterator]() { return this.sdkMessages }`), while the Query's own
+ * `return()` runs `cleanup()` FIRST — closing the transport — and only then
+ * delegates to the inner generator's `return()`
+ * (`async return(e){ return await this.cleanup(), this.sdkMessages.return(e) }`).
+ * Closing the transport is what resolves a held read, so teardown must call the
+ * Query's `return()`, not the inner iterator's.
+ */
+function fakeQuery(
+  messages: SDKMessage[] | ((transportClosed: Promise<void>) => AsyncGenerator<SDKMessage>)
+) {
   const releaseInput = vi.fn();
   const getContextUsage = vi.fn().mockResolvedValue({
     totalTokens: 15,
@@ -46,23 +58,40 @@ function fakeQuery(messages: SDKMessage[] | (() => AsyncGenerator<SDKMessage>)) 
     memoryFiles: [{ path: 'SENTINEL_CONTEXT_MEMORY', type: 'project', tokens: 2 }],
     providerExtension: 'SENTINEL_CONTEXT_EXTENSION',
   });
-  const generator =
+
+  // The fake transport: `cleanup()` closes it, which resolves any read the inner
+  // stream is holding (a wedged fake stream awaits `transportClosed`).
+  let closeTransport = () => {};
+  const transportClosed = new Promise<void>((resolve) => {
+    closeTransport = () => resolve();
+  });
+
+  const inner =
     typeof messages === 'function'
-      ? messages()
+      ? messages(transportClosed)
       : (async function* () {
           yield* messages;
         })();
-  // Spy on the iterator's own `return()` so tests can assert the query is
-  // finalized during teardown (the manual pump owns the cleanup `for await`
-  // used to do on break).
-  const originalReturn = generator.return.bind(generator);
-  const returnSpy = vi.fn((value?: unknown) => originalReturn(value as never));
-  generator.return = returnSpy as typeof generator.return;
-  return Object.assign(generator, {
+  const innerReturn = vi.fn(inner.return.bind(inner));
+  inner.return = innerReturn as typeof inner.return;
+
+  const cleanup = vi.fn(async () => {
+    closeTransport();
+  });
+  const queryReturn = vi.fn(async (value?: unknown) => {
+    await cleanup();
+    return inner.return(value as never);
+  });
+
+  return {
+    [Symbol.asyncIterator]: () => inner,
+    interrupt: vi.fn(),
     releaseInput,
     getContextUsage,
-    interrupt: vi.fn(),
-  });
+    cleanup,
+    innerReturn,
+    return: queryReturn,
+  };
 }
 
 function service() {
@@ -235,21 +264,29 @@ describe('ClaudePromptService background task query lifetime', () => {
     // `running` until a manual Stop, which then corrupts resume state and makes
     // the next prompt zero-turn. The bounded wait must settle the turn instead.
     vi.useFakeTimers();
+    let finalized = false;
     try {
-      const query = fakeQuery(async function* () {
-        yield {
-          type: 'system',
-          subtype: 'task_started',
-          task_id: 'task-1',
-          description: 'Never-settling background Bash',
-          uuid: 'start',
-          session_id: 'sdk-session',
-        };
-        yield sdkResult('parent-result');
-        // The background task never reports terminal, and no continuation result
-        // ever arrives. Hold the query open exactly as the wedged subprocess did.
-        await new Promise<void>(() => {});
-      });
+      const query = fakeQuery((transportClosed) =>
+        (async function* () {
+          try {
+            yield {
+              type: 'system',
+              subtype: 'task_started',
+              task_id: 'task-1',
+              description: 'Never-settling background Bash',
+              uuid: 'start',
+              session_id: 'sdk-session',
+            };
+            yield sdkResult('parent-result');
+            // The task never reports terminal and no continuation result arrives:
+            // the read stays held exactly as the wedged subprocess did, until the
+            // Query's cleanup() closes the transport.
+            await transportClosed;
+          } finally {
+            finalized = true;
+          }
+        })()
+      );
       vi.mocked(setupQuery).mockResolvedValue({
         query: query as never,
         resolvedModel: 'claude-sonnet-4-6',
@@ -272,12 +309,11 @@ describe('ClaudePromptService background task query lifetime', () => {
         }
       })();
 
-      // Advance past the bounded idle budget; without the timeout the generator
-      // would await the never-yielding next() forever.
+      // Advance past the bounded idle budget; without the timeout the held read
+      // would never resolve. No separate close-budget advance is needed: the
+      // Query's cleanup() closes the transport, which resolves the held read and
+      // lets teardown converge — that is exactly what this test proves.
       await vi.advanceTimersByTimeAsync(ClaudePromptService.POST_RESULT_IDLE_TIMEOUT_MS + 10);
-      // The teardown `iterator.return()` queues behind the stuck next(); advance
-      // its bounded close budget so settlement still converges.
-      await vi.advanceTimersByTimeAsync(ClaudePromptService.QUERY_CLOSE_TIMEOUT_MS + 10);
       await drained;
 
       // The parent turn's success result is the terminal response; the turn
@@ -289,12 +325,15 @@ describe('ClaudePromptService background task query lifetime', () => {
           .map((event) => event.raw_sdk_message?.uuid)
       ).toEqual(['parent-result']);
       expect(events.some((event) => event.type === 'stopped')).toBe(false);
-      // Input is released so the subprocess can close stdin and exit, the
-      // subprocess work is cancelled best-effort, and the query iterator is
-      // finalized so no stray query is left alive to race the next resume.
+      // Input is released, subprocess work is cancelled best-effort, and the
+      // Query is finalized: `return()` runs `cleanup()` (closing the transport),
+      // which resolves the held read so the generator's finalizer actually runs —
+      // no stray query is left alive to race the next resume.
       expect(query.releaseInput).toHaveBeenCalledTimes(1);
       expect(query.interrupt).toHaveBeenCalledTimes(1);
       expect(query.return).toHaveBeenCalledTimes(1);
+      expect(query.cleanup).toHaveBeenCalledTimes(1);
+      expect(finalized).toBe(true);
       // The paused SDK watchdog is rebalanced for the abandoned background task.
       expect(activity).toHaveBeenCalledWith('progress', 'background_task.start');
       expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
@@ -309,30 +348,37 @@ describe('ClaudePromptService background task query lifetime', () => {
     // query is still held open awaiting that continuation, so the idle timeout
     // must settle it — with activeBackgroundTasks already at zero.
     vi.useFakeTimers();
+    let finalized = false;
     try {
-      const query = fakeQuery(async function* () {
-        yield {
-          type: 'system',
-          subtype: 'task_started',
-          task_id: 'task-1',
-          description: 'Short background Bash',
-          uuid: 'start',
-          session_id: 'sdk-session',
-        };
-        yield sdkResult('parent-result');
-        yield {
-          type: 'system',
-          subtype: 'task_notification',
-          task_id: 'task-1',
-          status: 'completed',
-          output_file: '/tmp/task-1',
-          summary: 'done',
-          uuid: 'notification',
-          session_id: 'sdk-session',
-        };
-        // The task settled, but no continuation result ever arrives.
-        await new Promise<void>(() => {});
-      });
+      const query = fakeQuery((transportClosed) =>
+        (async function* () {
+          try {
+            yield {
+              type: 'system',
+              subtype: 'task_started',
+              task_id: 'task-1',
+              description: 'Short background Bash',
+              uuid: 'start',
+              session_id: 'sdk-session',
+            };
+            yield sdkResult('parent-result');
+            yield {
+              type: 'system',
+              subtype: 'task_notification',
+              task_id: 'task-1',
+              status: 'completed',
+              output_file: '/tmp/task-1',
+              summary: 'done',
+              uuid: 'notification',
+              session_id: 'sdk-session',
+            };
+            // The task settled, but no continuation result ever arrives.
+            await transportClosed;
+          } finally {
+            finalized = true;
+          }
+        })()
+      );
       vi.mocked(setupQuery).mockResolvedValue({
         query: query as never,
         resolvedModel: 'claude-sonnet-4-6',
@@ -356,7 +402,6 @@ describe('ClaudePromptService background task query lifetime', () => {
       })();
 
       await vi.advanceTimersByTimeAsync(ClaudePromptService.POST_RESULT_IDLE_TIMEOUT_MS + 10);
-      await vi.advanceTimersByTimeAsync(ClaudePromptService.QUERY_CLOSE_TIMEOUT_MS + 10);
       await drained;
 
       expect(
@@ -368,6 +413,8 @@ describe('ClaudePromptService background task query lifetime', () => {
       expect(query.releaseInput).toHaveBeenCalledTimes(1);
       expect(query.interrupt).toHaveBeenCalledTimes(1);
       expect(query.return).toHaveBeenCalledTimes(1);
+      expect(query.cleanup).toHaveBeenCalledTimes(1);
+      expect(finalized).toBe(true);
       // The task's own settlement balances the watchdog; the timeout has no
       // remaining active tasks to rebalance.
       expect(activity).toHaveBeenCalledWith('progress', 'background_task.start');

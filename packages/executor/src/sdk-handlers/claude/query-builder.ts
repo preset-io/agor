@@ -104,6 +104,16 @@ export interface InterruptibleQuery {
    * Must be called after the result event is fully processed.
    */
   releaseInput(): void;
+  /**
+   * Finalize the Query. The SDK Query's own `return()` runs `cleanup()` FIRST —
+   * closing the transport/stdin — and only then delegates to the inner message
+   * generator's `return()`. Closing the transport is what resolves an
+   * outstanding `next()` read, so this (unlike `[Symbol.asyncIterator]().return()`,
+   * which is serialized behind that pending read) is the correct teardown when a
+   * held read never settles on its own. Bounded by callers because
+   * `cleanup()` awaits the subprocess exit.
+   */
+  return(value?: unknown): Promise<IteratorResult<unknown>>;
   // biome-ignore lint/suspicious/noExplicitAny: SDK returns complex union of message types
   [Symbol.asyncIterator](): AsyncIterator<any>;
 }

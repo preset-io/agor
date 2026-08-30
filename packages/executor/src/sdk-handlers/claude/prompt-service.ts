@@ -484,12 +484,15 @@ If you continue to see authentication errors, please contact your Agor administr
       throw new Error(safe.message);
     } finally {
       // Manual iteration means we own the finalization `for await` did on break:
-      // close the SDK generator so its transport/subprocess is torn down and no
-      // stray query is left alive to race the next resume. Bounded because
-      // `return()` can queue behind a stuck `next()`; the preceding `interrupt()`
-      // + `releaseInput()` are what let that pending read resolve so it can run.
+      // close the SDK Query so its transport/subprocess is torn down and no stray
+      // query is left alive to race the next resume. Finalize the Query OBJECT
+      // (`result.return()`), NOT `iterator.return()`: the Query's own `return()`
+      // runs `cleanup()` first — closing the transport/stdin — which is what
+      // resolves an outstanding held read, whereas the inner iterator's
+      // `return()` is serialized behind that same stuck read and would never run.
+      // Bounded because `cleanup()` awaits the subprocess exit.
       try {
-        const closing = iterator.return?.();
+        const closing = result.return?.();
         if (closing) {
           await awaitWithTimeout(closing, ClaudePromptService.QUERY_CLOSE_TIMEOUT_MS);
         }
