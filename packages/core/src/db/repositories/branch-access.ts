@@ -2,6 +2,10 @@
 
 import type { CapabilityPolicyFsAccess, SessionID, UserID, UUID } from '@agor/core/types';
 import { and, eq, exists, inArray, or, type SQL, type SQLWrapper, sql } from 'drizzle-orm';
+import {
+  CAPABILITY_POLICY_SESSION_SHARING_KEY,
+  CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
+} from '../../types/capability-policy';
 import type { Database } from '../client';
 import { select } from '../database-wrapper';
 import {
@@ -78,9 +82,6 @@ function effectiveConfigCondition(): SQL {
     ) ?? sql`false`
   );
 }
-
-const WORKSPACE_PREFERENCES_NAMESPACE = 'workspace_preferences';
-const SESSION_SHARING_KEY = 'session_sharing_enabled';
 
 /**
  * Closed point projection used by Task launch and heartbeat revalidation.
@@ -192,8 +193,8 @@ export async function resolveSessionRuntimeBranchAccess(
         .from(appVariables)
         .where(
           and(
-            eq(appVariables.namespace, WORKSPACE_PREFERENCES_NAMESPACE),
-            eq(appVariables.key, SESSION_SHARING_KEY),
+            eq(appVariables.namespace, CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE),
+            eq(appVariables.key, CAPABILITY_POLICY_SESSION_SHARING_KEY),
             eq(appVariables.value_text, 'true')
           )
         )
