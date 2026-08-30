@@ -26,6 +26,7 @@ import {
 } from '@agor/core/db';
 import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { AuthenticatedParams, CodexAuthImportResult, UserID } from '@agor/core/types';
+import type { CodexCredentialBindInvalidator } from '../codex-auth-bind-invalidation.js';
 import { parseCodexAuthJson } from '../utils/codex-auth-file.js';
 import {
   type AppLike,
@@ -37,7 +38,8 @@ import {
 export function createCodexAuthImportService(
   app: AppLike,
   db: TenantScopeAwareDatabase,
-  credentialMutations?: CodexCredentialMutationCoordinator
+  credentialMutations?: CodexCredentialMutationCoordinator,
+  invalidateCredentialBinds: CodexCredentialBindInvalidator = async () => undefined
 ) {
   return {
     async create(
@@ -93,6 +95,11 @@ export function createCodexAuthImportService(
             persist
           )
         : await persist();
+      await invalidateCredentialBinds({
+        tenantId: String(tenantId),
+        userId,
+        reason: 'credentials_imported',
+      });
 
       return {
         status: 'authenticated',

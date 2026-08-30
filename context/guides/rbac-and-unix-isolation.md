@@ -47,7 +47,7 @@ A board stores two distinct policies:
 
 1. `board_access`: who can see or manage the canvas.
 2. `branch_template`: the complete branch permission package inherited by
-   branches on that board, including personal session-sharing rules.
+   branches on that board, including the shared-session prompt switch.
 
 Board roles are cumulative:
 
@@ -81,11 +81,12 @@ Branch roles are cumulative:
 | Collaborator | Viewer + `sessions.create`, `sessions.prompt_own`                                           |
 | Manager      | Collaborator + session lifecycle, branch/environment management, and `branch.policy.manage` |
 
-Manager does not imply permission to prompt another person's session or use
-their home. Filesystem access is a separate `none | read | write` dimension.
-Terminal access is derived: Collaborator or Manager plus non-`none` filesystem
-access. Sandbox mounts and `{branch_fs_access}` for delegated executors use the
-actual prompt actor's effective filesystem access, never the session owner's.
+Manager may prompt a foreign branch-home Session only when both sharing
+switches are enabled. Execution-home Sessions are never shareable. Filesystem
+access is a separate `none | read | write` dimension. Terminal access is
+derived: Collaborator or Manager plus non-`none` filesystem access. Sandbox
+mounts and `{branch_fs_access}` for delegated executors use the actual prompt
+actor's effective filesystem access, never the Session owner's.
 
 ### Principal resolution
 
@@ -109,25 +110,18 @@ active-state column, database authorization can distinguish only an existing
 same-tenant user from a deleted one. Its cutover must add the active-user
 predicate to both the point resolver and the set-based SQL below.
 
-## Personal session sharing
+## Shared session prompting
 
-Personal session sharing is disabled by default at workspace level. When an
-administrator enables it, each session owner may grant named users/groups
-permission to prompt sessions that owner owns. Nobody, including a branch
-Manager, may edit or discard another owner's rule; those rules are read-only in
-the form.
+Branch-home Sessions can be prompted by a foreign caller with
+`sessions.prompt_own` (normally Collaborator or Manager) only when the tenant
+preference and effective branch permission package both enable it. The task is
+attributed to the caller and uses the caller's execution home, managed
+credentials, connector credentials, and private MCP visibility. Only the
+conversation and branch-owned SDK state are shared.
 
-An allowed shared prompt preserves:
-
-- the original `session.created_by`, native conversation genealogy, and owner
-  home (`~/`);
-- the actual caller on `task.created_by`, prompt attribution, Agor-managed
-  environment variables, connector credentials, and private MCP visibility;
-- the caller's branch filesystem projection.
-
-The shared home remains a high-trust boundary. Home-resident tool credentials
-such as `~/.codex/auth.json`, native histories, dotfiles, and any files left by
-users or agents can still be read or changed by an agent operating there. See
+Execution-home Sessions are never shareable. This immutable compatibility
+boundary prevents a resumable conversation from changing mount identity after
+creation. See
 [`context/explorations/session-sharing.md`](../explorations/session-sharing.md).
 
 ## Listing and point checks
@@ -138,7 +132,7 @@ same normalized policies through `CapabilityPolicyRepository`:
 
 - `resolveBoardAccess(boardId, userId)`
 - `resolveBranchAccess(branchId, userId)`
-- `resolveSessionPromptAuthority({ branch_id, caller_user_id, session_owner_user_id })`
+- `resolveSessionPromptAuthority({ branch_id, caller_user_id, session_owner_user_id, session_sdk_home_scope })`
 
 `BranchRepository.resolveUserAccess` is the compatibility projection used by
 existing hooks; it is backed exclusively by the normalized resolver. SQL list
@@ -155,10 +149,25 @@ audience before policy rows cascade.
 
 Internal runtime callers do not rely on provider-only Feathers hooks. Gateway
 inbound traffic checks Collaborator access before Session creation, binds a
-durable platform thread to the configured branch, and resolves personal
-session-sharing authority immediately before Prompt admission. The scheduler
-checks its creator at Session admission and again before its initial Prompt so
-revocation races and crash recovery fail closed.
+durable platform thread to the configured branch, and resolves shared-session
+authority immediately before Prompt admission. The scheduler checks its
+creator at Session admission and again before its initial Prompt so revocation
+races and crash recovery fail closed.
+
+Task launch and heartbeat use the narrower
+`resolveSessionRuntimeBranchAccess` point projection in `branch-access.ts`.
+It resolves the exact Session, Branch, effective inherited/override config,
+principal role/file access, and foreign-session sharing in one bounded SQL
+statement. Launch persists only the original file-access floor inside private
+Task JSON. Each normal heartbeat compares current access to that floor before
+writing liveness: `write -> read/none` and `read -> none` terminate, while an
+increase never remounts or widens a live executor. PostgreSQL also checks the
+exact task-token fingerprint in the same Task transaction. Redis invalidation
+can disconnect sooner, but the database check is sufficient on its own.
+
+Web terminals are not Task executors and do not send this heartbeat. Their
+launch admission and mount projection remain enforced, but live terminal
+authority revalidation is a separate residual boundary.
 
 ## Execution modes
 
@@ -168,9 +177,12 @@ state and sibling tenant homes and fails closed when bubblewrap policy setup is
 unavailable.
 
 Delegated mode requires an explicit `executor_command_template`. Prefer
-`{tenant_id}`, `{user_id}`, and `{branch_fs_access}`. `{unix_user}` remains an
-opaque compatibility home key. The launcher owns runtime identity, storage,
-credentials, containment, cancellation, and tenant isolation.
+`{tenant_id}`, `{user_id}`, `{branch_fs_access}`, and `{branch_sdk_home}` (an
+absolute, shell-escaped branch SDK-home path only for a branch-scoped Session,
+or the empty string for an execution-home Session, even on an adopted branch).
+`{unix_user}` remains an opaque compatibility home key. The launcher owns
+runtime identity, storage, credentials, branch SDK-home mounting, containment,
+cancellation, and tenant isolation.
 
 In `simple` mode, agents and terminals run as the daemon account and application
 RBAC cannot provide filesystem isolation. Use it only on trusted installations.
@@ -190,11 +202,12 @@ is deliberately equal-or-less:
   Manager, matching legacy Board visibility without restoring removed Branch
   creators;
 - additional owners become Managers;
-- legacy prompt-like grants become Collaborators, not personal home-sharing;
+- legacy prompt-like grants become Collaborators, not shared-session opt-ins;
 - named user/group grants map to the closest equal-or-less fixed role;
 - board-aligned branches with branch-specific authority are materialized as
   complete overrides copied from the board template;
-- personal sharing starts empty and the workspace gate starts off.
+- shared-session switches start off, and the old per-owner grant tables are
+  removed by the follow-up offline migration.
 
 Legacy authority fields are tombstoned to private/none so a stray old daemon
 fails closed, and daemon startup rejects a database newer than its migration

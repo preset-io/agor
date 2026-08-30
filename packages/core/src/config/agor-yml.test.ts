@@ -283,6 +283,18 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(compose).toMatch(/- CREATE_RBAC_TEST_USERS=\$\{CREATE_RBAC_TEST_USERS:-\}/);
   });
 
+  it('makes branch SDK homes the rich/full RBAC fixture default', () => {
+    const baseCompose = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
+    const richOverlay = fs.readFileSync(
+      path.join(REPO_ROOT, 'docker-compose.postgres.yml'),
+      'utf8'
+    );
+    expect(baseCompose).toMatch(/AGOR_SANDBOX_SDK_HOME_MODE=\$\{AGOR_SANDBOX_SDK_HOME_MODE:-\}/);
+    expect(richOverlay).toMatch(
+      /AGOR_SANDBOX_SDK_HOME_MODE=\$\{AGOR_SANDBOX_SDK_HOME_MODE:-per_branch\}/
+    );
+  });
+
   it('keeps persisted deployment secrets stable when switching postgres variants', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML);
     expect(env).not.toBeNull();

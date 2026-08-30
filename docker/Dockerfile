@@ -8,6 +8,45 @@
 # Or use docker-compose which automatically selects the right target
 
 # ============================================================================
+# Stage 0: Security-pinned bubblewrap
+# ============================================================================
+# Debian stable currently ships an older bubblewrap. Build the upstream 0.12
+# release because Agor needs both --bind-fd (TOCTOU-safe credential projection)
+# and the GHSA-pxhw-h44j-8pfx setup-path fix. Keep build tooling out of the
+# runtime image and verify the immutable release asset before compiling it.
+FROM node:22-slim AS bubblewrap-builder
+
+ARG BUBBLEWRAP_VERSION=0.12.0
+ARG BUBBLEWRAP_SHA256=9760d007363e3abba7c747489910f9f82d9fca53ba3bd3282e396fa3c97a3314
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  build-essential \
+  ca-certificates \
+  curl \
+  libcap-dev \
+  meson \
+  ninja-build \
+  pkg-config \
+  xz-utils \
+  && rm -rf /var/lib/apt/lists/* \
+  && curl -fsSL \
+    "https://github.com/containers/bubblewrap/releases/download/v${BUBBLEWRAP_VERSION}/bubblewrap-${BUBBLEWRAP_VERSION}.tar.xz" \
+    -o /tmp/bubblewrap.tar.xz \
+  && echo "${BUBBLEWRAP_SHA256}  /tmp/bubblewrap.tar.xz" | sha256sum -c - \
+  && mkdir /tmp/bubblewrap \
+  && tar -xJf /tmp/bubblewrap.tar.xz -C /tmp/bubblewrap --strip-components=1 \
+  && meson setup /tmp/bubblewrap/_build /tmp/bubblewrap \
+    --buildtype=release \
+    --prefix=/usr/local \
+    -Dbash_completion=disabled \
+    -Dman=disabled \
+    -Dselinux=disabled \
+    -Dtests=false \
+    -Dzsh_completion=disabled \
+  && meson compile -C /tmp/bubblewrap/_build \
+  && DESTDIR=/tmp/bubblewrap-install meson install -C /tmp/bubblewrap/_build
+
+# ============================================================================
 # Stage 1: Shared Base (dev and prod both use this)
 # ============================================================================
 FROM node:22-slim AS base
@@ -30,11 +69,15 @@ RUN apt-get update && apt-get install -y \
   tree \
   openssh-client \
   ripgrep \
-  bubblewrap \
+  libcap2 \
   util-linux \
   && rm -rf /var/lib/apt/lists/*
-# bubblewrap: filesystem-only executor sandbox. util-linux supplies the kernel
-# flock holder used by HA Codex credential mutations.
+COPY --from=bubblewrap-builder /tmp/bubblewrap-install/usr/local/bin/bwrap /usr/local/bin/bwrap
+RUN bwrap --version | grep -F 'bubblewrap 0.12.0' \
+  && bwrap --help | grep -F -- '--bind-fd'
+# bubblewrap: filesystem-only executor sandbox, pinned above to the minimum
+# secure release. util-linux supplies the kernel flock holder used by HA Codex
+# credential mutations.
 
 # Install Zellij (terminal multiplexer)
 # Pinned to v0.43.1 for reproducibility

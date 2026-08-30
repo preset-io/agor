@@ -560,7 +560,7 @@ describe('agor_boards_update realtime events', () => {
           entries: [],
           others: { preset: 'none', capabilities: [], fs_access: 'none' },
         },
-        session_sharing: { owner_rules: [] },
+        allow_shared_session_prompts: false,
       },
     };
     const patch = vi.fn(async (_id, data) => data);

@@ -18,15 +18,18 @@ vi.mock('../forms/BoardFormFields', () => ({
     capabilityPolicyEditor,
     allGroups,
     rbacEnabled,
+    canEditGeneral,
   }: {
     capabilityPolicyEditor?: React.ReactNode;
     allGroups?: Array<{ name: string }>;
     rbacEnabled?: boolean;
+    canEditGeneral?: boolean;
   }) => (
     <>
       <Form.Item name="name" label="Name" rules={[{ required: true }]}>
         <Input />
       </Form.Item>
+      <div data-testid="board-modal-can-edit-general" data-value={String(canEditGeneral)} />
       {capabilityPolicyEditor && (
         <div
           data-testid="board-modal-policy-editor"
@@ -69,7 +72,7 @@ const policy = {
       entries: [],
       others: { preset: 'collaborator', capabilities: ['branch.view'], fs_access: 'read' },
     },
-    session_sharing: { owner_rules: [] },
+    allow_shared_session_prompts: false,
   },
 } as BoardCapabilityPolicies;
 
@@ -95,7 +98,18 @@ function makeClient(metadataError: { code?: number; message?: string } = { code:
           };
         }
         if (name === 'workspace-preferences') {
-          return { find: vi.fn().mockResolvedValue({ personal_session_sharing_enabled: false }) };
+          return { find: vi.fn().mockResolvedValue({ session_sharing_enabled: false }) };
+        }
+        if (name === 'boards/:id/effective-access') {
+          return {
+            find: vi.fn().mockResolvedValue({
+              capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+              fs_access: 'none',
+              source: 'primary_owner',
+              group_ids: [],
+              is_primary_owner: true,
+            }),
+          };
         }
         return { findAll: vi.fn().mockResolvedValue([]) };
       },
@@ -126,6 +140,73 @@ describe('BoardEditModal', () => {
     expect(await screen.findByDisplayValue('Fresh name')).toBeInTheDocument();
     expect(screen.queryByTestId('board-modal-policy-editor')).not.toBeInTheDocument();
     expect(permissionsFind).not.toHaveBeenCalled();
+  });
+
+  it('defaults canEditGeneral to true when RBAC is disabled, without fetching effective-access', async () => {
+    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: false });
+    const { client } = makeClient();
+
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    await screen.findByDisplayValue('Fresh name');
+    expect(screen.getByTestId('board-modal-can-edit-general')).toHaveAttribute(
+      'data-value',
+      'true'
+    );
+  });
+
+  it('passes canEditGeneral=false through to BoardFormFields when the caller lacks board.edit', async () => {
+    const get = vi.fn().mockResolvedValue(freshBoard);
+    const client = {
+      service: (name: string) => {
+        if (name === 'boards') return { get };
+        if (name === 'boards/:id/permissions') {
+          return {
+            find: vi.fn().mockResolvedValue(policy),
+            patch: vi.fn().mockImplementation(async (_id: unknown, value: unknown) => value),
+          };
+        }
+        if (name === 'workspace-preferences') {
+          return { find: vi.fn().mockResolvedValue({ personal_session_sharing_enabled: false }) };
+        }
+        if (name === 'boards/:id/effective-access') {
+          return {
+            find: vi.fn().mockResolvedValue({
+              capabilities: ['board.view'],
+              fs_access: 'none',
+              source: 'others',
+              group_ids: [],
+              is_primary_owner: false,
+            }),
+          };
+        }
+        return { findAll: vi.fn().mockResolvedValue([]) };
+      },
+    } as unknown as AgorClient;
+
+    render(
+      <BoardEditModal
+        board={listedBoard}
+        client={client}
+        open
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+      />
+    );
+
+    await screen.findByDisplayValue('Fresh name');
+    expect(screen.getByTestId('board-modal-can-edit-general')).toHaveAttribute(
+      'data-value',
+      'false'
+    );
   });
 
   it('loads the latest board and normalized permission package before saving', async () => {
@@ -174,7 +255,18 @@ describe('BoardEditModal', () => {
           };
         }
         if (name === 'workspace-preferences') {
-          return { find: vi.fn().mockResolvedValue({ personal_session_sharing_enabled: false }) };
+          return { find: vi.fn().mockResolvedValue({ session_sharing_enabled: false }) };
+        }
+        if (name === 'boards/:id/effective-access') {
+          return {
+            find: vi.fn().mockResolvedValue({
+              capabilities: ['board.view', 'board.edit', 'board.attach_branch'],
+              fs_access: 'none',
+              source: 'primary_owner',
+              group_ids: [],
+              is_primary_owner: true,
+            }),
+          };
         }
         throw new Error(`Unexpected service: ${name}`);
       },

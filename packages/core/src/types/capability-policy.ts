@@ -3,6 +3,10 @@ import type { BoardID, GroupID, UserID, UUID } from './id';
 /** Canonical board/branch capability-policy contract. */
 export const CAPABILITY_POLICY_SCHEMA_VERSION = 1 as const;
 
+/** Durable workspace-preference identifiers used by shared-session policy. */
+export const CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE = 'workspace_preferences' as const;
+export const CAPABILITY_POLICY_SESSION_SHARING_KEY = 'session_sharing_enabled' as const;
+
 export type CapabilityPolicySchemaVersion = typeof CAPABILITY_POLICY_SCHEMA_VERSION;
 export type CapabilityPolicySharingMode = 'private' | 'shared';
 export type CapabilityPolicyBindingMode = 'inherit' | 'override';
@@ -20,6 +24,9 @@ export const BOARD_POLICY_CAPABILITIES = [
 export const BRANCH_POLICY_CAPABILITIES = [
   'branch.view',
   'sessions.create',
+  // Historical identifier retained in the persisted policy contract. It
+  // authorizes the caller's own Sessions and, when both sharing switches are
+  // enabled, another person's branch-home Session.
   'sessions.prompt_own',
   'sessions.manage_others',
   'branch.manage',
@@ -75,53 +82,34 @@ export interface BoardCapabilityPoliciesDraft {
   board_access_revision?: number;
   branch_template_revision?: number;
   board_access: CapabilityPolicyDraft;
-  /** Live access and personal-sharing defaults inherited by aligned branches. */
+  /** Live access and shared-session defaults inherited by aligned branches. */
   branch_template: BranchPermissionConfigDraft;
-}
-
-/**
- * One existing person or group allowed to prompt sessions owned by one user.
- *
- * This is a personal, owner-authored exception that can cross an
- * execution-home boundary. A rule may be part of a board's branch defaults,
- * but nobody may edit another session owner's rule on their behalf.
- */
-export interface BranchSessionSharingGrantDraft {
-  grant_id: UUID;
-  principal: CapabilityPolicyPrincipalRef;
-}
-
-export interface BranchSessionSharingOwnerRuleDraft {
-  session_owner_user_id: UserID;
-  enabled: boolean;
-  grantees: BranchSessionSharingGrantDraft[];
-}
-
-export interface BranchSessionSharingDraft {
-  owner_rules: BranchSessionSharingOwnerRuleDraft[];
 }
 
 /**
  * The complete configuration shared by board branch defaults and branch
  * overrides. Binding is deliberately outside this object: a branch either
- * inherits or replaces this entire value. Aggregate transport does not imply
- * aggregate mutation authority: each session owner may change only their own
- * sharing rule.
+ * inherits or replaces this entire value.
  */
 export interface BranchPermissionConfigDraft {
   access: CapabilityPolicyDraft;
-  session_sharing: BranchSessionSharingDraft;
+  /**
+   * Allow Collaborators and Managers to prompt another person's branch-home
+   * Session. The tenant workspace preference is an independent fail-closed
+   * gate. Execution-home Sessions are never shareable.
+   */
+  allow_shared_session_prompts: boolean;
 }
 
 /**
- * Tenant-level product gate for personal session sharing.
+ * Tenant-level product gate for shared session prompting.
  *
  * This deliberately lives outside a board or branch policy: a workspace
- * administrator can revoke the feature everywhere, while every personal rule
- * remains authored by its session owner.
+ * administrator can revoke the feature everywhere. Board and branch Managers
+ * may opt individual permission packages in only while this gate is enabled.
  */
 export interface CapabilityPolicyWorkspacePreferencesDraft {
-  personal_session_sharing_enabled: boolean;
+  session_sharing_enabled: boolean;
 }
 
 /** Persisted API names. Draft aliases remain for form state compatibility. */
@@ -131,9 +119,6 @@ export type CapabilityPolicyOthers = CapabilityPolicyOthersDraft;
 export type BoardCapabilityPolicies = BoardCapabilityPoliciesDraft;
 export type BranchPermissionConfig = BranchPermissionConfigDraft;
 export type BranchCapabilityPolicy = BranchCapabilityPolicyDraft;
-export type BranchSessionSharing = BranchSessionSharingDraft;
-export type BranchSessionSharingOwnerRule = BranchSessionSharingOwnerRuleDraft;
-export type BranchSessionSharingGrant = BranchSessionSharingGrantDraft;
 export type CapabilityPolicyWorkspacePreferences = CapabilityPolicyWorkspacePreferencesDraft;
 
 export type CapabilityPolicyAccessSource = 'primary_owner' | 'direct_user' | 'group' | 'others';
@@ -151,14 +136,13 @@ export interface SessionPromptAuthority {
   allowed: boolean;
   /** Identity/home that the executor must use when allowed. */
   execution_user_id?: UserID;
-  source: 'own_session' | 'personal_session_sharing' | 'denied';
-}
-
-export interface BranchSessionSharingValidationIssue {
-  code: 'duplicate_owner_rule' | 'disabled_rule_has_grantees' | 'duplicate_grantee' | 'self_grant';
-  message: string;
-  owner_user_id: UserID;
-  grant_id?: UUID;
+  source: 'own_session' | 'branch_session' | 'denied';
+  /** Stable reason used to render safe, actionable denials across transports. */
+  denial_reason?:
+    | 'branch_access_required'
+    | 'execution_home_sharing_disabled'
+    | 'workspace_session_sharing_disabled'
+    | 'branch_session_sharing_disabled';
 }
 
 export interface BranchCapabilityPolicyDraft {
@@ -437,60 +421,6 @@ export function validateCapabilityPolicyDraft(
         code: 'private_has_fallback',
         message: 'Private policies cannot grant fallback access.',
       });
-    }
-  }
-
-  return issues;
-}
-
-export function validateBranchSessionSharingDraft(
-  sharing: BranchSessionSharingDraft
-): BranchSessionSharingValidationIssue[] {
-  const issues: BranchSessionSharingValidationIssue[] = [];
-  const seenOwners = new Set<UserID>();
-
-  for (const rule of sharing.owner_rules) {
-    if (seenOwners.has(rule.session_owner_user_id)) {
-      issues.push({
-        code: 'duplicate_owner_rule',
-        owner_user_id: rule.session_owner_user_id,
-        message: 'Each session owner can have only one personal sharing rule per branch.',
-      });
-    }
-    seenOwners.add(rule.session_owner_user_id);
-
-    if (!rule.enabled && rule.grantees.length > 0) {
-      issues.push({
-        code: 'disabled_rule_has_grantees',
-        owner_user_id: rule.session_owner_user_id,
-        message: 'Turning personal session sharing off must remove its grantee entries.',
-      });
-    }
-
-    const seenGrantees = new Set<string>();
-    for (const grant of rule.grantees) {
-      const granteeKey = capabilityPolicyPrincipalKey(grant.principal);
-      if (seenGrantees.has(granteeKey)) {
-        issues.push({
-          code: 'duplicate_grantee',
-          owner_user_id: rule.session_owner_user_id,
-          grant_id: grant.grant_id,
-          message: 'Each person or group can appear only once in an owner’s sharing rule.',
-        });
-      }
-      seenGrantees.add(granteeKey);
-
-      if (
-        grant.principal.principal_type === 'user' &&
-        grant.principal.user_id === rule.session_owner_user_id
-      ) {
-        issues.push({
-          code: 'self_grant',
-          owner_user_id: rule.session_owner_user_id,
-          grant_id: grant.grant_id,
-          message: 'A session owner does not need to share their sessions with themselves.',
-        });
-      }
     }
   }
 

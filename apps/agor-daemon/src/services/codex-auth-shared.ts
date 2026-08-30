@@ -22,7 +22,11 @@ import {
   hasCrossReplicaExecutorCredentialLock,
   hasTenantSafeExecutorCredentialHome,
 } from '@agor/core/config';
-import { getCurrentTenantId, type TenantScopedDatabase } from '@agor/core/db';
+import {
+  getCurrentTenantId,
+  type TenantScopeAwareDatabase,
+  type TenantScopedDatabase,
+} from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type {
   AgenticAuthMethods,
@@ -40,6 +44,7 @@ import {
 
 export interface AppLike {
   get(name: 'config'): DeepReadonly<AgorConfig>;
+  get(name: 'db'): TenantScopeAwareDatabase;
   service(path: string): unknown;
 }
 

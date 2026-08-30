@@ -271,10 +271,12 @@ a copy of the current board template.
   maximum.
 - `Others` matches only active same-tenant members with no direct/group match.
 
-Personal session sharing is a tenant-gated, owner-authored part of the complete
-branch configuration. Shared prompts retain the owner's native conversation
-and home, but task attribution, managed env/connector credentials, private MCP
-visibility, and branch mounts use the actual caller. See
+Shared session prompting is tenant-gated and explicitly enabled in the complete
+board-default or branch-override configuration. It applies only to branch-home
+Sessions: the conversation and branch SDK state are shared, while task
+attribution, execution home, managed env/connector credentials, private MCP
+visibility, and branch mounts use the actual caller. Historical execution-home
+Sessions are never shareable. See
 [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md).
 
 ---

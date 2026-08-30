@@ -25,6 +25,7 @@ import type {
   BranchPermissionLevel,
   HookContext,
   Session,
+  SessionPromptAuthority,
   UUID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
@@ -38,9 +39,10 @@ import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js
  * owner. They may add an explicit Manager entry when ordinary policy-based
  * access is needed.
  *
- * Note: This does NOT grant automatic prompt access. Superadmins must
- * add explicit access for their own sessions, and foreign sessions still
- * require an owner-authored personal sharing grant.
+ * Note: This does NOT grant automatic prompt access. Superadmins must add
+ * explicit branch access. Foreign branch-home Sessions then follow the
+ * tenant and branch sharing switches; execution-home Sessions are never
+ * shareable.
  *
  * The allow_superadmin config flag gates this. When false, superadmins
  * are treated as regular admins (no branch RBAC bypass).
@@ -57,6 +59,38 @@ export function isSuperAdmin(role: string | undefined, allowSuperadmin = true): 
 export const PERMISSION_RANK: Record<BranchPermissionLevel, number> = Object.fromEntries(
   BRANCH_PERMISSION_LEVELS.map((level, i) => [level, i - 1])
 ) as Record<BranchPermissionLevel, number>;
+
+/**
+ * Render the canonical, transport-safe denial for prompting a session.
+ *
+ * Keep the compatibility explanation here so browser, API, MCP, scheduler,
+ * widgets, and gateways do not drift. We intentionally say "uses its owner's
+ * execution home" rather than "predates the feature": deployments may create
+ * new execution-home sessions by opting out with `sdk_home_mode: inherit`.
+ */
+export function sessionPromptDeniedMessage(
+  authority: Pick<SessionPromptAuthority, 'denial_reason'>
+): string {
+  switch (authority.denial_reason) {
+    case 'execution_home_sharing_disabled':
+      return (
+        "This session uses its owner's execution home and cannot be shared. Start a separate " +
+        'session you own, or start a new branch-home session on this branch.'
+      );
+    case 'workspace_session_sharing_disabled':
+      return 'Session sharing is disabled for this workspace. Start a separate session you own.';
+    case 'branch_session_sharing_disabled':
+      return (
+        'This branch does not allow shared session prompting. Ask a Branch Manager to enable it, ' +
+        'or start a separate session you own.'
+      );
+    default:
+      return (
+        "You don't have permission to prompt this branch. Only Collaborators and Managers can " +
+        'prompt sessions on it.'
+      );
+  }
+}
 
 const REQUEST_RBAC_CACHE_LIMIT = 32;
 
@@ -252,8 +286,9 @@ export function resolveBranchPermission(
 
 /**
  * Resolve the one prompt-level policy shared by hooks and custom routes.
- * Branch management never implies authority over another user's home: a
- * foreign session requires an owner-authored personal sharing grant.
+ * Branch-scoped sessions run as the caller and require Collaborator/Manager
+ * access plus both explicit sharing switches. Execution-home sessions are an
+ * immutable compatibility boundary and are never shareable.
  */
 export async function resolveSessionPromptAccess(input: {
   branchRepository: Pick<
@@ -267,14 +302,16 @@ export async function resolveSessionPromptAccess(input: {
   allowed: boolean;
   effectiveLevel: BranchPermissionLevel;
   executionUserId?: UUID;
-  source: 'own_session' | 'personal_session_sharing' | 'denied';
+  source: SessionPromptAuthority['source'];
+  denialReason?: SessionPromptAuthority['denial_reason'];
 }> {
   const [effectiveLevel, authority] = await Promise.all([
     input.branchRepository.resolveUserPermission(input.branch, input.userId),
     input.branchRepository.resolveSessionPromptAuthority(
       input.branch.branch_id,
       input.userId,
-      input.session.created_by as UUID
+      input.session.created_by as UUID,
+      input.session.sdk_home_scope
     ),
   ]);
   return {
@@ -282,6 +319,7 @@ export async function resolveSessionPromptAccess(input: {
     effectiveLevel,
     executionUserId: authority.execution_user_id as UUID | undefined,
     source: authority.source,
+    denialReason: authority.denial_reason,
   };
 }
 
@@ -1100,39 +1138,6 @@ export function ensureSessionImmutability() {
 }
 
 /**
- * Decide which `unix_username` to stamp on a child session created via
- * fork() or spawn(). Pure function — no DB, no context — so it can be unit
- * tested directly and kept aligned with {@link determineSpawnIdentity}.
- *
- * Rules:
- * - Personal Session sharing → inherit the parent execution-home key. The
- *   genealogy stays in the Session owner's home while Task credentials still
- *   resolve from the human prompter.
- * - Otherwise (including the common same-user path) → use the caller's CURRENT
- *   `unix_username`. We must NOT fall back to `parent.unix_username` just because
- *   caller and parent owner share an id: the user's unix_username may have drifted
- *   since the parent was created, and `validateSessionUnixUsername` would then
- *   reject every prompt on the child.
- *
- * @param parentUnixUsername  - `parent.unix_username` from the parent session (may be null)
- * @param callerUnixUsername  - Caller's CURRENT unix_username (loaded fresh via
- *                              {@link loadUnixUsernameForUser}); may be null
- * @param usesSharedHome      - Whether an owner-authored sharing grant permits
- *                              use of the parent Session owner's home
- * @returns The unix_username to stamp on the child (string or null)
- */
-export function resolveChildUnixUsername(
-  parentUnixUsername: string | null | undefined,
-  callerUnixUsername: string | null,
-  usesSharedHome: boolean
-): string | null {
-  if (usesSharedHome) {
-    return parentUnixUsername ?? null;
-  }
-  return callerUnixUsername;
-}
-
-/**
  * Load a user's current `unix_username` by user id.
  *
  * Single source of truth used by both the `setSessionUnixUsername` hook
@@ -1263,7 +1268,7 @@ export async function assertSessionUnixIdentityUnchanged(
 }
 
 /**
- * Validate session unix_username before prompting
+ * Validate an execution-home Session's unix_username before prompting.
  *
  * DEFENSIVE CHECK: Before allowing operations that execute code (create tasks/messages),
  * verify that the session creator's current unix_username matches the session's stamped unix_username.
@@ -1310,6 +1315,11 @@ export function validateSessionUnixUsername(
       return context;
     }
 
+    // Branch-scoped Sessions use the current prompt actor's home key and the
+    // branch-owned SDK state. The creator's historical stamp is intentionally
+    // irrelevant, just as it is at executor startup.
+    if ((session.sdk_home_scope ?? 'execution_home') === 'branch') return context;
+
     await assertSessionUnixIdentityUnchanged(session, (userId) => userRepo.findById(userId));
 
     return context;
@@ -1322,8 +1332,8 @@ export function validateSessionUnixUsername(
  * Standalone helper (not a Feathers hook) — usable from MCP tools, service hooks, or anywhere
  * with access to the app and branch repository. Resolves branch ownership internally.
  *
- * Respects the 'session' tier: users with 'session' permission can prompt their own sessions
- * but not sessions created by other users.
+ * Respects Session scope and both sharing switches. Foreign execution-home
+ * Sessions are always denied.
  *
  * Use case: validating callback targets ("can this user queue a prompt to that session?").
  *
@@ -1359,12 +1369,12 @@ export async function ensureCanPromptTargetSession(
   const authority = await branchRepo.resolveSessionPromptAuthority(
     branch.branch_id,
     userId as UUID,
-    targetSession.created_by as UUID
+    targetSession.created_by as UUID,
+    targetSession.sdk_home_scope
   );
   if (authority.allowed) return targetSession;
   throw new Forbidden(
-    `Cannot prompt session ${shortId(targetSession.session_id)}. You need Collaborator access, ` +
-      `and the session owner must explicitly share their sessions with you.`
+    `Cannot prompt session ${shortId(targetSession.session_id)}. ${sessionPromptDeniedMessage(authority)}`
   );
 }
 
@@ -1442,14 +1452,11 @@ export function ensureCanPromptInSession(options?: {
     const authority = await options.branchRepository.resolveSessionPromptAuthority(
       branch.branch_id,
       userId,
-      session.created_by as UUID
+      session.created_by as UUID,
+      session.sdk_home_scope
     );
     if (authority.allowed) return context;
-    throw new Forbidden(
-      session.created_by === userId
-        ? 'Collaborator access is required to prompt this session.'
-        : 'The session owner has not shared their sessions with you.'
-    );
+    throw new Forbidden(sessionPromptDeniedMessage(authority));
   };
 }
 
@@ -1856,52 +1863,45 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
  * fork (sessions service: spawn() / fork(), or MCP tools agor_sessions_spawn /
  * agor_sessions_prompt(mode:"fork"|"subsession")).
  *
- * A cross-user child is legal only after an owner-authored personal session
- * sharing grant. It remains attributed to the parent Session owner so a
- * genealogy never crosses execution homes. The Task records the human caller.
+ * A cross-user child can only come from a branch-home Session and is attributed
+ * to the caller. Historical execution-home Sessions are never shareable.
  *
  * Pure function — no DB, no FeathersJS context — so it can be unit tested
  * directly and invoked from both service methods and MCP tool handlers.
  *
  * @param parent  - Parent session (must include created_by)
  * @param caller  - Authenticated caller (MCP-authenticated user / Feathers user)
- * @param sharing - Resolved, owner-authored session sharing decision
+ * @param sharing - Resolved branch-session sharing decision
  * @returns The created_by UUID to stamp on the child session
  */
 export function determineSpawnIdentity(
   parent: { created_by: string },
   caller: { user_id?: string; role?: string; _isServiceAccount?: boolean },
-  sharing: { branch_id: string; share_owner_home: boolean } | undefined
-): { created_by: string; usesSharedHome: boolean } {
+  sharing: { allow_caller_identity?: boolean } | undefined
+): { created_by: string } {
   const callerId = caller.user_id;
 
   // Service accounts (executor, internal jobs) preserve parent attribution.
   // They have no human user_id to attribute to, and their callers (the
   // scheduler, callbacks) already ran their own RBAC checks.
   if (caller._isServiceAccount) {
-    return { created_by: parent.created_by, usesSharedHome: false };
+    return { created_by: parent.created_by };
   }
 
   // Same user spawning their own session → attribute to caller (same value
   // as parent.created_by, but explicit).
   if (callerId && parent.created_by === callerId) {
-    return { created_by: callerId, usesSharedHome: false };
+    return { created_by: callerId };
   }
 
-  if (callerId && sharing?.share_owner_home === true) {
-    console.warn('[SECURITY] personal_session_sharing', {
-      event: 'personal_session_sharing',
-      caller_id: callerId ?? null,
-      session_owner_id: parent.created_by,
-      branch_id: sharing.branch_id,
-    });
-    return { created_by: parent.created_by, usesSharedHome: true };
+  if (callerId && sharing?.allow_caller_identity === true) {
+    return { created_by: callerId };
   }
 
   if (!callerId) {
     throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
   }
-  throw new Forbidden('The session owner has not shared their sessions with you.');
+  throw new Forbidden('This branch does not allow shared session prompting.');
 }
 
 // ============================================================================

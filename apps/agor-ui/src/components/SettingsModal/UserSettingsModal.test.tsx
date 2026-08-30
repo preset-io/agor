@@ -175,6 +175,60 @@ function makeUser(overrides: Partial<User> = {}): User {
 const ASYNC = { timeout: 10_000 };
 
 describe('UserSettingsModal', { timeout: 60_000 }, () => {
+  it('keeps deferred resume distinct from destructive restart', async () => {
+    const onReopenOnboarding = vi.fn(async () => undefined);
+    const user = makeUser({
+      onboarding_completed: false,
+      preferences: {
+        onboarding: {
+          boardId: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+          deferredAt: '2026-08-29T12:00:00.000Z',
+        },
+      },
+    });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+        onReopenOnboarding={onReopenOnboarding}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Resume onboarding' })).toBeInTheDocument();
+    expect(screen.getByText(/from your saved progress/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Restart from beginning' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume onboarding' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume' }));
+    await waitFor(() =>
+      expect(onReopenOnboarding).toHaveBeenCalledWith('resume', expect.any(Function))
+    );
+  });
+
+  it('offers a from-scratch restart when onboarding is not deferred', () => {
+    const user = makeUser({ onboarding_completed: true });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+        onReopenOnboarding={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Restart onboarding' })).toBeInTheDocument();
+    expect(screen.getByText(/from the beginning/i)).toBeInTheDocument();
+  });
+
   it('fails closed when an admin opens a superadmin settings modal', () => {
     const currentAdmin = makeUser({
       user_id: 'admin-1',

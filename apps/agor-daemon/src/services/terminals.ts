@@ -397,6 +397,11 @@ export class TerminalsService {
             user_id: userId,
             branch_id: branch.branch_id,
             branch_fs_access: principalBranchAccess,
+            // Interactive shells are deliberately excluded from shared SDK
+            // homes: native login commands could persist caller credentials
+            // into branch-owned state. Delegated launchers receive the same
+            // fail-closed empty value.
+            branch_sdk_home: '',
           },
           onExit: () => this.handleExecutorExit(terminalId, userId),
         }

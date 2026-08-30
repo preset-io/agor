@@ -239,17 +239,22 @@ WHERE bg.`can`<>'none' AND COALESCE(json_extract(b.`data`, '$.access_mode'), 'sh
 -- Explicit branch packages. A branch that formerly used board permissions is
 -- materialized only when branch-specific authority or a distinct board owner
 -- must be preserved; its package starts as an exact copy of the board template.
+-- A branch may carry a stale permission_source='board' while its board_id is
+-- NULL or dangling (the board was deleted). The board_config LEFT JOIN is then
+-- unmatched, so inheriting its others_role/others_fs_access would insert NULL
+-- into NOT NULL columns. Guard every board-inheritance branch on a resolved
+-- board_config and otherwise fall back to the branch's own others_can/fs.
 INSERT INTO `branch_permission_configs`
 SELECT lower(hex(randomblob(4)))||'-'||lower(hex(randomblob(2)))||'-7'||substr(lower(hex(randomblob(2))),2)||'-8'||substr(lower(hex(randomblob(2))),2)||'-'||lower(hex(randomblob(6))),
   NULL, br.`branch_id`, 1,
-  CASE WHEN br.`permission_source`='board' THEN 'shared'
+  CASE WHEN br.`permission_source`='board' AND board_config.`config_id` IS NOT NULL THEN 'shared'
        WHEN COALESCE(br.`others_can`,'session')<>'none'
          OR EXISTS (SELECT 1 FROM `branch_owners` bo WHERE bo.`branch_id`=br.`branch_id` AND bo.`user_id`<>br.`primary_owner_user_id`)
          OR EXISTS (SELECT 1 FROM `branch_group_grants` bg WHERE bg.`branch_id`=br.`branch_id` AND bg.`can`<>'none')
        THEN 'shared' ELSE 'private' END,
-  CASE WHEN br.`permission_source`='board' THEN board_config.`others_role`
+  CASE WHEN br.`permission_source`='board' AND board_config.`config_id` IS NOT NULL THEN board_config.`others_role`
        ELSE CASE COALESCE(br.`others_can`,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
-  CASE WHEN br.`permission_source`='board' THEN board_config.`others_fs_access`
+  CASE WHEN br.`permission_source`='board' AND board_config.`config_id` IS NOT NULL THEN board_config.`others_fs_access`
        WHEN COALESCE(br.`others_can`,'session')='none' THEN 'none' ELSE COALESCE(br.`others_fs_access`,'read') END,
   1, br.`primary_owner_user_id`, COALESCE(br.`created_at`, unixepoch()*1000), COALESCE(br.`updated_at`, br.`created_at`, unixepoch()*1000)
 FROM `branches` br

@@ -394,6 +394,14 @@ function parseOptionalPortEnvironmentValue(
   return port;
 }
 
+function parseOptionalSdkHomeModeEnvironmentValue(
+  value: string | undefined
+): 'inherit' | 'per_branch' | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (value === 'inherit' || value === 'per_branch') return value;
+  throw new Error('Config error: AGOR_SANDBOX_SDK_HOME_MODE must be one of: inherit, per_branch');
+}
+
 /**
  * Policy for config keys the daemon does not recognize.
  *
@@ -856,6 +864,7 @@ function validateConfig(config: AgorConfig): void {
     'protect_secrets',
     'isolate_branches',
     'home_mode',
+    'sdk_home_mode',
     'preserve_canonical_home_alias',
     'extra_allow_write',
     'extra_deny_read',
@@ -1472,6 +1481,7 @@ export function resolveEffectiveConfig(
     env.AGOR_SANDBOX_HOME_MODE === 'per_user' || env.AGOR_SANDBOX_HOME_MODE === 'shared'
       ? env.AGOR_SANDBOX_HOME_MODE
       : undefined;
+  const envSdkHomeMode = parseOptionalSdkHomeModeEnvironmentValue(env.AGOR_SANDBOX_SDK_HOME_MODE);
   let resolvedSandbox = config.execution?.sandbox;
   if (sandboxIsolation) {
     resolvedSandbox = {
@@ -1487,6 +1497,13 @@ export function resolveEffectiveConfig(
       ...(envSandboxEnabled ? { enabled: true } : {}),
       ...(envHomeMode ? { home_mode: envHomeMode } : {}),
     };
+  }
+  // SDK-home relocation is an independent rollout control: setting it must
+  // not implicitly enable or weaken the filesystem sandbox. The rich/full
+  // development profile opts in explicitly, while ordinary deployments keep
+  // the legacy-safe `inherit` default when neither YAML nor env names a mode.
+  if (envSdkHomeMode) {
+    resolvedSandbox = { ...resolvedSandbox, sdk_home_mode: envSdkHomeMode };
   }
   const resolvedExecutorResponse =
     defaults.execution?.executor_response ||
@@ -2275,6 +2292,43 @@ export function getBranchesDir(tenantId?: string): string {
  */
 export function getBranchPath(repoSlug: string, branchName: string, tenantId?: string): string {
   return path.join(getBranchesDir(tenantId), repoSlug, branchName);
+}
+
+/**
+ * Get the on-disk root for per-branch SDK homes.
+ *
+ * Returns: $AGOR_DATA_HOME/branch-homes
+ *
+ * A sibling of `worktrees/` and `homes/` (see {@link getBranchesDir},
+ * `resolveOwnerHomeStore`). Purely additive — nothing existing moves. Inherits
+ * filesystem-multitenancy isolation via {@link getTenantDataRoot}. See design
+ * §6.2.
+ *
+ * @returns Absolute path to the branch-homes root
+ */
+export function getBranchHomesDir(tenantId?: string): string {
+  return path.join(getTenantDataRoot(tenantId), 'branch-homes');
+}
+
+/**
+ * Get the per-branch SDK home path for a specific branch.
+ *
+ * Returns: $AGOR_DATA_HOME/branch-homes/<branchId>
+ *
+ * Keyed by the immutable `branchId` — NOT the branch name — because names are
+ * mutable and non-unique across repos. This is the single resolver that derives
+ * the path from the branch id, so the on-disk location cannot drift or be
+ * injected (the branch record only stores a boolean/enum intent, never a path;
+ * see design §9.2).
+ *
+ * @param branchId - The branch's immutable id
+ * @returns Absolute path to the branch's SDK home
+ */
+export function getBranchHomePath(branchId: string, tenantId?: string): string {
+  if (!branchId || branchId.includes('/') || branchId.includes('..')) {
+    throw new Error(`Invalid branchId for SDK home path: ${JSON.stringify(branchId)}`);
+  }
+  return path.join(getBranchHomesDir(tenantId), branchId);
 }
 
 /**

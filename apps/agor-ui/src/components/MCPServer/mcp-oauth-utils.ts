@@ -217,6 +217,14 @@ export function buildAuthFromValues(
     forPatch?: boolean;
   } = {}
 ): BuiltAuth | MCPAuthPatch | null | undefined {
+  // Authentication belongs to remote HTTP/SSE transports. A stale hidden
+  // auth_type can remain in the form after switching transports, and sending
+  // it would either create an invalid stdio row or prevent an existing legacy
+  // row from repairing itself on edit.
+  if (values.transport === 'stdio') {
+    return options.forPatch ? null : undefined;
+  }
+
   const authType = values.auth_type;
   if (authType !== 'bearer' && authType !== 'jwt' && authType !== 'oauth') {
     return options.forPatch ? null : undefined;

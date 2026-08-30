@@ -4,7 +4,7 @@ import { Alert, App, Button, Card, Flex, Skeleton, Switch, Typography, theme } f
 import { useEffect, useState } from 'react';
 
 const DEFAULT_PREFERENCES: CapabilityPolicyWorkspacePreferences = {
-  personal_session_sharing_enabled: false,
+  session_sharing_enabled: false,
 };
 
 export interface WorkspacePreferencesTabProps {
@@ -57,7 +57,7 @@ export const WorkspacePreferencesTab: React.FC<WorkspacePreferencesTabProps> = (
     };
   }, [client]);
 
-  const dirty = value.personal_session_sharing_enabled !== saved.personal_session_sharing_enabled;
+  const dirty = value.session_sharing_enabled !== saved.session_sharing_enabled;
 
   const save = async () => {
     if (!client || !isAdmin) return;
@@ -95,17 +95,15 @@ export const WorkspacePreferencesTab: React.FC<WorkspacePreferencesTabProps> = (
             <Flex vertical gap={token.paddingXXS} style={{ flex: 1, minWidth: 240 }}>
               <Typography.Text strong>Session sharing</Typography.Text>
               <Typography.Text type="secondary">
-                Allow people to share their own sessions and Agor home with trusted workspace
-                members. Off disables every board and branch sharing rule.
+                Let Board and Branch Managers allow collaborators to continue one another’s
+                branch-home sessions. Off disables and clears every board and branch opt-in.
               </Typography.Text>
             </Flex>
             <Switch
-              checked={value.personal_session_sharing_enabled}
+              checked={value.session_sharing_enabled}
               disabled={!isAdmin}
-              aria-label="Allow personal session sharing in this workspace"
-              onChange={(personal_session_sharing_enabled) =>
-                setValue({ personal_session_sharing_enabled })
-              }
+              aria-label="Allow session sharing in this workspace"
+              onChange={(session_sharing_enabled) => setValue({ session_sharing_enabled })}
             />
           </Flex>
           {!isAdmin && (

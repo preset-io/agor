@@ -24,6 +24,7 @@ vi.mock('../../store/agorStore', () => ({
     selector({
       mcpServerById: new Map(),
       userById: new Map(),
+      agenticToolSettingsByName: new Map(),
     }),
 }));
 

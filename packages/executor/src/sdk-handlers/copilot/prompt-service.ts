@@ -305,14 +305,24 @@ export class CopilotPromptService {
 
     console.log(`   Working directory: ${branch.path}`);
 
-    // Create CopilotClient (spawns CLI process)
+    // Create CopilotClient (spawns CLI process).
+    //
+    // `CopilotClientOptions.env` REPLACES the spawned CLI's environment wholesale
+    // (it is not merged). On the pinned @github/copilot-sdk 0.2.2 there is no
+    // `baseDirectory` option, so this is the reachable route for a per-branch SDK
+    // home (design §8A.8): forward COPILOT_HOME / COPILOT_CACHE_HOME from the
+    // daemon-injected process env so the bundled CLI relocates its config/state
+    // and cache into the branch home. Absent (feature off) ⇒ CLI default home,
+    // i.e. today's behavior. Neither var is on the env blocklist (only HOME is).
     const Copilot = await loadManagedAgenticToolSdk<typeof CopilotSdk>('copilot');
+    const copilotEnv: Record<string, string> = { HOME: process.env.HOME || '' };
+    if (process.env.COPILOT_HOME) copilotEnv.COPILOT_HOME = process.env.COPILOT_HOME;
+    if (process.env.COPILOT_CACHE_HOME)
+      copilotEnv.COPILOT_CACHE_HOME = process.env.COPILOT_CACHE_HOME;
     this.client = new Copilot.CopilotClient({
       useStdio: true,
       githubToken: this.apiKey || undefined,
-      env: {
-        HOME: process.env.HOME || '',
-      },
+      env: copilotEnv,
     });
 
     try {

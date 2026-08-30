@@ -53,7 +53,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, sessionContextRequiredResult, textResult } from '../server.js';
-import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
+import { runWithMcpTenantDatabaseScope, runWithMcpTenantDatabaseWrite } from '../tenant-scope.js';
 import { assertValidVariant } from './_environment-helpers.js';
 
 const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
@@ -969,25 +969,35 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const storageMode = args.storage_mode as 'worktree' | 'clone' | undefined;
       const cloneDepth = typeof args.clone_depth === 'number' ? args.clone_depth : undefined;
 
-      const branch = await reposService.createBranch(
-        repoId,
-        {
-          name: branchName,
-          ref,
-          createBranch,
-          refType,
-          ...(pullLatest !== undefined ? { pullLatest } : {}),
-          ...(sourceBranch ? { sourceBranch } : {}),
-          ...(issueUrl ? { issue_url: issueUrl } : {}),
-          ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
-          boardId,
-          ...(zoneId ? { zoneId } : {}),
-          ...(variant ? { environment_variant: variant } : {}),
-          ...(storageMode ? { storage_mode: storageMode } : {}),
-          ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
-          ...(teammateConfig ? { custom_context: { teammate: teammateConfig } } : {}),
-        },
-        ctx.baseServiceParams
+      // `createBranch` is deliberately NOT a Feathers transport method (it takes
+      // `(id, data)`), so this direct call bypasses the around hooks that enter
+      // the tenant database scope for the HTTP `/repos/:id/branches` route. In
+      // `required_from_auth` mode the guarded daemon-database proxy then throws
+      // `MissingTenantDatabaseScopeError` on the first `this.db` touch. Re-enter
+      // the authenticated tenant scope here so the metadata writes join one
+      // tenant transaction — exactly like the HTTP route — while the readiness
+      // wait below stays outside it and never holds a transaction across polls.
+      const branch = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        reposService.createBranch(
+          repoId,
+          {
+            name: branchName,
+            ref,
+            createBranch,
+            refType,
+            ...(pullLatest !== undefined ? { pullLatest } : {}),
+            ...(sourceBranch ? { sourceBranch } : {}),
+            ...(issueUrl ? { issue_url: issueUrl } : {}),
+            ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
+            boardId,
+            ...(zoneId ? { zoneId } : {}),
+            ...(variant ? { environment_variant: variant } : {}),
+            ...(storageMode ? { storage_mode: storageMode } : {}),
+            ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
+            ...(teammateConfig ? { custom_context: { teammate: teammateConfig } } : {}),
+          },
+          ctx.baseServiceParams
+        )
       );
 
       const readinessResult = args.waitForReady
@@ -1206,7 +1216,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_permissions_update',
     {
       description:
-        'Replace a branch permission package, including its inherit/override binding and personal session sharing rules. ' +
+        'Replace a branch permission package, including its inherit/override binding and shared-session switch. ' +
         'Read the current revision with agor_branches_get first. Primary ownership is immutable.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
@@ -1322,9 +1332,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       };
 
       if (zoneId === null) {
-        const boardObject = await boardObjectsService.findByBranchId(
-          branchId as BranchID,
-          ctx.baseServiceParams
+        // findByBranchId is a custom (non-transport) method on the board-objects
+        // service and reads `this.db` directly without an internal scope helper,
+        // so enter the tenant DB scope for this read (the surrounding patch/create
+        // are transport methods that enter it via their own hooks).
+        const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
+          boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams)
         );
         if (!boardObject) {
           return textResult({
@@ -1365,7 +1378,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const { x: relativeX, y: relativeY } = computeZoneRelativePosition(zone as ZoneBoardObject);
 
       let boardObject: import('@agor/core/types').BoardEntityObject | null =
-        await boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams);
+        await runWithMcpTenantDatabaseScope(ctx, () =>
+          boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams)
+        );
 
       if (!boardObject) {
         // Create new board object
