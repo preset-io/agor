@@ -224,6 +224,12 @@ All of this is changeable at any point. You don't have to start a new session to
 
 _Session Settings modal: model, effort, permissions, MCP, env vars, callbacks, all editable mid-session for supported runtimes._
 
+For OpenCode, reasoning effort is an exact provider/model capability rather than a tool-wide
+default. The selector shows the native effort names known for the chosen model. An empty list means
+the runtime exposes no compatible explicit effort, so leave the field inherited; models entered
+manually without known metadata are validated against the session owner's live, branch-scoped
+OpenCode configuration before any prompt is submitted.
+
 Forks and spawned children copy selection names for continuity, never stored values. Each child
 resolves the copied names against its attributed owner. When a collaborator forks or spawns from a
 shared branch-scoped session, the child is attributed to that collaborator, so a copied name cannot

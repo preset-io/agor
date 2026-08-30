@@ -1,5 +1,9 @@
 import type { AgorClient } from '@agor/core/client';
-import type { OpenCodeModelCatalog } from '@agor/core/types';
+import type {
+  EffortLevel,
+  OpenCodeModelCatalog,
+  OpenCodeProviderDiscovery,
+} from '@agor/core/types';
 import {
   InfoCircleOutlined,
   ReloadOutlined,
@@ -24,6 +28,11 @@ export interface OpenCodeModelSelectorProps {
   onChange?: (config: OpenCodeModelConfig | undefined) => void;
   /** Fired for an explicit catalog or exact-ID selection, never an automatic suggestion. */
   onCommit?: (config: OpenCodeModelConfig) => void;
+  onReasoningEffortLevelsChange?: (availability: {
+    provider: string;
+    model: string;
+    levels: readonly EffortLevel[] | undefined;
+  }) => void;
   client?: AgorClient | null;
   branchId?: string;
   /**
@@ -206,6 +215,7 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   value,
   onChange,
   onCommit,
+  onReasoningEffortLevelsChange,
   client,
   branchId,
   catalogEnabled = true,
@@ -216,6 +226,9 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
   const [model, setModel] = useState(value?.model ?? '');
   const [manualOpen, setManualOpen] = useState(!catalogEnabled && !compact);
   const [compactManualOpen, setCompactManualOpen] = useState(false);
+  const [liveEffortLevels, setLiveEffortLevels] = useState<
+    Map<string, readonly EffortLevel[]> | undefined
+  >();
   const appliedSuggestionRef = useRef<string | null>(null);
   const { catalog, availabilityResolved, loading, refreshFailed, refresh } =
     useOpenCodeModelCatalog({ client, catalogEnabled });
@@ -229,6 +242,31 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     if (!catalogEnabled) setManualOpen(!compact);
   }, [catalogEnabled, compact]);
 
+  useEffect(() => {
+    setLiveEffortLevels(undefined);
+    if (!client || !catalogEnabled || !branchId) return;
+    let cancelled = false;
+    void client
+      .service('opencode-auth')
+      .find({ query: { branch_id: branchId } })
+      .then((configuration: OpenCodeProviderDiscovery) => {
+        if (cancelled || configuration.runtime !== 'available') return;
+        const levels = new Map<string, readonly EffortLevel[]>();
+        for (const entry of configuration.providers) {
+          for (const candidate of entry.models) {
+            if (candidate.reasoningEffortLevels !== undefined) {
+              levels.set(modelPairValue(entry.id, candidate.id), candidate.reasoningEffortLevels);
+            }
+          }
+        }
+        setLiveEffortLevels(levels);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [branchId, catalogEnabled, client]);
+
   const storedCatalogState = useMemo<StoredCatalogState>(() => {
     if (!value || !catalog) return 'unknown';
     const storedProvider = catalog.providers.find((entry) => entry.id === value.provider);
@@ -238,6 +276,24 @@ export const OpenCodeModelSelector: React.FC<OpenCodeModelSelectorProps> = ({
     if (!availabilityResolved) return 'unknown';
     return storedProvider.availableForSelection ? 'available' : 'unavailable';
   }, [availabilityResolved, catalog, value]);
+
+  const selectedReasoningEffortLevels = useMemo(() => {
+    if (!catalogEnabled || !provider || !model) return undefined;
+    const liveLevels = liveEffortLevels?.get(modelPairValue(provider, model));
+    if (liveLevels !== undefined) return liveLevels;
+    return catalog?.providers
+      .find((entry) => entry.id === provider)
+      ?.models.find((candidate) => candidate.id === model)?.reasoningEffortLevels;
+  }, [catalog, catalogEnabled, liveEffortLevels, model, provider]);
+
+  useEffect(() => {
+    if (!provider || !model) return;
+    onReasoningEffortLevelsChange?.({
+      provider,
+      model,
+      levels: selectedReasoningEffortLevels,
+    });
+  }, [model, onReasoningEffortLevelsChange, provider, selectedReasoningEffortLevels]);
 
   useEffect(() => {
     if (

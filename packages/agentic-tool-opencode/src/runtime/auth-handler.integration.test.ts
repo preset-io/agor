@@ -191,6 +191,10 @@ describe('opencode.auth executor command', () => {
                 name: 'GPT Next',
                 status: 'active',
                 options: { apiKey: 'must-not-cross' },
+                variants: {
+                  high: { apiKey: 'must-not-cross' },
+                  minimal: { apiKey: 'must-not-cross' },
+                },
               },
             },
           },
@@ -237,7 +241,14 @@ describe('opencode.auth executor command', () => {
             credentialPresence: 'present',
             authMethods: [],
             suggestedModel: 'gpt-next',
-            models: [{ id: 'gpt-next', name: 'GPT Next', status: 'active' }],
+            models: [
+              {
+                id: 'gpt-next',
+                name: 'GPT Next',
+                status: 'active',
+                reasoningEffortLevels: ['high'],
+              },
+            ],
           },
         ],
       },

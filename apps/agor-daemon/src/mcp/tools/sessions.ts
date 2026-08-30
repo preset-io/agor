@@ -1,3 +1,4 @@
+import { createOpenCodeKnownModelCatalog, OPENCODE_VERSION } from '@agor/agentic-tool-opencode';
 import { AGENTIC_TOOL_CAPABILITIES } from '@agor/agentic-tools';
 import {
   BranchRepository,
@@ -96,7 +97,9 @@ const modelConfigObjectSchema = z.object({
   effort: z
     .enum(['low', 'medium', 'high', 'xhigh', 'max'])
     .optional()
-    .describe('Reasoning effort level (default: high)'),
+    .describe(
+      'Reasoning effort override. For OpenCode, omit it to inherit the selected model/runtime default and use agor_models_list to inspect exact-pair support.'
+    ),
   advisorModel: mcpOptionalString(
     'modelConfig.advisorModel',
     "Claude Code advisor model override (e.g. 'opus', 'sonnet', 'fable', or a full model ID)."
@@ -1705,9 +1708,30 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           .enum(AGENTIC_TOOL_NAMES)
           .optional()
           .describe('Filter to a single agentic tool. Omit to return all tools.'),
+        branchId: mcpOptionalId(
+          'branchId',
+          'Branch',
+          'Optional branch scope for authoritative live OpenCode provider/model effort discovery.'
+        ),
       }),
     },
     async (args) => {
+      let openCodeCatalog = null;
+      if (args.agenticTool === undefined || args.agenticTool === 'opencode') {
+        try {
+          openCodeCatalog = args.branchId
+            ? await ctx.app.service('/opencode-auth').find({
+                ...ctx.baseServiceParams,
+                query: { branch_id: await resolveBranchId(ctx, args.branchId) },
+              })
+            : await ctx.app.service('/opencode-models').find(ctx.baseServiceParams);
+        } catch {
+          openCodeCatalog = {
+            runtimeVersion: OPENCODE_VERSION,
+            ...createOpenCodeKnownModelCatalog(null),
+          };
+        }
+      }
       const claudeModels = AVAILABLE_CLAUDE_MODEL_ALIASES.map((m) => ({
         id: m.id,
         displayName: m.displayName,
@@ -1757,9 +1781,20 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           note: 'Gemini models are normally fetched live from the Google API per-user. This is the static fallback list — newer models may exist.',
         },
         opencode: {
-          default: null,
-          models: [],
-          note: 'OpenCode models are provider-specific and are discovered after selecting a provider. Pass both modelConfig.provider and modelConfig.model from the OpenCode provider catalog.',
+          default: openCodeCatalog?.suggestedSelection ?? null,
+          runtimeVersion: openCodeCatalog?.runtimeVersion ?? OPENCODE_VERSION,
+          providers: openCodeCatalog?.providers ?? [],
+          models:
+            openCodeCatalog?.providers.flatMap((provider) =>
+              provider.models.map((model) => ({
+                provider: provider.id,
+                id: model.id,
+                displayName: model.name,
+                status: model.status,
+                reasoningEffortLevels: model.reasoningEffortLevels,
+              }))
+            ) ?? [],
+          note: 'OpenCode requires an exact provider/model pair. reasoningEffortLevels is model-specific: [] means omit modelConfig.effort, while a missing field means the value is unknown and will be validated at runtime. Live session-owner and branch configuration remains authoritative.',
         },
         copilot: {
           default: DEFAULT_COPILOT_MODEL,
@@ -1779,7 +1814,7 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
         },
       } satisfies Record<
         AgenticToolName,
-        { default: string | null; models: unknown[]; note: string }
+        { default: unknown; models: unknown[]; note: string; [key: string]: unknown }
       >;
 
       if (args.agenticTool) {

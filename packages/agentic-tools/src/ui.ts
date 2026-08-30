@@ -1,6 +1,6 @@
 import { OPENCODE_UI_CONTRIBUTION } from '@agor/agentic-tool-opencode/ui';
 import type { AgorClient } from '@agor/core/client';
-import type { AgenticToolName, PermissionMode } from '@agor/core/types';
+import type { AgenticToolName, EffortLevel, PermissionMode } from '@agor/core/types';
 import type { ComponentType, ReactNode } from 'react';
 
 export interface AgenticToolModelSelection {
@@ -13,6 +13,12 @@ export interface AgenticToolModelSelectorProps {
   onChange?: (config: AgenticToolModelSelection | undefined) => void;
   /** Fired only when the user finishes selecting a provider/model pair. */
   onCommit?: (config: AgenticToolModelSelection) => void;
+  /** Reports advisory model-level effort support; undefined means runtime-validated. */
+  onReasoningEffortLevelsChange?: (availability: {
+    provider: string;
+    model: string;
+    levels: readonly EffortLevel[] | undefined;
+  }) => void;
   client?: AgorClient | null;
   branchId?: string;
   catalogEnabled?: boolean;

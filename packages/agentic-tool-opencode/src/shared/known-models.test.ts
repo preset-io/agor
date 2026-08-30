@@ -92,4 +92,28 @@ describe('OpenCode known model catalog', () => {
       ]),
     });
   });
+
+  it('pins OpenCode Go model effort metadata to the packaged runtime', () => {
+    const disconnected = createOpenCodeKnownModelCatalog(new Set());
+    const configured = createOpenCodeKnownModelCatalog(new Set(['opencode-go']));
+    const provider = configured.providers.find(({ id }) => id === 'opencode-go');
+
+    expect(disconnected.providers.find(({ id }) => id === 'opencode-go')).toMatchObject({
+      availableForSelection: false,
+    });
+    expect(configured.suggestedSelection).toEqual({
+      providerId: 'opencode-go',
+      modelId: 'gpt-5.6-luna',
+    });
+    expect(provider?.models).toHaveLength(25);
+    expect(provider?.models.find(({ id }) => id === 'gpt-5.6-luna')).toMatchObject({
+      reasoningEffortLevels: ['low', 'medium', 'high', 'xhigh'],
+    });
+    expect(provider?.models.find(({ id }) => id === 'deepseek-v4-pro')).toMatchObject({
+      reasoningEffortLevels: ['low', 'medium', 'high', 'max'],
+    });
+    expect(provider?.models.find(({ id }) => id === 'qwen3.8-flash')).toMatchObject({
+      reasoningEffortLevels: [],
+    });
+  });
 });

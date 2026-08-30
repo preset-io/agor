@@ -10,6 +10,7 @@ import type {
 } from '@agor/core/types';
 import type { createOpencodeClient } from '@opencode-ai/sdk/v2';
 import { createOpenCodeKnownModelCatalog } from '../shared/known-models.js';
+import { filterOpenCodeReasoningEffortLevels } from '../shared/reasoning-effort.js';
 import type { OpenCodeAuthPayload } from './auth-payload.js';
 import {
   ensureOpenCodeDataHome as defaultEnsureOpenCodeDataHome,
@@ -231,6 +232,10 @@ async function readConfigurationSnapshot(
                 id: model.id,
                 name: model.name,
                 status: model.status,
+                reasoningEffortLevels:
+                  filterOpenCodeReasoningEffortLevels(
+                    (model as { variants?: Record<string, unknown> }).variants ?? {}
+                  ) ?? [],
               }))
               .sort((left, right) => left.id.localeCompare(right.id))
           : [],
