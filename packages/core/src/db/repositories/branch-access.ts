@@ -12,8 +12,6 @@ import {
   branches,
   branchPermissionConfigs,
   branchPermissionEntries,
-  branchSessionSharingGrants,
-  branchSessionSharingRules,
   groupMemberships,
   groups,
   messages,
@@ -82,7 +80,7 @@ function effectiveConfigCondition(): SQL {
 }
 
 const WORKSPACE_PREFERENCES_NAMESPACE = 'workspace_preferences';
-const PERSONAL_SESSION_SHARING_KEY = 'personal_session_sharing_enabled';
+const SESSION_SHARING_KEY = 'session_sharing_enabled';
 
 /**
  * Closed point projection used by Task launch and heartbeat revalidation.
@@ -175,47 +173,16 @@ export async function resolveSessionRuntimeBranchAccess(
      AND ${groups.archived} = false
     WHERE ${branchPermissionEntries.config_id} = ${branchPermissionConfigs.config_id}
   ), -1)`;
-  const directSharingGrant = exists(
-    selectRaw(db)
-      .from(branchSessionSharingGrants)
-      .where(
-        and(
-          eq(branchSessionSharingGrants.config_id, branchPermissionConfigs.config_id),
-          eq(branchSessionSharingGrants.session_owner_user_id, sessions.created_by),
-          eq(branchSessionSharingGrants.user_id, principal)
-        )
-      )
-  );
-  const activeGroupSharingGrant = exists(
-    selectRaw(db)
-      .from(branchSessionSharingGrants)
-      .innerJoin(
-        groupMemberships,
-        and(
-          eq(groupMemberships.group_id, branchSessionSharingGrants.group_id),
-          eq(groupMemberships.user_id, principal)
-        )
-      )
-      .innerJoin(
-        groups,
-        and(eq(groups.group_id, branchSessionSharingGrants.group_id), eq(groups.archived, false))
-      )
-      .where(
-        and(
-          eq(branchSessionSharingGrants.config_id, branchPermissionConfigs.config_id),
-          eq(branchSessionSharingGrants.session_owner_user_id, sessions.created_by)
-        )
-      )
-  );
-
   const row = await select(db, {
     branch_id: branches.branch_id,
     session_owner_user_id: sessions.created_by,
+    session_sdk_home_scope: sessions.sdk_home_scope,
     principal_user_id: users.user_id,
     branch_primary_owner_user_id: branches.primary_owner_user_id,
     sharing_mode: branchPermissionConfigs.sharing_mode,
     others_role: branchPermissionConfigs.others_role,
     others_fs_access: branchPermissionConfigs.others_fs_access,
+    allow_shared_session_prompts: branchPermissionConfigs.allow_shared_session_prompts,
     direct_role: directRole,
     direct_fs_access: directFsAccess,
     active_group_role_rank: activeGroupRoleRank,
@@ -226,23 +193,11 @@ export async function resolveSessionRuntimeBranchAccess(
         .where(
           and(
             eq(appVariables.namespace, WORKSPACE_PREFERENCES_NAMESPACE),
-            eq(appVariables.key, PERSONAL_SESSION_SHARING_KEY),
+            eq(appVariables.key, SESSION_SHARING_KEY),
             eq(appVariables.value_text, 'true')
           )
         )
     ),
-    owner_sharing_enabled: exists(
-      selectRaw(db)
-        .from(branchSessionSharingRules)
-        .where(
-          and(
-            eq(branchSessionSharingRules.config_id, branchPermissionConfigs.config_id),
-            eq(branchSessionSharingRules.session_owner_user_id, sessions.created_by),
-            eq(branchSessionSharingRules.enabled, true)
-          )
-        )
-    ),
-    principal_sharing_granted: or(directSharingGrant, activeGroupSharingGrant) ?? sql`false`,
     observed_at: sql<Date>`CURRENT_TIMESTAMP`,
   })
     .from(sessions)
@@ -293,9 +248,9 @@ export async function resolveSessionRuntimeBranchAccess(
   const ownsSession =
     principalUserId !== undefined && principalUserId === row.session_owner_user_id;
   const sharedSessionAllowed =
+    row.session_sdk_home_scope === 'branch' &&
     Boolean(row.workspace_sharing_enabled) &&
-    Boolean(row.owner_sharing_enabled) &&
-    Boolean(row.principal_sharing_granted);
+    Boolean(row.allow_shared_session_prompts);
   const observedAt =
     row.observed_at instanceof Date ? row.observed_at : new Date(String(row.observed_at));
   return {

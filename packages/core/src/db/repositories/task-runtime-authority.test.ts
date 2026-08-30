@@ -1,4 +1,4 @@
-import type { BranchID, Task, UserID, UUID } from '@agor/core/types';
+import type { BranchID, SessionSdkHomeScope, Task, UserID, UUID } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
@@ -20,6 +20,7 @@ interface RuntimeSeed {
   ownerId: UserID;
   actorId: UserID;
   sessionOwnerId: UserID;
+  sessionSdkHomeScope: SessionSdkHomeScope;
   branchId: BranchID;
   task: Task;
   tasks: TaskRepository;
@@ -30,48 +31,23 @@ interface RuntimeSeedOptions {
   actorRole?: 'member' | 'superadmin';
   branchRbacEnabled?: boolean;
   sessionOwner?: 'actor' | 'branch_owner';
-  grantForeignSessionSharing?: boolean;
+  sessionSdkHomeScope?: SessionSdkHomeScope;
+  allowForeignSessionSharing?: boolean;
 }
 
 async function setForeignSessionSharing(
   db: Database,
   branchId: BranchID,
-  sessionOwnerId: UserID,
   actorId: UserID,
   enabled: boolean
 ): Promise<void> {
   const policies = new CapabilityPolicyRepository(db);
-  await policies.setWorkspacePreferences(
-    { personal_session_sharing_enabled: true },
-    sessionOwnerId
-  );
+  await policies.setWorkspacePreferences({ session_sharing_enabled: true }, actorId);
   const current = await policies.getBranchPolicy(branchId);
   const config = structuredClone(current.override_config);
   if (!config) throw new Error('Expected an override Branch policy');
-  config.session_sharing.owner_rules = [
-    ...config.session_sharing.owner_rules.filter(
-      (rule) => rule.session_owner_user_id !== sessionOwnerId
-    ),
-    ...(enabled
-      ? [
-          {
-            session_owner_user_id: sessionOwnerId,
-            enabled: true,
-            grantees: [
-              {
-                grant_id: generateId() as UUID,
-                principal: { principal_type: 'user' as const, user_id: actorId },
-              },
-            ],
-          },
-        ]
-      : []),
-  ];
-  await policies.replaceBranchPolicy(
-    branchId,
-    { ...current, override_config: config },
-    sessionOwnerId
-  );
+  config.allow_shared_session_prompts = enabled;
+  await policies.replaceBranchPolicy(branchId, { ...current, override_config: config }, actorId);
 }
 
 async function seedRuntime(
@@ -118,14 +94,17 @@ async function seedRuntime(
     owner.user_id
   );
   const sessionOwnerId = options.sessionOwner === 'branch_owner' ? owner.user_id : actor.user_id;
-  if (options.grantForeignSessionSharing) {
-    await setForeignSessionSharing(db, branch.branch_id, sessionOwnerId, actor.user_id, true);
+  if (options.allowForeignSessionSharing) {
+    await setForeignSessionSharing(db, branch.branch_id, actor.user_id, true);
   }
+  const sessionSdkHomeScope =
+    options.sessionSdkHomeScope ?? (sessionOwnerId === actor.user_id ? 'execution_home' : 'branch');
   const session = await new SessionRepository(db).create({
     session_id: generateId(),
     branch_id: branch.branch_id,
     created_by: sessionOwnerId,
     agentic_tool: 'codex',
+    sdk_home_scope: sessionSdkHomeScope,
   });
   const tasks = new TaskRepository(db);
   const task = await tasks.create({
@@ -150,6 +129,7 @@ async function seedRuntime(
     ownerId: owner.user_id,
     actorId: actor.user_id,
     sessionOwnerId,
+    sessionSdkHomeScope,
     branchId: branch.branch_id,
     task,
     tasks,
@@ -211,7 +191,12 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
 
     const [canonicalAccess, canonicalPrompt] = await Promise.all([
       branches.resolveUserAccess(branch, seed.actorId),
-      branches.resolveSessionPromptAuthority(seed.branchId, seed.actorId, seed.sessionOwnerId),
+      branches.resolveSessionPromptAuthority(
+        seed.branchId,
+        seed.actorId,
+        seed.sessionOwnerId,
+        seed.sessionSdkHomeScope
+      ),
     ]);
     expect(canonicalAccess.fs_access).toBe('read');
     expect(canonicalPrompt.allowed).toBe(true);
@@ -230,21 +215,32 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
     const seed = await seedRuntime(db, 'read', {
       actorRole: 'superadmin',
       sessionOwner: 'branch_owner',
-      grantForeignSessionSharing: true,
+      allowForeignSessionSharing: true,
     });
     await expect(
       seed.tasks.reportRuntimeTelemetry(seed.task.task_id, seed.authority)
     ).resolves.toMatchObject({ outcome: 'continued' });
 
-    await setForeignSessionSharing(db, seed.branchId, seed.sessionOwnerId, seed.actorId, false);
+    await setForeignSessionSharing(db, seed.branchId, seed.actorId, false);
     await expect(
       new BranchRepository(db).resolveSessionPromptAuthority(
         seed.branchId,
         seed.actorId,
-        seed.sessionOwnerId
+        seed.sessionOwnerId,
+        seed.sessionSdkHomeScope
       )
     ).resolves.toMatchObject({ allowed: false });
     await expectDeniedWithoutHeartbeatRefresh(seed, 'branch_capability_revoked');
+  });
+
+  dbTest('denies foreign execution-home sessions even when sharing is enabled', async ({ db }) => {
+    await expect(
+      seedRuntime(db, 'read', {
+        sessionOwner: 'branch_owner',
+        sessionSdkHomeScope: 'execution_home',
+        allowForeignSessionSharing: true,
+      })
+    ).rejects.toThrow('Authorization to launch this task is unavailable');
   });
 
   dbTest(
@@ -258,7 +254,8 @@ describe('Task runtime heartbeat authority (SQLite)', () => {
         new BranchRepository(db).resolveSessionPromptAuthority(
           seed.branchId,
           seed.actorId,
-          seed.sessionOwnerId
+          seed.sessionOwnerId,
+          seed.sessionSdkHomeScope
         )
       ).resolves.toMatchObject({ allowed: false });
       await expect(

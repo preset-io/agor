@@ -164,9 +164,10 @@ an explicit mapping-review point.
 - That same heartbeat is the runtime-authority check; there is no second poll.
   Before the atomic heartbeat write, the repository revalidates the durable
   task-token fingerprint and the exact Task creator → Session → Branch binding,
-  current user existence, current prompt capability, personal sharing when
-  applicable, and effective filesystem access. Access below the immutable
-  launch floor denies the write. Higher access does not change existing mounts.
+  current user existence, current prompt capability, shared-session gates and
+  branch-home scope when applicable, and effective filesystem access. Access
+  below the immutable launch floor denies the write. Higher access does not
+  change existing mounts.
 - An explicit denial claims the normal fenced `stopping` path with cause
   `authorization_revoked`. Authority-store/query errors throw and do not stamp
   liveness. The existing stale-heartbeat threshold supplies the bounded

@@ -10,8 +10,9 @@ response. Before its atomic liveness write, the repository checks:
 
 1. the locked Task's immutable creator and Session;
 2. that Session's Branch and effective inherited/override permission config;
-3. current principal existence, Branch prompt capability, and personal Session
-   sharing when the Task creator differs from the Session owner;
+3. current principal existence, Branch prompt capability, and the workspace /
+   Branch shared-session gates and branch-home scope when the Task creator
+   differs from the Session owner;
 4. current effective `none | read | write` access against the immutable launch
    floor; and
 5. in PostgreSQL, the current exact task-token fingerprint and its tenant,
@@ -59,10 +60,10 @@ point/correlated probes:
 - `branch_permission_entries_config_user_unique` for a direct shadow and
   `branch_permission_entries_config_idx` plus membership/group keys for
   additive groups;
-- sharing-rule primary key and
-  `branch_session_sharing_grants_rule_user_unique` / rule/group indexes; and
 - `app_variables` tenant/namespace/key unique index for the workspace sharing
-  gate.
+  gate. The Branch sharing switch comes from the already joined effective
+  permission config, and the immutable SDK-home scope comes from the Session
+  PK row; neither requires another probe.
 
 The token read starts from the 64-hex `token_fingerprint` primary key and then
 checks the exact tenant/resource/principal tuple. Policy/group work is bounded
