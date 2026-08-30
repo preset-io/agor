@@ -37,7 +37,10 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ### Breaking
 
-- **Board and branch permissions use a normalized capability model** — the upgrade is a coordinated offline, big-bang migration; old daemons cannot run against the migrated authority model. Legacy rules are mapped conservatively, so some access may become more restrictive; review important board and branch permissions after upgrading. Rollback requires restoring the complete pre-migration database backup. ([#2555](https://github.com/preset-io/agor/pull/2555))
+- **Board and branch permissions use a normalized capability model** — the upgrade is a coordinated offline, big-bang migration; old daemons cannot run against the migrated authority model. Legacy rules are mapped conservatively, so some access may become more restrictive. ([#2555](https://github.com/preset-io/agor/pull/2555))
+  - Before upgrading, inspect `agor db status --json`, drain work, stop every daemon connected to the database, and take and test a complete database backup. Install 0.26.0 without starting its daemon.
+  - From 0.26.0, run `agor db migrate --offline-cutover --yes` once. If primary-owner attribution fails, resolve the listed board or branch IDs and retry; do not assign an arbitrary owner merely to pass migration.
+  - Start only 0.26.0 daemons, then review important board and branch permission screens, especially materialized overrides and legacy cross-user prompt access. To roll back, stop the new cohort and restore the complete pre-migration database backup; do not run an old daemon against the migrated policy schema.
 - **Socket clients authenticate only at the namespace handshake** — `createClient` requires `socketAuthentication` for protected services and no longer exposes Feathers' post-connect `authenticate`, `reAuthenticate`, or `logout` methods. Use `createRestClient` for credential exchange/refresh and let reconnect present the latest access token. ([#2520](https://github.com/preset-io/agor/pull/2520))
 
 ### Security
