@@ -5,7 +5,6 @@ import { useThemedMessage } from '../../../utils/message';
 import { CodePreviewModal } from '../../CodePreviewModal/CodePreviewModal';
 import type { FileItem } from '../../FileCollection/FileCollection';
 import { FileCollection } from '../../FileCollection/FileCollection';
-import { MarkdownModal } from '../../MarkdownModal/MarkdownModal';
 
 const MAX_FILES = 50000;
 
@@ -65,6 +64,11 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
     async (file: FileItem) => {
       const currentClient = clientRef.current;
       if (!currentClient) return;
+
+      if (file.gitStatus === 'deleted') {
+        showError('This file was deleted in the working tree');
+        return;
+      }
 
       try {
         showLoading('Downloading file...', { key: 'download' });
@@ -151,7 +155,6 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
     setSelectedFile(null);
   }, []);
 
-  const isMarkdown = selectedFile?.path.endsWith('.md');
   const isTruncated = files.length >= MAX_FILES;
 
   return (
@@ -185,22 +188,12 @@ const FilesTabInner: React.FC<FilesTabProps> = ({ branch, client }) => {
           emptyMessage="No files found in branch"
         />
 
-        {isMarkdown ? (
-          <MarkdownModal
-            open={modalOpen}
-            title={selectedFile?.title || ''}
-            content={selectedFile?.content || ''}
-            filePath={selectedFile?.path || ''}
-            onClose={handleModalClose}
-          />
-        ) : (
-          <CodePreviewModal
-            file={selectedFile}
-            open={modalOpen}
-            onClose={handleModalClose}
-            loading={loadingDetail}
-          />
-        )}
+        <CodePreviewModal
+          file={selectedFile}
+          open={modalOpen}
+          onClose={handleModalClose}
+          loading={loadingDetail}
+        />
       </Space>
     </div>
   );
