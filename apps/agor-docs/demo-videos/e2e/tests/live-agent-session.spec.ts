@@ -58,6 +58,14 @@ test('a real Claude Code turn streams a real response', async ({ page }) => {
   await configureClaudeProxiedAuth(page, oauthToken, PROXY_URL);
   await closeSettings(page);
 
+  // The credential banners must genuinely clear: the token save re-fires the
+  // daemon's check-auth probe, which validates the bearer token against the
+  // connection's base URL (live: recorded through the proxy; replay: served
+  // from the cassette). If either amber banner is still up, the run doesn't
+  // look real and the credential plumbing regressed.
+  await expect(page.locator('text=No AI connected')).toBeHidden({ timeout: 20_000 });
+  await expect(page.locator("text=credentials aren't working")).toBeHidden({ timeout: 20_000 });
+
   // The seeded "Fix navbar layout (spawned)" session (fixtureData.ts /
   // demo-fixtures.ts) is IDLE — a real, promptable claude-code session.
   const sessionRow = page.locator('text=Fix navbar layout (spawned)').first();

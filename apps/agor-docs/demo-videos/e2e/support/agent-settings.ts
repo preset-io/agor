@@ -66,23 +66,29 @@ export async function configureClaudeProxiedAuth(
   await page.locator('text=API key').first().click();
   await page.waitForTimeout(300);
 
-  const authTokenInput = page.locator('input[placeholder="token..."]').first();
-  await moveToElement(page, authTokenInput);
-  await authTokenInput.fill(bearerToken);
-  // Each ApiKeyFields row has its own adjacent Save button (Space.Compact).
-  await page
-    .locator('.ant-space-compact:has(input[placeholder="token..."]) button:has-text("Save")')
-    .first()
-    .click();
-  await page.waitForTimeout(500);
-
+  // Base URL FIRST, token second — every agentic_tools save bumps the app's
+  // credentialVersion and re-fires the check-auth probe, and the probe hits
+  // the connection's base URL (check-auth.ts). Saving in this order means
+  // the probe triggered by the token save already routes through the
+  // cassette proxy, so live mode records it and replay mode can serve it —
+  // which is what clears the "credentials aren't working" banner in both.
   const baseUrlInput = page.locator('input[placeholder="https://api.anthropic.com"]').first();
   await moveToElement(page, baseUrlInput);
   await baseUrlInput.fill(baseUrl);
+  // Each ApiKeyFields row has its own adjacent Save button (Space.Compact).
   await page
     .locator(
       '.ant-space-compact:has(input[placeholder="https://api.anthropic.com"]) button:has-text("Save")'
     )
+    .first()
+    .click();
+  await page.waitForTimeout(500);
+
+  const authTokenInput = page.locator('input[placeholder="token..."]').first();
+  await moveToElement(page, authTokenInput);
+  await authTokenInput.fill(bearerToken);
+  await page
+    .locator('.ant-space-compact:has(input[placeholder="token..."]) button:has-text("Save")')
     .first()
     .click();
   await page.waitForTimeout(500);

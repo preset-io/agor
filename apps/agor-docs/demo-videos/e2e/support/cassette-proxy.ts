@@ -10,12 +10,15 @@
 // exact sequence of response byte chunks — preserving SSE streaming shape)
 // to a JSON cassette file.
 //
-// 'replay' mode: touches the network for nothing. Requests are matched
-// SEQUENTIALLY against the cassette (nth request in this run gets the nth
-// recorded response) rather than by content hash — simpler and robust for a
-// single scripted Playwright flow that always makes the same calls in the
-// same order, and doesn't break on incidental nondeterminism (timestamps,
-// tool-call IDs) inside the request body.
+// 'replay' mode: touches the network for nothing. Requests are matched by
+// (method + path) — each such bucket serves its recorded responses in order,
+// then repeats its LAST recorded response for any further requests. Never by
+// content hash (request bodies carry incidental nondeterminism — timestamps,
+// tool-call IDs) and never globally sequential: the daemon's check-auth
+// probe (GET /v1/models) and the CLI's periodic count_tokens calls fire a
+// run-dependent number of times, interleaved unpredictably with the
+// /v1/messages calls, so a strict global sequence would misalign. Only a
+// path with no recording at all is an error (599).
 //
 // This is deliberately NOT wired into every E2E spec — only ones that
 // actually invoke a real agent turn opt in, via AGOR_E2E_AGENT_MODE.
@@ -101,7 +104,16 @@ export async function startCassetteProxy(options: {
         'Run with AGOR_E2E_AGENT_MODE=live first to record one.'
     );
   }
-  let replayIndex = 0;
+  // Per-(method + path) queues, in recorded order; `replayLastServed` keeps
+  // each bucket's most recent entry so an exhausted bucket repeats it.
+  const replayBuckets = new Map<string, CassetteEntry[]>();
+  const replayLastServed = new Map<string, CassetteEntry>();
+  for (const entry of replayCassette?.entries ?? []) {
+    const key = `${entry.method} ${entry.path}`;
+    const bucket = replayBuckets.get(key);
+    if (bucket) bucket.push(entry);
+    else replayBuckets.set(key, [entry]);
+  }
 
   const server = createServer(async (req, res) => {
     // Harness readiness probe — never touches replay index or upstream.
@@ -114,11 +126,20 @@ export async function startCassetteProxy(options: {
     const bodyBuf = await readBody(req);
 
     if (mode === 'replay') {
-      const entry = replayCassette!.entries[replayIndex];
-      replayIndex += 1;
+      const key = `${req.method} ${req.url}`;
+      let entry = replayBuckets.get(key)?.shift();
+      if (entry) {
+        replayLastServed.set(key, entry);
+      } else {
+        entry = replayLastServed.get(key);
+        if (entry) {
+          console.warn(`[cassette-proxy] bucket exhausted, repeating last response: ${key}`);
+        }
+      }
       if (!entry) {
+        console.error(`[cassette-proxy] no recording for: ${key}`);
         res.writeHead(599, { 'content-type': 'text/plain' });
-        res.end(`cassette-proxy: no recorded entry for request #${replayIndex} (${req.url})`);
+        res.end(`cassette-proxy: no recorded entry for ${key}`);
         return;
       }
       const headers: Record<string, string> = {};
