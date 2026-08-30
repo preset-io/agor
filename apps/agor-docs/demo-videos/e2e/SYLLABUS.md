@@ -45,8 +45,11 @@ out keepers).
 Planned next (roughly in order): primary teammate for the board, MCP tools
 (donut-shop's MotherDuck database is the natural first server; an
 Agor-to-Agor MCP against a live instance is a candidate later), opening a
-PR from a branch, multi-branch / multi-agent boards, PR review flows, and
-multi-account multiplayer captured with two browser contexts.
+PR from a branch, PR review flows, and multi-account multiplayer captured
+with two browser contexts. A true second-provider lesson (Codex alongside
+Claude) is live-only for now: the Codex CLI ignores OPENAI_BASE_URL
+(verified empirically — a stub upstream got zero hits), so its traffic
+can't be cassette-recorded without deeper provider-config plumbing.
 
 ## How the from-zero environment works (support/harness.ts)
 
