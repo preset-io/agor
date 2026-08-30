@@ -167,9 +167,23 @@ through the first pass.
 **The static audit is now implemented** as
 `apps/agor-daemon/src/mcp/tools/tenant-scope-audit.test.ts`: it scans every `mcp/tools/*.ts`
 for `<x>Service.<method>()` calls to non-transport methods and fails unless the call is
-wrapped in `runWithMcpTenantDatabaseScope` (balanced-span aware, so multi-statement `async
-(db) => { … }` wrappers count) or is on an explicit, per-token allow-list with a documented
-reason (branches env methods + `unarchive` via `withTenantDatabase`; `gatewayService.emitMessage`
-via unit-of-work-bound repos; `reposService.addLocalRepository` as intentionally unwrapped).
-Running it during this change is what surfaced the `sessions` miss. The service-side
-`withTenantDatabase` refactor remains the heavier, more thorough follow-up.
+wrapped in either `runWithMcpTenantDatabaseScope` or `runWithMcpTenantDatabaseWrite`
+(balanced-span aware, so multi-statement `async (db) => { … }` wrappers count) or is on an
+explicit, per-token allow-list with a documented reason (branches env methods + `unarchive`
+via `withTenantDatabase`; `gatewayService.emitMessage` via unit-of-work-bound repos;
+`reposService.addLocalRepository` as intentionally unwrapped). It additionally enforces a
+`MUTATION_TOKENS` list (mutations must use the WRITE helper, not the read-only one) and the
+`<name>Service` alias convention the scan relies on. Running it during this change is what
+surfaced the `sessions` miss.
+
+Two threads remain for the service-side follow-up. (1) The **write-freeze gate** should
+cover _every_ MCP-initiated tenant mutation, not only those the scanner sees as
+`Service.method` calls — direct repository writes
+(`SessionRelationshipRepository.setCallbackEnabled`), utility writes (`appendSystemMessage`
+in `widgets.ts`), and the internally-scoped env mutators (`startEnvironment` et al., which
+need the _admission_ pattern rather than a held transaction) are not yet gated on the MCP
+path. HTTP-route parity is a convenient signal, not the criterion — the criterion is "is it
+a tenant write." (2) Growing the `withTenantDatabase`/write-unit helper on
+`ReposService`/`BoardsService`/`BoardObjectsService`/`CardsService` (as `BranchesService`
+already has) would make the services defend themselves — scope _and_ gate — regardless of
+caller, retiring the per-call-site read/write helper juggling entirely.

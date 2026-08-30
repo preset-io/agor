@@ -22,7 +22,7 @@ vi.mock('@agor/core/db', async (importActual) => {
     // Deterministic gate we can toggle per test; throws the real error type so
     // the helper's `instanceof` translation to `Unavailable` is exercised.
     assertTenantWritable: vi.fn(async (_db: unknown, tenantId: string) => {
-      if (gateActive) throw new actual.TenantWriteGateActiveError(tenantId, 1);
+      if (gateActive) throw new actual.TenantWriteGateActiveError(tenantId, '1');
     }),
   };
 });

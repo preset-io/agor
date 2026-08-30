@@ -68,10 +68,31 @@ const ALLOWED_UNWRAPPED: Record<string, string> = {
  */
 const CALL_SITE_SCOPED_SERVICES = ['repos', 'boards', 'cards', 'sessions', 'board-objects'];
 
-/** Balanced-paren spans of every `runWithMcpTenantDatabase{Scope,Write}( ... )` call. */
-function scopeSpans(code: string): Array<[number, number]> {
+/**
+ * `<serviceVar>.<method>` mutators that this PR brought onto the WRITE helper
+ * (`runWithMcpTenantDatabaseWrite`), which also enforces the tenant write-freeze
+ * gate. The read-only scope helper would silently skip the gate, so this list
+ * guards against a future edit downgrading one of them to the read helper.
+ *
+ * NOTE: this is the set with gated HTTP-route parity, not every MCP mutation.
+ * Other pre-existing MCP mutations (cards/board-object custom methods, and
+ * non-`Service.method` writes such as direct repositories / `appendSystemMessage`)
+ * still use the read helper and are the subject of the documented service-side
+ * write-gate follow-up — see docs/internal/mcp-tenant-db-scope-createbranch-2026-08-29.md.
+ */
+const MUTATION_TOKENS = new Set([
+  'reposService.createBranch',
+  'reposService.cloneRepository',
+  'reposService.updateMetadata',
+  'boardsService.archive',
+  'boardsService.unarchive',
+  'sessionsService.archive',
+  'sessionsService.unarchive',
+]);
+
+/** Balanced-paren spans of every call matching `opener`. */
+function helperSpans(code: string, opener: RegExp): Array<[number, number]> {
   const spans: Array<[number, number]> = [];
-  const opener = /runWithMcpTenantDatabase(?:Scope|Write)\s*\(/g;
   let m: RegExpExecArray | null;
   // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop.
   while ((m = opener.exec(code)) !== null) {
@@ -85,6 +106,12 @@ function scopeSpans(code: string): Array<[number, number]> {
   }
   return spans;
 }
+
+/** Spans of either scope helper (reads or writes) — for the "is scoped at all" check. */
+const scopeSpans = (code: string) =>
+  helperSpans(code, /runWithMcpTenantDatabase(?:Scope|Write)\s*\(/g);
+/** Spans of the WRITE helper only — for the "mutations honor the freeze gate" check. */
+const writeSpans = (code: string) => helperSpans(code, /runWithMcpTenantDatabaseWrite\s*\(/g);
 
 function stripComments(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
@@ -126,6 +153,39 @@ describe('MCP tool tenant database scope audit', () => {
       violations,
       `Unguarded MCP custom-method service calls (wrap in runWithMcpTenantDatabaseScope, or add to ALLOWED_UNWRAPPED with a reason):\n${violations.join('\n')}`
     ).toEqual([]);
+  });
+
+  it('wraps every mutating custom-method call in the WRITE helper (freeze gate honored)', () => {
+    const violations: string[] = [];
+    for (const file of files) {
+      const code = stripComments(readFileSync(join(TOOLS_DIR, file), 'utf8'));
+      const writes = writeSpans(code);
+      const inWrite = (idx: number) => writes.some(([s, e]) => idx >= s && idx <= e);
+
+      const call = /\b([a-zA-Z]+Service)\.([a-zA-Z]+)\(/g;
+      let m: RegExpExecArray | null;
+      // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec loop.
+      while ((m = call.exec(code)) !== null) {
+        const token = `${m[1]}.${m[2]}`;
+        if (!MUTATION_TOKENS.has(token)) continue;
+        if (inWrite(m.index)) continue;
+        violations.push(`${file}:${lineOf(code, m.index)}  ${token}()`);
+      }
+    }
+    expect(
+      violations,
+      `Mutating MCP calls must use runWithMcpTenantDatabaseWrite (it enforces the tenant write-freeze gate; the read-only scope helper skips it):\n${violations.join('\n')}`
+    ).toEqual([]);
+  });
+
+  it('keeps the mutation-token list honest (every entry is still called somewhere)', () => {
+    const allCode = files
+      .map((f) => stripComments(readFileSync(join(TOOLS_DIR, f), 'utf8')))
+      .join('\n');
+    const stale = [...MUTATION_TOKENS].filter((token) => !allCode.includes(`${token}(`));
+    expect(stale, `Stale MUTATION_TOKENS entries (no longer called): ${stale.join(', ')}`).toEqual(
+      []
+    );
   });
 
   it('does not alias a call-site-scoped service to a non-<name>Service local (which would evade the scan)', () => {
