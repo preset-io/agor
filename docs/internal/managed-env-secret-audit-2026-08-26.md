@@ -115,13 +115,15 @@ Trusted tenant/user/template variables and the authenticated payload continue
 to carry execution authority across the boundary, and the external launcher
 remains responsible for binding them to the correct isolated workload.
 
-The grant is non-transitive. A trusted launcher that starts another process
-must construct that descendant's environment explicitly and remove every
-`AGOR_CLOUD_*` entry before executing the workload. In particular, a wrapper
-must not pass its complete `process.env` to the executor. This descendant scrub
-is an Agor Cloud helper contract tracked in the explicitly linked design issue
-above; Agor cannot enforce it after handing control to an opaque external
-launcher.
+The grant is non-transitive. Removing every `AGOR_CLOUD_*` entry from a
+descendant's direct environment is necessary but not sufficient: a same-UID
+workload in the helper/daemon process namespace may recover the helper's initial
+environment through `/proc/<pid>/environ`. A conforming launcher must place the
+workload behind a pod/container, UID, and process-inspection boundary that makes
+the credential-bearing helper unreadable. Same-process wrapper modes must fail
+closed when that isolation is absent. This descendant containment contract is
+tracked in the explicitly linked Agor Cloud design issue above; Agor cannot
+enforce it after handing control to an opaque external launcher.
 
 ## Storage and cryptography inventory
 
@@ -354,7 +356,7 @@ Deleting a row removes live references and selection metadata but cannot erase b
 
 ### Operational residual — delegated substrate environment
 
-Agor now prevents the daemon environment from becoming an external helper's environment, except for the documented operator-controlled `AGOR_CLOUD_*` launcher namespace on two trusted paths: templated executor launch and the executor-heartbeat callback. Agor includes those credentials only in the immediate trusted launcher/helper environment; it does not include them in executor payload/session env or heartbeat JSON, and it discards helper output instead of treating it as a logging channel. Configuring either command therefore designates that operator-authored process as part of the launcher trust boundary; arbitrary user-authored commands must never use this policy. A conforming helper must terminate the credential grant there by scrubbing the reserved prefix from every workload descendant. After the launcher crosses into an external substrate, that substrate owns the executor's initial process environment and containment. Executor commands overlay ordinary authenticated payload variables but preserve substrate-owned `HOME`, `PATH`, identity, `LD_*`, and `DYLD_*` values. Certification must prove both the descendant scrub and that workload identity and pod-owned credentials are non-exportable or otherwise safe for child processes; Agor cannot sanitize an opaque external launcher without an explicit descriptor contract.
+Agor now prevents the daemon environment from becoming an external helper's environment, except for the documented operator-controlled `AGOR_CLOUD_*` launcher namespace on two trusted paths: templated executor launch and the executor-heartbeat callback. Agor includes those credentials only in the immediate trusted launcher/helper environment; it does not include them in executor payload/session env or heartbeat JSON, and it discards helper output instead of treating it as a logging channel. Configuring either command therefore designates that operator-authored process as part of the launcher trust boundary; arbitrary user-authored commands must never use this policy. A conforming helper must terminate the credential grant with both an explicit descendant environment and containment that prevents same-UID `/proc` inspection of the helper/daemon. After the launcher crosses into an external substrate, that substrate owns the executor's initial process environment and containment. Executor commands overlay ordinary authenticated payload variables but preserve substrate-owned `HOME`, `PATH`, identity, `LD_*`, and `DYLD_*` values. Certification must prove the descendant environment, process/UID namespace boundary, workload identity, and pod-owned credential behavior; Agor cannot sanitize an opaque external launcher without an explicit descriptor contract.
 
 ### Low residual — decryption timing oracle is not a public boundary
 
@@ -499,5 +501,5 @@ No user-managed development server was started.
 8. Concurrent users cannot overlap compatibility `process.env` mutation, and concurrent User JSON patches cannot silently replace each other.
 9. Gateway credentials have one encrypt-on-write boundary; unreadable stored representations never become runtime credentials.
 10. Selection names do not travel on realtime channels; values never travel in analytics.
-11. Decrypted task env exists only in the daemon launch scope, authenticated executor payload/stdin, and intended child process; it is not cached or written to a task/session row. Ambient launcher credentials exist only in the daemon and the two immediate trusted external launcher/helper environments, never in task/session env, executor payload, heartbeat JSON, helper output logs, or a conforming helper's workload descendants.
+11. Decrypted task env exists only in the daemon launch scope, authenticated executor payload/stdin, and intended child process; it is not cached or written to a task/session row. Ambient launcher credentials exist only in the daemon and the two immediate trusted external launcher/helper environments, never in task/session env, executor payload, heartbeat JSON, helper output logs, or a conforming helper's separately contained workload descendants.
 12. These invariants do not claim defense from the host/daemon administrator, an intentionally secret-bearing process, user-authored commands that print their own env, physical historical backups, or the unresolved legacy-envelope swapping/rotation limitations above.
