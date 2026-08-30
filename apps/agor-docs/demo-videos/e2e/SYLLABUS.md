@@ -33,13 +33,14 @@ out keepers).
 
 ## The lessons
 
-| #   | Lesson                  | What it teaches                                                       | Ends with                                                      |
-| --- | ----------------------- | --------------------------------------------------------------------- | -------------------------------------------------------------- |
-| 00  | First run               | The onboarding wizard: goal cards, skippable steps                    | The wizard-made board, open on an empty canvas                 |
-| 01  | Connect your repository | The Create dialog's Repository tab; clone-from-URL vs register-local  | donut-shop registered ("Local repository added successfully!") |
-| 02  | Connect your AI         | The Connect AI flow in Settings; credentials verified by a real probe | Both amber credential banners genuinely gone                   |
-| 03  | Your first branch       | Branch options: source branch, worktree vs clone, issue/PR links      | A real worktree branch card on the canvas, error-free          |
-| 04  | Your first session      | The coding-agent picker; prompting a session                          | A real Claude Code reply about the donut-shop architecture     |
+| #   | Lesson                  | What it teaches                                                                     | Ends with                                                                         |
+| --- | ----------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| 00  | First run               | The onboarding wizard: goal cards, skippable steps                                  | The wizard-made board, open on an empty canvas                                    |
+| 01  | Connect your repository | The Create dialog's Repository tab; clone-from-URL vs register-local                | donut-shop registered ("Local repository added successfully!")                    |
+| 02  | Connect your AI         | The Connect AI flow in Settings; credentials verified by a real probe               | Both amber credential banners genuinely gone                                      |
+| 03  | Your first branch       | Branch options: source branch, worktree vs clone, issue/PR links                    | A real worktree branch card on the canvas, error-free                             |
+| 04  | Your first session      | The coding-agent picker; prompting; following up — sessions are conversations       | Two real Claude turns: an architecture tour, then a concrete improvement proposal |
+| 05  | Organize your board     | Zones as workflow lanes; inline rename; the zone trigger config; dragging a card in | "In Progress" / "Review" zones with the branch card filed                         |
 
 Planned next (roughly in order): primary teammate for the board, MCP tools
 (donut-shop's MotherDuck database is the natural first server; an

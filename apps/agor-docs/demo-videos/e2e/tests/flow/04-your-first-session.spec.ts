@@ -25,10 +25,14 @@ const agentMode = resolveAgentMode();
 const BRANCH_NAME = 'glaze-menu-refresh';
 const PROMPT =
   'Give me a quick tour of this repo: what is the project, and how is the code organized? Keep it under 150 words.';
+const FOLLOW_UP =
+  "What's one small improvement you'd tackle first? Look at the code and propose it concretely — don't make any changes yet.";
 
 test.skip(!agentMode, 'set AGOR_E2E_AGENT_MODE=live|replay for the AI lessons');
 
 test('lesson 04: your first session', async ({ page }) => {
+  // Two real model turns, each of which may read the repo at length.
+  test.setTimeout(420_000);
   await openLesson(page, '/');
   await glideAndClick(page, page.getByRole('button', { name: "Admin's board" }).first());
   await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 30_000 });
@@ -61,6 +65,22 @@ test('lesson 04: your first session', async ({ page }) => {
 
   await reassertCursor(page);
   await expect(page.locator('text=MotherDuck').first()).toBeVisible({ timeout: 150_000 });
+  await settle(page);
+
+  // Sessions are conversations — follow up. Let the first turn fully wrap
+  // (status back to IDLE), then ask the agent what it would improve; it goes
+  // back into the code to answer.
+  await expect(page.locator('text=IDLE').first()).toBeVisible({ timeout: 60_000 });
+  await beat(page);
+  await typeInto(page, composer, FOLLOW_UP);
+  await beat(page);
+  await glideAndClick(page, page.locator('button:has-text("Send")').first());
+
+  // Watch it work: status flips to RUNNING while the agent reads code, then
+  // returns to IDLE when the proposal lands.
+  await expect(page.locator('text=RUNNING').first()).toBeVisible({ timeout: 30_000 });
+  await reassertCursor(page);
+  await expect(page.locator('text=IDLE').first()).toBeVisible({ timeout: 240_000 });
   await settle(page);
   await settle(page);
 });
