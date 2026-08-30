@@ -760,7 +760,31 @@ export function createSocketIOConfig(
         );
         next();
       } catch (error) {
-        console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
+        // An expired/invalid token on a (re)connecting socket is routine: the
+        // client refreshes on the 401 we return below and retries. Log it as a
+        // terse warning without a stack. Reserve the loud error+stack for
+        // genuinely unexpected failures (absent/revoked authority, tenant drift,
+        // or another invariant violation) that warrant investigation.
+        const err = error as {
+          code?: number;
+          className?: string;
+          message?: string;
+          data?: { name?: string };
+        };
+        const expected =
+          err?.code === 401 ||
+          err?.className === 'not-authenticated' ||
+          err?.data?.name === 'TokenExpiredError' ||
+          /jwt expired|token expired/i.test(err?.message ?? '');
+        if (expected) {
+          const reason =
+            err?.data?.name === 'TokenExpiredError'
+              ? 'token expired'
+              : (err?.message ?? 'not authenticated');
+          console.warn(`WebSocket auth rejected for ${socket.id}: ${reason}`);
+        } else {
+          console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
+        }
         authenticationFailures = Math.min(authenticationFailures + 1, Number.MAX_SAFE_INTEGER);
         retireSocketConnectionAuthority(app, fs.feathers);
         const publicError = new Error('Invalid or expired authentication token') as Error & {
