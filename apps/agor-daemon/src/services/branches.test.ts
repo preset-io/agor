@@ -701,6 +701,59 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
+  it('forwards resolved sandbox mount inputs into the env-logs executor params', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-sbx' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-sbx',
+      path: '/tmp/wt-sbx',
+      created_by: 'user-1' as UUID,
+      primary_owner_user_id: 'owner-2' as UUID,
+      branch_unique_id: 2,
+      logs_command: 'tail -n 100 dev.log',
+    };
+
+    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
+      kind: 'shell',
+      command: branch.logs_command,
+    } as never);
+    // Under the fail-closed per_user sandbox this context resolves an owner
+    // home store; the executor payload MUST carry it or buildSandboxWrap
+    // refuses to spawn (the ENOTDIR-adjacent "no owner home store" failure).
+    vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
+      env: { PATH: '/usr/bin:/bin' },
+      delegatedHomeKey: undefined,
+      executionUserId: 'owner-2',
+      branchFsAccess: 'write',
+      sandboxMounts: {
+        sandboxHomeStore: '/data/homes/owner-2',
+        sandboxWorktreesRoot: '/data/worktrees',
+        sandboxBaseRepoPath: undefined,
+      },
+    } as never);
+    mockedRequestExecutor.mockResolvedValue({
+      success: true,
+      data: { logs: 'ok', timestamp: '2026-06-19T00:00:00.000Z' },
+    });
+
+    await service.getLogs(branch.branch_id);
+
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'environment.logs',
+        params: expect.objectContaining({
+          sandboxHomeStore: '/data/homes/owner-2',
+          sandboxWorktreesRoot: '/data/worktrees',
+          logsCommand: branch.logs_command,
+        }),
+      }),
+      expect.anything()
+    );
+  });
+
   it('resolves lifecycle credentials for the authenticated actor, not the branch creator', async () => {
     const { service } = createServiceHarness();
     const app = (service as unknown as { app: Application }).app as unknown as {
