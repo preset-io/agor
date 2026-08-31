@@ -15,6 +15,7 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
+  UsersRepository,
 } from '@agor/core/db';
 import { BadRequest, Unavailable } from '@agor/core/feathers';
 import type { DeepReadonly, UserID } from '@agor/core/types';
@@ -165,9 +166,7 @@ export class ClaudeRuntimeCredentialResolver {
     const target = join(route.claudeConfigDir, '.credentials.json');
     const observed = await this.readCredential(target);
     if (usableWithoutRefresh(observed.parsed, this.now())) {
-      // Deliberately lock-free and network-free: access tokens are immutable
-      // inputs to a task launch, and logout/source changes fence all writes.
-      return runtimeConnection(observed.parsed.claudeAiOauth.accessToken);
+      return this.resolveFreshUnderAuthority({ tenantId, userId, target, observed });
     }
 
     const key = `${tenantId}:${userId}`;
@@ -210,11 +209,54 @@ export class ClaudeRuntimeCredentialResolver {
     return { raw, parsed };
   }
 
-  private async sourceIsStillManaged(tenantId: string, userId: UserID): Promise<boolean> {
-    const result = await runWithTenantDatabaseScope(this.db, tenantId, (tenantDb) =>
-      resolveProviderConnection('claude-code', { userId, db: tenantDb })
+  private async sourceIsStillManagedFile(tenantId: string, userId: UserID): Promise<boolean> {
+    return runWithTenantDatabaseScope(this.db, tenantId, async (tenantDb) => {
+      const [result, user] = await Promise.all([
+        resolveProviderConnection('claude-code', { userId, db: tenantDb }),
+        new UsersRepository(tenantDb).findById(userId),
+      ]);
+      return (
+        user?.agentic_credential_sources?.['claude-code'] === 'managed_file' &&
+        result.source === 'user' &&
+        result.useNativeAuth
+      );
+    });
+  }
+
+  /**
+   * Linearize a fresh-token return with source/route/file mutations. The first
+   * read is only an optimistic network-avoidance hint: authority revalidates
+   * the exact managed-file source, physical route, and identical credential
+   * bytes before any access token crosses into a newly starting task.
+   */
+  private resolveFreshUnderAuthority(input: {
+    tenantId: string;
+    userId: UserID;
+    target: string;
+    observed: { raw: string; parsed: ClaudeCredentialDocument };
+  }): Promise<ReturnType<typeof runtimeConnection>> {
+    return this.authority.runCredentialMutation(
+      claudeCredentialMutationKey(this.config, input.tenantId, input.userId),
+      async () => {
+        if (!(await this.sourceIsStillManagedFile(input.tenantId, input.userId))) {
+          throw new BadRequest('The Claude authentication method changed while the task started.');
+        }
+        const currentRoute = await this.route(input.tenantId, input.userId);
+        if (join(currentRoute.claudeConfigDir, '.credentials.json') !== input.target) {
+          throw new BadRequest('The Claude credential home changed while the task started.');
+        }
+        const current = await this.readCredential(input.target);
+        if (
+          current.raw !== input.observed.raw ||
+          !usableWithoutRefresh(current.parsed, this.now())
+        ) {
+          throw new BadRequest(
+            'The managed Claude login changed while the task started. Try again.'
+          );
+        }
+        return runtimeConnection(current.parsed.claudeAiOauth.accessToken);
+      }
     );
-    return result.source === 'user' && result.useNativeAuth;
   }
 
   private async refreshAndResolve(input: {
@@ -225,7 +267,7 @@ export class ClaudeRuntimeCredentialResolver {
     // Another task may have completed a refresh before it joined this flight.
     const observed = await this.readCredential(input.target);
     if (usableWithoutRefresh(observed.parsed, this.now())) {
-      return runtimeConnection(observed.parsed.claudeAiOauth.accessToken);
+      return this.resolveFreshUnderAuthority({ ...input, observed });
     }
 
     const oauth = observed.parsed.claudeAiOauth;
@@ -247,7 +289,7 @@ export class ClaudeRuntimeCredentialResolver {
         const adopted = await this.authority.runCredentialMutation(
           claudeCredentialMutationKey(this.config, input.tenantId, input.userId),
           async () => {
-            if (!(await this.sourceIsStillManaged(input.tenantId, input.userId))) return null;
+            if (!(await this.sourceIsStillManagedFile(input.tenantId, input.userId))) return null;
             const currentRoute = await this.route(input.tenantId, input.userId);
             if (join(currentRoute.claudeConfigDir, '.credentials.json') !== input.target)
               return null;
@@ -274,7 +316,7 @@ export class ClaudeRuntimeCredentialResolver {
     return this.authority.runCredentialMutation(
       claudeCredentialMutationKey(this.config, input.tenantId, input.userId),
       async (generation) => {
-        if (!(await this.sourceIsStillManaged(input.tenantId, input.userId))) {
+        if (!(await this.sourceIsStillManagedFile(input.tenantId, input.userId))) {
           throw new BadRequest('The Claude authentication method changed while the task started.');
         }
         const currentRoute = await this.route(input.tenantId, input.userId);

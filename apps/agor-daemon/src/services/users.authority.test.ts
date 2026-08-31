@@ -429,6 +429,13 @@ describe('UsersService Claude credential-source authority', () => {
           trusted
         );
       }
+      await service.patch(
+        moving.user_id as UserID,
+        { filesystem_home: `/srv/old-${moving.user_id}` },
+        params
+      );
+      await service.patch(moving.user_id as UserID, { unix_username: 'sandbox-home-key' }, params);
+      expect(mutations.tombstoneCurrentCredential).not.toHaveBeenCalled();
       await service.patch(moving.user_id as UserID, { filesystem_home: '/srv/new-home' }, params);
       await service.remove(deleting.user_id as UserID, params);
 
@@ -445,6 +452,81 @@ describe('UsersService Claude credential-source authority', () => {
         },
       ]);
       expect(mutations.tombstoneCurrentCredential).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  dbTest(
+    'serializes blocked SQLite cleanup with actor demotion across different target users',
+    async ({ db }) => {
+      let cleanupEntered!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        cleanupEntered = resolve;
+      });
+      let releaseCleanup!: () => void;
+      const release = new Promise<void>((resolve) => {
+        releaseCleanup = resolve;
+      });
+      const mutations = {
+        runCredentialMutation: vi.fn(
+          async <T>(_key: string, work: (generation: number) => Promise<T>) => work(91)
+        ),
+        tombstoneCurrentCredential: vi.fn(async () => {
+          cleanupEntered();
+          await release;
+        }),
+      };
+      const config = {
+        execution: {
+          unix_user_mode: 'sandbox' as const,
+          executor_storage: { user_home: 'persistent-per-user' as const },
+          sandbox: { enabled: true, home_mode: 'per_user' as const },
+        },
+      };
+      const service = new UsersService(db, undefined, config, mutations);
+      const superadmin = await createUser(service, 'superadmin', 'cleanup-race-superadmin');
+      const admin = await createUser(service, 'admin', 'cleanup-race-admin');
+      const member = await createUser(service, 'member', 'cleanup-race-member');
+      const tenant = { tenant_id: 'cleanup-race-tenant' };
+      const superadminParams = { ...externalParams(superadmin), tenant } as AuthenticatedParams;
+      const adminParams = { ...externalParams(admin), tenant } as AuthenticatedParams;
+      const trusted = { ...superadminParams, provider: undefined } as Params;
+      markTrustedUserMutation(trusted, 'claude-auth');
+      await service.patch(
+        member.user_id as UserID,
+        { filesystem_home: '/srv/cleanup-race-old' },
+        superadminParams
+      );
+      await service.patch(
+        member.user_id as UserID,
+        {
+          agentic_auth_methods: { 'claude-code': 'subscription' },
+          agentic_credential_sources: { 'claude-code': 'managed_file' },
+        },
+        trusted
+      );
+
+      const cleanup = service.patch(
+        member.user_id as UserID,
+        { filesystem_home: '/srv/cleanup-race-new' },
+        adminParams
+      );
+      await entered;
+      let demotionSettled = false;
+      const demotion = service
+        .patch(admin.user_id as UserID, { role: 'member' }, superadminParams)
+        .finally(() => {
+          demotionSettled = true;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(demotionSettled).toBe(false);
+
+      releaseCleanup();
+      await expect(cleanup).resolves.toMatchObject({ user_id: member.user_id });
+      await expect(demotion).resolves.toMatchObject({ role: 'member' });
+      await expect(
+        new UsersRepository(db).findById(member.user_id as UserID)
+      ).resolves.toMatchObject({ filesystem_home: '/srv/cleanup-race-new' });
+      expect(mutations.tombstoneCurrentCredential).toHaveBeenCalledTimes(1);
     }
   );
 

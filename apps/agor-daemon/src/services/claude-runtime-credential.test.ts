@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const configMocks = vi.hoisted(() => ({
   contained: true,
+  credentialSource: 'managed_file' as 'managed_file' | 'api_key' | 'none',
   resolveProviderConnection: vi.fn(async () => ({
     source: 'user',
     useNativeAuth: true,
@@ -26,6 +27,13 @@ vi.mock('@agor/core/config', async (importOriginal) => ({
 }));
 vi.mock('@agor/core/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@agor/core/db')>()),
+  UsersRepository: class {
+    async findById() {
+      return {
+        agentic_credential_sources: { 'claude-code': configMocks.credentialSource },
+      };
+    }
+  },
   runWithTenantDatabaseScope: async (
     db: unknown,
     _tenantId: string,
@@ -123,6 +131,7 @@ describe('ClaudeRuntimeCredentialResolver', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     configMocks.contained = true;
+    configMocks.credentialSource = 'managed_file';
     routeMocks.claudeConfigDir = '/homes/user-1/.claude';
     dbMocks.depth = 0;
     dbMocks.tenants = [];
@@ -133,7 +142,7 @@ describe('ClaudeRuntimeCredentialResolver', () => {
     });
   });
 
-  it('takes the fresh fast path without network or credential authority', async () => {
+  it('takes the fresh fast path without network after authority revalidation', async () => {
     const read = vi.fn(async () => credential('sk-ant-oat01-fresh', NOW + 2 * 60 * 60 * 1000));
     const subject = resolver({ read });
 
@@ -142,8 +151,91 @@ describe('ClaudeRuntimeCredentialResolver', () => {
       useNativeAuth: false,
     });
     expect(subject.refresh).not.toHaveBeenCalled();
-    expect(subject.auth.runCredentialMutation).not.toHaveBeenCalled();
+    expect(subject.auth.runCredentialMutation).toHaveBeenCalledTimes(1);
     expect(subject.compareAndSwap).not.toHaveBeenCalled();
+  });
+
+  it('lets a source switch queued ahead of a fresh return suppress the old identity', async () => {
+    const fresh = credential('sk-ant-oat01-old-identity', NOW + 2 * 60 * 60 * 1000);
+    let releaseAuthority!: () => void;
+    const ahead = new Promise<void>((resolve) => {
+      releaseAuthority = resolve;
+    });
+    const auth = authority();
+    auth.runCredentialMutation.mockImplementation(async (_key, work) => {
+      await ahead;
+      return work(42);
+    });
+    const subject = resolver({ read: vi.fn(async () => fresh), auth });
+    const resolving = subject.instance.resolve('tenant-1', USER);
+
+    await vi.waitFor(() => expect(auth.runCredentialMutation).toHaveBeenCalledTimes(1));
+    configMocks.credentialSource = 'api_key';
+    configMocks.resolveProviderConnection.mockResolvedValue({
+      source: 'user',
+      useNativeAuth: false,
+      connection: { ANTHROPIC_API_KEY: 'replacement-key' },
+    });
+    releaseAuthority();
+
+    await expect(resolving).rejects.toThrow(/authentication method changed/i);
+  });
+
+  it('lets logout queued ahead of a fresh return suppress the deleted login', async () => {
+    const fresh = credential('sk-ant-oat01-logged-out', NOW + 2 * 60 * 60 * 1000);
+    let releaseAuthority!: () => void;
+    const ahead = new Promise<void>((resolve) => {
+      releaseAuthority = resolve;
+    });
+    const auth = authority();
+    auth.runCredentialMutation.mockImplementation(async (_key, work) => {
+      await ahead;
+      return work(42);
+    });
+    const read = vi.fn(async () => fresh);
+    const subject = resolver({ read, auth });
+    const resolving = subject.instance.resolve('tenant-1', USER);
+
+    await vi.waitFor(() => expect(auth.runCredentialMutation).toHaveBeenCalledTimes(1));
+    configMocks.credentialSource = 'none';
+    configMocks.resolveProviderConnection.mockResolvedValue({
+      source: 'none',
+      useNativeAuth: false,
+      connection: {},
+    });
+    releaseAuthority();
+
+    await expect(resolving).rejects.toThrow(/authentication method changed/i);
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a fresh credential replaced before authority revalidation', async () => {
+    const old = credential('sk-ant-oat01-old-identity', NOW + 2 * 60 * 60 * 1000);
+    const replacement = credential('sk-ant-oat01-new-identity', NOW + 2 * 60 * 60 * 1000);
+    const read = vi.fn().mockResolvedValueOnce(old).mockResolvedValueOnce(replacement);
+    const subject = resolver({ read });
+
+    await expect(subject.instance.resolve('tenant-1', USER)).rejects.toThrow(
+      /managed Claude login changed/i
+    );
+    expect(subject.refresh).not.toHaveBeenCalled();
+  });
+
+  it('revalidates the second fresh path when another task refreshed before the flight', async () => {
+    const expiring = credential('sk-ant-oat01-expiring', NOW + 5 * 60 * 1000);
+    const fresh = credential('sk-ant-oat01-other-task', NOW + 2 * 60 * 60 * 1000);
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(expiring)
+      .mockResolvedValueOnce(fresh)
+      .mockResolvedValueOnce(fresh);
+    const subject = resolver({ read });
+
+    await expect(subject.instance.resolve('tenant-1', USER)).resolves.toMatchObject({
+      connection: { CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-other-task' },
+    });
+    expect(subject.auth.runCredentialMutation).toHaveBeenCalledTimes(1);
+    expect(subject.refresh).not.toHaveBeenCalled();
   });
 
   it('accepts the exact canonical login document when subscription type is absent', async () => {

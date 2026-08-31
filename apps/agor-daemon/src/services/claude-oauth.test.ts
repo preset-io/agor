@@ -298,6 +298,9 @@ describe('refreshClaudeTokens contract validation', () => {
 
   it.each([
     [400, 'rejected'],
+    [408, 'ambiguous'],
+    [425, 'ambiguous'],
+    [429, 'ambiguous'],
     [503, 'ambiguous'],
   ] as const)(
     'classifies HTTP %s as %s without exposing the provider body',
@@ -312,6 +315,7 @@ describe('refreshClaudeTokens contract validation', () => {
       expect(error).toMatchObject({ disposition });
       expect(String(error)).not.toContain('secret-provider-body');
       expect(String(error)).not.toContain('sk-ant-ort01-secret');
+      expect(fetch).toHaveBeenCalledTimes(1);
     }
   );
 });

@@ -305,9 +305,11 @@ export async function exchangeCodeForTokens(
  * to the provider runtime. The POST deliberately has the same rejected versus
  * ambiguous taxonomy as the one-shot code exchange:
  *
- * - any 4xx (including `invalid_grant`) is a definitive rejection;
- * - network failures, 5xx, and malformed success bodies are ambiguous because
- *   the provider may already have rotated the refresh token.
+ * - definitive 4xx responses (including `invalid_grant`) are rejections;
+ * - network failures, 408/425/429 throttling or timeout responses, 5xx, and
+ *   malformed success bodies are ambiguous because the provider may already
+ *   have rotated the refresh token. `Retry-After` must not trigger an automatic
+ *   replay of a possibly consumed refresh token within the launch.
  *
  * Callers must never clear the canonical file or persisted source for either
  * disposition. An ambiguous refresh is never replayed within the launch.
@@ -336,10 +338,11 @@ export async function refreshClaudeTokens(
     );
   }
   if (!res.ok) {
+    const ambiguous = res.status >= 500 || [408, 425, 429].includes(res.status);
     throw new TokenExchangeError(
-      res.status >= 500 ? 'ambiguous' : 'rejected',
-      res.status >= 500
-        ? 'Claude had a server error refreshing this login. Try again later.'
+      ambiguous ? 'ambiguous' : 'rejected',
+      ambiguous
+        ? 'Claude login refresh is temporarily unavailable. Try again later.'
         : 'Claude rejected this login refresh. Sign in again.'
     );
   }

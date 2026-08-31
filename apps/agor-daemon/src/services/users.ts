@@ -47,6 +47,7 @@ import {
   insert,
   isExecutionHomeKeyAvailable,
   isNull,
+  isPostgresDatabaseHandle,
   jsonExtract,
   runWithTenantDatabaseTransaction,
   select,
@@ -123,6 +124,42 @@ interface ClaudeCredentialMutationCoordinatorLike {
 }
 
 const CLAUDE_CREDENTIAL_MUTATION_GENERATION = Symbol('claude-credential-mutation-generation');
+const TENANT_USER_MUTATION_LOCK_HELD = Symbol('agor.users.tenant-mutation-lock-held');
+
+// SQLite is a single-daemon topology, so one process-local tenant authority
+// lock provides the serialization that PostgreSQL gets from its transaction
+// advisory fence. It deliberately spans authorization, external credential
+// cleanup, and the final guarded SQL mutation: a concurrent actor demotion can
+// therefore linearize either before cleanup (and deny it) or after the
+// authorized mutation, never between destructive cleanup and its SQL CAS.
+const tenantUserMutationLocks = new Map<string, Promise<void>>();
+
+async function withTenantUserMutationLock<T>(
+  params: Params | undefined,
+  work: (params: Params) => Promise<T>
+): Promise<T> {
+  const tenantId =
+    (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ??
+    getCurrentTenantId() ??
+    '<standalone>';
+  const previous = tenantUserMutationLocks.get(tenantId) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  tenantUserMutationLocks.set(tenantId, current);
+  await previous.catch(() => undefined);
+  try {
+    const lockedParams = { ...(params ?? {}) } as Params & {
+      [TENANT_USER_MUTATION_LOCK_HELD]: boolean;
+    };
+    lockedParams[TENANT_USER_MUTATION_LOCK_HELD] = true;
+    return await work(lockedParams);
+  } finally {
+    release();
+    if (tenantUserMutationLocks.get(tenantId) === current) tenantUserMutationLocks.delete(tenantId);
+  }
+}
 
 function affectsClaudeCredentialAuthority(data: UpdateUserData): boolean {
   return (
@@ -936,6 +973,16 @@ export class UsersService {
           } as Params)
       );
     }
+    if (
+      !isPostgresDatabaseHandle(this.db) &&
+      !(params as (Params & { [TENANT_USER_MUTATION_LOCK_HELD]?: boolean }) | undefined)?.[
+        TENANT_USER_MUTATION_LOCK_HELD
+      ]
+    ) {
+      return withTenantUserMutationLock(params, (lockedParams) =>
+        this.patch(id, data, lockedParams)
+      );
+    }
     if (typeof id !== 'string' || !id) {
       throw new BadRequest('Bulk user mutations are not supported');
     }
@@ -1366,11 +1413,26 @@ export class UsersService {
     const currentClaudeSource = (
       authority.target.data as { agentic_credential_sources?: AgenticCredentialSources }
     ).agentic_credential_sources?.['claude-code'];
-    const nextClaudeSource = (
-      updates.data as { agentic_credential_sources?: AgenticCredentialSources } | undefined
-    )?.agentic_credential_sources?.['claude-code'];
+    const nextClaudeSource = updates.data
+      ? (updates.data as { agentic_credential_sources?: AgenticCredentialSources })
+          .agentic_credential_sources?.['claude-code']
+      : currentClaudeSource;
+    const normalizeRouteField = (value: string | null | undefined) => value?.trim() || null;
+    const unixUsernameChanges =
+      Object.hasOwn(data, 'unix_username') &&
+      normalizeRouteField(data.unix_username) !==
+        normalizeRouteField(authority.target.unix_username);
+    const filesystemHomeChanges =
+      Object.hasOwn(data, 'filesystem_home') &&
+      normalizeRouteField(data.filesystem_home) !==
+        normalizeRouteField(authority.target.filesystem_home);
+    const executionMode = this.config.execution?.unix_user_mode ?? 'simple';
     const routeChanges =
-      Object.hasOwn(data, 'unix_username') || Object.hasOwn(data, 'filesystem_home');
+      executionMode === 'sandbox'
+        ? filesystemHomeChanges
+        : executionMode === 'delegated'
+          ? unixUsernameChanges
+          : false;
     const generation = coordinated?.[CLAUDE_CREDENTIAL_MUTATION_GENERATION];
     if (
       generation !== undefined &&
@@ -1463,6 +1525,14 @@ export class UsersService {
             [CLAUDE_CREDENTIAL_MUTATION_GENERATION]: generation,
           } as Params)
       );
+    }
+    if (
+      !isPostgresDatabaseHandle(this.db) &&
+      !(params as (Params & { [TENANT_USER_MUTATION_LOCK_HELD]?: boolean }) | undefined)?.[
+        TENANT_USER_MUTATION_LOCK_HELD
+      ]
+    ) {
+      return withTenantUserMutationLock(params, (lockedParams) => this.remove(id, lockedParams));
     }
     if (typeof id !== 'string' || !id) {
       throw new BadRequest('Bulk user mutations are not supported');
