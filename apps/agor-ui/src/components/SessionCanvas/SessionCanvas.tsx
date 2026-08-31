@@ -577,7 +577,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         try {
           let targetSessionId = sessionId;
 
-          // If creating new session, create it first
+          // If creating new session, create it first. MCP servers attach in the
+          // same create call so the selection can't be silently dropped (#2629);
+          // a failure rejects here and surfaces via the catch below.
           if (sessionId === 'new') {
             const newSession = await client.service('sessions').create({
               branch_id: triggerModal.branchId,
@@ -585,6 +587,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               agentic_tool_preset_id: agenticToolPresetId,
               description: `Session from zone "${triggerModal.zoneName}"`,
               status: 'idle',
+              mcpServerIds: mcpServerIds?.length ? mcpServerIds : undefined,
               model_config: modelConfig
                 ? {
                     ...modelConfig,
@@ -598,15 +601,6 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 : undefined,
             });
             targetSessionId = newSession.session_id;
-
-            // Attach MCP servers if provided
-            if (mcpServerIds && mcpServerIds.length > 0) {
-              for (const serverId of mcpServerIds) {
-                await client
-                  .service(`sessions/${targetSessionId}/mcp-servers`)
-                  .create({ mcpServerId: serverId });
-              }
-            }
           }
 
           // Execute action and capture the session the user should land on so

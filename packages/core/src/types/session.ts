@@ -626,6 +626,8 @@ export type CreateSessionInput = Omit<
   agentic_tool?: AgenticToolName;
   agentic_tool_preset_id?: AgenticToolConfigurationReference | null;
   model_config?: Partial<NonNullable<Session['model_config']>> | null;
+  /** MCP server IDs to attach in the same create call (issue #2629). */
+  mcpServerIds?: string[];
 };
 
 /** Session patch semantics: omit/undefined preserves, string sets, null clears. */

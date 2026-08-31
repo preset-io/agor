@@ -410,8 +410,9 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     const {
       agentic_tool_preset_id: configurationReference,
       model_config: originalModelConfig,
+      mcpServerIds: explicitMcpServerIds,
       ...sessionData
-    } = data;
+    } = data as CreateSessionInput;
     let createData: Partial<Session> = { ...sessionData };
     if (params?._agenticConfigResolved) {
       createData = {
@@ -521,13 +522,40 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       }
       if (admission.adoptBranch) await branchRepo.adoptSdkHome(branch.branch_id);
 
-      return new SessionRepository(scoped).create({
+      const createdSession = await new SessionRepository(scoped).create({
         ...createData,
         sdk_home_scope: admission.scope,
       });
+
+      // An explicit create-time MCP selection must persist atomically with the
+      // session. addServer validates usability against the session owner and
+      // throws when it fails, so a bad server rolls the whole create back
+      // rather than silently dropping the selection (issue #2629).
+      if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
+        const mcpRepo = new SessionMCPServerRepository(scoped);
+        for (const serverId of explicitMcpServerIds) {
+          await mcpRepo.addServer(createdSession.session_id, serverId as MCPServerID);
+        }
+      }
+
+      return createdSession;
     });
     if (Array.isArray(created)) {
       throw new Error('Single-session creation returned multiple sessions');
+    }
+    if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
+      for (const serverId of explicitMcpServerIds) {
+        emitServiceEvent(this.app, {
+          path: 'session-mcp-servers',
+          event: 'created',
+          data: {
+            session_id: created.session_id,
+            mcp_server_id: serverId,
+            enabled: true,
+            added_at: new Date(),
+          },
+        });
+      }
     }
     return created;
   }
