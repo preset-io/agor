@@ -331,6 +331,7 @@ describe('refreshClaudeTokens contract validation', () => {
       expect(error).toMatchObject({ disposition });
       expect(String(error)).not.toContain('secret-provider-body');
       expect(String(error)).not.toContain('sk-ant-ort01-secret');
+      expect(fetch).toHaveBeenCalledTimes(1);
     }
   );
 

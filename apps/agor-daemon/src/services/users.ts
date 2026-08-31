@@ -992,13 +992,16 @@ export class UsersService {
     const authority = await this.authorizePatch(id, data, params);
     const changesClaudeCredentialSource =
       coordinateClaudeCredential && this.claudeCredentialPatches!.changesSource(data, params);
+    const normalizeRouteField = (value: string | null | undefined) => value?.trim() || null;
     const changesClaudeCredentialRoute =
       coordinateClaudeCredential &&
       this.claudeCredentialPatches!.changesRoute(data) &&
       ((data.unix_username !== undefined &&
-        data.unix_username !== authority.target.unix_username) ||
+        normalizeRouteField(data.unix_username) !==
+          normalizeRouteField(authority.target.unix_username)) ||
         (data.filesystem_home !== undefined &&
-          data.filesystem_home !== authority.target.filesystem_home));
+          normalizeRouteField(data.filesystem_home) !==
+            normalizeRouteField(authority.target.filesystem_home)));
     const hasPasswordWrite = Object.hasOwn(data, 'password');
     const assignedPassword = hasPasswordWrite
       ? validatedAssignedPassword(data.password, data.email ?? authority.target.email)

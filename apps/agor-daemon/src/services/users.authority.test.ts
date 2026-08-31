@@ -519,10 +519,15 @@ describe('UsersService Claude credential-source authority', () => {
         { filesystem_home: '/tmp/claude-coordinated-home' },
         params
       );
+      await service.patch(
+        user.user_id as UserID,
+        { filesystem_home: '/tmp/claude-coordinated-home' },
+        params
+      );
       await service.patch(user.user_id as UserID, { name: 'not-credential-related' }, params);
     });
 
-    expect(lock).toHaveBeenCalledTimes(2);
+    expect(lock).toHaveBeenCalledTimes(3);
     expect(complete).toHaveBeenCalledTimes(1);
     expect(cleanupRouteBeforePatch).toHaveBeenCalledTimes(1);
   });
