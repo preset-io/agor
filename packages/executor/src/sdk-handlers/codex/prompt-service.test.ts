@@ -1445,7 +1445,7 @@ describe('CodexPromptService - tool payload mapping', () => {
     });
   });
 
-  it('clears resume state on a fatal stream error even when the session started fresh', async () => {
+  it('clears resume state when an observed stream error is followed by EOF on a fresh thread', async () => {
     const service = new CodexPromptService(
       mockMessagesRepo,
       mockSessionsRepo,
@@ -1491,7 +1491,7 @@ describe('CodexPromptService - tool payload mapping', () => {
           // no-op
         }
       })()
-    ).rejects.toThrow('The MCP operation failed');
+    ).rejects.toThrow('Codex ended the turn without a completion event');
 
     expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-1', {
       sdk_session_id: null,
@@ -1915,7 +1915,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     });
   });
 
-  it('treats the SDK-defined fatal error event as authoritative without parsing reconnect prose', async () => {
+  it('allows Codex to recover after a stream error without parsing reconnect prose', async () => {
     const { service } = await makeInitializedStreamingService('existing-thread-id');
 
     const reconnectMessage =
@@ -1923,19 +1923,67 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     mockStreamEvents = [
       { type: 'error', message: reconnectMessage },
       {
+        type: 'item.completed',
+        item: { id: 'answer-1', type: 'agent_message', text: 'Recovered answer.' },
+      },
+      {
         type: 'turn.completed',
         usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 2 },
       },
     ];
-    await expect(drain(service)).rejects.toThrow('The MCP operation failed');
-    expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const emitted = await drain(service);
+      expect(JSON.stringify(emitted)).toContain('Recovered answer.');
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining('[codex.provider] event=stream_error_observed')
+      );
+      expect(log).toHaveBeenCalledWith(expect.stringContaining('outcome=awaiting_terminal_event'));
+      expect(JSON.stringify(log.mock.calls)).not.toContain(reconnectMessage);
+      expect(mockSessionsRepo.update).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('fails only after Codex completes without an assistant response following a stream error', async () => {
+    const { service } = await makeInitializedStreamingService('existing-thread-id');
+    const providerMessage = 'SENTINEL_PROVIDER_STREAM_BODY';
+    mockStreamEvents = [
+      { type: 'error', message: providerMessage },
+      {
+        type: 'item.completed',
+        item: { id: 'empty-answer', type: 'agent_message', text: '' },
+      },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 5, cached_input_tokens: 0, output_tokens: 0 },
+      },
+    ];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(drain(service)).rejects.toThrow(
+        'Codex completed after a provider stream error but returned no assistant response'
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('event=stream_error_observed'));
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('event=turn_completed_without_response')
+      );
+      expect(JSON.stringify([...warn.mock.calls, ...error.mock.calls])).not.toContain(
+        providerMessage
+      );
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
   });
 
   it.each([
     ['fresh', null],
     ['established', 'existing-thread-id'],
   ])(
-    'classifies a real SDK-shaped turn.failed as unknown for a %s thread',
+    'reports a real SDK-shaped turn.failed as a Codex provider failure for a %s thread',
     async (_threadKind, sdkSessionId) => {
       const { service } = await makeInitializedStreamingService(sdkSessionId);
 
@@ -1943,7 +1991,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
         { type: 'turn.failed', error: { message: 'provider rejected the turn' } },
       ];
 
-      await expect(drain(service)).rejects.toThrow('The MCP operation failed');
+      await expect(drain(service)).rejects.toThrow('The Codex provider failed the turn');
 
       expect(mockSessionsRepo.update).not.toHaveBeenCalled();
     }
@@ -1968,6 +2016,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
       const failure = await drain(service).catch((error: unknown) => error);
       expect(String(failure)).not.toContain(sentinel);
       expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(sentinel);
+      expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).toContain('event=turn_failed');
       expect(JSON.stringify(mockSessionsRepo.update.mock.calls)).not.toContain(sentinel);
     } finally {
       for (const spy of spies) spy.mockRestore();
@@ -1984,7 +2033,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     ];
 
     const failure = await drain(service).catch((error: unknown) => error);
-    expect(String(failure)).toContain('The MCP operation failed');
+    expect(String(failure)).toContain('The Codex provider failed the turn');
     expect(String(failure)).not.toContain('SENTINEL_REJECTED_BODY');
     expect(String(failure)).not.toContain('sign in again');
   });
@@ -1998,7 +2047,7 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     ];
 
     await expect(drain(service)).rejects.toThrow(
-      'This MCP authentication configuration is incomplete. Review the saved server settings and retry.'
+      'Codex authentication is not configured. Review Codex authentication settings and retry the prompt.'
     );
   });
 
@@ -2007,12 +2056,12 @@ describe('CodexPromptService - event_msg terminal handling (issue #1749)', () =>
     ['Reconnecting...', 'missing N/M'],
     [' Reconnecting... 2/5', 'leading whitespace'],
     ['Error: Reconnecting... 2/5', 'prefixed text'],
-  ])('treats %s as a fatal stream error (%s)', async (message) => {
+  ])('awaits a terminal event after %s without trusting prose shape (%s)', async (message) => {
     const { service } = await makeInitializedStreamingService('existing-thread-id');
 
     mockStreamEvents = [{ type: 'error', message }];
 
-    await expect(drain(service)).rejects.toThrow('The MCP operation failed');
+    await expect(drain(service)).rejects.toThrow('Codex ended the turn without a completion event');
 
     expect(mockSessionsRepo.update).not.toHaveBeenCalled();
   });
