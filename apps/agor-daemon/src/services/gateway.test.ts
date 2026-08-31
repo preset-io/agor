@@ -1730,21 +1730,24 @@ describe('GatewayService durable listener delivery fences', () => {
       existingMapping: makeMapping({ channel_id: channel.id, thread_id: '19:group@thread.v2' }),
     });
 
-    await expect(
-      service.create({
-        channel_key: channel.channel_key,
-        thread_id: '19:group@thread.v2',
-        text: 'display name only',
-        metadata: {
-          teams_conversation_type: 'groupChat',
-          teams_has_mention: false,
-        },
-      })
-    ).resolves.toMatchObject({ success: false, created: false });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: '19:group@thread.v2',
+      text: 'display name only',
+      metadata: {
+        teams_conversation_type: 'groupChat',
+        teams_has_mention: false,
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000097' as never,
+    };
+    await expect(service.create(withVerifiedHttpGatewayAuthority(data))).resolves.toMatchObject({
+      success: false,
+      created: false,
+    });
     expect(promptCreate).not.toHaveBeenCalled();
   });
 
-  it('rejects forged inbound event IDs and accepts the verified Teams HTTP path', async () => {
+  it('rejects direct Teams creates without durable ownership and accepts the verified HTTP path', async () => {
     const channel: GatewayChannel = {
       ...slackChannel,
       id: 'teams-authority-channel' as never,
@@ -1766,7 +1769,7 @@ describe('GatewayService durable listener delivery fences', () => {
     });
     const { service } = makeGatewayHarness({ channel, existingMapping: mapping });
     Object.assign(service as unknown as Record<string, unknown>, {
-      durableListenerOwnership: true,
+      durableListenerOwnership: false,
       taskRepo: { findById: vi.fn(async () => null) },
     });
     const data = {

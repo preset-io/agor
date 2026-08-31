@@ -2192,24 +2192,18 @@ export class GatewayService {
       throw new Error('Channel is disabled');
     }
     const channelConfig = channel.config as Record<string, unknown>;
-    if (
-      verifiedHttpAuthority &&
-      (channel.channel_type !== 'teams' ||
+    if (channel.channel_type === 'teams') {
+      if (
+        !verifiedHttpAuthority ||
         !data.gateway_inbound_event_id ||
-        data.listener_claim_token !== undefined)
-    ) {
+        data.listener_claim_token !== undefined
+      ) {
+        throw new Error(
+          'Gateway inbound event authority must be verified by the Teams queue or listener'
+        );
+      }
+    } else if (verifiedHttpAuthority) {
       throw new Error('Invalid verified HTTP gateway authority');
-    }
-    if (
-      channel.channel_type === 'teams' &&
-      durableListenerOwnership &&
-      data.gateway_inbound_event_id &&
-      !verifiedHttpAuthority &&
-      !data.listener_claim_token
-    ) {
-      throw new Error(
-        'Gateway inbound event authority must be verified by the Teams queue or listener'
-      );
     }
     if (durableListenerOwnership && !data.gateway_inbound_event_id) {
       throw new Error(

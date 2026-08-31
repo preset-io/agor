@@ -1,8 +1,8 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "bcea6150-29bf-44f0-86cb-23b80ed7d1c4",
-  "prevId": "051759c2-9ec7-4cf5-a027-ac14e65e827c",
+  "id": "c89a1fe5-28b8-47c4-b840-ba8b7cc31d22",
+  "prevId": "bcea6150-29bf-44f0-86cb-23b80ed7d1c4",
   "tables": {
     "agentic_tool_presets": {
       "name": "agentic_tool_presets",
@@ -1564,6 +1564,14 @@
           "autoincrement": false,
           "default": "'none'"
         },
+        "allow_shared_session_prompts": {
+          "name": "allow_shared_session_prompts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
         "revision": {
           "name": "revision",
           "type": "integer",
@@ -1794,186 +1802,6 @@
           "value": "(\"branch_permission_entries\".\"user_id\" IS NOT NULL) <> (\"branch_permission_entries\".\"group_id\" IS NOT NULL)"
         }
       }
-    },
-    "branch_session_sharing_grants": {
-      "name": "branch_session_sharing_grants",
-      "columns": {
-        "grant_id": {
-          "name": "grant_id",
-          "type": "text(36)",
-          "primaryKey": true,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "config_id": {
-          "name": "config_id",
-          "type": "text(36)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "session_owner_user_id": {
-          "name": "session_owner_user_id",
-          "type": "text(36)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "text(36)",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "group_id": {
-          "name": "group_id",
-          "type": "text(36)",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "branch_session_sharing_grants_rule_idx": {
-          "name": "branch_session_sharing_grants_rule_idx",
-          "columns": ["config_id", "session_owner_user_id"],
-          "isUnique": false
-        },
-        "branch_session_sharing_grants_user_idx": {
-          "name": "branch_session_sharing_grants_user_idx",
-          "columns": ["user_id", "config_id"],
-          "isUnique": false
-        },
-        "branch_session_sharing_grants_group_idx": {
-          "name": "branch_session_sharing_grants_group_idx",
-          "columns": ["group_id", "config_id"],
-          "isUnique": false
-        },
-        "branch_session_sharing_grants_rule_user_unique": {
-          "name": "branch_session_sharing_grants_rule_user_unique",
-          "columns": ["config_id", "session_owner_user_id", "user_id"],
-          "isUnique": true
-        },
-        "branch_session_sharing_grants_rule_group_unique": {
-          "name": "branch_session_sharing_grants_rule_group_unique",
-          "columns": ["config_id", "session_owner_user_id", "group_id"],
-          "isUnique": true
-        }
-      },
-      "foreignKeys": {
-        "branch_session_sharing_grants_user_id_users_user_id_fk": {
-          "name": "branch_session_sharing_grants_user_id_users_user_id_fk",
-          "tableFrom": "branch_session_sharing_grants",
-          "tableTo": "users",
-          "columnsFrom": ["user_id"],
-          "columnsTo": ["user_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "branch_session_sharing_grants_group_id_groups_group_id_fk": {
-          "name": "branch_session_sharing_grants_group_id_groups_group_id_fk",
-          "tableFrom": "branch_session_sharing_grants",
-          "tableTo": "groups",
-          "columnsFrom": ["group_id"],
-          "columnsTo": ["group_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "branch_session_sharing_grants_config_id_session_owner_user_id_branch_session_sharing_rules_config_id_session_owner_user_id_fk": {
-          "name": "branch_session_sharing_grants_config_id_session_owner_user_id_branch_session_sharing_rules_config_id_session_owner_user_id_fk",
-          "tableFrom": "branch_session_sharing_grants",
-          "tableTo": "branch_session_sharing_rules",
-          "columnsFrom": ["config_id", "session_owner_user_id"],
-          "columnsTo": ["config_id", "session_owner_user_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "checkConstraints": {
-        "branch_session_sharing_grants_principal_check": {
-          "name": "branch_session_sharing_grants_principal_check",
-          "value": "(\"branch_session_sharing_grants\".\"user_id\" IS NOT NULL) <> (\"branch_session_sharing_grants\".\"group_id\" IS NOT NULL)"
-        }
-      }
-    },
-    "branch_session_sharing_rules": {
-      "name": "branch_session_sharing_rules",
-      "columns": {
-        "config_id": {
-          "name": "config_id",
-          "type": "text(36)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "session_owner_user_id": {
-          "name": "session_owner_user_id",
-          "type": "text(36)",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false,
-          "default": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        }
-      },
-      "indexes": {
-        "branch_session_sharing_rules_owner_idx": {
-          "name": "branch_session_sharing_rules_owner_idx",
-          "columns": ["session_owner_user_id"],
-          "isUnique": false
-        }
-      },
-      "foreignKeys": {
-        "branch_session_sharing_rules_config_id_branch_permission_configs_config_id_fk": {
-          "name": "branch_session_sharing_rules_config_id_branch_permission_configs_config_id_fk",
-          "tableFrom": "branch_session_sharing_rules",
-          "tableTo": "branch_permission_configs",
-          "columnsFrom": ["config_id"],
-          "columnsTo": ["config_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "branch_session_sharing_rules_session_owner_user_id_users_user_id_fk": {
-          "name": "branch_session_sharing_rules_session_owner_user_id_users_user_id_fk",
-          "tableFrom": "branch_session_sharing_rules",
-          "tableTo": "users",
-          "columnsFrom": ["session_owner_user_id"],
-          "columnsTo": ["user_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "branch_session_sharing_rules_config_id_session_owner_user_id_pk": {
-          "columns": ["config_id", "session_owner_user_id"],
-          "name": "branch_session_sharing_rules_config_id_session_owner_user_id_pk"
-        }
-      },
-      "uniqueConstraints": {},
-      "checkConstraints": {}
     },
     "branches": {
       "name": "branches",
@@ -2249,6 +2077,13 @@
         "clone_depth": {
           "name": "clone_depth",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "sdk_home": {
+          "name": "sdk_home",
+          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
@@ -6571,6 +6406,14 @@
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false
+        },
+        "sdk_home_scope": {
+          "name": "sdk_home_scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": "'execution_home'"
         },
         "status": {
           "name": "status",

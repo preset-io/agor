@@ -60,7 +60,7 @@ function migrationTenantTables(): string[] {
     'packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'
   );
   const teamsGatewayHaMigration = readRepoFile(
-    'packages/core/drizzle/postgres/0096_slow_virginia_dare.sql'
+    'packages/core/drizzle/postgres/0100_slow_virginia_dare.sql'
   );
   const retiredTables = retiredTenantTables();
   return [
@@ -98,7 +98,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),
     readRepoFile('packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'),
     readRepoFile('packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'),
-    readRepoFile('packages/core/drizzle/postgres/0096_slow_virginia_dare.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0100_slow_virginia_dare.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [
@@ -127,7 +127,7 @@ describe('Postgres multitenancy schema coverage', () => {
   });
 
   it('limits Teams ingress and delivery discovery to explicit read capabilities', () => {
-    const migration = readRepoFile('packages/core/drizzle/postgres/0096_slow_virginia_dare.sql');
+    const migration = readRepoFile('packages/core/drizzle/postgres/0100_slow_virginia_dare.sql');
     expect(migration).toContain('CREATE POLICY "teams_gateway_ingress_discovery"');
     expect(migration).toContain('CREATE POLICY "teams_gateway_inbound_discovery"');
     expect(migration).toContain('CREATE POLICY "teams_message_delivery_discovery"');

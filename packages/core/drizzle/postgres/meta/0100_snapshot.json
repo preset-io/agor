@@ -1,6 +1,6 @@
 {
-  "id": "e3d2c91b-811e-4568-9b00-8ec7d51d4fd6",
-  "prevId": "23ab2a49-538b-4c25-be22-b4115e97b2af",
+  "id": "6a8b123f-f86a-4476-b9c8-4a22ec591332",
+  "prevId": "e3d2c91b-811e-4568-9b00-8ec7d51d4fd6",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2255,6 +2255,13 @@
           "notNull": true,
           "default": "'none'"
         },
+        "allow_shared_session_prompts": {
+          "name": "allow_shared_session_prompts",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
         "revision": {
           "name": "revision",
           "type": "integer",
@@ -2677,352 +2684,6 @@
       },
       "isRLSEnabled": false
     },
-    "public.branch_session_sharing_grants": {
-      "name": "branch_session_sharing_grants",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'default'"
-        },
-        "grant_id": {
-          "name": "grant_id",
-          "type": "varchar(36)",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "config_id": {
-          "name": "config_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "session_owner_user_id": {
-          "name": "session_owner_user_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "group_id": {
-          "name": "group_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "branch_session_sharing_grants_tenant_id_idx": {
-          "name": "branch_session_sharing_grants_tenant_id_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "branch_session_sharing_grants_rule_idx": {
-          "name": "branch_session_sharing_grants_rule_idx",
-          "columns": [
-            {
-              "expression": "config_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "session_owner_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "branch_session_sharing_grants_user_idx": {
-          "name": "branch_session_sharing_grants_user_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "config_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "branch_session_sharing_grants_group_idx": {
-          "name": "branch_session_sharing_grants_group_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "group_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "config_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "branch_session_sharing_grants_rule_user_unique": {
-          "name": "branch_session_sharing_grants_rule_user_unique",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "config_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "session_owner_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "branch_session_sharing_grants_rule_group_unique": {
-          "name": "branch_session_sharing_grants_rule_group_unique",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "config_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "session_owner_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "group_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "branch_session_sharing_grants_tenant_rule_fk": {
-          "name": "branch_session_sharing_grants_tenant_rule_fk",
-          "tableFrom": "branch_session_sharing_grants",
-          "tableTo": "branch_session_sharing_rules",
-          "columnsFrom": ["tenant_id", "config_id", "session_owner_user_id"],
-          "columnsTo": ["tenant_id", "config_id", "session_owner_user_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "branch_session_sharing_grants_tenant_user_fk": {
-          "name": "branch_session_sharing_grants_tenant_user_fk",
-          "tableFrom": "branch_session_sharing_grants",
-          "tableTo": "users",
-          "columnsFrom": ["tenant_id", "user_id"],
-          "columnsTo": ["tenant_id", "user_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "branch_session_sharing_grants_tenant_group_fk": {
-          "name": "branch_session_sharing_grants_tenant_group_fk",
-          "tableFrom": "branch_session_sharing_grants",
-          "tableTo": "groups",
-          "columnsFrom": ["tenant_id", "group_id"],
-          "columnsTo": ["tenant_id", "group_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {
-        "branch_session_sharing_grants_principal_check": {
-          "name": "branch_session_sharing_grants_principal_check",
-          "value": "(\"branch_session_sharing_grants\".\"user_id\" IS NOT NULL) <> (\"branch_session_sharing_grants\".\"group_id\" IS NOT NULL)"
-        }
-      },
-      "isRLSEnabled": false
-    },
-    "public.branch_session_sharing_rules": {
-      "name": "branch_session_sharing_rules",
-      "schema": "",
-      "columns": {
-        "tenant_id": {
-          "name": "tenant_id",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'default'"
-        },
-        "config_id": {
-          "name": "config_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "session_owner_user_id": {
-          "name": "session_owner_user_id",
-          "type": "varchar(36)",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "enabled": {
-          "name": "enabled",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "updated_at": {
-          "name": "updated_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true
-        }
-      },
-      "indexes": {
-        "branch_session_sharing_rules_tenant_id_idx": {
-          "name": "branch_session_sharing_rules_tenant_id_idx",
-          "columns": [
-            {
-              "expression": "tenant_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "branch_session_sharing_rules_owner_idx": {
-          "name": "branch_session_sharing_rules_owner_idx",
-          "columns": [
-            {
-              "expression": "session_owner_user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "branch_session_sharing_rules_tenant_config_fk": {
-          "name": "branch_session_sharing_rules_tenant_config_fk",
-          "tableFrom": "branch_session_sharing_rules",
-          "tableTo": "branch_permission_configs",
-          "columnsFrom": ["tenant_id", "config_id"],
-          "columnsTo": ["tenant_id", "config_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "branch_session_sharing_rules_tenant_owner_fk": {
-          "name": "branch_session_sharing_rules_tenant_owner_fk",
-          "tableFrom": "branch_session_sharing_rules",
-          "tableTo": "users",
-          "columnsFrom": ["tenant_id", "session_owner_user_id"],
-          "columnsTo": ["tenant_id", "user_id"],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "branch_session_sharing_rules_tenant_id_config_id_session_owner_user_id_pk": {
-          "name": "branch_session_sharing_rules_tenant_id_config_id_session_owner_user_id_pk",
-          "columns": ["tenant_id", "config_id", "session_owner_user_id"]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.branches": {
       "name": "branches",
       "schema": "",
@@ -3268,6 +2929,12 @@
         "clone_depth": {
           "name": "clone_depth",
           "type": "integer",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sdk_home": {
+          "name": "sdk_home",
+          "type": "text",
           "primaryKey": false,
           "notNull": false
         },
@@ -9730,6 +9397,13 @@
           "type": "text",
           "primaryKey": false,
           "notNull": false
+        },
+        "sdk_home_scope": {
+          "name": "sdk_home_scope",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'execution_home'"
         },
         "status": {
           "name": "status",
