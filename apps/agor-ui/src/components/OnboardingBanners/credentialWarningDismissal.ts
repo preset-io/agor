@@ -22,7 +22,7 @@ export function credentialWarningDismissalKey(
   userId: string,
   tool: AgenticToolName
 ): string {
-  return `agor:onboarding-banner:v2:${scope}:${userId}:${tool}`;
+  return `agor-credential-warning-dismissed:v2:${scope}:${userId}:${tool}`;
 }
 
 /**
