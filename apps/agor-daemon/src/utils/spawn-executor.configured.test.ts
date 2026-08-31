@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
@@ -34,6 +34,8 @@ vi.mock('../executor-tracking.js', () => ({
 
 vi.mock('@agor/core/unix', () => ({
   isValidExecutionHomeKey: (username: string) => /^[a-z_][a-z0-9_-]{0,31}$/.test(username),
+  probeBwrapPidNamespace: () => true,
+  probeBwrapSecurityBaseline: () => true,
 }));
 
 vi.mock('./build-resolved-config-slice.js', () => ({
@@ -676,6 +678,107 @@ describe('configured executor spawning', () => {
         stdio: ['pipe', 'pipe', 'pipe'],
       })
     );
+  });
+
+  it('carries the per-user home store through local request handoff into bubblewrap', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'agor-owner-home-handoff-'));
+    const homeDir = path.join(root, 'home');
+    const dataHome = path.join(homeDir, '.agor');
+    const branchPath = path.join(dataHome, 'worktrees', 'tenant-a', 'repo', 'feature');
+    const ownerHomeStore = path.join(dataHome, 'tenants', 'tenant-a', 'homes', 'owner-a');
+    mkdirSync(branchPath, { recursive: true });
+
+    try {
+      const actualSandboxWrap =
+        await vi.importActual<typeof import('./sandbox-wrap.js')>('./sandbox-wrap.js');
+      sandboxWrapMock.mockImplementation(actualSandboxWrap.buildSandboxWrap);
+      const { configureExecutor, requestExecutor } = await import('./spawn-executor');
+      configureExecutor(
+        {
+          sandbox: {
+            enabled: true,
+            fail_if_unavailable: true,
+            home_mode: 'per_user',
+          },
+        },
+        {
+          ...LOCAL_RESPONSE_OPTIONS,
+          sandboxRuntimePaths: {
+            homeDir,
+            dataHome,
+            protectedDataRoots: [dataHome],
+            worktreesRoot: path.join(dataHome, 'worktrees', 'tenant-a'),
+            agenticToolsPath: path.join(dataHome, 'agentic-tools'),
+            agorConfigPath: path.join(dataHome, 'config.yaml'),
+            agorDbPath: path.join(dataHome, 'agor.db'),
+          },
+        }
+      );
+
+      await expect(
+        requestExecutor({
+          command: 'upload.materialize:session-a:upload-a',
+          params: { cwd: branchPath, principalBranchAccess: 'write' },
+        })
+      ).resolves.toMatchObject({
+        success: false,
+        error: {
+          code: 'EXECUTOR_SPAWN_ERROR',
+          message: expect.stringContaining(
+            'sandbox home_mode=per_user requires an owner home store'
+          ),
+        },
+      });
+      expect(spawnMock).not.toHaveBeenCalled();
+
+      const proc = createMockProcess();
+      spawnMock.mockReturnValue(proc);
+      const resultPromise = requestExecutor({
+        command: 'upload.materialize:session-a:upload-a',
+        params: {
+          cwd: branchPath,
+          principalBranchAccess: 'write',
+          sandboxHomeStore: ownerHomeStore,
+        },
+      });
+
+      await deliverExecutorResponse(proc, {
+        success: true,
+        data: { path: '.agor/session-staging/brief.txt' },
+      });
+      proc.emit('exit', 0);
+
+      await expect(resultPromise).resolves.toEqual({
+        success: true,
+        data: { path: '.agor/session-staging/brief.txt' },
+      });
+      expect(spawnMock).toHaveBeenCalledOnce();
+      const bwrapArgs = spawnMock.mock.calls[0]?.[1] as string[];
+      const homeBindIndex = bwrapArgs.findIndex(
+        (arg, index) =>
+          arg === '--bind' &&
+          bwrapArgs[index + 1] === ownerHomeStore &&
+          bwrapArgs[index + 2] === homeDir
+      );
+      const tmpBindIndex = bwrapArgs.findIndex(
+        (arg, index) =>
+          arg === '--bind' &&
+          bwrapArgs[index + 1] === path.join(ownerHomeStore, 'tmp') &&
+          bwrapArgs[index + 2] === '/tmp'
+      );
+      expect(homeBindIndex).toBeGreaterThanOrEqual(0);
+      expect(tmpBindIndex).toBeGreaterThan(homeBindIndex);
+      expect(spawnMock).toHaveBeenCalledWith(
+        'bwrap',
+        expect.any(Array),
+        expect.objectContaining({
+          env: expect.objectContaining({ AGOR_OUTER_SANDBOX: '1' }),
+          stdio: ['pipe', 'pipe', 'pipe'],
+        })
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('maps a pinned credential source onto child fd 3 without serializing it', async () => {
