@@ -226,6 +226,7 @@ export class ConfigService {
         tenantId,
         config: this.config,
         withTenantDatabase: (work) => runWithTenantDatabaseScope(this.db, tenantId, work),
+        agenticTool: tool,
       });
     const requireCanonicalCodexHome = tool === 'codex' && this.config.deployment?.mode === 'ha';
     let prompterHome = requireCanonicalCodexHome ? await homeOf(promptingUserId) : undefined;

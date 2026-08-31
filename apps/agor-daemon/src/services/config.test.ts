@@ -645,6 +645,14 @@ describe('ConfigService.resolveApiKey', () => {
       )
     ).rejects.toBeInstanceOf(Forbidden);
     expect(homeMocks.resolveExecutionCredentialHome).toHaveBeenCalledTimes(2);
+    expect(homeMocks.resolveExecutionCredentialHome).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ userId: 'prompter-1', agenticTool: 'codex' })
+    );
+    expect(homeMocks.resolveExecutionCredentialHome).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ userId: 'owner-2', agenticTool: 'codex' })
+    );
   });
 
   it('uses the foreign Task actor native auth for a branch-scoped Codex Session', async () => {

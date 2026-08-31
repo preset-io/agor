@@ -7,10 +7,11 @@ export interface CodexAuthCredentialRouting {
   delegatedHomeKey: string | null;
   userId: string;
   /**
-   * Explicit `CODEX_HOME` (the `.codex` dir) for the auth-file route. HA
+   * Explicit native Codex state root for the auth-file route. HA
    * generation-fenced mutations use it directly; executor operations receive
-   * it as `CODEX_HOME`. Unset routes the executor to its effective user's
-   * `~/.codex`.
+   * it as `CODEX_HOME`. Set for the built-in local `simple` executor to the
+   * caller's Agor-managed namespace, or in `sandbox` to the caller's per-user
+   * store. Unset for templated/external routes, whose substrate owns the home.
    */
   codexHome?: string;
 }
@@ -32,10 +33,11 @@ const options = (routing: CodexAuthCredentialRouting) => ({
     user_id: routing.userId,
   },
   // Executor-routed operations resolve the auth file from CODEX_HOME. Point
-  // them at the caller's per-user store `.codex` so they inspect the same file
-  // as the sandboxed session (with that store overlaid at ~). The option env
-  // replaces the spawn environment, so seed it from the secret-free runtime
-  // allowlist rather than copying the daemon's deployment credential bag.
+  // them at the daemon-authorized simple namespace or sandbox home so auth
+  // helpers and later task execution agree. The option env replaces the spawn
+  // environment, so seed it from the secret-free runtime allowlist rather than
+  // copying the daemon's deployment credential bag. The explicit value comes
+  // last and cannot be replaced by an ambient CODEX_HOME.
   ...(routing.codexHome
     ? { env: { ...buildAllowlistedEnv(), CODEX_HOME: routing.codexHome } }
     : {}),

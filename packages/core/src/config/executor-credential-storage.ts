@@ -24,8 +24,11 @@ export function hasTenantSafeExecutorCredentialHome(
  * In `sandbox` mode Agor selects the tenant/user-keyed home store directly. In
  * `delegated` mode the external substrate receives the trusted tenant/user home
  * key and this contract asserts that every helper and later Task is routed to
- * that same durable home. Merely declaring `persistent-per-user` while running
- * in `simple` mode does not change the daemon process home.
+ * that same durable home. The built-in local `simple` executor may separate
+ * Codex state into tenant/user directories, but every directory is still
+ * accessible to the daemon uid. That trusted-local namespace is deliberately
+ * not treated as the exact-user filesystem contract required in hosted mode;
+ * merely declaring `persistent-per-user` does not change this boundary.
  */
 export function hasExactUserExecutorCredentialHome(config: Pick<AgorConfig, 'execution'>): boolean {
   if (config.execution?.executor_storage?.user_home !== 'persistent-per-user') return false;

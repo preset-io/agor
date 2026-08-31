@@ -6,16 +6,21 @@
  * two identities resolve to the same concrete home.
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import type { AgorConfig } from '@agor/core/config';
 import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
-import type { DeepReadonly, UserID } from '@agor/core/types';
+import type { AgenticToolName, DeepReadonly, UserID } from '@agor/core/types';
 import { resolveDelegatedHomeKey, type UnixUserMode } from '@agor/core/unix';
+import { resolveSimpleCodexHome } from '../utils/codex-credential-namespace.js';
 import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
 
 export interface ExecutionCredentialHome {
   delegatedHomeKey: string | null;
   homeStore: string | null;
   homeStoreSource: 'canonical' | 'override' | null;
+  /** Explicit native Codex state root when Agor, rather than the substrate, selects it. */
+  codexHome?: string;
 }
 
 export class ExecutionCredentialHomeResolutionError extends Error {
@@ -33,8 +38,10 @@ export async function resolveExecutionCredentialHome(options: {
   tenantId: string | undefined;
   config: DeepReadonly<AgorConfig>;
   withTenantDatabase: <T>(work: (db: TenantScopedDatabase) => Promise<T>) => Promise<T>;
+  /** Native-auth tool whose concrete state namespace is being compared. */
+  agenticTool?: AgenticToolName;
 }): Promise<ExecutionCredentialHome> {
-  const { userId, tenantId, config, withTenantDatabase } = options;
+  const { userId, tenantId, config, withTenantDatabase, agenticTool } = options;
   const mode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
   const sandbox = config.execution?.sandbox;
   const perOwnerHome = sandbox?.enabled === true && sandbox?.home_mode === 'per_user';
@@ -64,17 +71,38 @@ export async function resolveExecutionCredentialHome(options: {
   }
 
   const filesystemHome = row?.filesystem_home?.trim();
+  const homeStore = perOwnerHome
+    ? resolveOwnerHomeStore({
+        config,
+        tenantId,
+        ownerUserId: userId,
+        filesystemHome,
+      })
+    : null;
+
+  // Only the built-in local simple executor is under the daemon's path
+  // authority. Give Codex a stable tenant/user state namespace there. This is
+  // trusted-local state separation, not filesystem isolation: every namespace
+  // remains accessible to the daemon uid. Templated simple execution is left
+  // to its external substrate, exactly like delegated execution.
+  const codexHome =
+    agenticTool !== 'codex'
+      ? undefined
+      : mode === 'simple' && !config.execution?.executor_command_template
+        ? resolveSimpleCodexHome({
+            tenantId: tenantId ?? '',
+            subjectUserId: userId,
+            homeDir: homedir(),
+          })
+        : homeStore
+          ? join(homeStore, '.codex')
+          : undefined;
+
   return {
     delegatedHomeKey,
-    homeStore: perOwnerHome
-      ? resolveOwnerHomeStore({
-          config,
-          tenantId,
-          ownerUserId: userId,
-          filesystemHome,
-        })
-      : null,
+    homeStore,
     homeStoreSource: perOwnerHome ? (filesystemHome ? 'override' : 'canonical') : null,
+    ...(codexHome ? { codexHome } : {}),
   };
 }
 
@@ -82,5 +110,9 @@ export function sameExecutionCredentialHome(
   a: ExecutionCredentialHome,
   b: ExecutionCredentialHome
 ): boolean {
-  return a.delegatedHomeKey === b.delegatedHomeKey && a.homeStore === b.homeStore;
+  return (
+    a.delegatedHomeKey === b.delegatedHomeKey &&
+    a.homeStore === b.homeStore &&
+    a.codexHome === b.codexHome
+  );
 }

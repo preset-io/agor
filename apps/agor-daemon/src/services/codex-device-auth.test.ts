@@ -167,6 +167,11 @@ describe('codex-device-auth', () => {
       },
     });
     expect(typeof written.last_refresh).toBe('string');
+    expect(writeCodexAuthCredentialMock.mock.calls[0][1]).toEqual({
+      delegatedHomeKey: null,
+      userId: 'user-1',
+      codexHome: expect.stringMatching(/\/\.local\/share\/agor\/codex\/[0-9a-f]{64}$/),
+    });
 
     expect(usersService.patch).toHaveBeenCalledWith(
       'user-1',

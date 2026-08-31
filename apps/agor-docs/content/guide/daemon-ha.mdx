@@ -259,6 +259,10 @@ later Codex Task agree on `.codex/auth.json`. Generation-fenced HA mutations run
 authority-owning daemon rather than a detached credential writer. Device-code attempts use
 PostgreSQL ownership leases; Redis never carries their codes or credentials.
 
+Do not substitute the standalone built-in `simple` executor's Codex namespaces for this HA
+contract. Those namespaces only separate trusted-local state under one daemon uid; they provide
+neither filesystem isolation nor the exact-user storage and locking guarantees required here.
+
 `shared-local` may set `allow_web_terminal: true`. A terminal create runs over
 the browser's sticky Socket.IO connection and returns a daemon-boot-fenced,
 branch-scoped attachment. PTY traffic remains local to that replica. Replica

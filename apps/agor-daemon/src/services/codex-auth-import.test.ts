@@ -151,7 +151,11 @@ describe('codex-auth-import', () => {
     expect(writeCodexAuthCredentialMock).toHaveBeenCalledTimes(1);
     const [writtenContent, routing] = writeCodexAuthCredentialMock.mock.calls[0];
     expect(JSON.parse(writtenContent)).toEqual(JSON.parse(VALID_AUTH_JSON));
-    expect(routing).toEqual({ delegatedHomeKey: null, userId: 'user-1', codexHome: undefined });
+    expect(routing).toEqual({
+      delegatedHomeKey: null,
+      userId: 'user-1',
+      codexHome: expect.stringMatching(/\/\.local\/share\/agor\/codex\/[0-9a-f]{64}$/),
+    });
 
     expect(usersService.patch).toHaveBeenCalledWith(
       'user-1',

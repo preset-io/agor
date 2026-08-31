@@ -75,7 +75,7 @@ describe('codex-auth-logout', () => {
     expect(deleteCodexAuthCredentialMock).toHaveBeenCalledWith({
       delegatedHomeKey: null,
       userId: 'user-1',
-      codexHome: undefined,
+      codexHome: expect.stringMatching(/\/\.local\/share\/agor\/codex\/[0-9a-f]{64}$/),
     });
     // Only the codex key is sent — the users-service merge clears it against the
     // FRESH record, preserving any concurrently-updated method for another tool.

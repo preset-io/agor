@@ -16,7 +16,6 @@
  *   file permissions in the selected execution home.
  */
 
-import { join } from 'node:path';
 import {
   type AgorConfig,
   hasCrossReplicaExecutorCredentialLock,
@@ -79,11 +78,11 @@ export type CodexCredentialRouteResolution =
       /** Stable trusted identity for persistent-per-user storage selection. */
       userId: UserID;
       /**
-       * Explicit `CODEX_HOME` (the `.codex` dir) for the auth-file executor.
-       * Set in `unix_user_mode: sandbox` to the caller's per-user home store so
-       * auth is written where the sandboxed session (with that store overlaid at
-       * `~`) reads it. Undefined in other modes (executor uses the effective
-       * user's `~/.codex`).
+       * Explicit native Codex state root for the auth-file executor.
+       * Set for the built-in local `simple` executor to an Agor-managed user
+       * namespace, and in `sandbox` to the caller's per-user home store.
+       * Undefined for templated/external execution, where that substrate owns
+       * the effective user's home.
        */
       codexHome?: string;
     }
@@ -169,6 +168,7 @@ export async function resolveCodexCredentialRoute(
       tenantId: getCurrentTenantId(),
       config,
       withTenantDatabase,
+      agenticTool: 'codex',
     });
     if (config.deployment?.mode === 'ha' && resolved.homeStoreSource === 'override') {
       return {
@@ -179,12 +179,11 @@ export async function resolveCodexCredentialRoute(
           'Remove the filesystem_home override for this account or use an API key.',
       };
     }
-    const codexHome = resolved.homeStore ? join(resolved.homeStore, '.codex') : undefined;
     return {
       ok: true,
       delegatedHomeKey: resolved.delegatedHomeKey,
       userId,
-      ...(codexHome ? { codexHome } : {}),
+      ...(resolved.codexHome ? { codexHome: resolved.codexHome } : {}),
     };
   } catch (err) {
     return {
@@ -211,7 +210,7 @@ export async function persistVerifiedCodexAuth(options: {
   delegatedHomeKey: string | null;
   userId: UserID;
   authUser: NonNullable<AuthenticatedParams['user']>;
-  /** Per-user store `.codex` for sandbox mode (see CodexCredentialRouteResolution.codexHome). */
+  /** Daemon-authorized `CODEX_HOME` when the local execution mode selects one explicitly. */
   codexHome?: string;
   /** PostgreSQL authority generation for HA filesystem fencing. */
   authorityGeneration?: number;

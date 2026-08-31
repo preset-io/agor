@@ -3,9 +3,11 @@
  *
  * Delegated execution requires an explicit persistent-per-user home guarantee.
  * Sandbox auth is routed to the same per-user store mounted for sessions.
+ * Built-in local simple execution uses a trusted tenant/user Codex namespace.
  */
+import { homedir } from 'node:os';
 import { loadConfigSync, resolveEffectiveConfig } from '@agor/core/config';
-import { type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
+import { runWithTenantContext, type TenantScopedDatabase, UsersRepository } from '@agor/core/db';
 import type { UserID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -26,6 +28,7 @@ vi.mock('@agor/core/db', async (importOriginal) => {
   };
 });
 
+import { resolveSimpleCodexHome } from '../utils/codex-credential-namespace.js';
 import { resolveCodexCredentialRoute } from './codex-auth-shared.js';
 
 const loadConfigSyncMock = vi.mocked(loadConfigSync);
@@ -180,7 +183,55 @@ describe('resolveCodexCredentialRoute — delegated mode', () => {
     });
   });
 
-  it('keeps simple mode untouched even with a template configured', async () => {
+  it('routes local simple mode to a tenant-and-user Codex home', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      execution: { unix_user_mode: 'simple' },
+    } as never);
+
+    const result = await runWithTenantContext('tenant-test', () =>
+      resolveCodexCredentialRoute(
+        USER_ID,
+        withTenantDatabase,
+        resolveEffectiveConfig(loadConfigSync())
+      )
+    );
+
+    expect(result).toEqual({
+      ok: true,
+      delegatedHomeKey: null,
+      userId: USER_ID,
+      codexHome: resolveSimpleCodexHome({
+        tenantId: 'tenant-test',
+        subjectUserId: USER_ID,
+        homeDir: homedir(),
+      }),
+    });
+    expect(findById).not.toHaveBeenCalled();
+  });
+
+  it('does not let the same user id share a simple Codex home across tenants', async () => {
+    loadConfigSyncMock.mockReturnValue({
+      execution: { unix_user_mode: 'simple' },
+    } as never);
+    const resolveForTenant = (tenantId: string) =>
+      runWithTenantContext(tenantId, () =>
+        resolveCodexCredentialRoute(
+          USER_ID,
+          withTenantDatabase,
+          resolveEffectiveConfig(loadConfigSync())
+        )
+      );
+
+    const tenantA = await resolveForTenant('tenant-a');
+    const tenantB = await resolveForTenant('tenant-b');
+
+    expect(tenantA).toMatchObject({ ok: true, codexHome: expect.any(String) });
+    expect(tenantB).toMatchObject({ ok: true, codexHome: expect.any(String) });
+    if (!tenantA.ok || !tenantB.ok) throw new Error('Expected successful credential routes');
+    expect(tenantA.codexHome).not.toBe(tenantB.codexHome);
+  });
+
+  it('does not impose a daemon-local path on a templated simple executor', async () => {
     loadConfigSyncMock.mockReturnValue({
       execution: {
         unix_user_mode: 'simple',
@@ -188,18 +239,13 @@ describe('resolveCodexCredentialRoute — delegated mode', () => {
       },
     } as never);
 
-    const result = await resolveCodexCredentialRoute(
-      USER_ID,
-      withTenantDatabase,
-      resolveEffectiveConfig(loadConfigSync())
-    );
-
-    expect(result).toEqual({
-      ok: true,
-      delegatedHomeKey: null,
-      userId: USER_ID,
-    });
-    expect(findById).not.toHaveBeenCalled();
+    await expect(
+      resolveCodexCredentialRoute(
+        USER_ID,
+        withTenantDatabase,
+        resolveEffectiveConfig(loadConfigSync())
+      )
+    ).resolves.toEqual({ ok: true, delegatedHomeKey: null, userId: USER_ID });
   });
 
   it('routes delegated templated auth through a persistent per-user home', async () => {

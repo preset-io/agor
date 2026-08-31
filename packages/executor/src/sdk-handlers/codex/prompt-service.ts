@@ -10,11 +10,12 @@
  * scrub `OPENAI_API_KEY` / `CODEX_API_KEY` from the spawn so the CLI is
  * forced down the auth.json path.
  *
- * Per-session config (Agor session-context as `model_instructions_file`,
- * MCP server registry) is passed via `CodexOptions.config`. We do NOT
- * override `$CODEX_HOME` — Codex CLI's default `~/.codex` is preserved
- * across all unix_user_modes (the daemon spawns the executor as the right
- * user already).
+ * Per-session config (Agor session-context as `model_instructions_file`, MCP
+ * server registry) is passed via `CodexOptions.config`. This service does not
+ * override `$CODEX_HOME`; it preserves the executor environment selected by
+ * the daemon or external substrate. The built-in local simple executor uses a
+ * stable tenant/session-owner namespace, while sandbox/delegated/templated
+ * execution retain their existing home routing.
  *
  * IMPORTANT: this service caches the Codex SDK instance and only recreates
  * it when the relevant config (apiKey, baseUrl, useNativeAuth, MCP servers,
@@ -1185,10 +1186,10 @@ export class CodexPromptService {
       `   Using Codex permissions: sandboxMode=${sandboxMode}, approvalPolicy=${approvalPolicy}, networkAccess=${networkAccess}`
     );
 
-    // Write per-session Agor instructions file (single .md, not a directory).
-    // CODEX_HOME is intentionally NOT overridden — Codex CLI uses the
-    // executor user's $HOME/.codex which already contains auth.json plus any
-    // user-authored config.toml.
+    // Write the per-session Agor instructions file (single .md, not a
+    // directory). CODEX_HOME is intentionally NOT overridden here: the daemon
+    // or external substrate already selected the authoritative native-state
+    // route, including the built-in simple executor's tenant/owner namespace.
     const instructionsFile = await this.ensureCodexInstructionsFile(sessionId);
 
     const mcpToken = session.mcp_token;

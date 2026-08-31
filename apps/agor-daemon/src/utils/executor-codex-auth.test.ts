@@ -85,8 +85,10 @@ describe('executor Codex auth dispatch', () => {
     runMock.mockResolvedValue({ success: true, data: { status: 'not-found' } });
     const previousDatabaseUrl = process.env.DATABASE_URL;
     const previousMasterSecret = process.env.AGOR_MASTER_SECRET;
+    const previousCodexHome = process.env.CODEX_HOME;
     process.env.DATABASE_URL = 'postgres://daemon-canary';
     process.env.AGOR_MASTER_SECRET = 'master-canary';
+    process.env.CODEX_HOME = '/ambient/user-controlled';
     try {
       await inspectCodexAuthViaExecutor({
         delegatedHomeKey: null,
@@ -103,6 +105,8 @@ describe('executor Codex auth dispatch', () => {
       else process.env.DATABASE_URL = previousDatabaseUrl;
       if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
       else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
     }
   });
 

@@ -309,9 +309,9 @@ describe('check-auth codex auth.json probe', () => {
     resolveApiKeyMock.mockResolvedValue({ apiKey: undefined, source: 'user', useNativeAuth: true });
     resolveCodexCredentialRouteMock.mockResolvedValue({
       ok: true,
-      unixUser: null,
       delegatedHomeKey: null,
       userId: 'user-1' as never,
+      codexHome: '/daemon/authorized/codex-home',
     });
   });
 
@@ -331,12 +331,19 @@ describe('check-auth codex auth.json probe', () => {
     const result = await service().create({ tool: 'codex', validateNative: true }, params);
     expect(result).toMatchObject({ status: 'authenticated', method: 'oauth' });
     expect(result.hint).toContain('plus');
+    expect(inspectCodexAuthViaExecutorMock).toHaveBeenCalledWith({
+      delegatedHomeKey: null,
+      userId: 'user-1',
+      codexHome: '/daemon/authorized/codex-home',
+    });
   });
 
   it('genuinely absent auth.json → unauthenticated', async () => {
     inspectCodexAuthViaExecutorMock.mockResolvedValue({ ok: false, reason: 'not-found' });
     const result = await service().create({ tool: 'codex', validateNative: true }, params);
     expect(result.status).toBe('unauthenticated');
+    expect(result.hint).toContain('your Agor user');
+    expect(result.hint).not.toContain('branch terminal');
   });
 
   it('unreadable auth.json (sudo/permission failure) → unknown, never unauthenticated', async () => {

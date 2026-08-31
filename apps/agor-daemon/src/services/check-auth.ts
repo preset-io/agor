@@ -256,9 +256,9 @@ function resultFromKeyStatus(status: AuthCheckStatus, rejectedHint: string): Aut
 }
 
 /**
- * Probe the Codex `auth.json` selected by this user's credential route (the
- * local daemon home or a delegated execution-home key). File contents stay on the
- * daemon side; only shape/metadata drive the result.
+ * Probe the Codex `auth.json` selected by this user's credential route (an
+ * Agor-selected local CODEX_HOME or a delegated execution-home key). File
+ * contents stay on the daemon side; only shape/metadata drive the result.
  *
  * An embedded API key is verified against the provider; ChatGPT login tokens
  * cannot be verified without consuming a refresh, so a well-formed token set
@@ -299,15 +299,22 @@ async function probeCodexAuthFile(
     // Only a genuinely absent file proves "no login". Permission/launcher/
     // transport failures mean we could not LOOK, which must never surface as
     // the persistent "credentials aren't working" state.
+    const builtInSimple =
+      (config.execution?.unix_user_mode ?? 'simple') === 'simple' &&
+      !config.execution?.executor_command_template;
     return inspection.reason === 'not-found'
       ? unauthenticated(
           'none',
-          'No Codex login found on this server — import your auth.json or run `codex login` from a branch terminal.'
+          builtInSimple
+            ? 'No Codex login found for your Agor user — sign in with ChatGPT or import your auth.json in User Settings.'
+            : 'No Codex login found on this server — import your auth.json or run `codex login` from a branch terminal.'
         )
       : inspection.reason === 'malformed'
         ? unauthenticated(
             'none',
-            'The Codex auth file on this server is malformed — import a fresh auth.json or run `codex login` again.'
+            builtInSimple
+              ? 'Your Agor user’s Codex auth file is malformed — sign in with ChatGPT again or import a fresh auth.json in User Settings.'
+              : 'The Codex auth file on this server is malformed — import a fresh auth.json or run `codex login` again.'
           )
         : unknown(
             'Could not inspect the Codex auth file — check executor availability and permissions.'
