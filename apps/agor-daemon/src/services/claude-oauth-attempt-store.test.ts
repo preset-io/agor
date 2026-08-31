@@ -2,8 +2,34 @@ import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mutateCredentialFile } from '@agor/core/codex/credential-file';
-import { describe, expect, it } from 'vitest';
-import { InMemoryClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  DurableClaudeOAuthAttemptStore,
+  InMemoryClaudeOAuthAttemptStore,
+} from './claude-oauth-attempt-store.js';
+
+describe('durable Claude status reconstruction', () => {
+  it.each([
+    ['provider_rejected_code', /rejected this authorization code/i],
+    ['exchange_failed', /code may be used up/i],
+    ['credential_persistence_ambiguous', /saving the login could not be confirmed/i],
+  ])('restores a useful hint for %s after reconnect', async (failureCode, expected) => {
+    const authority = {
+      getForUser: vi.fn(async () => ({
+        attemptId: 'attempt-a',
+        status: 'failed',
+        failureCode,
+        expiresAt: new Date(Date.now() + 60_000),
+        subscriptionType: null,
+      })),
+    };
+    const store = new DurableClaudeOAuthAttemptStore(authority as never);
+
+    await expect(
+      store.status({ tenantId: 'tenant-a', userId: 'user-a' as never }, 'attempt-a')
+    ).resolves.toMatchObject({ phase: 'error', attemptId: 'attempt-a', hint: expected });
+  });
+});
 
 describe('standalone Claude credential mutation authority', () => {
   it('revalidates the route after a winning users mutation and before reservation', async () => {

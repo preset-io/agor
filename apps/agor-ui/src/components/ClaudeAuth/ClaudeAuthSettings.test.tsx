@@ -7,7 +7,7 @@
  * with `.closest('button')`, never `getByRole` (antd + jsdom cssstyle crash).
  */
 
-import type { AgenticAuthMethod, AuthCheckResult } from '@agor-live/client';
+import type { AgenticAuthMethod, AuthCheckResult, ClaudeCredentialSource } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useRef } from 'react';
 import { TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
@@ -18,6 +18,7 @@ const UNKNOWN: AuthCheckResult = { status: 'unknown', authenticated: false, meth
 
 interface HarnessOptions {
   initialMethod?: AgenticAuthMethod;
+  initialSource?: ClaudeCredentialSource;
   fieldStatus?: Record<string, boolean>;
   checkAuth?: ReturnType<typeof vi.fn>;
   logoutCreate?: ReturnType<typeof vi.fn>;
@@ -30,6 +31,7 @@ interface HarnessOptions {
 
 function Harness({
   initialMethod = 'api_key',
+  initialSource,
   fieldStatus = {},
   checkAuth,
   logoutCreate,
@@ -62,6 +64,7 @@ function Harness({
     <ClaudeAuthSettings
       client={client}
       authMethod={initialMethod}
+      credentialSource={initialSource}
       apiKeyFields={TOOL_FIELD_CONFIGS['claude-code']}
       fieldStatus={fieldStatus}
       onSaveField={onSaveField ?? vi.fn(async () => undefined)}
@@ -81,6 +84,19 @@ function clickText(text: string | RegExp) {
 }
 
 describe('ClaudeAuthSettings', () => {
+  it('tracks source-only realtime transitions between pasted token and managed OAuth', async () => {
+    const common = {
+      initialMethod: 'subscription' as const,
+      allowOAuthSignIn: true,
+    };
+    const { rerender } = render(<Harness {...common} initialSource="subscription_token" />);
+    expect(await screen.findByPlaceholderText('sk-ant-oat01-...')).toBeInTheDocument();
+
+    rerender(<Harness {...common} initialSource="managed_file" />);
+    expect(await screen.findByText(/Agor stores the login on the server/)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('sk-ant-oat01-...')).not.toBeInTheDocument();
+  });
+
   it('hides daemon-driven OAuth when the deployment capability is off', () => {
     render(<Harness allowOAuthSignIn={false} />);
     expect(screen.queryByText('Sign in with Claude')).not.toBeInTheDocument();
@@ -205,6 +221,36 @@ describe('ClaudeAuthSettings', () => {
 });
 
 describe('ClaudeOAuthSignIn', () => {
+  it.each(['rejected exchange', 'ambiguous exchange', 'persistence failure'])(
+    'reconciles a terminal %s and exposes Start over',
+    async (failure) => {
+      const oauth = {
+        find: vi
+          .fn()
+          .mockResolvedValueOnce({ phase: 'idle' })
+          .mockResolvedValueOnce({ phase: 'error', hint: `${failure} — start over.` }),
+        create: vi
+          .fn()
+          .mockResolvedValueOnce({
+            phase: 'awaiting_code',
+            verificationUrl: 'https://claude.example/authorize',
+          })
+          .mockRejectedValueOnce(new Error(`${failure} request failed`)),
+      };
+      const client = { service: vi.fn(() => oauth) } as never;
+      render(<ClaudeOAuthSignIn client={client} onVerified={vi.fn()} autoStart={false} />);
+
+      fireEvent.click(await screen.findByText('Sign in with Claude'));
+      const input = await screen.findByLabelText('Claude authorization code');
+      fireEvent.change(input, { target: { value: 'code#state' } });
+      fireEvent.click(screen.getByText('Complete sign-in'));
+
+      expect(await screen.findByText(`${failure} — start over.`)).toBeInTheDocument();
+      expect(screen.getByText('Start over')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Claude authorization code')).not.toBeInTheDocument();
+    }
+  );
+
   it('adopts an exchanging attempt without replacing it on remount', async () => {
     const onVerified = vi.fn();
     const oauth = {

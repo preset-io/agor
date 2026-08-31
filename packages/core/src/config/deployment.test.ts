@@ -336,7 +336,7 @@ describe('resolveDeploymentConfig', () => {
     expect(deployment.capabilities.claudeOAuth).toBe(false);
   });
 
-  it('admits Codex device auth but keeps Claude gated without concrete runtime containment', () => {
+  it('keeps Claude OAuth gated without containment while admitting safe cleanup', () => {
     const deployment = resolveDeploymentConfig(
       {
         ...haConfig,
@@ -356,7 +356,7 @@ describe('resolveDeploymentConfig', () => {
     expect(deployment.mode).toBe('ha');
     if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
     expect(deployment.capabilities.codexDeviceAuth).toBe(true);
-    expect(deployment.capabilities.claudeAuth).toBe(false);
+    expect(deployment.capabilities.claudeAuth).toBe(true);
     expect(deployment.capabilities.claudeOAuth).toBe(false);
   });
 
@@ -408,7 +408,7 @@ describe('resolveDeploymentConfig', () => {
     );
     expect(deployment.mode).toBe('ha');
     if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
-    expect(deployment.capabilities.claudeAuth).toBe(false);
+    expect(deployment.capabilities.claudeAuth).toBe(true);
     expect(deployment.capabilities.claudeOAuth).toBe(false);
   });
   it.each(['sandbox', 'delegated'] as const)(

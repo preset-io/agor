@@ -73,7 +73,7 @@ function bwrapAvailable(): boolean {
 // once so operators know the /proc process-side vector isn't closed on this
 // host (in a container the container itself is the isolation boundary).
 let pidNsCache: boolean | undefined;
-function pidNamespaceAvailable(): boolean {
+export function sandboxPidNamespaceAvailable(): boolean {
   if (pidNsCache === undefined) {
     pidNsCache = probeBwrapPidNamespace();
     if (!pidNsCache) {
@@ -86,6 +86,11 @@ function pidNamespaceAvailable(): boolean {
     }
   }
   return pidNsCache;
+}
+
+/** Host capability required before a managed Claude token may enter a runtime. */
+export function sandboxManagedCredentialIsolationAvailable(): boolean {
+  return process.platform === 'linux' && bwrapAvailable() && sandboxPidNamespaceAvailable();
 }
 
 /**
@@ -193,7 +198,7 @@ export function buildSandboxWrap(params: {
     branchAccess,
     branchSdkHomeDir,
     branchSdkCredentialBinds,
-    pidNamespace: pidNamespaceAvailable(),
+    pidNamespace: sandboxPidNamespaceAvailable(),
     homeDir: home,
     canonicalHomeDir: canonicalizeExistingPath(home),
     dataHome,

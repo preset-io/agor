@@ -116,6 +116,8 @@ export interface ClaudeOAuthAttemptStore {
     ctx: ClaudeOAuthAttemptContext,
     work: (generation?: number) => Promise<T>
   ): Promise<T>;
+  /** Read and revalidate one credential route while holding writer authority. */
+  runCredentialResolution<T>(ctx: ClaudeOAuthAttemptContext, work: () => Promise<T>): Promise<T>;
   /** Acquire the same authority for a users-service route/source mutation. */
   lockExternalUserMutation(tenantId: string, userId: UserID): Promise<(() => Promise<void>) | void>;
   /** Invalidate and generation-fence while the external caller retains that authority. */
@@ -198,6 +200,12 @@ function hintForFailureCode(failureCode: string | null): string | undefined {
       return 'The account was removed while Claude sign-in was in progress.';
     case 'exchange_owner_lost':
       return 'Sign-in could not be completed and the code may be used up — start over to get a fresh link.';
+    case 'provider_rejected_code':
+      return 'Claude rejected this authorization code — start over to get a fresh link.';
+    case 'exchange_failed':
+      return 'Sign-in could not be completed and the code may be used up — start over to get a fresh link.';
+    case 'credential_persistence_ambiguous':
+      return 'Claude sign-in completed, but saving the login could not be confirmed — start over.';
     default:
       return undefined;
   }
@@ -442,6 +450,10 @@ export class InMemoryClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore 
     return this.credentialMutations.run(STANDALONE_CLAUDE_CREDENTIAL_HOME, () => work(undefined));
   }
 
+  runCredentialResolution<T>(_ctx: ClaudeOAuthAttemptContext, work: () => Promise<T>): Promise<T> {
+    return this.credentialMutations.run(STANDALONE_CLAUDE_CREDENTIAL_HOME, work);
+  }
+
   lockExternalUserMutation(_tenantId: string, _userId: UserID): Promise<() => Promise<void>> {
     return this.credentialMutations.acquire(STANDALONE_CLAUDE_CREDENTIAL_HOME);
   }
@@ -616,6 +628,10 @@ export class DurableClaudeOAuthAttemptStore implements ClaudeOAuthAttemptStore {
     work: (generation: number) => Promise<T>
   ): Promise<T> {
     return this.authority.runCredentialRefresh(ctx.tenantId, ctx.userId, work);
+  }
+
+  runCredentialResolution<T>(ctx: ClaudeOAuthAttemptContext, work: () => Promise<T>): Promise<T> {
+    return this.authority.runCredentialResolution(ctx.tenantId, ctx.userId, work);
   }
 
   lockExternalUserMutation(tenantId: string, userId: UserID): Promise<void> {

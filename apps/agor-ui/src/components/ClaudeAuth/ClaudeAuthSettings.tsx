@@ -3,6 +3,7 @@ import type {
   AgenticToolConfigField,
   AgorClient,
   AuthCheckResult,
+  ClaudeCredentialSource,
 } from '@agor-live/client';
 import { Alert, Button, Form, Popconfirm, Radio, Space, Typography, theme } from 'antd';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -27,6 +28,17 @@ function viewForMethod(method: AgenticAuthMethod, prev: ClaudeMethodView): Claud
   return prev === 'token' ? 'token' : 'oauth';
 }
 
+function viewForCredentialSource(
+  source: ClaudeCredentialSource | undefined,
+  method: AgenticAuthMethod,
+  prev: ClaudeMethodView
+): ClaudeMethodView {
+  if (source === 'managed_file') return 'oauth';
+  if (source === 'subscription_token') return 'token';
+  if (source === 'api_key') return 'api_key';
+  return viewForMethod(method, prev);
+}
+
 export interface ClaudeAuthSettingsProps {
   client: AgorClient | null;
   /**
@@ -36,6 +48,8 @@ export interface ClaudeAuthSettingsProps {
    * `subscription`), never of merely selecting a tab.
    */
   authMethod: AgenticAuthMethod;
+  /** Exact persisted source; distinguishes managed OAuth from a pasted token. */
+  credentialSource?: ClaudeCredentialSource;
   /** All Claude credential field definitions (API key, subscription token, advanced). */
   apiKeyFields: AgenticToolFieldConfig[];
   fieldStatus: FieldStatus;
@@ -68,6 +82,7 @@ export interface ClaudeAuthSettingsProps {
 export function ClaudeAuthSettings({
   client,
   authMethod,
+  credentialSource,
   apiKeyFields,
   fieldStatus,
   onSaveField,
@@ -80,7 +95,9 @@ export function ClaudeAuthSettings({
   operationScope,
 }: ClaudeAuthSettingsProps) {
   const { token } = useToken();
-  const [view, setView] = useState<ClaudeMethodView>(() => viewForMethod(authMethod, 'oauth'));
+  const [view, setView] = useState<ClaudeMethodView>(() =>
+    viewForCredentialSource(credentialSource, authMethod, 'oauth')
+  );
   const [probe, setProbe] = useState<AuthCheckResult | null>(null);
   const [probing, setProbing] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -99,12 +116,14 @@ export function ClaudeAuthSettings({
   // never demote to api_key. After a disconnect (method → api_key) the user
   // stays on the sign-in view showing the signed-out state instead of jumping.
   useEffect(() => {
-    if (authMethod === 'subscription') {
+    if (credentialSource && credentialSource !== 'none') {
+      setView((prev) => viewForCredentialSource(credentialSource, authMethod, prev));
+    } else if (authMethod === 'subscription') {
       setView((prev) =>
         prev === 'token' || !allowSubscriptionLogin || !allowOAuthSignIn ? 'token' : 'oauth'
       );
     }
-  }, [authMethod, allowSubscriptionLogin, allowOAuthSignIn]);
+  }, [credentialSource, authMethod, allowSubscriptionLogin, allowOAuthSignIn]);
 
   // An administrator editing another user cannot invoke the caller-bound OAuth
   // endpoints, but must still be able to manage that user's pasted subscription
@@ -116,10 +135,12 @@ export function ClaudeAuthSettings({
   // OR the effective method changes (and on unmount) — a verdict captured under
   // the PREVIOUS method must not be re-interpreted under the new one.
   const effectiveOperationScope =
-    operationScope === undefined ? ([client, authMethod] as const) : operationScope;
+    operationScope === undefined
+      ? ([client, authMethod, credentialSource] as const)
+      : operationScope;
   const operationAvailable = effectiveOperationScope !== null;
   const { run } = useIdentityGuardedAsync(
-    [client, authMethod, ...(effectiveOperationScope ?? [null])],
+    [client, authMethod, credentialSource, ...(effectiveOperationScope ?? [null])],
     () => {
       setProbe(null);
       setProbing(false);
@@ -344,7 +365,7 @@ export function ClaudeAuthSettings({
             <ClaudeOAuthSignIn
               client={client}
               operationScope={effectiveOperationScope}
-              connected={authMethod === 'subscription'}
+              connected={credentialSource === 'managed_file'}
               onVerified={handleAuthenticated}
               autoStart={false}
             />

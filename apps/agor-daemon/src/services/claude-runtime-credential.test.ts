@@ -73,10 +73,11 @@ function credential(access: string, expiresAt: number, refresh = 'sk-ant-ort01-r
 }
 
 function authority() {
+  const runCredentialResolution = vi.fn(async <T>(_ctx: unknown, work: () => Promise<T>) => work());
   const runCredentialRefresh = vi.fn(
     async <T>(_ctx: unknown, work: (generation: number) => Promise<T>) => work(42)
   );
-  return { runCredentialRefresh, invalidate: vi.fn() };
+  return { runCredentialResolution, runCredentialRefresh, invalidate: vi.fn() };
 }
 
 function resolver(options: {
@@ -85,6 +86,7 @@ function resolver(options: {
   compareAndSwap?: ReturnType<typeof vi.fn>;
   auth?: ReturnType<typeof authority>;
   config?: Record<string, unknown>;
+  runtimeIsolationAvailable?: () => boolean;
 }) {
   const auth = options.auth ?? authority();
   const refresh =
@@ -107,6 +109,7 @@ function resolver(options: {
       read: options.read,
       refresh,
       compareAndSwap,
+      runtimeIsolationAvailable: options.runtimeIsolationAvailable ?? (() => true),
     }),
   };
 }
@@ -151,7 +154,18 @@ describe('ClaudeRuntimeCredentialResolver', () => {
     expect(subject.refresh).not.toHaveBeenCalled();
   });
 
-  it('takes the fresh fast path without network or credential authority', async () => {
+  it('rejects before route resolution when private PID isolation is unavailable', async () => {
+    const read = vi.fn(async () => credential('sk-ant-oat01-hidden', NOW + 2 * 60 * 60 * 1000));
+    const subject = resolver({ read, runtimeIsolationAvailable: () => false });
+
+    await expect(subject.instance.resolve('tenant-1', USER)).rejects.toThrow(
+      /private PID namespace/
+    );
+    expect(routeMocks.resolve).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it('takes the fresh path without network after revalidating credential authority', async () => {
     const read = vi.fn(async () => credential('sk-ant-oat01-fresh', NOW + 2 * 60 * 60 * 1000));
     const subject = resolver({ read });
 
@@ -160,8 +174,28 @@ describe('ClaudeRuntimeCredentialResolver', () => {
       useNativeAuth: false,
     });
     expect(subject.refresh).not.toHaveBeenCalled();
+    expect(subject.auth.runCredentialResolution).toHaveBeenCalledTimes(1);
     expect(subject.auth.runCredentialRefresh).not.toHaveBeenCalled();
     expect(subject.compareAndSwap).not.toHaveBeenCalled();
+  });
+
+  it('does not inject a fresh token after its source is superseded', async () => {
+    const read = vi.fn(async () => credential('sk-ant-oat01-stale', NOW + 2 * 60 * 60 * 1000));
+    const auth = authority();
+    auth.runCredentialResolution.mockImplementation(async (_ctx, work) => {
+      configMocks.resolveProviderConnection.mockResolvedValueOnce({
+        source: 'workspace',
+        useNativeAuth: false,
+        connection: {},
+      });
+      return work();
+    });
+    const subject = resolver({ read, auth });
+
+    await expect(subject.instance.resolve('tenant-1', USER)).rejects.toThrow(
+      /changed while the task started/
+    );
+    expect(subject.refresh).not.toHaveBeenCalled();
   });
 
   it('accepts the exact canonical login document when subscription type is absent', async () => {

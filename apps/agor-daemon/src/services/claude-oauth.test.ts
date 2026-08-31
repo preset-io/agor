@@ -68,8 +68,18 @@ import {
 const base64urlOf = (buf: Buffer) =>
   buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-function jsonResponse(body: unknown, ok = true, status = ok ? 200 : 400) {
-  return { ok, status, json: async () => body } as unknown as Response;
+function jsonResponse(
+  body: unknown,
+  ok = true,
+  status = ok ? 200 : 400,
+  headers: Record<string, string> = {}
+) {
+  return {
+    ok,
+    status,
+    headers: new Headers(headers),
+    json: async () => body,
+  } as unknown as Response;
 }
 
 /** Drain the microtask queue so an in-flight `create()` reaches its fetch await. */
@@ -94,7 +104,11 @@ async function startAndGetState(svc: {
   return { state: state as string, attemptId: status.attemptId as string };
 }
 
-function makeService(coordinator?: ClaudeOAuthAttemptStore, config: Record<string, unknown> = {}) {
+function makeService(
+  coordinator?: ClaudeOAuthAttemptStore,
+  config: Record<string, unknown> = {},
+  runtimeIsolationAvailable = () => true
+) {
   const usersGet = vi.fn(async () => ({ agentic_auth_methods: {} }));
   const usersPatch = vi.fn(async () => ({}));
   const app = {
@@ -105,7 +119,8 @@ function makeService(coordinator?: ClaudeOAuthAttemptStore, config: Record<strin
   const svc = createClaudeOAuthService(
     app as unknown as Parameters<typeof createClaudeOAuthService>[0],
     {} as unknown as Parameters<typeof createClaudeOAuthService>[1],
-    coordinator
+    coordinator,
+    runtimeIsolationAvailable
   );
   return { svc, usersGet, usersPatch, app };
 }
@@ -299,6 +314,9 @@ describe('refreshClaudeTokens contract validation', () => {
 
   it.each([
     [400, 'rejected'],
+    [408, 'ambiguous'],
+    [425, 'ambiguous'],
+    [429, 'ambiguous'],
     [503, 'ambiguous'],
   ] as const)(
     'classifies HTTP %s as %s without exposing the provider body',
@@ -315,9 +333,25 @@ describe('refreshClaudeTokens contract validation', () => {
       expect(String(error)).not.toContain('sk-ant-ort01-secret');
     }
   );
+
+  it('preserves Retry-After on a throttled ambiguous refresh', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({}, false, 429, { 'retry-after': '7' }))
+    );
+    await expect(refreshClaudeTokens('sk-ant-ort01-old', current)).rejects.toMatchObject({
+      disposition: 'ambiguous',
+      retryAfterMs: 7000,
+    });
+  });
 });
 
 describe('createClaudeOAuthService — flow + security', () => {
+  it('rejects OAuth when private PID isolation is unavailable', async () => {
+    const { svc } = makeService(undefined, {}, () => false);
+    await expect(svc.create({}, asUserA)).rejects.toThrow(/private PID namespace/);
+  });
+
   it('fails closed when the deployment has not authorized Claude subscription OAuth', async () => {
     const { svc } = makeService(undefined, {
       agentic_tools: {},

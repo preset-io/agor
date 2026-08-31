@@ -58,6 +58,7 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { writeClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
+import { sandboxManagedCredentialIsolationAvailable } from '../utils/sandbox-wrap.js';
 import { CLAUDE_AUTH_TRUSTED_USER_MUTATION } from './claude-credential-mutation-trust.js';
 import {
   type ClaudeOAuthAttemptContext,
@@ -211,10 +212,19 @@ const MAX_EXPIRES_IN_SEC = 400 * 24 * 60 * 60;
 export class TokenExchangeError extends BadRequest {
   constructor(
     readonly disposition: 'rejected' | 'ambiguous',
-    message: string
+    message: string,
+    readonly retryAfterMs?: number
   ) {
     super(message);
   }
+}
+
+function retryAfterMs(response: Response): number | undefined {
+  const value = response.headers.get('retry-after')?.trim();
+  if (!value) return undefined;
+  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
 }
 
 export async function exchangeCodeForTokens(
@@ -311,7 +321,8 @@ export async function exchangeCodeForTokens(
  * to the provider runtime. The POST deliberately has the same rejected versus
  * ambiguous taxonomy as the one-shot code exchange:
  *
- * - any 4xx (including `invalid_grant`) is a definitive rejection;
+ * - invalid credentials and other definitive 4xx responses are rejections;
+ * - 408, 425, and 429 are transient/ambiguous and must not trigger a replay;
  * - network failures, 5xx, and malformed success bodies are ambiguous because
  *   the provider may already have rotated the refresh token.
  *
@@ -342,11 +353,13 @@ export async function refreshClaudeTokens(
     );
   }
   if (!res.ok) {
+    const transient = res.status >= 500 || [408, 425, 429].includes(res.status);
     throw new TokenExchangeError(
-      res.status >= 500 ? 'ambiguous' : 'rejected',
-      res.status >= 500
+      transient ? 'ambiguous' : 'rejected',
+      transient
         ? 'Claude had a server error refreshing this login. Try again later.'
-        : 'Claude rejected this login refresh. Sign in again.'
+        : 'Claude rejected this login refresh. Sign in again.',
+      transient ? retryAfterMs(res) : undefined
     );
   }
 
@@ -450,7 +463,8 @@ export function createClaudeOAuthService(
   app: AppLike,
   db: TenantScopeAwareDatabase,
   /** Omitted for a standalone daemon, which keeps attempts in process memory. */
-  store: ClaudeOAuthAttemptStore = new InMemoryClaudeOAuthAttemptStore()
+  store: ClaudeOAuthAttemptStore = new InMemoryClaudeOAuthAttemptStore(),
+  runtimeIsolationAvailable: () => boolean = sandboxManagedCredentialIsolationAvailable
 ) {
   async function requireContext(params?: AuthenticatedParams): Promise<{
     authUser: NonNullable<AuthenticatedParams['user']>;
@@ -670,6 +684,11 @@ export function createClaudeOAuthService(
       if (!hasContainedClaudeRuntimeCredentials(config)) {
         throw new BadRequest(
           'Claude subscription sign-in requires a contained per-user sandbox. Use an API key or pasted subscription token in this execution mode.'
+        );
+      }
+      if (!runtimeIsolationAvailable()) {
+        throw new BadRequest(
+          'Claude subscription sign-in requires verified bubblewrap isolation with a private PID namespace on this host. Use an API key or pasted subscription token.'
         );
       }
 

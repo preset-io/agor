@@ -308,6 +308,18 @@ export class ClaudeOAuthAttemptAuthority {
     });
   }
 
+  /** Serialize a source/route/file read without advancing the generation. */
+  async runCredentialResolution<T>(
+    tenantId: string,
+    userId: UserID,
+    work: () => Promise<T>
+  ): Promise<T> {
+    return runWithTenantDatabaseScope(this.db, tenantId, async (scoped) => {
+      await new ClaudeOAuthAttemptRepository(scoped).lockUser(tenantId, userId);
+      return work();
+    });
+  }
+
   /** Lock ordering seam used by UsersService: credential lock, then role lock. */
   async lockExternalUserMutation(tenantId: string, userId: UserID): Promise<void> {
     const scope = getCurrentTenantDatabaseScope();

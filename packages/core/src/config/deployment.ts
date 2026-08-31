@@ -494,8 +494,13 @@ export function resolveDeploymentConfig(
       // mask proves the provider runtime cannot mutate the canonical grant.
       claudeOAuth:
         exactUserCredentialHome && crossReplicaCredentialLock && containedClaudeRuntimeCredentials,
+      // Cleanup must remain available after a containment-policy downgrade so
+      // an operator can remove credentials written by the formerly-admitted
+      // configuration. It still requires local exact routing + writer lock.
       claudeAuth:
-        exactUserCredentialHome && crossReplicaCredentialLock && containedClaudeRuntimeCredentials,
+        executionTopology === 'shared-local' &&
+        exactUserCredentialHome &&
+        crossReplicaCredentialLock,
       processAffineAuth: false,
       gatewayListeners: true,
       gatewayOutboundExactlyOnce: false,

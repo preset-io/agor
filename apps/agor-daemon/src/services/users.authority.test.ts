@@ -347,6 +347,60 @@ describe('UsersService role authority', () => {
 });
 
 describe('UsersService Claude credential-source authority', () => {
+  dbTest('serializes SQLite actor demotion with destructive route cleanup', async ({ db }) => {
+    let enterCleanup!: () => void;
+    const cleanupEntered = new Promise<void>((resolve) => {
+      enterCleanup = resolve;
+    });
+    let releaseCleanup!: () => void;
+    const cleanupReleased = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const cleanupRouteBeforePatch = vi.fn(async () => {
+      enterCleanup();
+      await cleanupReleased;
+    });
+    const service = new UsersService(db, undefined, undefined, {
+      applies: (data) => Object.hasOwn(data, 'filesystem_home'),
+      changesSource: () => false,
+      changesRoute: (data) => Object.hasOwn(data, 'filesystem_home'),
+      coordinatesRemoval: () => true,
+      lock: vi.fn(async () => undefined),
+      complete: vi.fn(async () => undefined),
+      cleanupRouteBeforePatch,
+      cleanupRouteBeforeRemove: vi.fn(async () => undefined),
+    });
+    const actor = await createUser(service, 'superadmin', 'cleanup-actor');
+    const demoter = await createUser(service, 'superadmin', 'cleanup-demoter');
+    const target = await createUser(service, 'admin', 'cleanup-target');
+
+    await runWithTenantContext('default', async () => {
+      const targetPatch = service.patch(
+        target.user_id as UserID,
+        { filesystem_home: '/tmp/serialized-cleanup-home' },
+        externalParams(actor)
+      );
+      await cleanupEntered;
+
+      let demotionCompleted = false;
+      const demotion = service
+        .patch(actor.user_id as UserID, { role: 'member' }, externalParams(demoter))
+        .then((value) => {
+          demotionCompleted = true;
+          return value;
+        });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(demotionCompleted).toBe(false);
+
+      releaseCleanup();
+      await expect(targetPatch).resolves.toMatchObject({
+        user_id: target.user_id,
+      });
+      await expect(demotion).resolves.toMatchObject({ role: 'member' });
+    });
+    expect(cleanupRouteBeforePatch).toHaveBeenCalledTimes(1);
+  });
+
   dbTest('serializes source and route changes with managed runtime refresh', async ({ db }) => {
     const lock = vi.fn(async () => undefined);
     const complete = vi.fn(async () => undefined);

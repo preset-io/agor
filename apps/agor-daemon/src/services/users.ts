@@ -46,6 +46,7 @@ import {
   insert,
   isExecutionHomeKeyAvailable,
   isNull,
+  isPostgresDatabaseHandle,
   jsonExtract,
   runWithTenantDatabaseTransaction,
   select,
@@ -177,6 +178,33 @@ const USER_PATCH_LOCK_HELD_PARAM = Symbol('agor.users.patch-lock-held');
 // advisory/CAS fences as the cross-replica authority; this local lock merely
 // avoids needless same-process conflicts there.
 const userPatchLocks = new Map<string, Promise<void>>();
+const sqliteTenantAuthorityLocks = new Map<string, Promise<void>>();
+
+async function withSqliteTenantAuthorityLock<T>(
+  db: TenantScopeAwareDatabase,
+  params: Params | undefined,
+  work: () => Promise<T>
+): Promise<T> {
+  if (isPostgresDatabaseHandle(db)) return work();
+  const tenantId =
+    (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ??
+    getCurrentTenantId() ??
+    '<standalone>';
+  const key = String(tenantId);
+  const previous = sqliteTenantAuthorityLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  sqliteTenantAuthorityLocks.set(key, current);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    if (sqliteTenantAuthorityLocks.get(key) === current) sqliteTenantAuthorityLocks.delete(key);
+  }
+}
 
 async function withUserPatchLock<T>(
   id: UserID,
@@ -916,12 +944,14 @@ export class UsersService {
       ? await this.claudeCredentialPatches!.lock(String(credentialTenantId), id)
       : undefined;
     try {
-      return await this.patchWithClaudeCredentialAuthority(
-        id,
-        data,
-        params,
-        coordinateClaudeCredential,
-        credentialTenantId
+      return await withSqliteTenantAuthorityLock(this.db, params, () =>
+        this.patchWithClaudeCredentialAuthority(
+          id,
+          data,
+          params,
+          coordinateClaudeCredential,
+          credentialTenantId
+        )
       );
     } finally {
       await releaseClaudeCredential?.();
@@ -1441,11 +1471,13 @@ export class UsersService {
       ? await this.claudeCredentialPatches.lock(String(credentialTenantId), id)
       : undefined;
     try {
-      return await this.removeWithClaudeCredentialAuthority(
-        id,
-        params,
-        coordinateClaudeCredential,
-        credentialTenantId
+      return await withSqliteTenantAuthorityLock(this.db, params, () =>
+        this.removeWithClaudeCredentialAuthority(
+          id,
+          params,
+          coordinateClaudeCredential,
+          credentialTenantId
+        )
       );
     } finally {
       await releaseClaudeCredential?.();
