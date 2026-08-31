@@ -112,13 +112,10 @@ export const MarketplacePage: React.FC<MarketplacePageProps> = ({
             onClick={() => navigate('/')}
           />
           <BrandLogo level={3} style={{ marginTop: -4 }} />
-          <Text
-            strong
-            style={{ display: 'inline-flex', alignItems: 'center', gap: token.sizeUnit }}
-          >
+          <Space data-testid="catalog-header-brand" align="center" size={token.marginXS}>
             <ShopOutlined style={{ color: token.colorTextSecondary }} />
-            Catalog
-          </Text>
+            <Text strong>Catalog</Text>
+          </Space>
         </Space>
         <GlobalUserMenu
           user={currentUser}

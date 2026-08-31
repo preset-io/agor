@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { theme } from 'antd';
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MarketplacePage } from './MarketplacePage';
@@ -92,6 +93,15 @@ describe('Catalog tab routes', () => {
       'Sessions',
       'Credentials (1)',
     ]);
+  });
+
+  it('separates the Catalog header icon and label with the theme spacing token', () => {
+    renderPage(['/catalog']);
+
+    const headerBrand = screen.getByTestId('catalog-header-brand');
+    expect(headerBrand).toHaveStyle({ columnGap: `${theme.getDesignToken().marginXS}px` });
+    expect(headerBrand.querySelector('.anticon-shop')).toBeInTheDocument();
+    expect(headerBrand).toHaveTextContent('Catalog');
   });
 
   it('deep-links directly to each tab and normalizes the root to Catalog', async () => {
