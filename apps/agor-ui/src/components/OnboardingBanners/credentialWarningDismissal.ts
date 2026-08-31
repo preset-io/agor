@@ -1,38 +1,53 @@
 import type { AgenticToolName } from '@agor-live/client';
 
-export const CREDENTIAL_WARNING_SNOOZE_MS = 24 * 60 * 60 * 1000;
+/**
+ * Persistent, per-user+tool dismissal of a credential banner. It survives
+ * reloads and time (no 24-hour snooze) and re-surfaces only when the tool's own
+ * credential fingerprint changes — never when an unrelated tool is saved.
+ *
+ * `warning` scopes the amber "not connected / rejected" banner; `partial`
+ * scopes the softened notice shown when another tool still works. Keeping them
+ * apart means dismissing the informational notice never hides a later
+ * all-tools-down warning.
+ */
+export type BannerDismissalScope = 'warning' | 'partial';
 
-interface CredentialWarningDismissal {
-  version: 1;
-  snoozedUntil: number;
+interface StoredDismissal {
+  version: 2;
+  fingerprint: string;
 }
 
-export function credentialWarningSnoozeStorageKey(userId: string, tool: AgenticToolName): string {
-  return `agor:credential-warning:v1:${userId}:${tool}`;
+export function credentialWarningDismissalKey(
+  scope: BannerDismissalScope,
+  userId: string,
+  tool: AgenticToolName
+): string {
+  return `agor:onboarding-banner:v2:${scope}:${userId}:${tool}`;
 }
 
-/** Read one user/tool-scoped snooze, deleting malformed or expired state. */
-export function readCredentialWarningSnooze(
+/**
+ * True while the stored dismissal still matches the tool's current credential
+ * fingerprint. A missing, malformed, or stale (fingerprint-changed) entry is
+ * removed and treated as "not dismissed", so a real warning is never hidden by
+ * an out-of-date dismissal.
+ */
+export function readCredentialWarningDismissed(
   storage: Pick<Storage, 'getItem' | 'removeItem'>,
+  scope: BannerDismissalScope,
   userId: string,
   tool: AgenticToolName,
-  now = Date.now()
-): number | null {
-  const key = credentialWarningSnoozeStorageKey(userId, tool);
+  fingerprint: string
+): boolean {
+  const key = credentialWarningDismissalKey(scope, userId, tool);
   try {
     const raw = storage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<CredentialWarningDismissal>;
-    if (
-      parsed.version !== 1 ||
-      typeof parsed.snoozedUntil !== 'number' ||
-      !Number.isFinite(parsed.snoozedUntil) ||
-      parsed.snoozedUntil <= now
-    ) {
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as Partial<StoredDismissal>;
+    if (parsed.version !== 2 || parsed.fingerprint !== fingerprint) {
       storage.removeItem(key);
-      return null;
+      return false;
     }
-    return parsed.snoozedUntil;
+    return true;
   } catch {
     // Storage can be unavailable in hardened/private browser contexts. A
     // persistence failure must not hide a real warning indefinitely.
@@ -41,37 +56,36 @@ export function readCredentialWarningSnooze(
     } catch {
       // Best effort only.
     }
-    return null;
+    return false;
   }
 }
 
-/** Snooze one user's warning for one tool. Returns the in-memory expiry. */
-export function writeCredentialWarningSnooze(
+export function writeCredentialWarningDismissed(
   storage: Pick<Storage, 'setItem'>,
+  scope: BannerDismissalScope,
   userId: string,
   tool: AgenticToolName,
-  now = Date.now()
-): number {
-  const snoozedUntil = now + CREDENTIAL_WARNING_SNOOZE_MS;
+  fingerprint: string
+): void {
   try {
     storage.setItem(
-      credentialWarningSnoozeStorageKey(userId, tool),
-      JSON.stringify({ version: 1, snoozedUntil } satisfies CredentialWarningDismissal)
+      credentialWarningDismissalKey(scope, userId, tool),
+      JSON.stringify({ version: 2, fingerprint } satisfies StoredDismissal)
     );
   } catch {
-    // The mounted component still honors the in-memory snooze. A reload will
-    // show the warning again rather than silently hiding it forever.
+    // The mounted component still honors the in-memory dismissal. A reload will
+    // re-show the warning rather than silently hiding it forever.
   }
-  return snoozedUntil;
 }
 
-export function clearCredentialWarningSnooze(
+export function clearCredentialWarningDismissal(
   storage: Pick<Storage, 'removeItem'>,
+  scope: BannerDismissalScope,
   userId: string,
   tool: AgenticToolName
 ): void {
   try {
-    storage.removeItem(credentialWarningSnoozeStorageKey(userId, tool));
+    storage.removeItem(credentialWarningDismissalKey(scope, userId, tool));
   } catch {
     // Best effort only.
   }
