@@ -24,15 +24,15 @@ import {
 const agentMode = resolveAgentMode();
 const BRANCH_NAME = 'glaze-menu-refresh';
 const PROMPT =
-  'Give me a quick tour of this repo: what is the project, and how is the code organized? Keep it under 150 words.';
+  'Give me a quick tour of this repo: what is the project, and how is the code organized? Skim the README and the top-level layout only — no deep exploration — and keep it under 150 words.';
 const FOLLOW_UP =
-  "What's one small improvement you'd tackle first? Look at the code and propose it concretely — don't make any changes yet.";
+  "What's one small improvement you'd tackle first? Check just the one or two most relevant files and propose it concretely — don't make any changes yet, and keep the proposal short.";
 
 test.skip(!agentMode, 'set AGOR_E2E_AGENT_MODE=live|replay for the AI lessons');
 
 test('lesson 04: your first session', async ({ page }) => {
   // Two real model turns, each of which may read the repo at length.
-  test.setTimeout(420_000);
+  test.setTimeout(1_200_000);
   await openLesson(page, BOARD_PATH, '04-your-first-session');
   await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 30_000 });
   await beat(page);
@@ -62,14 +62,20 @@ test('lesson 04: your first session', async ({ page }) => {
   await beat(page);
   await glideAndClick(page, page.locator('button:has-text("Send")').first());
 
+  await expect(page.locator('text=RUNNING').first()).toBeVisible({ timeout: 30_000 });
   await reassertCursor(page);
-  await expect(page.locator('text=MotherDuck').first()).toBeVisible({ timeout: 150_000 });
+
+  // Let the first turn fully wrap (status back to IDLE), then check the
+  // tour actually landed in the transcript. Assert on the project's name —
+  // never on incidental wording a fresh model turn is free to vary.
+  await expect(page.locator('text=IDLE').first()).toBeVisible({ timeout: 480_000 });
+  await expect(page.locator('[data-conversation-block]').last()).toContainText(/donut/i, {
+    timeout: 15_000,
+  });
   await settle(page);
 
-  // Sessions are conversations — follow up. Let the first turn fully wrap
-  // (status back to IDLE), then ask the agent what it would improve; it goes
-  // back into the code to answer.
-  await expect(page.locator('text=IDLE').first()).toBeVisible({ timeout: 60_000 });
+  // Sessions are conversations — follow up: ask the agent what it would
+  // improve; it goes back into the code to answer.
   await beat(page);
   await typeInto(page, composer, FOLLOW_UP);
   await beat(page);
@@ -79,7 +85,7 @@ test('lesson 04: your first session', async ({ page }) => {
   // returns to IDLE when the proposal lands.
   await expect(page.locator('text=RUNNING').first()).toBeVisible({ timeout: 30_000 });
   await reassertCursor(page);
-  await expect(page.locator('text=IDLE').first()).toBeVisible({ timeout: 240_000 });
+  await expect(page.locator('text=IDLE').first()).toBeVisible({ timeout: 480_000 });
   await settle(page);
   await settle(page);
 });

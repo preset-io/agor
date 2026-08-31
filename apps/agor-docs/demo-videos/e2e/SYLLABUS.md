@@ -113,14 +113,13 @@ _Two agents, one repo, zero collisions_ · _agent lesson_
 
 **Ends with:** Two live branch cards on the board
 
-## Planned
-
 ### 08 · Make the change
 
 _From proposal to diff — pick up where lesson 04 left off_ · _agent lesson_
 
-1. Lesson 04 ended with "Want me to go ahead and make that change?" — say yes
-1. Watch the agent edit for real; review the diff in the session panel
+1. Reopen lesson 04's conversation from the branch card — sessions are durable
+1. The agent proposed a concrete fix and asked to implement it — say yes
+1. Watch it edit for real; review the inline diff blocks in the transcript
 1. The branch card now carries real, uncommitted work
 
 **Ends with:** A reviewed diff on glaze-menu-refresh
@@ -129,13 +128,24 @@ _From proposal to diff — pick up where lesson 04 left off_ · _agent lesson_
 
 _A long-lived agent with identity, memory, and goals_ · _agent lesson_
 
-1. The left panel has said "no primary teammate yet" since lesson 00 — fix that
-1. Create an AI teammate from the framework repo (pre-registered by the harness)
-1. Assign it as the board's primary teammate
+1. Create "Sprinkles" via Create New… → Teammate (framework repo pre-registered)
+1. Its first session starts bootstrapping the teammate for real — identity, memory, goals
+1. Teammates preside over their own board — end there, Sprinkles at the helm
+1. The bootstrap keeps working in the background while you move on
 
-**Ends with:** A named teammate presiding over the board
+**Ends with:** Sprinkles presiding over Sprinkles's Board from the left panel
 
-> Teammate bootstrap may run a setup session — budget model turns; framework repo is already local.
+### 12 · Multiplayer
+
+_Two people, live cursors, one board_
+
+1. Create a second user (Ada) via Settings → Admin → Users — there is no email invite flow
+1. Ada joins the same board in her own browser; her live cursor + name chip appear
+1. Ada drags a branch card — it moves on the admin's screen in real time
+
+**Ends with:** A visibly multiplayer board
+
+## Planned
 
 ### 10 · Give your agent tools
 
@@ -147,7 +157,7 @@ _MCP: ask questions of the live MotherDuck database_ · _agent lesson_
 
 **Ends with:** A session with working MCP tools
 
-> Needs MOTHERDUCK_TOKEN in .e2e-secrets. An Agor-to-Agor MCP against a live Preset instance is a later variant.
+> MOTHERDUCK_TOKEN is in .e2e-secrets (verified against the DonutShop DB). An Agor-to-Agor MCP against a live Preset instance is a later variant.
 
 ### 11 · Open a pull request
 
@@ -160,18 +170,6 @@ _Ship the branch: commit, push, PR — from the card_ · _agent lesson_
 **Ends with:** A real PR linked from the board
 
 > Needs GitHub write access to donut-shop (or a fork strategy) — decide before building.
-
-### 12 · Multiplayer
-
-_Two people, live cursors, one board_
-
-1. A second user joins the board in a second browser context
-1. Live presence cursors; both users touch the same canvas
-1. Invite flow becomes its own beat ("Invite a teammate" from the checklist)
-
-**Ends with:** A visibly multiplayer board
-
-> Two Playwright contexts in one spec; needs a second (invited) user account.
 
 ### 13 · A second provider
 

@@ -45,9 +45,10 @@ test('lesson 01: connect your repository', async ({ page }) => {
 
   await glideAndClick(page, page.locator('button:has-text("Add Repository")').first());
 
-  // The daemon inspects the clone and registers it.
+  // The daemon inspects the clone and registers it — genuinely slow on a
+  // loaded host, so give it room.
   await expect(page.locator('text=Local repository added successfully').first()).toBeVisible({
-    timeout: 30_000,
+    timeout: 120_000,
   });
   await settle(page);
 });

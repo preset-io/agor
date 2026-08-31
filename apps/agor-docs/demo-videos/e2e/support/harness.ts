@@ -20,16 +20,42 @@
 // single later lesson (the earlier lessons' state must already exist).
 
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // HERE = apps/agor-docs/demo-videos/e2e/support -> repo root is 5 levels up.
 export const REPO_ROOT = path.resolve(HERE, '../../../../..');
-export const SCRATCH_DIR = path.join(REPO_ROOT, '.e2e-runtime');
+export const SCRATCH_DIR =
+  process.env.AGOR_E2E_SCRATCH_DIR ?? path.join(os.homedir(), '.agor-e2e', 'runtime');
 export const DB_PATH = path.join(SCRATCH_DIR, 'agor-e2e.db');
 export const DATA_HOME = path.join(SCRATCH_DIR, 'data');
+// Scratch AGOR_HOME so the daemon reads THIS config.yaml — without it the
+// e2e daemon silently reads the developer's real ~/.agor/config.yaml
+// (only the DB and git data home were overridden), so recordings varied
+// with local settings. From-zero means default config too.
+export const AGOR_HOME_DIR = path.join(SCRATCH_DIR, 'home');
+// Per-lesson state checkpoints ("migrations as cache", see BACKLOG.md):
+// openLesson snapshots the quiescent workspace as pre-<lessonId> so any
+// lesson can later run solo from exactly the state it expects.
+export const CHECKPOINTS_DIR =
+  process.env.AGOR_E2E_CHECKPOINTS_DIR ?? path.join(os.homedir(), '.agor-e2e', 'checkpoints');
+// Playwright writes videos continuously while recording — those go to the
+// (fast, internal) main drive per Evan: raw recordings live beside the
+// finished syllabus copies under ~/Desktop/agor_video/.
+export const TEST_RESULTS_DIR =
+  process.env.AGOR_E2E_RESULTS_DIR ??
+  path.join(os.homedir(), 'Desktop', 'agor_video', 'raw-recordings');
 export const STATE_FILE = path.join(SCRATCH_DIR, 'harness-state.json');
 export const STORAGE_STATE_PATH = path.join(SCRATCH_DIR, 'auth-state.json');
 // Deliberately OUTSIDE SCRATCH_DIR (which the reset wipes): user-provided
@@ -246,17 +272,124 @@ function reapStalePorts(): void {
   }
 }
 
+// Playwright hardcodes its recording pipeline at "good enough for CI
+// artifacts": JPEG screencast frames at quality 80, piped into VP8 at
+// `-b:v 1M -crf 8 -speed 8` regardless of resolution. On this app's dark
+// gradient UI that 1 Mbps cap reads as visible banding/dither in every
+// clip — and these recordings are the product, not a debugging artifact.
+// There is no public API for either knob, so patch the installed bundle
+// (idempotent, re-applied every setup, so a reinstall just gets repatched).
+const PW_VIDEO_ARGS_STOCK =
+  '-qmin 0 -qmax 50 -crf 8 -deadline realtime -speed 8 -b:v 1M -threads 1';
+const PW_VIDEO_ARGS_DEMO =
+  '-qmin 0 -qmax 40 -crf 4 -deadline realtime -speed 7 -b:v 12M -threads 4';
+// Earlier variants of the patch, so a bundle patched by an older harness
+// still upgrades cleanly.
+const PW_VIDEO_ARGS_PRIOR = [
+  '-qmin 0 -qmax 40 -crf 4 -deadline realtime -speed 6 -b:v 12M -threads 4',
+];
+const PW_JPEG_STOCK = 'quality: 80';
+const PW_JPEG_DEMO = 'quality: 95';
+// 30fps capture matches the 30fps logo intro and the 30fps reel output —
+// one timeline end to end, no resampling judder.
+const PW_FPS_STOCK = 'fps = 25';
+const PW_FPS_DEMO = 'fps = 30';
+
+function patchPlaywrightVideoQuality(): void {
+  const bundle = path.join(
+    path.resolve(HERE, '..'),
+    'node_modules/playwright-core/lib/coreBundle.js'
+  );
+  if (!existsSync(bundle)) {
+    console.warn('[harness] playwright-core bundle not found — video stays at stock quality');
+    return;
+  }
+  let src = readFileSync(bundle, 'utf-8');
+  if (src.includes(PW_VIDEO_ARGS_DEMO) && src.includes(PW_JPEG_DEMO) && src.includes(PW_FPS_DEMO))
+    return; // already patched
+  const before = src;
+  src = src
+    .replace(PW_VIDEO_ARGS_STOCK, PW_VIDEO_ARGS_DEMO)
+    .replace(PW_JPEG_STOCK, PW_JPEG_DEMO)
+    .replace(PW_FPS_STOCK, PW_FPS_DEMO);
+  for (const prior of PW_VIDEO_ARGS_PRIOR) {
+    src = src.replace(prior, PW_VIDEO_ARGS_DEMO);
+  }
+  if (src === before) {
+    console.warn(
+      '[harness] playwright-core encoder args not found (version changed?) — video stays at stock quality'
+    );
+    return;
+  }
+  writeFileSync(bundle, src);
+  console.log('[harness] patched playwright-core video pipeline (jpeg q95, vp8 12M, 30fps)');
+}
+
+/**
+ * Snapshot the current scratch runtime as a named checkpoint. APFS
+ * clone-copy (cp -c) makes this near-instant and copy-on-write; falls back
+ * to a plain copy elsewhere. Logs are excluded; the daemon may still be
+ * writing (heartbeats), so a checkpoint is an iteration cache, not a
+ * byte-perfect backup — worst case, re-record from an earlier one.
+ */
+export function snapshotCheckpoint(name: string): void {
+  if (!existsSync(DB_PATH)) return;
+  const dest = path.join(CHECKPOINTS_DIR, name);
+  rmSync(dest, { recursive: true, force: true });
+  mkdirSync(CHECKPOINTS_DIR, { recursive: true });
+  const clone = spawnSync('cp', ['-Rc', SCRATCH_DIR, dest], { stdio: 'ignore' });
+  if (clone.status !== 0) {
+    const plain = spawnSync('cp', ['-R', SCRATCH_DIR, dest], { stdio: 'ignore' });
+    if (plain.status !== 0) {
+      console.warn(`[harness] checkpoint ${name} failed — continuing without it`);
+      rmSync(dest, { recursive: true, force: true });
+      return;
+    }
+  }
+  rmSync(path.join(dest, 'daemon.log'), { force: true });
+  rmSync(path.join(dest, 'ui.log'), { force: true });
+  rmSync(path.join(dest, 'cassette-proxy.log'), { force: true });
+}
+
 /** Global setup: reset scratch env from zero, spawn daemon + UI, mint auth state. */
 export async function setupHarness(): Promise<void> {
   const keepScratch = process.env.AGOR_E2E_KEEP_SCRATCH === '1';
+  // AGOR_E2E_FROM_CHECKPOINT=pre-<lessonId>: restore that snapshot instead
+  // of wiping — then run just the lesson(s) you're iterating on.
+  const fromCheckpoint = process.env.AGOR_E2E_FROM_CHECKPOINT;
   const secrets = loadSecrets();
   const agentMode = resolveAgentMode();
 
   reapStalePorts();
+  patchPlaywrightVideoQuality();
 
-  if (!keepScratch || !existsSync(DB_PATH)) {
+  if (fromCheckpoint) {
+    const src = path.join(CHECKPOINTS_DIR, fromCheckpoint);
+    if (!existsSync(path.join(src, 'agor-e2e.db'))) {
+      throw new Error(`[harness] no checkpoint named ${fromCheckpoint} in ${CHECKPOINTS_DIR}`);
+    }
+    console.log(`[harness] restoring workspace from checkpoint ${fromCheckpoint}...`);
+    rmSync(SCRATCH_DIR, { recursive: true, force: true });
+    mkdirSync(path.dirname(SCRATCH_DIR), { recursive: true });
+    const clone = spawnSync('cp', ['-Rc', src, SCRATCH_DIR], { stdio: 'ignore' });
+    if (clone.status !== 0) {
+      run('cp', ['-R', src, SCRATCH_DIR], REPO_ROOT, process.env);
+    }
+  }
+
+  if (!fromCheckpoint && (!keepScratch || !existsSync(DB_PATH))) {
     rmSync(SCRATCH_DIR, { recursive: true, force: true });
     mkdirSync(DATA_HOME, { recursive: true });
+    mkdirSync(AGOR_HOME_DIR, { recursive: true });
+    // Recording-friendly deviation from defaults: a transient daemon/socket
+    // stall must not get a healthy multi-minute agent turn killed
+    // (task.termination cause=heartbeat_lost — see ONBOARDING_FINDINGS.md
+    // #10). 15 minutes of tolerance; the suite's own timeouts still bound
+    // every wait.
+    writeFileSync(
+      path.join(AGOR_HOME_DIR, 'config.yaml'),
+      'execution:\n  executor_heartbeat:\n    stale_after_ms: 900000\n'
+    );
 
     const dbEnv: NodeJS.ProcessEnv = { ...process.env, DATABASE_URL };
     console.log('[harness] migrating scratch database (no seed — the flow starts from zero)...');
@@ -275,6 +408,7 @@ export async function setupHarness(): Promise<void> {
     ...process.env,
     ...secrets,
     DATABASE_URL,
+    AGOR_HOME: AGOR_HOME_DIR,
     AGOR_DATA_HOME: DATA_HOME,
     PORT: String(DAEMON_PORT),
     NODE_ENV: 'development',
@@ -327,6 +461,7 @@ export async function setupHarness(): Promise<void> {
         ...process.env,
         AGOR_E2E_AGENT_MODE: agentMode,
         CASSETTE_PATH,
+        AGOR_E2E_CASSETTE_APPEND: process.env.AGOR_E2E_CASSETTE_APPEND ?? '',
         PROXY_PORT: String(PROXY_PORT),
       },
       stdio: ['ignore', proxyLog, proxyLog],
@@ -334,14 +469,14 @@ export async function setupHarness(): Promise<void> {
       shell: true,
     });
     state.proxyPid = proxy.pid!;
-    await waitForHealth(`${PROXY_URL}/__cassette_health`, 15_000);
+    await waitForHealth(`${PROXY_URL}/__cassette_health`, 60_000);
     console.log('[harness] cassette proxy healthy.');
   }
 
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 
-  await waitForHealth(`${DAEMON_URL}/health`, 30_000);
-  await waitForHealth(BASE_URL, 30_000);
+  await waitForHealth(`${DAEMON_URL}/health`, 120_000);
+  await waitForHealth(BASE_URL, 120_000);
   const accessToken = await writeStorageState();
   await registerFrameworkRepo(accessToken);
   console.log('[harness] daemon + UI healthy; admin auth state minted.');
@@ -401,7 +536,23 @@ export async function teardownHarness(): Promise<void> {
   if (state.proxyPid) {
     try {
       process.kill(state.proxyPid, 'SIGTERM');
-      await waitForExit(state.proxyPid, 10_000);
+      // The cassette write goes to the (possibly slow, external) repo
+      // volume — give it real time.
+      await waitForExit(state.proxyPid, 30_000);
+      // Belt and suspenders: if the proxy died between its atomic
+      // write-to-tmp and the rename, promote a valid leftover tmp so a
+      // recorded run is never silently dropped.
+      const tmpCassette = `${CASSETTE_PATH}.tmp`;
+      if (existsSync(tmpCassette)) {
+        try {
+          JSON.parse(readFileSync(tmpCassette, 'utf-8'));
+          renameSync(tmpCassette, CASSETTE_PATH);
+          console.log('[harness] promoted leftover cassette tmp (proxy died mid-rename)');
+        } catch {
+          rmSync(tmpCassette, { force: true });
+          console.warn('[harness] discarded corrupt leftover cassette tmp');
+        }
+      }
     } catch {
       // Already dead — fine.
     }

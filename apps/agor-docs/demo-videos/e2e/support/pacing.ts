@@ -18,7 +18,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { installCursor } from './cursor.ts';
-import { SCRATCH_DIR } from './harness.ts';
+import { SCRATCH_DIR, snapshotCheckpoint } from './harness.ts';
 
 /** Where each page's cursor currently rests (Playwright doesn't expose it). */
 const cursorPos = new WeakMap<Page, { x: number; y: number }>();
@@ -106,7 +106,11 @@ export async function glideAndClick(page: Page, target: Locator, durationMs = 65
  */
 export async function spotlight(page: Page, target: Locator, dwellMs = 1400): Promise<void> {
   await glideTo(page, target);
-  await target.hover();
+  // Bounded hover: an overlaying element (e.g. a Select's readonly input)
+  // intercepts pointer events and would otherwise retry until the TEST
+  // timeout. The glide already parked the visible cursor on the target,
+  // so a failed hover costs nothing on camera.
+  await target.hover({ timeout: 10_000 }).catch(() => undefined);
   await page.waitForTimeout(dwellMs);
 }
 
@@ -127,15 +131,27 @@ const TRIM_MARKS_FILE = path.join(SCRATCH_DIR, 'trim-marks.jsonl');
  * starts each lesson where the real UI (and the lesson's story) begins.
  */
 export async function openLesson(page: Page, urlPath = '/', lessonId?: string): Promise<void> {
+  // Checkpoint the quiescent pre-lesson workspace (previous lesson settled,
+  // this one not started) so this lesson can later be re-run solo:
+  //   AGOR_E2E_FROM_CHECKPOINT=pre-<lessonId> npx playwright test <spec>
+  // Near-free via APFS clone; disable with AGOR_E2E_CHECKPOINTS=0.
+  if (lessonId && process.env.AGOR_E2E_CHECKPOINTS !== '0') {
+    snapshotCheckpoint(`pre-${lessonId}`);
+  }
   const t0 = Date.now();
   await page.goto(urlPath);
-  // Outlast both boot screens ("Loading..." shell + "Loading workspace data...").
-  await page
-    .locator('text=/^Loading/')
-    .first()
-    .waitFor({ state: 'hidden', timeout: 60_000 })
-    .catch(() => undefined);
-  await page.waitForTimeout(700);
+  // Outlast both boot screens ("Loading..." shell, then "Loading workspace
+  // data..."). They are SEQUENTIAL elements: waiting for `.first()` to hide
+  // resolves when the shell loader unmounts while the workspace loader is
+  // still coming, under-measuring the trim mark. Poll until no /^Loading/
+  // text has been on screen for three consecutive checks.
+  const loading = page.locator('text=/^Loading/');
+  const bootDeadline = Date.now() + 90_000;
+  let quietChecks = 0;
+  while (Date.now() < bootDeadline && quietChecks < 3) {
+    quietChecks = (await loading.count().catch(() => 1)) === 0 ? quietChecks + 1 : 0;
+    await page.waitForTimeout(400);
+  }
   if (lessonId) {
     const elapsed = (Date.now() - t0) / 1000;
     mkdirSync(SCRATCH_DIR, { recursive: true });

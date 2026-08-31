@@ -16,6 +16,7 @@ if (!cassettePath) throw new Error('cassette-proxy-cli: CASSETTE_PATH env var is
 
 const handle = await startCassetteProxy({
   mode,
+  append: process.env.AGOR_E2E_CASSETTE_APPEND === '1',
   cassettePath,
   upstreamHost: process.env.UPSTREAM_HOST ?? 'api.anthropic.com',
   port: process.env.PROXY_PORT ? Number(process.env.PROXY_PORT) : undefined,

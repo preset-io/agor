@@ -36,7 +36,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SCRATCH_DIR } from '../support/harness.ts';
+import { SCRATCH_DIR, TEST_RESULTS_DIR } from '../support/harness.ts';
 import { DONE_LESSONS } from '../support/syllabus.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -57,7 +57,14 @@ const TITLE_HOLD = 4.0; // seconds the overlay stays fully visible
 // Output framerate. Frames are duplicated/dropped to hit it — timestamps
 // are authoritative, so playback SPEED never changes with this knob (e.g.
 // AGOR_E2E_REEL_FPS=60 for a smoother-capable target).
-const REEL_FPS = Number(process.env.AGOR_E2E_REEL_FPS ?? 25);
+const REEL_FPS = Number(process.env.AGOR_E2E_REEL_FPS ?? 30);
+// Output resolution: 4K by default (the conference TV), AGOR_E2E_REEL_RES=1080
+// for a lighter cut. 1080p sources upscale through lanczos; native-4K capture
+// (AGOR_E2E_VIDEO=4k) passes through. Title sizes scale with the canvas.
+const REEL_4K = (process.env.AGOR_E2E_REEL_RES ?? '4k') !== '1080';
+const OUT_W = REEL_4K ? 3840 : 1920;
+const OUT_H = REEL_4K ? 2160 : 1080;
+const S = OUT_W / 1920; // typography/layout scale relative to the 1080p design
 
 // Per-lesson trim marks written by openLesson (support/pacing.ts): seconds
 // of app-boot to cut so each lesson opens on the settled UI where its
@@ -155,7 +162,7 @@ function drawText(opts: {
     `alpha='${alphaExpr(opts.t0, opts.hold)}'`,
   ];
   if (opts.box) {
-    parts.push('box=1', 'boxcolor=black@0.55', 'boxborderw=22');
+    parts.push('box=1', 'boxcolor=black@0.55', `boxborderw=${Math.round(22 * S)}`);
   }
   return `drawtext=${parts.join(':')}`;
 }
@@ -176,7 +183,7 @@ function main(): void {
       const candidate = path.join(sourceDir, `${lesson.id}.webm`);
       if (existsSync(candidate)) source = candidate;
     } else {
-      const resultsDir = path.join(E2E_ROOT, 'test-results');
+      const resultsDir = TEST_RESULTS_DIR;
       const match = readdirSync(resultsDir).find((name) =>
         name.startsWith(`flow-${lesson.number}`)
       );
@@ -197,7 +204,20 @@ function main(): void {
   // Each clip's head trim: its recorded loading time when openLesson marked
   // it, never less than the paint-in flash floor.
   const marks = loadTrimMarks(sourceDir);
-  const trims = clips.map((clip) => Math.max(TRIM_HEAD, marks.get(clip.id) ?? TRIM_HEAD));
+  // Prefer visually detected UI-start cuts when the source dir carries
+  // them (ui-start.json, produced by frame analysis) — they measure the
+  // recording itself and can't race the app's boot screens. Fall back to
+  // the in-test marks (+pad for the context-creation offset the marks
+  // can't see), then the flash floor.
+  const uiStartPath = sourceDir ? path.join(sourceDir, 'ui-start.json') : null;
+  const uiStarts: Record<string, number> =
+    uiStartPath && existsSync(uiStartPath) ? JSON.parse(readFileSync(uiStartPath, 'utf-8')) : {};
+  const TRIM_PAD = 1.2;
+  const trims = clips.map((clip) => {
+    if (uiStarts[clip.id] !== undefined) return uiStarts[clip.id];
+    const mark = marks.get(clip.id);
+    return mark !== undefined ? mark + TRIM_PAD : TRIM_HEAD;
+  });
   const durations = clips.map((clip, i) => ffprobeDuration(clip.file) - trims[i]);
 
   const inputs: string[] = [];
@@ -208,8 +228,8 @@ function main(): void {
   const introSeconds = ffprobeDuration(INTRO);
   inputs.push('-i', INTRO);
   filters.push(
-    `[0:v]scale=1920:1080,` +
-      `${drawText({ text: 'From zero to a working agent team', size: 46, x: '(w-text_w)/2', y: 'h-150', t0: introSeconds - 2.2, hold: 2.2, color: '0xd8e6e3' })},` +
+    `[0:v]scale=${OUT_W}:${OUT_H}:flags=lanczos,` +
+      `${drawText({ text: 'From zero to a working agent team', size: 46 * S, x: '(w-text_w)/2', y: `h-${150 * S}`, t0: introSeconds - 2.2, hold: 2.2, color: '0xd8e6e3' })},` +
       `settb=AVTB,fps=${REEL_FPS},setpts=PTS-STARTPTS[card]`
   );
 
@@ -222,9 +242,9 @@ function main(): void {
     const lesson = lessonByIndex[i];
     inputs.push('-i', clip.file);
     filters.push(
-      `[${i + 1}:v]trim=start=${trims[i].toFixed(3)},setpts=PTS-STARTPTS,scale=1920:1080,` +
-        `${drawText({ text: lesson.title, size: 48, x: '64', y: 'h-180', t0: TITLE_IN, hold: TITLE_HOLD, box: true })},` +
-        `${drawText({ text: lesson.tagline, size: 30, x: '64', y: 'h-110', t0: TITLE_IN + 0.25, hold: TITLE_HOLD - 0.25, color: '0xd8e6e3', box: true })},` +
+      `[${i + 1}:v]trim=start=${trims[i].toFixed(3)},setpts=PTS-STARTPTS,scale=${OUT_W}:${OUT_H}:flags=lanczos,` +
+        `${drawText({ text: lesson.title, size: 48 * S, x: `${64 * S}`, y: `h-${180 * S}`, t0: TITLE_IN, hold: TITLE_HOLD, box: true })},` +
+        `${drawText({ text: lesson.tagline, size: 30 * S, x: `${64 * S}`, y: `h-${110 * S}`, t0: TITLE_IN + 0.25, hold: TITLE_HOLD - 0.25, color: '0xd8e6e3', box: true })},` +
         `settb=AVTB,fps=${REEL_FPS}[v${i}]`
     );
   });
@@ -270,9 +290,9 @@ function main(): void {
     '-profile:v',
     'high',
     '-level:v',
-    '4.2',
+    REEL_4K ? '5.1' : '4.2',
     '-crf',
-    '20',
+    '17',
     '-preset',
     'medium',
     '-c:a',

@@ -1,5 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-import { BASE_URL, STORAGE_STATE_PATH } from './support/harness';
+import { BASE_URL, STORAGE_STATE_PATH, TEST_RESULTS_DIR } from './support/harness';
 
 // AGOR_E2E_VIDEO=4k renders the UI at deviceScaleFactor 2 and records
 // 3840x2160 — verified genuine 2x raster detail, not an upscale. Default
@@ -21,7 +21,7 @@ export default defineConfig({
   reporter: [['list'], ['html', { open: 'never', outputFolder: 'report' }]],
   globalSetup: './support/global-setup.ts',
   globalTeardown: './support/global-teardown.ts',
-  outputDir: './test-results',
+  outputDir: TEST_RESULTS_DIR,
   timeout: 120_000,
   use: {
     baseURL: BASE_URL,

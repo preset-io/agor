@@ -23,7 +23,7 @@
 // This is deliberately NOT wired into every E2E spec — only ones that
 // actually invoke a real agent turn opt in, via AGOR_E2E_AGENT_MODE.
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createServer, type IncomingMessage } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 
@@ -93,10 +93,19 @@ export async function startCassetteProxy(options: {
   cassettePath: string;
   upstreamHost: string; // e.g. 'api.anthropic.com'
   port?: number;
+  append?: boolean;
 }): Promise<CassetteProxyHandle> {
   const { mode, cassettePath, upstreamHost } = options;
 
   const recorded: CassetteEntry[] = [];
+  // Append mode: a live run adds onto the existing cassette instead of
+  // replacing it — how the suite records in chunks (later lessons against
+  // a kept workspace) without re-burning earlier lessons' metered turns.
+  if (mode === 'live' && options.append && existsSync(cassettePath)) {
+    const prior = loadCassette(cassettePath);
+    recorded.push(...prior.entries);
+    console.log(`[cassette-proxy] append mode: preloaded ${prior.entries.length} entries`);
+  }
   const replayCassette = mode === 'replay' ? loadCassette(cassettePath) : null;
   if (mode === 'replay' && (!replayCassette || replayCassette.entries.length === 0)) {
     throw new Error(
@@ -155,6 +164,11 @@ export async function startCassetteProxy(options: {
     }
 
     // live: forward to the real upstream, stream back, record as we go.
+    const t0 = Date.now();
+    let clientClosedEarly = false;
+    res.on('close', () => {
+      if (!res.writableEnded) clientClosedEarly = true;
+    });
     const upstreamReq = httpsRequest(
       {
         hostname: upstreamHost,
@@ -175,6 +189,11 @@ export async function startCassetteProxy(options: {
         });
         upstreamRes.on('end', () => {
           res.end();
+          console.log(
+            `[cassette-proxy] ${req.method} ${req.url} -> ${upstreamRes.statusCode} ` +
+              `${Date.now() - t0}ms req=${bodyBuf.length}B resp=${responseChunks.reduce((n, c) => n + c.length, 0)}B` +
+              `${clientClosedEarly ? ' CLIENT_ABORTED' : ''}`
+          );
           const reqHeaders: Record<string, string> = {};
           for (const [k, v] of Object.entries(req.headers)) {
             if (typeof v === 'string') reqHeaders[k] = v;
@@ -192,8 +211,19 @@ export async function startCassetteProxy(options: {
       }
     );
     upstreamReq.on('error', (err) => {
-      res.writeHead(502, { 'content-type': 'text/plain' });
+      console.log(
+        `[cassette-proxy] ${req.method} ${req.url} -> UPSTREAM_ERROR ${Date.now() - t0}ms ` +
+          `req=${bodyBuf.length}B err=${err.message}${clientClosedEarly ? ' CLIENT_ABORTED' : ''}`
+      );
+      if (!res.headersSent) {
+        res.writeHead(502, { 'content-type': 'text/plain' });
+      }
       res.end(`cassette-proxy: upstream error: ${err.message}`);
+    });
+    // A client that aborts (speculative requests are normal for the CLI)
+    // must tear down its upstream leg rather than leak it.
+    res.on('close', () => {
+      if (!res.writableEnded) upstreamReq.destroy();
     });
     if (bodyBuf.length > 0) upstreamReq.write(bodyBuf);
     upstreamReq.end();
@@ -208,10 +238,14 @@ export async function startCassetteProxy(options: {
     close: () =>
       new Promise<void>((resolve, reject) => {
         if (mode === 'live') {
+          // Atomic write: a run killed mid-write must never leave a
+          // truncated cassette behind (replay crashes parsing it).
+          const tmpPath = `${cassettePath}.tmp`;
           writeFileSync(
-            cassettePath,
+            tmpPath,
             JSON.stringify({ upstreamHost, entries: recorded } satisfies Cassette, null, 2)
           );
+          renameSync(tmpPath, cassettePath);
           console.log(
             `[cassette-proxy] recorded ${recorded.length} interaction(s) → ${cassettePath}`
           );

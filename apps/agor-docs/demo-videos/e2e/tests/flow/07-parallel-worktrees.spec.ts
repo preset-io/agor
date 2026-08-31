@@ -22,12 +22,12 @@ const agentMode = resolveAgentMode();
 const FIRST_BRANCH = 'glaze-menu-refresh';
 const SECOND_BRANCH = 'daily-special-banner';
 const PROMPT =
-  "Sketch a plan for a '🍩 Daily Special' banner on the storefront: which files would you touch, and why? Plan only — no changes.";
+  "Sketch a brief plan for a '🍩 Daily Special' banner on the storefront: which files would you touch, and why? Check only the most relevant files. Plan only — no changes, keep it short.";
 
 test.skip(!agentMode, 'set AGOR_E2E_AGENT_MODE=live|replay for the AI lessons');
 
 test('lesson 07: parallel work on isolated worktrees', async ({ page }) => {
-  test.setTimeout(420_000);
+  test.setTimeout(1_200_000);
   await openLesson(page, BOARD_PATH, '07-parallel-worktrees');
   await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 30_000 });
   await beat(page);
@@ -69,7 +69,7 @@ test('lesson 07: parallel work on isolated worktrees', async ({ page }) => {
   await glideAndClick(page, page.locator('button:has-text("Send")').first());
   await expect(page.locator('text=RUNNING').first()).toBeVisible({ timeout: 30_000 });
   await reassertCursor(page);
-  await expect(page.locator('text=IDLE').first()).toBeVisible({ timeout: 240_000 });
+  await expect(page.locator('text=IDLE').first()).toBeVisible({ timeout: 900_000 });
   await settle(page);
 
   // Close the panel and end wide: two branch cards, two conversations, one
