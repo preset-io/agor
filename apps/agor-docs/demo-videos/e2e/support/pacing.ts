@@ -23,7 +23,7 @@ import { SCRATCH_DIR, snapshotCheckpoint } from './harness.ts';
 /** Where each page's cursor currently rests (Playwright doesn't expose it). */
 const cursorPos = new WeakMap<Page, { x: number; y: number }>();
 
-const STEP_MS = 28; // ~cadence of one paced mouse step (>= a 25fps frame)
+const STEP_MS = 16; // target sampling cadence; wall-clock drives position
 
 /** A short narrative pause between steps. */
 export function beat(page: Page): Promise<void> {
@@ -61,14 +61,22 @@ export async function pacedMove(page: Page, x: number, y: number, durationMs = 6
     x: from.x + dx / 2 + perp.x * bow,
     y: from.y + dy / 2 + perp.y * bow,
   };
-  const steps = Math.max(8, Math.round(durationMs / STEP_MS));
-  for (let i = 1; i <= steps; i++) {
-    const t = easeInOut(i / steps);
-    const u = 1 - t;
+  // Sample the eased curve by WALL-CLOCK time, not by step count: a
+  // fixed-delay step loop assumes each waitForTimeout takes exactly its
+  // delay, but protocol jitter bunches steps up and the recorded cursor
+  // leaps-then-crawls (measured 15px/2px/14px alternation per frame).
+  // Position computed from elapsed time is always where a real hand would
+  // be, so every captured frame samples a smooth trajectory.
+  const start = Date.now();
+  for (;;) {
+    const t = Math.min(1, (Date.now() - start) / durationMs);
+    const e = easeInOut(t);
+    const u = 1 - e;
     await page.mouse.move(
-      u * u * from.x + 2 * u * t * ctrl.x + t * t * x,
-      u * u * from.y + 2 * u * t * ctrl.y + t * t * y
+      u * u * from.x + 2 * u * e * ctrl.x + e * e * x,
+      u * u * from.y + 2 * u * e * ctrl.y + e * e * y
     );
+    if (t >= 1) break;
     await page.waitForTimeout(STEP_MS);
   }
   cursorPos.set(page, { x, y });
