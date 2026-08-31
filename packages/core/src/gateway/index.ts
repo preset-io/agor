@@ -69,6 +69,7 @@ export {
   isSlackFileSourceAllowed,
   isSlackWriteTargetAllowed,
   markdownToMrkdwn,
+  parseThreadId as parseSlackThreadId,
   SlackConnector,
 } from './connectors/slack';
 export type {

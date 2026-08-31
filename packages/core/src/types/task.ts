@@ -190,6 +190,16 @@ export interface TaskMetadata {
   gateway_inbound_event_id?: GatewayInboundEventID;
   /** Provider reply target captured for this gateway Task (for example an editable ack ID). */
   gateway_reply_metadata?: Record<string, unknown>;
+  /** Immutable gateway coordinates; stripped from API/realtime Task DTOs. */
+  gateway_task_source?: {
+    gateway_channel_id: string;
+    channel_type: import('./gateway').ChannelType;
+    thread_id: string;
+    provider_user_id: string;
+    provider_message_id?: string;
+    slack_team_id?: string;
+    slack_channel_id?: string;
+  };
   /**
    * Durable identity of the Task's first transcript row. Internal
    * idempotent producers persist this alongside the Task so any daemon that
@@ -227,6 +237,9 @@ export interface TaskMetadata {
     /** Bounded keyed hashes of the exact projection returned for this claim. */
     authority_fingerprints?: string[];
   };
+
+  /** Internal Slack delivery projection for the structured MCP recovery above. */
+  mcp_slack_recovery_notice?: import('./mcp').MCPSlackRecoveryNotice;
 
   /**
    * Immutable one-shot completion callback requested for this exact task.

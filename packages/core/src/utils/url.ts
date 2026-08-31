@@ -100,6 +100,11 @@ export function artifactFullscreenPath(artifactId: ArtifactID): string {
   return `/${ENTITY_PATH_SEGMENTS.artifact}/${shortId(artifactId)}/fullscreen`;
 }
 
+/** Lightweight authenticated browser surface for a Slack MCP recovery action. */
+export function mcpSlackRecoveryPath(): string {
+  return '/recover/mcp';
+}
+
 function encodePathSegments(path: string): string {
   return path
     .split('/')
@@ -176,6 +181,11 @@ export function getArtifactUrl(artifactId: ArtifactID, baseUrl: string): string 
  *  compact navbar. */
 export function getArtifactFullscreenUrl(artifactId: ArtifactID, baseUrl: string): string {
   return fullUrl(artifactFullscreenPath(artifactId), baseUrl);
+}
+
+/** Preserve any operator-configured base path while adding the UI mount. */
+export function getMcpSlackRecoveryUrl(baseUrl: string): string {
+  return fullUrl(mcpSlackRecoveryPath(), baseUrl);
 }
 
 /** Generate a Knowledge URL from namespace + optional document path. */
