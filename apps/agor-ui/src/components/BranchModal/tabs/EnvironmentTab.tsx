@@ -84,6 +84,16 @@ interface BranchRenderedSnapshot {
   app?: string;
 }
 
+/** The only snapshot keys persisted to the branch — anything else is dropped. */
+const RECOGNIZED_SNAPSHOT_KEYS: (keyof BranchRenderedSnapshot)[] = [
+  'start',
+  'stop',
+  'nuke',
+  'logs',
+  'health',
+  'app',
+];
+
 function snapshotFromBranch(wt: Branch): BranchRenderedSnapshot {
   return {
     start: wt.start_command || undefined,
@@ -448,6 +458,36 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
     setSnapshotYamlError(null);
     setIsEditingSnapshot(false);
   };
+
+  // Only the six recognized keys are persisted; any others in the editor are
+  // silently discarded on save. Surface them so the drop is a choice, not a
+  // surprise. Parse errors are already reported via snapshotYamlError.
+  const unrecognizedSnapshotKeys = useMemo(() => {
+    try {
+      const parsed = yaml.load(snapshotYamlText);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return Object.keys(parsed as Record<string, unknown>).filter(
+          (key) => !(RECOGNIZED_SNAPSHOT_KEYS as string[]).includes(key)
+        );
+      }
+    } catch {
+      // Invalid YAML — the error alert covers it; no key warning to add.
+    }
+    return [];
+  }, [snapshotYamlText]);
+
+  // Rendered URLs persisted on the branch. A concrete absolute URL becomes a
+  // link; a still-templated value ({{ ... }}) or relative path stays as code.
+  const renderUrlValue = (url: string) =>
+    /^https?:\/\//.test(url) && !url.includes('{{') ? (
+      <Typography.Link href={url} target="_blank" rel="noreferrer">
+        {url}
+      </Typography.Link>
+    ) : (
+      <Typography.Text code style={{ fontSize: 12 }}>
+        {url}
+      </Typography.Text>
+    );
 
   // ----- Import / export (admin only) -----
   const handleImport = () => {
@@ -870,6 +910,13 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
                 <Button size="small" onClick={handleCancelRepo}>
                   Cancel
                 </Button>
+                {/* Explicit insert — the template was previously only a ghost
+                    placeholder you couldn't edit. Offered while the doc is empty. */}
+                {!repoYamlText.trim() && (
+                  <Button size="small" onClick={() => setRepoYamlText(repoPlaceholder)}>
+                    Insert template
+                  </Button>
+                )}
               </Space>
             )}
           </Space>
@@ -958,6 +1005,28 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
               <code>app</code>). {lifecycleFieldHelp} Click Render above to regenerate from the
               variant.
             </Typography.Text>
+            {/* Surface the two URLs as labeled fields — otherwise they're only
+                findable by reading the `app` / `health` lines in the YAML. */}
+            {(branch.app_url || branch.health_check_url) && (
+              <Space orientation="vertical" size={2} style={{ width: '100%' }}>
+                {branch.app_url && (
+                  <Typography.Text style={{ fontSize: 12 }}>
+                    <Typography.Text strong style={{ fontSize: 12 }}>
+                      App URL:{' '}
+                    </Typography.Text>
+                    {renderUrlValue(branch.app_url)}
+                  </Typography.Text>
+                )}
+                {branch.health_check_url && (
+                  <Typography.Text style={{ fontSize: 12 }}>
+                    <Typography.Text strong style={{ fontSize: 12 }}>
+                      Health Check URL:{' '}
+                    </Typography.Text>
+                    {renderUrlValue(branch.health_check_url)}
+                  </Typography.Text>
+                )}
+              </Space>
+            )}
             <CodeEditor
               value={snapshotYamlText}
               onChange={(v) => {
@@ -971,6 +1040,14 @@ export const EnvironmentTab: React.FC<EnvironmentTabProps> = ({
             />
             {snapshotYamlError && (
               <Alert type="error" showIcon title={`Invalid snapshot: ${snapshotYamlError}`} />
+            )}
+            {isEditingSnapshot && unrecognizedSnapshotKeys.length > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                message="Unsupported keys will be dropped on save"
+                description={`Only start, stop, nuke, logs, health and app are persisted to the branch. These will be discarded when you save: ${unrecognizedSnapshotKeys.join(', ')}.`}
+              />
             )}
             {isEditingSnapshot && (
               <Space>
