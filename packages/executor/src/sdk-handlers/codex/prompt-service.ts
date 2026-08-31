@@ -1760,7 +1760,7 @@ export class CodexPromptService {
       if (isKnownCodexBoundaryError(error)) throw error;
 
       // Convert opaque SDK lifecycle failures to local, fixed control-flow
-      // errors. Provider failures emitted as typed events above have already
+      // errors. Codex runtime failures emitted as typed events above have already
       // been converted to Codex-specific fixed lifecycle errors.
       throw new CodexLifecycleError(
         runtimePhase === 'starting' ? 'stream_start_failed' : 'stream_interrupted'
