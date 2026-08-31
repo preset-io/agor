@@ -98,6 +98,7 @@ describe('claude-auth-logout', () => {
     let releaseWrite!: () => void;
     const events: string[] = [];
     const write = coordinator.runCredentialMutation(
+      'shared-home',
       () =>
         new Promise<void>((resolve) => {
           events.push('write-start');

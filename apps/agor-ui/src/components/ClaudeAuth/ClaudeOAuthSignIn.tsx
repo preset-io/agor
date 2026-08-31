@@ -167,11 +167,27 @@ export const ClaudeOAuthSignIn = memo(function ClaudeOAuthSignIn({
       setStatus(next);
       if (next.phase === 'success') setCode('');
     } catch (err) {
-      setSubmitError(
+      const message =
         err instanceof Error && err.message
           ? err.message
-          : 'That code could not be completed — start over and try again.'
-      );
+          : 'That code could not be completed — start over and try again.';
+      // Malformed/wrong-state pastes remain retryable daemon-side. Once an
+      // exchange began, however, rejection/ambiguity/persistence failures are
+      // terminal because the code may be spent. Reconcile the daemon phase so
+      // this mounted pane exposes Start over instead of trapping the user on
+      // the old awaiting-code form.
+      try {
+        const latest = (await run(() => service.find())) as ClaudeOAuthStatus;
+        if (latest.phase !== 'awaiting_code' && latest.phase !== 'exchanging') {
+          setStatus(latest);
+          setCode('');
+          setSubmitError(null);
+        } else {
+          setSubmitError(message);
+        }
+      } catch {
+        setSubmitError(message);
+      }
     } finally {
       setSubmitting(false);
     }

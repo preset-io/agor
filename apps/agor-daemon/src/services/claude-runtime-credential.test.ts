@@ -65,8 +65,8 @@ function credential(access: string, expiresAt: number, refresh = 'sk-ant-ort01-r
 }
 
 function authority() {
-  const runCredentialMutation = vi.fn(async <T>(work: (generation: number) => Promise<T>) =>
-    work(42)
+  const runCredentialMutation = vi.fn(
+    async <T>(_key: string, work: (generation: number) => Promise<T>) => work(42)
   );
   return { runCredentialMutation, invalidate: vi.fn() };
 }
@@ -77,6 +77,7 @@ function resolver(options: {
   compareAndSwap?: ReturnType<typeof vi.fn>;
   auth?: ReturnType<typeof authority>;
   config?: Record<string, unknown>;
+  runtimeIsolationAvailable?: () => boolean;
 }) {
   const auth = options.auth ?? authority();
   const refresh =
@@ -99,11 +100,26 @@ function resolver(options: {
       read: options.read,
       refresh,
       compareAndSwap,
+      runtimeIsolationAvailable: options.runtimeIsolationAvailable ?? (() => true),
     }),
   };
 }
 
 describe('ClaudeRuntimeCredentialResolver', () => {
+  it('refuses managed tokens for every user when the live sandbox lacks a PID namespace', async () => {
+    const read = vi.fn(async () => credential('sk-ant-oat01-secret', NOW + 8 * 60 * 60 * 1000));
+    const subject = resolver({ read, runtimeIsolationAvailable: () => false });
+
+    await expect(subject.instance.resolve('tenant-a', USER)).rejects.toThrow(
+      /private PID namespace/
+    );
+    await expect(subject.instance.resolve('tenant-a', 'user-2' as UserID)).rejects.toThrow(
+      /private PID namespace/
+    );
+    expect(read).not.toHaveBeenCalled();
+    expect(routeMocks.resolve).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     configMocks.contained = true;
@@ -170,7 +186,7 @@ describe('ClaudeRuntimeCredentialResolver', () => {
     const old = credential('sk-ant-oat01-old', NOW + 5 * 60 * 1000);
     const auth = authority();
     let authorityDepth = 0;
-    auth.runCredentialMutation.mockImplementation(async (work) => {
+    auth.runCredentialMutation.mockImplementation(async (_key, work) => {
       authorityDepth += 1;
       try {
         return await work(42);

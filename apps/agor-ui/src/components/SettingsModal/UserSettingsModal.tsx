@@ -2235,6 +2235,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
             identityKey={callerIdentityKey}
             operationScope={operationScope}
             authMethod={authMethod ?? 'api_key'}
+            credentialSource={claudeSource}
             allowSubscriptionLogin={isSelf}
             allowOAuthSignIn={featuresConfig?.claudeSubscriptionOAuth === true}
             apiKeyFields={allToolFields}

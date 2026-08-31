@@ -18,6 +18,7 @@ import {
   assertInlineAgenticConfigurationAllowed,
   assertSecurePassword,
   assertV05Scope,
+  DEFAULT_STATIC_TENANT_ID,
   getEnvVarBlockReason,
   AgorIdentityCapability as IdentityCapability,
   isEnvVarAllowed,
@@ -104,6 +105,7 @@ import {
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { claudeCredentialMutationKey } from './claude-oauth.js';
 import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
 import { UserAvatarSyncManager } from './user-avatar-sync.js';
 import {
@@ -112,10 +114,15 @@ import {
 } from './user-mutation-trust.js';
 
 interface ClaudeCredentialMutationCoordinatorLike {
-  runCredentialMutation<T>(work: (generation: number) => Promise<T>): Promise<T>;
+  runCredentialMutation<T>(key: string, work: (generation: number) => Promise<T>): Promise<T>;
+  tombstoneCurrentCredential: (input: {
+    tenantId: string;
+    userId: UserID;
+    generation: number;
+  }) => Promise<void>;
 }
 
-const CLAUDE_CREDENTIAL_MUTATION_HELD = Symbol('claude-credential-mutation-held');
+const CLAUDE_CREDENTIAL_MUTATION_GENERATION = Symbol('claude-credential-mutation-generation');
 
 function affectsClaudeCredentialAuthority(data: UpdateUserData): boolean {
   return (
@@ -484,6 +491,7 @@ function validatedAssignedPassword(password: unknown, email?: string): string {
 export class UsersService {
   private avatarSync?: UserAvatarSyncManager;
   private readonly identityAuthority: ResolvedIdentityAuthority;
+  private readonly config: AgorConfig;
 
   constructor(
     protected db: TenantScopeAwareDatabase | TenantScopedDatabase,
@@ -492,6 +500,7 @@ export class UsersService {
     private readonly claudeCredentialMutations?: ClaudeCredentialMutationCoordinatorLike
   ) {
     const effectiveConfig = config ?? (app?.get('config') as AgorConfig | undefined) ?? {};
+    this.config = effectiveConfig;
     this.identityAuthority = resolveIdentityAuthority(effectiveConfig);
     if (app) {
       // Application-bound services are created only from the long-lived,
@@ -509,6 +518,16 @@ export class UsersService {
       capability,
       authority,
     });
+  }
+
+  private claudeCredentialTenantId(params?: Params): string {
+    const tenantId =
+      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId();
+    if (tenantId) return tenantId;
+    if (this.config.multi_tenancy?.mode === 'required_from_auth') {
+      throw new Error('Missing active tenant context for Claude credential mutation');
+    }
+    return this.config.multi_tenancy?.static_tenant_id?.trim() || DEFAULT_STATIC_TENANT_ID;
   }
 
   private assertCreateAllowed(): void {
@@ -899,19 +918,22 @@ export class UsersService {
    */
   async patch(id: UserID, data: UpdateUserData, params?: Params): Promise<User> {
     const coordinated = params as
-      | (Params & { [CLAUDE_CREDENTIAL_MUTATION_HELD]?: boolean })
+      | (Params & { [CLAUDE_CREDENTIAL_MUTATION_GENERATION]?: number })
       | undefined;
     if (
       this.claudeCredentialMutations &&
-      !coordinated?.[CLAUDE_CREDENTIAL_MUTATION_HELD] &&
+      coordinated?.[CLAUDE_CREDENTIAL_MUTATION_GENERATION] === undefined &&
       getTrustedUserMutationPurpose(params) !== 'claude-auth' &&
       affectsClaudeCredentialAuthority(data)
     ) {
-      return this.claudeCredentialMutations.runCredentialMutation(() =>
-        this.patch(id, data, {
-          ...(params ?? {}),
-          [CLAUDE_CREDENTIAL_MUTATION_HELD]: true,
-        } as Params)
+      const tenantId = this.claudeCredentialTenantId(params);
+      return this.claudeCredentialMutations.runCredentialMutation(
+        claudeCredentialMutationKey(this.config, tenantId, id),
+        (generation) =>
+          this.patch(id, data, {
+            ...(params ?? {}),
+            [CLAUDE_CREDENTIAL_MUTATION_GENERATION]: generation,
+          } as Params)
       );
     }
     if (typeof id !== 'string' || !id) {
@@ -1341,6 +1363,28 @@ export class UsersService {
       updates.tokens_valid_after = credentialUpdatedAt;
     }
 
+    const currentClaudeSource = (
+      authority.target.data as { agentic_credential_sources?: AgenticCredentialSources }
+    ).agentic_credential_sources?.['claude-code'];
+    const nextClaudeSource = (
+      updates.data as { agentic_credential_sources?: AgenticCredentialSources } | undefined
+    )?.agentic_credential_sources?.['claude-code'];
+    const routeChanges =
+      Object.hasOwn(data, 'unix_username') || Object.hasOwn(data, 'filesystem_home');
+    const generation = coordinated?.[CLAUDE_CREDENTIAL_MUTATION_GENERATION];
+    if (
+      generation !== undefined &&
+      currentClaudeSource === 'managed_file' &&
+      (routeChanges || nextClaudeSource !== 'managed_file')
+    ) {
+      const tenantId = this.claudeCredentialTenantId(params);
+      await this.claudeCredentialMutations?.tombstoneCurrentCredential({
+        tenantId,
+        userId: id,
+        generation,
+      });
+    }
+
     const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
     const row = await runWithTenantDatabaseTransaction(
       this.db,
@@ -1404,14 +1448,20 @@ export class UsersService {
    */
   async remove(id: UserID, params?: Params): Promise<User> {
     const coordinated = params as
-      | (Params & { [CLAUDE_CREDENTIAL_MUTATION_HELD]?: boolean })
+      | (Params & { [CLAUDE_CREDENTIAL_MUTATION_GENERATION]?: number })
       | undefined;
-    if (this.claudeCredentialMutations && !coordinated?.[CLAUDE_CREDENTIAL_MUTATION_HELD]) {
-      return this.claudeCredentialMutations.runCredentialMutation(() =>
-        this.remove(id, {
-          ...(params ?? {}),
-          [CLAUDE_CREDENTIAL_MUTATION_HELD]: true,
-        } as Params)
+    if (
+      this.claudeCredentialMutations &&
+      coordinated?.[CLAUDE_CREDENTIAL_MUTATION_GENERATION] === undefined
+    ) {
+      const tenantId = this.claudeCredentialTenantId(params);
+      return this.claudeCredentialMutations.runCredentialMutation(
+        claudeCredentialMutationKey(this.config, tenantId, id),
+        (generation) =>
+          this.remove(id, {
+            ...(params ?? {}),
+            [CLAUDE_CREDENTIAL_MUTATION_GENERATION]: generation,
+          } as Params)
       );
     }
     if (typeof id !== 'string' || !id) {
@@ -1447,6 +1497,19 @@ export class UsersService {
       throw new BadRequest(
         'This user still owns boards or branches. Delete those resources before deleting the user.'
       );
+    }
+
+    const currentClaudeSource = (
+      authority.target.data as { agentic_credential_sources?: AgenticCredentialSources }
+    ).agentic_credential_sources?.['claude-code'];
+    const generation = coordinated?.[CLAUDE_CREDENTIAL_MUTATION_GENERATION];
+    if (generation !== undefined && currentClaudeSource === 'managed_file') {
+      const tenantId = this.claudeCredentialTenantId(params);
+      await this.claudeCredentialMutations?.tombstoneCurrentCredential({
+        tenantId,
+        userId: id,
+        generation,
+      });
     }
 
     const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);

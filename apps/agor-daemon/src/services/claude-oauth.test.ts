@@ -51,6 +51,7 @@ vi.mock('@agor/core/db', () => ({
 import {
   buildAuthorizeUrl,
   buildClaudeCredentialsJson,
+  claudeCredentialMutationKey,
   constantTimeEqual,
   createClaudeOAuthService,
   exchangeCodeForTokens,
@@ -89,7 +90,8 @@ async function startAndGetState(svc: {
 
 function makeService(
   coordinator?: InMemoryClaudeOAuthCoordinator,
-  config: Record<string, unknown> = {}
+  config: Record<string, unknown> = {},
+  runtimeIsolationAvailable = true
 ) {
   const usersGet = vi.fn(async () => ({ agentic_auth_methods: {} }));
   const usersPatch = vi.fn(async () => ({}));
@@ -101,7 +103,8 @@ function makeService(
   const svc = createClaudeOAuthService(
     app as unknown as Parameters<typeof createClaudeOAuthService>[0],
     {} as unknown as Parameters<typeof createClaudeOAuthService>[1],
-    coordinator
+    coordinator,
+    () => runtimeIsolationAvailable
   );
   return { svc, usersGet, usersPatch, app };
 }
@@ -314,6 +317,46 @@ describe('refreshClaudeTokens contract validation', () => {
 });
 
 describe('createClaudeOAuthService — flow + security', () => {
+  it('serializes one credential route without blocking an unrelated tenant/user route', async () => {
+    const coordinator = new InMemoryClaudeOAuthCoordinator();
+    let release!: () => void;
+    const events: string[] = [];
+    const first = coordinator.runCredentialMutation('tenant-a:user-a', async () => {
+      events.push('a-start');
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      events.push('a-end');
+    });
+    await vi.waitFor(() => expect(events).toEqual(['a-start']));
+
+    const sameRoute = coordinator.runCredentialMutation('tenant-a:user-a', async () => {
+      events.push('same-route');
+    });
+    const otherRoute = coordinator.runCredentialMutation('tenant-b:user-b', async () => {
+      events.push('other-route');
+    });
+    await vi.waitFor(() => expect(events).toContain('other-route'));
+    expect(events).not.toContain('same-route');
+
+    release();
+    await Promise.all([first, sameRoute, otherRoute]);
+    expect(events).toEqual(['a-start', 'other-route', 'a-end', 'same-route']);
+  });
+
+  it('retains one global mutation key for shared-home layouts', () => {
+    exactUserHome = false;
+    const shared = { execution: { unix_user_mode: 'simple' as const } };
+    expect(claudeCredentialMutationKey(shared, 'tenant-a', 'user-a' as never)).toBe('shared-home');
+    expect(claudeCredentialMutationKey(shared, 'tenant-b', 'user-b' as never)).toBe('shared-home');
+  });
+
+  it('fails closed before issuing a link when PID namespaces are unavailable', async () => {
+    const { svc } = makeService(undefined, {}, false);
+    await expect(svc.create({}, asUserA)).rejects.toThrow(/private PID namespace/);
+    expect(writeClaudeAuthViaExecutor).not.toHaveBeenCalled();
+  });
+
   it('fails closed when the deployment has not authorized Claude subscription OAuth', async () => {
     const { svc } = makeService(undefined, {
       agentic_tools: {},

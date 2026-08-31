@@ -38,7 +38,10 @@ import type {
   UserID,
 } from '@agor/core/types';
 import { deleteClaudeAuthViaExecutor } from '../utils/executor-claude-auth.js';
-import type { ClaudeCredentialMutationCoordinator } from './claude-oauth.js';
+import {
+  type ClaudeCredentialMutationCoordinator,
+  claudeCredentialMutationKey,
+} from './claude-oauth.js';
 import { type AppLike, resolveCodexCredentialRoute } from './codex-auth-shared.js';
 import { markTrustedUserMutation } from './user-mutation-trust.js';
 
@@ -145,7 +148,12 @@ export function createClaudeAuthLogoutService(
         return { status: 'removed' };
       };
 
-      return coordinator ? coordinator.runCredentialMutation(remove) : remove();
+      return coordinator
+        ? coordinator.runCredentialMutation(
+            claudeCredentialMutationKey(app.get('config'), tenantId, userId),
+            remove
+          )
+        : remove();
     },
   };
 }

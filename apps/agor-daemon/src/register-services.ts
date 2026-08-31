@@ -281,6 +281,7 @@ import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
+import { deleteClaudeAuthViaExecutor } from './utils/executor-claude-auth.js';
 import { renderOAuthResultPage } from './utils/html.js';
 import { emitMarketplaceInvalidation } from './utils/marketplace-invalidation.js';
 import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
@@ -1007,7 +1008,34 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Users service
   // ============================================================================
 
-  const usersService = createUsersService(db, app, config, claudeOAuthCoordinator);
+  const usersService = createUsersService(db, app, config, {
+    runCredentialMutation: (key, work) => claudeOAuthCoordinator.runCredentialMutation(key, work),
+    tombstoneCurrentCredential: async ({ tenantId, userId, generation }) => {
+      const attemptKey = `${tenantId}:${userId}`;
+      claudeOAuthCoordinator.invalidate(
+        attemptKey,
+        'This sign-in was cancelled because the execution home or account changed.'
+      );
+      const route = await resolveCodexCredentialRoute(
+        userId,
+        (work) => runWithTenantDatabaseScope(db, tenantId, work),
+        config
+      );
+      if (!route.ok) {
+        throw new BadRequest(
+          `Cannot remove the prior Claude login before changing the account: ${route.message}`
+        );
+      }
+      await deleteClaudeAuthViaExecutor(
+        {
+          delegatedHomeKey: route.delegatedHomeKey,
+          userId: route.userId,
+          ...(route.claudeConfigDir ? { claudeConfigDir: route.claudeConfigDir } : {}),
+        },
+        generation
+      );
+    },
+  });
   // UsersService implements find/get/create/patch/remove (no `update`), plus
   // avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.

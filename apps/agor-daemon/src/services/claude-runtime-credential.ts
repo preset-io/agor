@@ -18,8 +18,10 @@ import {
 } from '@agor/core/db';
 import { BadRequest, Unavailable } from '@agor/core/feathers';
 import type { DeepReadonly, UserID } from '@agor/core/types';
+import { sandboxManagedCredentialIsolationAvailable } from '../utils/sandbox-wrap.js';
 import {
   type ClaudeCredentialMutationCoordinator,
+  claudeCredentialMutationKey,
   type ExchangedTokens,
   refreshClaudeTokens,
   TokenExchangeError,
@@ -69,6 +71,7 @@ export interface ClaudeRuntimeCredentialDependencies {
   refresh?: typeof refreshClaudeTokens;
   read?: typeof readCredentialFile;
   compareAndSwap?: typeof compareAndSwapCredentialFile;
+  runtimeIsolationAvailable?: () => boolean;
 }
 
 function parseCredential(content: string): ClaudeCredentialDocument | null {
@@ -126,6 +129,7 @@ export class ClaudeRuntimeCredentialResolver {
   private readonly refresh: typeof refreshClaudeTokens;
   private readonly read: typeof readCredentialFile;
   private readonly compareAndSwap: typeof compareAndSwapCredentialFile;
+  private readonly runtimeIsolationAvailable: () => boolean;
 
   constructor(
     private readonly db: TenantScopeAwareDatabase,
@@ -139,6 +143,8 @@ export class ClaudeRuntimeCredentialResolver {
     this.compareAndSwap =
       dependencies.compareAndSwap ??
       ((options) => compareAndSwapCredentialFile({ ...options, preserveAuthorityInodes: true }));
+    this.runtimeIsolationAvailable =
+      dependencies.runtimeIsolationAvailable ?? sandboxManagedCredentialIsolationAvailable;
   }
 
   async resolve(tenantId: string, userId: UserID): Promise<ReturnType<typeof runtimeConnection>> {
@@ -148,6 +154,11 @@ export class ClaudeRuntimeCredentialResolver {
     ) {
       throw new BadRequest(
         'Managed Claude subscription login requires a contained per-user sandbox. Use an API key or pasted subscription token in this execution mode.'
+      );
+    }
+    if (!this.runtimeIsolationAvailable()) {
+      throw new BadRequest(
+        'Managed Claude subscription login requires verified bubblewrap isolation with a private PID namespace on this host. Use an API key or pasted subscription token.'
       );
     }
     const route = await this.route(tenantId, userId);
@@ -233,20 +244,24 @@ export class ClaudeRuntimeCredentialResolver {
         // so logout and route changes cannot be bypassed by adopting bytes from
         // the old home. Never clear/rewrite source or file for invalid_grant or
         // an ambiguous outcome.
-        const adopted = await this.authority.runCredentialMutation(async () => {
-          if (!(await this.sourceIsStillManaged(input.tenantId, input.userId))) return null;
-          const currentRoute = await this.route(input.tenantId, input.userId);
-          if (join(currentRoute.claudeConfigDir, '.credentials.json') !== input.target) return null;
-          const winner = await this.readCredential(input.target).catch(() => null);
-          if (
-            winner &&
-            winner.raw !== observed.raw &&
-            usableWithoutRefresh(winner.parsed, this.now())
-          ) {
-            return runtimeConnection(winner.parsed.claudeAiOauth.accessToken);
+        const adopted = await this.authority.runCredentialMutation(
+          claudeCredentialMutationKey(this.config, input.tenantId, input.userId),
+          async () => {
+            if (!(await this.sourceIsStillManaged(input.tenantId, input.userId))) return null;
+            const currentRoute = await this.route(input.tenantId, input.userId);
+            if (join(currentRoute.claudeConfigDir, '.credentials.json') !== input.target)
+              return null;
+            const winner = await this.readCredential(input.target).catch(() => null);
+            if (
+              winner &&
+              winner.raw !== observed.raw &&
+              usableWithoutRefresh(winner.parsed, this.now())
+            ) {
+              return runtimeConnection(winner.parsed.claudeAiOauth.accessToken);
+            }
+            return null;
           }
-          return null;
-        });
+        );
         if (adopted) return adopted;
         if (error.disposition === 'ambiguous') {
           throw new Unavailable('Claude login refresh is temporarily unavailable. Try again.');
@@ -256,35 +271,38 @@ export class ClaudeRuntimeCredentialResolver {
       throw error;
     }
 
-    return this.authority.runCredentialMutation(async (generation) => {
-      if (!(await this.sourceIsStillManaged(input.tenantId, input.userId))) {
-        throw new BadRequest('The Claude authentication method changed while the task started.');
-      }
-      const currentRoute = await this.route(input.tenantId, input.userId);
-      const currentTarget = join(currentRoute.claudeConfigDir, '.credentials.json');
-      if (currentTarget !== input.target) {
-        throw new BadRequest('The Claude credential home changed while the task started.');
-      }
-
-      const nextContent = buildRefreshedCredential(observed.parsed, refreshed, this.now());
-      const outcome = await this.compareAndSwap({
-        target: input.target,
-        expectedContent: observed.raw,
-        content: nextContent,
-        generation,
-      });
-      if (outcome.outcome === 'written') return runtimeConnection(refreshed.accessToken);
-
-      // Login/logout/another refresh won the compare. Missing bytes are a
-      // logout; changed usable bytes are the winner to adopt. Never recreate
-      // the observed grant after losing this fence.
-      if (outcome.content !== undefined) {
-        const winner = parseCredential(outcome.content);
-        if (winner && usableWithoutRefresh(winner, this.now())) {
-          return runtimeConnection(winner.claudeAiOauth.accessToken);
+    return this.authority.runCredentialMutation(
+      claudeCredentialMutationKey(this.config, input.tenantId, input.userId),
+      async (generation) => {
+        if (!(await this.sourceIsStillManaged(input.tenantId, input.userId))) {
+          throw new BadRequest('The Claude authentication method changed while the task started.');
         }
+        const currentRoute = await this.route(input.tenantId, input.userId);
+        const currentTarget = join(currentRoute.claudeConfigDir, '.credentials.json');
+        if (currentTarget !== input.target) {
+          throw new BadRequest('The Claude credential home changed while the task started.');
+        }
+
+        const nextContent = buildRefreshedCredential(observed.parsed, refreshed, this.now());
+        const outcome = await this.compareAndSwap({
+          target: input.target,
+          expectedContent: observed.raw,
+          content: nextContent,
+          generation,
+        });
+        if (outcome.outcome === 'written') return runtimeConnection(refreshed.accessToken);
+
+        // Login/logout/another refresh won the compare. Missing bytes are a
+        // logout; changed usable bytes are the winner to adopt. Never recreate
+        // the observed grant after losing this fence.
+        if (outcome.content !== undefined) {
+          const winner = parseCredential(outcome.content);
+          if (winner && usableWithoutRefresh(winner, this.now())) {
+            return runtimeConnection(winner.claudeAiOauth.accessToken);
+          }
+        }
+        throw new BadRequest('The managed Claude login changed while the task started. Try again.');
       }
-      throw new BadRequest('The managed Claude login changed while the task started. Try again.');
-    });
+    );
   }
 }

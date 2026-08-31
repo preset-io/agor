@@ -18,7 +18,11 @@ vi.mock('@agor/core/unix', () => ({
   probeBwrapPidNamespace: () => false,
 }));
 
-import { buildSandboxWrap, type SandboxRuntimePaths } from './sandbox-wrap.js';
+import {
+  buildSandboxWrap,
+  type SandboxRuntimePaths,
+  sandboxManagedCredentialIsolationAvailable,
+} from './sandbox-wrap.js';
 
 const bwrapRuntimeAvailable =
   process.platform === 'linux' &&
@@ -30,6 +34,10 @@ const AUTHORITY_FILENAMES = [
   '.credentials.json',
   ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES,
 ] as const;
+
+it('does not authorize managed runtime credentials when the live PID probe fails', () => {
+  expect(sandboxManagedCredentialIsolationAvailable()).toBe(false);
+});
 
 async function waitForFile(path: string): Promise<void> {
   const deadline = Date.now() + 10_000;
@@ -396,7 +404,7 @@ printf physical-state > "$claude_dir/ordinary-state.json"
     const checked = join(ownerStore, '.claude', 'race-checked');
     const tombstoned = join(ownerStore, '.claude', 'race-tombstoned');
 
-    const script = String.raw`
+    const script = `
 set -eu
 must_fail() {
   if "$@" >/dev/null 2>&1; then
