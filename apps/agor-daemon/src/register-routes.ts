@@ -645,24 +645,23 @@ export function createRegisteredMCPCatalogConnectService(
   app: Application,
   db: TenantScopeAwareDatabase
 ) {
+  const runInTenantDatabaseScope = <T>(params: AuthenticatedParams, work: () => Promise<T>) => {
+    const tenantId = params.tenant?.tenant_id ?? getCurrentTenantId();
+    return tenantId ? runWithTenantDatabaseScope(db, tenantId, work) : work();
+  };
   return createMCPCatalogConnectService(app, {
+    runInTenantDatabaseScope,
     async listCandidates(userId, params) {
-      const tenantId =
-        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
       const read = async () => new MCPCatalogCandidateRepository(db).listForUser(userId);
-      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+      return runInTenantDatabaseScope(params, read);
     },
     async getCandidate(userId, serverId, params) {
-      const tenantId =
-        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
       const read = async () => new MCPCatalogCandidateRepository(db).getForUser(userId, serverId);
-      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+      return runInTenantDatabaseScope(params, read);
     },
     async isGrantAuthorized(candidate, params) {
       const userId = params.user?.user_id as UserID | undefined;
       if (!userId) return false;
-      const tenantId =
-        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
       const read = async () => {
         const grant = await new UserMCPOAuthTokenRepository(db).getCatalogGrantAuthority(
           userId,
@@ -673,7 +672,7 @@ export function createRegisteredMCPCatalogConnectService(
             (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
         );
       };
-      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+      return runInTenantDatabaseScope(params, read);
     },
   });
 }

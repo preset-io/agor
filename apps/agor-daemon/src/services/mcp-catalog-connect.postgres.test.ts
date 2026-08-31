@@ -74,6 +74,7 @@ function rowsOf(result: unknown): Array<Record<string, unknown>> {
 
 function registeredMcpServerHooks(db: TenantScopeAwareDatabase) {
   const captured = {
+    aroundAll: [] as unknown[],
     beforeAll: [] as unknown[],
     beforeFind: [] as unknown[],
     beforeCreate: [] as unknown[],
@@ -84,10 +85,12 @@ function registeredMcpServerHooks(db: TenantScopeAwareDatabase) {
     service(path: string) {
       return {
         hooks(hooks: {
+          around?: { all?: unknown[] };
           before?: { all?: unknown[]; find?: unknown[]; create?: unknown[] };
           after?: { find?: unknown[]; get?: unknown[] };
         }) {
           if (path.replace(/^\//, '') !== 'mcp-servers') return;
+          captured.aroundAll.push(...(hooks.around?.all ?? []));
           captured.beforeAll.push(...(hooks.before?.all ?? []));
           captured.beforeFind.push(...(hooks.before?.find ?? []));
           captured.beforeCreate.push(...(hooks.before?.create ?? []));
@@ -238,6 +241,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       const app = feathers();
       app.use('mcp-servers', createMCPServersService(db));
       app.service('mcp-servers').hooks({
+        around: { all: hooks.aroundAll },
         before: {
           all: hooks.beforeAll,
           find: hooks.beforeFind,
@@ -285,8 +289,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       entry: MCPCatalogEntry = ENTRY,
       app = connectApp(entry)
     ) {
-      return runWithTenantDatabaseScope(db, tenantId, () =>
-        createRegisteredMCPCatalogConnectService(app, db).create(REQUEST, params(user, tenantId))
+      // Deliberately no ambient database scope here. This is the production
+      // long-route shape: authenticated tenant identity is present, while each
+      // database phase must open its own short scope on the required-scope
+      // proxy. Wrapping this whole call would hide the regression this test
+      // guards and would hold a PostgreSQL transaction across the remote probe.
+      return createRegisteredMCPCatalogConnectService(app, db).create(
+        REQUEST,
+        params(user, tenantId)
       );
     }
 
@@ -296,15 +306,13 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       token: string,
       app = connectApp(CREDENTIAL_ENTRY)
     ) {
-      return runWithTenantDatabaseScope(db, tenantId, () =>
-        createRegisteredMCPCatalogConnectService(app, db).create(
-          {
-            ...REQUEST,
-            catalog_key: CREDENTIAL_ENTRY.name,
-            bearer_token: token,
-          },
-          params(user, tenantId)
-        )
+      return createRegisteredMCPCatalogConnectService(app, db).create(
+        {
+          ...REQUEST,
+          catalog_key: CREDENTIAL_ENTRY.name,
+          bearer_token: token,
+        },
+        params(user, tenantId)
       );
     }
 
@@ -435,7 +443,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
     });
 
-    it('serializes delayed PostgreSQL first connects before adoption and preserves the newer key', async () => {
+    it('fences a delayed PostgreSQL first connect after newer adoption and preserves the newer key', async () => {
       probeRemoteAuthType.mockResolvedValue('credentials');
       const actor = await buildTenant('bearer-first-race');
       const app = connectApp(CREDENTIAL_ENTRY);
@@ -459,13 +467,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
 
       const older = connectWithToken(actor.user, actor.tenantId, OLD_KEY, app);
       await atProbe;
-      const newerPending = connectWithToken(actor.user, actor.tenantId, NEW_KEY, app);
-      await Promise.resolve();
-      expect(probeRemoteBearerToken).not.toHaveBeenCalledWith(RESOURCE, NEW_KEY);
+      const newer = await connectWithToken(actor.user, actor.tenantId, NEW_KEY, app);
+      expect(newer.reused_existing_server).toBe(false);
       releaseOld();
-      await older;
-      const newer = await newerPending;
-      expect(newer.reused_existing_server).toBe(true);
+      await expect(older).rejects.toThrow(/newer marketplace connect superseded/i);
       await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
         const rows = await new MCPServerRepository(scoped).findAll({
           catalogEntryName: CREDENTIAL_ENTRY.name,

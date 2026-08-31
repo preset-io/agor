@@ -127,6 +127,10 @@ async function buildDaemon(
 
   const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
   const connectDeps = {
+    runInTenantDatabaseScope: <T>(
+      _params: AuthenticatedParams,
+      work: () => Promise<T>
+    ): Promise<T> => work(),
     listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
     getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
       candidateRepo.getForUser(userId, serverId),
@@ -651,6 +655,10 @@ describe('credential reuse, against real grants', () => {
     // grant" is decided by the same key the production wiring uses.
     const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
     const deps = {
+      runInTenantDatabaseScope: <T>(
+        _params: AuthenticatedParams,
+        work: () => Promise<T>
+      ): Promise<T> => work(),
       listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
       getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
         candidateRepo.getForUser(userId, serverId),
