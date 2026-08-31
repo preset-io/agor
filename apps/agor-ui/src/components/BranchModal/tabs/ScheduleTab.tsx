@@ -17,7 +17,18 @@ import {
   UnorderedListOutlined,
 } from '@ant-design/icons';
 import type { TableColumnsType } from 'antd';
-import { Button, Empty, Popconfirm, Space, Spin, Switch, Table, Tooltip, Typography } from 'antd';
+import {
+  Button,
+  Empty,
+  Input,
+  Popconfirm,
+  Space,
+  Spin,
+  Switch,
+  Table,
+  Tooltip,
+  Typography,
+} from 'antd';
 import type { ReactNode } from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import { useThemedMessage } from '../../../utils/message';
@@ -126,6 +137,7 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
 }) => {
   const { showError, showSuccess } = useThemedMessage();
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [scheduleSearch, setScheduleSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
@@ -406,23 +418,47 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
     },
   ];
 
+  const searchTermLower = scheduleSearch.trim().toLowerCase();
+  const visibleSchedules = searchTermLower
+    ? schedules.filter(
+        (s) =>
+          s.name.toLowerCase().includes(searchTermLower) ||
+          (s.description ?? '').toLowerCase().includes(searchTermLower)
+      )
+    : schedules;
+
   return (
     <div style={{ padding: 16, minWidth: 0 }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          gap: 12,
-          marginBottom: 12,
-          minWidth: 0,
-        }}
-      >
+      <div style={{ marginBottom: 8, minWidth: 0 }}>
         <CompactTooltipText
           title={`Schedules for ${branch.name}`}
           ariaLabel={`Schedules for ${branch.name}`}
         >
           Schedules for {branch.name}
         </CompactTooltipText>
+        <Text type="secondary" style={{ display: 'block', marginTop: 2 }}>
+          Fire a prompt on a cadence — hourly heartbeats, daily summaries, weekly retros. Each run
+          starts a new session on this branch.
+        </Text>
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 12,
+          marginBottom: 12,
+          minWidth: 0,
+        }}
+      >
+        <Input
+          allowClear
+          placeholder="Search schedules by name or description"
+          value={scheduleSearch}
+          onChange={(e) => setScheduleSearch(e.target.value)}
+          style={{ maxWidth: 320 }}
+          disabled={schedules.length === 0}
+        />
         <Button
           type="primary"
           icon={<PlusOutlined />}
@@ -447,10 +483,12 @@ export const ScheduleTab: React.FC<ScheduleTabProps> = ({
             New schedule
           </Button>
         </Empty>
+      ) : visibleSchedules.length === 0 ? (
+        <Empty description={`No schedules match "${scheduleSearch.trim()}"`} />
       ) : (
         <Table<Schedule>
           rowKey="schedule_id"
-          dataSource={schedules}
+          dataSource={visibleSchedules}
           columns={columns}
           pagination={false}
           size="small"
