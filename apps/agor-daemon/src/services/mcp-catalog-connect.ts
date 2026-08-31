@@ -509,6 +509,7 @@ export interface MCPCatalogConnectService {
  * to catch that than a bug report about consenting twice.
  */
 export interface MCPCatalogConnectDeps {
+  resolveUserId(userId: string, params: AuthenticatedParams): Promise<UserID>;
   listCandidates(userId: UserID, params: AuthenticatedParams): Promise<MCPCatalogServerCandidate[]>;
   getCandidate(
     userId: UserID,
@@ -900,8 +901,19 @@ export function createMCPCatalogConnectService(
       // comes from the entry the catalog resolved and the answer the endpoint
       // gave, so a caller holding a key can only ever aim it at the URL the
       // checked-in file already points to.
-      const userId = params.user?.user_id as UserID | undefined;
-      if (!userId) throw new NotAuthenticated('Authentication required');
+      const presentedUserId = params.user?.user_id;
+      if (!presentedUserId) throw new NotAuthenticated('Authentication required');
+      const userId = await deps.resolveUserId(presentedUserId, params);
+      // Every downstream service call and candidate/grant lookup must use the
+      // same canonical identity that will be persisted as owner_user_id. A
+      // short public ID here otherwise creates a split request: reads key on
+      // the short form while the write hook resolves a different FK value.
+      if (userId !== presentedUserId) {
+        params = {
+          ...params,
+          user: { ...params.user, user_id: userId },
+        } as AuthenticatedParams;
+      }
       const bearerToken = readBearerToken(data.bearer_token, entry);
       // Every connect claims an operation generation, not only bearer
       // rotation. Compensation must not delete a just-created row after a

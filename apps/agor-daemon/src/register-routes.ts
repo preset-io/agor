@@ -221,7 +221,10 @@ import {
   redactMCPServerSecrets,
   shouldExposeMCPServerSecrets,
 } from './utils/mcp-header-secrets.js';
-import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
+import {
+  canConfigureMcpServers,
+  resolveCanonicalMcpOwnerUserId,
+} from './utils/mcp-server-authorization.js';
 import { patchUnlessRemoved } from './utils/patch-unless-removed.js';
 import {
   buildPromptTaskMetadata,
@@ -644,6 +647,12 @@ export function createRegisteredMCPCatalogConnectService(
   db: TenantScopeAwareDatabase
 ) {
   return createMCPCatalogConnectService(app, {
+    async resolveUserId(userId, params) {
+      const tenantId =
+        (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();
+      const read = () => resolveCanonicalMcpOwnerUserId(db, userId);
+      return tenantId ? runWithTenantDatabaseScope(db, tenantId, read) : read();
+    },
     async listCandidates(userId, params) {
       const tenantId =
         (params as { tenant?: { tenant_id?: string } }).tenant?.tenant_id ?? getCurrentTenantId();

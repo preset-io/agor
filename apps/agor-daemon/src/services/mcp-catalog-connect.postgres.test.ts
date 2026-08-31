@@ -14,6 +14,7 @@ import {
   MCPServerRepository,
   runWithTenantDatabaseScope,
   setMcpMemberPolicy,
+  shortId,
   sql,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
@@ -269,11 +270,15 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       return app;
     }
 
-    function params(user: User, tenantId: string): AuthenticatedParams {
+    function params(
+      user: User,
+      tenantId: string,
+      presentedUserId: string = user.user_id
+    ): AuthenticatedParams {
       return {
         provider: 'rest',
         authenticated: true,
-        user: { user_id: user.user_id, email: user.email, role: 'member' },
+        user: { user_id: presentedUserId, email: user.email, role: 'member' },
         authentication: { strategy: 'jwt', payload: { tenant_id: tenantId } },
         tenant: { tenant_id: tenantId, source: 'auth_claim' },
       } as AuthenticatedParams;
@@ -318,6 +323,47 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         reused_existing_server: true,
         reuse_kind: 'credential_peer',
         mcp_server: { mcp_server_id: peer.mcp_server_id },
+      });
+    });
+
+    it('resolves a same-tenant short user ID before persisting catalog ownership', async () => {
+      const actor = await buildTenant('short-owner-positive');
+      const app = connectApp();
+
+      const result = await runWithTenantDatabaseScope(db, actor.tenantId, () =>
+        createRegisteredMCPCatalogConnectService(app, db).create(
+          REQUEST,
+          params(actor.user, actor.tenantId, shortId(actor.user.user_id))
+        )
+      );
+
+      expect(result.mcp_server.owner_user_id).toBe(actor.user.user_id);
+      await runWithTenantDatabaseScope(db, actor.tenantId, async (scoped) => {
+        const rows = await new MCPServerRepository(scoped).findAll({
+          catalogEntryName: ENTRY.name,
+        });
+        expect(rows).toEqual([expect.objectContaining({ owner_user_id: actor.user.user_id })]);
+      });
+    });
+
+    it('does not resolve a foreign tenant short user ID into local ownership', async () => {
+      const foreign = await buildTenant('short-owner-foreign');
+      const local = await buildTenant('short-owner-local');
+      const app = connectApp();
+
+      await expect(
+        runWithTenantDatabaseScope(db, local.tenantId, () =>
+          createRegisteredMCPCatalogConnectService(app, db).create(
+            REQUEST,
+            params(foreign.user, local.tenantId, shortId(foreign.user.user_id))
+          )
+        )
+      ).rejects.toThrow(/Authenticated user identity could not be resolved/);
+
+      await runWithTenantDatabaseScope(db, local.tenantId, async (scoped) => {
+        await expect(
+          new MCPServerRepository(scoped).findAll({ catalogEntryName: ENTRY.name })
+        ).resolves.toEqual([]);
       });
     });
 

@@ -48,7 +48,7 @@ import type {
   MCPTransport,
   UserID,
 } from '@agor/core/types';
-import { hasMinimumRole, ROLES } from '@agor/core/types';
+import { hasMinimumRole, isCanonicalFullUuid, ROLES } from '@agor/core/types';
 import { runInOAuthTenantScope } from '../oauth-auth-helpers.js';
 
 export type McpServerWriteMethod = 'create' | 'update' | 'patch' | 'remove';
@@ -76,6 +76,28 @@ export interface McpServerWriteDecision {
 }
 
 type McpServerWriteAuthorizationDatabase = TenantScopeAwareDatabase | TenantScopedDatabase;
+
+/**
+ * Resolve the authenticated user's public ID shape to the tenant-owned users
+ * row before it is copied into an MCP ownership foreign key.
+ *
+ * Authentication normally carries the full database ID. Socket/service
+ * callers can, however, carry the public short form, and older hosted users
+ * retain canonical pre-UUIDv7 UUIDs. Full UUIDs are already persistence keys;
+ * only abbreviated shapes need a tenant-scoped repository lookup.
+ */
+export async function resolveCanonicalMcpOwnerUserId(
+  db: McpServerWriteAuthorizationDatabase,
+  presentedUserId: string
+): Promise<UserID> {
+  if (isCanonicalFullUuid(presentedUserId)) return presentedUserId as UserID;
+
+  const user = await new UsersRepository(db).findById(presentedUserId);
+  if (!user || !isCanonicalFullUuid(user.user_id)) {
+    throw new NotAuthenticated('Authenticated user identity could not be resolved');
+  }
+  return user.user_id as UserID;
+}
 
 /**
  * The extra params the marketplace connect service sets on its own
@@ -439,8 +461,24 @@ export async function authorizeMcpServerWrite(
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
 ): Promise<McpServerWriteDecision> {
-  const decision = await decidePolicyAndOwnership(db, params, request);
-  const install = resolveCatalogInstall(params, request);
+  let canonicalParams = params;
+  const presentedUser = params?.user;
+  if (
+    params?.provider &&
+    presentedUser?.user_id &&
+    !(presentedUser as { _isServiceAccount?: boolean })._isServiceAccount
+  ) {
+    const userId = await resolveCanonicalMcpOwnerUserId(db, presentedUser.user_id);
+    if (userId !== presentedUser.user_id) {
+      canonicalParams = {
+        ...params,
+        user: { ...presentedUser, user_id: userId },
+      } as AuthenticatedParams;
+    }
+  }
+
+  const decision = await decidePolicyAndOwnership(db, canonicalParams, request);
+  const install = resolveCatalogInstall(canonicalParams, request);
   return install === undefined
     ? decision
     : {
