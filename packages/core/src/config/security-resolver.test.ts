@@ -14,9 +14,11 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { loadCuratedCatalog } from '../mcp-catalog/curated-loader';
 import {
   getDefaultGitConfigParameters,
   gitConfigParameterLooksSecret,
+  MCP_CATALOG_CSP_IMG_SRCS,
   redactUrlUserinfo,
   renderGitConfigParametersForLog,
   resolveGitConfigParameters,
@@ -29,6 +31,13 @@ import type { AgorConfig } from './types';
 
 const EMPTY: AgorConfig = {};
 
+function cspSourceAllowsUrl(source: string, url: URL): boolean {
+  if (source.startsWith('https://*.')) {
+    return url.protocol === 'https:' && url.hostname.endsWith(source.slice('https://*'.length));
+  }
+  return source === url.origin;
+}
+
 describe('resolveSecurity — CSP defaults', () => {
   it('bakes in sandpack frame-src + worker-src so artifacts render out of the box', () => {
     const { csp } = resolveSecurity(EMPTY, { daemonUrl: 'http://localhost:3030' });
@@ -40,6 +49,28 @@ describe('resolveSecurity — CSP defaults', () => {
   it('allows Slack avatar images by default', () => {
     const { csp } = resolveSecurity(EMPTY, { daemonUrl: 'http://localhost:3030' });
     expect(csp.directives['img-src']).toContain(SLACK_AVATAR_CSP_IMG_SRC);
+  });
+
+  it('allows checked-in MCP catalog logo origins by default', () => {
+    const { csp } = resolveSecurity(EMPTY, { daemonUrl: 'http://localhost:3030' });
+    expect(csp.directives['img-src']).toEqual(
+      expect.arrayContaining([...MCP_CATALOG_CSP_IMG_SRCS])
+    );
+  });
+
+  it('keeps every checked-in MCP catalog logo within the default image policy', async () => {
+    const { csp } = resolveSecurity(EMPTY);
+    const imageSources = csp.directives['img-src'] ?? [];
+    const catalog = await loadCuratedCatalog();
+
+    for (const entry of catalog) {
+      if (!entry.icon_url) continue;
+      const iconUrl = new URL(entry.icon_url);
+      expect(
+        imageSources.some((source) => cspSourceAllowsUrl(source, iconUrl)),
+        `${entry.name} icon origin ${iconUrl.origin} is missing from the default img-src`
+      ).toBe(true);
+    }
   });
 
   it('honours allowSandpack=false by dropping *.codesandbox.io from frame-src', () => {
