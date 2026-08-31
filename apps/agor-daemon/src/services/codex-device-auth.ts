@@ -62,6 +62,7 @@ import {
 
 export { buildDeviceAuthJson } from './codex-device-auth-provider.js';
 
+import type { CodexCredentialBindInvalidator } from '../codex-auth-bind-invalidation.js';
 import {
   type AppLike,
   persistVerifiedCodexAuth,
@@ -117,7 +118,8 @@ function statusOf(attempt: DeviceAuthAttempt | undefined): CodexDeviceAuthStatus
 export function createCodexDeviceAuthService(
   app: AppLike,
   db: TenantScopeAwareDatabase,
-  routeAuthority?: StandaloneCredentialRouteAuthority
+  routeAuthority?: StandaloneCredentialRouteAuthority,
+  invalidateCredentialBinds: CodexCredentialBindInvalidator = async () => undefined
 ) {
   const attempts = new Map<string, DeviceAuthAttempt>();
 
@@ -234,6 +236,11 @@ export function createCodexDeviceAuthService(
             codexHome: attempt.codexHome,
           })
         );
+        await invalidateCredentialBinds({
+          tenantId: String(attempt.tenantId),
+          userId: attempt.userId,
+          reason: 'credentials_imported',
+        });
         attempt.planType = summary.planType;
         finish(
           attempt,

@@ -154,7 +154,7 @@ export async function listAttachedMcpServers(
   sessionId: string,
   opts: { includeDisabled?: boolean } = {}
 ): Promise<McpServerSummary[]> {
-  const session = await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
+  await ctx.app.service('sessions').get(sessionId, ctx.baseServiceParams);
   const sessionMCPServers = await ctx.app.service('session-mcp-servers').find({
     ...ctx.baseServiceParams,
     query: {
@@ -170,7 +170,10 @@ export async function listAttachedMcpServers(
       const mcpServer = await ctx.app
         .service('mcp-servers')
         .get(sms.mcp_server_id, ctx.baseServiceParams);
-      if (mcpServer.owner_user_id && mcpServer.owner_user_id !== session.created_by) {
+      // The attached row belongs to the Session, but private credentials must
+      // belong to the current prompt actor. Personal sharing never lends the
+      // Session owner's private MCP credential to a collaborator.
+      if (mcpServer.owner_user_id && mcpServer.owner_user_id !== ctx.userId) {
         continue;
       }
       summaries.push(await summarizeMcpServer(ctx, mcpServer));

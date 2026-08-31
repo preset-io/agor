@@ -55,7 +55,7 @@ Redis prefixes are operational deployment isolation only. Tenant IDs and applica
 
 ### Exact event inventory
 
-- Native cross-replica packets: `cursor-moved`, `cursor-left`, `presence-updated`, tenant-scoped `repo:cloneError`.
+- Native cross-replica packets: `cursor-moved`, `cursor-left`, `presence-updated`, `presence-left`, tenant-scoped `repo:cloneError`. Board-bearing presence targets only an authorized tenant-and-board association room.
 - Socket-local: `server-info`.
 - Behind blocked HA flows: `oauth:open_browser`, `oauth:completed`, `oauth:disconnected`.
 - Disabled at startup: every terminal/PTy packet.
@@ -64,7 +64,7 @@ Redis prefixes are operational deployment isolation only. Tenant IDs and applica
 
 Never deliberately place bearer/API/executor/MCP/terminal tokens, OAuth/PKCE/device credentials, GitHub install state, external-launch credentials, Artifact environment/grants, or secret-derived results in Redis. The Compose Redis disables RDB and AOF, but lack of persistence is not a security control.
 
-Native board presence now obtains an authenticated, tenant-scoped `boards.get` before room join. Cursor emit requires that grant. Auth replacement/logout clears every tenant/user/board native room. Tests cover tenant-A/tenant-B same-ID non-delivery, Feathers receiver-side tenant/RBAC reauthorization, denied Redis paths, redacted dispatch, and unauthorized board joins.
+Native cursor presence obtains an authenticated, tenant-scoped `boards.get` before room join. Navbar board association uses a separate full-set subscription authorized through `boards.find`; unavailable IDs are silently omitted. Cursor emit and board-bearing heartbeat publication each require the corresponding server-owned grant. Auth replacement/logout clears every tenant/user/board native room. Tests cover tenant-A/tenant-B same-ID non-delivery, Feathers receiver-side tenant/RBAC reauthorization, denied Redis paths, redacted dispatch, and unauthorized board joins.
 
 ## Merged-foundation support matrix
 

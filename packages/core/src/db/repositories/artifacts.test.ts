@@ -4,11 +4,11 @@
  * Focused on the find filters that back the SQL pushdown on ArtifactsService.find.
  */
 
-import type { BoardID, BranchID, UUID } from '@agor/core/types';
+import type { BoardID, BranchID, UserID, UUID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { ArtifactRepository } from './artifacts';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
@@ -151,7 +151,6 @@ describe('ArtifactRepository.findAll', () => {
 
   dbTest('pushes branch visibility directly into findAll SQL', async ({ db }) => {
     const repo = new ArtifactRepository(db);
-    const branchRepo = new BranchRepository(db);
     const usersRepo = new UsersRepository(db);
     const board = await createBoard(db);
     const viewerId = generateId() as UUID;
@@ -162,7 +161,7 @@ describe('ArtifactRepository.findAll', () => {
     });
     const visibleBranch = await createBranch(db, { others_can: 'none' });
     const hiddenBranch = await createBranch(db, { others_can: 'none' });
-    await branchRepo.addOwner(visibleBranch, viewerId);
+    await setTestBranchUserRole(db, visibleBranch, viewerId as UserID, 'manager');
 
     const visibleArtifact = await repo.create({
       artifact_id: generateId(),

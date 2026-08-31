@@ -1,6 +1,8 @@
 # Env var access and exposure
 
-**Status:** 🧪 Exploration — problem framing, two-part cleanup + gating model, minimal v1 scope, parked future branches. **V0.5 shipped 2026-04-18** (`feat-env-var-scope` branch): schema + `global`/`session` scopes + session selections + RBAC + UI all landed; v1 (Part A executor-auth homes, additional scope values, full resolver graph) still pending.
+**Status:** 🧪 Exploration — problem framing, two-part cleanup + gating model, minimal v1 scope, parked future branches. **V0.5 shipped 2026-04-18** (`feat-env-var-scope` branch): `global`/`session` metadata, name-only session selections, RBAC, resolver, and UI landed; v1 (additional scope values and the full resolver graph) is still pending. The shipped storage differs from the early schema sketch below: values remain keyed by name in `users.data.env_vars`; there is no first-class `env_vars` table or ID. `session_env_selections` therefore stores `(session_id, env_var_name)` and ownership is implicit in `sessions.created_by`.
+
+The current security/correctness review and authoritative data-flow matrix are in [`../../docs/internal/managed-env-secret-audit-2026-08-26.md`](../../docs/internal/managed-env-secret-audit-2026-08-26.md). Treat the design sections below as exploration where they conflict with that current-state record or code.
 
 Related concepts: [`permissions.md`](../concepts/permissions.md) · [`mcp-integration.md`](../concepts/mcp-integration.md) · [`auth.md`](../concepts/auth.md) · [`agent-integration.md`](../concepts/agent-integration.md) · [`branches.md`](../concepts/branches.md)
 
@@ -201,7 +203,7 @@ Strict / compliance modes would additionally force tool-only or approval tiers f
 
 Smaller-than-v1 proving step that establishes the schema and UI pattern without yet wiring all scope values. Landed on branch `feat-env-var-scope`:
 
-1. **Schema**: add `scope` (text, default `'global'`), `resource_id` (text, nullable), `extra_config` (json, nullable) columns to `env_vars`. Create `session_env_selections` join table.
+1. **Storage**: add `scope`, `resource_id`, and `extra_config` fields to each encrypted entry in `users.data.env_vars`. Create the name-keyed `session_env_selections` join table.
 2. **Validated scope values for v0.5**: only `'global'` and `'session'`. Other values are reserved in the enum (validated at the app layer) but not yet offered in the UI or resolved by the resolver.
 3. **Env resolution logic**: daemon computes a session's effective env at spawn time from:
    - all global-scope env vars for the session's user, plus

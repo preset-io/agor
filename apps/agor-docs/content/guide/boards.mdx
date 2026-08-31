@@ -24,7 +24,7 @@ _An Agor board staged for an active team: live cursors, roomy workflow zones, br
 - "Testing sessions cluster on the right."
 - "That failed experiment is way down there."
 
-This is location-based memory, the same reason you remember where you parked but forget a shopping list. A 2D board gives every branch and session a *place*. Linear lists discard that.
+This is location-based memory, the same reason you remember where you parked but forget a shopping list. A 2D board gives every branch and session a _place_. Linear lists discard that.
 
 **Like Figma did for design**, Agor brings spatial collaboration to AI coding:
 
@@ -44,7 +44,7 @@ Drag a branch into "Code Review" → auto-prompts the agent for review.
 Drag into "Needs Tests" → auto-prompts for test generation.
 Drag into "Ship It" → auto-prompts for changelog + PR description.
 
-Zones turn your board into a workflow engine. Spatial position *means something*. It triggers behavior.
+Zones turn your board into a workflow engine. Spatial position _means something_. It triggers behavior.
 
 ### How zone triggers work
 
@@ -123,6 +123,26 @@ Common patterns:
 ## Cards (Beta)
 
 Branches aren't the only thing that can live on a board. **[Cards](/guide/cards)** are generic workflow entities (support tickets, sales leads, content pieces) that an [teammate](/guide/teammates) creates and manages via MCP. Same spatial canvas, same zones, same multiplayer presence, just not git-bound.
+
+---
+
+## Permissions and branch defaults
+
+When branch RBAC is enabled, a board has one primary owner and two intentionally separate permission sections:
+
+1. **Board access** controls who can see and manage this canvas.
+2. **Branch defaults** define the complete permission package inherited by branches on this board.
+
+Board access uses Viewer, Editor, and Manager roles. Seeing a branch associated with a board does not make the board visible, and seeing a board does not reveal branch cards the person cannot access.
+
+Branch defaults use the same roles, file-access choices, and session-sharing editor as a branch override. A branch inherits the entire package or overrides the entire package—session sharing never has its own separate inheritance switch.
+
+Entries point to one person or group. Direct person entries override group membership; otherwise group entries combine. **Others** is a clearly labeled fallback for active workspace members who do not match any named entry.
+
+Primary ownership cannot be reassigned. Managers can maintain access and may
+enable shared prompting for branch-home Sessions, but do not become owners.
+The workspace preference must also be enabled, and execution-home Sessions are
+never shareable.
 
 ---
 

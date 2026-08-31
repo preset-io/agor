@@ -114,8 +114,8 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'useAgorData tracks per-session MCP attachment.',
   },
   'session-env-selections': {
-    audience: 'branch-or-session',
-    why: 'No browser subscriber today, but the row is session-scoped and was already scoped here; kept so a consumer can be added without a security decision.',
+    audience: 'none',
+    why: 'Selection names are credential metadata; there is no subscriber, and any future consumer needs an owner-aware disclosure decision.',
   },
 
   // ---------------------------------------------------------------------------
@@ -129,13 +129,17 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'branch',
     why: 'BranchModal ScheduleTab lists schedules live.',
   },
-  'branches/:id/owners': {
-    audience: 'branch-route',
-    why: 'BoardTeammatePanel refetches owners on created/removed — owner edits never patch the branch row, so this is its only signal.',
+  'branches/:id/permissions': {
+    audience: 'none',
+    why: 'Permission mutations invalidate authorization caches; editors use the mutation response.',
   },
-  'branches/:id/group-grants': {
-    audience: 'branch-route',
-    why: 'Grant rows carry no secret and were already branch-scoped; kept so the permissions UI can subscribe without re-deciding the audience.',
+  'boards/:id/permissions': {
+    audience: 'none',
+    why: 'Permission mutations invalidate authorization caches; editors use the mutation response.',
+  },
+  'workspace-preferences': {
+    audience: 'none',
+    why: 'Workspace settings are fetched by the settings and permissions forms.',
   },
 
   // ---------------------------------------------------------------------------
@@ -239,6 +243,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'auth/launch': { audience: 'none', why: 'Exchanges a launch token for a session.' },
   'check-auth': { audience: 'none', why: 'Echoes back the API key it was asked to validate.' },
   'config/resolve-api-key': { audience: 'none', why: 'Returns a provider API key.' },
+  'executor-git-environment': {
+    audience: 'none',
+    why: 'Returns a command-scoped Git credential DTO to one executor.',
+  },
   'api/v1/user/api-keys': { audience: 'none', why: 'Returns a freshly minted user API key.' },
   terminals: {
     audience: 'none',
@@ -329,15 +337,8 @@ export const REALTIME_PUBLISH_POLICY = {
   'copilot-models': { audience: 'none', why: 'Per-caller model list.' },
   'cursor-models': { audience: 'none', why: 'Per-caller model list.' },
   health: { audience: 'none', why: 'Liveness probe.' },
-  'boards/:id/owners': {
-    audience: 'none',
-    why: 'Board owner edits; the panel refetches, no subscriber.',
-  },
-  'boards/:id/group-grants': {
-    audience: 'none',
-    why: 'Board grant edits; the panel refetches, no subscriber.',
-  },
   'boards/:id/aligned-branches': { audience: 'none', why: 'Query route.' },
+  'boards/:id/effective-access': { audience: 'none', why: 'Query route.' },
   'branches/:id/effective-access': { audience: 'none', why: 'Query route.' },
   'branches/:id/fs-access-users': { audience: 'none', why: 'Query route.' },
   'me/artifact-trust-grants': { audience: 'none', why: 'Trust grants belonging to the caller.' },

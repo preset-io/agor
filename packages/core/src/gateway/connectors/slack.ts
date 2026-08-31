@@ -46,7 +46,7 @@ import type {
 } from '../connector';
 import { GatewayListenerError } from '../listener-error';
 import { sanitizeGatewayProviderError } from '../provider-error';
-import { createSlackSdkLogger } from './slack-sdk-logger';
+import { createSlackSdkLoggerController, type SlackSdkLoggerController } from './slack-sdk-logger';
 
 function slackProviderFailure(prefix: string, error: unknown): Error {
   return new Error(`${prefix}: ${sanitizeGatewayProviderError(error)}`);
@@ -843,6 +843,7 @@ export class SlackConnector implements GatewayConnector {
 
   private web: WebClient;
   private socketMode: SocketModeClient | null = null;
+  private socketLogger: SlackSdkLoggerController | null = null;
   private config: SlackConfig;
   private botUserId: string | null = null;
 
@@ -2093,10 +2094,13 @@ export class SlackConnector implements GatewayConnector {
       );
     }
 
-    this.socketMode = new SocketModeClient({
+    const socketLogger = createSlackSdkLoggerController();
+    const socketMode = new SocketModeClient({
       appToken: this.config.app_token,
-      logger: createSlackSdkLogger(),
+      logger: socketLogger.logger,
     });
+    this.socketLogger = socketLogger;
+    this.socketMode = socketMode;
 
     // Read config options (with defaults matching UI)
     const enableChannels = this.config.enable_channels ?? false;
@@ -2127,7 +2131,7 @@ export class SlackConnector implements GatewayConnector {
     }
 
     // Handle incoming Slack events
-    this.socketMode.on('slack_event', async ({ type, body, ack }) => {
+    socketMode.on('slack_event', async ({ type, body, ack }) => {
       // Event received - process based on type
 
       // Handle both 'message' events (DMs, threads) and 'app_mention' events (channel mentions)
@@ -2414,9 +2418,14 @@ export class SlackConnector implements GatewayConnector {
     });
 
     try {
-      await this.socketMode.start();
+      await socketMode.start();
+      socketLogger.setLifecycleState(
+        this.socketMode === socketMode && this.socketLogger === socketLogger ? 'active' : 'stopped'
+      );
     } catch (error) {
-      this.socketMode = null;
+      socketLogger.setLifecycleState('stopped');
+      if (this.socketLogger === socketLogger) this.socketLogger = null;
+      if (this.socketMode === socketMode) this.socketMode = null;
       const code =
         typeof error === 'object' && error !== null
           ? `${String((error as { code?: unknown }).code ?? '')} ${String(
@@ -2442,9 +2451,17 @@ export class SlackConnector implements GatewayConnector {
    * Stop Socket Mode listener
    */
   async stopListening(): Promise<void> {
-    if (this.socketMode) {
-      await this.socketMode.disconnect();
-      this.socketMode = null;
+    const socketMode = this.socketMode;
+    const socketLogger = this.socketLogger;
+    if (socketMode) {
+      socketLogger?.setLifecycleState('stopping');
+      try {
+        await socketMode.disconnect();
+      } finally {
+        socketLogger?.setLifecycleState('stopped');
+        if (this.socketLogger === socketLogger) this.socketLogger = null;
+        if (this.socketMode === socketMode) this.socketMode = null;
+      }
     }
   }
 

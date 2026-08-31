@@ -23,6 +23,8 @@ import { loadCatalog } from '@agor/core/mcp-catalog';
 import type {
   AuthenticatedParams,
   MCPCatalogEntry,
+  MCPOAuthBrowserEventRequest,
+  MCPOAuthBrowserReservation,
   MCPServer,
   MCPServerID,
   User,
@@ -602,13 +604,36 @@ function addLiveAuthority(
 async function reserveBrowserEvent(
   harness: SQLiteHarness,
   operation: 'discover' | 'test-oauth'
-): Promise<{ reservation_token: string }> {
+): Promise<MCPOAuthBrowserEventRequest> {
+  const reservation = await createBrowserEventReservation(harness, operation);
+  return { reservation_token: reservation.reservation_token };
+}
+
+async function reserveBrowserEventWithDeadline(
+  harness: SQLiteHarness,
+  operation: 'discover' | 'test-oauth'
+): Promise<{ event: MCPOAuthBrowserEventRequest; expiresAt: number }> {
+  // The async reservation boundary may cross a wall-clock tick under load.
+  // Expiry tests must advance from the daemon-issued deadline, not a timestamp
+  // sampled before the request, or they can remain accidentally unexpired.
+  const reservation = await createBrowserEventReservation(harness, operation);
+  return {
+    event: { reservation_token: reservation.reservation_token },
+    expiresAt: reservation.expires_at,
+  };
+}
+
+async function createBrowserEventReservation(
+  harness: SQLiteHarness,
+  operation: 'discover' | 'test-oauth'
+): Promise<MCPOAuthBrowserReservation> {
   const reservation = (await harness.app
     .service('mcp-servers/oauth-browser-reservations')
-    .create({ operation, mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
-    reservation_token: string;
-  };
-  return { reservation_token: reservation.reservation_token };
+    .create(
+      { operation, mcp_server_id: harness.server.mcp_server_id },
+      paramsFor(harness)
+    )) as MCPOAuthBrowserReservation;
+  return reservation;
 }
 
 async function authorizeSavedServer(harness: SQLiteHarness): Promise<void> {
@@ -1879,9 +1904,11 @@ describe('SQLite saved-row OAuth authority', () => {
     providers.push(provider);
     const harness = await createHarness(provider);
     databases.push(harness.rawDb);
-    const issuedAt = Date.now();
-    const browserReservation = await reserveBrowserEvent(harness, 'test-oauth');
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 59_999);
+    const { event: browserReservation, expiresAt } = await reserveBrowserEventWithDeadline(
+      harness,
+      'test-oauth'
+    );
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(expiresAt - 1);
     try {
       const testRequest = harness.app.service('mcp-servers/test-oauth').create(
         {
@@ -1897,7 +1924,7 @@ describe('SQLite saved-row OAuth authority', () => {
       // The pre-browser reservation has done its job. The callback wait is
       // bounded separately and remains usable only by the same live socket,
       // caller, role, tenant, token fingerprint, and server-issued attempt.
-      clock.mockReturnValue(issuedAt + 60_001);
+      clock.mockReturnValue(expiresAt);
       await expect(
         harness.callback(authorizationUrl.searchParams.get('state')!)
       ).resolves.toMatchObject({ status: 200 });
@@ -2155,10 +2182,12 @@ describe('SQLite saved-row OAuth authority', () => {
     providers.push(provider);
     const harness = await createHarness(provider);
     databases.push(harness.rawDb);
-    const issuedAt = Date.now();
-    const request = await reserveBrowserEvent(harness, 'discover');
+    const { event: request, expiresAt } = await reserveBrowserEventWithDeadline(
+      harness,
+      'discover'
+    );
     const before = provider.requests.length;
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 60_001);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(expiresAt);
     try {
       await expect(
         harness.app.service('mcp-servers/discover').create(
@@ -2180,8 +2209,10 @@ describe('SQLite saved-row OAuth authority', () => {
     providers.push(provider);
     const harness = await createHarness(provider);
     databases.push(harness.rawDb);
-    const issuedAt = Date.now();
-    const request = await reserveBrowserEvent(harness, 'test-oauth');
+    const { event: request, expiresAt } = await reserveBrowserEventWithDeadline(
+      harness,
+      'test-oauth'
+    );
     const before = provider.requests.length;
     const lookupStarted = deferred<void>();
     const releaseLookup = deferred<void>();
@@ -2197,7 +2228,7 @@ describe('SQLite saved-row OAuth authority', () => {
         }
         return originalFindById.call(this, id);
       });
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 59_999);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(expiresAt - 1);
     try {
       const test = harness.app.service('mcp-servers/test-oauth').create(
         {
@@ -2209,7 +2240,7 @@ describe('SQLite saved-row OAuth authority', () => {
         paramsFor(harness)
       );
       await lookupStarted.promise;
-      clock.mockReturnValue(issuedAt + 60_001);
+      clock.mockReturnValue(expiresAt);
       releaseLookup.resolve();
 
       await expect(test).resolves.toMatchObject({
@@ -2231,8 +2262,10 @@ describe('SQLite saved-row OAuth authority', () => {
       providers.push(provider);
       const harness = await createHarness(provider);
       databases.push(harness.rawDb);
-      const issuedAt = Date.now();
-      const request = await reserveBrowserEvent(harness, 'discover');
+      const { event: request, expiresAt } = await reserveBrowserEventWithDeadline(
+        harness,
+        'discover'
+      );
       const lookupStarted = deferred<void>();
       const releaseLookup = deferred<void>();
       const originalGetToken = UserMCPOAuthTokenRepository.prototype.getToken;
@@ -2252,9 +2285,7 @@ describe('SQLite saved-row OAuth authority', () => {
           return originalGetToken.apply(this, args);
         });
       const clock =
-        transition === 'expiry'
-          ? vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 59_999)
-          : undefined;
+        transition === 'expiry' ? vi.spyOn(Date, 'now').mockReturnValue(expiresAt - 1) : undefined;
       try {
         const discover = harness.app.service('mcp-servers/discover').create(
           {
@@ -2267,7 +2298,7 @@ describe('SQLite saved-row OAuth authority', () => {
         const requestsAtFailure = provider.requests.map((entry) => ({ ...entry }));
 
         if (transition === 'expiry') {
-          clock!.mockReturnValue(issuedAt + 60_001);
+          clock!.mockReturnValue(expiresAt);
         } else {
           harness.liveSocket.feathers.user = {
             ...harness.user,
@@ -2317,9 +2348,11 @@ describe('SQLite saved-row OAuth authority', () => {
       lockGrantConfiguration,
     });
     databases.push(harness.rawDb);
-    const issuedAt = Date.now();
-    const request = await reserveBrowserEvent(harness, 'discover');
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 59_999);
+    const { event: request, expiresAt } = await reserveBrowserEventWithDeadline(
+      harness,
+      'discover'
+    );
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(expiresAt - 1);
     try {
       const discover = harness.app.service('mcp-servers/discover').create(
         {
@@ -2330,7 +2363,7 @@ describe('SQLite saved-row OAuth authority', () => {
       );
       await lockStarted.promise;
       const requestsAtFailure = provider.requests.map((entry) => ({ ...entry }));
-      clock.mockReturnValue(issuedAt + 60_001);
+      clock.mockReturnValue(expiresAt);
       releaseLock.resolve();
 
       await expect(discover).resolves.toMatchObject({
@@ -2410,9 +2443,11 @@ describe('SQLite saved-row OAuth authority', () => {
         oauth_compatibility_mode: 'legacy',
       },
     });
-    const issuedAt = Date.now();
-    const request = await reserveBrowserEvent(harness, 'discover');
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 59_999);
+    const { event: request, expiresAt } = await reserveBrowserEventWithDeadline(
+      harness,
+      'discover'
+    );
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(expiresAt - 1);
     try {
       const discover = harness.app.service('mcp-servers/discover').create(
         {
@@ -2426,7 +2461,7 @@ describe('SQLite saved-row OAuth authority', () => {
       // The map entry has already been consumed. Advancing past its immutable
       // claim deadline must still fence every continuation after the held MCP
       // challenge completes.
-      clock.mockReturnValue(issuedAt + 60_001);
+      clock.mockReturnValue(expiresAt);
       provider.releaseMcp();
 
       await expect(discover).resolves.toMatchObject({

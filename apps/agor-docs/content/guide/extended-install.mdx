@@ -256,16 +256,17 @@ Run that as a database owner or another role with permission to create extension
 
 If pgvector is missing or the Agor DB user cannot enable it, semantic search returns a clear `semantic_unavailable` error and text search continues to work.
 
-### PostgreSQL offline-cutover migrations
+### Offline-cutover migrations
 
-Some migrations change distributed ownership or callback protocols and must be applied as a **stop-the-world cutover** on existing PostgreSQL installations:
+Some migrations change authorization, distributed ownership, or callback protocols and must be applied as a **stop-the-world cutover** on existing databases:
 
 - `0074_knowledge_embedding_claims` changes the ownership protocol used by Knowledge embedding workers.
 - `0078_mcp_oauth_pending_flows` replaces plaintext, unfenced MCP OAuth grants with durable sealed callback and refresh authority.
 - `0082_github_install_state` moves GitHub App install callback state from a per-daemon Map to PostgreSQL. Old daemons cannot consume state issued by new daemons, and new daemons cannot consume state issued by old daemons.
 - `0091_codex_device_auth_attempts` moves Codex device authorization polling and exchange ownership into a fenced PostgreSQL protocol.
 - `0092_add_user_credential_generation` makes password-change revocation use generation-bearing tokens. Old daemons do not understand the claim and must not share a cohort once a password changes.
-- `0095_claude_oauth_attempts` moves Claude paste-back attempts and credential-file mutations into generation-fenced PostgreSQL authority. Old daemons do not participate in that protocol and must not overlap the new cohort.
+- `0095_board_branch_capability_policies` (PostgreSQL) / `0098_board_branch_capability_policies` (SQLite) replaces board and branch RBAC with normalized capability policies. Its best-effort conversion is intentionally equal-or-less privilege: legacy prompt sharing is reduced to independent collaboration, and rules that cannot be represented safely may lose access rather than gain it.
+- `0100_claude_oauth_attempts` (PostgreSQL) / `0103_claude_oauth_attempts` (SQLite) moves Claude paste-back attempts and credential-file mutations into generation-fenced authority. Old daemons do not participate in that protocol and must not overlap the new cohort.
 
 Rolling old and new daemons against the same database across any cutover is not supported.
 
@@ -278,11 +279,13 @@ Rolling old and new daemons against the same database across any cutover is not 
 
 3. Start only daemons running the new release.
 
-Normal daemon startup and `agor db migrate --yes` deliberately refuse these migrations on an existing PostgreSQL database unless `--offline-cutover` is present. The flag is an operator acknowledgement; it cannot verify that another host has stopped. Fresh installations and SQLite databases do not require this cutover.
+Normal daemon startup and `agor db migrate --yes` deliberately refuse registered cutover migrations on an existing database unless `--offline-cutover` is present. The flag is an operator acknowledgement; it cannot verify that another host has stopped. Fresh installations do not require this acknowledgement because no old daemon can be attached.
+
+Before the board/branch RBAC cutover, take a complete database backup and review the migration preflight. The migration stops if a board or branch cannot be attributed to an existing primary owner. After migration, review access rules, especially board-aligned branches that were materialized as overrides and any legacy cross-user prompt access. A release rollback requires stopping all new daemons and restoring the complete pre-migration backup; do not run an old daemon against the new policy schema.
 
 Migration `0078` deletes existing MCP OAuth grant rows because the old plaintext, unfenced rows are not compatible with active-active callback and rotating-refresh ownership. Users must reconnect MCP OAuth after the upgrade. Take a backup before the cutover. A rollback to an older daemon requires restoring the pre-cutover backup; do not run an older cohort against the new OAuth schema.
 
-Migration `0095` is additive, so an offline binary rollback may retain its table, but its distributed protocol is not rollback compatible: stop every new daemon first, do not run mixed cohorts, and return to a release whose HA guard keeps Claude OAuth/logout disabled. Pending `0095` attempts then remain inert until the new cohort returns or an operator removes them in a coordinated schema-and-ledger rollback. Never advertise Claude HA credential mutation from a binary that does not own the `0095` generation/tombstone protocol and concrete runtime credential mask. Drain managed-file Claude tasks before rolling back to a runtime that can read or refresh the canonical file directly. Current-version standalone writers share one process-global queue and do not advance durable file tombstones; after an offline HA → standalone → HA deployment-mode transition, retained PostgreSQL sequences resume above the prior HA tombstones. This does not permit concurrent standalone/HA writers.
+Migration `0100` is additive, so an offline binary rollback may retain its table, but its distributed protocol is not rollback compatible: stop every new daemon first, do not run mixed cohorts, and return to a release whose HA guard keeps Claude OAuth/logout disabled. Pending `0100` attempts then remain inert until the new cohort returns or an operator removes them in a coordinated schema-and-ledger rollback. Never advertise Claude HA credential mutation from a binary that does not own the `0100` generation/tombstone protocol and concrete runtime credential mask. Drain managed-file Claude tasks before rolling back to a runtime that can read or refresh the canonical file directly. Current-version standalone writers share one process-global queue and do not advance durable file tombstones; after an offline HA → standalone → HA deployment-mode transition, retained PostgreSQL sequences resume above the prior HA tombstones. This does not permit concurrent standalone/HA writers.
 
 Tenant archives deliberately omit MCP OAuth grants. The encrypted grant envelope is bound to the source tenant ID, server, generation, and deployment master secret, so importing or re-homing a tenant restores the MCP server configuration but requires users to reconnect OAuth. Pending OAuth attempts, executor token authorities, and GitHub install state are likewise non-portable.
 

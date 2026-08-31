@@ -8,6 +8,7 @@ import {
 import { Button, Input, Space, Tooltip, Typography, theme } from 'antd';
 import { useLayoutEffect, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { ClaudeSubscriptionTokenInstructions } from './ClaudeSubscriptionTokenInstructions';
 import { Tag } from './Tag';
 
@@ -203,7 +204,13 @@ export const ApiKeyFields: React.FC<ApiKeyFieldsProps> = ({
 
   const handleSave = async (field: AgenticToolConfigField) => {
     const operation = operationGuard.begin();
-    const value = inputValues[field]?.trim();
+    const raw = inputValues[field];
+    // Non-secret fields (base URLs) only need outer whitespace trimmed.
+    // Secret fields (API keys, OAuth tokens) can pick up an embedded space
+    // or newline when pasted from a terminal that soft-wrapped the value
+    // (e.g. `claude setup-token` output), so strip whitespace everywhere.
+    const config = configs.find((c) => c.field === field);
+    const value = raw ? (config?.type === 'text' ? raw.trim() : sanitizeSecretValue(raw)) : '';
     if (!value || !operation.isCurrent()) return;
 
     await onSave(field, value);

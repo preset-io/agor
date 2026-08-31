@@ -755,7 +755,6 @@ describe('createClient', () => {
         methods: MockedFunction<(...names: string[]) => unknown>;
       };
       expect(usersService.methods).toHaveBeenCalledWith(
-        'getGitEnvironment',
         'getAvatarSettings',
         'updateAvatarSettings',
         'syncAvatars',

@@ -4,7 +4,7 @@ import type { AnalyticsLogger, AnalyticsProperties, AnalyticsTrackOptions } from
 import { resetAnalyticsLoggerForTests, setAnalyticsLoggerForTests } from '../../analytics';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
@@ -40,7 +40,7 @@ async function createBoard(db: Database, overrides?: Partial<Board>): Promise<Bo
   return new BoardRepository(db).create({
     board_id: generateId(),
     name: overrides?.name ?? 'Board',
-    created_by: overrides?.created_by ?? generateId(),
+    created_by: overrides?.created_by ?? 'test-user',
     access_mode: overrides?.access_mode ?? 'shared',
   });
 }
@@ -68,7 +68,7 @@ async function createBranch(
     branch_unique_id: branchUniqueId++,
     path: `/tmp/${name}`,
     board_id: boardId,
-    created_by: generateId(),
+    created_by: 'test-user' as UUID,
     permission_source: overrides?.permission_source ?? 'override',
     others_can: overrides?.others_can ?? 'session',
     custom_context: { teammate: { kind: 'teammate', displayName: name } },
@@ -99,7 +99,6 @@ describe('UserPrimaryTeammateRepository', () => {
     'resolves a teammate embedded on another (private) board via direct ownership',
     async ({ db }) => {
       const repo = new UserPrimaryTeammateRepository(db);
-      const branchRepo = new BranchRepository(db);
       const user = await createUser(db, 'cross-board@example.com');
 
       // Teammate lives on a private board the user does not own; only direct
@@ -109,7 +108,7 @@ describe('UserPrimaryTeammateRepository', () => {
         permission_source: 'override',
         others_can: 'none',
       });
-      await branchRepo.addOwner(branchId, user);
+      await setTestBranchUserRole(db, branchId, user, 'manager');
 
       await repo.setPrimaryTeammate(user, branchId, { source: 'default' });
 

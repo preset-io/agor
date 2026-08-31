@@ -7,11 +7,13 @@
  * See `context/explorations/env-var-access.md`.
  */
 
-import type { SessionEnvSelection, SessionID } from '@agor/core/types';
+import type { SessionEnvSelection, SessionID, UserID } from '@agor/core/types';
 import { and, eq } from 'drizzle-orm';
 import type { Database } from '../client';
-import { deleteFrom, insert, select } from '../database-wrapper';
-import { type SessionEnvSelectionRow, sessionEnvSelections } from '../schema';
+import { deleteFrom, insert, lockRowForUpdate, select } from '../database-wrapper';
+import { type SessionEnvSelectionRow, sessionEnvSelections, sessions } from '../schema';
+import { getCurrentTenantId } from '../tenant-context';
+import { runWithTenantDatabaseTransaction } from '../tenant-scope';
 import { RepositoryError } from './base';
 
 export class SessionEnvSelectionRepository {
@@ -44,6 +46,36 @@ export class SessionEnvSelectionRepository {
     return new Set(names);
   }
 
+  /**
+   * Return selections only when the Session belongs to the execution user.
+   *
+   * A selection row names a variable but does not name its owning user; that
+   * ownership is implicit in `sessions.created_by`. Callers resolving user A's
+   * environment must not be able to use user B's session as an oracle that
+   * selects same-named secrets from A's profile.
+   */
+  async asSetForOwner(sessionId: SessionID, userId: UserID): Promise<Set<string>> {
+    try {
+      const rows = await select(this.db, { env_var_name: sessionEnvSelections.env_var_name })
+        .from(sessionEnvSelections)
+        .innerJoin(
+          sessions,
+          and(
+            eq(sessions.session_id, sessionEnvSelections.session_id),
+            eq(sessions.created_by, userId)
+          )
+        )
+        .where(eq(sessionEnvSelections.session_id, sessionId))
+        .all();
+      return new Set(rows.map((row: { env_var_name: string }) => row.env_var_name));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to list owner-bound session env selections: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   /** Full rows with timestamps — for the REST API response. */
   async list(sessionId: SessionID): Promise<SessionEnvSelection[]> {
     const rows = await this.fetchRows(sessionId);
@@ -57,23 +89,13 @@ export class SessionEnvSelectionRepository {
   /** Add a selection. No-op if it already exists. */
   async add(sessionId: SessionID, envVarName: string): Promise<void> {
     try {
-      const existing = await select(this.db)
-        .from(sessionEnvSelections)
-        .where(
-          and(
-            eq(sessionEnvSelections.session_id, sessionId),
-            eq(sessionEnvSelections.env_var_name, envVarName)
-          )
-        )
-        .one();
-      if (existing) return;
-
       await insert(this.db, sessionEnvSelections)
         .values({
           session_id: sessionId,
           env_var_name: envVarName,
           created_at: new Date(),
         })
+        .onConflictDoNothing()
         .run();
     } catch (error) {
       throw new RepositoryError(
@@ -105,20 +127,27 @@ export class SessionEnvSelectionRepository {
   /** Bulk replace — deletes all existing rows, inserts the new set. */
   async setAll(sessionId: SessionID, envVarNames: string[]): Promise<void> {
     try {
-      await deleteFrom(this.db, sessionEnvSelections)
-        .where(eq(sessionEnvSelections.session_id, sessionId))
-        .run();
-      if (envVarNames.length === 0) return;
-      const now = new Date();
-      await insert(this.db, sessionEnvSelections)
-        .values(
-          envVarNames.map((name) => ({
-            session_id: sessionId,
-            env_var_name: name,
-            created_at: now,
-          }))
-        )
-        .run();
+      await runWithTenantDatabaseTransaction(this.db, getCurrentTenantId(), async (mutationDb) => {
+        // Serialize replacement across PostgreSQL replicas on the durable
+        // parent row. SQLite's IMMEDIATE transaction is the equivalent writer
+        // fence. Without this, two delete+insert replacements can commit a
+        // union rather than either caller's complete set.
+        await lockRowForUpdate(mutationDb, this.db, sessions, eq(sessions.session_id, sessionId));
+        await deleteFrom(mutationDb, sessionEnvSelections)
+          .where(eq(sessionEnvSelections.session_id, sessionId))
+          .run();
+        if (envVarNames.length === 0) return;
+        const now = new Date();
+        await insert(mutationDb, sessionEnvSelections)
+          .values(
+            envVarNames.map((name) => ({
+              session_id: sessionId,
+              env_var_name: name,
+              created_at: now,
+            }))
+          )
+          .run();
+      });
     } catch (error) {
       throw new RepositoryError(
         `Failed to set session env selections: ${error instanceof Error ? error.message : String(error)}`,

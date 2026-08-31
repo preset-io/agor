@@ -7,7 +7,7 @@
  *
  * Both follow the same resolution path:
  *   1. Load the widget message row by `widget_id` (message_id == widget_id).
- *   2. Authorize: caller is session creator OR has prompt-tier branch RBAC.
+ *   2. Authorize through the canonical session prompt authority resolver.
  *   3. Idempotency: status MUST be 'pending'.
  *   4. Durably claim `pending -> resolving` with an opaque token.
  *   5. The sole claimant dispatches to the registry (`applySubmit` for
@@ -32,10 +32,11 @@ import type {
   MessageID,
   Session,
   SessionID,
+  SessionPromptAuthority,
   UserID,
   WidgetMessageMetadata,
 } from '@agor/core/types';
-import { PERMISSION_RANK, resolveBranchPermission } from '../utils/branch-authorization.js';
+import { sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
 import { widgetAutoResumeTaskId } from '../utils/durable-task-id.js';
 import { structuredLogErrorCode } from '../utils/structured-log.js';
 import { getWidget, type WidgetSubmitCtx } from './registry.js';
@@ -62,10 +63,13 @@ export interface WidgetResolverDeps {
   resolutionStore: WidgetResolutionStore;
   /** Tenant-scoped custom-event publisher; production must not emit globally. */
   publishResolved?(payload: Record<string, unknown>): void;
-  /** Branch ownership lookup — pulled out so tests can stub without RBAC plumbing. */
-  isBranchOwner(branchId: string, userId: UserID): Promise<boolean>;
-  /** Optional group-aware effective branch permission lookup. */
-  resolveBranchPermission?(branch: Branch, userId: UserID): Promise<Branch['others_can']>;
+  /** Canonical branch capability + shared-session authorization. */
+  resolveSessionPromptAuthority(
+    branchId: string,
+    callerUserId: UserID,
+    sessionOwnerUserId: UserID,
+    sessionSdkHomeScope: Session['sdk_home_scope']
+  ): Promise<SessionPromptAuthority>;
 }
 
 export interface AuthenticatedCaller {
@@ -84,28 +88,12 @@ export interface WidgetResolutionResult {
 }
 
 /**
- * Check whether the caller is allowed to resolve a widget for the given
- * session+branch. Mirrors the rule in §5.2 / R4: session creator always
- * passes; branch owners pass via the owner-bypass path; non-creators need
- * prompt-tier branch RBAC.
+ * Widget resolution queues a prompt, so it uses exactly the same authority
+ * decision as every other prompt path. Branch management alone is never
+ * enough to act through another user's home.
  */
-export function canResolveWidget(
-  caller: AuthenticatedCaller,
-  session: Pick<Session, 'created_by'>,
-  branch: Branch,
-  isOwner: boolean,
-  effectivePermission?: Branch['others_can']
-): boolean {
-  if (session.created_by === caller.user_id) return true;
-  const effective = resolveBranchPermission(
-    branch,
-    caller.user_id,
-    isOwner,
-    caller.role,
-    true,
-    effectivePermission
-  );
-  return PERMISSION_RANK[effective] >= PERMISSION_RANK.prompt;
+export function canResolveWidget(authority: Pick<SessionPromptAuthority, 'allowed'>): boolean {
+  return authority.allowed;
 }
 
 /**
@@ -177,13 +165,14 @@ async function doResolveWidget(
   });
 
   // 2. Authorize using the context loaded above.
-  const isOwner = await deps.isBranchOwner(branch.branch_id, caller.user_id);
-  const effectivePermission = await deps.resolveBranchPermission?.(branch, caller.user_id);
-
-  if (!canResolveWidget(caller, session, branch, isOwner, effectivePermission)) {
-    throw new Forbidden(
-      `You need to be the session creator, a branch owner, or have 'prompt' permission on the branch to resolve this widget.`
-    );
+  const authority = await deps.resolveSessionPromptAuthority(
+    branch.branch_id,
+    caller.user_id,
+    session.created_by as UserID,
+    session.sdk_home_scope
+  );
+  if (!canResolveWidget(authority)) {
+    throw new Forbidden(sessionPromptDeniedMessage(authority));
   }
 
   // 3. Idempotency: only 'pending' widgets can be resolved.
@@ -278,6 +267,19 @@ async function doResolveWidget(
   // reopen it and replay an already-completed external effect.
   let autoResumeQueued = false;
   if (widget.auto_resume !== false && autoResumePrompt) {
+    // Re-evaluate at Task admission. A sharing switch may be revoked or the
+    // caller may lose Collaborator access while a submit handler performs
+    // external work. The durable widget claim remains `resolving` on denial so
+    // the already-completed side effect is never replayed.
+    const promptAuthority = await deps.resolveSessionPromptAuthority(
+      branch.branch_id,
+      caller.user_id,
+      session.created_by as UserID,
+      session.sdk_home_scope
+    );
+    if (!canResolveWidget(promptAuthority)) {
+      throw new Forbidden(sessionPromptDeniedMessage(promptAuthority));
+    }
     await deps.app.service('/sessions/:id/prompt').create(
       {
         prompt: autoResumePrompt,
@@ -290,9 +292,10 @@ async function doResolveWidget(
         },
       },
       {
-        // Stable widget identity must also have stable Task attribution.
-        // The widget row records the actual resolver separately.
-        user: { user_id: session.created_by },
+        // The Task records the actual resolver so prompts, credentials, and
+        // managed environment variables are attributed to the caller rather
+        // than borrowed from the Session owner.
+        user: { user_id: caller.user_id },
         route: { id: message.session_id },
       }
     );

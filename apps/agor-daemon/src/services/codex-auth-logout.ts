@@ -39,6 +39,7 @@ import type {
   CodexAuthLogoutResult,
   UserID,
 } from '@agor/core/types';
+import type { CodexCredentialBindInvalidator } from '../codex-auth-bind-invalidation.js';
 import { deleteCodexAuthCredential } from '../utils/executor-codex-auth.js';
 import {
   type AppLike,
@@ -60,7 +61,8 @@ interface UsersServiceLike {
 export function createCodexAuthLogoutService(
   app: AppLike,
   db: TenantScopeAwareDatabase,
-  credentialMutations?: CodexCredentialMutationCoordinator
+  credentialMutations?: CodexCredentialMutationCoordinator,
+  invalidateCredentialBinds: CodexCredentialBindInvalidator = async () => undefined
 ) {
   return {
     async create(_data: unknown, params?: AuthenticatedParams): Promise<CodexAuthLogoutResult> {
@@ -157,6 +159,11 @@ export function createCodexAuthLogoutService(
         await validateRoute();
         await mutate();
       }
+      await invalidateCredentialBinds({
+        tenantId: String(tenantId),
+        userId,
+        reason: 'credentials_removed',
+      });
 
       return { status: 'removed' };
     },

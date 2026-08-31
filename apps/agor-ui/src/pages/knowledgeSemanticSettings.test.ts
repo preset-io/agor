@@ -55,4 +55,13 @@ describe('Knowledge semantic settings UI helpers', () => {
 
     expect(patch.indexing).toEqual({ paused: true, batch_size: 32 });
   });
+
+  it('strips whitespace embedded mid-key from a wrapped terminal/clipboard paste', () => {
+    const patch = buildKnowledgeSemanticSettingsPatch(
+      DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS,
+      'sk-proj-abc\n123-def456',
+      false
+    );
+    expect(patch.api_key).toBe('sk-proj-abc123-def456');
+  });
 });

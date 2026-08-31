@@ -18,6 +18,7 @@ import {
   isExecutionHomeKeyAvailable,
   reattributeLegacyAnonymousRows,
   runWithTenantDatabaseTransaction,
+  seedInitialDataInTransaction,
   select,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -29,6 +30,7 @@ import { BadRequest, NotAuthenticated } from '@agor/core/feathers';
 import type { Params, User, UserExternalIdentity, UserID, UserRole } from '@agor/core/types';
 import { isValidExecutionHomeKey, normalizeRole, ROLES } from '@agor/core/types';
 import jwt, { type JwtHeader, type JwtPayload, type SignOptions } from 'jsonwebtoken';
+import { lockTenantAuthorizationFence } from '../services/tenant-authorization-fence.js';
 import { safeLaunchDiagnostic } from './launch-redaction.js';
 import { issueRuntimeTokenPair, runtimeTenantClaims } from './runtime-tokens.js';
 import {
@@ -91,6 +93,7 @@ export interface LaunchAuthServiceOptions {
   accessTokenTtl: SignOptions['expiresIn'];
   refreshTokenTtl: SignOptions['expiresIn'];
   usersService: { get(id: UserID, params?: Params): Promise<User> };
+  onAuthorizationInvalidated?: (tenantId: string) => void;
 }
 
 export function resolvePublicLaunchAuthSettings(
@@ -270,7 +273,7 @@ async function projectLaunchUser(
   db: TenantScopedDatabase,
   options: LaunchAuthServiceOptions,
   claims: LaunchClaims
-): Promise<UserID> {
+): Promise<{ userId: UserID; authorizationChanged: boolean }> {
   const { config } = options;
   const issuer = claims.iss;
   const subject = claims.sub;
@@ -307,6 +310,12 @@ async function projectLaunchUser(
     name,
     last_login_at: nowIso,
   };
+
+  // Role projection is an authority mutation. Take the same tenant fence as
+  // policy, group, prompt, terminal, and user-role commands before reading the
+  // current row so a launch assertion cannot interleave a stale authorization
+  // decision on another replica.
+  await lockTenantAuthorizationFence(db);
 
   const identityRepository = new UserExternalIdentitiesRepository(db);
   await identityRepository.lockProvisioningKey(`identity:${key}`);
@@ -374,7 +383,10 @@ async function projectLaunchUser(
     await identityRepository.bind(existing.user_id as UserID, identity, now);
     await reattributeLegacyAnonymousRows(db, existing.user_id);
 
-    return existing.user_id as UserID;
+    return {
+      userId: existing.user_id as UserID,
+      authorizationChanged: normalizeRole(existing.role) !== normalizeRole(role),
+    };
   }
 
   const role = mapRole(
@@ -416,7 +428,7 @@ async function projectLaunchUser(
   await identityRepository.bind(userId, identity, now);
   await reattributeLegacyAnonymousRows(db, userId);
 
-  return userId;
+  return { userId, authorizationChanged: false };
 }
 
 async function fetchJson(url: string, init: RequestInit, timeoutMs: number): Promise<unknown> {
@@ -751,16 +763,31 @@ export function createLaunchAuthService(options: LaunchAuthServiceOptions) {
         const tenant = resolveTenantContext(multiTenancy, { authPayload: claims });
         const provider = claims.provider || settings.providerId || claims.iss;
         const projectionKey = `${tenant.tenant_id}\0${provider}\0${claims.iss}\0${claims.sub}`;
-        const userId = await serializeProjection(projectionKey, () =>
-          runWithTenantDatabaseTransaction(options.db, tenant.tenant_id, async (scopedDb) =>
-            projectLaunchUser(scopedDb, options, claims)
-          )
-        );
+        const projection = await serializeProjection(projectionKey, async () => {
+          const projected = await runWithTenantDatabaseTransaction(
+            options.db,
+            tenant.tenant_id,
+            async (scopedDb) => {
+              const current = await projectLaunchUser(scopedDb, options, claims);
+              // Claim the default Board while the same tenant authority fence
+              // still serializes first-user projection. Immutable ownership
+              // can therefore never be won by a later concurrent launch.
+              await seedInitialDataInTransaction(scopedDb, current.userId);
+              return current;
+            }
+          );
+          if (projected.authorizationChanged) {
+            // The role write and any first-run Board claim have committed.
+            // Evict every socket that may still carry the previous role.
+            options.onAuthorizationInvalidated?.(tenant.tenant_id);
+          }
+          return projected;
+        });
         const userLookupParams = {
           provider: undefined,
           tenant,
         };
-        const user = await options.usersService.get(userId, userLookupParams);
+        const user = await options.usersService.get(projection.userId, userLookupParams);
         return issueRuntimeTokens(
           user,
           options.jwtSecret,

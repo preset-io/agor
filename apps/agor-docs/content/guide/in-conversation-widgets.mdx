@@ -121,9 +121,9 @@ If a particular request is sensitive enough that even the name shouldn't appear 
 
 ## Multi-user behavior
 
-When `branch_rbac: true` and someone other than the session creator submits the widget (under `others_can: prompt`), the env var lands in **the session creator's** identity. That's whose env the agent will read at retry. The submitting user is recorded in `result_meta.submitted_by` for audit.
+When shared session prompting allows someone other than the Session creator to resolve a widget, the env var is saved to the **submitter's** identity. The retry keeps the branch-owned conversation and SDK state, while its new task records the submitter and uses that person's execution home, Agor-managed variables, and credentials. The submitter is also recorded in `result_meta.submitted_by` for audit.
 
-This is consistent with `dangerously_allow_session_sharing: false` (the default-safe posture). For the full multi-user story see [Multiplayer Execution Isolation](./multiplayer-unix-isolation.mdx).
+Permission is checked before the side effect and again before the automatic retry is admitted, so a revoked branch or sharing switch fails closed. For the full multi-user story see [Multiplayer Execution Isolation](./multiplayer-unix-isolation.mdx).
 
 ---
 

@@ -6,7 +6,7 @@ import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { runDatabaseTransaction, update } from '../database-wrapper';
 import { discordMessageDeliveries } from '../schema';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { DiscordMessageDeliveryRepository } from './discord-message-deliveries';
 import { GatewayChannelRepository } from './gateway-channels';
@@ -46,7 +46,7 @@ async function seedMappedDiscord(db: Database, metadata: Record<string, unknown>
     ref: 'refs/heads/main',
     branch_unique_id: 1,
     path: '/tmp/delivery-test-repo/main',
-    created_by: generateId() as UUID,
+    created_by: 'test-user' as UUID,
   });
   const session = await new SessionRepository(db).create({
     session_id: generateId() as SessionID,

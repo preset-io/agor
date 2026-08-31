@@ -156,6 +156,71 @@ async function captureTool(
   return handler;
 }
 
+describe('listAttachedMcpServers prompt identity', () => {
+  it('omits a Session owner private server when a collaborator is prompting', async () => {
+    const servers = new Map([
+      [
+        'owner-private',
+        {
+          mcp_server_id: 'owner-private',
+          name: 'Owner private',
+          transport: 'http',
+          enabled: true,
+          owner_user_id: 'session-owner',
+          auth: { type: 'none' },
+        },
+      ],
+      [
+        'actor-private',
+        {
+          mcp_server_id: 'actor-private',
+          name: 'Actor private',
+          transport: 'http',
+          enabled: true,
+          owner_user_id: 'prompt-actor',
+          auth: { type: 'none' },
+        },
+      ],
+      [
+        'shared',
+        {
+          mcp_server_id: 'shared',
+          name: 'Shared',
+          transport: 'http',
+          enabled: true,
+          auth: { type: 'none' },
+        },
+      ],
+    ]);
+    const app = makeFakeApp({
+      sessions: { get: async () => ({ session_id: 'sess-1', created_by: 'session-owner' }) },
+      'session-mcp-servers': {
+        find: async () => ({
+          data: [...servers.keys()].map((mcp_server_id) => ({ mcp_server_id })),
+        }),
+      },
+      'mcp-servers': {
+        get: async (id: unknown) => servers.get(String(id)),
+      },
+    });
+    const { listAttachedMcpServers } = await import('./mcp-servers.js');
+
+    const result = await listAttachedMcpServers(
+      {
+        app,
+        db: {},
+        userId: 'prompt-actor',
+        sessionId: 'sess-1',
+        authenticatedUser: { user_id: 'prompt-actor', role: 'member' },
+        baseServiceParams: {},
+      } as never,
+      'sess-1'
+    );
+
+    expect(result.map((server) => server.mcp_server_id)).toEqual(['actor-private', 'shared']);
+  });
+});
+
 describe('agor_mcp_servers_list', () => {
   it('returns eligible global and official session-scope servers without consulting attachments', async () => {
     let sessionMcpServersWasCalled = false;

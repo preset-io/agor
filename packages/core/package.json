@@ -82,6 +82,12 @@
       "import": "./dist/telemetry/index.js",
       "require": "./dist/telemetry/index.cjs"
     },
+    "./tracing/datadog": {
+      "source": "./src/tracing/datadog.ts",
+      "types": "./dist/tracing/datadog.d.ts",
+      "import": "./dist/tracing/datadog.js",
+      "require": "./dist/tracing/datadog.cjs"
+    },
     "./config": {
       "source": "./src/config/index.ts",
       "types": "./dist/config/index.d.ts",
@@ -123,6 +129,18 @@
       "types": "./dist/lib/validation.d.ts",
       "import": "./dist/lib/validation.js",
       "require": "./dist/lib/validation.cjs"
+    },
+    "./ids": {
+      "source": "./src/lib/ids.ts",
+      "types": "./dist/lib/ids.d.ts",
+      "import": "./dist/ids/index.js",
+      "require": "./dist/ids/index.cjs"
+    },
+    "./ids/browser": {
+      "source": "./src/lib/ids.browser.ts",
+      "types": "./dist/lib/ids.browser.d.ts",
+      "import": "./dist/ids/browser.js",
+      "require": "./dist/ids/browser.cjs"
     },
     "./templates/handlebars-helpers": {
       "source": "./src/templates/handlebars-helpers.ts",

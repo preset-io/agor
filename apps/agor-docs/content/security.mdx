@@ -14,11 +14,11 @@ Agor coordinates agents that can read, write, and execute code. Choose an execut
 
 Agor 0.25 supports three execution modes:
 
-| Mode | Local process | Filesystem boundary | Intended use |
-|---|---|---|---|
-| `simple` | daemon user | none | One trusted user or fully trusted team |
-| `sandbox` | daemon user inside bubblewrap | RBAC-derived mounts and private home | Shared Linux installations |
-| `delegated` | external launcher | supplied by the external substrate | Containers, pods, hosted execution |
+| Mode        | Local process                 | Filesystem boundary                  | Intended use                           |
+| ----------- | ----------------------------- | ------------------------------------ | -------------------------------------- |
+| `simple`    | daemon user                   | none                                 | One trusted user or fully trusted team |
+| `sandbox`   | daemon user inside bubblewrap | RBAC-derived mounts and private home | Shared Linux installations             |
+| `delegated` | external launcher             | supplied by the external substrate   | Containers, pods, hosted execution     |
 
 ### Simple
 
@@ -50,27 +50,31 @@ execution:
 
 The external launcher is responsible for identity, credentials, storage, containment, cancellation, and tenant isolation. `{tenant_id}` and `{user_id}` are the preferred stable identity inputs. The compatibility `{unix_user}` value is an opaque home key, not a host account.
 
+The launcher command receives a curated minimal process environment. The authenticated executor payload (including the task's resolved user environment) is delivered over stdin, not argv. Give the launcher its own workload identity in the delegated substrate; do not depend on inheriting daemon database, JWT, master-key, or provider credentials.
+
 > `strict` and `insulated` were removed in 0.25. Upgrade through the latest 0.24.x release and migrate to `sandbox` before upgrading a legacy installation.
 
-## Branch Permission Tiers (RBAC)
+## Board and branch permissions (RBAC)
 
-When `branch_rbac: true` is set, every branch has owners plus an `others_can` tier that controls what non-owners may do:
+When `branch_rbac: true` is set, every board and branch has one primary owner plus normalized user, group, and **Others** rules. The primary owner cannot be reassigned. A direct user rule takes precedence over groups; otherwise matching group rules combine. Others is only the fallback for an active same-workspace member with no direct or group match.
 
-| Tier | What others can do |
-|---|---|
-| `none` | No access, completely private to owners |
-| `view` | Read branches, sessions, tasks, messages |
-| **`session`** (default) | Create *their own* sessions; prompt their own sessions only |
-| `prompt` | Prompt **any** session, including others' (but each session still runs as its creator's identity) |
-| `all` | Full control (create/update/delete sessions, change permissions) |
+Board access and branch access are separate. A board has one policy for who can see or manage its canvas and one complete default package for its branches. A branch either inherits that package or overrides all of it.
 
-The `session` tier is the safe default. Collaborators can work independently without borrowing each other's execution context.
+| Branch role  | What it allows                                                                             |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| Viewer       | Read the branch and its sessions                                                           |
+| Collaborator | Viewer access plus create and prompt the user's own sessions                               |
+| Manager      | Collaborator access plus branch, session-lifecycle, environment, and permission management |
 
-### Session Sharing (`dangerously_allow_session_sharing`)
+Filesystem access is configured separately as `none`, `read`, or `write`. Terminal access requires Collaborator or Manager plus filesystem access. Manager does not grant access to another person's sessions, home, or credentials.
 
-A branch-level toggle, **off by default**. When OFF, spawning/forking attributes the new child to the *caller*. It uses the caller's execution-home and credential route. When ON (legacy behavior), children inherit the parent's `created_by`, meaning a collaborator can effectively spawn agents that execute in the original session owner's immutable context.
+### Shared session prompting
 
-Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See `context/explorations/session-sharing.md` for the full discussion.
+Shared session prompting starts off at two levels. A workspace admin must enable it in **Settings → Workspace → Preferences**, then a Board or Branch Manager can enable **Allow shared session prompting** in branch defaults or an individual branch override. Only Collaborators and Managers can use it.
+
+Only branch-home Sessions are shareable. Historical or explicitly opted-out Sessions that use their creator's execution home remain private and fail closed. An admitted shared prompt continues the same conversation and branch SDK state, but records the actual caller on the task and uses that caller's execution home, Agor-managed variables, provider and connector credentials, private MCP visibility, and branch filesystem projection. It never borrows the Session creator's home.
+
+People who can prompt a Session can read its conversation and influence its future context. Disabling the workspace preference also clears every board and branch opt-in so re-enabling cannot reopen stale permissions.
 
 ---
 
@@ -99,7 +103,7 @@ export AGOR_MASTER_SECRET="$(openssl rand -hex 32)"
 agor daemon start
 ```
 
-If unset, Agor falls back to plaintext storage and logs a warning. Never run a shared deployment without it.
+The daemon fails startup when no master secret can be resolved. First-run setup may generate one in the local config, but production operators should provision and back up a stable high-entropy value explicitly. Do not change or lose it: Agor does not currently provide an online master-key rotation or bulk re-encryption workflow, and ciphertext written under the old key cannot be opened with a replacement key.
 
 ### Web Terminal Trust Boundary
 
@@ -125,7 +129,16 @@ Mitigations: dedicated branches, restricted bot distribution, supervised permiss
 
 ### Per-User Secrets Still Live on the Daemon
 
-Per-user API keys and env vars are encrypted at rest and only decrypted when needed. **But the daemon hosts the secrets.** A malicious admin or compromised host can still recover them. Invite admins you'd trust with your tool credentials.
+Per-user API keys and env vars are encrypted at rest and only decrypted when needed. User/admin API reads expose names, scope, and presence metadata—not ciphertext or plaintext. Admins can replace or delete another lower-role user's stored value where user-management policy permits, but there is no browser, user-token, or admin-token reveal operation. Exact executor commands may resolve the minimum credential DTO they need for their authenticated user. **The daemon still hosts the secrets.** A malicious administrator with code/config/host control, or a compromised daemon account, can recover them. Invite administrators you trust with tool credentials.
+
+Agor distinguishes two environment sources:
+
+- **Daemon process environment:** executors inherit only explicit runtime metadata (`PATH`/home/identity, temp, locale/terminal, log/daemon routing, managed-tool paths, and the daemon-resolved Git safety policy). Ambient provider keys, proxy URLs, Git identity, XDG paths, and arbitrary variables exported by the account that started the daemon are excluded.
+- **User settings:** the authenticated user's configured mapping flows to that user's executor after structural name, NUL, and 10 KiB value checks. There is no semantic deny-list for this source; terminal access already lets that user export the same names. Narrow consumers such as managed Git use a typed subset rather than the generic map.
+
+For a shared session, each task uses the **prompter's global** managed variables and credentials. It does not implicitly use the Session creator's secrets or another person's session-scoped variables. A guest can save a requested widget value globally to their own profile.
+
+This process-environment rule does not suppress filesystem startup files. An interactive shell may still read the dotfiles present in its projected `HOME`; in `simple` mode that is part of the documented daemon-account trust boundary.
 
 ### Admins Have Wide Reach
 
@@ -138,7 +151,7 @@ Users with the `admin` role can manage other users, configure MCP servers, view 
 - **Keep the daemon behind a firewall, VPN, or private network.** Pair with a reverse proxy if you need SSO or IP allowlists.
 - **Patch the host like any shared dev box.** Monitor logs, rotate credentials, audit users.
 - **Prefer scoped or temporary API credentials.** `OPENAI_API_KEY` for an artifact session shouldn't be your team's master key.
-- **Rotate the master secret periodically.** Re-encrypt at rest by triggering a settings update flow.
+- **Keep the deployment master secret stable and recoverable.** Online rotation/re-encryption is not implemented; rotate provider credentials independently after suspected exposure.
 - **Audit daemon and external-launcher logs.** Correlate tenant, user, session, task, and runtime identifiers.
 - **Pilot before scaling.** Run the first weeks of multi-user use with logs open.
 

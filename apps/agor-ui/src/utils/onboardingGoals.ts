@@ -230,6 +230,7 @@ export function buildCompletedOnboardingPreferences(
   result: CompletedOnboardingPreferencesInput
 ): UserPreferences {
   const retainedOnboarding = { ...(latest?.onboarding ?? {}) };
+  delete retainedOnboarding.deferredAt;
   delete retainedOnboarding.teammateDisplayName;
   delete retainedOnboarding.teammateEmoji;
   delete retainedOnboarding.teammateTemplateId;

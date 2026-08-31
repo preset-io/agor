@@ -1512,34 +1512,6 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-236",
-    "class": "A",
-    "file": "apps/agor-daemon/src/utils/sandbox-context.ts",
-    "import": "node:fs",
-    "symbol": "existsSync",
-    "local": "existsSync",
-    "operation": "call:existsSync@canonicalizeProspectivePath#1",
-    "owner": "daemon host/operator runtime",
-    "boundary": "deployment-local host capability",
-    "rationale": "Finds the deepest existing trusted deployment-root ancestor before deriving a canonical per-owner credential home.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
-    "id": "DAEMON-FS-CAP-237",
-    "class": "A",
-    "file": "apps/agor-daemon/src/utils/sandbox-context.ts",
-    "import": "node:fs",
-    "symbol": "realpathSync",
-    "local": "realpathSync",
-    "operation": "call:realpathSync@canonicalizeProspectivePath#1",
-    "owner": "daemon host/operator runtime",
-    "boundary": "deployment-local host capability",
-    "rationale": "Canonicalizes the trusted existing deployment-root ancestor so symlinked data roots resolve to one credential authority.",
-    "reviewTarget": null,
-    "reviewDate": null
-  },
-  {
     "id": "DAEMON-FS-CAP-200",
     "class": "A",
     "file": "packages/core/src/config/config-manager.ts",
@@ -1694,6 +1666,20 @@
     "operation": "call:open@openPath#1"
   },
   {
+    "id": "DAEMON-FS-CAP-237",
+    "class": "A",
+    "file": "packages/core/src/codex/credential-file.ts",
+    "import": "node:fs/promises",
+    "owner": "Codex credential authority",
+    "boundary": "canonical tenant/user credential-store capability",
+    "rationale": "Canonicalizes only the credential directory's trusted parent home \u2014 an admin/daemon-owned anchor whose ancestors are not sandbox-writable and which may legitimately be reached through a static, root-owned symlink alias on non-standard hosts. Never applied to the sandbox-writable credential leaf (.codex), which retains its no-follow open, so a concurrent path swap still cannot redirect access across homes.",
+    "reviewTarget": null,
+    "reviewDate": null,
+    "symbol": "realpath",
+    "local": "realpath",
+    "operation": "call:realpath@resolveCanonicalDirectory#1"
+  },
+  {
     "id": "DAEMON-FS-CAP-211",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
@@ -1780,6 +1766,118 @@
   {
     "id": "DAEMON-FS-CAP-225",
     "class": "A",
+    "file": "apps/agor-daemon/src/services/branches.ts",
+    "import": "node:fs/promises",
+    "symbol": "rm",
+    "local": "rm",
+    "operation": "call:rm@removeBranchSdkHomeAfterDelete#1",
+    "owner": "daemon branch-home lifecycle",
+    "boundary": "tenant-scoped branch SDK home lifecycle",
+    "rationale": "Removes <tenantDataRoot>/branch-homes/<branchId> when a branch is deleted (archive retains). Path is derived only from the trusted branchId and tenant scope, never caller-supplied; force:true makes never-created homes a no-op (design doc \u00a76.2, \u00a78B.4).",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-226",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/sandbox-wrap.ts",
+    "import": "node:fs",
+    "symbol": "mkdirSync",
+    "local": "mkdirSync",
+    "operation": "call:mkdirSync@buildSandboxWrap#3",
+    "owner": "daemon branch-home lifecycle",
+    "boundary": "tenant-scoped branch SDK home lifecycle",
+    "rationale": "Guarantees the per-branch SDK home --bind source exists before bwrap spawn; bwrap aborts on a missing --bind source and dropMasksForMissingTargets never drops a --bind (design doc \u00a77.2, same precedent as the owner home store mkdir above).",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-230",
+    "class": "A",
+    "file": "apps/agor-daemon/src/register-services.ts",
+    "import": "node:fs/promises",
+    "symbol": "mkdir",
+    "local": "mkdir",
+    "operation": "call:mkdir@createExecuteHandler#1",
+    "owner": "daemon branch-home lifecycle",
+    "boundary": "tenant-scoped branch SDK home lifecycle",
+    "rationale": "Lazy-creates the tenant-scoped branch SDK home on first prompt (design doc \u00a76.2); the bwrap --bind source must pre-exist (\u00a77.2). Path derived from trusted branchId + tenant scope only.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-231",
+    "class": "A",
+    "file": "apps/agor-daemon/src/register-services.ts",
+    "import": "node:fs/promises",
+    "symbol": "mkdir",
+    "local": "mkdir",
+    "operation": "call:mkdir@createExecuteHandler#2",
+    "owner": "daemon branch-home lifecycle",
+    "boundary": "tenant-scoped branch SDK home lifecycle",
+    "rationale": "Creates the per-tool subdirectories the relocated SDK env vars point at, inside the branch SDK home; daemon-derived paths only (design doc \u00a78, \u00a78A.7).",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-233",
+    "class": "A",
+    "file": "packages/core/src/unix/bwrap.ts",
+    "import": "node:fs",
+    "symbol": "openSync",
+    "local": "openSync",
+    "operation": "call:openSync@probeBwrapBindFd#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local sandbox capability probe",
+    "rationale": "Opens the fixed /dev/null path read-only and no-follow so the daemon can functionally verify bubblewrap --bind-fd support without exposing tenant or credential data.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-234",
+    "class": "A",
+    "file": "packages/core/src/unix/bwrap.ts",
+    "import": "node:child_process",
+    "symbol": "spawnSync",
+    "local": "spawnSync",
+    "operation": "call:spawnSync@probeBwrapBindFd#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local sandbox capability probe",
+    "rationale": "Runs a fixed secret-free bubblewrap command that binds the inherited /dev/null descriptor, proving the TOCTOU-safe descriptor-mount primitive before Agor admits the sandbox runtime.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-235",
+    "class": "A",
+    "file": "packages/core/src/unix/bwrap.ts",
+    "import": "node:fs",
+    "symbol": "closeSync",
+    "local": "closeSync",
+    "operation": "call:closeSync@probeBwrapBindFd#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local sandbox capability probe",
+    "rationale": "Closes only the daemon-owned /dev/null probe descriptor after the fixed --bind-fd capability check.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-236",
+    "class": "A",
+    "file": "packages/core/src/unix/bwrap.ts",
+    "import": "node:child_process",
+    "symbol": "spawnSync",
+    "local": "spawnSync",
+    "operation": "call:spawnSync@probeBwrapSafeSetupPathResolution#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local sandbox capability probe",
+    "rationale": "Runs fixed `bwrap --version` with an empty input and no tenant data so Agor can require the 0.12.0 setup-path security fix before using bubblewrap as a boundary.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-238",
+    "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
     "symbol": "openSync",
@@ -1792,7 +1890,7 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-226",
+    "id": "DAEMON-FS-CAP-239",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
@@ -1806,7 +1904,7 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-227",
+    "id": "DAEMON-FS-CAP-240",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
@@ -1820,7 +1918,7 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-228",
+    "id": "DAEMON-FS-CAP-241",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
@@ -1834,7 +1932,7 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-229",
+    "id": "DAEMON-FS-CAP-242",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
@@ -1848,7 +1946,7 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-230",
+    "id": "DAEMON-FS-CAP-243",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
@@ -1862,7 +1960,7 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-231",
+    "id": "DAEMON-FS-CAP-244",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
@@ -1876,7 +1974,7 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-232",
+    "id": "DAEMON-FS-CAP-245",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
@@ -1890,7 +1988,7 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-233",
+    "id": "DAEMON-FS-CAP-246",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
@@ -1904,7 +2002,7 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-234",
+    "id": "DAEMON-FS-CAP-247",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
@@ -1918,7 +2016,7 @@
     "reviewDate": null
   },
   {
-    "id": "DAEMON-FS-CAP-235",
+    "id": "DAEMON-FS-CAP-248",
     "class": "A",
     "file": "packages/core/src/codex/credential-file.ts",
     "import": "node:fs",
@@ -1928,6 +2026,34 @@
     "owner": "agent credential authority",
     "boundary": "canonical tenant/user credential-store pre-spawn capability",
     "rationale": "The synchronous task-launch preflight targets only the server-resolved canonical tenant/user Claude home and walks it through no-follow directory descriptors. Keeping preparation synchronous closes the Stop-before-process-tracking race while materializing the immutable parent and stable authority leaves before bubblewrap spawn.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-249",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/sandbox-context.ts",
+    "import": "node:fs",
+    "symbol": "existsSync",
+    "local": "existsSync",
+    "operation": "call:existsSync@canonicalizeProspectivePath#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Finds the deepest existing trusted deployment-root ancestor before deriving a canonical per-owner credential home.",
+    "reviewTarget": null,
+    "reviewDate": null
+  },
+  {
+    "id": "DAEMON-FS-CAP-250",
+    "class": "A",
+    "file": "apps/agor-daemon/src/utils/sandbox-context.ts",
+    "import": "node:fs",
+    "symbol": "realpathSync",
+    "local": "realpathSync",
+    "operation": "call:realpathSync@canonicalizeProspectivePath#1",
+    "owner": "daemon host/operator runtime",
+    "boundary": "deployment-local host capability",
+    "rationale": "Canonicalizes the trusted existing deployment-root ancestor so symlinked data roots resolve to one credential authority.",
     "reviewTarget": null,
     "reviewDate": null
   }

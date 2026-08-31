@@ -20,7 +20,7 @@ import type { Application } from '@agor/core/feathers';
 import type { Session, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { SessionsService } from './sessions';
 
 // The find() board_id path only touches the session repos built from `db`; the
@@ -203,6 +203,45 @@ describe('SessionsService.find — recency sort + pagination (SQL pushdown)', ()
       query: { board_id: boardA, $sort: { updated_at: -1 }, $limit: 2, $skip: 1 },
     });
     expect(orderedIds(page2)).toEqual([mid, old]);
+  });
+
+  dbTest('uses the SQL page path for branch created_at pagination', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const boardA = await createBoard(db);
+    const branchA = await createBranchOnBoard(db, boardA);
+
+    const first = await createSession(db, branchA, {
+      session_id: '00000000-0000-7000-8000-000000000001' as UUID,
+      created_at: T_OLD,
+    });
+    const second = await createSession(db, branchA, {
+      session_id: '00000000-0000-7000-8000-000000000002' as UUID,
+      created_at: T_MID,
+    });
+    const third = await createSession(db, branchA, {
+      session_id: '00000000-0000-7000-8000-000000000003' as UUID,
+      created_at: T_NEW,
+    });
+
+    const page = await service.find({
+      query: {
+        branch_id: branchA,
+        $sort: { created_at: 1 },
+        $limit: 2,
+        $skip: 0,
+      },
+    });
+    const nextPage = await service.find({
+      query: {
+        branch_id: branchA,
+        $sort: { created_at: 1 },
+        $limit: 2,
+        $skip: 2,
+      },
+    });
+
+    expect(orderedIds(page)).toEqual([first, second]);
+    expect(orderedIds(nextPage)).toEqual([third]);
   });
 
   dbTest('orders the global recent-N slice by updated_at desc across boards', async ({ db }) => {

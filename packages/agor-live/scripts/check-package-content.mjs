@@ -3,14 +3,15 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+// Guard against a step-change in package size (accidentally bundling
+// node_modules, an SDK, a fixtures dir, etc.) — not gradual feature growth.
+// Ceilings are kept generous (~25% over actuals) so legit additions don't
+// block a deploy; a real bloat accident overshoots by an order of magnitude
+// and still trips these.
 const limits = {
-  files: 2600,
-  // Discord delivery, the MCP egress stack, and Claude's durable HA authority
-  // legitimately move the stacked release just beyond the previous budgets.
-  // Keep tight whole-MiB ceilings so source-image/HA builds remain an effective
-  // package-growth tripwire rather than disabling the check.
-  unpackedBytes: 97 * 1024 * 1024,
-  packedBytes: 24 * 1024 * 1024,
+  files: 3250,
+  unpackedBytes: 120 * 1024 * 1024,
+  packedBytes: 30 * 1024 * 1024,
 };
 
 function measureDirectory(directory) {

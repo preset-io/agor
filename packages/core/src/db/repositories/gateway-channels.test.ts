@@ -23,7 +23,7 @@ import {
   withDiscordConfigDefaults,
 } from '../../types/gateway';
 import type { Database } from '../client';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { GatewayChannelRepository } from './gateway-channels';
 import { RepoRepository } from './repos';
@@ -48,7 +48,7 @@ async function seedBranch(db: Database) {
     ref: 'refs/heads/main',
     branch_unique_id: 1,
     path: '/home/user/.agor/worktrees/test/repo/main',
-    created_by: generateId() as UUID,
+    created_by: 'test-user' as UUID,
   });
 
   return branch;

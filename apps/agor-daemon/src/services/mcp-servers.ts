@@ -114,31 +114,14 @@ export class MCPServersService extends DrizzleService<
       if (params.query.catalogEntryName) filters.catalogEntryName = params.query.catalogEntryName;
     }
 
-    const servers = await this.mcpServerRepo.findAll(filters);
-
     const sort = params?.query?.$sort as Record<string, 1 | -1> | undefined;
-    if (sort) {
-      servers.sort((a, b) => {
-        for (const [field, direction] of Object.entries(sort)) {
-          const aValue = a[field as keyof MCPServer];
-          const bValue = b[field as keyof MCPServer];
-          const aComparable = aValue instanceof Date ? aValue.getTime() : aValue;
-          const bComparable = bValue instanceof Date ? bValue.getTime() : bValue;
-          if (aComparable === bComparable) continue;
-          if (aComparable === undefined || aComparable === null) return -1 * direction;
-          if (bComparable === undefined || bComparable === null) return 1 * direction;
-          return (aComparable < bComparable ? -1 : 1) * direction;
-        }
-        return 0;
-      });
-    }
-
-    // Apply pagination if requested
     const limit = params?.query?.$limit ?? this.paginate?.default ?? 50;
     const skip = params?.query?.$skip ?? 0;
-
-    const total = servers.length;
-    const data = servers.slice(skip, skip + limit);
+    const pageFilters: MCPServerFilters = { ...filters, limit, offset: skip, sort };
+    const [total, data] = await Promise.all([
+      this.mcpServerRepo.count(filters),
+      this.mcpServerRepo.findAll(pageFilters),
+    ]);
 
     if (this.paginate) {
       return {

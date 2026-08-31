@@ -16,9 +16,9 @@ import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
+import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 
 const Gemini = await loadManagedAgenticToolSdk<typeof GeminiTypes>('gemini');
 type ResumedSessionData = GeminiTypes.ResumedSessionData;
@@ -31,6 +31,7 @@ import {
   isMCPAbortError,
   listMcpToolsWithPermission,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+  resolveScopedMCPAuthHeaders,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
@@ -528,7 +529,13 @@ export class GeminiPromptService {
     try {
       // Calculate project hash (same as SDK does)
       const projectHash = crypto.createHash('sha256').update(projectRoot).digest('hex');
-      const chatsDir = path.join(os.homedir(), '.gemini', 'tmp', projectHash, 'chats');
+      // Read from the SAME location the Gemini CLI writes to. GEMINI_CLI_HOME is
+      // a home ROOT (the CLI appends `.gemini`), so honor it when a per-branch
+      // SDK home relocates it (design §8 item 3); else fall back to the passwd
+      // home. Without this, Agor would read the old `~/.gemini` while the SDK
+      // wrote to the relocated branch home (silent split-brain).
+      const geminiHomeRoot = process.env.GEMINI_CLI_HOME || os.homedir();
+      const chatsDir = path.join(geminiHomeRoot, '.gemini', 'tmp', projectHash, 'chats');
 
       // Check if chats directory exists
       try {
@@ -739,22 +746,30 @@ export class GeminiPromptService {
             mcpServerRepo: this.mcpServerRepo,
             mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
             forUserId: contextUserId,
-            sessionOwnerId: session.created_by,
           },
           { toolFiltering: 'exclude' }
         );
 
+        const authDiagnostics = new McpAuthDiagnosticAccumulator();
         // Convert to Gemini SDK format
-        for (const { server } of serversWithSource) {
+        for (const scoped of serversWithSource) {
+          const { server } = scoped;
           let headers: Record<string, string> | undefined;
           try {
-            const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+            const authHeaders = await resolveScopedMCPAuthHeaders(scoped, {
+              surfaceAuthorityError: true,
+            });
             headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
-          } catch (error) {
-            const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
-            console.warn(
-              `   ⚠️  Failed to resolve MCP auth headers server_id=${server.mcp_server_id} category=${safe.category} type=${safe.diagnostic.type}`
-            );
+            if (
+              server.transport !== 'stdio' &&
+              server.auth &&
+              server.auth.type !== 'none' &&
+              !authHeaders?.Authorization
+            ) {
+              authDiagnostics.recordUnavailable();
+            }
+          } catch {
+            authDiagnostics.recordResolutionFailure();
           }
 
           const excludeTools = listMcpToolsWithPermission(
@@ -805,6 +820,8 @@ export class GeminiPromptService {
             );
           }
         }
+
+        authDiagnostics.emitSummary('gemini');
 
         if (Object.keys(mcpServersConfig).length > 0) {
           console.log(

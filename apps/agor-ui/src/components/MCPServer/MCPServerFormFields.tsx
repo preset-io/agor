@@ -22,6 +22,7 @@ import {
 import { useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useThemedMessage } from '@/utils/message';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { MCPOAuthRecoveryAlert } from './MCPOAuthRecoveryAlert';
 import { describeMissingForOAuth, missingMCPFieldLabels } from './mcp-form-requirements';
 import { extractOAuthConfigForTesting, validateHeadersJSON } from './mcp-oauth-utils';
@@ -249,8 +250,14 @@ export const MCPServerFormFields: React.FC<MCPServerFormFieldsProps> = ({
     try {
       if (currentAuthType === 'jwt') {
         const apiUrl = values.jwt_api_url;
-        const apiToken = values.jwt_api_token;
-        const apiSecret = values.jwt_api_secret;
+        const apiToken =
+          typeof values.jwt_api_token === 'string'
+            ? sanitizeSecretValue(values.jwt_api_token)
+            : values.jwt_api_token;
+        const apiSecret =
+          typeof values.jwt_api_secret === 'string'
+            ? sanitizeSecretValue(values.jwt_api_secret)
+            : values.jwt_api_secret;
 
         if (!apiUrl || !apiToken || !apiSecret) {
           showError('Please fill in all JWT authentication fields');

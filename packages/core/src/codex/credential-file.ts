@@ -9,7 +9,7 @@ import {
   mkdirSync,
   openSync,
 } from 'node:fs';
-import { type FileHandle, lstat, mkdir, open, rename, rm } from 'node:fs/promises';
+import { type FileHandle, lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises';
 import { basename, dirname, join, parse, resolve, sep } from 'node:path';
 import { parseCodexAuthJson } from './auth-file.js';
 import {
@@ -46,11 +46,20 @@ interface CredentialLock {
 }
 
 // Keep this sensitive storage primitive's ambient filesystem authority behind
-// six narrow adapters. Besides making the operations auditable by Agor's
+// seven narrow adapters. Besides making the operations auditable by Agor's
 // daemon-filesystem boundary registry, callers cannot accidentally bypass the
 // directory-capability path with a one-off fs call.
 async function openPath(path: string, flags: string | number, mode?: number): Promise<FileHandle> {
   return open(path, flags, mode);
+}
+
+// Resolve a trusted, admin/daemon-owned anchor path to its canonical form,
+// following any STATIC symlinks in it (e.g. a root-owned `/home/<user>` ->
+// `/var/lib/.../<user>` alias on non-standard hosts). Only ever applied to the
+// credential directory's parent home, never to a component a sandboxed actor
+// can write; the leaf stays O_NOFOLLOW.
+async function resolveCanonicalDirectory(path: string): Promise<string> {
+  return realpath(path);
 }
 
 async function createDirectory(
@@ -87,31 +96,42 @@ function linuxDirectoryFlags(): number {
 }
 
 /**
- * Open each directory component relative to its already-open parent. The final
- * `/proc/self/fd` path stays attached to that inode even if a sandbox process
- * concurrently renames `.codex` and replaces it with a cross-home symlink.
+ * Open the credential directory as a race-safe capability. The credential
+ * leaf (`.codex`) is opened with `O_NOFOLLOW` relative to its already-open
+ * parent, so the final `/proc/self/fd` path stays attached to that inode even
+ * if a sandbox process concurrently renames `.codex` and replaces it with a
+ * cross-home symlink.
+ *
+ * The parent home is a distinct trust tier: it and its ancestors are admin- or
+ * daemon-owned and not writable by a sandboxed actor, and on non-standard hosts
+ * the home may be reached through a STATIC, root-owned symlink alias. We
+ * therefore canonicalize the parent (following those static links) and keep
+ * `O_NOFOLLOW` strictly for the sandbox-writable leaf, rather than walking the
+ * whole path `O_NOFOLLOW` — which would fail closed on a legitimate home alias.
  */
 async function openLinuxDirectory(
   rawDirectory: string,
   create: boolean
 ): Promise<CredentialDirectory> {
   const absolute = resolve(rawDirectory);
-  const root = parse(absolute).root;
-  let current = await openPath(root, linuxDirectoryFlags());
+  const parent = await resolveCanonicalDirectory(dirname(absolute));
+  const leaf = basename(absolute);
+  // `parent` is canonical (symlink-free) and its terminal node is not
+  // sandbox-renamable, so following it here is safe; the leaf below stays
+  // O_NOFOLLOW.
+  let current = await openPath(parent, constants.O_RDONLY | constants.O_DIRECTORY);
   try {
-    for (const component of absolute.slice(root.length).split(sep).filter(Boolean)) {
-      const child = join('/proc/self/fd', String(current.fd), component);
-      if (create) {
-        try {
-          await createDirectory(child, { mode: 0o700 });
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        }
+    const child = join('/proc/self/fd', String(current.fd), leaf);
+    if (create) {
+      try {
+        await createDirectory(child, { mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       }
-      const next = await openPath(child, linuxDirectoryFlags());
-      await current.close();
-      current = next;
     }
+    const next = await openPath(child, linuxDirectoryFlags());
+    await current.close();
+    current = next;
     if (create) await current.chmod(0o700);
     return { handle: current, path: `/proc/self/fd/${current.fd}` };
   } catch (error) {
@@ -445,11 +465,56 @@ export async function readCredentialAuthorityFile(target: string): Promise<strin
 }
 
 /**
+ * Open one credential file as a stable bind-mount capability.
+ *
+ * Linux bubblewrap's `--bind-fd` is the mount-side counterpart to this
+ * helper: the daemon opens every directory component and the final file with
+ * no-follow semantics, validates the resulting inode, then passes that exact
+ * descriptor to bubblewrap. A sandbox process may rename or replace the
+ * pathname after this function returns, but it cannot change the inode named
+ * by the descriptor. This avoids the check-then-`--bind <path>` race that
+ * would otherwise let an actor-controlled `auth.json` symlink select an
+ * unrelated host file.
+ *
+ * The caller owns the returned handle and must keep it open through
+ * `child_process.spawn()`, then close its parent-side copy.
+ */
+export async function openCredentialFileForBind(target: string): Promise<FileHandle> {
+  if (process.platform !== 'linux') {
+    throw new Error('Credential file descriptor binds require Linux');
+  }
+
+  const directory = await openCredentialDirectory(target, false);
+  try {
+    const handle = await openPath(
+      join(directory.path, basename(resolve(target))),
+      constants.O_RDONLY | constants.O_NOFOLLOW
+    );
+    try {
+      const metadata = await handle.stat();
+      if (!metadata.isFile()) throw new Error('Credential bind source must be a regular file');
+      // A second pathname to this inode would let an otherwise hidden file be
+      // selected without a symlink. Agor's atomic credential writer always
+      // produces a single-link file, so fail closed on unusual manual layouts.
+      if (metadata.nlink !== 1) {
+        throw new Error('Credential bind source must not have additional hard links');
+      }
+      return handle;
+    } catch (error) {
+      await handle.close().catch(() => undefined);
+      throw error;
+    }
+  } finally {
+    await directory.handle.close();
+  }
+}
+
+/**
  * Credential mutation with a per-home generation fence. Normal callers use
  * atomic replacement; contained Claude authority uses a locked, stable-inode
- * rewrite so live bwrap masks cannot detach. Linux callers mutate through an
- * opened directory capability, so path replacement cannot redirect a
- * daemon/helper into another user's home.
+ * rewrite so live bwrap masks cannot detach. Linux callers
+ * mutate through an opened directory capability, so path replacement cannot
+ * redirect a daemon/helper into another user's home.
  */
 export async function mutateCredentialFile(
   options: {

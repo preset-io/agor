@@ -1,4 +1,8 @@
-import { getCurrentTenantDatabaseScope, runWithTenantContext } from '@agor/core/db';
+import {
+  BranchRepository,
+  getCurrentTenantDatabaseScope,
+  runWithTenantContext,
+} from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { requestExecutor } from '../utils/spawn-executor.js';
 import { FilesService } from './files.js';
@@ -19,7 +23,15 @@ const app = {
 } as never;
 
 describe('FilesService tenant scope', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.spyOn(BranchRepository.prototype, 'resolveUserAccess').mockResolvedValue({
+      can: 'view',
+      fs_access: 'read',
+      is_owner: false,
+      source: 'others',
+    });
+  });
 
   it('fails before repository access when tenant identity is missing', async () => {
     const service = new FilesService({ run: vi.fn() } as never, app);
@@ -49,7 +61,22 @@ describe('FilesService tenant scope', () => {
       } as never)
     );
 
-    expect(requestExecutor).toHaveBeenCalledOnce();
+    expect(requestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'branch.files.list',
+        params: expect.objectContaining({
+          cwd: '/tenant-a/branch-1',
+          principalBranchAccess: 'read',
+        }),
+      }),
+      expect.objectContaining({
+        templateVariables: {
+          branch_id: 'branch-1',
+          user_id: 'user-1',
+          branch_fs_access: 'read',
+        },
+      })
+    );
   });
 
   it('does not swallow a conflicting tenant scope as empty autocomplete', async () => {
@@ -64,6 +91,28 @@ describe('FilesService tenant scope', () => {
         )
       ).toThrow('Cannot enter tenant context tenant-b');
     });
+    expect(requestExecutor).not.toHaveBeenCalled();
+  });
+
+  it('does not expose autocomplete results without normalized filesystem read access', async () => {
+    vi.spyOn(BranchRepository.prototype, 'resolveUserAccess').mockResolvedValue({
+      can: 'view',
+      fs_access: 'none',
+      is_owner: false,
+      source: 'others',
+    });
+    const service = new FilesService({ run: vi.fn() } as never, app);
+
+    await expect(
+      runWithTenantContext('tenant-a', () =>
+        service.find({
+          query: { sessionId: 'session-1' as never, search: 'readme' },
+          session: { session_id: 'session-1', branch_id: 'branch-1' },
+          branch: { branch_id: 'branch-1', path: '/tenant-a/branch-1' },
+          user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+        } as never)
+      )
+    ).rejects.toThrow('branch filesystem read access required');
     expect(requestExecutor).not.toHaveBeenCalled();
   });
 });

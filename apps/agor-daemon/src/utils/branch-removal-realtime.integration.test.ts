@@ -51,7 +51,7 @@ describe('branch hard-delete realtime integration', () => {
 
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => storedBranch),
-      findExplicitViewUserIds: vi.fn(async () => ['allowed']),
+      findRealtimeViewUserIds: vi.fn(async () => ['allowed']),
     } as unknown as BranchRepository;
     configureRealtimePublish({
       app: app as never,

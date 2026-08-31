@@ -19,6 +19,11 @@ const dbMocks = vi.hoisted(() => ({
   seedInitialData: vi.fn(),
 }));
 
+const adminMocks = vi.hoisted(() => ({
+  runFirstRunAdminBootstrap: vi.fn(),
+  logFirstRunAdminBootstrap: vi.fn(),
+}));
+
 vi.mock('node:fs/promises', async (importOriginal) => ({
   ...(await importOriginal()),
   ...fsMocks,
@@ -33,6 +38,8 @@ vi.mock('@agor/core/config', async (importOriginal) => ({
   ...(await importOriginal()),
   ...configMocks,
 }));
+
+vi.mock('./first-run-admin.js', () => adminMocks);
 
 describe('initializeDatabase logging', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
@@ -52,6 +59,11 @@ describe('initializeDatabase logging', () => {
       async (_db, _operation, run: () => Promise<void>) => run()
     );
     dbMocks.seedInitialData.mockResolvedValue(undefined);
+    adminMocks.runFirstRunAdminBootstrap.mockResolvedValue({
+      createdAdmin: true,
+      admin: { user_id: 'real-owner' },
+      reattributedCount: 0,
+    });
   });
 
   afterEach(() => {
@@ -92,7 +104,7 @@ describe('initializeDatabase logging', () => {
 
       expect(dbMocks.createDatabaseAsync).toHaveBeenCalledWith({ url });
       expect(dbMocks.checkMigrationStatus).toHaveBeenCalledTimes(1);
-      expect(dbMocks.seedInitialData).toHaveBeenCalledTimes(1);
+      expect(dbMocks.seedInitialData).not.toHaveBeenCalled();
     }
   );
 
@@ -107,6 +119,16 @@ describe('initializeDatabase logging', () => {
     expect(dbMocks.createDatabaseAsync).toHaveBeenCalledWith({ url });
   });
 
+  it('creates the first real User before seeding the default Board', async () => {
+    await initializeDatabase('file:/tmp/agor-first-run.db');
+
+    expect(adminMocks.runFirstRunAdminBootstrap).toHaveBeenCalledOnce();
+    expect(dbMocks.seedInitialData).toHaveBeenCalledWith(expect.anything(), 'real-owner');
+    expect(adminMocks.runFirstRunAdminBootstrap.mock.invocationCallOrder[0]).toBeLessThan(
+      dbMocks.seedInitialData.mock.invocationCallOrder[0]
+    );
+  });
+
   it('forwards configured PostgreSQL pool settings to the database client', async () => {
     const url = 'postgresql://localhost/agor';
     const pool = { max: 25 };
@@ -114,6 +136,19 @@ describe('initializeDatabase logging', () => {
     await initializeDatabase(url, { pool, skipFirstRunAdminBootstrap: true });
 
     expect(dbMocks.createDatabaseAsync).toHaveBeenCalledWith({ url, pool });
+  });
+
+  it('refuses to start an older binary against a newer database schema', async () => {
+    dbMocks.checkMigrationStatus.mockResolvedValue({
+      hasPending: false,
+      pending: [],
+      dbAheadOfBinary: true,
+    });
+
+    await expect(
+      initializeDatabase('file:/tmp/agor-newer.db', { skipFirstRunAdminBootstrap: true })
+    ).rejects.toThrow('Database schema is newer than this Agor binary');
+    expect(dbMocks.seedInitialData).not.toHaveBeenCalled();
   });
 
   it('does not log a hostile SQLite directory when creating it', async () => {

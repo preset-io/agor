@@ -16,7 +16,7 @@ import {
 } from '@agor/core/gateway';
 import { AGENTIC_TOOL_NAMES, getRequiredSecretFields } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { requestExecutor } from '../../utils/spawn-executor.js';
 import { getUploadDirectory, MAX_UPLOAD_FILE_SIZE } from '../../utils/upload.js';
 
@@ -189,6 +189,7 @@ const slackChannel = {
 const branch = {
   branch_id: 'branch-1',
   name: 'slack-work',
+  path: '/tenant-test/branch-1',
   others_can: 'view',
 };
 
@@ -208,6 +209,15 @@ const threadMapping = {
     slack_bot_user_id: 'U_BOT',
   },
 };
+
+beforeEach(() => {
+  vi.spyOn(BranchRepository.prototype, 'resolveUserAccess').mockResolvedValue({
+    can: 'session',
+    fs_access: 'write',
+    is_owner: false,
+    source: 'others',
+  });
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -1991,6 +2001,67 @@ describe('gateway agent-tool capability gating (MCP)', () => {
     });
   });
 
+  describe('agor_upload_materialize', () => {
+    const uploadRef = 'upl_00000000-0000-4000-8000-000000000001';
+
+    it('projects normalized branch write access into the executor command', async () => {
+      uploadStoreMock.inspect.mockResolvedValue({
+        ref: uploadRef,
+        name: 'brief.txt',
+        mimeType: 'text/plain',
+        size: 16,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        expiresAt: '2026-01-02T00:00:00.000Z',
+        provenance: 'browser',
+      });
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: true,
+        data: { path: '.agor/session-staging/brief.txt' },
+      });
+      spyCallerSessionBranch('branch-1');
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await tools.agor_upload_materialize.handler({ uploadRef });
+
+      expect(requestExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'branch.upload.materialize',
+          params: expect.objectContaining({
+            branchId: 'branch-1',
+            cwd: '/tenant-test/branch-1',
+            principalBranchAccess: 'write',
+          }),
+        }),
+        expect.objectContaining({
+          templateVariables: {
+            branch_id: 'branch-1',
+            user_id: 'user-1',
+            branch_fs_access: 'write',
+          },
+        })
+      );
+    });
+
+    it('rejects materialization when the caller has only branch filesystem read access', async () => {
+      vi.spyOn(BranchRepository.prototype, 'resolveUserAccess').mockResolvedValue({
+        can: 'session',
+        fs_access: 'read',
+        is_owner: false,
+        source: 'others',
+      });
+      spyCallerSessionBranch('branch-1');
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await expect(tools.agor_upload_materialize.handler({ uploadRef })).rejects.toThrow(
+        'branch filesystem write access required'
+      );
+      expect(uploadStoreMock.inspect).not.toHaveBeenCalled();
+      expect(requestExecutor).not.toHaveBeenCalled();
+    });
+  });
+
   describe('agor_gateway_slack_file_upload', () => {
     let uploadDir: string;
 
@@ -2077,14 +2148,44 @@ describe('gateway agent-tool capability gating (MCP)', () => {
             filePath: 'chart.png',
             gatewayChannelId: fileUploadEnabled.id,
             threadTs: '171234.000100',
+            cwd: '/tenant-test/branch-1',
+            principalBranchAccess: 'write',
           }),
         }),
-        expect.any(Object)
+        expect.objectContaining({
+          templateVariables: {
+            branch_id: 'branch-1',
+            user_id: 'user-1',
+            branch_fs_access: 'write',
+          },
+        })
       );
       const executorPayload = vi.mocked(requestExecutor).mock.calls[0]?.[0];
       expect(JSON.stringify(executorPayload)).not.toContain('xoxb');
       expect(executorPayload?.params).not.toHaveProperty('connectorConfig');
       expect(payload).toMatchObject({ uploaded: true });
+    });
+
+    it('rejects branch file uploads without filesystem read access', async () => {
+      vi.spyOn(BranchRepository.prototype, 'resolveUserAccess').mockResolvedValue({
+        can: 'session',
+        fs_access: 'none',
+        is_owner: false,
+        source: 'others',
+      });
+      spyCallerGatewaySession('branch-1', gatewaySource);
+      vi.spyOn(GatewayChannelRepository.prototype, 'findById').mockResolvedValue(
+        fileUploadEnabled as any
+      );
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member');
+      await expect(
+        tools.agor_gateway_slack_file_upload.handler({
+          source: { kind: 'branch', branchPath: 'chart.png' },
+        })
+      ).rejects.toThrow('branch filesystem read access required');
+      expect(requestExecutor).not.toHaveBeenCalled();
     });
 
     it('rejects an absolute path outside the daemon upload directory', async () => {

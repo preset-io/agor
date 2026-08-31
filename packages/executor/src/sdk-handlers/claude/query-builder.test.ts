@@ -1,7 +1,8 @@
 import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const sdkMocks = vi.hoisted(() => ({ query: vi.fn() }));
+const mcpAuthMocks = vi.hoisted(() => ({ resolveMCPAuthHeaders: vi.fn() }));
+const claudeSdkMocks = vi.hoisted(() => ({ query: vi.fn() }));
 
 // Mock minimal dependencies
 vi.mock('@agor/core/lib/validation', () => ({
@@ -11,9 +12,9 @@ vi.mock('@agor/core/db', () => ({
   // shortId is used in log lines inside query-builder; passthrough mock.
   shortId: vi.fn((id: string) => id),
 }));
-vi.mock('@anthropic-ai/claude-agent-sdk', () => sdkMocks);
+vi.mock('@anthropic-ai/claude-agent-sdk', () => claudeSdkMocks);
 vi.mock('@agor/core/agentic-integrations', () => ({
-  loadManagedAgenticToolSdk: vi.fn(async () => sdkMocks),
+  loadManagedAgenticToolSdk: vi.fn(async () => claudeSdkMocks),
 }));
 vi.mock('@agor/core/templates/session-context', () => ({
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
@@ -21,15 +22,19 @@ vi.mock('@agor/core/templates/session-context', () => ({
 vi.mock('@agor/core/tools/mcp/http-headers', () => ({
   mergeMCPRemoteHeaders: vi.fn(({ custom, auth }) => ({ ...(custom || {}), ...(auth || {}) })),
 }));
-vi.mock('@agor/core/tools/mcp/jwt-auth', () => ({
-  resolveMCPAuthHeaders: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => ({
   getDaemonUrl: vi.fn().mockResolvedValue('http://localhost:3030'),
 }));
 vi.mock('@agor/core/mcp', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
-  return { ...actual, getMcpServersForSession: vi.fn().mockResolvedValue([]) };
+  return {
+    ...actual,
+    getMcpServersForSession: vi.fn().mockResolvedValue([]),
+    resolveScopedMCPAuthHeaders: vi.fn(({ server }) =>
+      mcpAuthMocks.resolveMCPAuthHeaders(server.auth, server.url)
+    ),
+  };
 });
 vi.mock('./models.js', () => ({
   DEFAULT_CLAUDE_MODEL: 'claude-sonnet-4-6',
@@ -156,9 +161,27 @@ describe('setupQuery - Local Settings Support', () => {
       forkSession: true,
       settingSources: expect.arrayContaining(['user', 'project', 'local']),
     });
-    // Runtime containment masks only .credentials.json. It must not redirect
+    // Runtime containment keeps the canonical .claude state directory writable
+    // while masking only credential authority leaves. It must not redirect
     // CLAUDE_CONFIG_DIR, which would strand path-keyed transcripts/settings.
     expect(callArgs.options).not.toHaveProperty('env.CLAUDE_CONFIG_DIR');
+  });
+
+  it('retains only UTF-8 byte metadata from provider stderr', async () => {
+    const deps = createMockDeps();
+    const setup = await setupQuery('test-session' as SessionID, 'test prompt', deps);
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const captureStderr = callArgs.options.stderr as (data: unknown) => void;
+    const sentinel = 'SENTINEL_CLAUDE_STDERR_SECRET_🔐';
+
+    captureStderr(sentinel);
+    captureStderr({ reflected: sentinel });
+
+    expect(setup.getStderrMetadata()).toEqual({
+      hasStderr: true,
+      byteLength: Buffer.byteLength(sentinel),
+    });
+    expect(JSON.stringify(setup.getStderrMetadata())).not.toContain(sentinel);
   });
 
   // Pin the literal disallow list so a stray edit to the constant

@@ -60,15 +60,15 @@ environment:
     rich:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=sandbox docker compose -f
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} AGOR_MIGRATION_OFFLINE_CUTOVER=true SEED=true AGOR_RBAC_ENABLED=true AGOR_UNIX_USER_MODE=sandbox docker compose -f
         docker-compose.yml -f docker-compose.postgres.yml -p agor-{{branch.name}}
         --profile postgres up -d --build postgres agor-dev
       stop: >-
         docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
       description: >-
-        PostgreSQL + branch RBAC + fail-closed per-user sandbox, with Alice/Bob fixtures. Standalone
-        development only; HA remains a separate variant.
+        PostgreSQL + branch RBAC + fail-closed per-user sandbox + per-branch SDK homes, with
+        Alice/Bob fixtures. Standalone development only; HA remains a separate variant.
       nuke: >-
         docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres down -v
@@ -83,7 +83,7 @@ environment:
     sqlite:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true docker compose -p agor-{{branch.name}} up -d --build
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} AGOR_MIGRATION_OFFLINE_CUTOVER=true SEED=true docker compose -p agor-{{branch.name}} up -d --build
       stop: docker compose -p agor-{{branch.name}} down
       description: SQLite standalone dev; RBAC and executor sandbox off. Fastest to boot.
       nuke: docker compose -p agor-{{branch.name}} down -v
@@ -93,7 +93,7 @@ environment:
     sandbox:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_SANDBOX_ENABLED=true docker compose -p agor-{{branch.name}} up -d --build
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} AGOR_MIGRATION_OFFLINE_CUTOVER=true SEED=true AGOR_SANDBOX_ENABLED=true docker compose -p agor-{{branch.name}} up -d --build
       description: >-
         SQLite + tunable shared-home bubblewrap sandbox. RBAC off; falls back to unsandboxed
         execution if bubblewrap is unavailable.
@@ -101,7 +101,7 @@ environment:
     sandbox-peruser:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true AGOR_UNIX_USER_MODE=sandbox docker compose -p agor-{{branch.name}} up -d --build
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} AGOR_MIGRATION_OFFLINE_CUTOVER=true SEED=true AGOR_UNIX_USER_MODE=sandbox docker compose -p agor-{{branch.name}} up -d --build
       description: >-
         SQLite + fail-closed per-user bubblewrap sandbox. Forces branch RBAC and uses RBAC-derived
         branch mounts; no host-user impersonation.
@@ -109,7 +109,7 @@ environment:
     postgres:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true docker compose -f docker-compose.yml -f
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} AGOR_MIGRATION_OFFLINE_CUTOVER=true SEED=true docker compose -f docker-compose.yml -f
         docker-compose.override.postgres.yml -p agor-{{branch.name}} --profile postgres up -d
         --build postgres agor-dev
       stop: >-
@@ -127,14 +127,14 @@ environment:
     sqlite-demo:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true LOAD_FIXTURES=true docker compose -p agor-{{branch.name}} up -d --build
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} AGOR_MIGRATION_OFFLINE_CUTOVER=true SEED=true LOAD_FIXTURES=true docker compose -p agor-{{branch.name}} up -d --build
       description: >-
         SQLite + development seed + four-user demo fixtures. Development only.
       extends: sqlite
     postgres-demo:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000
-        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} SEED=true LOAD_FIXTURES=true docker compose -f docker-compose.yml -f
+        branch.unique_id}} AGOR_BASE_URL=http://{{host.ip_address}}:{{add 5000 branch.unique_id}} VITE_DAEMON_URL=http://{{host.ip_address}}:{{add 3000 branch.unique_id}} AGOR_MIGRATION_OFFLINE_CUTOVER=true SEED=true LOAD_FIXTURES=true docker compose -f docker-compose.yml -f
         docker-compose.override.postgres.yml -p agor-{{branch.name}} --profile postgres up -d
         --build postgres agor-dev
       stop: >-

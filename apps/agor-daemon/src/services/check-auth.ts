@@ -162,14 +162,13 @@ async function validateClaudeSubscriptionToken(token: string): Promise<AuthCheck
 }
 
 /**
- * Validate a concrete API key against the provider. `authenticated` only on a 2xx;
+ * Validate a concrete provider connection against the provider. `authenticated` only on a 2xx;
  * `unauthenticated` only on a real 401/403 rejection; everything else (timeout,
  * 5xx, network error) is `unknown` — a failure to VERIFY is not proof of invalidity.
  */
-async function validateApiKey(
+async function validateProviderCredential(
   tool: string,
-  key: string,
-  connection: Record<string, string | undefined> = {}
+  connection: Record<string, string | undefined>
 ): Promise<AuthCheckStatus> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
@@ -181,22 +180,27 @@ async function validateApiKey(
     switch (tool) {
       case 'claude-code': {
         url = `${(connection.ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com').replace(/\/$/, '')}/v1/models`;
-        headers['x-api-key'] = key;
+        if (connection.ANTHROPIC_API_KEY) {
+          headers['x-api-key'] = connection.ANTHROPIC_API_KEY;
+        }
+        if (connection.ANTHROPIC_AUTH_TOKEN) {
+          headers.Authorization = `Bearer ${connection.ANTHROPIC_AUTH_TOKEN}`;
+        }
         headers['anthropic-version'] = '2023-06-01';
         break;
       }
       case 'codex': {
         url = `${(connection.OPENAI_BASE_URL ?? 'https://api.openai.com/v1').replace(/\/$/, '')}/models`;
-        headers.Authorization = `Bearer ${key}`;
+        headers.Authorization = `Bearer ${connection.OPENAI_API_KEY}`;
         break;
       }
       case 'gemini': {
-        url = `https://generativelanguage.googleapis.com/v1/models?key=${encodeURIComponent(key)}`;
+        url = `https://generativelanguage.googleapis.com/v1/models?key=${encodeURIComponent(connection.GEMINI_API_KEY ?? '')}`;
         break;
       }
       case 'copilot': {
         url = 'https://api.github.com/user';
-        headers.Authorization = `token ${key}`;
+        headers.Authorization = `token ${connection.COPILOT_GITHUB_TOKEN}`;
         headers.Accept = 'application/vnd.github.v3+json';
         break;
       }
@@ -206,7 +210,7 @@ async function validateApiKey(
         // successful call as authenticated and any throw as unknown (fail safe).
         const { Cursor } = await loadManagedAgenticToolSdk<typeof import('@cursor/sdk')>('cursor');
         await Promise.race([
-          Cursor.me({ apiKey: key }),
+          Cursor.me({ apiKey: connection.CURSOR_API_KEY ?? '' }),
           new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error('Cursor auth check timed out')), FETCH_TIMEOUT_MS)
           ),
@@ -225,6 +229,23 @@ async function validateApiKey(
     return 'unknown';
   } finally {
     clearTimeout(timer);
+  }
+}
+
+function rawProviderConnection(tool: string, key: string): Record<string, string | undefined> {
+  switch (tool) {
+    case 'claude-code':
+      return { ANTHROPIC_API_KEY: key };
+    case 'codex':
+      return { OPENAI_API_KEY: key };
+    case 'gemini':
+      return { GEMINI_API_KEY: key };
+    case 'copilot':
+      return { COPILOT_GITHUB_TOKEN: key };
+    case 'cursor':
+      return { CURSOR_API_KEY: key };
+    default:
+      return {};
   }
 }
 
@@ -405,7 +426,7 @@ export function createCheckAuthService(
         }
 
         return resultFromKeyStatus(
-          await validateApiKey(tool, rawKey.trim()),
+          await validateProviderCredential(tool, rawProviderConnection(tool, rawKey.trim())),
           tool === 'copilot'
             ? 'GitHub token rejected — check the token has not expired or been revoked.'
             : 'Key rejected by provider — double-check and try again.'
@@ -429,12 +450,10 @@ export function createCheckAuthService(
         );
       }
 
-      if (apiKey) {
-        return resultFromKeyStatus(
-          await validateApiKey(tool, apiKey, connection as Record<string, string | undefined>),
-          'Stored key was rejected by provider — update it in Settings → Agent Setup.'
-        );
-      }
+      const resolvedConnection = {
+        ...rawProviderConnection(tool, apiKey ?? ''),
+        ...(connection ?? {}),
+      } as Record<string, string | undefined>;
 
       if (tool === 'codex' && useNativeAuth) {
         // The persisted method is the cheap default used by app-shell banners.
@@ -460,22 +479,12 @@ export function createCheckAuthService(
       }
 
       if (tool === 'claude-code') {
-        const subscriptionResolution = await withTenantDatabase((tenantDb) =>
-          resolveApiKey('CLAUDE_CODE_OAUTH_TOKEN', {
-            userId,
-            db: tenantDb,
-            tool: 'claude-code',
-          })
-        );
-
-        if (subscriptionResolution.decryptionFailed) {
-          return unauthenticated(
-            'none',
-            'Stored Claude subscription token could not be decrypted (master-secret mismatch). Re-enter it in Settings → Agent Setup.'
-          );
-        }
-
-        const subscriptionToken = subscriptionResolution.apiKey;
+        // The atomic provider resolver returns the exact connection exported to
+        // the executor. Do not reduce it to TOOL_API_KEY_NAMES: Claude also
+        // supports ANTHROPIC_AUTH_TOKEN (Bearer auth) and subscription tokens.
+        // Reducing this connection to ANTHROPIC_API_KEY is what made a working
+        // Claude session look disconnected in the app-shell banner.
+        const subscriptionToken = resolvedConnection.CLAUDE_CODE_OAUTH_TOKEN;
         if (subscriptionToken) {
           const status = await validateClaudeSubscriptionToken(subscriptionToken);
           if (status === 'authenticated') return authed('oauth');
@@ -487,6 +496,16 @@ export function createCheckAuthService(
           }
           return unknown('Could not verify the Claude subscription token — try again.');
         }
+      }
+
+      const hasResolvedCredential =
+        Boolean(apiKey) ||
+        (tool === 'claude-code' && Boolean(resolvedConnection.ANTHROPIC_AUTH_TOKEN));
+      if (hasResolvedCredential) {
+        return resultFromKeyStatus(
+          await validateProviderCredential(tool, resolvedConnection),
+          'Stored key was rejected by provider — update it in Settings → Agent Setup.'
+        );
       }
 
       return unauthenticated('none', `No usable ${keyName} is available under workspace policy.`);

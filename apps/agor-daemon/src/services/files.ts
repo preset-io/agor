@@ -15,7 +15,14 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import { NotAuthenticated } from '@agor/core/feathers';
-import type { AuthenticatedParams, RBACParams, SessionID, UserID } from '@agor/core/types';
+import type {
+  AuthenticatedParams,
+  RBACParams,
+  SessionID,
+  UserID,
+  UserRole,
+} from '@agor/core/types';
+import { ensureBranchWorkspaceAccess } from '../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../utils/spawn-executor.js';
 import { issueExecutorCommandToken } from './session-token-service.js';
@@ -110,12 +117,27 @@ export class FilesService {
 
       const currentUserId = params.user?.user_id as UserID | undefined;
       if (!currentUserId) throw new NotAuthenticated('Authentication required');
+      const fsAccess = await ensureBranchWorkspaceAccess(
+        this.branchRepo,
+        branch,
+        currentUserId,
+        params.user?.role as UserRole | undefined,
+        'view',
+        'read',
+        this.app.get('config').execution?.allow_superadmin === true
+      );
       const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
         currentUserId,
         this.app.get('config')
       );
-      return { branchId: branch.branch_id, delegatedHomeKey, userId: currentUserId };
+      return {
+        branchId: branch.branch_id,
+        branchPath: branch.path,
+        delegatedHomeKey,
+        fsAccess,
+        userId: currentUserId,
+      };
     });
     if (!resolved) return [];
 
@@ -136,6 +158,8 @@ export class FilesService {
             branchId: resolved.branchId,
             search,
             limit: MAX_FILE_RESULTS,
+            cwd: resolved.branchPath,
+            principalBranchAccess: resolved.fsAccess,
           },
         },
         {
@@ -143,6 +167,11 @@ export class FilesService {
           // Delegated mode passes the caller's stable execution-home key to
           // the external launcher. Local modes do not select a host identity.
           delegatedHomeKey: resolved.delegatedHomeKey,
+          templateVariables: {
+            branch_id: resolved.branchId,
+            user_id: resolved.userId,
+            branch_fs_access: resolved.fsAccess,
+          },
         }
       );
 

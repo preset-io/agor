@@ -53,13 +53,13 @@ describe('register-services /mcp-servers/oauth-auth-headers authorization', () =
     expect(authHeadersBlock).toContain('shouldExposeMCPServerSecretsForSessionToken');
     expect(authHeadersBlock).toContain('SessionMCPServerRepository');
     expect(authHeadersBlock).toContain("scope: 'global'");
-    expect(authHeadersBlock).toContain('usableByUserId: executorSession.created_by');
+    expect(authHeadersBlock).toContain('usableByUserId: userId');
     expect(authHeadersBlock).toContain('allowedServerIds');
     expect(authHeadersBlock).toContain('server_not_in_session_scope');
   });
 
   it('scopes the global set to what the session may use', () => {
-    expect(authHeadersBlock).toContain('usableByUserId: executorSession.created_by');
+    expect(authHeadersBlock).toContain('usableByUserId: userId');
   });
 });
 

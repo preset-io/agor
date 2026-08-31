@@ -1,4 +1,4 @@
-import { runWithTenantContext, UsersRepository } from '@agor/core/db';
+import { BoardRepository, runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, Params, User, UserID, UserRole } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
@@ -156,6 +156,25 @@ describe('UsersService role authority', () => {
       service.remove(member.user_id as UserID, externalParams(admin))
     ).resolves.toMatchObject({ user_id: member.user_id });
   });
+
+  dbTest(
+    'blocks service and raw deletion while the user owns protected resources',
+    async ({ db }) => {
+      const service = new UsersService(db);
+      const admin = await createUser(service, 'admin', 'owner-guard-admin');
+      const member = await createUser(service, 'member', 'protected-owner');
+      await new BoardRepository(db).create({
+        name: 'Protected owner board',
+        created_by: member.user_id,
+        access_mode: 'private',
+      });
+
+      await expect(
+        service.remove(member.user_id as UserID, externalParams(admin))
+      ).rejects.toMatchObject({ code: 400 });
+      await expect(new UsersRepository(db).delete(member.user_id)).rejects.toThrow();
+    }
+  );
 
   dbTest('blocks self role changes, self deletion, and last-superadmin removal', async ({ db }) => {
     const service = new UsersService(db);

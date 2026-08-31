@@ -1,8 +1,11 @@
 import * as configModule from '@agor/core/config';
-import { BranchRepository } from '@agor/core/db';
-import { Forbidden } from '@agor/core/feathers';
-import type { McpServer } from '@modelcontextprotocol/server';
+import { BranchRepository, CapabilityPolicyRepository } from '@agor/core/db';
+import { Forbidden, feathers } from '@agor/core/feathers';
+import type { Branch, BranchPermissionLevel } from '@agor/core/types';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { DrizzleService, type Repository } from '../../adapters/drizzle.js';
+import { loadBranch } from '../../utils/branch-authorization.js';
 import { registerBranchTools } from './branches.js';
 
 vi.mock('../../utils/executor-delegated-home.js', () => ({
@@ -25,7 +28,10 @@ vi.mock('../../utils/spawn-executor.js', async (importOriginal) => {
   };
 });
 
-type ToolHandler = (args: Record<string, unknown>) => Promise<{
+type ToolHandler = (
+  args: Record<string, unknown>,
+  requestContext?: ServerContext
+) => Promise<{
   content: Array<{ type: string; text: string }>;
   isError?: boolean;
 }>;
@@ -39,6 +45,10 @@ type ToolConfig = {
       | { success: false; error: { issues: Array<{ message: string }> } };
   };
 };
+
+function requestContext(signal = new AbortController().signal): ServerContext {
+  return { mcpReq: { signal } } as ServerContext;
+}
 
 function registerAndCaptureHandler(
   toolName: string,
@@ -64,7 +74,10 @@ function registerAndCaptureHandler(
 
   registerBranchTools(fakeServer, {
     app: ctx.app as Parameters<typeof registerBranchTools>[1]['app'],
-    db: {} as Parameters<typeof registerBranchTools>[1]['db'],
+    // A `.run` marker makes runWithMcpTenantDatabaseScope treat this as the
+    // SQLite-like handle (identity scope, no native transaction to fake) when a
+    // tenant is present in baseServiceParams.
+    db: { run: () => undefined } as unknown as Parameters<typeof registerBranchTools>[1]['db'],
     userId: ctx.userId as Parameters<typeof registerBranchTools>[1]['userId'],
     sessionId: ctx.sessionId as Parameters<typeof registerBranchTools>[1]['sessionId'],
     authenticatedUser: (ctx.authenticatedUser ?? {
@@ -105,7 +118,10 @@ function registerAndCaptureConfig(
 
   registerBranchTools(fakeServer, {
     app: ctx.app as Parameters<typeof registerBranchTools>[1]['app'],
-    db: {} as Parameters<typeof registerBranchTools>[1]['db'],
+    // A `.run` marker makes runWithMcpTenantDatabaseScope treat this as the
+    // SQLite-like handle (identity scope, no native transaction to fake) when a
+    // tenant is present in baseServiceParams.
+    db: { run: () => undefined } as unknown as Parameters<typeof registerBranchTools>[1]['db'],
     userId: ctx.userId as Parameters<typeof registerBranchTools>[1]['userId'],
     sessionId: ctx.sessionId as Parameters<typeof registerBranchTools>[1]['sessionId'],
     authenticatedUser: (ctx.authenticatedUser ?? {
@@ -134,6 +150,247 @@ function registerAndCaptureUpdate(ctx: {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe('agor_branches_wait_for_ready', () => {
+  const makeBranch = (filesystemStatus: string, overrides: Record<string, unknown> = {}) => ({
+    branch_id: '01900000-0000-7000-8000-000000000001',
+    filesystem_status: filesystemStatus,
+    archived: false,
+    path: '/worktrees/feature',
+    start_command: 'pnpm dev',
+    board_id: 'board-1',
+    ...overrides,
+  });
+
+  it('returns the refreshed authoritative branch on the already-ready fast path', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      user: { user_id: 'user-1', role: 'member' },
+      tenant: { tenant_id: 'tenant-1' },
+    };
+    const ready = makeBranch('ready');
+    const get = vi.fn(async () => ready);
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await waitForReady({ branchId: '01900000' }, requestContext());
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(payload).toMatchObject({
+      branch: ready,
+      _readiness: { outcome: 'ready', poll_interval_ms: 1_000 },
+    });
+    expect(get).toHaveBeenCalledWith('01900000', baseServiceParams);
+  });
+
+  it('uses fresh authorized service reads until a creating branch is ready', async () => {
+    vi.useFakeTimers();
+    const creating = makeBranch('creating');
+    const ready = makeBranch('ready', { path: '/worktrees/feature-ready' });
+    const get = vi.fn().mockResolvedValueOnce(creating).mockResolvedValueOnce(ready);
+    const baseServiceParams = { provider: 'mcp', tenant: { tenant_id: 'tenant-1' } };
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const waiting = waitForReady({ branchId: '01900000' }, requestContext());
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await waiting;
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.branch).toEqual(ready);
+    expect(get.mock.calls).toEqual([
+      ['01900000', baseServiceParams],
+      ['01900000-0000-7000-8000-000000000001', baseServiceParams],
+    ]);
+    expect(get.mock.calls[0][1]).not.toBe(baseServiceParams);
+    expect(get.mock.calls[1][1]).not.toBe(get.mock.calls[0][1]);
+  });
+
+  it('uses pristine params so real Feathers RBAC hooks cannot pin the first branch row', async () => {
+    vi.useFakeTimers();
+    const creating = makeBranch('creating') as unknown as Branch;
+    const ready = makeBranch('ready', { path: '/worktrees/feature-ready' }) as unknown as Branch;
+    const findById = vi.fn().mockResolvedValueOnce(creating).mockResolvedValueOnce(ready);
+    const repository = {
+      findById,
+      findAll: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      isOwner: vi.fn(async () => false),
+      resolveUserPermission: vi.fn(async () => 'view' as BranchPermissionLevel),
+    } as unknown as Repository<Branch> & {
+      isOwner: (branchId: string, userId: string) => Promise<boolean>;
+      resolveUserPermission: (branch: Branch, userId: string) => Promise<BranchPermissionLevel>;
+    };
+    const app = feathers();
+    app.use(
+      'branches',
+      new DrizzleService<Branch>(repository, { id: 'branch_id', resourceType: 'Branch' })
+    );
+    app.service('branches').hooks({
+      before: { get: [loadBranch(repository as never)] },
+    });
+
+    // Optional current-Session authorization can already have populated these
+    // request-scoped hook caches before the tool starts. A shallow clone would
+    // carry the stale row into every observation.
+    const poisonedBaseParams = {
+      provider: 'mcp',
+      user: { user_id: 'user-1', email: 'user@example.test', role: 'member' },
+      branch: creating,
+      _agorPrefetchedRecord: {
+        id: creating.branch_id,
+        idField: 'branch_id',
+        record: creating,
+      },
+      _agorRbacCache: {
+        sessions: new Map(),
+        branches: new Map([[creating.branch_id, creating]]),
+        branchAccess: new Map(),
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+      baseServiceParams: poisonedBaseParams,
+    });
+
+    const waiting = waitForReady({ branchId: '01900000' }, requestContext());
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await waiting;
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(payload.branch).toEqual(ready);
+    expect(findById).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns a retryable structured timeout while preserving the creating branch', async () => {
+    vi.useFakeTimers();
+    const creating = makeBranch('creating');
+    const get = vi.fn(async () => creating);
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+    });
+
+    const waiting = waitForReady(
+      { branchId: creating.branch_id, waitTimeoutMs: 1_000 },
+      requestContext()
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await waiting;
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(payload).toMatchObject({
+      branch: creating,
+      _readiness: {
+        outcome: 'timeout',
+        timeout_ms: 1_000,
+        poll: {
+          tool: 'agor_branches_wait_for_ready',
+          arguments: { branchId: creating.branch_id },
+        },
+      },
+    });
+  });
+
+  it('stops polling when the MCP request is cancelled', async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const creating = makeBranch('creating');
+    const get = vi.fn(async () => creating);
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+    });
+
+    const waiting = waitForReady(
+      { branchId: creating.branch_id },
+      requestContext(controller.signal)
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort(new Error('client disconnected'));
+
+    await expect(waiting).rejects.toThrow('client disconnected');
+    expect(get).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('returns the persisted safe failure as a structured terminal error', async () => {
+    const failed = makeBranch('failed', { error_message: 'clone authentication failed' });
+    const app = {
+      service(name: string) {
+        if (name === 'branches') return { get: vi.fn(async () => failed) };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    const waitForReady = registerAndCaptureHandler('agor_branches_wait_for_ready', {
+      app,
+      userId: 'user-1',
+    });
+
+    const result = await waitForReady({ branchId: failed.branch_id }, requestContext());
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({
+      branch: failed,
+      _readiness: { outcome: 'failed', message: 'clone authentication failed' },
+    });
+  });
+
+  it('enforces bounded MCP timeout inputs in the tool schema', () => {
+    const config = registerAndCaptureConfig('agor_branches_wait_for_ready', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', waitTimeoutMs: 1_000 }).success
+    ).toBe(true);
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', waitTimeoutMs: 999 }).success
+    ).toBe(false);
+    expect(
+      config.inputSchema?.safeParse({ branchId: 'branch-1', waitTimeoutMs: 300_001 }).success
+    ).toBe(false);
+  });
 });
 
 describe('agor_branches_delete authorization boundary', () => {
@@ -183,29 +440,40 @@ describe('agor_branches_delete authorization boundary', () => {
 });
 
 describe('agor_branches_update', () => {
-  it('can persist an explicit None override instead of an inherited board default', async () => {
-    const branchesPatch = vi.fn(async (_id, data) => ({ branch_id: 'branch-1', ...data }));
-    const branchesGet = vi.fn(async () => ({ branch_id: 'branch-1' }));
+  it('replaces an explicit normalized override package', async () => {
+    const permissions = {
+      primary_owner_user_id: '00000000-0000-7000-8000-000000000001',
+      revision: 1,
+      binding_mode: 'override',
+      override_config: {
+        access: {
+          schema_version: 1,
+          policy_kind: 'branch_access',
+          sharing_mode: 'private',
+          entries: [],
+          others: { preset: 'none', capabilities: [], fs_access: 'none' },
+        },
+        allow_shared_session_prompts: false,
+      },
+    };
+    const permissionsPatch = vi.fn(async (_id, data) => data);
     const app = {
       get: () => ({ execution: { branch_rbac: true, allow_superadmin: false } }),
       service(name: string) {
-        if (name === 'branches') return { get: branchesGet, patch: branchesPatch };
+        if (name === 'branches/:id/permissions') return { patch: permissionsPatch };
         throw new Error(`Unexpected service call: ${name}`);
       },
     };
-    const update = registerAndCaptureUpdate({ app, userId: 'user-1' });
-
-    await update({
-      branchId: 'branch-1',
-      permissionSource: 'override',
-      othersCan: 'none',
+    const update = registerAndCaptureHandler('agor_branches_permissions_update', {
+      app,
+      userId: 'user-1',
     });
 
-    expect(branchesPatch).toHaveBeenCalledWith(
-      'branch-1',
-      { permission_source: 'override', others_can: 'none' },
-      {}
-    );
+    await update({ branchId: 'branch-1', permissions });
+
+    expect(permissionsPatch).toHaveBeenCalledWith(null, permissions, {
+      route: { id: 'branch-1' },
+    });
   });
 
   it('uses authenticated service params when falling back to the current session branch', async () => {
@@ -304,6 +572,55 @@ describe('agor_branches_update', () => {
 });
 
 describe('agor_branches_create', () => {
+  function waitFixture(options: {
+    name: string;
+    initial?: Record<string, unknown>;
+    observed?: Record<string, unknown>;
+  }) {
+    const branchId = '01900000-0000-7000-8000-000000000001';
+    const creating = {
+      branch_id: branchId,
+      name: options.name,
+      board_id: 'board-1',
+      filesystem_status: 'creating',
+      ...options.initial,
+    };
+    const observed = { ...creating, ...options.observed };
+    const createBranch = vi.fn(async () => creating);
+    const branchesGet = vi.fn(async () => observed);
+    const app = {
+      get: () => ({}),
+      service(name: string) {
+        if (name === 'repos') {
+          return {
+            get: vi.fn(async () => ({ repo_id: 'repo-1', default_branch: 'main' })),
+            createBranch,
+          };
+        }
+        if (name === 'boards') return { get: vi.fn(async () => ({ board_id: 'board-1' })) };
+        if (name === 'branches') return { get: branchesGet };
+        throw new Error(`Unexpected service call: ${name}`);
+      },
+    };
+    return { app, branchId, creating, observed, createBranch, branchesGet };
+  }
+
+  it('rejects waitTimeoutMs unless waitForReady is enabled', async () => {
+    const create = registerAndCaptureHandler('agor_branches_create', {
+      app: {},
+      userId: 'user-1',
+    });
+
+    await expect(
+      create({
+        repoId: 'repo-1',
+        branchName: 'feature',
+        boardId: 'board-1',
+        waitTimeoutMs: 1_000,
+      })
+    ).rejects.toThrow('waitTimeoutMs requires waitForReady=true');
+  });
+
   it('passes acting MCP user params through to branch creation so ownership resolves to the prompter', async () => {
     const baseServiceParams = {
       authenticated: true,
@@ -350,6 +667,133 @@ describe('agor_branches_create', () => {
       expect.objectContaining({ name: 'user-b-feature', boardId: 'board-1' }),
       baseServiceParams
     );
+  });
+
+  it('optionally waits and returns the authoritative ready branch in the existing flat response', async () => {
+    const baseServiceParams = {
+      authenticated: true,
+      provider: 'mcp',
+      tenant: { tenant_id: 'tenant-1' },
+    };
+    const {
+      app,
+      branchId,
+      observed: ready,
+      branchesGet,
+    } = waitFixture({
+      name: 'waited-feature',
+      observed: {
+        filesystem_status: 'ready',
+        path: '/worktrees/waited-feature',
+        start_command: 'pnpm dev',
+      },
+    });
+    const create = registerAndCaptureHandler('agor_branches_create', {
+      app,
+      userId: 'user-1',
+      baseServiceParams,
+    });
+
+    const result = await create(
+      {
+        repoId: 'repo-1',
+        branchName: 'waited-feature',
+        boardId: 'board-1',
+        autoSuffix: false,
+        waitForReady: true,
+      },
+      requestContext()
+    );
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(payload).toMatchObject({
+      ...ready,
+      _readiness: {
+        outcome: 'ready',
+        timeout_ms: 45_000,
+        poll_interval_ms: 1_000,
+      },
+    });
+    expect(payload).not.toHaveProperty('branch');
+    expect(branchesGet).toHaveBeenCalledWith(branchId, baseServiceParams);
+  });
+
+  it('returns a retryable timeout without undoing an opt-in creation', async () => {
+    vi.useFakeTimers();
+    const { app, branchId, creating, createBranch, branchesGet } = waitFixture({
+      name: 'slow-clone',
+      initial: { storage_mode: 'clone' },
+    });
+    const create = registerAndCaptureHandler('agor_branches_create', {
+      app,
+      userId: 'user-1',
+    });
+
+    const waiting = create(
+      {
+        repoId: 'repo-1',
+        branchName: 'slow-clone',
+        boardId: 'board-1',
+        autoSuffix: false,
+        storage_mode: 'clone',
+        waitForReady: true,
+        waitTimeoutMs: 1_000,
+      },
+      requestContext()
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await waiting;
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBeUndefined();
+    expect(payload).toMatchObject({
+      ...creating,
+      _readiness: {
+        outcome: 'timeout',
+        timeout_ms: 1_000,
+        poll: {
+          tool: 'agor_branches_wait_for_ready',
+          arguments: { branchId },
+        },
+      },
+    });
+    expect(createBranch).toHaveBeenCalledOnce();
+    expect(branchesGet).toHaveBeenCalledTimes(2);
+    expect(branchesGet.mock.calls[1][1]).not.toBe(branchesGet.mock.calls[0][1]);
+  });
+
+  it('returns a persisted materialization failure without losing creation metadata', async () => {
+    const { app, observed: failed } = waitFixture({
+      name: 'failed-clone',
+      observed: {
+        filesystem_status: 'failed',
+        error_message: 'clone authentication failed',
+      },
+    });
+    const create = registerAndCaptureHandler('agor_branches_create', {
+      app,
+      userId: 'user-1',
+    });
+
+    const result = await create(
+      {
+        repoId: 'repo-1',
+        branchName: 'failed-clone',
+        boardId: 'board-1',
+        autoSuffix: false,
+        waitForReady: true,
+      },
+      requestContext()
+    );
+    const payload = JSON.parse(result.content[0].text);
+
+    expect(result.isError).toBe(true);
+    expect(payload).toMatchObject({
+      ...failed,
+      _readiness: { outcome: 'failed', message: 'clone authentication failed' },
+    });
   });
 
   it('creates a one-shot teammate branch by writing teammate metadata into custom_context', async () => {
@@ -669,6 +1113,25 @@ describe('agor_branches_create', () => {
 });
 
 describe('branch MCP input schemas', () => {
+  it('exposes an opt-in create wait with a one-second to five-minute timeout', () => {
+    const config = registerAndCaptureConfig('agor_branches_create', {
+      app: {},
+      userId: 'user-1',
+    });
+    const base = { repoId: 'repo-1', branchName: 'feature', boardId: 'board-1' };
+
+    expect(
+      config.inputSchema?.safeParse({
+        ...base,
+        waitForReady: true,
+        waitTimeoutMs: 300_000,
+      }).success
+    ).toBe(true);
+    expect(config.inputSchema?.safeParse({ ...base, waitTimeoutMs: 999 }).success).toBe(false);
+    expect(config.inputSchema?.safeParse({ ...base, waitTimeoutMs: 300_001 }).success).toBe(false);
+    expect(config.inputSchema?.safeParse({ ...base, waitForReady: 'yes' }).success).toBe(false);
+  });
+
   it('accepts boolean branch attention updates and rejects non-booleans', () => {
     const config = registerAndCaptureConfig('agor_branches_update', {
       app: {},
@@ -819,6 +1282,7 @@ describe('agor_branches_set_zone', () => {
     const result = await setZone({ branchId: 'branch-1', zoneId: null });
     const parsed = JSON.parse(result.content[0].text);
 
+    expect(branchesGet).toHaveBeenCalledOnce();
     expect(branchesGet).toHaveBeenCalledWith('branch-1', baseServiceParams);
     expect(findByBranchId).toHaveBeenCalledWith('branch-1', baseServiceParams);
     expect(boardObjectsPatch).toHaveBeenCalledWith(
@@ -952,6 +1416,7 @@ describe('agor_branches_set_zone', () => {
     });
     const parsed = JSON.parse(result.content[0].text);
 
+    expect(branchesGet).toHaveBeenCalledOnce();
     expect(sessionsGet).toHaveBeenCalledWith('session-1', baseServiceParams);
     expect(boardObjectsPatch).toHaveBeenCalledWith(
       'obj-branch-1',
@@ -1291,6 +1756,14 @@ describe('agor_branches_cleanup_candidates', () => {
       if (options?.repoGetFails) throw new Error('repo unavailable');
       return repo;
     });
+    vi.spyOn(CapabilityPolicyRepository.prototype, 'getBranchSharingModes').mockResolvedValue(
+      new Map(
+        branches.map((value) => {
+          const branch = value as { branch_id: string };
+          return [branch.branch_id, branch.branch_id === 'private' ? 'private' : 'shared'];
+        })
+      )
+    );
 
     return {
       branchesFind,

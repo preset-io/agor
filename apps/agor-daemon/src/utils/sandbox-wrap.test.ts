@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/unix', () => ({
   bwrapOnPath: () => true,
+  probeBwrapSecurityBaseline: () => true,
   probeBwrapUserns: () => true,
   probeBwrapPidNamespace: () => false,
 }));
@@ -265,7 +266,8 @@ test "$(cat "$HOME/.codex/auth.json")" = codex-visible
       const before = await Promise.all(
         AUTHORITY_FILENAMES.map(async (filename) => {
           const path = join(physicalClaude, filename);
-          return { bytes: await readFile(path), inode: (await stat(path)).ino };
+          const metadata = await stat(path, { bigint: true });
+          return { bytes: await readFile(path), inode: metadata.ino, mtimeNs: metadata.mtimeNs };
         })
       );
 
@@ -341,7 +343,8 @@ printf physical-state > "$claude_dir/ordinary-state.json"
         await Promise.all(
           AUTHORITY_FILENAMES.map(async (filename) => {
             const path = join(physicalClaude, filename);
-            return { bytes: await readFile(path), inode: (await stat(path)).ino };
+            const metadata = await stat(path, { bigint: true });
+            return { bytes: await readFile(path), inode: metadata.ino, mtimeNs: metadata.mtimeNs };
           })
         )
       ).toEqual(before);

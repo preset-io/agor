@@ -5,7 +5,7 @@
  * JSON data field handling.
  */
 
-import type { Message, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
+import type { Message, MessageID, SessionID, TaskID, UserID, UUID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
 import { describe, expect, vi } from 'vitest';
@@ -13,7 +13,7 @@ import { generateId } from '../../lib/ids';
 import { JSON_SANITIZER_LIMITS } from '../../utils/sanitize-json';
 import { select, update } from '../database-wrapper';
 import { messages as messagesTable } from '../schema';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { MESSAGE_CONTENT_OMITTED, MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
@@ -364,7 +364,7 @@ describe('MessagesRepository.findAll', () => {
       permission_source: 'override',
       others_can: 'none',
     });
-    await branches.addOwner(visibleBranch.branch_id, viewerId);
+    await setTestBranchUserRole(db, visibleBranch.branch_id, viewerId as UserID, 'manager');
     const visibleSession = await sessions.create({
       branch_id: visibleBranch.branch_id,
       title: 'visible',

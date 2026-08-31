@@ -11,9 +11,9 @@ import { shortId } from '@agor/core/db';
 import { validateDirectory } from '@agor/core/lib/validation';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import { isGatewaySession } from '@agor/core/types';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
+import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 
 type PermissionMode = ClaudeSdk.PermissionMode;
 type Options = ClaudeSdk.Options;
@@ -23,6 +23,7 @@ import {
   getMcpServersForSession,
   listMcpToolsWithPermission,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+  resolveScopedMCPAuthHeaders,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
@@ -120,7 +121,7 @@ export async function setupQuery(
 ): Promise<{
   query: InterruptibleQuery;
   resolvedModel: string;
-  getStderr: () => string;
+  getStderrMetadata: () => { hasStderr: boolean; byteLength: number };
 }> {
   const { taskId, permissionMode, resume = true, abortController } = options;
 
@@ -203,8 +204,10 @@ export async function setupQuery(
 
   // Get Claude Code path
 
-  // Buffer to capture stderr for better error messages
-  let stderrBuffer = '';
+  // Provider stderr may contain MCP URLs/headers, credentials, or reflected
+  // payloads. Retain only bounded scalar metadata; raw bytes never cross this
+  // callback or become available to later logging code.
+  let stderrByteLength = 0;
 
   // Append static Agor orientation. Dynamic context is available through Agor MCP.
   const agorSystemPrompt = await renderAgorSystemPrompt();
@@ -224,9 +227,14 @@ export async function setupQuery(
     additionalDirectories: ['/tmp', '/var/tmp'],
     // Enable token-level streaming (yields partial messages as tokens arrive)
     includePartialMessages: true,
-    // Capture stderr to get actual error messages (not just "exit code 1")
-    stderr: (data: string) => {
-      stderrBuffer += data;
+    stderr: (data: unknown) => {
+      const chunkByteLength =
+        typeof data === 'string'
+          ? Buffer.byteLength(data)
+          : Buffer.isBuffer(data)
+            ? data.length
+            : 0;
+      stderrByteLength = Math.min(Number.MAX_SAFE_INTEGER, stderrByteLength + chunkByteLength);
     },
   };
 
@@ -440,7 +448,6 @@ export async function setupQuery(
           mcpServerRepo: deps.mcpServerRepo,
           mcpOAuthAuthHeadersRepo: deps.mcpOAuthAuthHeadersRepo,
           forUserId: contextUserId,
-          sessionOwnerId: session.created_by,
         },
         { toolFiltering: 'exclude' }
       );
@@ -465,11 +472,10 @@ export async function setupQuery(
         // Convert to SDK format
         const mcpConfig: MCPServersConfig = {};
         const deniedTools: string[] = [];
-        const missingAuthServerIds: string[] = [];
-        const unresolvedAuthServerIds: string[] = [];
+        const authDiagnostics = new McpAuthDiagnosticAccumulator();
 
-        for (const { server } of attachableServers) {
-          // Infer transport if missing (backwards compatibility)
+        for (const scoped of attachableServers) {
+          const { server } = scoped; // Infer transport if missing (backwards compatibility)
           const transport = server.transport || (server.url ? 'sse' : 'stdio');
 
           // Build server config (convert 'transport' field to 'type' for Claude Code)
@@ -491,7 +497,9 @@ export async function setupQuery(
 
           try {
             // Pass mcpUrl for OAuth token cache lookup
-            const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+            const authHeaders = await resolveScopedMCPAuthHeaders(scoped, {
+              surfaceAuthorityError: true,
+            });
             const missingRequiredAuth =
               !!server.auth &&
               server.auth.type !== 'none' &&
@@ -503,15 +511,11 @@ export async function setupQuery(
             }
             if (missingRequiredAuth) {
               // Auth-backed remote server but no usable token. Track one concise summary below.
-              missingAuthServerIds.push(server.mcp_server_id);
+              authDiagnostics.recordUnavailable();
               canAlwaysLoad = false;
             }
-          } catch (error) {
-            const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
-            console.warn(
-              `   ⚠️  Failed to resolve MCP auth server_id=${server.mcp_server_id} category=${safe.category} type=${safe.diagnostic.type}`
-            );
-            unresolvedAuthServerIds.push(server.mcp_server_id);
+          } catch {
+            authDiagnostics.recordResolutionFailure();
             canAlwaysLoad = false;
           }
 
@@ -546,18 +550,7 @@ export async function setupQuery(
           ...(queryOptions.mcpServers || {}),
           ...mcpConfig,
         };
-        if (missingAuthServerIds.length > 0) {
-          console.warn(
-            `   ⚠️  ${missingAuthServerIds.length} MCP server(s) have configured auth but no valid token; ` +
-              `server_ids=${formatListForLog(missingAuthServerIds)}. Check Settings → MCP Servers.`
-          );
-        }
-        if (unresolvedAuthServerIds.length > 0) {
-          console.warn(
-            `   ⚠️  Failed to resolve MCP auth for ${unresolvedAuthServerIds.length} server(s); ` +
-              `server_ids=${formatListForLog(unresolvedAuthServerIds, 3)}`
-          );
-        }
+        authDiagnostics.emitSummary('claude');
         if (deniedTools.length > 0) {
           queryOptions.disallowedTools = [
             ...(queryOptions.disallowedTools as string[]),
@@ -656,8 +649,10 @@ export async function setupQuery(
     throw new Error(safe.message);
   }
 
-  // Store stderr buffer getter for error reporting
-  const getStderr = () => stderrBuffer;
+  const getStderrMetadata = () => ({
+    hasStderr: stderrByteLength > 0,
+    byteLength: stderrByteLength,
+  });
 
   // Attach releaseInput() so callers can signal when post-result control requests are done.
   // The SDK's query() returns an AsyncGenerator with interrupt()/getContextUsage() methods.
@@ -669,6 +664,6 @@ export async function setupQuery(
   return {
     query: queryObj,
     resolvedModel: model,
-    getStderr,
+    getStderrMetadata,
   };
 }

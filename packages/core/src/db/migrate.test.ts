@@ -84,17 +84,17 @@ describe('migration status introspection', () => {
     expect(sqliteMigration?.impact).toBe(postgresqlMigration?.impact);
   });
 
-  it('never requires offline acknowledgement for an existing SQLite database', () => {
+  it('requires offline acknowledgement for the SQLite RBAC cutover on an existing database', () => {
     const report = introspectMigrationStatus('sqlite', {
       applied: ['0000_init'],
-      pending: ['0074_knowledge_embedding_claims'],
+      pending: ['0098_board_branch_capability_policies'],
       dbAheadOfBinary: false,
     });
     expect(report.dialect).toBe('sqlite');
-    expect(report.requiresOfflineCutover).toBe(false);
+    expect(report.requiresOfflineCutover).toBe(true);
     expect(report.pendingMigrations[0]).toMatchObject({
-      requiresOfflineCutover: false,
-      impact: { userAction: 'none' },
+      requiresOfflineCutover: true,
+      impact: { userAction: 'required', rollbackCompatibility: 'incompatible' },
     });
   });
 
@@ -109,7 +109,7 @@ describe('migration status introspection', () => {
   it('reports Claude OAuth authority as a rollback-incompatible protocol cutover', () => {
     const migration = introspectMigrationStatus('postgresql', {
       applied: ['0093_scheduler_poison_recovery'],
-      pending: ['0095_claude_oauth_attempts'],
+      pending: ['0100_claude_oauth_attempts'],
       dbAheadOfBinary: false,
     }).pendingMigrations[0];
 
@@ -141,7 +141,7 @@ describe('migration status introspection', () => {
         '0082_github_install_state',
         '0083_transcript_hydration_keysets',
         '0091_codex_device_auth_attempts',
-        '0095_claude_oauth_attempts',
+        '0100_claude_oauth_attempts',
       ],
     });
 
@@ -175,7 +175,7 @@ describe('migration status introspection', () => {
       '0082_github_install_state',
       '0083_transcript_hydration_keysets',
       '0091_codex_device_auth_attempts',
-      '0095_claude_oauth_attempts',
+      '0100_claude_oauth_attempts',
       'unregistered',
     ]) {
       expect(getMigrationImpact(name).summary.length).toBeLessThanOrEqual(

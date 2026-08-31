@@ -25,6 +25,7 @@ import type {
   BranchPermissionLevel,
   HookContext,
   Session,
+  SessionPromptAuthority,
   UUID,
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
@@ -34,10 +35,14 @@ import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
  * Superadmins bypass branch-level RBAC — they can view all branches
- * (including others_can=none) and self-assign ownership.
+ * and perform branch administration without changing the immutable primary
+ * owner. They may add an explicit Manager entry when ordinary policy-based
+ * access is needed.
  *
- * Note: This does NOT grant automatic prompt access. Superadmins must
- * self-assign as branch owner first, leaving an audit trail.
+ * Note: This does NOT grant automatic prompt access. Superadmins must add
+ * explicit branch access. Foreign branch-home Sessions then follow the
+ * tenant and branch sharing switches; execution-home Sessions are never
+ * shareable.
  *
  * The allow_superadmin config flag gates this. When false, superadmins
  * are treated as regular admins (no branch RBAC bypass).
@@ -54,6 +59,38 @@ export function isSuperAdmin(role: string | undefined, allowSuperadmin = true): 
 export const PERMISSION_RANK: Record<BranchPermissionLevel, number> = Object.fromEntries(
   BRANCH_PERMISSION_LEVELS.map((level, i) => [level, i - 1])
 ) as Record<BranchPermissionLevel, number>;
+
+/**
+ * Render the canonical, transport-safe denial for prompting a session.
+ *
+ * Keep the compatibility explanation here so browser, API, MCP, scheduler,
+ * widgets, and gateways do not drift. We intentionally say "uses its owner's
+ * execution home" rather than "predates the feature": deployments may create
+ * new execution-home sessions by opting out with `sdk_home_mode: inherit`.
+ */
+export function sessionPromptDeniedMessage(
+  authority: Pick<SessionPromptAuthority, 'denial_reason'>
+): string {
+  switch (authority.denial_reason) {
+    case 'execution_home_sharing_disabled':
+      return (
+        "This session uses its owner's execution home and cannot be shared. Start a separate " +
+        'session you own, or start a new branch-home session on this branch.'
+      );
+    case 'workspace_session_sharing_disabled':
+      return 'Session sharing is disabled for this workspace. Start a separate session you own.';
+    case 'branch_session_sharing_disabled':
+      return (
+        'This branch does not allow shared session prompting. Ask a Branch Manager to enable it, ' +
+        'or start a separate session you own.'
+      );
+    default:
+      return (
+        "You don't have permission to prompt this branch. Only Collaborators and Managers can " +
+        'prompt sessions on it.'
+      );
+  }
+}
 
 const REQUEST_RBAC_CACHE_LIMIT = 32;
 
@@ -131,8 +168,7 @@ function rememberPrefetchedRecord(
 
 async function loadCachedSession(
   params: AuthenticatedParams,
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  sessionService: any,
+  sessionRepo: Pick<SessionRepository, 'findById'>,
   sessionId: string
 ): Promise<Session> {
   const cachedParamSession = (params as PrefetchParams).session as Session | undefined;
@@ -144,7 +180,7 @@ async function loadCachedSession(
   const cached = cache.sessions.get(sessionId);
   if (cached) return cached;
 
-  const session = (await sessionService.get(sessionId, { provider: undefined })) as Session | null;
+  const session = await sessionRepo.findById(sessionId);
   if (!session) {
     throw new Forbidden(`Session not found: ${sessionId}`);
   }
@@ -177,9 +213,10 @@ async function loadCachedBranch(
  *
  * Logic:
  * - Owners always have 'all' permission
- * - Superadmins get 'view' permission on all branches (can see everything)
- *   but must self-assign ownership to get 'prompt'/'all' (leaves audit trail)
- * - Non-owners inherit from branch.others_can
+ * - Superadmins bypass ordinary branch operations without becoming owners
+ *   (session prompting remains governed by the separate prompt authority)
+ * - Non-owners use the normalized effective permission supplied by the
+ *   repository resolver
  * - Compare effective permission against required level
  *
  * @param branch - Branch to check
@@ -208,8 +245,10 @@ export function hasBranchPermission(
     return true;
   }
 
-  // Non-owners inherit from branch.others_can (defaults to 'session')
-  const effectiveLevel = effectivePermission ?? branch.others_can ?? 'session';
+  // Legacy branch fields are intentionally inert after the capability-policy
+  // cutover. A caller that forgets to supply the normalized repository result
+  // must fail closed rather than silently reactivating `others_can`.
+  const effectiveLevel = effectivePermission ?? 'none';
   const effectiveRank = PERMISSION_RANK[effectiveLevel];
   const requiredRank = PERMISSION_RANK[requiredLevel];
 
@@ -242,32 +281,45 @@ export function resolveBranchPermission(
   if (isSuperAdmin(userRole, allowSuperadmin)) {
     return 'all';
   }
-  return effectivePermission ?? branch.others_can ?? 'session';
+  return effectivePermission ?? 'none';
 }
 
-/** Resolve the one prompt-level policy shared by hooks and custom routes. */
-export function resolveSessionPromptAccess(input: {
+/**
+ * Resolve the one prompt-level policy shared by hooks and custom routes.
+ * Branch-scoped sessions run as the caller and require Collaborator/Manager
+ * access plus both explicit sharing switches. Execution-home sessions are an
+ * immutable compatibility boundary and are never shareable.
+ */
+export async function resolveSessionPromptAccess(input: {
+  branchRepository: Pick<
+    BranchRepository,
+    'resolveUserPermission' | 'resolveSessionPromptAuthority'
+  >;
   branch: Branch;
   session: Session;
   userId: UUID;
-  isOwner: boolean;
-  userRole?: string;
-  allowSuperadmin?: boolean;
-  branchPermission?: BranchPermissionLevel;
-}): { allowed: boolean; effectiveLevel: BranchPermissionLevel } {
-  const effectiveLevel = resolveBranchPermission(
-    input.branch,
-    input.userId,
-    input.isOwner,
-    input.userRole,
-    input.allowSuperadmin,
-    input.branchPermission
-  );
+}): Promise<{
+  allowed: boolean;
+  effectiveLevel: BranchPermissionLevel;
+  executionUserId?: UUID;
+  source: SessionPromptAuthority['source'];
+  denialReason?: SessionPromptAuthority['denial_reason'];
+}> {
+  const [effectiveLevel, authority] = await Promise.all([
+    input.branchRepository.resolveUserPermission(input.branch, input.userId),
+    input.branchRepository.resolveSessionPromptAuthority(
+      input.branch.branch_id,
+      input.userId,
+      input.session.created_by as UUID,
+      input.session.sdk_home_scope
+    ),
+  ]);
   return {
+    allowed: authority.allowed,
     effectiveLevel,
-    allowed:
-      PERMISSION_RANK[effectiveLevel] >= PERMISSION_RANK.prompt ||
-      (effectiveLevel === 'session' && input.session.created_by === input.userId),
+    executionUserId: authority.execution_user_id as UUID | undefined,
+    source: authority.source,
+    denialReason: authority.denial_reason,
   };
 }
 
@@ -290,9 +342,7 @@ export async function cacheBranchAccess(
   if (!access) {
     access = {
       isOwner: userId ? await branchRepo.isOwner(branch.branch_id, userId) : false,
-      branchPermission: userId
-        ? await branchRepo.resolveUserPermission(branch, userId)
-        : (branch.others_can ?? 'session'),
+      branchPermission: userId ? await branchRepo.resolveUserPermission(branch, userId) : 'none',
     };
     rememberBounded(cache.branchAccess, accessKey, access);
   }
@@ -451,8 +501,6 @@ export function ensureBranchPermission(
 
     // Branch and ownership should have been cached by loadBranch hook
     const branch = context.params.branch;
-    const isOwner = context.params.isBranchOwner ?? false;
-
     if (!branch) {
       throw new Error('loadBranch hook must run before ensureBranchPermission');
     }
@@ -460,6 +508,7 @@ export function ensureBranchPermission(
     const userId = context.params.user.user_id as UUID;
     const userRole = context.params.user.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
+    const isOwner = context.params.isBranchOwner === true;
 
     if (
       !hasBranchPermission(
@@ -789,11 +838,9 @@ export function filterBranchesByPermission(branchRepo: BranchRepository) {
     // Filter branches by permission
     const authorizedBranches = [];
     for (const branch of branches) {
-      const isOwner = await branchRepo.isOwner(branch.branch_id, userId);
-      // User can access if they're an owner OR others_can allows at least 'view' permission
-      // Check against permission rank: 'none' (-1) blocks access, 'view' (0) and above allows
-      const effectivePermission = await branchRepo.resolveUserPermission(branch, userId);
-      const hasAccess = isOwner || PERMISSION_RANK[effectivePermission] >= PERMISSION_RANK.view;
+      const effective = await branchRepo.resolveUserAccess(branch, userId);
+      const hasAccess =
+        effective.is_owner || PERMISSION_RANK[effective.can] >= PERMISSION_RANK.view;
 
       if (hasAccess) {
         authorizedBranches.push(branch);
@@ -818,13 +865,12 @@ export function filterBranchesByPermission(branchRepo: BranchRepository) {
  * For session/task/message operations, we need to resolve the branch first.
  * This hook loads the session, then loads its branch.
  *
- * @param sessionService - FeathersJS sessions service
+ * @param sessionRepo - Tenant-scoped canonical session repository
  * @param branchRepo - BranchRepository instance
  * @returns Feathers hook
  */
 export function loadSessionBranch(
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type not fully typed
-  sessionService: any, // Type as FeathersService if available
+  sessionRepo: Pick<SessionRepository, 'findById'>,
   branchRepo: BranchRepository
 ) {
   return async (context: HookContext) => {
@@ -882,9 +928,13 @@ export function loadSessionBranch(
       throw new Error('Cannot load session branch: session_id not found');
     }
 
-    const session = await loadCachedSession(context.params, sessionService, sessionId);
-    if (context.path === 'sessions' && context.id && String(context.id) === sessionId) {
-      rememberPrefetchedRecord(context, session, 'session_id', sessionId);
+    const session = await loadCachedSession(context.params, sessionRepo, sessionId);
+    if (context.path === 'sessions' && context.id) {
+      // Canonicalize short IDs once at the authorization boundary, then pass
+      // the exact tenant-scoped row through to the service body. This avoids a
+      // recursive Feathers sessions.get and lets DrizzleService reuse the row.
+      context.id = session.session_id;
+      rememberPrefetchedRecord(context, session, 'session_id', session.session_id);
     }
 
     const branch = await loadCachedBranch(context.params, branchRepo, session.branch_id);
@@ -985,12 +1035,9 @@ export function resolveSessionContext() {
  *
  * This is Step 2 of the RBAC hook chain.
  *
- * @param sessionService - FeathersJS sessions service
+ * @param sessionRepo - Tenant-scoped canonical session repository
  */
-export function loadSession(
-  // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service type
-  sessionService: any
-) {
+export function loadSession(sessionRepo: Pick<SessionRepository, 'findById'>) {
   return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
@@ -1003,9 +1050,10 @@ export function loadSession(
       throw new Error('resolveSessionContext hook must run before loadSession');
     }
 
-    const session = await loadCachedSession(context.params, sessionService, sessionId);
-    if (context.path === 'sessions' && context.id && String(context.id) === sessionId) {
-      rememberPrefetchedRecord(context, session, 'session_id', sessionId);
+    const session = await loadCachedSession(context.params, sessionRepo, sessionId);
+    if (context.path === 'sessions' && context.id) {
+      context.id = session.session_id;
+      rememberPrefetchedRecord(context, session, 'session_id', session.session_id);
     }
 
     // Cache on context for downstream hooks (type-safe via RBACParams)
@@ -1087,38 +1135,6 @@ export function ensureSessionImmutability() {
 
     return context;
   };
-}
-
-/**
- * Decide which `unix_username` to stamp on a child session created via
- * fork() or spawn(). Pure function — no DB, no context — so it can be unit
- * tested directly and kept aligned with {@link determineSpawnIdentity}.
- *
- * Rules:
- * - Legacy sharing (branch opt-in `dangerously_allow_session_sharing` triggered) →
- *   inherit `parent.unix_username`. Identity borrowing is the whole point of this flag.
- * - Otherwise (including the common same-user path) → use the caller's CURRENT
- *   `unix_username`. We must NOT fall back to `parent.unix_username` just because
- *   caller and parent owner share an id: the user's unix_username may have drifted
- *   since the parent was created, and `validateSessionUnixUsername` would then
- *   reject every prompt on the child.
- *
- * @param parentUnixUsername  - `parent.unix_username` from the parent session (may be null)
- * @param callerUnixUsername  - Caller's CURRENT unix_username (loaded fresh via
- *                              {@link loadUnixUsernameForUser}); may be null
- * @param usedLegacySharing   - Whether {@link determineSpawnIdentity} fell into
- *                              the legacy identity-borrowing branch
- * @returns The unix_username to stamp on the child (string or null)
- */
-export function resolveChildUnixUsername(
-  parentUnixUsername: string | null | undefined,
-  callerUnixUsername: string | null,
-  usedLegacySharing: boolean
-): string | null {
-  if (usedLegacySharing) {
-    return parentUnixUsername ?? null;
-  }
-  return callerUnixUsername;
 }
 
 /**
@@ -1252,7 +1268,7 @@ export async function assertSessionUnixIdentityUnchanged(
 }
 
 /**
- * Validate session unix_username before prompting
+ * Validate an execution-home Session's unix_username before prompting.
  *
  * DEFENSIVE CHECK: Before allowing operations that execute code (create tasks/messages),
  * verify that the session creator's current unix_username matches the session's stamped unix_username.
@@ -1299,6 +1315,11 @@ export function validateSessionUnixUsername(
       return context;
     }
 
+    // Branch-scoped Sessions use the current prompt actor's home key and the
+    // branch-owned SDK state. The creator's historical stamp is intentionally
+    // irrelevant, just as it is at executor startup.
+    if ((session.sdk_home_scope ?? 'execution_home') === 'branch') return context;
+
     await assertSessionUnixIdentityUnchanged(session, (userId) => userRepo.findById(userId));
 
     return context;
@@ -1311,8 +1332,8 @@ export function validateSessionUnixUsername(
  * Standalone helper (not a Feathers hook) — usable from MCP tools, service hooks, or anywhere
  * with access to the app and branch repository. Resolves branch ownership internally.
  *
- * Respects the 'session' tier: users with 'session' permission can prompt their own sessions
- * but not sessions created by other users.
+ * Respects Session scope and both sharing switches. Foreign execution-home
+ * Sessions are always denied.
  *
  * Use case: validating callback targets ("can this user queue a prompt to that session?").
  *
@@ -1345,30 +1366,15 @@ export async function ensureCanPromptTargetSession(
     throw new Forbidden(`Cannot resolve permissions: branch ${targetSession.branch_id} not found`);
   }
 
-  // Resolve ownership internally — callers shouldn't need to know this
-  const isOwner = await branchRepo.isOwner(branch.branch_id, userId as UUID);
-
-  const { allowed, effectiveLevel } = resolveSessionPromptAccess({
-    branch,
-    session: targetSession,
-    userId: userId as UUID,
-    isOwner,
-    branchPermission: await branchRepo.resolveUserPermission(branch, userId as UUID),
-  });
-  if (allowed) return targetSession;
-
-  if (effectiveLevel === 'session') {
-    throw new Forbidden(
-      `You have 'session' permission — you can only prompt sessions you created. ` +
-        `This session was created by another user. ` +
-        `Ask a branch owner to upgrade your access to 'prompt' if needed.`
-    );
-  }
-
+  const authority = await branchRepo.resolveSessionPromptAuthority(
+    branch.branch_id,
+    userId as UUID,
+    targetSession.created_by as UUID,
+    targetSession.sdk_home_scope
+  );
+  if (authority.allowed) return targetSession;
   throw new Forbidden(
-    `Cannot set callback target: you need at least 'session' permission on branch ` +
-      `${branch.name || shortId(branch.branch_id)}. ` +
-      `You have '${effectiveLevel}' permission.`
+    `Cannot prompt session ${shortId(targetSession.session_id)}. ${sessionPromptDeniedMessage(authority)}`
   );
 }
 
@@ -1411,8 +1417,11 @@ export function ensureCanPrompt(options?: { allowSuperadmin?: boolean }) {
  *
  * @returns Feathers hook
  */
-export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }) {
-  return (context: HookContext) => {
+export function ensureCanPromptInSession(options?: {
+  allowSuperadmin?: boolean;
+  branchRepository?: BranchRepository;
+}) {
+  return async (context: HookContext) => {
     // Skip for internal calls
     if (!context.params.provider) {
       return context;
@@ -1428,43 +1437,26 @@ export function ensureCanPromptInSession(options?: { allowSuperadmin?: boolean }
     }
 
     const branch = context.params.branch;
-    const isOwner = context.params.isBranchOwner ?? false;
-
     if (!branch) {
       throw new Error('loadBranch hook must run before ensureCanPromptInSession');
     }
 
     const userId = context.params.user.user_id as UUID;
-    const userRole = context.params.user.role as string | undefined;
-    const allowSuperadmin = options?.allowSuperadmin ?? true;
-
     const session = context.params.session;
     if (!session) {
       throw new Error('loadSession hook must run before ensureCanPromptInSession');
     }
-    const { allowed, effectiveLevel } = resolveSessionPromptAccess({
-      branch,
-      session,
-      userId,
-      isOwner,
-      userRole,
-      allowSuperadmin,
-      branchPermission: context.params.branchPermission,
-    });
-    if (allowed) return context;
-
-    if (effectiveLevel === 'session') {
-      throw new Forbidden(
-        `You have 'session' permission — you can only prompt sessions you created. ` +
-          `This session was created by another user. ` +
-          `Ask a branch owner to upgrade your access to 'prompt' if you need to prompt other users' sessions.`
-      );
+    if (!options?.branchRepository) {
+      throw new Error('ensureCanPromptInSession requires a BranchRepository');
     }
-
-    // 'view' or 'none' → denied
-    throw new Forbidden(
-      `You need 'prompt' permission to create tasks/messages in this branch. You have '${effectiveLevel}' permission.`
+    const authority = await options.branchRepository.resolveSessionPromptAuthority(
+      branch.branch_id,
+      userId,
+      session.created_by as UUID,
+      session.sdk_home_scope
     );
+    if (authority.allowed) return context;
+    throw new Forbidden(sessionPromptDeniedMessage(authority));
   };
 }
 
@@ -1724,15 +1716,13 @@ export function scopeFindToAccessibleSessionsSql(options?: { allowSuperadmin?: b
  * Scope find() queries on the boards service to the set of boards the caller
  * can see.
  *
- * A board is visible if the caller owns it, it is shared, any branch on the
- * board is accessible to them, or the board's primary teammate branch is
- * accessible to them. Empty private boards stay visible to their owners;
- * superadmins bypass.
+ * A board is visible only when its normalized board policy grants View (or the
+ * caller is its primary owner). Branch access never makes the parent board
+ * visible implicitly; superadmins retain their configured bypass.
  *
  * Resolution happens in a single SQL EXISTS query via
- * {@link BoardRepository.findVisibleBoardIds}, avoiding the hydrate-every-
- * branch cost of the previous in-memory after-hook and letting Feathers'
- * pagination/sort run against the already-scoped id set.
+ * {@link BoardRepository.findVisibleBoardIds}, avoiding branch joins and
+ * letting Feathers pagination/sort run against the already-scoped id set.
  *
  * @param boardRepo - BoardRepository instance
  * @param options - Optional flags (allowSuperadmin)
@@ -1873,81 +1863,45 @@ export function ensureSessionOwnerOrAdmin(options?: { allowSuperadmin?: boolean 
  * fork (sessions service: spawn() / fork(), or MCP tools agor_sessions_spawn /
  * agor_sessions_prompt(mode:"fork"|"subsession")).
  *
- * Default behavior — and the behavior whenever the caller is the parent owner,
- * an admin, or a superadmin — attributes the child to the **caller** so it
- * uses the caller's execution-home, credentials, and env vars.
- *
- * Legacy "identity borrowing" (child inherits parent.created_by, so it runs
- * under the *parent owner's* identity even when spawned by a different user)
- * is preserved only when the branch opts in via
- * `dangerously_allow_session_sharing: true`. When that legacy path triggers
- * for a cross-user spawn, the daemon emits a loud warning so it appears in
- * audit logs.
+ * A cross-user child can only come from a branch-home Session and is attributed
+ * to the caller. Historical execution-home Sessions are never shareable.
  *
  * Pure function — no DB, no FeathersJS context — so it can be unit tested
  * directly and invoked from both service methods and MCP tool handlers.
  *
  * @param parent  - Parent session (must include created_by)
  * @param caller  - Authenticated caller (MCP-authenticated user / Feathers user)
- * @param branch - Parent's branch (used for the opt-in flag)
- * @param options - allowSuperadmin (defaults to true)
+ * @param sharing - Resolved branch-session sharing decision
  * @returns The created_by UUID to stamp on the child session
  */
 export function determineSpawnIdentity(
   parent: { created_by: string },
   caller: { user_id?: string; role?: string; _isServiceAccount?: boolean },
-  branch: { branch_id: string; dangerously_allow_session_sharing?: boolean } | undefined,
-  options?: { allowSuperadmin?: boolean }
-): { created_by: string; usedLegacySharing: boolean } {
+  sharing: { allow_caller_identity?: boolean } | undefined
+): { created_by: string } {
   const callerId = caller.user_id;
-  const role = caller.role;
 
   // Service accounts (executor, internal jobs) preserve parent attribution.
   // They have no human user_id to attribute to, and their callers (the
   // scheduler, callbacks) already ran their own RBAC checks.
   if (caller._isServiceAccount) {
-    return { created_by: parent.created_by, usedLegacySharing: false };
-  }
-
-  // Admin / superadmin → always attributed to themselves so the audit trail
-  // points at the human who pressed the button. Never inherit parent identity.
-  // `allow_superadmin` only gates exceptional branch-RBAC bypasses. A
-  // superadmin always retains the ordinary admin authority represented here.
-  if (hasMinimumRole(role, ROLES.ADMIN)) {
-    if (!callerId) {
-      // Should not happen — admins always have an id — but fall back safely.
-      return { created_by: parent.created_by, usedLegacySharing: false };
-    }
-    return { created_by: callerId, usedLegacySharing: false };
+    return { created_by: parent.created_by };
   }
 
   // Same user spawning their own session → attribute to caller (same value
   // as parent.created_by, but explicit).
   if (callerId && parent.created_by === callerId) {
-    return { created_by: callerId, usedLegacySharing: false };
+    return { created_by: callerId };
   }
 
-  // Cross-user spawn: a non-admin caller is spawning/forking from someone
-  // else's session.
-  if (branch?.dangerously_allow_session_sharing === true) {
-    // Opt-in legacy behavior: preserve identity borrowing. Log loudly.
-    // Structured key/value form so it can be queried by log shippers.
-    console.warn('[SECURITY] legacy_session_sharing', {
-      event: 'legacy_session_sharing',
-      caller_id: callerId ?? null,
-      parent_owner_id: parent.created_by,
-      branch_id: branch.branch_id,
-    });
-    return { created_by: parent.created_by, usedLegacySharing: true };
+  if (callerId && sharing?.allow_caller_identity === true) {
+    return { created_by: callerId };
   }
 
-  // Default: attribute child to caller (no identity borrowing).
-  // If we don't have a caller id at this point we cannot safely proceed —
-  // refuse rather than silently fall back to parent ownership.
   if (!callerId) {
     throw new Forbidden('Cannot spawn/fork session without an authenticated caller identity.');
   }
-  return { created_by: callerId, usedLegacySharing: false };
+  throw new Forbidden('This branch does not allow shared session prompting.');
 }
 
 // ============================================================================
@@ -2077,8 +2031,8 @@ export function ensureCanModifySchedule(options?: { allowSuperadmin?: boolean })
     const userRole = context.params.user.role as string | undefined;
     const allowSuperadmin = options?.allowSuperadmin ?? true;
 
-    // "Own" = the schedule's creator gets the session-tier bar
-    // (i.e. branch.others_can >= session); everyone else needs 'all'.
+    // "Own" = the schedule's creator gets the Collaborator/session-tier bar;
+    // everyone else needs Manager/all.
     const requiredTier: BranchPermissionLevel = schedule.created_by === userId ? 'session' : 'all';
 
     if (

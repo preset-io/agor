@@ -225,6 +225,30 @@ describe('UsersService — external identity authority', () => {
     expect(updated.default_mcp_server_ids).toEqual([]);
   });
 
+  dbTest('persists onboarding deferral without claiming completion', async ({ db }) => {
+    const local = new UsersService(db);
+    const userId = await makeUser(local);
+    const external = new UsersService(db, undefined, externalIdentityConfig);
+    const deferredAt = '2026-08-28T23:00:00.000Z';
+
+    const updated = await external.patch(userId, {
+      preferences: {
+        onboarding: {
+          deferredAt,
+          goals: ['ship'],
+          boardId: 'saved-board',
+        },
+      },
+    });
+
+    expect(updated.onboarding_completed).toBe(false);
+    expect(updated.preferences?.onboarding).toMatchObject({
+      deferredAt,
+      goals: ['ship'],
+      boardId: 'saved-board',
+    });
+  });
+
   dbTest('composes external capabilities with actor role authority', async ({ db }) => {
     const local = new UsersService(db);
     const superadmin = await local.create({

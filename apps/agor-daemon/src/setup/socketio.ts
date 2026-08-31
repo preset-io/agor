@@ -14,6 +14,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import {
   EXECUTOR_REVOCATION_TRANSPORT_CLEANUP_TIMEOUT_MS,
   type ResolvedMultiTenancyConfig,
@@ -22,11 +23,19 @@ import {
 import { shortId } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import {
+  type Board,
   type BoardID,
+  type BoardPresenceSubscriptionRequest,
   type CursorLeaveEvent,
+  type CursorLeftEvent,
   type CursorMovedEvent,
   type CursorMoveEvent,
+  MAX_PRESENCE_BOARD_SUBSCRIPTIONS,
   MAX_TENANT_ID_LENGTH,
+  PRESENCE_SOCKET_EVENTS,
+  type PresenceHeartbeatEvent,
+  type PresenceLeftEvent,
+  type PresenceSubscriptionAcknowledgement,
   type PresenceUpdatedEvent,
   type TenantContext,
   type TerminalAllocatedEvent,
@@ -40,6 +49,7 @@ import {
 import { getOrCreateExecutorConnectionRevocationFence } from '../auth/executor-connection-admission.js';
 import type { ExecutorSessionTokenRevocation } from '../auth/executor-session-token.js';
 import {
+  boardPresenceAssociationRoomName,
   boardPresenceRoomName,
   emitHaNativeSocketEvent,
   HA_AUTHORIZATION_INVALIDATION_EVENT,
@@ -57,6 +67,7 @@ import {
   TERMINAL_REQUEST_JOIN_CHANNEL,
   type TerminalRequestConnection,
 } from '../terminal-socket-connection.js';
+import { FEATHERS_INSTRUMENTATION_REASON } from '../utils/feathers-instrumentation.js';
 import {
   joinExecutorTaskChannel,
   leaveAllExecutorTaskChannels,
@@ -86,9 +97,32 @@ interface FeathersSocket extends Socket {
     currentBoardId?: BoardID;
     /** Boards authorized through the Feathers boards.get hook on this socket. */
     authorizedBoardIds?: Set<string>;
-    lastPresenceEmitAt?: number;
+    /** In-flight cursor grants count against the same hard room bound. */
+    pendingCursorBoardAdmissions?: Map<string, symbol>;
+    /** Low-frequency association rooms authorized through boards.find. */
+    presenceAssociationBoardIds?: Set<string>;
+    /** A board association is publishable only after this full-set grant exists. */
+    hasPresenceAssociationSubscription?: boolean;
+    /** Monotonic generation plus a single latest-wins pending authorization request. */
+    presenceSubscriptionGeneration?: number;
+    pendingPresenceSubscription?: PendingPresenceSubscription;
+    presenceSubscriptionRunning?: boolean;
+    /** Random per-connection identity; never caller controlled. */
+    presenceId?: string;
+    presenceActive?: boolean;
+    presenceBoardId?: BoardID;
+    lastTenantPresenceEmitAt?: number;
+    lastBoardPresenceEmitAt?: number;
   };
   handshake: Socket['handshake'] & { headers?: Record<string, string | string[] | undefined> };
+}
+
+type PresenceSubscriptionAck = (result: PresenceSubscriptionAcknowledgement) => void;
+
+interface PendingPresenceSubscription {
+  generation: number;
+  boardIds: string[];
+  acknowledge?: PresenceSubscriptionAck;
 }
 
 /** Remove realtime capability before clearing the authentication projection. */
@@ -278,6 +312,43 @@ export interface SocketIOResult {
  * user stays on the same board.
  */
 const GLOBAL_PRESENCE_EMIT_INTERVAL_MS = 10_000;
+const MAX_REALTIME_BOARD_ID_LENGTH = 256;
+const MAX_CURSOR_COORDINATE_MAGNITUDE = 10_000_000;
+const CURSOR_MOVE_RATE_LIMIT = { capacity: 30, refillPerSec: 15 } as const;
+const CURSOR_WATCH_RATE_LIMIT = { capacity: 20, refillPerSec: 5 } as const;
+const PRESENCE_HEARTBEAT_RATE_LIMIT = { capacity: 10, refillPerSec: 2 } as const;
+const PRESENCE_SUBSCRIPTION_RATE_LIMIT = { capacity: 5, refillPerSec: 1 } as const;
+
+function isBoundedBoardId(value: unknown): value is string {
+  return (
+    typeof value === 'string' && value.length > 0 && value.length <= MAX_REALTIME_BOARD_ID_LENGTH
+  );
+}
+
+function isCursorMoveEvent(value: unknown): value is CursorMoveEvent {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const event = value as Partial<CursorMoveEvent>;
+  return (
+    isBoundedBoardId(event.boardId) &&
+    typeof event.x === 'number' &&
+    Number.isFinite(event.x) &&
+    Math.abs(event.x) <= MAX_CURSOR_COORDINATE_MAGNITUDE &&
+    typeof event.y === 'number' &&
+    Number.isFinite(event.y) &&
+    Math.abs(event.y) <= MAX_CURSOR_COORDINATE_MAGNITUDE
+  );
+}
+
+function boardsFromServiceResult(value: unknown): Board[] {
+  if (Array.isArray(value)) return value as Board[];
+  const data = (value as { data?: unknown } | null | undefined)?.data;
+  return Array.isArray(data) ? (data as Board[]) : [];
+}
+
+function normalizeAcknowledgement<Result>(value: unknown): ((result: Result) => void) | undefined {
+  return typeof value === 'function' ? (value as (result: Result) => void) : undefined;
+}
+
 function deferExecutorTransportWork(work: () => void): void {
   // Transport-only callback: it must never perform database or tenant-owned
   // work while retaining the revoking request's async context.
@@ -445,6 +516,15 @@ export function createSocketIOConfig(
     // revocation; routine REST access-token rotation must not tear down PTYs or
     // subscriptions.
     const authorityExpiryTimers = new WeakMap<Socket, ReturnType<typeof setTimeout>>();
+    // Feathers emits `disconnect` with its connection projection on explicit
+    // logout. Native Socket.IO rooms are not Feathers channels, so close the
+    // owning transport rather than leaving cursor/presence capabilities alive
+    // after the authentication strategy has retired that projection.
+    const socketByFeathersConnection = new WeakMap<object, Socket>();
+    app.on('disconnect', (connection: unknown) => {
+      if (!connection || typeof connection !== 'object') return;
+      socketByFeathersConnection.get(connection)?.disconnect(true);
+    });
     // Revokes captured terminal-subscription functions across disconnects.
     const terminalAuthGenerations = new WeakMap<Socket, number>();
     // Serialize subscription operations for one socket/channel. Socket.IO room
@@ -680,7 +760,31 @@ export function createSocketIOConfig(
         );
         next();
       } catch (error) {
-        console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
+        // An expired/invalid token on a (re)connecting socket is routine: the
+        // client refreshes on the 401 we return below and retries. Log it as a
+        // terse warning without a stack. Reserve the loud error+stack for
+        // genuinely unexpected failures (absent/revoked authority, tenant drift,
+        // or another invariant violation) that warrant investigation.
+        const err = error as {
+          code?: number;
+          className?: string;
+          message?: string;
+          data?: { name?: string };
+        };
+        const expected =
+          err?.code === 401 ||
+          err?.className === 'not-authenticated' ||
+          err?.data?.name === 'TokenExpiredError' ||
+          /jwt expired|token expired/i.test(err?.message ?? '');
+        if (expected) {
+          const reason =
+            err?.data?.name === 'TokenExpiredError'
+              ? 'token expired'
+              : (err?.message ?? 'not authenticated');
+          console.warn(`WebSocket auth rejected for ${socket.id}: ${reason}`);
+        } else {
+          console.error(`❌ WebSocket authentication failed for ${socket.id}:`, error);
+        }
         authenticationFailures = Math.min(authenticationFailures + 1, Number.MAX_SAFE_INTEGER);
         retireSocketConnectionAuthority(app, fs.feathers);
         const publicError = new Error('Invalid or expired authentication token') as Error & {
@@ -884,11 +988,6 @@ export function createSocketIOConfig(
         );
       }
 
-      // Helper to get the user ID from immutable connection authority.
-      const getUserId = () => {
-        return getSocketAuthState(socket).userId ?? 'unknown';
-      };
-
       // A terminal-executor identity has zero non-terminal daemon visibility:
       // it must not watch board presence rooms or emit/receive cursor+presence
       // activity (it would otherwise spoof presence and observe collaborators).
@@ -898,136 +997,461 @@ export function createSocketIOConfig(
         getAuthenticatedConnectionAuthority((socket as FeathersSocket).feathers)?.principal.kind ===
         'terminal-executor';
       const getTenantId = () => getSocketAuthState(socket).tenant?.tenant_id;
+      const presenceSocket = socket as FeathersSocket;
+      presenceSocket.data.presenceId = randomUUID();
+      const boundPresenceUserId =
+        authority?.principal.kind === 'user' ? authority.principal.userId : undefined;
+      const boundPresenceTenantId = authority?.tenant?.tenant_id;
+      if (presenceSocket.feathers && typeof presenceSocket.feathers === 'object') {
+        socketByFeathersConnection.set(presenceSocket.feathers, socket);
+      }
+      const allowCursorMove = createTokenBucket(
+        CURSOR_MOVE_RATE_LIMIT.capacity,
+        CURSOR_MOVE_RATE_LIMIT.refillPerSec
+      );
+      const allowCursorWatch = createTokenBucket(
+        CURSOR_WATCH_RATE_LIMIT.capacity,
+        CURSOR_WATCH_RATE_LIMIT.refillPerSec
+      );
+      const allowPresenceHeartbeat = createTokenBucket(
+        PRESENCE_HEARTBEAT_RATE_LIMIT.capacity,
+        PRESENCE_HEARTBEAT_RATE_LIMIT.refillPerSec
+      );
+      const allowPresenceSubscription = createTokenBucket(
+        PRESENCE_SUBSCRIPTION_RATE_LIMIT.capacity,
+        PRESENCE_SUBSCRIPTION_RATE_LIMIT.refillPerSec
+      );
+
+      const emitPresenceLeft = (boardId?: BoardID) => {
+        const presenceId = presenceSocket.data.presenceId;
+        if (!boundPresenceUserId || !boundPresenceTenantId || !presenceId) return;
+        const event: PresenceLeftEvent = {
+          userId: boundPresenceUserId,
+          presenceId,
+          ...(boardId ? { boardId } : {}),
+          timestamp: Date.now(),
+        };
+        emitHaNativeSocketEvent(
+          socket.broadcast.to(
+            boardId
+              ? boardPresenceAssociationRoomName(boundPresenceTenantId, boardId)
+              : tenantChannelName(boundPresenceTenantId)
+          ),
+          PRESENCE_SOCKET_EVENTS.left,
+          event
+        );
+      };
+
+      const clearPublishedPresence = () => {
+        if (!presenceSocket.data.presenceActive) return;
+        const previousBoardId = presenceSocket.data.presenceBoardId;
+        if (previousBoardId) emitPresenceLeft(previousBoardId);
+        emitPresenceLeft();
+        delete presenceSocket.data.presenceActive;
+        delete presenceSocket.data.presenceBoardId;
+        delete presenceSocket.data.lastTenantPresenceEmitAt;
+        delete presenceSocket.data.lastBoardPresenceEmitAt;
+      };
+
+      const currentPresenceIdentity = (): {
+        userId: string;
+        tenantId: string;
+        presenceId: string;
+      } | null => {
+        const auth = getSocketAuthState(socket);
+        const tenantId = auth.tenant?.tenant_id;
+        const presenceId = presenceSocket.data.presenceId;
+        if (
+          !auth.userId ||
+          auth.userId !== boundPresenceUserId ||
+          !tenantId ||
+          tenantId !== boundPresenceTenantId ||
+          !presenceId
+        ) {
+          return null;
+        }
+        return { userId: auth.userId, tenantId, presenceId };
+      };
+
+      const publishTenantLiveness = (identity = currentPresenceIdentity(), now = Date.now()) => {
+        if (!identity) return;
+        if (
+          presenceSocket.data.presenceActive &&
+          presenceSocket.data.lastTenantPresenceEmitAt &&
+          now - presenceSocket.data.lastTenantPresenceEmitAt < GLOBAL_PRESENCE_EMIT_INTERVAL_MS
+        ) {
+          return;
+        }
+
+        const tenantPresence: PresenceUpdatedEvent = {
+          userId: identity.userId,
+          presenceId: identity.presenceId,
+          timestamp: now,
+        };
+        emitHaNativeSocketEvent(
+          socket.broadcast.to(tenantChannelName(identity.tenantId)),
+          PRESENCE_SOCKET_EVENTS.updated,
+          tenantPresence
+        );
+        presenceSocket.data.presenceActive = true;
+        presenceSocket.data.lastTenantPresenceEmitAt = now;
+      };
+
+      const publishAuthorizedBoardAssociation = (boardId?: BoardID) => {
+        const identity = currentPresenceIdentity();
+        if (!identity) return;
+        const previousBoardId = presenceSocket.data.presenceBoardId;
+        const now = Date.now();
+        const changed = previousBoardId !== boardId;
+        if (previousBoardId && changed) emitPresenceLeft(previousBoardId);
+        if (
+          boardId &&
+          (changed ||
+            !presenceSocket.data.lastBoardPresenceEmitAt ||
+            now - presenceSocket.data.lastBoardPresenceEmitAt >= GLOBAL_PRESENCE_EMIT_INTERVAL_MS)
+        ) {
+          emitHaNativeSocketEvent(
+            socket.broadcast.to(boardPresenceAssociationRoomName(identity.tenantId, boardId)),
+            PRESENCE_SOCKET_EVENTS.updated,
+            {
+              userId: identity.userId,
+              presenceId: identity.presenceId,
+              boardId,
+              timestamp: now,
+            }
+          );
+          presenceSocket.data.lastBoardPresenceEmitAt = now;
+        }
+        if (boardId) presenceSocket.data.presenceBoardId = boardId;
+        else {
+          delete presenceSocket.data.presenceBoardId;
+          delete presenceSocket.data.lastBoardPresenceEmitAt;
+        }
+      };
 
       socket.on(
-        'presence:watch-board',
-        async (boardId: string, acknowledge?: (result: { ok: boolean }) => void) => {
+        PRESENCE_SOCKET_EVENTS.watchBoardCursors,
+        async (boardId: string, acknowledgement?: unknown) => {
+          const acknowledge = normalizeAcknowledgement<{ ok: boolean }>(acknowledgement);
           const auth = getSocketAuthState(socket);
           if (!auth.userId || isTerminalExecutorSocket()) return acknowledge?.({ ok: false });
-          if (typeof boardId !== 'string' || !boardId.trim()) return acknowledge?.({ ok: false });
+          if (!isBoundedBoardId(boardId)) return acknowledge?.({ ok: false });
           if (!auth.tenant?.tenant_id) return acknowledge?.({ ok: false });
+          if (!allowCursorWatch()) return acknowledge?.({ ok: false });
           const fs = socket as FeathersSocket;
-          try {
-            // Raw Socket.IO rooms bypass Feathers publication hooks, so perform
-            // the normal authenticated boards.get authorization before granting
-            // membership. Tenant-qualified room names alone are not branch/board
-            // authorization and Redis prefixes are never treated as auth.
-            await app.service('boards').get(boardId, {
-              ...(fs.feathers ?? {}),
-              provider: 'socketio',
-              connection: fs.feathers,
-              tenant: auth.tenant,
-            } as never);
-          } catch {
-            return acknowledge?.({ ok: false });
+          if (fs.data.authorizedBoardIds?.has(boardId)) {
+            acknowledge?.({ ok: true });
+            return;
           }
-
-          // Authorization above is asynchronous. The connection authority is
-          // immutable, but a disconnect or revocation may land while the read
-          // is in flight; never restore a room to a retired connection.
-          const currentAuth = getSocketAuthState(socket);
+          fs.data.pendingCursorBoardAdmissions ??= new Map();
           if (
-            !socket.connected ||
-            currentAuth.userId !== auth.userId ||
-            currentAuth.tenant?.tenant_id !== auth.tenant.tenant_id
+            fs.data.pendingCursorBoardAdmissions.has(boardId) ||
+            (fs.data.authorizedBoardIds?.size ?? 0) + fs.data.pendingCursorBoardAdmissions.size >=
+              MAX_PRESENCE_BOARD_SUBSCRIPTIONS
           ) {
             return acknowledge?.({ ok: false });
           }
-          fs.data.authorizedBoardIds ??= new Set();
-          fs.data.authorizedBoardIds.add(boardId);
-          socket.join(boardPresenceRoomName(auth.tenant.tenant_id, boardId));
-          acknowledge?.({ ok: true });
+          const requestedBoardId = boardId;
+          const admission = Symbol(boardId);
+          fs.data.pendingCursorBoardAdmissions.set(requestedBoardId, admission);
+          try {
+            try {
+              // Raw Socket.IO rooms bypass Feathers publication hooks, so perform
+              // the normal authenticated boards.get authorization before granting
+              // membership. Tenant-qualified room names alone are not branch/board
+              // authorization and Redis prefixes are never treated as auth.
+              const board = (await app.service('boards').get(boardId, {
+                ...(fs.feathers ?? {}),
+                provider: 'socketio',
+                connection: fs.feathers,
+                tenant: auth.tenant,
+                [FEATHERS_INSTRUMENTATION_REASON]: 'presence_cursor_admission',
+              } as never)) as Board;
+              if (
+                board.archived ||
+                !isBoundedBoardId(board.board_id) ||
+                board.board_id !== requestedBoardId
+              ) {
+                return acknowledge?.({ ok: false });
+              }
+              boardId = board.board_id;
+            } catch {
+              return acknowledge?.({ ok: false });
+            }
+
+            // Authorization above is asynchronous. The connection authority is
+            // immutable, but a disconnect or revocation may land while the read
+            // is in flight; never restore a room to a retired connection.
+            const currentAuth = getSocketAuthState(socket);
+            if (
+              !socket.connected ||
+              currentAuth.userId !== auth.userId ||
+              currentAuth.tenant?.tenant_id !== auth.tenant.tenant_id ||
+              fs.data.pendingCursorBoardAdmissions.get(requestedBoardId) !== admission
+            ) {
+              return acknowledge?.({ ok: false });
+            }
+            fs.data.authorizedBoardIds ??= new Set();
+            fs.data.authorizedBoardIds.add(boardId);
+            socket.join(boardPresenceRoomName(auth.tenant.tenant_id, boardId));
+            acknowledge?.({ ok: true });
+          } finally {
+            if (fs.data.pendingCursorBoardAdmissions.get(requestedBoardId) === admission) {
+              fs.data.pendingCursorBoardAdmissions.delete(requestedBoardId);
+            }
+          }
         }
       );
 
-      socket.on('presence:unwatch-board', (boardId: string) => {
-        if (typeof boardId !== 'string' || !boardId.trim()) return;
+      socket.on(PRESENCE_SOCKET_EVENTS.unwatchBoardCursors, (boardId: string) => {
+        if (!isBoundedBoardId(boardId)) return;
         const tenantId = getTenantId();
         if (!tenantId) return;
+        (socket as FeathersSocket).data.pendingCursorBoardAdmissions?.delete(boardId);
         socket.leave(boardPresenceRoomName(tenantId, boardId));
         (socket as FeathersSocket).data.authorizedBoardIds?.delete(boardId);
       });
 
+      const applyPresenceSubscription = async (
+        subscription: PendingPresenceSubscription
+      ): Promise<boolean> => {
+        const auth = getSocketAuthState(socket);
+        if (!auth.userId || !auth.tenant?.tenant_id || !socket.connected) return false;
+
+        let boards: Board[] = [];
+        if (subscription.boardIds.length > 0) {
+          const result = await app.service('boards').find({
+            ...(presenceSocket.feathers ?? {}),
+            provider: 'socketio',
+            connection: presenceSocket.feathers,
+            tenant: auth.tenant,
+            paginate: false,
+            query: {
+              board_id: { $in: subscription.boardIds },
+              archived: false,
+              lean: true,
+              $limit: MAX_PRESENCE_BOARD_SUBSCRIPTIONS,
+            },
+          } as never);
+          boards = boardsFromServiceResult(result);
+        }
+
+        const currentAuth = getSocketAuthState(socket);
+        if (
+          !socket.connected ||
+          currentAuth.userId !== auth.userId ||
+          currentAuth.tenant?.tenant_id !== auth.tenant.tenant_id
+        ) {
+          return false;
+        }
+        // A newer full-set request supersedes this result before it can alter
+        // passive room membership. Only one authorization read plus one latest
+        // desired set are retained per socket.
+        if (subscription.generation !== presenceSocket.data.presenceSubscriptionGeneration) {
+          return false;
+        }
+
+        const requested = new Set(subscription.boardIds);
+        const authorized = new Set(
+          boards
+            .filter(
+              (board) =>
+                !board.archived && isBoundedBoardId(board.board_id) && requested.has(board.board_id)
+            )
+            .map((board) => board.board_id as string)
+        );
+        const previous = presenceSocket.data.presenceAssociationBoardIds ?? new Set<string>();
+        if (
+          presenceSocket.data.presenceBoardId &&
+          !authorized.has(presenceSocket.data.presenceBoardId)
+        ) {
+          // Full-set removal retracts only the association capability. Tenant
+          // liveness is a separate signal and cursor traffic cannot restore it.
+          publishAuthorizedBoardAssociation();
+        }
+        await Promise.all([
+          ...[...previous]
+            .filter((boardId) => !authorized.has(boardId))
+            .map((boardId) =>
+              socket.leave(boardPresenceAssociationRoomName(auth.tenant!.tenant_id, boardId))
+            ),
+          ...[...authorized]
+            .filter((boardId) => !previous.has(boardId))
+            .map((boardId) =>
+              socket.join(boardPresenceAssociationRoomName(auth.tenant!.tenant_id, boardId))
+            ),
+        ]);
+        presenceSocket.data.presenceAssociationBoardIds = authorized;
+        if (subscription.generation !== presenceSocket.data.presenceSubscriptionGeneration) {
+          return false;
+        }
+        presenceSocket.data.hasPresenceAssociationSubscription = true;
+        return true;
+      };
+
+      const drainPresenceSubscriptions = async (): Promise<void> => {
+        if (presenceSocket.data.presenceSubscriptionRunning) return;
+        presenceSocket.data.presenceSubscriptionRunning = true;
+        try {
+          while (socket.connected) {
+            const subscription = presenceSocket.data.pendingPresenceSubscription;
+            if (!subscription) break;
+            delete presenceSocket.data.pendingPresenceSubscription;
+            let ok = false;
+            try {
+              ok = await applyPresenceSubscription(subscription);
+            } catch {
+              ok = false;
+            }
+            subscription.acknowledge?.({ ok });
+          }
+        } finally {
+          delete presenceSocket.data.presenceSubscriptionRunning;
+          if (socket.connected && presenceSocket.data.pendingPresenceSubscription) {
+            void drainPresenceSubscriptions();
+          }
+        }
+      };
+
+      socket.on(
+        PRESENCE_SOCKET_EVENTS.subscribeBoardAssociations,
+        (request: BoardPresenceSubscriptionRequest, acknowledgement?: unknown) => {
+          const acknowledge =
+            normalizeAcknowledgement<PresenceSubscriptionAcknowledgement>(acknowledgement);
+          const boardIds = request?.boardIds;
+          if (
+            !Array.isArray(boardIds) ||
+            boardIds.length > MAX_PRESENCE_BOARD_SUBSCRIPTIONS ||
+            !boardIds.every(isBoundedBoardId)
+          ) {
+            acknowledge?.({ ok: false });
+            return;
+          }
+          const requestedBoardIds = [...new Set(boardIds)];
+          const generation = (presenceSocket.data.presenceSubscriptionGeneration ?? 0) + 1;
+          presenceSocket.data.presenceSubscriptionGeneration = generation;
+          // Every valid full-set generation invalidates publisher authority,
+          // even when the recipient room set is unchanged. A later heartbeat
+          // cannot reuse an older successful grant while this generation is
+          // slow, superseded, rate-limited, or rejected.
+          publishAuthorizedBoardAssociation();
+          delete presenceSocket.data.hasPresenceAssociationSubscription;
+          // Superseded pending work is acknowledged negatively immediately so
+          // neither the browser nor daemon retains an unbounded callback queue.
+          presenceSocket.data.pendingPresenceSubscription?.acknowledge?.({ ok: false });
+          delete presenceSocket.data.pendingPresenceSubscription;
+          if (requestedBoardIds.length > 0 && !allowPresenceSubscription()) {
+            acknowledge?.({ ok: false });
+            return;
+          }
+          presenceSocket.data.pendingPresenceSubscription = {
+            generation,
+            boardIds: requestedBoardIds,
+            acknowledge,
+          };
+          void drainPresenceSubscriptions();
+        }
+      );
+
+      socket.on(PRESENCE_SOCKET_EVENTS.heartbeat, (data: PresenceHeartbeatEvent) => {
+        const boardId = data?.boardId;
+        if (boardId !== undefined && boardId !== null && !isBoundedBoardId(boardId)) return;
+        publishTenantLiveness();
+        if (boardId === undefined || boardId === null) {
+          publishAuthorizedBoardAssociation();
+          return;
+        }
+        if (!allowPresenceHeartbeat()) return;
+        if (
+          presenceSocket.data.presenceSubscriptionRunning ||
+          !presenceSocket.data.hasPresenceAssociationSubscription ||
+          !presenceSocket.data.presenceAssociationBoardIds?.has(boardId)
+        ) {
+          return;
+        }
+        publishAuthorizedBoardAssociation(boardId);
+      });
+
+      socket.on(PRESENCE_SOCKET_EVENTS.leave, clearPublishedPresence);
+
       // Handle cursor movement events
-      socket.on('cursor-move', (data: CursorMoveEvent) => {
-        if (isTerminalExecutorSocket()) return;
-        const userId = getUserId();
+      socket.on(PRESENCE_SOCKET_EVENTS.cursorMove, (data: CursorMoveEvent) => {
+        if (!isCursorMoveEvent(data)) return;
+        if (!allowCursorMove()) return;
+        // One immutable-authority projection plus the in-memory board grant is
+        // the entire per-sample authorization path. Never put a Feathers/DB
+        // lookup in this high-frequency handler: admission and revocation own
+        // that work at connection/room boundaries.
+        const identity = currentPresenceIdentity();
+        if (!identity) return;
         const fs = socket as FeathersSocket;
-        const tenantId = getTenantId();
-        if (!tenantId || !getSocketAuthState(socket).userId) return;
         if (!fs.data.authorizedBoardIds?.has(data.boardId)) return;
         const previousBoardId = fs.data.currentBoardId;
+        const timestamp = Date.now();
 
         if (previousBoardId && previousBoardId !== data.boardId) {
+          const left: CursorLeftEvent = {
+            userId: identity.userId,
+            presenceId: identity.presenceId,
+            boardId: previousBoardId,
+            timestamp,
+          };
           emitHaNativeSocketEvent(
-            socket.broadcast.to(boardPresenceRoomName(tenantId, previousBoardId)),
-            'cursor-left',
-            {
-              userId,
-              boardId: previousBoardId,
-              timestamp: Date.now(),
-            }
+            socket.broadcast.to(boardPresenceRoomName(identity.tenantId, previousBoardId)),
+            PRESENCE_SOCKET_EVENTS.cursorLeft,
+            left
           );
         }
 
         const broadcastData: CursorMovedEvent = {
-          userId,
+          userId: identity.userId,
+          presenceId: identity.presenceId,
           boardId: data.boardId,
           x: data.x,
           y: data.y,
-          timestamp: data.timestamp,
+          timestamp,
         };
 
-        // Broadcast cursor position only to tabs actively watching this board.
+        // Cursor samples are lossy state, not an event log. Volatile fanout
+        // prevents a slow/recovering transport from buffering stale positions;
+        // leave/presence edge events intentionally remain reliable.
         emitHaNativeSocketEvent(
-          socket.broadcast.to(boardPresenceRoomName(tenantId, data.boardId)),
-          'cursor-moved',
+          socket.broadcast.to(boardPresenceRoomName(identity.tenantId, data.boardId)).volatile,
+          PRESENCE_SOCKET_EVENTS.cursorMoved,
           broadcastData
         );
 
         fs.data.currentBoardId = data.boardId;
-
-        const shouldEmitPresenceUpdate =
-          previousBoardId !== data.boardId ||
-          !fs.data.lastPresenceEmitAt ||
-          data.timestamp - fs.data.lastPresenceEmitAt >= GLOBAL_PRESENCE_EMIT_INTERVAL_MS;
-
-        if (shouldEmitPresenceUpdate) {
-          const presenceData: PresenceUpdatedEvent = {
-            userId,
-            timestamp: data.timestamp,
-          };
-          emitHaNativeSocketEvent(
-            socket.broadcast.to(tenantChannelName(tenantId)),
-            'presence-updated',
-            presenceData
-          );
-          fs.data.lastPresenceEmitAt = data.timestamp;
-        }
+        // Cursor authorization and navbar association authorization are
+        // intentionally separate. Cursor traffic refreshes only tenant-wide
+        // liveness and can never assert a board association.
+        publishTenantLiveness(identity, timestamp);
       });
 
       // Handle cursor leave events (user navigates away from board)
-      socket.on('cursor-leave', (data: CursorLeaveEvent) => {
-        if (isTerminalExecutorSocket()) return;
-        const userId = getUserId();
+      socket.on(PRESENCE_SOCKET_EVENTS.cursorLeave, (data: CursorLeaveEvent) => {
+        const identity = currentPresenceIdentity();
+        if (!identity) return;
         const fs = socket as FeathersSocket;
-        const tenantId = getTenantId();
-        if (!tenantId || !getSocketAuthState(socket).userId) return;
-        if (!fs.data.authorizedBoardIds?.has(data.boardId)) return;
+        if (!isBoundedBoardId(data?.boardId) || !fs.data.authorizedBoardIds?.has(data.boardId)) {
+          return;
+        }
+        if (fs.data.currentBoardId !== data.boardId) return;
+        // Make leave edge-triggered before fanout. Repeated caller packets can
+        // no longer amplify one accepted, rate-limited cursor move into
+        // unbounded Redis traffic.
+        delete fs.data.currentBoardId;
 
         emitHaNativeSocketEvent(
-          socket.broadcast.to(boardPresenceRoomName(tenantId, data.boardId)),
-          'cursor-left',
+          socket.broadcast.to(boardPresenceRoomName(identity.tenantId, data.boardId)),
+          PRESENCE_SOCKET_EVENTS.cursorLeft,
           {
-            userId,
+            userId: identity.userId,
+            presenceId: identity.presenceId,
             boardId: data.boardId,
             timestamp: Date.now(),
           }
         );
-
-        if (fs.data.currentBoardId === data.boardId) {
-          delete fs.data.currentBoardId;
-        }
       });
 
       // =========================================================================
@@ -1492,6 +1916,10 @@ export function createSocketIOConfig(
         app.emit(AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT, socket.id);
         activeConnections--;
         clearAuthorityExpiry(socket);
+        clearPublishedPresence();
+        if (presenceSocket.feathers && typeof presenceSocket.feathers === 'object') {
+          socketByFeathersConnection.delete(presenceSocket.feathers);
+        }
         invalidateTerminalRequestJoin(socket as FeathersSocket);
         retireSocketConnectionAuthority(app, (socket as FeathersSocket).feathers);
         const message = `🔌 Socket.io disconnected: ${socket.id} (reason: ${reason}, remaining: ${activeConnections})`;

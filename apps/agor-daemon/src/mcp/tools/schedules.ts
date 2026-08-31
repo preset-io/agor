@@ -4,9 +4,11 @@
  * design doc.
  */
 
+import { PAGINATION } from '@agor/core/config';
 import { BadRequest } from '@agor/core/feathers';
 import {
   AGENTIC_TOOL_NAMES,
+  type Branch,
   type Schedule,
   type ScheduleAgenticToolConfig,
   type ScheduleCreateData,
@@ -123,16 +125,37 @@ export function registerScheduleTools(server: McpServer, ctx: McpContext): void 
         ...ctx.baseServiceParams,
       });
 
-      // boardId filter is post-query (we'd need a JOIN to do it in SQL);
-      // keep it simple — schedule counts per board are small. Resolve
-      // short IDs first so a caller can pass either form.
+      // boardId filter is post-query (we'd need a JOIN to do it in SQL).
+      // Resolve short IDs first so a caller can pass either form, then bulk
+      // authorize the unique referenced branches rather than issuing one
+      // branches.get request per schedule.
       if (args.boardId) {
         const boardId = await resolveBoardId(ctx, args.boardId);
         const allData: Schedule[] = Array.isArray(result) ? result : result.data;
-        const branches = await Promise.all(
-          allData.map((s) => ctx.app.service('branches').get(s.branch_id, ctx.baseServiceParams))
+        const branchIds = [...new Set(allData.map((schedule) => schedule.branch_id))];
+        const branches: Branch[] = [];
+        // BranchesService clamps every `$limit` to PAGINATION.MAX_LIMIT even
+        // for non-paginated calls. Keep each authorization batch below that
+        // boundary so large schedule sets are complete rather than silently
+        // dropping branches above the cap.
+        for (let offset = 0; offset < branchIds.length; offset += PAGINATION.MAX_LIMIT) {
+          const batch = branchIds.slice(offset, offset + PAGINATION.MAX_LIMIT);
+          const branchesResult = await ctx.app.service('branches').find({
+            query: {
+              branch_id: { $in: batch },
+              $limit: batch.length,
+            },
+            paginate: false,
+            ...ctx.baseServiceParams,
+          });
+          branches.push(
+            ...((Array.isArray(branchesResult) ? branchesResult : branchesResult.data) as Branch[])
+          );
+        }
+        const matchingBranchIds = new Set(
+          branches.filter((branch) => branch.board_id === boardId).map((branch) => branch.branch_id)
         );
-        const filtered = allData.filter((_, i) => branches[i]?.board_id === boardId);
+        const filtered = allData.filter((schedule) => matchingBranchIds.has(schedule.branch_id));
         const data = filtered.slice(args.offset, args.offset + args.limit);
         return textResult(mcpPageResult({ total: filtered.length, data }, args.limit, args.offset));
       }

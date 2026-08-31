@@ -81,6 +81,8 @@ export interface FeaturesConfig {
   branchStorage?: BranchStorageConfig;
   /** Resolved upload limits enforced by the daemon. */
   uploadPolicy?: UploadIngressPolicy;
+  /** Whether normalized board/branch RBAC is enabled on the daemon. */
+  branchRbac?: boolean;
 }
 
 interface HealthResponse {
@@ -140,7 +142,7 @@ export function __resetAuthConfigForTests(): void {
 }
 
 /** Seed the already-loaded app-shell snapshot for isolated component tests. */
-export function __setAuthConfigForTests(config: AuthConfig): void {
+export function __setAuthConfigForTests(config: AuthConfig, featuresConfig?: FeaturesConfig): void {
   const identityContractState = config.identity
     ? isResolvedIdentityAuthority(config.identity)
       ? IdentityContractState.SUPPORTED
@@ -149,7 +151,7 @@ export function __setAuthConfigForTests(config: AuthConfig): void {
   snapshot = {
     config: identityContractState === IdentityContractState.UNSUPPORTED ? null : config,
     instanceConfig: null,
-    featuresConfig: undefined,
+    featuresConfig,
     loading: false,
     error:
       identityContractState === IdentityContractState.UNSUPPORTED

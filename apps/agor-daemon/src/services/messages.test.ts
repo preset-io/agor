@@ -17,6 +17,7 @@ import { MessagesRepository } from '../../../../packages/core/src/db/repositorie
 import { RepoRepository } from '../../../../packages/core/src/db/repositories/repos';
 import { SessionRepository } from '../../../../packages/core/src/db/repositories/sessions';
 import { TaskRepository } from '../../../../packages/core/src/db/repositories/tasks';
+import { UsersRepository } from '../../../../packages/core/src/db/repositories/users';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { generateId } from '../../../../packages/core/src/lib/ids';
 import { RuntimeJWTStrategy } from '../auth/runtime-jwt-strategy';
@@ -34,6 +35,15 @@ async function createTestSession(
   db: Parameters<typeof dbTest>[0]['db'],
   options: { createdBy?: UUID; othersCan?: 'none' | 'view' } = {}
 ): Promise<SessionID> {
+  const createdBy = options.createdBy ?? (generateId() as UUID);
+  const users = new UsersRepository(db);
+  if (!(await users.findById(createdBy))) {
+    await users.create({
+      user_id: createdBy,
+      email: `${createdBy}@messages.test`,
+      role: ROLES.MEMBER,
+    });
+  }
   const repo = await new RepoRepository(db).create({
     slug: `messages-service-${generateId()}`,
     name: 'Messages service test repo',
@@ -48,13 +58,13 @@ async function createTestSession(
     path: `/tmp/messages-service-branch-${generateId()}`,
     ref: 'main',
     branch_unique_id: Math.floor(Math.random() * 1_000_000),
-    created_by: options.createdBy ?? (generateId() as UUID),
+    created_by: createdBy,
     others_can: options.othersCan,
   });
   const session = await new SessionRepository(db).create({
     branch_id: branch.branch_id,
     title: 'Messages service test session',
-    created_by: options.createdBy ?? (generateId() as UUID),
+    created_by: createdBy,
   });
   return session.session_id as SessionID;
 }

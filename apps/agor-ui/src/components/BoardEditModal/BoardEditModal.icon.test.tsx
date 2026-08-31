@@ -30,12 +30,39 @@ const listedBoard = {
 } as Board;
 
 function makeClient(getBoard: () => Board): AgorClient {
-  const notFound = () => Promise.reject(Object.assign(new Error('not found'), { code: 404 }));
+  const policy = {
+    primary_owner_user_id: 'owner-1',
+    board_access_revision: 1,
+    branch_template_revision: 1,
+    board_access: {
+      schema_version: 1,
+      policy_kind: 'board_access',
+      sharing_mode: 'private',
+      entries: [],
+      others: { preset: 'none', capabilities: [], fs_access: 'none' },
+    },
+    branch_template: {
+      access: {
+        schema_version: 1,
+        policy_kind: 'branch_access',
+        sharing_mode: 'private',
+        entries: [],
+        others: { preset: 'none', capabilities: [], fs_access: 'none' },
+      },
+      allow_shared_session_prompts: false,
+    },
+  };
   return {
     service: (name: string) => {
       if (name === 'boards') return { get: vi.fn().mockImplementation(getBoard) };
-      if (name === 'boards/:id/owners' || name === 'boards/:id/group-grants') {
-        return { find: vi.fn(notFound) };
+      if (name === 'boards/:id/permissions') {
+        return {
+          find: vi.fn().mockResolvedValue(policy),
+          patch: vi.fn(async (_id: unknown, value: unknown) => value),
+        };
+      }
+      if (name === 'workspace-preferences') {
+        return { find: vi.fn().mockResolvedValue({ session_sharing_enabled: false }) };
       }
       return { findAll: vi.fn().mockResolvedValue([]) };
     },

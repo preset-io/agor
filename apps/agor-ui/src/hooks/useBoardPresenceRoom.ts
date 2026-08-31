@@ -1,4 +1,4 @@
-import type { AgorClient, BoardID } from '@agor-live/client';
+import { type AgorClient, type BoardID, PRESENCE_SOCKET_EVENTS } from '@agor-live/client';
 import { useEffect } from 'react';
 
 interface UseBoardPresenceRoomOptions {
@@ -19,7 +19,7 @@ export function useBoardPresenceRoom(options: UseBoardPresenceRoomOptions) {
     if (!enabled || !client?.io || !boardId) return;
 
     const joinRoom = () => {
-      client.io.emit('presence:watch-board', boardId);
+      client.io.emit(PRESENCE_SOCKET_EVENTS.watchBoardCursors, boardId);
     };
 
     joinRoom();
@@ -29,7 +29,7 @@ export function useBoardPresenceRoom(options: UseBoardPresenceRoomOptions) {
     return () => {
       client.io.off('connect', joinRoom);
       client.off('authenticated', joinRoom);
-      client.io.emit('presence:unwatch-board', boardId);
+      client.io.emit(PRESENCE_SOCKET_EVENTS.unwatchBoardCursors, boardId);
     };
   }, [boardId, client, enabled]);
 }

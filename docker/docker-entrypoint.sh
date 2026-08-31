@@ -229,11 +229,20 @@ else
   pnpm agor init --skip-if-exists --non-interactive --agentic-tools "${AGOR_AGENTIC_TOOLS:-none}" --daemon-port "${DAEMON_PORT:-3030}" --daemon-host "${DAEMON_HOST:-0.0.0.0}"
 fi
 
-# Run database migrations (idempotent: safe to run on every start)
-# This ensures schema is up-to-date even when using existing database volumes
-# Use --yes to skip confirmation prompt in non-interactive Docker environment
+# Run database migrations (idempotent: safe to run on every start).
+# This ensures schema is up-to-date even when using existing database volumes.
+# Managed, isolated development environments explicitly acknowledge offline
+# cutovers through AGOR_MIGRATION_OFFLINE_CUTOVER. Keep the default fail-closed:
+# arbitrary Compose users may point this container at a shared database, so the
+# entrypoint must not infer that an offline migration is safe merely because it
+# is the development image.
 echo "🔄 Running database migrations..."
-pnpm agor db migrate --yes
+if [ "${AGOR_MIGRATION_OFFLINE_CUTOVER:-false}" = "true" ]; then
+  echo "⚠️  Applying acknowledged offline-cutover migrations in this isolated development environment"
+  pnpm agor db migrate --yes --offline-cutover
+else
+  pnpm agor db migrate --yes
+fi
 
 # Runtime deployment overrides are consumed directly from the environment by
 # the daemon. Never materialize them into the operator-owned config.yaml.

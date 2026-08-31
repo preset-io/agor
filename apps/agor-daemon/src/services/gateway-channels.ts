@@ -6,7 +6,7 @@
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
-import { AgenticConfigurationResolutionError, PAGINATION } from '@agor/core/config';
+import { AgenticConfigurationResolutionError, PAGINATION, validateEnvVar } from '@agor/core/config';
 import {
   GatewayChannelRepository,
   getCurrentTenantId,
@@ -25,6 +25,7 @@ import {
   type AgenticToolConfigurationSource,
   type AuthenticatedParams,
   GATEWAY_CHANNEL_WRITE_FIELDS,
+  GATEWAY_REDACTED_SENTINEL,
   type GatewayChannel,
   type GatewayChannelCreateData,
   type GatewayChannelPatchData,
@@ -121,6 +122,30 @@ export class GatewayChannelsService extends DrizzleService<
     );
   }
 
+  private assertValidEnvironmentVariables(config: PersistedGatewayAgenticConfig | null): void {
+    const seen = new Set<string>();
+    for (const variable of config?.envVars ?? []) {
+      if (seen.has(variable.key)) {
+        throw new BadRequest(`Duplicate gateway environment variable: ${variable.key}`);
+      }
+      seen.add(variable.key);
+      if (variable.value === GATEWAY_REDACTED_SENTINEL) {
+        // The transport hook must resolve preservation sentinels to the current
+        // plaintext before this authoritative service boundary. A sentinel
+        // reaching a direct/provider-less call is never a credential.
+        throw new BadRequest(
+          `Gateway environment variable ${variable.key} contains an unresolved redaction sentinel`
+        );
+      }
+      const errors = validateEnvVar(variable.key, variable.value);
+      if (errors.length > 0) {
+        throw new BadRequest(
+          `Invalid gateway environment variable ${variable.key}: ${errors.map((error) => error.message).join('; ')}`
+        );
+      }
+    }
+  }
+
   private async validateConfig(
     config: GatewayChannelPatchData['agentic_config'] | GatewayChannel['agentic_config'],
     channel: Pick<GatewayChannel, 'agor_user_id' | 'config'>,
@@ -152,7 +177,9 @@ export class GatewayChannelsService extends DrizzleService<
           ? (channel.agor_user_id as UserID)
           : undefined,
       });
-      return materializedAgenticToolConfigurationToGatewayConfig(config, materialized);
+      const resolved = materializedAgenticToolConfigurationToGatewayConfig(config, materialized);
+      this.assertValidEnvironmentVariables(resolved);
+      return resolved;
     } catch (error) {
       if (
         isInvalidModelConfigError(error) ||

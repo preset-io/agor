@@ -35,12 +35,12 @@ import {
   listMcpToolsWithPermission,
   MCPExternalError,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+  resolveScopedMCPAuthHeaders,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import type { CodexOptions, Thread, ThreadItem, TurnCompletedEvent } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer } from '@agor/core/types';
 import { getDefaultPermissionMode, isGatewaySession } from '@agor/core/types';
 import { mapToCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
@@ -56,6 +56,7 @@ import type {
   SessionRepository,
   UsersRepository,
 } from '../../db/feathers-repositories.js';
+import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.js';
 import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
@@ -724,11 +725,10 @@ export class CodexPromptService {
     mcpToken: string | undefined,
     context: {
       forUserId?: UserID;
-      sessionOwnerId: UserID;
       requireMcpServers?: boolean;
     }
   ): Promise<{ servers: CodexConfigObject; total: number }> {
-    const { forUserId, sessionOwnerId, requireMcpServers = false } = context;
+    const { forUserId, requireMcpServers = false } = context;
     codexDebug(`🔍 [Codex MCP] Fetching MCP servers for session ${shortId(sessionId)}...`);
     codexDebug(`   [Codex MCP] forUserId: ${forUserId || 'NOT SET'}`);
 
@@ -739,7 +739,6 @@ export class CodexPromptService {
         mcpServerRepo: this.mcpServerRepo,
         mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
         forUserId,
-        sessionOwnerId,
       },
       { toolFiltering: 'exclude' }
     );
@@ -751,14 +750,17 @@ export class CodexPromptService {
       codexDebug(`   Servers: ${mcpServers.map((s) => `${s.name} (${s.transport})`).join(', ')}`);
     }
 
-    const stdioServers = mcpServers.filter((s) => s.transport === 'stdio');
-    const httpServers = mcpServers.filter((s) => s.transport === 'http' || s.transport === 'sse');
+    const stdioServers = serversWithSource.filter(({ server }) => server.transport === 'stdio');
+    const httpServers = serversWithSource.filter(
+      ({ server }) => server.transport === 'http' || server.transport === 'sse'
+    );
 
     codexDebug(
       `   📊 [Codex MCP] Transport breakdown: ${stdioServers.length} STDIO, ${httpServers.length} HTTP/SSE`
     );
 
     const result: CodexConfigObject = {};
+    const authDiagnostics = new McpAuthDiagnosticAccumulator();
     const claimedNames = new Set<string>();
 
     // Built-in Agor MCP server (streamable HTTP). Token travels via
@@ -780,7 +782,7 @@ export class CodexPromptService {
       );
     }
 
-    for (const server of stdioServers) {
+    for (const { server } of stdioServers) {
       const serverName = this.claimMcpServerName(
         server.name,
         claimedNames,
@@ -807,7 +809,8 @@ export class CodexPromptService {
       result[serverName] = serverConfig;
     }
 
-    for (const server of httpServers) {
+    for (const scoped of httpServers) {
+      const { server } = scoped;
       const serverName = this.claimMcpServerName(
         server.name,
         claimedNames,
@@ -831,7 +834,9 @@ export class CodexPromptService {
       // out of the SDK's generated `--config` arguments. Non-bearer schemes
       // log a warning since Codex's CLI only supports bearer auth.
       try {
-        const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+        const authHeaders = await resolveScopedMCPAuthHeaders(scoped, {
+          surfaceAuthorityError: true,
+        });
         const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
         const authHeader = headers?.Authorization;
         const missingRequiredAuth = !!server.auth && server.auth.type !== 'none' && !authHeader;
@@ -875,22 +880,10 @@ export class CodexPromptService {
           }
         } else if (missingRequiredAuth) {
           canRequireServer = false;
-          console.warn(
-            `   ⚠️  [Codex MCP] Server "${server.name}" has configured auth but no valid token found.`
-          );
-          const action =
-            server.auth?.type === 'oauth'
-              ? `Start OAuth Flow for ${server.name}`
-              : `check credentials for ${server.name}`;
-          console.warn(`      💡 Go to Settings → MCP Servers → ${action}.`);
+          authDiagnostics.recordUnavailable();
         }
       } catch {
-        // Auth-resolution exceptions may include a provider endpoint or
-        // reflected credential material. Recovery is surfaced by the daemon;
-        // executor logs retain only a stable category and server identity.
-        console.warn(
-          `   ⚠️  [Codex MCP] Auth header resolution failed server_id=${server.mcp_server_id}`
-        );
+        authDiagnostics.recordResolutionFailure();
         canRequireServer = false;
       }
 
@@ -899,6 +892,7 @@ export class CodexPromptService {
     }
 
     const total = stdioServers.length + httpServers.length + (mcpToken ? 1 : 0);
+    authDiagnostics.emitSummary('codex');
     if (total > 0) {
       console.info(`✅ [Codex MCP] Configured ${total} MCP server(s)`);
     }
@@ -1190,7 +1184,6 @@ export class CodexPromptService {
       mcpToken,
       {
         forUserId,
-        sessionOwnerId: session.created_by as UserID,
         requireMcpServers,
       }
     );

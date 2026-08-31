@@ -4,6 +4,7 @@ import {
   isValidMCPHeaderName,
 } from '@agor/core/tools/mcp/http-headers';
 import type { MCPAuthPatch, MCPOAuthDCRMode } from '@agor-live/client';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 
 /**
  * OAuth utility functions extracted from MCPServersTable for testability.
@@ -54,9 +55,13 @@ export function extractOAuthConfig(values: Record<string, unknown>): OAuthConfig
     config.oauth_client_id = values.oauth_client_id;
   }
 
-  // Only include client secret if it's provided
+  // Only include client secret if it's provided. Template expressions (e.g.
+  // `{{ user.env.VAR }}`) are left untouched; only a real pasted secret gets
+  // whitespace-sanitized.
   if (values.oauth_client_secret && typeof values.oauth_client_secret === 'string') {
-    config.oauth_client_secret = values.oauth_client_secret;
+    config.oauth_client_secret = isTemplateValue(values.oauth_client_secret)
+      ? values.oauth_client_secret
+      : sanitizeSecretValue(values.oauth_client_secret);
   }
 
   // Only include scope if it's provided
@@ -131,7 +136,7 @@ export function extractOAuthConfigForTesting(values: Record<string, unknown>): T
     typeof values.oauth_client_secret === 'string' &&
     !isTemplateValue(values.oauth_client_secret)
   ) {
-    config.client_secret = values.oauth_client_secret;
+    config.client_secret = sanitizeSecretValue(values.oauth_client_secret);
   }
 
   // Include scope if provided
@@ -212,6 +217,14 @@ export function buildAuthFromValues(
     forPatch?: boolean;
   } = {}
 ): BuiltAuth | MCPAuthPatch | null | undefined {
+  // Authentication belongs to remote HTTP/SSE transports. A stale hidden
+  // auth_type can remain in the form after switching transports, and sending
+  // it would either create an invalid stdio row or prevent an existing legacy
+  // row from repairing itself on edit.
+  if (values.transport === 'stdio') {
+    return options.forPatch ? null : undefined;
+  }
+
   const authType = values.auth_type;
   if (authType !== 'bearer' && authType !== 'jwt' && authType !== 'oauth') {
     return options.forPatch ? null : undefined;
@@ -219,11 +232,15 @@ export function buildAuthFromValues(
 
   const auth: BuiltAuth = { type: authType };
   if (authType === 'bearer') {
-    if (typeof values.auth_token === 'string') auth.token = values.auth_token;
+    if (typeof values.auth_token === 'string') auth.token = sanitizeSecretValue(values.auth_token);
   } else if (authType === 'jwt') {
     if (typeof values.jwt_api_url === 'string') auth.api_url = values.jwt_api_url;
-    if (typeof values.jwt_api_token === 'string') auth.api_token = values.jwt_api_token;
-    if (typeof values.jwt_api_secret === 'string') auth.api_secret = values.jwt_api_secret;
+    if (typeof values.jwt_api_token === 'string') {
+      auth.api_token = sanitizeSecretValue(values.jwt_api_token);
+    }
+    if (typeof values.jwt_api_secret === 'string') {
+      auth.api_secret = sanitizeSecretValue(values.jwt_api_secret);
+    }
   } else {
     Object.assign(auth, extractOAuthConfig(values));
     if (options.preserveAbsentDcrMode && values.oauth_dcr_mode === 'advertised') {
