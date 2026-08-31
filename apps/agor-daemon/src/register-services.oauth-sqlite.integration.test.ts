@@ -39,6 +39,7 @@ import {
   RUNTIME_JWT_AUDIENCE,
   RUNTIME_JWT_ISSUER,
 } from './auth/runtime-tokens.js';
+import { type RegisterHooksContext, registerHooks } from './register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from './register-routes.js';
 import { type RegisterServicesContext, registerMCPServices } from './register-services.js';
 import { createSocketIOConfig } from './setup/socketio.js';
@@ -400,6 +401,7 @@ async function createHarness(
     lockGrantConfiguration?: NonNullable<RegisterServicesContext['lockMcpOAuthGrantConfiguration']>;
     outboundDnsLookup?: OutboundDnsLookup;
     requireAuth?: RegisterServicesContext['requireAuth'];
+    deployment?: RegisterServicesContext['deployment'];
   } = {}
 ) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
@@ -471,7 +473,7 @@ async function createHarness(
     branchRbacEnabled: false,
     allowSuperadmin: false,
     requireAuth: options.requireAuth ?? (async (context) => context),
-    deployment: {} as RegisterServicesContext['deployment'],
+    deployment: options.deployment ?? ({} as RegisterServicesContext['deployment']),
     mcpOAuthPendingFlowAuthority: options.durableAuthority,
     lockMcpOAuthGrantConfiguration: options.lockGrantConfiguration,
     mcpOutboundDnsLookup: options.outboundDnsLookup,
@@ -548,6 +550,84 @@ function paramsFor(harness: SQLiteHarness): AuthenticatedParams {
     connection: harness.liveSocket.feathers,
     authentication: harness.liveSocket.feathers.authentication,
   } as AuthenticatedParams;
+}
+
+const constrainedHaDeployment = {
+  mode: 'ha',
+  supportProfile: 'constrained-active-active',
+  capabilities: {
+    taskExecution: true,
+    executorTokenAuthority: true,
+    agorManagedInteractivePermissions: true,
+    scheduler: true,
+    sessionQueue: true,
+    taskRuntimeReconciliation: true,
+    knowledgeEmbeddingIndexer: true,
+    statelessMcp: true,
+    completionCallbackDurableAdmission: true,
+    completionCallbackPreAdmissionRecovery: false,
+    widgetResolutionDurableClaim: true,
+    githubInstall: true,
+    codexCredentialFiles: false,
+    codexDeviceAuth: false,
+    processAffineAuth: false,
+    gatewayListeners: true,
+    gatewayOutboundExactlyOnce: false,
+    environmentHealthMonitor: true,
+    artifactRuntimeIntrospection: false,
+  },
+  redis: {},
+  environmentHealthMonitor: {},
+  executorStorage: {
+    userHome: 'replica-local',
+    branchWorkspace: 'shared',
+    baseRepository: 'shared',
+  },
+  topology: {
+    execution: 'shared-local',
+    sharedFilesystem: true,
+    ingressAffinity: true,
+  },
+} as RegisterHooksContext['deployment'];
+
+/**
+ * Install the same hook registrar used by daemon boot while letting this MCP-
+ * focused harness stand in empty services for unrelated product surfaces.
+ */
+function registerProductionHooksForHarness(harness: SQLiteHarness): void {
+  const emptyService = { hooks() {}, on() {}, emit() {} };
+  const registrationApp = {
+    service(path: string) {
+      try {
+        return harness.app.service(path);
+      } catch {
+        return emptyService;
+      }
+    },
+    use() {},
+    publish() {},
+    emit() {},
+  } as unknown as RegisterHooksContext['app'];
+
+  registerHooks({
+    db: harness.db,
+    app: registrationApp,
+    config: {
+      database: { dialect: 'sqlite' },
+      multi_tenancy: { mode: 'static', static_tenant_id: 'default' },
+      execution: { branch_rbac: false },
+    } as RegisterHooksContext['config'],
+    jwtSecret: 'ha-discovery-registration-test',
+    requireAuth: async (context) => context,
+    superadminOpts: { allowSuperadmin: false },
+    sessionsService: emptyService as RegisterHooksContext['sessionsService'],
+    messagesService: emptyService as RegisterHooksContext['messagesService'],
+    boardsService: undefined,
+    branchRepository: {} as RegisterHooksContext['branchRepository'],
+    usersRepository: {} as RegisterHooksContext['usersRepository'],
+    sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    deployment: constrainedHaDeployment,
+  });
 }
 
 function replaceLiveSocketAuthority(harness: SQLiteHarness, suffix = 'replacement'): void {
@@ -1197,6 +1277,61 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it('discovers an already usable OAuth server through the production HA hook chain', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user', {
+      deployment: constrainedHaDeployment,
+    });
+    databases.push(harness.rawDb);
+    await new UserMCPOAuthTokenRepository(harness.rawDb).saveToken(
+      harness.user.user_id as UserID,
+      harness.server.mcp_server_id as MCPServerID,
+      {
+        accessToken: 'sqlite-access-token',
+        refreshToken: 'refresh',
+        clientId: 'saved-client-id',
+        expiresAt: new Date(Date.now() + 3_600_000),
+      }
+    );
+    registerProductionHooksForHarness(harness);
+
+    await expect(
+      harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
+    ).resolves.toMatchObject({ success: true, tools: [] });
+    await expect(
+      harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
+    ).rejects.toThrow(
+      'HA support profile constrained-active-active does not support MCP OAuth flows'
+    );
+  });
+
+  it('does not escalate an HA capability probe into OAuth discovery or a browser flow', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user', {
+      deployment: constrainedHaDeployment,
+    });
+    databases.push(harness.rawDb);
+    registerProductionHooksForHarness(harness);
+    const browserReservation = await reserveBrowserEvent(harness, 'discover');
+
+    await harness.app.service('mcp-servers/discover').create(
+      {
+        mcp_server_id: harness.server.mcp_server_id,
+        oauth_browser_event: browserReservation,
+      },
+      paramsFor(harness)
+    );
+
+    expect(provider.requests.map((request) => request.path)).toEqual(['/saved/mcp']);
+    expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
   it('authenticates REST mutations before the MCP OAuth around hook can read or write', async () => {
     const provider = await createTestProvider();
     providers.push(provider);

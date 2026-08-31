@@ -708,9 +708,17 @@ describe('tenant-owned service registration', () => {
     );
   });
 
-  it('fails closed for discovery that can enter the process-local MCP OAuth flow in HA', () => {
-    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
+  it('gates OAuth flow endpoints in HA without blocking ordinary MCP capability discovery', () => {
+    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).not.toContainEqual([
       'mcp-servers/discover',
+      'mcpOAuth',
+    ]);
+    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
+      'mcp-servers/oauth-start',
+      'mcpOAuth',
+    ]);
+    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
+      'mcp-servers/oauth-complete',
       'mcpOAuth',
     ]);
   });

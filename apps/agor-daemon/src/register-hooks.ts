@@ -625,11 +625,11 @@ export function suppressKnowledgeCommandRealtimeEvent(context: HookContext): Hoo
  * Service endpoints whose implementation retains process-local credentials,
  * provider handshakes, or native runtime state. Keep this inventory exported
  * so the constrained HA fail-closed boundary has direct regression coverage.
- * `mcp-servers/discover` is included because an OAuth-protected probe can start
- * the same pending PKCE/callback flow as the explicit OAuth endpoints.
+ * MCP discovery is deliberately absent: its ordinary capability probe is HA
+ * safe, while its optional OAuth escalation is stopped inside the endpoint
+ * before provider discovery or flow creation.
  */
 export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
-  ['mcp-servers/discover', 'mcpOAuth'],
   ['mcp-servers/oauth-auth-headers', 'mcpOAuth'],
   ['mcp-servers/oauth-complete', 'mcpOAuth'],
   ['mcp-servers/oauth-disconnect', 'mcpOAuth'],
