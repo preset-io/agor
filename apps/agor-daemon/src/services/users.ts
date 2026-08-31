@@ -170,6 +170,7 @@ export const USERS_SERVICE_TRANSPORT_METHODS = [
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
 export const AUTH_INTERNAL_USER_LOOKUP_PARAM = Symbol('agor.users.auth-internal-lookup');
 const USER_PATCH_LOCK_HELD_PARAM = Symbol('agor.users.patch-lock-held');
+const USER_CREDENTIAL_LOCK_HELD_PARAM = Symbol('agor.users.credential-lock-held');
 
 // SQLite runs one daemon and has no cross-process writer, but two async
 // requests can still read the same users.data snapshot and then overlap on the
@@ -914,11 +915,37 @@ export class UsersService {
     if (typeof id !== 'string' || !id) {
       throw new BadRequest('Bulk user mutations are not supported');
     }
+    const coordinateClaudeCredential = this.claudeCredentialPatches?.applies(data, params) === true;
+    const credentialTenantId = coordinateClaudeCredential ? getCurrentTenantId() : undefined;
+    if (coordinateClaudeCredential && !credentialTenantId) {
+      throw new Error('Missing active tenant context for Claude credential mutation');
+    }
+    const credentialLockHeld =
+      (params as (Params & { [USER_CREDENTIAL_LOCK_HELD_PARAM]?: boolean }) | undefined)?.[
+        USER_CREDENTIAL_LOCK_HELD_PARAM
+      ] === true;
     if (
       !(params as (Params & { [USER_PATCH_LOCK_HELD_PARAM]?: boolean }) | undefined)?.[
         USER_PATCH_LOCK_HELD_PARAM
       ]
     ) {
+      if (coordinateClaudeCredential && !credentialLockHeld) {
+        const releaseClaudeCredential = await this.claudeCredentialPatches!.lock(
+          String(credentialTenantId),
+          id
+        );
+        try {
+          const credentialLockedParams = { ...(params ?? {}) } as Params & {
+            [USER_CREDENTIAL_LOCK_HELD_PARAM]: boolean;
+          };
+          credentialLockedParams[USER_CREDENTIAL_LOCK_HELD_PARAM] = true;
+          return await withUserPatchLock(id, credentialLockedParams, (lockedParams) =>
+            this.patch(id, data, lockedParams)
+          );
+        } finally {
+          await releaseClaudeCredential?.();
+        }
+      }
       return withUserPatchLock(id, params, (lockedParams) => this.patch(id, data, lockedParams));
     }
     assertSingleUserMutation(data);
@@ -933,16 +960,12 @@ export class UsersService {
     ) {
       throw new BadRequest(`Execution home key "${data.unix_username}" is already in use`);
     }
-    const coordinateClaudeCredential = this.claudeCredentialPatches?.applies(data, params) === true;
-    const credentialTenantId = coordinateClaudeCredential ? getCurrentTenantId() : undefined;
-    if (coordinateClaudeCredential && !credentialTenantId) {
-      throw new Error('Missing active tenant context for Claude credential mutation');
-    }
     // Keep lock ordering consistent with OAuth finalization: credential
     // authority first, then the users-service role/identity authority.
-    const releaseClaudeCredential = coordinateClaudeCredential
-      ? await this.claudeCredentialPatches!.lock(String(credentialTenantId), id)
-      : undefined;
+    const releaseClaudeCredential =
+      coordinateClaudeCredential && !credentialLockHeld
+        ? await this.claudeCredentialPatches!.lock(String(credentialTenantId), id)
+        : undefined;
     try {
       return await withSqliteTenantAuthorityLock(this.db, params, () =>
         this.patchWithClaudeCredentialAuthority(

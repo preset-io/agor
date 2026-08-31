@@ -3,6 +3,11 @@ import { feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, Params, User, UserID, UserRole } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import {
+  CLAUDE_AUTH_TRUSTED_USER_MUTATION,
+  createClaudeUserCredentialPatchCoordinator,
+} from './claude-credential-mutation';
+import { InMemoryClaudeOAuthAttemptStore } from './claude-oauth-attempt-store';
 import { markTrustedUserMutation } from './user-mutation-trust';
 import { createUsersService, UsersService } from './users';
 
@@ -347,6 +352,85 @@ describe('UsersService role authority', () => {
 });
 
 describe('UsersService Claude credential-source authority', () => {
+  dbTest(
+    'lets nested standalone OAuth metadata patch pass a waiting external source change',
+    async ({ db }) => {
+      const config = { deployment: { mode: 'standalone' } } as const;
+      const app = { get: () => config, service: () => undefined };
+      const store = new InMemoryClaudeOAuthAttemptStore();
+      let externalLockRequested!: () => void;
+      const externalRequested = new Promise<void>((resolve) => {
+        externalLockRequested = resolve;
+      });
+      const service = new UsersService(
+        db,
+        app as never,
+        config as never,
+        createClaudeUserCredentialPatchCoordinator(app as never, db, {
+          lockExternalUserMutation: (...args) => {
+            externalLockRequested();
+            return store.lockExternalUserMutation(...args);
+          },
+          completeExternalUserMutation: (...args) => store.completeExternalUserMutation(...args),
+        })
+      );
+      const user = await createUser(service, 'member', 'standalone-lock-order');
+
+      await runWithTenantContext('default', async () => {
+        let ownerEntered!: () => void;
+        const entered = new Promise<void>((resolve) => {
+          ownerEntered = resolve;
+        });
+        let allowNested!: () => void;
+        const allowed = new Promise<void>((resolve) => {
+          allowNested = resolve;
+        });
+        const owner = store.runCredentialRefresh(
+          { tenantId: 'default', userId: user.user_id },
+          async () => {
+            ownerEntered();
+            await allowed;
+            const trustedParams = { ...externalParams(user), provider: undefined } as Params & {
+              [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: boolean;
+            };
+            trustedParams[CLAUDE_AUTH_TRUSTED_USER_MUTATION] = true;
+            markTrustedUserMutation(trustedParams, 'claude-auth');
+            return service.patch(
+              user.user_id,
+              {
+                agentic_auth_methods: { 'claude-code': 'subscription' },
+                agentic_credential_sources: { 'claude-code': 'managed_file' },
+              },
+              trustedParams
+            );
+          }
+        );
+        await entered;
+        const external = service.patch(
+          user.user_id,
+          { agentic_auth_methods: { 'claude-code': 'api_key' } },
+          externalParams(user)
+        );
+        await externalRequested;
+        allowNested();
+
+        await expect(
+          Promise.race([
+            owner,
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('nested users patch deadlocked')), 250)
+            ),
+          ])
+        ).resolves.toMatchObject({
+          agentic_auth_methods: { 'claude-code': 'subscription' },
+        });
+        await expect(external).resolves.toMatchObject({
+          user_id: user.user_id,
+        });
+      });
+    }
+  );
+
   dbTest('serializes SQLite actor demotion with destructive route cleanup', async ({ db }) => {
     let enterCleanup!: () => void;
     const cleanupEntered = new Promise<void>((resolve) => {

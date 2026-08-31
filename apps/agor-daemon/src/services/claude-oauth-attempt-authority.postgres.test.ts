@@ -44,13 +44,17 @@ import {
   fenceClaudeAuthCredential,
   writeClaudeAuthViaExecutor,
 } from '../utils/executor-claude-auth.js';
-import { createClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
+import {
+  CLAUDE_AUTH_TRUSTED_USER_MUTATION,
+  createClaudeUserCredentialPatchCoordinator,
+} from './claude-credential-mutation.js';
 import {
   ClaudeOAuthAttemptAuthority,
   fingerprintClaudeOAuthState,
 } from './claude-oauth-attempt-authority.js';
 import { InMemoryClaudeOAuthAttemptStore } from './claude-oauth-attempt-store.js';
 import { CodexDeviceAuthAttemptAuthority } from './codex-device-auth-attempt-authority.js';
+import { markTrustedUserMutation } from './user-mutation-trust.js';
 import { UsersService } from './users.js';
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
@@ -896,6 +900,107 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             claim.attempt.attemptGeneration
           )
         ).rejects.toThrow(/superseded/);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('lets nested HA OAuth metadata patch pass a waiting external source change', async () => {
+      const seeded = await seed('users-service-lock-order');
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-users-lock-order-'));
+      try {
+        const config = {
+          paths: { data_home: root },
+          deployment: { mode: 'ha' },
+          multi_tenancy: { mode: 'required_from_auth' },
+          execution: {
+            unix_user_mode: 'sandbox',
+            sandbox: { enabled: true, home_mode: 'per_user' },
+            executor_storage: {
+              user_home: 'persistent-per-user',
+              user_home_locking: 'cross-replica-flock',
+            },
+          },
+        } as const;
+        const app = { get: () => config, service: () => undefined };
+        let externalLockRequested!: () => void;
+        const externalRequested = new Promise<void>((resolve) => {
+          externalLockRequested = resolve;
+        });
+        const usersA = new UsersService(
+          dbA,
+          app as never,
+          config as never,
+          createClaudeUserCredentialPatchCoordinator(app as never, dbA, authorityA)
+        );
+        const usersB = new UsersService(
+          dbB,
+          app as never,
+          config as never,
+          createClaudeUserCredentialPatchCoordinator(app as never, dbB, {
+            lockExternalUserMutation: (...args) => {
+              externalLockRequested();
+              return authorityB.lockExternalUserMutation(...args);
+            },
+            completeExternalUserMutation: (...args) =>
+              authorityB.completeExternalUserMutation(...args),
+          })
+        );
+        const actor = {
+          authenticated: true,
+          tenant: { tenant_id: seeded.tenantId },
+          user: {
+            user_id: seeded.userId,
+            email: `${seeded.userId}@example.test`,
+            role: 'member',
+          },
+        } as never;
+        let ownerEntered!: () => void;
+        const entered = new Promise<void>((resolve) => {
+          ownerEntered = resolve;
+        });
+        let allowNested!: () => void;
+        const allowed = new Promise<void>((resolve) => {
+          allowNested = resolve;
+        });
+        const owner = authorityA.runCredentialRefresh(seeded.tenantId, seeded.userId, async () => {
+          ownerEntered();
+          await allowed;
+          const trustedParams = {
+            ...actor,
+            provider: undefined,
+            [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: true,
+          } as never;
+          markTrustedUserMutation(trustedParams, 'claude-auth');
+          return usersA.patch(
+            seeded.userId,
+            {
+              agentic_auth_methods: { 'claude-code': 'subscription' },
+              agentic_credential_sources: { 'claude-code': 'managed_file' },
+            },
+            trustedParams
+          );
+        });
+        await entered;
+        const external = runWithTenantDatabaseScope(dbB, seeded.tenantId, () =>
+          usersB.patch(seeded.userId, { agentic_auth_methods: { 'claude-code': 'api_key' } }, actor)
+        );
+        await externalRequested;
+        allowNested();
+
+        await expect(
+          Promise.race([
+            owner,
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('nested HA users patch deadlocked')), 1000)
+            ),
+          ])
+        ).resolves.toMatchObject({
+          agentic_auth_methods: { 'claude-code': 'subscription' },
+        });
+        await expect(external).resolves.toMatchObject({
+          user_id: seeded.userId,
+        });
       } finally {
         await rm(root, { recursive: true, force: true });
       }
