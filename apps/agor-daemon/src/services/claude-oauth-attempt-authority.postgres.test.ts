@@ -1539,7 +1539,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     });
 
     it('fails closed when the master secret is missing or does not match', async () => {
-      expect(() => new ClaudeOAuthAttemptAuthority(dbA, undefined)).toThrow(/AGOR_MASTER_SECRET/);
+      const configuredMasterSecret = process.env.AGOR_MASTER_SECRET;
+      delete process.env.AGOR_MASTER_SECRET;
+      try {
+        expect(() => new ClaudeOAuthAttemptAuthority(dbA, undefined)).toThrow(/AGOR_MASTER_SECRET/);
+      } finally {
+        if (configuredMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
+        else process.env.AGOR_MASTER_SECRET = configuredMasterSecret;
+      }
 
       const seeded = await seed('mixed-secret');
       const attemptId = await start(authorityA, seeded, 'mixed-secret');

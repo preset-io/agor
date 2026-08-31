@@ -62,6 +62,28 @@ async function resolveCanonicalDirectory(path: string): Promise<string> {
   return realpath(path);
 }
 
+async function resolveCanonicalDirectoryAnchor(path: string): Promise<{
+  path: string;
+  missingComponents: string[];
+}> {
+  let candidate = resolve(path);
+  const missingComponents: string[] = [];
+  while (true) {
+    try {
+      return {
+        path: await resolveCanonicalDirectory(candidate),
+        missingComponents,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = dirname(candidate);
+      if (parent === candidate) throw error;
+      missingComponents.unshift(basename(candidate));
+      candidate = parent;
+    }
+  }
+}
+
 async function createDirectory(
   path: string,
   options: { mode?: number; recursive?: boolean } = {}
@@ -114,24 +136,28 @@ async function openLinuxDirectory(
   create: boolean
 ): Promise<CredentialDirectory> {
   const absolute = resolve(rawDirectory);
-  const parent = await resolveCanonicalDirectory(dirname(absolute));
+  const parent = await resolveCanonicalDirectoryAnchor(dirname(absolute));
   const leaf = basename(absolute);
-  // `parent` is canonical (symlink-free) and its terminal node is not
-  // sandbox-renamable, so following it here is safe; the leaf below stays
-  // O_NOFOLLOW.
-  let current = await openPath(parent, constants.O_RDONLY | constants.O_DIRECTORY);
+  // The existing anchor is canonical (symlink-free) and its terminal node is
+  // not sandbox-renamable, so following it here is safe. Any not-yet-created
+  // tenant/home suffix and the credential leaf are then walked relative to an
+  // open descriptor with O_NOFOLLOW, retaining the original recursive-create
+  // behavior without following a user-controlled replacement.
+  let current = await openPath(parent.path, constants.O_RDONLY | constants.O_DIRECTORY);
   try {
-    const child = join('/proc/self/fd', String(current.fd), leaf);
-    if (create) {
-      try {
-        await createDirectory(child, { mode: 0o700 });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    for (const component of [...parent.missingComponents, leaf]) {
+      const child = join('/proc/self/fd', String(current.fd), component);
+      if (create) {
+        try {
+          await createDirectory(child, { mode: 0o700 });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        }
       }
+      const next = await openPath(child, linuxDirectoryFlags());
+      await current.close();
+      current = next;
     }
-    const next = await openPath(child, linuxDirectoryFlags());
-    await current.close();
-    current = next;
     if (create) await current.chmod(0o700);
     return { handle: current, path: `/proc/self/fd/${current.fd}` };
   } catch (error) {
