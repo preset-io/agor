@@ -77,16 +77,3 @@ export function writeCredentialWarningDismissed(
     // re-show the warning rather than silently hiding it forever.
   }
 }
-
-export function clearCredentialWarningDismissal(
-  storage: Pick<Storage, 'removeItem'>,
-  scope: BannerDismissalScope,
-  userId: string,
-  tool: AgenticToolName
-): void {
-  try {
-    storage.removeItem(credentialWarningDismissalKey(scope, userId, tool));
-  } catch {
-    // Best effort only.
-  }
-}
