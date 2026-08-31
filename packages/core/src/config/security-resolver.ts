@@ -75,6 +75,20 @@ const KNOWN_CSP_DIRECTIVES: ReadonlySet<string> = new Set([
 export const SANDPACK_CSP_FRAME_SRC = 'https://*.codesandbox.io';
 export const SANDPACK_CSP_WORKER_SRC = 'blob:';
 export const SLACK_AVATAR_CSP_IMG_SRC = 'https://*.slack-edge.com';
+/**
+ * Browser image origins used by the checked-in MCP catalog.
+ *
+ * Catalog icons are loaded directly by the browser; the daemon never fetches
+ * or proxies them. Google favicons redirect to a shard on `*.gstatic.com`, so
+ * both the request and redirect origins must be allowed.
+ */
+export const MCP_CATALOG_CSP_IMG_SRCS = [
+  'https://api.smithery.ai',
+  'https://www.google.com',
+  'https://*.gstatic.com',
+  'https://logos.composio.dev',
+  'https://cdn.jsdelivr.net',
+] as const;
 
 /**
  * Built-in CSP defaults.
@@ -95,7 +109,13 @@ function buildDefaultDirectives(opts: {
   if (opts.daemonUrl) connectSrc.push(opts.daemonUrl);
   if (opts.extraConnectSrc) connectSrc.push(...opts.extraConnectSrc);
 
-  const imgSrc = ["'self'", 'data:', 'blob:', SLACK_AVATAR_CSP_IMG_SRC];
+  const imgSrc = [
+    "'self'",
+    'data:',
+    'blob:',
+    SLACK_AVATAR_CSP_IMG_SRC,
+    ...MCP_CATALOG_CSP_IMG_SRCS,
+  ];
   const frameSrc = ["'self'"];
   const workerSrc = ["'self'", SANDPACK_CSP_WORKER_SRC];
   if (opts.allowSandpack) {
