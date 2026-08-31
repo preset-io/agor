@@ -43,6 +43,7 @@ interface Harness {
 const buildHarness = (options: {
   branchRbac: boolean;
   unixUserMode: 'simple' | 'sandbox' | 'delegated';
+  sdkHomeScope?: 'execution_home' | 'branch';
   /** Creator's `unix_username` today; the session is always stamped 'alice'. */
   creatorUnixUsername: string | null;
 }): Harness => {
@@ -67,12 +68,25 @@ const buildHarness = (options: {
 
   const sessionsService = {
     async get(sessionId: string) {
+      return {
+        session_id: sessionId,
+        branch_id: BRANCH_ID,
+        created_by: CREATOR_ID,
+        unix_username: 'alice',
+        sdk_home_scope: options.sdkHomeScope ?? 'execution_home',
+      };
+    },
+  };
+
+  const sessionsRepository = {
+    async findById(sessionId: string) {
       harness.sessionReads += 1;
       return {
         session_id: sessionId,
         branch_id: BRANCH_ID,
         created_by: CREATOR_ID,
         unix_username: 'alice',
+        sdk_home_scope: options.sdkHomeScope ?? 'execution_home',
       };
     },
   };
@@ -101,7 +115,7 @@ const buildHarness = (options: {
     boardsService: undefined,
     branchRepository: {} as RegisterHooksContext['branchRepository'],
     usersRepository: usersRepository as unknown as RegisterHooksContext['usersRepository'],
-    sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    sessionsRepository: sessionsRepository as unknown as RegisterHooksContext['sessionsRepository'],
   });
 
   return harness;
@@ -191,6 +205,19 @@ describe.each(PROMPT_WRITES)('%s.create — session unix identity drift', (path)
       await expect(runCreateChain(harness, path)).resolves.toBeUndefined();
       expect(harness.sessionReads).toBe(1);
       expect(harness.userReads).toBe(1);
+    });
+
+    it("ignores the creator's old stamp for a branch-scoped Session", async () => {
+      const harness = buildHarness({
+        branchRbac: false,
+        unixUserMode,
+        sdkHomeScope: 'branch',
+        creatorUnixUsername: 'alice-renamed',
+      });
+
+      await expect(runCreateChain(harness, path)).resolves.toBeUndefined();
+      expect(harness.sessionReads).toBe(1);
+      expect(harness.userReads).toBe(0);
     });
 
     /**

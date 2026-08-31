@@ -6,6 +6,7 @@ export default defineConfig({
     index: 'src/index.ts',
     'analytics/index': 'src/analytics/index.ts', // Backend analytics logger and plugin resolution
     'telemetry/index': 'src/telemetry/index.ts', // Community install telemetry helpers
+    'tracing/datadog': 'src/tracing/datadog.ts', // Shared Datadog tracer type + optional-peer resolver
     'types/index': 'src/types/index.ts',
     'realtime/index': 'src/realtime/index.ts',
     'executor-protocol': 'src/executor-protocol.ts',
@@ -25,6 +26,8 @@ export default defineConfig({
     'feathers/index': 'src/feathers/index.ts', // FeathersJS runtime re-exports
     'lib/feathers-validation': 'src/lib/feathers-validation.ts', // FeathersJS query validation schemas
     'lib/validation': 'src/lib/validation.ts', // Node-only filesystem validation for executors
+    'ids/index': 'src/lib/ids.ts', // Canonical Node UUIDv7 generation and ID utilities
+    'ids/browser': 'src/lib/ids.browser.ts', // Browser-safe UUIDv7 generation via Web Crypto
     'templates/handlebars-helpers': 'src/templates/handlebars-helpers.ts', // Handlebars helpers
     'templates/session-context': 'src/templates/session-context.ts', // Agor system prompt rendering
     'templates/spawn-subsession-template': 'src/templates/spawn-subsession-template.ts', // Spawn-subsession meta-prompt

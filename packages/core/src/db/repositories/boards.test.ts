@@ -7,16 +7,16 @@
 
 import type { Board, BoardID, BoardObject, UUID } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
 import { select, update } from '../database-wrapper';
 import { boards as boardsTable } from '../schema';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
-import { GroupRepository } from './groups';
+import { CapabilityPolicyRepository } from './capability-policies';
 import { RepoRepository } from './repos';
 import { UsersRepository } from './users';
 
@@ -31,6 +31,7 @@ function createBoardData(overrides?: Partial<Board>): Partial<Board> {
     description: overrides?.description,
     color: overrides?.color,
     icon: overrides?.icon,
+    custom_css: overrides?.custom_css,
     objects: overrides?.objects,
     custom_context: overrides?.custom_context,
     created_by: overrides?.created_by ?? 'test-user',
@@ -39,7 +40,6 @@ function createBoardData(overrides?: Partial<Board>): Partial<Board> {
     access_mode: overrides?.access_mode,
     default_others_can: overrides?.default_others_can,
     default_others_fs_access: overrides?.default_others_fs_access,
-    default_dangerously_allow_session_sharing: overrides?.default_dangerously_allow_session_sharing,
   };
   if (overrides && Object.hasOwn(overrides, 'primary_teammate_id')) {
     data.primary_teammate_id = overrides.primary_teammate_id;
@@ -70,6 +70,7 @@ async function createBranchForBoard(
   boardId: UUID,
   overrides: {
     name?: string;
+    created_by?: UUID;
     teammate?: boolean;
     archived?: boolean;
     custom_context?: Record<string, unknown>;
@@ -89,7 +90,7 @@ async function createBranchForBoard(
     path: `/tmp/${name}`,
     board_id: boardId,
     archived: overrides.archived,
-    created_by: generateId(),
+    created_by: overrides.created_by ?? ('test-user' as UUID),
     custom_context:
       overrides.custom_context ??
       (overrides.teammate
@@ -134,6 +135,11 @@ describe('BoardRepository.create', () => {
 
   dbTest('should create board with all required fields', async ({ db }) => {
     const repo = new BoardRepository(db);
+    await new UsersRepository(db).create({
+      user_id: 'user-123' as UUID,
+      email: 'user-123@agor.test',
+      role: 'member',
+    });
     const data = createBoardData({
       name: 'My Board',
       created_by: 'user-123',
@@ -177,6 +183,15 @@ describe('BoardRepository.create', () => {
     delete (data as any).created_by;
 
     await expect(repo.create(data)).rejects.toThrow(/created_by/);
+  });
+
+  dbTest('rejects a missing immutable primary owner', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const missing = generateId() as UUID;
+
+    await expect(
+      repo.create(createBoardData({ created_by: missing, primary_owner_user_id: missing }))
+    ).rejects.toThrow(/primary owner .* does not exist in this tenant/);
   });
 
   dbTest('should reject primary_teammate_id in generic create input', async ({ db }) => {
@@ -598,9 +613,58 @@ describe('BoardRepository.findAll', () => {
     expect(await repo.findAll({ boardIds: [] })).toEqual([]);
   });
 
+  dbTest('findPage applies ordering and pagination in SQL', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    await repo.create(createBoardData({ name: 'C', slug: 'c' }));
+    await repo.create(createBoardData({ name: 'A', slug: 'a' }));
+    await repo.create(createBoardData({ name: 'B', slug: 'b' }));
+
+    const client = (
+      db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const page = await repo.findPage({ sort: { name: 1 }, limit: 1, offset: 1 });
+    expect(page.total).toBe(3);
+    expect(page.data.map((board) => board.name)).toEqual(['B']);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(
+      execute.mock.calls
+        .map(([query]) => JSON.stringify(query))
+        .some((query) => /limit/i.test(query))
+    ).toBe(true);
+  });
+
+  dbTest('keeps nullable slug ordering portable across pages', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const noSlug = await repo.create(createBoardData({ name: 'No slug' }));
+    const alpha = await repo.create(createBoardData({ name: 'Alpha', slug: 'alpha' }));
+    await update(db, boardsTable)
+      .set({ slug: null })
+      .where(eq(boardsTable.board_id, noSlug.board_id))
+      .run();
+
+    const page = await repo.findPage({ sort: { slug: 1 }, limit: 1, offset: 0 });
+    const nextPage = await repo.findPage({ sort: { slug: 1 }, limit: 1, offset: 1 });
+
+    expect(page.data.map((board) => board.board_id)).toEqual([alpha.board_id]);
+    expect(nextPage.data.map((board) => board.board_id)).toEqual([noSlug.board_id]);
+  });
+
   dbTest('should push board visibility directly into findAll SQL', async ({ db }) => {
     const repo = new BoardRepository(db);
     const viewerId = generateId() as UUID;
+    const otherId = generateId() as UUID;
+    const users = new UsersRepository(db);
+    await users.create({
+      user_id: viewerId,
+      email: `viewer-${viewerId}@agor.test`,
+      role: 'member',
+    });
+    await users.create({
+      user_id: otherId,
+      email: `other-${otherId}@agor.test`,
+      role: 'member',
+    });
 
     const ownedPrivate = await repo.create(
       createBoardData({
@@ -615,7 +679,7 @@ describe('BoardRepository.findAll', () => {
         name: 'Other private',
         slug: 'other-private',
         access_mode: 'private',
-        created_by: generateId() as UUID,
+        created_by: otherId,
       })
     );
 
@@ -626,6 +690,18 @@ describe('BoardRepository.findAll', () => {
   dbTest('should resolve visible board IDs without hidden-prefix ambiguity', async ({ db }) => {
     const repo = new BoardRepository(db);
     const viewerId = generateId() as UUID;
+    const otherId = generateId() as UUID;
+    const users = new UsersRepository(db);
+    await users.create({
+      user_id: viewerId,
+      email: `prefix-viewer-${viewerId}@agor.test`,
+      role: 'member',
+    });
+    await users.create({
+      user_id: otherId,
+      email: `prefix-other-${otherId}@agor.test`,
+      role: 'member',
+    });
     const visible = await repo.create(
       createBoardData({
         board_id: '018f0000-0000-7000-8000-000000000001' as BoardID,
@@ -637,7 +713,7 @@ describe('BoardRepository.findAll', () => {
       createBoardData({
         board_id: '018f0000-0000-7000-8000-000000000002' as BoardID,
         access_mode: 'private',
-        created_by: generateId() as UUID,
+        created_by: otherId,
       })
     );
 
@@ -804,7 +880,7 @@ describe('BoardRepository.update', () => {
 
 describe('BoardRepository primary teammate', () => {
   dbTest(
-    'keeps private boards visible through an accessible primary teammate even after teammate moves',
+    'does not infer private-board visibility from an accessible primary teammate',
     async ({ db }) => {
       const users = new UsersRepository(db);
       const boardRepo = new BoardRepository(db);
@@ -822,22 +898,19 @@ describe('BoardRepository primary teammate', () => {
       const teammate = await createBranchForBoard(db, oldBoard.board_id, {
         teammate: true,
         name: 'kelly-teammate',
+        created_by: viewer.user_id as UUID,
       });
 
       await boardRepo.setPrimaryTeammate(oldBoard.board_id, teammate.branch_id);
       await branchRepo.update(teammate.branch_id, {
         board_id: newBoard.board_id,
-        permission_source: 'override',
-        others_can: 'none',
       });
 
       await expect(boardRepo.findVisibleBoardIds(viewer.user_id as UUID)).resolves.not.toContain(
         oldBoard.board_id
       );
 
-      await branchRepo.addOwner(teammate.branch_id, viewer.user_id as UUID);
-
-      await expect(boardRepo.findVisibleBoardIds(viewer.user_id as UUID)).resolves.toContain(
+      await expect(boardRepo.findVisibleBoardIds(viewer.user_id as UUID)).resolves.not.toContain(
         oldBoard.board_id
       );
     }
@@ -1037,7 +1110,7 @@ describe('BoardRepository.getDefault', () => {
   dbTest('should create default board if it does not exist', async ({ db }) => {
     const repo = new BoardRepository(db);
 
-    const defaultBoard = await repo.getDefault();
+    const defaultBoard = await repo.getDefault('test-user');
 
     expect(defaultBoard.slug).toBe('default');
     expect(defaultBoard.name).toBe('Main Board');
@@ -1049,7 +1122,7 @@ describe('BoardRepository.getDefault', () => {
   dbTest('should not create duplicate default boards', async ({ db }) => {
     const repo = new BoardRepository(db);
 
-    const first = await repo.getDefault();
+    const first = await repo.getDefault('test-user');
     const second = await repo.getDefault();
 
     expect(first.board_id).toBe(second.board_id);
@@ -1491,11 +1564,22 @@ describe('BoardRepository import/export', () => {
         name: 'Imported Blob Board',
         slug: 'imported-blob-board',
         icon: ':compass:',
+        custom_css: '.imported { color: teal; }',
+        access_mode: 'shared',
+        default_others_can: 'all',
+        default_others_fs_access: 'write',
       },
       'test-user'
     );
 
     expect(imported.icon).toBe('🧭');
+    expect(imported.custom_css).toBe('.imported { color: teal; }');
+    const policy = await new CapabilityPolicyRepository(db).getBoardPolicies(imported.board_id);
+    expect(policy.board_access.sharing_mode).toBe('shared');
+    expect(policy.branch_template.access.others).toMatchObject({
+      preset: 'manager',
+      fs_access: 'write',
+    });
     await expect(getStoredBoardIcon(db, imported.board_id)).resolves.toBe('🧭');
   });
 
@@ -1503,14 +1587,42 @@ describe('BoardRepository import/export', () => {
     const repo = new BoardRepository(db);
 
     const imported = await repo.fromYaml(
-      ['name: Imported YAML Board', 'slug: imported-yaml-board', 'icon: ":compass:"', ''].join(
-        '\n'
-      ),
+      [
+        'name: Imported YAML Board',
+        'slug: imported-yaml-board',
+        'icon: ":compass:"',
+        'custom_css: ".yaml { color: navy; }"',
+        '',
+      ].join('\n'),
       'test-user'
     );
 
     expect(imported.icon).toBe('🧭');
+    expect(imported.custom_css).toBe('.yaml { color: navy; }');
     await expect(getStoredBoardIcon(db, imported.board_id)).resolves.toBe('🧭');
+  });
+
+  dbTest('uses the same portable mapping for repository clones', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const original = await repo.create(
+      createBoardData({
+        name: 'Clone source',
+        custom_css: '.clone { display: grid; }',
+        access_mode: 'shared',
+        default_others_can: 'view',
+        default_others_fs_access: 'read',
+      })
+    );
+
+    const cloned = await repo.clone(original.board_id, 'Clone target', 'test-user');
+
+    expect(cloned.custom_css).toBe('.clone { display: grid; }');
+    const policy = await new CapabilityPolicyRepository(db).getBoardPolicies(cloned.board_id);
+    expect(policy.board_access.sharing_mode).toBe('shared');
+    expect(policy.branch_template.access.others).toMatchObject({
+      preset: 'viewer',
+      fs_access: 'read',
+    });
   });
 });
 
@@ -1718,109 +1830,99 @@ describe('BoardRepository slug uniqueness', () => {
   });
 });
 
-describe('BoardRepository RBAC defaults', () => {
-  dbTest('applies shared backcompat defaults when fields are omitted', async ({ db }) => {
-    const repo = new BoardRepository(db);
-    const board = await repo.create(createBoardData({ name: 'Backcompat Board' }));
+describe('BoardRepository normalized permission boundary', () => {
+  dbTest(
+    'maps legacy create defaults once but exposes only the fail-closed compatibility view',
+    async ({ db }) => {
+      const repo = new BoardRepository(db);
+      const board = await repo.create(
+        createBoardData({
+          name: 'Compatibility Board',
+          access_mode: 'shared',
+          default_others_can: 'prompt',
+          default_others_fs_access: 'write',
+        })
+      );
+      const permissions = await new CapabilityPolicyRepository(db).getBoardPolicies(board.board_id);
 
-    expect(board.access_mode).toBe('shared');
-    expect(board.default_others_can).toBe('session');
-    expect(board.default_others_fs_access).toBe('read');
-    expect(board.default_dangerously_allow_session_sharing).toBe(false);
-  });
-
-  dbTest('round-trips board-level permission defaults', async ({ db }) => {
-    const repo = new BoardRepository(db);
-    const board = await repo.create(
-      createBoardData({
-        name: 'Private Defaults Board',
+      expect(board).toMatchObject({
         access_mode: 'private',
         default_others_can: 'none',
         default_others_fs_access: 'none',
-        default_dangerously_allow_session_sharing: true,
-      })
+      });
+      expect(permissions).toMatchObject({
+        board_access: { sharing_mode: 'shared', others: { preset: 'viewer' } },
+        branch_template: {
+          access: {
+            sharing_mode: 'shared',
+            others: { preset: 'collaborator', fs_access: 'write' },
+          },
+        },
+      });
+    }
+  );
+
+  dbTest('rejects permission changes through generic board updates', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(createBoardData({ name: 'Policy Boundary' }));
+
+    await expect(repo.update(board.board_id, { access_mode: 'shared' })).rejects.toThrow(
+      'board permission policy service'
     );
-
-    expect(board).toMatchObject({
-      access_mode: 'private',
-      default_others_can: 'none',
-      default_others_fs_access: 'none',
-      default_dangerously_allow_session_sharing: true,
-    });
-
-    const updated = await repo.update(board.board_id, {
-      access_mode: 'shared',
-      default_others_can: 'prompt',
-      default_others_fs_access: 'write',
-      default_dangerously_allow_session_sharing: false,
-    });
-
-    expect(updated).toMatchObject({
-      access_mode: 'shared',
-      default_others_can: 'prompt',
-      default_others_fs_access: 'write',
-      default_dangerously_allow_session_sharing: false,
-    });
   });
 
-  dbTest('treats created_by as a board mutator for historical boards', async ({ db }) => {
+  dbTest('uses immutable primary ownership for creator mutation access', async ({ db }) => {
     const repo = new BoardRepository(db);
-    const usersRepo = new UsersRepository(db);
     const creatorId = generateId() as UUID;
-    await usersRepo.create({
+    await new UsersRepository(db).create({
       user_id: creatorId,
-      email: 'creator@example.com',
-      name: 'Creator',
+      email: `owner-${creatorId}@agor.test`,
+      role: 'member',
     });
     const board = await repo.create(
-      createBoardData({
-        name: 'Historical Board',
-        created_by: creatorId,
-        access_mode: 'private',
-      })
+      createBoardData({ name: 'Owner Board', created_by: creatorId, access_mode: 'private' })
     );
 
+    expect(board.primary_owner_user_id).toBe(creatorId);
     expect(await repo.canMutate(board.board_id, creatorId)).toBe(true);
-    expect(await repo.findVisibleBoardIds(creatorId)).toContain(board.board_id);
+    await expect(
+      repo.update(board.board_id, { primary_owner_user_id: generateId() })
+    ).rejects.toThrow('Primary ownership is immutable');
   });
 
-  dbTest('ignores stale board group mutators when a board is private', async ({ db }) => {
-    const boardRepo = new BoardRepository(db);
-    const groupRepo = new GroupRepository(db);
-    const usersRepo = new UsersRepository(db);
-    const creatorId = generateId() as UUID;
-    const memberId = generateId() as UUID;
-    await usersRepo.create({
-      user_id: creatorId,
-      email: 'creator-private@example.com',
-      name: 'Creator',
-    });
-    await usersRepo.create({
-      user_id: memberId,
-      email: 'member-private@example.com',
-      name: 'Member',
-    });
-    const board = await boardRepo.create(
-      createBoardData({
-        name: 'Private Board',
-        created_by: creatorId,
-        access_mode: 'private',
-      })
-    );
-    const group = await groupRepo.create({ name: 'Editors', created_by: creatorId });
-    await groupRepo.addMember(group.group_id, memberId, creatorId);
-    await groupRepo.upsertBoardGrant({
-      board_id: board.board_id,
-      group_id: group.group_id,
-      can: 'all',
-      fs_access: 'write',
-      created_by: creatorId,
-    });
+  dbTest(
+    'resolveUserAccess grants full capabilities to the primary owner and none to an unrelated member on a private board',
+    async ({ db }) => {
+      const repo = new BoardRepository(db);
+      const creatorId = generateId() as UUID;
+      const otherId = generateId() as UUID;
+      await new UsersRepository(db).create({
+        user_id: creatorId,
+        email: `owner-${creatorId}@agor.test`,
+        role: 'member',
+      });
+      await new UsersRepository(db).create({
+        user_id: otherId,
+        email: `other-${otherId}@agor.test`,
+        role: 'member',
+      });
+      const board = await repo.create(
+        createBoardData({
+          name: 'Effective Access Board',
+          created_by: creatorId,
+          access_mode: 'private',
+        })
+      );
 
-    expect(await boardRepo.canMutate(board.board_id, memberId)).toBe(false);
-    expect(await boardRepo.findVisibleBoardIds(memberId)).not.toContain(board.board_id);
+      const ownerAccess = await repo.resolveUserAccess(board, creatorId);
+      expect(ownerAccess.is_primary_owner).toBe(true);
+      expect(ownerAccess.capabilities).toEqual(
+        expect.arrayContaining(['board.view', 'board.edit'])
+      );
 
-    await boardRepo.update(board.board_id, { access_mode: 'shared' });
-    expect(await boardRepo.canMutate(board.board_id, memberId)).toBe(true);
-  });
+      const otherAccess = await repo.resolveUserAccess(board, otherId);
+      expect(otherAccess.is_primary_owner).toBe(false);
+      expect(otherAccess.capabilities).toEqual([]);
+    }
+  );
 });

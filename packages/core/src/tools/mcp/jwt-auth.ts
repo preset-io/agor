@@ -41,7 +41,6 @@ export interface JWTTokenFetchOptions {
 
 // Cache tokens per unique credential set to avoid cross-tenant leakage
 const tokenCache = new Map<string, CachedToken>();
-
 // Token validity duration: 15 minutes (in milliseconds)
 const TOKEN_TTL_MS = 15 * 60 * 1000;
 
@@ -204,7 +203,13 @@ export async function resolveMCPAuthHeaders(
     cacheNamespace?: string;
     disableProcessTokenCache?: boolean;
     /** Optional live request authority for provider/token use. */
-    assertCurrent?: () => void;
+    assertCurrent?: () => void /**
+     * Identifies the authority that supplied OAuth credentials for this
+     * handoff. The executor repository is tenant/user/generation scoped and
+     * authoritative: an empty result must not fall through to a second
+     * client-credentials exchange from persisted configuration.
+     */;
+    oauthCredentialAuthority?: 'configuration' | 'executor_repository';
   } = {}
 ): Promise<Record<string, string> | undefined> {
   options.assertCurrent?.();
@@ -260,6 +265,11 @@ export async function resolveMCPAuthHeaders(
         };
       }
     }
+
+    // The executor repository is authoritative for per-user OAuth grants. If
+    // it returned no token, do not fan out into a second client-credentials
+    // probe with persisted configuration from the same server row.
+    if (options.oauthCredentialAuthority === 'executor_repository') return undefined;
 
     // Browser authorization-code tokens must arrive through the caller's
     // trusted, server/user-scoped durable record. The legacy origin-only

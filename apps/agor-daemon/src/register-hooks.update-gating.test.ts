@@ -14,12 +14,9 @@ import type { HookContext } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { type RegisterHooksContext, registerHooks } from './register-hooks';
 import { ARTIFACTS_SERVICE_TRANSPORT_METHODS } from './services/artifacts';
-import { BOARD_OWNERS_SERVICE_TRANSPORT_METHODS } from './services/board-owners';
-import { BRANCH_OWNERS_SERVICE_TRANSPORT_METHODS } from './services/branch-owners';
+import { CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS } from './services/capability-policies';
 import { GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS } from './services/gateway-channels';
 import {
-  BOARD_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
-  BRANCH_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
   GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
   GROUPS_SERVICE_TRANSPORT_METHODS,
 } from './services/groups';
@@ -45,7 +42,8 @@ type CapturedHooks = {
  */
 const captureRegisteredHooks = (
   branchRbacEnabled: boolean,
-  branchRepositoryOverride?: RegisterHooksContext['branchRepository']
+  branchRepositoryOverride?: RegisterHooksContext['branchRepository'],
+  boardRepositoryOverride?: RegisterHooksContext['boardRepository']
 ): Map<string, CapturedHooks> => {
   const captured = new Map<string, CapturedHooks>();
   const visibleBranch = {
@@ -93,6 +91,7 @@ const captureRegisteredHooks = (
     sessionsService: {} as RegisterHooksContext['sessionsService'],
     messagesService: {} as RegisterHooksContext['messagesService'],
     boardsService: undefined,
+    boardRepository: boardRepositoryOverride,
     branchRepository:
       branchRepositoryOverride ??
       ({
@@ -109,6 +108,54 @@ const captureRegisteredHooks = (
   return captured;
 };
 
+describe('board get authorization prefetch', () => {
+  it('passes one freshly authorized canonical row into the service method', async () => {
+    const board = {
+      board_id: '00000000-0000-7000-8000-000000000010',
+      name: 'Authorized board',
+    };
+    const findBySlugOrId = vi.fn(async () => board);
+    const canViewResolved = vi.fn(async () => true);
+    const canView = vi.fn(() => {
+      throw new Error('must not reload the authorized board');
+    });
+    const boardRepository = {
+      findBySlugOrId,
+      canViewResolved,
+      canView,
+    } as unknown as NonNullable<RegisterHooksContext['boardRepository']>;
+    const hooks = captureRegisteredHooks(true, undefined, boardRepository).get('boards')?.before;
+    if (!hooks) throw new Error('boards registers no before hooks');
+    const context = {
+      path: 'boards',
+      method: 'get',
+      id: '00000000',
+      params: {
+        provider: 'socketio',
+        query: {},
+        user: {
+          user_id: '00000000-0000-7000-8000-0000000000ff',
+          role: 'member',
+        },
+      },
+    } as unknown as HookContext;
+
+    for (const hook of [...(hooks.all ?? []), ...(hooks.get ?? [])]) await hook(context);
+
+    expect(findBySlugOrId).toHaveBeenCalledOnce();
+    expect(canViewResolved).toHaveBeenCalledWith(board, '00000000-0000-7000-8000-0000000000ff');
+    expect(canView).not.toHaveBeenCalled();
+    expect(context.id).toBe(board.board_id);
+    expect(context.params).toMatchObject({
+      _agorPrefetchedRecord: {
+        id: board.board_id,
+        idField: 'board_id',
+        record: board,
+      },
+    });
+  });
+});
+
 describe('branch hard-delete realtime hook', () => {
   it('captures current authorized recipients before the branch and ACL rows are removed', async () => {
     const branchId = '00000000-0000-7000-8000-000000000001';
@@ -119,7 +166,7 @@ describe('branch hard-delete realtime hook', () => {
       isOwner: async () => true,
       resolveUserPermission: async () => 'all',
       findRealtimeVisibilityBranch: async () => branch,
-      findExplicitViewUserIds: async () => [ownerId, '00000000-0000-7000-8000-0000000000aa'],
+      findRealtimeViewUserIds: async () => [ownerId, '00000000-0000-7000-8000-0000000000aa'],
     } as unknown as RegisterHooksContext['branchRepository'];
     const hooks = captureRegisteredHooks(true, branchRepository).get('branches')?.before;
     if (!hooks) throw new Error('branches registers no before hooks');
@@ -153,7 +200,7 @@ describe('branch hard-delete realtime hook', () => {
       isOwner: async () => true,
       resolveUserPermission: async () => 'session',
       findRealtimeVisibilityBranch: async () => branch,
-      findExplicitViewUserIds: async () => [],
+      findRealtimeViewUserIds: async () => [],
     } as unknown as RegisterHooksContext['branchRepository'];
     const hooks = captureRegisteredHooks(false, branchRepository).get('branches')?.before;
     if (!hooks) throw new Error('branches registers no before hooks');
@@ -185,7 +232,7 @@ describe('branch hard-delete realtime hook', () => {
       isOwner: async () => false,
       resolveUserPermission: async () => 'session',
       findRealtimeVisibilityBranch,
-      findExplicitViewUserIds: async () => [],
+      findRealtimeViewUserIds: async () => [],
     } as unknown as RegisterHooksContext['branchRepository'];
     const hooks = captureRegisteredHooks(false, branchRepository).get('branches')?.before;
     if (!hooks) throw new Error('branches registers no before hooks');
@@ -348,10 +395,8 @@ const UPDATE_NOT_ROUTED: Record<string, string | readonly string[]> = {
     'no update method — custom route exposes create only',
   'artifacts/:id/sandpack-error': 'no update method — custom route exposes create only',
   'artifacts/:id/trust': 'no update method — custom route exposes create only',
-  'boards/:id/group-grants': BOARD_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
-  'boards/:id/owners': BOARD_OWNERS_SERVICE_TRANSPORT_METHODS,
-  'branches/:id/group-grants': BRANCH_GROUP_GRANTS_SERVICE_TRANSPORT_METHODS,
-  'branches/:id/owners': BRANCH_OWNERS_SERVICE_TRANSPORT_METHODS,
+  'boards/:id/permissions': CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS,
+  'branches/:id/permissions': CAPABILITY_POLICY_SERVICE_TRANSPORT_METHODS,
   'gateway-channels': GATEWAY_CHANNELS_SERVICE_TRANSPORT_METHODS,
   'group-memberships': GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
   groups: GROUPS_SERVICE_TRANSPORT_METHODS,
@@ -574,10 +619,8 @@ describe('pinned methods list', () => {
     // nothing while still reading as green.
     expect(pinned.map(([path]) => path)).toEqual([
       'artifacts',
-      'boards/:id/group-grants',
-      'boards/:id/owners',
-      'branches/:id/group-grants',
-      'branches/:id/owners',
+      'boards/:id/permissions',
+      'branches/:id/permissions',
       'gateway-channels',
       'group-memberships',
       'groups',

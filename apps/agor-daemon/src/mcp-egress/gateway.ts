@@ -20,7 +20,7 @@ import { getConnector } from '@agor/core/gateway';
 import {
   buildMCPTemplateContextFromEnv,
   extractMCPTemplateDependencies,
-  isMCPServerUsableInSession,
+  isMCPServerUsableBy,
   resolveMcpServerTemplates,
 } from '@agor/core/mcp';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
@@ -608,16 +608,16 @@ export class MCPEgressGateway {
           !task ||
           task.session_id !== claims.session_id ||
           task.created_by !== claims.principal_user_id ||
+          task.created_by !== claims.credential_user_id ||
           !ACTIVE_TASK_STATES.has(task.status) ||
           !session ||
-          session.created_by !== claims.credential_user_id ||
           !server ||
           !server.enabled ||
           !principal ||
           !credentialUser ||
           !hasMinimumRole(principal.role, ROLES.MEMBER) ||
           !hasMinimumRole(credentialUser.role, ROLES.MEMBER) ||
-          !isMCPServerUsableInSession(server, session)
+          !isMCPServerUsableBy(server, claims.credential_user_id)
         ) {
           throw new MCPEgressGatewayError(403, 'principal_revoked', 'MCP task authority changed');
         }
@@ -654,20 +654,13 @@ export class MCPEgressGateway {
           const branchRepository = new BranchRepository(tenantDb);
           const branch = await branchRepository.findById(session.branch_id);
           if (!branch) throw new MCPEgressGatewayError(403, 'branch_revoked', 'Branch unavailable');
-          const access = await branchRepository.resolveUserAccess(
+          const promptAccess = await resolveSessionPromptAccess({
+            branchRepository,
             branch,
-            claims.principal_user_id as UserID
-          );
-          if (
-            !resolveSessionPromptAccess({
-              branch,
-              session,
-              userId: claims.principal_user_id as UserID,
-              isOwner: access.is_owner,
-              userRole: principal.role,
-              branchPermission: access.can,
-            }).allowed
-          ) {
+            session,
+            userId: claims.principal_user_id as UserID,
+          });
+          if (!promptAccess.allowed) {
             throw new MCPEgressGatewayError(403, 'branch_revoked', 'Branch permission changed');
           }
         }

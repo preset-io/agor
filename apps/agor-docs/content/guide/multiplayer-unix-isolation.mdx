@@ -28,17 +28,81 @@ Sandbox mode automatically enables branch RBAC and the per-user filesystem sandb
 
 For each launch the daemon derives mount access from trusted tenant and branch authorization state:
 
-- the active branch is writable, read-only, or absent according to the principal's permission;
+- the active branch is writable, read-only, or absent according to the prompt actor's file access;
 - sibling worktrees and tenant homes are masked;
 - daemon state and external data roots are hidden;
 - the principal receives a persistent private home overlay;
 - provider and daemon connectivity still use the host network namespace—this is filesystem isolation, not network isolation.
 
+While a Task is running, its existing executor heartbeat rechecks the exact
+user, Task, Session, Branch, prompt permission, and effective file access
+against PostgreSQL authority. Losing prompt permission ends the Task through
+the normal fenced shutdown path. A file-access reduction also ends a runtime
+whose original mounts were broader (`read/write` to `read` or `none`, and
+`read` to `none`). An access increase does not widen or remount a live runtime;
+it applies to a later launch. Redis can accelerate disconnection but is not
+required for the next heartbeat decision.
+
 `users.filesystem_home` can point at a migrated home. Otherwise Agor uses its canonical tenant-scoped home store. Never derive this path from untrusted request data.
+
+### Per-branch SDK homes
+
+Agent SDK state can be relocated from the session owner's home into a directory
+shared by sessions on one branch:
+
+```yaml
+execution:
+  unix_user_mode: sandbox
+  sandbox:
+    sdk_home_mode: per_branch
+```
+
+The default is `inherit`, which preserves the existing home layout. With
+`per_branch`, admission of the first supported independent Session on a branch
+stickily records branch intent. Its directory at
+`<tenantDataRoot>/branch-homes/<branchId>` is still created lazily when that
+Session first runs. Disabling the deployment setting later stops new adoption
+but does not strand an adopted branch's state. Archiving retains the directory;
+permanently deleting the branch removes it.
+
+Each Session also records an immutable SDK-home scope. Existing Sessions keep
+using their historical execution home even after their branch is adopted; a
+new independent Session is the deliberate migration point. Forked and spawned
+children inherit their parent's scope so one native conversation lineage never
+moves between homes. Branch intent selects the default for future independent
+Sessions, while the Session stamp selects the home used when a conversation is
+resumed.
+
+Agor sets each supported tool's config-home environment variables and mounts
+the branch directory at its real path. Cursor is refused because its config
+home cannot currently be relocated reliably. OpenCode is also refused because
+its current XDG data home combines native credentials with relocatable state.
+Credentials remain caller-scoped rather than being copied into the shared
+branch home. Codex API keys are injected through the environment; Codex
+subscription auth uses a caller-specific file overlay in local sandbox mode.
+The daemon opens that caller's existing `.codex/auth.json` without following
+symlinks, passes the pinned inode to bubblewrap, and mounts it read/write over
+an empty `auth.json` mountpoint in the branch Codex home. Codex refreshes the
+caller's credential file in place, while no credential bytes are copied into
+branch-owned storage. This requires `home_mode: per_user`, functional
+`--bind-fd`, and bubblewrap 0.12.0 or newer; Agor fails closed without that
+boundary. Importing replacement credentials or logging out durably requests
+termination of that actor's live branch-scoped Codex Tasks: their sandboxes
+pin the prior inode, and the next prompt must bind the new pathname. A reviewed
+delegated launcher may provide an equivalent caller-scoped overlay.
 
 ### Web terminals
 
-A branch terminal requires at least `session` permission. In sandbox mode it receives the same filesystem boundary as an agent launch. In `simple` mode it is a daemon-user shell and should be disabled on shared instances:
+A branch terminal requires Collaborator or Manager access plus `read` or `read/write` file access. In sandbox mode it receives the same filesystem boundary as an agent launch. In `simple` mode it is a daemon-user shell and should be disabled on shared instances:
+
+Interactive terminals do not mount or receive environment variables for a
+per-branch SDK home. Native tool login commands write credentials into their
+config home, so exposing the shared home to an arbitrary shell would violate
+the caller-scoped credential boundary.
+
+Terminals do not share the Task executor heartbeat, so this continuous
+revalidation applies to Task executors only. Closing that live-terminal parity
+gap requires separate terminal lifecycle work.
 
 ```yaml
 execution:
@@ -51,7 +115,8 @@ execution:
 execution:
   unix_user_mode: delegated
   executor_command_template: >-
-    launcher --tenant {tenant_id} --user {user_id}
+    launcher --tenant {tenant_id} --user {user_id} --branch-access {branch_fs_access}
+    --branch-sdk-home {branch_sdk_home}
 ```
 
 Agor does not claim to prove an external launcher's isolation. The operator must ensure:
@@ -63,21 +128,56 @@ Agor does not claim to prove an external launcher's isolation. The operator must
 - terminal support is owner-affine or disabled;
 - network access is explicitly controlled.
 
-Prefer `{tenant_id}` and `{user_id}`. `{unix_user}` remains temporarily as an opaque, validated home key for compatible hosted launchers; it is not a Unix account and is never passed to sudo.
+Prefer `{tenant_id}`, `{user_id}`, `{branch_fs_access}`, and
+`{branch_sdk_home}`. The branch-home value is shell-escaped and is present only
+for a branch-scoped Session; it is empty for execution-home Sessions even when
+their branch has since been adopted. The launcher must make the same
+Session-scoped mount decision and owns its tool-environment policy.
+`{unix_user}` remains temporarily as an opaque, validated home key for
+compatible hosted launchers; it is not a Unix account and is never passed to
+sudo.
 
-## Branch permissions
+## Board and branch permissions
 
-`others_can` controls non-owner access:
+Every board and branch has one primary owner. Primary ownership cannot be reassigned.
 
-| Value     | Meaning                                      |
-| --------- | -------------------------------------------- |
-| `none`    | no access                                    |
-| `view`    | read branch, session, task, and message data |
-| `session` | create and prompt the caller's own sessions  |
-| `prompt`  | prompt sessions created by other users       |
-| `all`     | full branch/session control                  |
+A board has two separate settings:
 
-`session` is the safe collaboration default. Keep `dangerously_allow_session_sharing` off unless cross-user credential execution is explicitly intended.
+- **Board access** controls who can see and edit the canvas.
+- **Branch defaults** are the complete permission package inherited by branches on that board.
+
+A branch either inherits that entire package or uses one override copied from the current defaults. This includes session sharing—there is no separate inheritance switch for it.
+
+Board roles are **Viewer**, **Editor**, and **Manager**. Branch roles are:
+
+| Role         | Meaning                                                                                    |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| Viewer       | View the branch and its conversations                                                      |
+| Collaborator | View, create Sessions, and prompt branch-home Sessions                                     |
+| Manager      | Collaborator access plus branch, environment, session-lifecycle, and permission management |
+
+Branch file access is selected separately as `none`, `read`, or `read/write`. Collaborator and Manager can open a terminal only when file access is not `none`.
+
+Each entry names exactly one person or group. A person's direct entry overrides their group memberships; otherwise group permissions combine and the highest file access wins. **Others** is a fallback only for active members of the same workspace who match no person or group entry.
+
+Collaborators and Managers may prompt another person's **branch-home** Session
+only when the workspace preference and effective branch permission package both
+enable shared session prompting. The task runs as the actual caller while the
+conversation and native SDK state remain branch-owned. An **execution-home**
+Session is never shareable; create a new branch-home Session instead. When a
+gate is disabled, Agor and connected gateway channels return an actionable,
+terminal denial rather than silently changing execution identity or retrying.
+
+## Capability-policy upgrade
+
+The normalized board/branch permission migration is a coordinated offline cutover. Stop every daemon, take and test a complete database backup, then run the migration with only the new version installed.
+
+The migration maps legacy access conservatively. Personal sharing grants are
+not broadened into branch-wide access: the new workspace and branch switches
+start off. Some users may therefore have less access after the upgrade. Review
+important board and branch permission screens before resuming normal work.
+
+If a board or branch cannot be attributed to a primary owner, migration stops and lists the affected IDs. Resolve those resources manually rather than assigning an arbitrary owner. Old daemon versions cannot run against the migrated authority model. Rollback requires restoring the complete pre-migration database backup.
 
 ## Migrating from 0.24
 

@@ -9,6 +9,7 @@ import type {
   PermissionMode,
   Session,
   SessionID,
+  SessionStopResult,
   SpawnConfig,
   Task,
   User,
@@ -100,6 +101,11 @@ import { SessionAttachmentTray } from './SessionAttachmentTray';
 import { SessionComposerDropZone } from './SessionComposerDropZone';
 import { SessionFooter } from './SessionFooter';
 import { SessionPanelContent } from './SessionPanelContent';
+import {
+  isStopTransportAmbiguous,
+  reconcileStopTransportFailure,
+  requestSessionStop,
+} from './stopReconciliation';
 import { useComposerAttachments } from './useComposerAttachments';
 
 // Re-export PermissionMode from SDK for convenience
@@ -609,6 +615,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const [advancedUploadInitialFiles, setAdvancedUploadInitialFiles] = React.useState<File[]>([]);
   const [composerDropActive, setComposerDropActive] = React.useState(false);
   const [stopRequestInFlight, setStopRequestInFlight] = React.useState(false);
+  const currentClientRef = React.useRef(client);
+  currentClientRef.current = client;
   const [forceFailTarget, setForceFailTarget] = React.useState<{
     taskId: string;
     terminationRequestedAt: string;
@@ -618,7 +626,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
-    reactiveOptions: { taskHydration: 'none' },
+    // ConversationView retains the same lazy handle. Keeping the cache key
+    // identical collapses duplicate Session bootstrap/reconnect reads while
+    // preserving the transcript's latest-task hydration contract.
+    reactiveOptions: { taskHydration: 'lazy' },
   });
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
@@ -924,7 +935,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // lifetime-stable wrappers that delegate to the latest implementations via
   // a ref (re-pointed each render, right where the impls are defined).
   const footerHandlersRef = React.useRef<{
-    onModelConfigChange: (config: ModelConfig) => void;
+    onModelConfigCommit: (config: ModelConfig) => void;
     onSendPrompt: () => void;
     onStop: () => void;
     onFork: () => void;
@@ -938,8 +949,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   } | null>(null);
   const stableFooterHandlers = React.useMemo(
     () => ({
-      onModelConfigChange: (config: ModelConfig) =>
-        footerHandlersRef.current?.onModelConfigChange(config),
+      onModelConfigCommit: (config: ModelConfig) =>
+        footerHandlersRef.current?.onModelConfigCommit(config),
       onSendPrompt: () => footerHandlersRef.current?.onSendPrompt(),
       onStop: () => footerHandlersRef.current?.onStop(),
       onFork: () => footerHandlersRef.current?.onFork(),
@@ -1302,7 +1313,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   };
 
   const handleStop = async () => {
-    if (!session || !client || stopRequestInFlight) return;
+    if (!session || !client || connectionDisabled || stopRequestInFlight) return;
 
     const unverifiedTask = [...tasks]
       .reverse()
@@ -1324,18 +1335,46 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       showInfo('Retrying stop request...');
     }
 
+    const stopSessionId = session.session_id;
+    const stopTarget = [...tasks]
+      .reverse()
+      .find(
+        (task) =>
+          task.status === TaskStatus.DISPATCHING ||
+          task.status === TaskStatus.RUNNING ||
+          task.status === TaskStatus.STOPPING ||
+          task.status === TaskStatus.AWAITING_PERMISSION ||
+          task.status === TaskStatus.AWAITING_INPUT
+      );
+    if (!stopTarget) {
+      showError('Execution state is still syncing. Try again.');
+      return;
+    }
+
     setStopRequestInFlight(true);
     try {
-      const result = (await client.service(`sessions/${session.session_id}/stop`).create({})) as {
-        success?: boolean;
-        reason?: string;
-      };
+      const result: SessionStopResult = await requestSessionStop(
+        client,
+        stopSessionId,
+        stopTarget.task_id
+      );
       if (result.success === false) {
         showInfo(result.reason ?? 'Stop requested; waiting for executor termination.');
       }
     } catch (error) {
       console.error('Failed to stop execution:', error);
-      showError('Failed to stop execution. You can try again.');
+      const reconciliation = isStopTransportAmbiguous(error)
+        ? await reconcileStopTransportFailure(
+            () => currentClientRef.current,
+            stopSessionId,
+            stopTarget.task_id
+          )
+        : { outcome: 'unresolved' as const };
+      if (reconciliation.outcome === 'accepted' || reconciliation.outcome === 'ended') {
+        showInfo(reconciliation.reason);
+      } else {
+        showError('Failed to stop execution. You can try again.');
+      }
     } finally {
       setStopRequestInFlight(false);
     }
@@ -1515,7 +1554,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleModelConfigChange = (newConfig: ModelConfig) => {
+  const handleModelConfigCommit = (newConfig: ModelConfig) => {
     if (session && onUpdateSession) {
       const nextConfig: NonNullable<Session['model_config']> = {
         ...session.model_config,
@@ -1556,7 +1595,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // Render-phase ref write (instead of the usual useLayoutEffect) because the
   // impls above only exist when `session` is non-null, past the early return.
   footerHandlersRef.current = {
-    onModelConfigChange: handleModelConfigChange,
+    onModelConfigCommit: handleModelConfigCommit,
     onSendPrompt: handleSendPrompt,
     onStop: handleStop,
     onFork: handleFork,
@@ -1597,7 +1636,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       client={client}
       modelLabel={modelLabel}
       modelConfig={modelConfig}
-      onModelConfigChange={stableFooterHandlers.onModelConfigChange}
+      onModelConfigCommit={stableFooterHandlers.onModelConfigCommit}
       onOpenSessionSettings={onOpenSettings}
       onSendPrompt={stableFooterHandlers.onSendPrompt}
       onStop={stableFooterHandlers.onStop}

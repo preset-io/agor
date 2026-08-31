@@ -1,4 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+const socketModeMocks = vi.hoisted(() => ({
+  instances: [] as Array<{
+    start: ReturnType<typeof vi.fn>;
+    disconnect: ReturnType<typeof vi.fn>;
+    on: ReturnType<typeof vi.fn>;
+  }>,
+  startImpl: () => Promise.resolve(),
+}));
+
+vi.mock('@slack/socket-mode', () => ({
+  LogLevel: { DEBUG: 'debug', INFO: 'info', WARN: 'warn', ERROR: 'error' },
+  SocketModeClient: class {
+    start = vi.fn(() => socketModeMocks.startImpl());
+    disconnect = vi.fn().mockResolvedValue(undefined);
+    on = vi.fn();
+
+    constructor() {
+      socketModeMocks.instances.push(this);
+    }
+  },
+}));
+
 import {
   extractSlackInboundFiles,
   isChannelAllowedByWhitelist,
@@ -10,6 +33,45 @@ import {
   SlackConnector,
   wrapTablesInCodeBlocks,
 } from './slack';
+
+describe('Slack listener lifecycle', () => {
+  it.each(['resolve', 'reject'] as const)(
+    'keeps stop-during-start bounded when Socket Mode later %ss',
+    async (outcome) => {
+      let resolveStart!: () => void;
+      let rejectStart!: (error: Error) => void;
+      socketModeMocks.instances.length = 0;
+      socketModeMocks.startImpl = () =>
+        new Promise<void>((resolve, reject) => {
+          resolveStart = resolve;
+          rejectStart = reject;
+        });
+      const connector = new SlackConnector({
+        bot_token: 'bot-redacted',
+        app_token: 'app-redacted',
+      });
+      (connector as unknown as { web: unknown }).web = {
+        auth: { test: vi.fn().mockResolvedValue({ user_id: 'bot-user' }) },
+      };
+
+      const starting = connector.startListening(vi.fn());
+      await vi.waitFor(() => expect(socketModeMocks.instances).toHaveLength(1));
+      await connector.stopListening();
+      expect(socketModeMocks.instances[0].disconnect).toHaveBeenCalledOnce();
+
+      if (outcome === 'resolve') {
+        resolveStart();
+        await expect(starting).resolves.toBeUndefined();
+      } else {
+        rejectStart(new Error('provider detail must stay hidden'));
+        await expect(starting).rejects.toMatchObject({
+          code: 'slack_socket_unavailable',
+          kind: 'transient',
+        });
+      }
+    }
+  );
+});
 
 /**
  * slackify-markdown uses zero-width spaces (\u200B) around inline formatting

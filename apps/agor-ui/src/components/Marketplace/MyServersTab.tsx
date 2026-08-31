@@ -16,7 +16,7 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useState } from 'react';
 import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '../../hooks/useMcpMemberPolicy';
 import {
@@ -109,9 +109,10 @@ export const MyServersTab: React.FC<{
   // is an atomic one-tool merge, so no whole-policy lost update is possible.
   const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const [removeConfirm, setRemoveConfirm] = useState<string | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Open portals and pending visual state belong to this exact authority
-    // epoch. Individual controls below still derive their narrower predicate.
+    // epoch. Clear them before paint so a newly-ready authority cannot race
+    // this reset by immediately opening a confirmation.
     if (mutationAuthorityKey === null) {
       setRemoveConfirm(null);
       setBusy(new Set());

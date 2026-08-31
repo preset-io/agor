@@ -530,17 +530,36 @@ export interface AgorSandboxSettings {
    * How the executor's `$HOME` is presented inside the sandbox:
    *  - `shared` (default): the daemon user's real home, with tool state/cache
    *    dirs writable and the daemon trust-root + credential dirs masked.
-   *  - `per_user`: overlay a **per-owner home store**
-   *    (`<data_home>/tenants/<tenant>/homes/<owner_id>`) at the passwd home, so
-   *    `~` is a private, persistent home per session owner. The overlay hides
-   *    the entire daemon `.agor` tree (config, db, worktrees, repos) and every
-   *    other user's home by construction. When the data root lives outside the
-   *    passwd home, Agor masks that root explicitly. Symlink aliases of the
-   *    home and data root are masked as well. The branch, base repo, and
-   *    managed agentic-tools are re-exposed on top. This is the substrate that
-   *    lets per-user isolation work without host accounts. Default: `shared`.
+   *  - `per_user`: overlay a **per-execution-user home store**
+   *    (`<data_home>/tenants/<tenant>/homes/<user_id>`) at the passwd home, so
+   *    `~` is a private, persistent home. Historical execution-home sessions
+   *    select their owner; branch-home sessions select the current prompt
+   *    actor. The overlay hides the entire daemon `.agor` tree (config, db,
+   *    worktrees, repos) and every other user's home by construction. When the
+   *    data root lives outside the passwd home, Agor masks that root explicitly.
+   *    Symlink aliases of the home and data root are masked as well. The branch,
+   *    base repo, and managed agentic-tools are re-exposed on top. This is the
+   *    substrate that lets per-user isolation work without host accounts.
+   *    Default: `shared`.
    */
   home_mode?: 'shared' | 'per_user';
+  /**
+   * Whether fresh sessions on an unadopted branch receive a per-branch SDK
+   * home (relocating the agentic tool's config/state dir —
+   * `.claude`/`.codex`/… — to a branch-keyed directory under
+   * `<tenantDataRoot>/branch-homes/<branchId>`) instead of inheriting the
+   * session-owner's home:
+   *  - `inherit` (default): an unadopted branch creates execution-home sessions.
+   *    Existing sessions and previously adopted branches retain their durable
+   *    behavior. Byte-for-byte identical to a deployment that never set this key.
+   *  - `per_branch`: the first supported independent session on an unadopted
+   *    branch records branch intent and is stamped to use the branch SDK home.
+   *    The branch record governs future independent sessions; the immutable
+   *    Session stamp governs resume. Flipping back to `inherit` stops adoption
+   *    of other branches without moving any existing SDK conversation.
+   * Default: `inherit`.
+   */
+  sdk_home_mode?: 'inherit' | 'per_branch';
   /**
    * Preserve a symlinked daemon home's canonical alias inside a per-user
    * sandbox. The owner store and authorized dynamic paths are exposed at both
@@ -555,9 +574,10 @@ export interface AgorSandboxSettings {
   /** Extra denied-read paths added to `protect_secrets` (escape hatch). */
   extra_deny_read?: string[];
   /**
-   * Hard-fail a task if the sandbox cannot start (missing `bwrap` / unsupported
-   * platform) instead of running unsandboxed. Recommended `true` for
-   * production security gates. Default: false.
+   * Hard-fail a task if the sandbox cannot start (missing bubblewrap 0.12.0+,
+   * unavailable `--bind-fd`, blocked user namespaces, or unsupported platform)
+   * instead of running unsandboxed. Recommended `true` for production security
+   * gates. Default: false.
    */
   fail_if_unavailable?: boolean;
 }
@@ -679,6 +699,9 @@ export interface AgorExecutionSettings {
    * - {session_id} - Session ID (if available)
    * - {branch_id} - Branch ID (if available)
    * - {user_id} - Trusted authenticated Agor user UUID (if available)
+   * - {branch_fs_access} - Actor's branch projection: none, read, or write
+   * - {branch_sdk_home} - Absolute path for a branch-home Session, or empty for
+   *   an execution-home Session
    * - {tenant_id} - Trusted ambient tenant ID (shell-escaped; fails if unavailable)
    *
    * The template command receives JSON payload via stdin and should pipe it
@@ -1202,9 +1225,45 @@ export interface AgorStatsDSettings {
   global_tags?: Record<string, string>;
 }
 
+/** Valid depths for FeathersJS service-method tracing, cheapest first. */
+export const APM_TRACE_SERVICE_DEPTHS = ['off', 'entrypoint', 'full'] as const;
+export type ApmTraceServiceDepth = (typeof APM_TRACE_SERVICE_DEPTHS)[number];
+
+/**
+ * Datadog APM (dd-trace) tracing knobs for the daemon.
+ *
+ * The tracer itself is loaded process-wide (single-step / `NODE_OPTIONS`
+ * injection), which already auto-instruments HTTP, Express, Postgres, and
+ * Redis. These settings govern Agor's custom tracing layers: the FeathersJS
+ * service-method layer and the postgres.js Drizzle query shim, both of which
+ * dd-trace has no native plugin for. `off` disables both custom layers.
+ */
+export interface AgorApmSettings {
+  /**
+   * Depth of custom Agor tracing. Defaults to `off`.
+   *
+   * PostgreSQL query tracing is enabled for either `entrypoint` or `full` and
+   * disabled for `off`. The depth only affects FeathersJS service spans.
+   *
+   * - `off`: neither custom tracing layer is registered — zero custom tracing
+   *   overhead (including no database shim patch and no tracer resolution).
+   * - `entrypoint`: one span per top-level request; nested service-to-service
+   *   fan-out is suppressed (mirrors the StatsD metrics hook). Cheap and
+   *   bounded — safe to leave on in production.
+   * - `full`: a span per service-method invocation including nested calls, so
+   *   the fan-out and its child Postgres queries are visible in the flame
+   *   graph. Highest span volume (and ingestion cost) — intended for active
+   *   investigation, not steady state.
+   */
+  trace_services?: ApmTraceServiceDepth;
+}
+
 /** Optional daemon operational metrics exporters. */
 export interface AgorMetricsSettings {
   statsd?: AgorStatsDSettings;
+
+  /** Datadog APM (dd-trace) tracing knobs. */
+  apm?: AgorApmSettings;
 }
 
 /**

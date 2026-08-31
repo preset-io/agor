@@ -25,9 +25,9 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Artifact, BoardID, BranchID, SessionID, UUID } from '@agor/core/types';
-import { describe, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
-import { ArtifactsService } from './artifacts';
+import { ArtifactsService, escapeEnvValue } from './artifacts';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/config')>();
@@ -35,6 +35,14 @@ vi.mock('@agor/core/config', async (importOriginal) => {
     ...actual,
     getDaemonBaseUrl: vi.fn(async () => 'http://localhost:3030'),
   };
+});
+
+it('quotes dotenv values without permitting CR/LF record injection', () => {
+  const escaped = escapeEnvValue('first\rINJECTED=value\nlast\\"');
+
+  expect(escaped).toBe('"first\\rINJECTED=value\\nlast\\\\\\""');
+  expect(escaped).not.toContain('\r');
+  expect(escaped).not.toContain('\n');
 });
 
 /**
@@ -54,6 +62,7 @@ function makeFakeApp(): Application {
 /** Create a board directly via the repository, since the artifacts service
  * doesn't own boards. */
 async function seedBoard(db: Database) {
+  await seedUser(db, 'user-owner');
   const repo = new BoardRepository(db);
   return repo.create({
     board_id: generateId() as BoardID,
@@ -102,6 +111,7 @@ async function seedSession(db: Database, branchId: BranchID, userId = 'user-owne
  */
 async function seedUser(db: Database, userId: string): Promise<void> {
   const repo = new UsersRepository(db);
+  if ((await repo.findAll()).some((user) => user.user_id === userId)) return;
   await repo.create({
     user_id: userId as never,
     email: `${userId}@test.local`,

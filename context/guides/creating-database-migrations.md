@@ -150,12 +150,24 @@ live daemon connections hold shared locks that will trip the timeout.
 ### Protocol-breaking migrations require an enforced offline cutover
 
 If old and new workers cannot safely share the additive schema, register the
-migration in `OFFLINE_CUTOVER_MIGRATIONS` in `src/db/migrate.ts`. Existing
-PostgreSQL databases then refuse automatic migration until an operator stops
-every daemon and runs `agor db migrate --offline-cutover`. Fresh databases may
-still migrate automatically because no old worker can exist. Document the
-exact stop → migrate → start order in the user guide; the acknowledgement flag
-cannot itself prove that another host has stopped.
+migration in the impact registry in `src/db/migrate.ts` with
+`requiresOfflineCutover: true`. Existing
+databases then refuse automatic migration until an operator stops every daemon
+and runs `agor db migrate --offline-cutover`. The registry may cover either or
+both dialects; a protocol-breaking SQLite migration still needs acknowledgement
+on an existing database even though it has no HA cohort. Fresh databases may
+still migrate automatically because no old worker can exist. Document the exact
+stop → migrate → start order in the user guide; the acknowledgement flag cannot
+itself prove that another host has stopped.
+
+Agor-managed standalone development variants are isolated by Compose project
+and explicitly set `AGOR_MIGRATION_OFFLINE_CUTOVER=true`. The development
+entrypoint translates that acknowledgement to `--offline-cutover`; arbitrary
+unseeded Compose invocations default it to false. For already-rendered managed
+environment commands, `SEED=true` is the development-only compatibility signal;
+those Compose projects own isolated database volumes. HA keeps using its
+dedicated one-shot migrator before either daemon replica starts. Never set this
+variable or `SEED=true` merely to make a shared or production database boot.
 
 ### Schemas drifting
 

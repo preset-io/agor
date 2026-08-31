@@ -372,14 +372,14 @@ describe('HA Feathers publication relay', () => {
       board_id: 'board-a',
       access_mode: 'private' as const,
     }));
-    const canView = vi.fn(async (_boardId: string, userId: string) => userId === 'allowed');
+    const findRealtimeViewUserIds = vi.fn(async () => ['allowed']);
     configureRealtimePublish({
       app,
       branchRbacEnabled: true,
       ...repos({ branch: branch('unused'), permissions: {} }),
       boardRepository: {
         findById: currentBoard,
-        canView,
+        findRealtimeViewUserIds,
       } as unknown as BoardRepository,
       multiTenancy: {
         mode: 'required_from_auth',
@@ -401,7 +401,8 @@ describe('HA Feathers publication relay', () => {
     await remoteHandler?.(forgedSharedEnvelope);
 
     expect(currentBoard).toHaveBeenCalledWith('board-a');
-    expect(canView).toHaveBeenCalledTimes(2);
+    expect(findRealtimeViewUserIds).toHaveBeenCalledOnce();
+    expect(findRealtimeViewUserIds).toHaveBeenCalledWith('board-a');
     expect(app.emit).toHaveBeenCalledOnce();
     const currentPrivateDelivery = app.emit.mock.calls[0]?.[2] as FakeChannel;
     expect(currentPrivateDelivery.connections).toEqual([allowed]);
@@ -483,7 +484,7 @@ describe('HA Feathers publication relay', () => {
     );
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => null),
-      findExplicitViewUserIds: vi.fn(async () => []),
+      findRealtimeViewUserIds: vi.fn(async () => []),
     } as unknown as RealtimeAccessBranchRepository;
     const params = {
       tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
@@ -664,6 +665,7 @@ describe('HA Feathers publication relay', () => {
         'authentication',
         'session-tokens',
         'external-launch',
+        'executor-git-environment',
         'mcp-servers/oauth-auth-headers',
         'codex-auth/device',
         // Claude subscription control-plane results must never enter shared Redis,
@@ -940,7 +942,7 @@ function repos(options: {
     findRealtimeVisibilityBranch: vi.fn(async (id: string) =>
       id === options.branch.branch_id ? options.branch : null
     ),
-    findExplicitViewUserIds: vi.fn(async () => viewableUserIds),
+    findRealtimeViewUserIds: vi.fn(async () => viewableUserIds),
   } as unknown as RealtimeAccessBranchRepository;
   const sessionsRepository = {
     findBranchIdBySessionId: vi.fn(async (id: string) =>
@@ -955,10 +957,12 @@ function repos(options: {
       board_id: boardId,
       access_mode: options.boardAccessMode ?? 'private',
     })),
-    canView: vi.fn(async (_boardId: string, userId: string) =>
+    findRealtimeViewUserIds: vi.fn(async () =>
       options.boardPermissions
-        ? options.boardPermissions[userId] === true
-        : viewableUserIds.includes(userId)
+        ? Object.entries(options.boardPermissions)
+            .filter(([, canView]) => canView)
+            .map(([userId]) => userId)
+        : viewableUserIds
     ),
   } as unknown as BoardRepository;
   return { branchRepository, sessionsRepository, boardRepository };
@@ -1232,7 +1236,10 @@ describe('configureRealtimePublish', () => {
         'tenant:tenant-a': [{ user: tenantUser }],
       }
     );
-    const r = repos({ branch: branch('b1', 'view'), permissions: {} });
+    const r = repos({
+      branch: branch('b1', 'view'),
+      permissions: { 'tenant-user': 'view' },
+    });
     vi.mocked(r.branchRepository.findRealtimeVisibilityBranch).mockImplementation(async () => {
       expect(getCurrentTenantId()).toBe('tenant-a');
       return branch('b1', 'view');
@@ -1490,7 +1497,7 @@ describe('configureRealtimePublish', () => {
     const deletedBranch = branch('b1', 'none');
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => null),
-      findExplicitViewUserIds: vi.fn(async () => []),
+      findRealtimeViewUserIds: vi.fn(async () => []),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
       findBranchIdBySessionId: vi.fn(async () => null),
@@ -1550,7 +1557,7 @@ describe('configureRealtimePublish', () => {
     expect(r.branchRepository.findRealtimeVisibilityBranch).not.toHaveBeenCalled();
   });
 
-  it('scopes nested branch permission service events through the route branch id', async () => {
+  it('does not broadcast branch permission mutation payloads', async () => {
     const allowed = user('allowed');
     const denied = user('denied');
     const app = makeApp([{ user: allowed }, { user: denied }]);
@@ -1563,17 +1570,17 @@ describe('configureRealtimePublish', () => {
     const channel = await app.runPublish(
       { user_id: 'owner-user' },
       {
-        path: 'branches/:id/owners',
-        method: 'create',
-        event: 'created',
+        path: 'branches/:id/permissions',
+        method: 'patch',
+        event: 'patched',
         params: { route: { id: 'b1' } },
       }
     );
 
-    expect(channel.connections).toEqual([{ user: allowed }]);
+    expect(channel.connections ?? []).toEqual([]);
   });
 
-  it('scopes nested branch group grant events through the route branch id', async () => {
+  it('does not broadcast board permission mutation payloads', async () => {
     const allowed = user('allowed');
     const denied = user('denied');
     const app = makeApp([{ user: allowed }, { user: denied }]);
@@ -1584,25 +1591,25 @@ describe('configureRealtimePublish', () => {
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
 
     const channel = await app.runPublish(
-      { group_id: 'g1', can: 'view' },
+      { board_access_revision: 2 },
       {
-        path: 'branches/:id/group-grants',
-        method: 'create',
-        event: 'created',
-        params: { route: { id: 'b1' } },
+        path: 'boards/:id/permissions',
+        method: 'patch',
+        event: 'patched',
+        params: { route: { id: 'board-1' } },
       }
     );
 
-    expect(channel.connections).toEqual([{ user: allowed }]);
+    expect(channel.connections ?? []).toEqual([]);
   });
 
-  it('broadcasts broadly visible branch events without explicit user expansion', async () => {
+  it('publishes broadly visible branch events only to the materialized audience', async () => {
     const u1 = user('u1');
     const u2 = user('u2');
     const app = makeApp([{ user: u1 }, { user: u2 }]);
     const r = repos({
       branch: branch('b1', 'session'),
-      permissions: {},
+      permissions: { u1: 'view', u2: 'view' },
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
 
@@ -1612,7 +1619,7 @@ describe('configureRealtimePublish', () => {
     );
 
     expect(channel.connections).toEqual([{ user: u1 }, { user: u2 }]);
-    expect(vi.mocked(r.branchRepository.findExplicitViewUserIds)).not.toHaveBeenCalled();
+    expect(vi.mocked(r.branchRepository.findRealtimeViewUserIds)).toHaveBeenCalledOnce();
   });
 
   it('honors allowSuperadmin=false for branch events', async () => {
@@ -1675,7 +1682,7 @@ describe('configureRealtimePublish', () => {
     const r = repos({
       branch: branch('b1', 'view'),
       session: session('s1', 'b1'),
-      permissions: {},
+      permissions: { 'owner-user': 'view' },
       owner: 'owner-user',
     });
     configureRealtimePublish({ app, branchRbacEnabled: true, ...r });
@@ -1730,7 +1737,7 @@ describe('configureRealtimePublish', () => {
       { path: 'board-comments', method: 'create', event: 'created' }
     );
 
-    expect(r.boardRepository.canView).not.toHaveBeenCalled();
+    expect(r.boardRepository.findRealtimeViewUserIds).not.toHaveBeenCalled();
     expect(channel.connections).toEqual([{ user: allowed }]);
   });
 
@@ -2255,7 +2262,7 @@ describe('configureRealtimePublish streaming scope', () => {
     );
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'view')),
-      findExplicitViewUserIds: vi.fn(async () => []),
+      findRealtimeViewUserIds: vi.fn(async () => []),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
       findBranchIdBySessionId: vi.fn(async () => 'b1'),
@@ -2529,6 +2536,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
     ['mcp-servers/discover', { tools: [] }],
     ['branches/logs', { logs: 'DATABASE_URL=postgres://user:pw@host/db' }],
     ['repos/clone', { url: 'https://token@github.com/org/repo' }],
+    ['session-env-selections', { session_id: 's1', env_var_name: 'PRIVATE_TOKEN' }],
     ['sessions/:id/fork', { session_id: 's1', branch_id: 'b1' }],
     ['terminals', { terminal_id: 't1' }],
   ])('publishes %s to nobody', async (path, data) => {
@@ -2589,7 +2597,6 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       ['tasks', { session_id: 's1' }],
       ['messages', { session_id: 's1' }],
       ['session-mcp-servers', { session_id: 's1' }],
-      ['session-env-selections', { session_id: 's1' }],
       ['branches', { branch_id: 'b1' }],
       ['schedules', { branch_id: 'b1' }],
       ['artifacts', { branch_id: 'b1' }],
@@ -2611,7 +2618,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       expect(delivered(result)).toEqual([allowed]);
     });
 
-    it('branches/:id/owners reaches the branch audience via the route id', async () => {
+    it('branches/:id/permissions does not expose policy payloads', async () => {
       const allowed = { user: user('allowed') };
       const denied = { user: user('denied') };
       const app = allowlistApp([allowed, denied]);
@@ -2622,33 +2629,33 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       const result = await app.runPublish(
         { user_id: 'allowed' },
         {
-          path: 'branches/:id/owners',
-          method: 'create',
-          event: 'created',
+          path: 'branches/:id/permissions',
+          method: 'patch',
+          event: 'patched',
           params: { route: { id: 'b1' } },
         }
       );
 
-      expect(delivered(result)).toEqual([allowed]);
+      expect(delivered(result)).toEqual([]);
     });
 
-    it('branches/:id/group-grants reaches the branch audience via the route id', async () => {
+    it('boards/:id/permissions does not expose policy payloads', async () => {
       const allowed = { user: user('allowed') };
       const denied = { user: user('denied') };
       const app = allowlistApp([allowed, denied]);
       configureRealtimePublish({ app, branchRbacEnabled: true, ...rbacRepos() });
 
       const result = await app.runPublish(
-        { group_id: 'g1' },
+        { board_access_revision: 2 },
         {
-          path: 'branches/:id/group-grants',
-          method: 'create',
-          event: 'created',
-          params: { route: { id: 'b1' } },
+          path: 'boards/:id/permissions',
+          method: 'patch',
+          event: 'patched',
+          params: { route: { id: 'board-1' } },
         }
       );
 
-      expect(delivered(result)).toEqual([allowed]);
+      expect(delivered(result)).toEqual([]);
     });
 
     it.each([
@@ -2724,7 +2731,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
       expect(delivered(result)).toEqual([allowed]);
     });
 
-    it('a shared board row still reaches the whole tenant', async () => {
+    it('a board row reaches only principals allowed by the board policy', async () => {
       const u1 = { user: user('u1') };
       const u2 = { user: user('u2') };
       const app = allowlistApp([u1, u2]);
@@ -2734,7 +2741,7 @@ describe('configureRealtimePublish default-deny allowlist', () => {
         ...repos({
           branch: branch('b1', 'none'),
           permissions: {},
-          boardAccessMode: 'shared',
+          boardPermissions: { u1: true, u2: true },
         }),
       });
 

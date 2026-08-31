@@ -1,18 +1,21 @@
 import type {
   AgorClient,
   Board,
-  BoardGroupGrantWithGroup,
-  BranchFsAccessLevel,
-  BranchPermissionLevel,
+  BoardCapabilityPolicies,
+  CapabilityPolicyWorkspacePreferences,
+  EffectiveCapabilityPolicyAccess,
   Group,
   User,
-  UUID,
 } from '@agor-live/client';
 import { Alert, Form, Modal, Skeleton } from 'antd';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useThemedMessage } from '@/utils/message';
+import { useAuthConfig } from '../../hooks/useAuthConfig';
+import { useAgorStore } from '../../store/agorStore';
+import { selectUserById } from '../../store/selectors';
 import { BoardFormFields, extractBoardFormValues } from '../forms/BoardFormFields';
 import { JSONEditor, validateJSON } from '../JSONEditor';
+import { BoardCapabilityPolicyModalEditor } from '../permissions/CapabilityPolicyEditor';
 
 export interface BoardEditModalProps {
   board: Board | null;
@@ -20,19 +23,43 @@ export interface BoardEditModalProps {
   open: boolean;
   onClose: () => void;
   onUpdate?: (boardId: string, updates: Partial<Board>) => unknown;
+  currentUser?: User | null;
 }
 
 /** The single board-settings editor used by Settings and the navbar shortcut. */
-export function BoardEditModal({ board, client, open, onClose, onUpdate }: BoardEditModalProps) {
+export function BoardEditModal({
+  board,
+  client,
+  open,
+  onClose,
+  onUpdate,
+  currentUser,
+}: BoardEditModalProps) {
+  const userById = useAgorStore(selectUserById);
+  const { featuresConfig } = useAuthConfig();
+  // Do not mount the normalized policy editor against a daemon that has not
+  // explicitly enabled the feature. Legacy board permission fields remain
+  // available in that mode, matching the pre-remodel UI behavior.
+  const branchRbacEnabled = featuresConfig?.branchRbac === true;
   const [form] = Form.useForm();
   const { showError } = useThemedMessage();
   const [loading, setLoading] = useState(false);
-  const [rbacEnabled, setRbacEnabled] = useState(false);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
+  const [policy, setPolicy] = useState<BoardCapabilityPolicies | null>(null);
+  const [workspacePreferences, setWorkspacePreferences] =
+    useState<CapabilityPolicyWorkspacePreferences>({ session_sharing_enabled: false });
+  const [effectiveAccess, setEffectiveAccess] = useState<EffectiveCapabilityPolicyAccess | null>(
+    null
+  );
   const [loadedBoard, setLoadedBoard] = useState<Board | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const permissionUsers = useMemo(() => {
+    const knownUsers = new Map(userById);
+    for (const user of allUsers) knownUsers.set(user.user_id, user);
+    return [...knownUsers.values()];
+  }, [userById, allUsers]);
 
   useEffect(() => {
     if (!open || !board) return;
@@ -40,42 +67,66 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
     setLoading(true);
     setLoadError(null);
     setLoadedBoard(null);
+    setPolicy(null);
+    setEffectiveAccess(null);
 
     // Re-read the board as the modal opens. The selector uses a lean board list,
     // while this form must always start from the full, latest representation.
     const load = async () => {
       try {
-        const fresh = client ? await client.service('boards').get(board.board_id) : board;
-        let ownerIds: string[] = [];
-        let grants: Array<{ group_id: string; can: string; fs_access?: string }> = [];
-        if (client) {
-          try {
-            const [users, groups, owners, groupGrants] = await Promise.all([
-              client.service('users').findAll({}),
-              client.service('groups').findAll({ query: { archived: false } }),
-              client.service('boards/:id/owners').find({ route: { id: board.board_id } }),
-              client.service('boards/:id/group-grants').find({ route: { id: board.board_id } }),
-            ]);
-            if (cancelled) return;
-            setRbacEnabled(true);
-            setAllUsers(users as User[]);
-            setAllGroups(groups as Group[]);
-            ownerIds = (owners as User[]).map((user) => user.user_id);
-            grants = (groupGrants as BoardGroupGrantWithGroup[]).map((grant) => ({
-              group_id: grant.group_id,
-              can: grant.can,
-              fs_access: grant.fs_access,
-            }));
-          } catch (error) {
-            if ((error as { code?: number })?.code !== 404) throw error;
-            // Owner/group routes intentionally do not exist when RBAC is disabled.
-            setRbacEnabled(false);
-            setAllUsers([]);
-            setAllGroups([]);
+        if (!client) throw new Error('Agor client is unavailable');
+        const fresh = await client.service('boards').get(board.board_id);
+        // The legacy board permissions tab still needs the principal
+        // directory when normalized RBAC is disabled. Only the normalized
+        // policy package and workspace preference are feature-gated.
+        const [usersResult, groupsResult] = await Promise.allSettled([
+          client.service('users').findAll({}),
+          client.service('groups').findAll({ query: { archived: false } }),
+        ]);
+        if (cancelled) return;
+
+        if (usersResult.status === 'fulfilled') {
+          setAllUsers(usersResult.value as User[]);
+        } else {
+          setAllUsers([]);
+          console.warn('Failed to load users for board permissions:', usersResult.reason);
+        }
+        if (groupsResult.status === 'fulfilled') {
+          setAllGroups(groupsResult.value as Group[]);
+        } else {
+          setAllGroups([]);
+          console.warn('Failed to load groups for board permissions:', groupsResult.reason);
+        }
+
+        if (branchRbacEnabled) {
+          const [policyResult, preferencesResult, accessResult] = await Promise.allSettled([
+            client.service('boards/:id/permissions').find({ route: { id: board.board_id } }),
+            client.service('workspace-preferences').find(),
+            client.service('boards/:id/effective-access').find({ route: { id: board.board_id } }),
+          ]);
+          if (cancelled) return;
+          if (policyResult.status === 'fulfilled') {
+            setPolicy(policyResult.value);
+          } else {
+            throw policyResult.reason;
           }
+          if (preferencesResult.status === 'fulfilled') {
+            setWorkspacePreferences(preferencesResult.value);
+          }
+          // A failed fetch here fails closed: canEditGeneral (below) treats a
+          // null effectiveAccess as "no board.edit capability", same as an
+          // explicit denial.
+          setEffectiveAccess(
+            accessResult.status === 'fulfilled'
+              ? (accessResult.value as unknown as EffectiveCapabilityPolicyAccess)
+              : null
+          );
+        } else {
+          setPolicy(null);
+          setWorkspacePreferences({ session_sharing_enabled: false });
+          setEffectiveAccess(null);
         }
         if (cancelled) return;
-        if (ownerIds.length === 0 && fresh.created_by) ownerIds = [fresh.created_by];
         // Populate the form BEFORE exposing loadedBoard so the background
         // editor mounts against fully-initialized field values (rather than
         // relying on render batching). loadedBoard is set last, below.
@@ -89,11 +140,8 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
           access_mode: fresh.access_mode || 'shared',
           default_others_can: fresh.default_others_can || 'session',
           default_others_fs_access: fresh.default_others_fs_access || 'read',
-          default_dangerously_allow_session_sharing: Boolean(
-            fresh.default_dangerously_allow_session_sharing
-          ),
-          owner_ids: ownerIds,
-          board_group_grants: grants,
+          owner_ids: fresh.created_by ? [fresh.created_by] : [],
+          board_group_grants: [],
           custom_context: fresh.custom_context ? JSON.stringify(fresh.custom_context, null, 2) : '',
         });
         // Expose the loaded board last: this is what un-gates the form render.
@@ -111,40 +159,24 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
     return () => {
       cancelled = true;
     };
-  }, [board, client, form, open]);
+  }, [board, branchRbacEnabled, client, form, open]);
+
+  // Preserve the legacy open-RBAC behavior while the normalized policy
+  // feature is disabled: every board mutator has always been allowed to
+  // save general settings there, and the daemon-side authorization hook
+  // is a no-op in that mode too. The server remains authoritative for
+  // every write either way — this only prevents typing into fields that
+  // are certain to 403.
+  const canEditGeneral = branchRbacEnabled
+    ? Boolean(effectiveAccess?.capabilities.includes('board.edit'))
+    : true;
 
   const syncPermissions = async () => {
-    if (!client || !board || !rbacEnabled) return;
-    const id = board.board_id as UUID;
-    const values = form.getFieldsValue(true);
-    const desiredOwners = (values.owner_ids || []) as UUID[];
-    const desiredGrants = (
-      values.access_mode === 'private' ? [] : values.board_group_grants || []
-    ) as Array<{ group_id: string; can: BranchPermissionLevel; fs_access?: BranchFsAccessLevel }>;
-    const owners = (await client.service('boards/:id/owners').find({ route: { id } })) as User[];
-    const currentOwnerIds = owners.map((user) => user.user_id as UUID);
-    const currentGrants = (await client
-      .service('boards/:id/group-grants')
-      .find({ route: { id } })) as BoardGroupGrantWithGroup[];
-    const desiredGroups = new Set(desiredGrants.map((grant) => grant.group_id));
-    await Promise.all([
-      ...desiredOwners
-        .filter((userId) => !currentOwnerIds.includes(userId))
-        .map((user_id) =>
-          client.service('boards/:id/owners').create({ user_id }, { route: { id } })
-        ),
-      ...currentOwnerIds
-        .filter((userId) => !desiredOwners.includes(userId))
-        .map((userId) => client.service('boards/:id/owners').remove(userId, { route: { id } })),
-      ...desiredGrants.map((grant) =>
-        client.service('boards/:id/group-grants').create(grant, { route: { id } })
-      ),
-      ...currentGrants
-        .filter((grant) => !desiredGroups.has(grant.group_id))
-        .map((grant) =>
-          client.service('boards/:id/group-grants').remove(grant.group_id, { route: { id } })
-        ),
-    ]);
+    if (!branchRbacEnabled || !client || !board || !policy) return;
+    const saved = await client
+      .service('boards/:id/permissions')
+      .patch(null, policy, { route: { id: board.board_id } });
+    setPolicy(saved);
   };
 
   const close = () => {
@@ -157,12 +189,10 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
     try {
       setSaving(true);
       await form.validateFields();
-      const values = form.getFieldsValue(true);
-      if (values.access_mode === 'private' && (values.owner_ids || []).length !== 1) {
-        showError('Private boards must have exactly one private user');
-        return;
-      }
-      const updated = await onUpdate?.(board.board_id, extractBoardFormValues(form));
+      const updated = await onUpdate?.(
+        board.board_id,
+        extractBoardFormValues(form, { includeLegacyPermissions: !branchRbacEnabled })
+      );
       if (updated === false) return;
       await syncPermissions();
       close();
@@ -199,9 +229,27 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
             key={loadedBoard.board_id}
             form={form}
             backgroundResetSignal={loadedBoard.board_id}
-            rbacEnabled={rbacEnabled}
+            rbacEnabled={branchRbacEnabled}
             allUsers={allUsers}
             allGroups={allGroups}
+            canEditGeneral={canEditGeneral}
+            capabilityPolicyEditor={
+              branchRbacEnabled ? (
+                policy ? (
+                  <BoardCapabilityPolicyModalEditor
+                    value={policy}
+                    onChange={setPolicy}
+                    client={client}
+                    users={permissionUsers}
+                    groups={allGroups}
+                    currentUser={currentUser}
+                    workspacePreferences={workspacePreferences}
+                  />
+                ) : (
+                  <Alert type="error" showIcon description="Permissions are unavailable." />
+                )
+              ) : undefined
+            }
             extra={
               <Form.Item
                 label="Custom Context (JSON)"
@@ -209,7 +257,11 @@ export function BoardEditModal({ board, client, open, onClose, onUpdate }: Board
                 help="Add custom fields for use in zone trigger templates (e.g., {{ board.context.yourField }})"
                 rules={[{ validator: validateJSON }]}
               >
-                <JSONEditor placeholder='{"team": "Backend", "sprint": 42}' rows={4} />
+                <JSONEditor
+                  placeholder='{"team": "Backend", "sprint": 42}'
+                  rows={4}
+                  disabled={!canEditGeneral}
+                />
               </Form.Item>
             }
           />

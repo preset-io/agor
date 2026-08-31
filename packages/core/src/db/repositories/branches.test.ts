@@ -5,15 +5,15 @@
  */
 
 import type { BoardID, BranchID, UUID } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { eq } from 'drizzle-orm';
+import { describe, expect, vi } from 'vitest';
 import { generateId, shortId } from '../../lib/ids';
-import { boards } from '../schema';
-import { dbTest } from '../test-helpers';
+import { update } from '../database-wrapper';
+import { boards, branches } from '../schema';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError } from './base';
 import { BoardObjectRepository } from './board-objects';
-import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
-import { GroupRepository } from './groups';
 import { RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
 import { UsersRepository } from './users';
@@ -48,6 +48,7 @@ function createBranchData(overrides?: {
   path?: string;
   board_id?: UUID;
   created_by?: UUID;
+  primary_owner_user_id?: UUID;
   base_ref?: string;
   base_remote_url?: string;
   base_sha?: string;
@@ -68,7 +69,6 @@ function createBranchData(overrides?: {
   permission_source?: 'board' | 'override';
   others_can?: 'none' | 'view' | 'session' | 'prompt' | 'all';
   others_fs_access?: 'none' | 'read' | 'write';
-  dangerously_allow_session_sharing?: boolean;
 }) {
   const name = overrides?.name ?? 'feature-branch';
   const repoId = overrides?.repo_id ?? (generateId() as UUID);
@@ -82,7 +82,8 @@ function createBranchData(overrides?: {
     branch_unique_id: overrides?.branch_unique_id ?? 1,
     path: overrides?.path ?? `/home/user/.agor/repos/test-repo/${name}`,
     board_id: overrides?.board_id,
-    created_by: overrides?.created_by ?? (generateId() as UUID),
+    created_by: overrides?.created_by ?? ('test-user' as UUID),
+    primary_owner_user_id: overrides?.primary_owner_user_id,
     base_ref: overrides?.base_ref,
     base_remote_url: overrides?.base_remote_url,
     base_sha: overrides?.base_sha,
@@ -103,7 +104,6 @@ function createBranchData(overrides?: {
     permission_source: overrides?.permission_source,
     others_can: overrides?.others_can,
     others_fs_access: overrides?.others_fs_access,
-    dangerously_allow_session_sharing: overrides?.dangerously_allow_session_sharing,
   } as const;
 }
 
@@ -119,6 +119,7 @@ describe('BranchRepository.findBranchIdsByZone', () => {
       board_id: boardId,
       created_at: new Date(),
       created_by: 'test-user' as UUID,
+      primary_owner_user_id: 'test-user' as UUID,
       name: 'Test Board',
       data: {
         objects: {
@@ -171,6 +172,23 @@ describe('BranchRepository.findBranchIdsByZone', () => {
 // ============================================================================
 
 describe('BranchRepository.create', () => {
+  dbTest('rejects a missing immutable primary owner', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const missing = generateId() as UUID;
+
+    await expect(
+      branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          created_by: missing,
+          primary_owner_user_id: missing,
+        })
+      )
+    ).rejects.toThrow(/primary owner .* does not exist in this tenant/);
+  });
+
   dbTest('should create branch with comprehensive field validation', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
@@ -181,6 +199,7 @@ describe('BranchRepository.create', () => {
       board_id: boardId,
       created_at: new Date(),
       created_by: 'test-user' as UUID,
+      primary_owner_user_id: 'test-user' as UUID,
       name: 'Test Board',
       data: {},
     });
@@ -510,6 +529,72 @@ describe('BranchRepository.findAll', () => {
     expect(filtered).toEqual([]);
   });
 
+  dbTest('findPage applies ordering and pagination in SQL', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const wtRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'paged-repo' }));
+    for (const name of ['branch-c', 'branch-a', 'branch-b']) {
+      await wtRepo.create(createBranchData({ repo_id: repo.repo_id, name }));
+    }
+
+    const client = (
+      db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const page = await wtRepo.findPage({
+      repo_id: repo.repo_id,
+      sort: { name: 1 },
+      limit: 1,
+      offset: 1,
+    });
+    expect(page.total).toBe(3);
+    expect(page.data.map((branch) => branch.name)).toEqual(['branch-b']);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(
+      execute.mock.calls
+        .map(([query]) => JSON.stringify(query))
+        .some((query) => /limit/i.test(query))
+    ).toBe(true);
+  });
+
+  dbTest('orders nullable updated_at by the logical recency value', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData({ slug: 'logical-recency' }));
+    const fallback = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'fallback',
+        branch_unique_id: 1,
+        created_at: '2026-03-01T00:00:00.000Z',
+      })
+    );
+    const explicit = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        name: 'explicit',
+        branch_unique_id: 2,
+        created_at: '2026-01-01T00:00:00.000Z',
+      })
+    );
+
+    await update(db, branches)
+      .set({ updated_at: null })
+      .where(eq(branches.branch_id, fallback.branch_id))
+      .run();
+    await update(db, branches)
+      .set({ updated_at: new Date('2026-02-01T00:00:00.000Z') })
+      .where(eq(branches.branch_id, explicit.branch_id))
+      .run();
+
+    const page = await branchRepo.findPage({ sort: { updated_at: 1 }, limit: 2, offset: 0 });
+
+    expect(page.data.map((branch) => branch.branch_id)).toEqual([
+      explicit.branch_id,
+      fallback.branch_id,
+    ]);
+  });
+
   dbTest('should filter by board_id', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
@@ -522,6 +607,7 @@ describe('BranchRepository.findAll', () => {
         board_id: boardId,
         created_at: new Date(),
         created_by: 'test-user' as UUID,
+        primary_owner_user_id: 'test-user' as UUID,
         name: 'Board',
         data: {},
       });
@@ -578,7 +664,6 @@ describe('BranchRepository.findAll', () => {
 
     await expect(branchRepo.findRealtimeVisibilityBranch(archived.branch_id)).resolves.toEqual({
       branch_id: archived.branch_id,
-      others_can: 'view',
     });
   });
 
@@ -625,16 +710,16 @@ describe('BranchRepository.findAll', () => {
     });
 
     const repo = await repoRepo.create(createRepoData());
-    const ownedPrivate = await wtRepo.create(
+    await wtRepo.create(
       createBranchData({
         repo_id: repo.repo_id,
         name: 'owned-private',
         branch_unique_id: 1,
+        created_by: viewerId,
         permission_source: 'override',
         others_can: 'none',
       })
     );
-    await wtRepo.addOwner(ownedPrivate.branch_id, viewerId);
     await wtRepo.create(
       createBranchData({
         repo_id: repo.repo_id,
@@ -785,6 +870,73 @@ describe('BranchRepository.findByRepoAndName', () => {
 // ============================================================================
 
 describe('BranchRepository.update', () => {
+  dbTest('keeps SDK-home intent out of generic branch updates', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+
+    await expect(branchRepo.update(branch.branch_id, { sdk_home: 'per_branch' })).rejects.toThrow(
+      /server-managed/
+    );
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: undefined,
+    });
+  });
+
+  dbTest('adopts an SDK home stickily through the narrow transition', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
+
+    await expect(branchRepo.adoptSdkHome(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
+    await expect(branchRepo.adoptSdkHome(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
+    await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+      sdk_home: 'per_branch',
+    });
+  });
+
+  dbTest(
+    'revalidates inherited binding under the row lock before moving boards',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const repo = await repoRepo.create(createRepoData());
+      const sourceBoardId = generateId() as BoardID;
+      const destinationBoardId = generateId() as BoardID;
+      for (const boardId of [sourceBoardId, destinationBoardId]) {
+        await (db as any).insert(boards).values({
+          board_id: boardId,
+          created_at: new Date(),
+          created_by: 'test-user' as UUID,
+          primary_owner_user_id: 'test-user' as UUID,
+          name: `Board ${boardId}`,
+          data: {},
+        });
+      }
+      const branch = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          board_id: sourceBoardId,
+          permission_source: 'board',
+        })
+      );
+
+      await expect(
+        branchRepo.update(branch.branch_id, { board_id: destinationBoardId })
+      ).rejects.toThrow('explicit permission override');
+      await expect(branchRepo.findById(branch.branch_id)).resolves.toMatchObject({
+        board_id: sourceBoardId,
+        permission_binding: 'inherit',
+      });
+    }
+  );
+
   dbTest('can preserve updated_at for observation-only bookkeeping', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);
@@ -857,6 +1009,7 @@ describe('BranchRepository.update', () => {
       board_id: boardId,
       created_at: new Date(),
       created_by: 'test-user' as UUID,
+      primary_owner_user_id: 'test-user' as UUID,
       name: 'Test Board',
       data: {},
     });
@@ -921,6 +1074,7 @@ describe('BranchRepository.update', () => {
       board_id: boardId,
       created_at: new Date(),
       created_by: 'test-user' as UUID,
+      primary_owner_user_id: 'test-user' as UUID,
       name: 'Test Board',
       data: {},
     });
@@ -1058,584 +1212,28 @@ describe('BranchRepository.delete', () => {
 });
 
 describe('BranchRepository permission_source', () => {
-  dbTest(
-    'defaults legacy/read branches to override and round-trips board alignment',
-    async ({ db }) => {
-      const repoRepo = new RepoRepository(db);
-      const branchRepo = new BranchRepository(db);
-      const repo = await repoRepo.create(createRepoData({ slug: 'permission-source-repo' }));
-
-      const legacy = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          name: 'legacy-permission-source',
-          branch_unique_id: 9101,
-        })
-      );
-      expect(legacy.permission_source).toBe('override');
-
-      const aligned = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          name: 'aligned-permission-source',
-          branch_unique_id: 9102,
-          permission_source: 'board',
-        })
-      );
-      expect(aligned.permission_source).toBe('board');
-
-      const patched = await branchRepo.update(aligned.branch_id, { permission_source: 'override' });
-      expect(patched.permission_source).toBe('override');
-    }
-  );
-});
-
-describe('BranchRepository resolveUserAccess', () => {
-  dbTest(
-    'enforces None for board defaults and branch overrides without granting access from board membership',
-    async ({ db }) => {
-      const users = new UsersRepository(db);
-      const repos = new RepoRepository(db);
-      const boards = new BoardRepository(db);
-      const branches = new BranchRepository(db);
-      const owner = await users.create({ email: 'none-owner@example.com' });
-      const boardOwner = await users.create({ email: 'none-board-owner@example.com' });
-      const outsider = await users.create({ email: 'none-outsider@example.com' });
-      const repo = await repos.create(createRepoData({ slug: 'none-contract-repo' }));
-      const board = await boards.create({
-        board_id: generateId(),
-        name: 'Shared board with no public fallback',
-        created_by: owner.user_id,
-        access_mode: 'shared',
-        default_others_can: 'none',
-      });
-      await boards.addOwner(board.board_id, boardOwner.user_id as UUID);
-
-      const aligned = await branches.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          board_id: board.board_id,
-          created_by: owner.user_id as UUID,
-          name: 'aligned-none',
-          branch_unique_id: 9198,
-          permission_source: 'board',
-        })
-      );
-      const overridden = await branches.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          board_id: board.board_id,
-          created_by: owner.user_id as UUID,
-          name: 'override-none',
-          branch_unique_id: 9199,
-          permission_source: 'override',
-          others_can: 'none',
-        })
-      );
-      await branches.addOwner(aligned.branch_id, owner.user_id as UUID);
-      await branches.addOwner(overridden.branch_id, owner.user_id as UUID);
-
-      expect(await branches.resolveUserAccess(aligned, outsider.user_id as UUID)).toMatchObject({
-        can: 'none',
-        source: 'board',
-      });
-      expect(await branches.resolveUserAccess(aligned, owner.user_id as UUID)).toMatchObject({
-        can: 'all',
-        source: 'owner',
-      });
-      expect(
-        await branches.resolveUserAccess(overridden, boardOwner.user_id as UUID)
-      ).toMatchObject({ can: 'none', source: 'others' });
-    }
-  );
-
-  dbTest(
-    'uses board session-sharing defaults for direct owners of board-aligned branches',
-    async ({ db }) => {
-      const repoRepo = new RepoRepository(db);
-      const boardRepo = new BoardRepository(db);
-      const branchRepo = new BranchRepository(db);
-      const usersRepo = new UsersRepository(db);
-      const repo = await repoRepo.create(createRepoData({ slug: 'owner-board-defaults-repo' }));
-      const ownerId = generateId() as UUID;
-      await usersRepo.create({
-        user_id: ownerId,
-        email: 'owner-board-defaults@example.com',
-        name: 'Owner',
-      });
-      const board = await boardRepo.create({
-        board_id: generateId(),
-        name: 'Board Defaults',
-        created_by: ownerId,
-        access_mode: 'shared',
-        default_dangerously_allow_session_sharing: true,
-      });
-      const branch = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          board_id: board.board_id,
-          name: 'owner-board-defaults',
-          branch_unique_id: 9201,
-          created_by: ownerId,
-          permission_source: 'board',
-          dangerously_allow_session_sharing: false,
-        })
-      );
-      await branchRepo.addOwner(branch.branch_id, ownerId);
-
-      const effective = await branchRepo.resolveUserAccess(branch, ownerId);
-      expect(effective).toMatchObject({
-        can: 'all',
-        source: 'owner',
-        dangerously_allow_session_sharing: true,
-      });
-    }
-  );
-
-  dbTest(
-    'tie-breaks equal app permissions by stronger explicit filesystem access',
-    async ({ db }) => {
-      const repoRepo = new RepoRepository(db);
-      const boardRepo = new BoardRepository(db);
-      const branchRepo = new BranchRepository(db);
-      const groupRepo = new GroupRepository(db);
-      const usersRepo = new UsersRepository(db);
-      const repo = await repoRepo.create(createRepoData({ slug: 'fs-tiebreak-repo' }));
-      const creatorId = generateId() as UUID;
-      const memberId = generateId() as UUID;
-      await usersRepo.create({
-        user_id: creatorId,
-        email: 'creator-fs@example.com',
-        name: 'Creator',
-      });
-      await usersRepo.create({
-        user_id: memberId,
-        email: 'member-fs@example.com',
-        name: 'Member',
-      });
-      const board = await boardRepo.create({
-        board_id: generateId(),
-        name: 'FS Tie Board',
-        created_by: creatorId,
-        access_mode: 'shared',
-        default_others_can: 'session',
-        default_others_fs_access: 'read',
-      });
-      const group = await groupRepo.create({ name: 'FS Writers', created_by: creatorId });
-      await groupRepo.addMember(group.group_id, memberId, creatorId);
-      await groupRepo.upsertBoardGrant({
-        board_id: board.board_id,
-        group_id: group.group_id,
-        can: 'session',
-        fs_access: 'write',
-        created_by: creatorId,
-      });
-      const branch = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          board_id: board.board_id,
-          name: 'fs-tiebreak',
-          branch_unique_id: 9202,
-          created_by: creatorId,
-          permission_source: 'board',
-        })
-      );
-
-      const effective = await branchRepo.resolveUserAccess(branch, memberId);
-      expect(effective).toMatchObject({
-        can: 'session',
-        fs_access: 'write',
-        source: 'board_group',
-        group_ids: [group.group_id],
-      });
-    }
-  );
-});
-
-describe('BranchRepository findExplicitFsAccessUserIds', () => {
-  dbTest('expands direct owners and branch group filesystem grants', async ({ db }) => {
+  dbTest('defaults to override and rejects legacy permission writes', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);
-    const groupRepo = new GroupRepository(db);
-    const usersRepo = new UsersRepository(db);
-    const repo = await repoRepo.create(createRepoData({ slug: 'direct-fs-users-repo' }));
-    const creatorId = generateId() as UUID;
-    const ownerId = generateId() as UUID;
-    const groupMemberId = generateId() as UUID;
+    const repo = await repoRepo.create(createRepoData({ slug: 'permission-source-repo' }));
 
-    await usersRepo.create({ user_id: creatorId, email: 'creator-direct-fs@example.com' });
-    await usersRepo.create({ user_id: ownerId, email: 'owner-direct-fs@example.com' });
-    await usersRepo.create({
-      user_id: groupMemberId,
-      email: 'member-direct-fs@example.com',
-    });
-    const branch = await branchRepo.create(
+    const legacy = await branchRepo.create(
       createBranchData({
         repo_id: repo.repo_id,
-        name: 'direct-fs-users',
-        branch_unique_id: 9300,
-        created_by: creatorId,
+        name: 'legacy-permission-source',
+        branch_unique_id: 9101,
       })
     );
-    await branchRepo.addOwner(branch.branch_id, ownerId);
-    const group = await groupRepo.create({ name: 'Direct FS Group', created_by: creatorId });
-    await groupRepo.addMember(group.group_id, groupMemberId, creatorId);
-    await groupRepo.upsertBranchGrant({
-      branch_id: branch.branch_id,
-      group_id: group.group_id,
-      can: 'session',
-      fs_access: 'write',
-      created_by: creatorId,
-    });
+    expect(legacy.permission_source).toBe('override');
 
-    expect(await branchRepo.findExplicitFsAccessUserIds(branch.branch_id)).toEqual(
-      expect.arrayContaining([ownerId, groupMemberId])
-    );
+    await expect(
+      branchRepo.update(legacy.branch_id, { permission_source: 'board' })
+    ).rejects.toThrow('branch permission policy service');
   });
-
-  dbTest(
-    'expands board owners and board groups only for board-aligned branches',
-    async ({ db }) => {
-      const repoRepo = new RepoRepository(db);
-      const boardRepo = new BoardRepository(db);
-      const branchRepo = new BranchRepository(db);
-      const groupRepo = new GroupRepository(db);
-      const usersRepo = new UsersRepository(db);
-      const repo = await repoRepo.create(createRepoData({ slug: 'board-fs-users-repo' }));
-      const creatorId = generateId() as UUID;
-      const boardOwnerId = generateId() as UUID;
-      const groupMemberId = generateId() as UUID;
-
-      await usersRepo.create({ user_id: creatorId, email: 'creator-board-fs@example.com' });
-      await usersRepo.create({ user_id: boardOwnerId, email: 'owner-board-fs@example.com' });
-      await usersRepo.create({ user_id: groupMemberId, email: 'member-board-fs@example.com' });
-
-      const board = await boardRepo.create({
-        board_id: generateId(),
-        name: 'Board FS Users',
-        created_by: creatorId,
-        access_mode: 'shared',
-      });
-      await boardRepo.addOwner(board.board_id, boardOwnerId);
-      const group = await groupRepo.create({ name: 'Board FS Group', created_by: creatorId });
-      await groupRepo.addMember(group.group_id, groupMemberId, creatorId);
-      await groupRepo.upsertBoardGrant({
-        board_id: board.board_id,
-        group_id: group.group_id,
-        can: 'session',
-        fs_access: 'write',
-        created_by: creatorId,
-      });
-
-      const aligned = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          board_id: board.board_id,
-          name: 'board-fs-aligned',
-          branch_unique_id: 9301,
-          created_by: creatorId,
-          permission_source: 'board',
-        })
-      );
-      const notAligned = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          board_id: board.board_id,
-          name: 'board-fs-override',
-          branch_unique_id: 9302,
-          created_by: creatorId,
-          permission_source: 'override',
-        })
-      );
-
-      expect(await branchRepo.findExplicitFsAccessUserIds(aligned.branch_id)).toEqual(
-        expect.arrayContaining([boardOwnerId, groupMemberId])
-      );
-      expect(await branchRepo.findExplicitFsAccessUserIds(notAligned.branch_id)).not.toEqual(
-        expect.arrayContaining([boardOwnerId, groupMemberId])
-      );
-    }
-  );
-
-  dbTest('excludes board group grants with filesystem access none', async ({ db }) => {
-    const repoRepo = new RepoRepository(db);
-    const boardRepo = new BoardRepository(db);
-    const branchRepo = new BranchRepository(db);
-    const groupRepo = new GroupRepository(db);
-    const usersRepo = new UsersRepository(db);
-    const repo = await repoRepo.create(createRepoData({ slug: 'board-fs-none-repo' }));
-    const creatorId = generateId() as UUID;
-    const groupMemberId = generateId() as UUID;
-
-    await usersRepo.create({ user_id: creatorId, email: 'creator-fs-none@example.com' });
-    await usersRepo.create({ user_id: groupMemberId, email: 'member-fs-none@example.com' });
-    const board = await boardRepo.create({
-      board_id: generateId(),
-      name: 'Board FS None',
-      created_by: creatorId,
-      access_mode: 'shared',
-    });
-    const group = await groupRepo.create({ name: 'Board No FS Group', created_by: creatorId });
-    await groupRepo.addMember(group.group_id, groupMemberId, creatorId);
-    await groupRepo.upsertBoardGrant({
-      board_id: board.board_id,
-      group_id: group.group_id,
-      can: 'prompt',
-      fs_access: 'none',
-      created_by: creatorId,
-    });
-    const branch = await branchRepo.create(
-      createBranchData({
-        repo_id: repo.repo_id,
-        board_id: board.board_id,
-        name: 'board-fs-none',
-        branch_unique_id: 9303,
-        created_by: creatorId,
-        permission_source: 'board',
-      })
-    );
-
-    expect(await branchRepo.findExplicitFsAccessUserIds(branch.branch_id)).not.toContain(
-      groupMemberId
-    );
-  });
-
-  dbTest(
-    'includes private board owners for board-aligned branch filesystem access',
-    async ({ db }) => {
-      const repoRepo = new RepoRepository(db);
-      const boardRepo = new BoardRepository(db);
-      const branchRepo = new BranchRepository(db);
-      const usersRepo = new UsersRepository(db);
-      const repo = await repoRepo.create(createRepoData({ slug: 'private-board-owner-fs-repo' }));
-      const creatorId = generateId() as UUID;
-      const boardOwnerId = generateId() as UUID;
-
-      await usersRepo.create({ user_id: creatorId, email: 'creator-private-owner-fs@example.com' });
-      await usersRepo.create({
-        user_id: boardOwnerId,
-        email: 'owner-private-owner-fs@example.com',
-      });
-      const board = await boardRepo.create({
-        board_id: generateId(),
-        name: 'Private Board Owner FS',
-        created_by: creatorId,
-        access_mode: 'private',
-      });
-      await boardRepo.addOwner(board.board_id, boardOwnerId);
-      const branch = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          board_id: board.board_id,
-          name: 'private-board-owner-fs',
-          branch_unique_id: 9304,
-          created_by: creatorId,
-          permission_source: 'board',
-        })
-      );
-
-      expect(await branchRepo.findExplicitFsAccessUserIds(branch.branch_id)).toContain(
-        boardOwnerId
-      );
-    }
-  );
 });
 
-describe('BranchRepository findExplicitFsAccessBranchIdsForGroup', () => {
-  dbTest(
-    'scopes membership-driven filesystem syncs to direct and board-aligned group grants',
-    async ({ db }) => {
-      const repoRepo = new RepoRepository(db);
-      const boardRepo = new BoardRepository(db);
-      const branchRepo = new BranchRepository(db);
-      const groupRepo = new GroupRepository(db);
-      const usersRepo = new UsersRepository(db);
-      const repo = await repoRepo.create(createRepoData({ slug: 'group-fs-branches-repo' }));
-      const creatorId = generateId() as UUID;
-      await usersRepo.create({
-        user_id: creatorId,
-        email: 'creator-group-fs-branches@example.com',
-      });
-      const group = await groupRepo.create({ name: 'Group FS Branches', created_by: creatorId });
-
-      const direct = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          name: 'group-fs-direct',
-          branch_unique_id: 9401,
-          created_by: creatorId,
-        })
-      );
-      await groupRepo.upsertBranchGrant({
-        branch_id: direct.branch_id,
-        group_id: group.group_id,
-        can: 'session',
-        fs_access: 'write',
-        created_by: creatorId,
-      });
-      const defaultFsAccess = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          name: 'group-fs-default-read',
-          branch_unique_id: 9405,
-          created_by: creatorId,
-        })
-      );
-      await groupRepo.upsertBranchGrant({
-        branch_id: defaultFsAccess.branch_id,
-        group_id: group.group_id,
-        can: 'view',
-        created_by: creatorId,
-      });
-
-      const board = await boardRepo.create({
-        board_id: generateId(),
-        name: 'Group FS Board',
-        created_by: creatorId,
-        access_mode: 'shared',
-      });
-      await groupRepo.upsertBoardGrant({
-        board_id: board.board_id,
-        group_id: group.group_id,
-        can: 'view',
-        fs_access: 'read',
-        created_by: creatorId,
-      });
-      const aligned = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          board_id: board.board_id,
-          name: 'group-fs-board-aligned',
-          branch_unique_id: 9402,
-          created_by: creatorId,
-          permission_source: 'board',
-        })
-      );
-      const override = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          board_id: board.board_id,
-          name: 'group-fs-board-override',
-          branch_unique_id: 9403,
-          created_by: creatorId,
-          permission_source: 'override',
-        })
-      );
-
-      const appOnly = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          name: 'group-app-only',
-          branch_unique_id: 9404,
-          created_by: creatorId,
-        })
-      );
-      await groupRepo.upsertBranchGrant({
-        branch_id: appOnly.branch_id,
-        group_id: group.group_id,
-        can: 'prompt',
-        fs_access: 'none',
-        created_by: creatorId,
-      });
-      const privateBoard = await boardRepo.create({
-        board_id: generateId(),
-        name: 'Private Group FS Board',
-        created_by: creatorId,
-        access_mode: 'private',
-      });
-      await groupRepo.upsertBoardGrant({
-        board_id: privateBoard.board_id,
-        group_id: group.group_id,
-        can: 'all',
-        fs_access: 'write',
-        created_by: creatorId,
-      });
-      const privateBoardBranch = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          board_id: privateBoard.board_id,
-          name: 'group-fs-private-board',
-          branch_unique_id: 9406,
-          created_by: creatorId,
-          permission_source: 'board',
-        })
-      );
-      const archivedBranch = await branchRepo.create(
-        createBranchData({
-          repo_id: repo.repo_id,
-          name: 'group-fs-archived',
-          branch_unique_id: 9407,
-          created_by: creatorId,
-        })
-      );
-      await groupRepo.upsertBranchGrant({
-        branch_id: archivedBranch.branch_id,
-        group_id: group.group_id,
-        can: 'session',
-        fs_access: 'write',
-        created_by: creatorId,
-      });
-      await branchRepo.update(archivedBranch.branch_id, { archived: true });
-
-      const branchIds = await branchRepo.findExplicitFsAccessBranchIdsForGroup(group.group_id);
-      expect(branchIds).toEqual(
-        expect.arrayContaining([direct.branch_id, defaultFsAccess.branch_id, aligned.branch_id])
-      );
-      expect(branchIds).not.toEqual(
-        expect.arrayContaining([
-          override.branch_id,
-          appOnly.branch_id,
-          privateBoardBranch.branch_id,
-          archivedBranch.branch_id,
-        ])
-      );
-    }
-  );
-
-  dbTest('returns no branches for groups without filesystem grants', async ({ db }) => {
-    const branchRepo = new BranchRepository(db);
-    const groupRepo = new GroupRepository(db);
-    const group = await groupRepo.create({ name: 'No FS Grants' });
-
-    await expect(branchRepo.findExplicitFsAccessBranchIdsForGroup(group.group_id)).resolves.toEqual(
-      []
-    );
-  });
-
-  dbTest('returns no branches for archived groups', async ({ db }) => {
-    const repoRepo = new RepoRepository(db);
-    const branchRepo = new BranchRepository(db);
-    const groupRepo = new GroupRepository(db);
-    const usersRepo = new UsersRepository(db);
-    const repo = await repoRepo.create(createRepoData({ slug: 'archived-group-fs-branches-repo' }));
-    const creatorId = generateId() as UUID;
-    await usersRepo.create({
-      user_id: creatorId,
-      email: 'creator-archived-group-fs-branches@example.com',
-    });
-    const group = await groupRepo.create({ name: 'Archived Group FS', created_by: creatorId });
-    const branch = await branchRepo.create(
-      createBranchData({
-        repo_id: repo.repo_id,
-        name: 'archived-group-fs-branch',
-        branch_unique_id: 9408,
-        created_by: creatorId,
-      })
-    );
-    await groupRepo.upsertBranchGrant({
-      branch_id: branch.branch_id,
-      group_id: group.group_id,
-      can: 'session',
-      fs_access: 'write',
-      created_by: creatorId,
-    });
-    await groupRepo.update(group.group_id, { archived: true });
-
-    await expect(branchRepo.findExplicitFsAccessBranchIdsForGroup(group.group_id)).resolves.toEqual(
-      []
-    );
-  });
-});
+// Normalized policy resolution, filesystem expansion, inheritance, and group
+// invalidation are covered in capability-policies.test.ts.
 
 describe('BranchRepository.findAccessibleById', () => {
   dbTest(
@@ -1679,8 +1277,6 @@ describe('BranchRepository.findAccessibleById', () => {
           others_can: 'none',
         })
       );
-      await branches.addOwner(hidden.branch_id, owner.user_id as UUID);
-
       // Both rows share this prefix. The hidden row must not make the visible
       // branch ambiguous or disclose its full ID to the outsider.
       const collidingPrefix = visible.branch_id.slice(0, -1);
@@ -1851,7 +1447,6 @@ describe('BranchRepository.findTeammateBranches', () => {
         },
       })
     );
-    await branches.addOwner(privateTeammate.branch_id, owner.user_id as UUID);
     const viewOnlyTeammate = await branches.create(
       createBranchData({
         repo_id: repo.repo_id as UUID,

@@ -5,19 +5,12 @@ const KEY_LENGTH = 32;
 const IV_LENGTH = 16;
 const SALT_LENGTH = 16;
 
-/**
- * Get master secret from environment
- * Falls back to warning if not set (dev mode)
- */
-function getMasterSecret(): string {
+/** Get the deployment master secret, failing closed when bootstrap regresses. */
+function getMasterSecret(operation: 'encryption' | 'decryption'): string {
   const secret = process.env.AGOR_MASTER_SECRET;
 
   if (!secret) {
-    console.warn(
-      '⚠️  AGOR_MASTER_SECRET not set - API keys will be stored in plaintext. ' +
-        'Set this environment variable to enable encryption.'
-    );
-    return '';
+    throw new Error(`Secret ${operation} requires AGOR_MASTER_SECRET`);
   }
 
   return secret;
@@ -38,12 +31,8 @@ function deriveKey(secret: string, salt: Buffer): Buffer {
  * @returns Encrypted string in format: {salt}:{iv}:{authTag}:{encryptedData} (hex-encoded)
  */
 export function encryptApiKey(plaintext: string, secret?: string): string {
-  const masterSecret = secret || getMasterSecret();
-
-  // If no master secret, return plaintext (dev mode)
-  if (!masterSecret) {
-    return plaintext;
-  }
+  const masterSecret = secret ?? getMasterSecret('encryption');
+  if (!masterSecret) throw new Error('Secret encryption requires AGOR_MASTER_SECRET');
 
   // Generate random salt and IV
   const salt = randomBytes(SALT_LENGTH);
@@ -78,37 +67,43 @@ export function encryptApiKey(plaintext: string, secret?: string): string {
  * @returns Decrypted API key
  */
 export function decryptApiKey(ciphertext: string, secret?: string): string {
-  const masterSecret = secret || getMasterSecret();
+  const masterSecret = secret ?? getMasterSecret('decryption');
+  if (!masterSecret) throw new Error('Secret decryption requires AGOR_MASTER_SECRET');
 
-  // If no master secret and ciphertext doesn't look encrypted, return as-is (dev mode)
-  if (!masterSecret && !ciphertext.includes(':')) {
-    return ciphertext;
+  try {
+    const parts = ciphertext.split(':');
+    if (parts.length !== 4) throw new Error('invalid envelope');
+    const [saltHex, ivHex, authTagHex, encryptedHex] = parts;
+    if (
+      !isHexOfBytes(saltHex, SALT_LENGTH) ||
+      !isHexOfBytes(ivHex, IV_LENGTH) ||
+      !isHexOfBytes(authTagHex, 16) ||
+      !isEvenHex(encryptedHex)
+    ) {
+      throw new Error('invalid envelope');
+    }
+
+    const salt = Buffer.from(saltHex, 'hex');
+    const iv = Buffer.from(ivHex, 'hex');
+    const authTag = Buffer.from(authTagHex, 'hex');
+    const encrypted = Buffer.from(encryptedHex, 'hex');
+    const decipher = createDecipheriv(ALGORITHM, deriveKey(masterSecret, salt), iv);
+    decipher.setAuthTag(authTag);
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+  } catch {
+    // Do not expose parser-vs-authentication distinctions (or OpenSSL details)
+    // through API errors and logs. Operators only need to know that this field
+    // cannot be opened with the active deployment key.
+    throw new Error('Secret decryption failed');
   }
+}
 
-  // Parse encrypted string
-  const parts = ciphertext.split(':');
-  if (parts.length !== 4) {
-    throw new Error('Invalid encrypted data format');
-  }
+function isEvenHex(value: string): boolean {
+  return value.length % 2 === 0 && /^[0-9a-f]*$/i.test(value);
+}
 
-  const [saltHex, ivHex, authTagHex, encryptedHex] = parts;
-
-  const salt = Buffer.from(saltHex, 'hex');
-  const iv = Buffer.from(ivHex, 'hex');
-  const authTag = Buffer.from(authTagHex, 'hex');
-  const encrypted = Buffer.from(encryptedHex, 'hex');
-
-  // Derive key from master secret
-  const key = deriveKey(masterSecret, salt);
-
-  // Create decipher
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(authTag);
-
-  // Decrypt
-  const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-
-  return decrypted.toString('utf8');
+function isHexOfBytes(value: string, bytes: number): boolean {
+  return value.length === bytes * 2 && isEvenHex(value);
 }
 
 /**
@@ -116,5 +111,11 @@ export function decryptApiKey(ciphertext: string, secret?: string): string {
  */
 export function isEncrypted(value: string): boolean {
   const parts = value.split(':');
-  return parts.length === 4 && parts.every((part) => /^[0-9a-f]+$/i.test(part));
+  return (
+    parts.length === 4 &&
+    isHexOfBytes(parts[0], SALT_LENGTH) &&
+    isHexOfBytes(parts[1], IV_LENGTH) &&
+    isHexOfBytes(parts[2], 16) &&
+    isEvenHex(parts[3])
+  );
 }

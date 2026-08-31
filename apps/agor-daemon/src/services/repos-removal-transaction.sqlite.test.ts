@@ -7,7 +7,7 @@ import {
 import type { Application } from '@agor/core/feathers';
 import type { BranchID, UUID } from '@agor/core/types';
 import { vi } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { BranchesService } from './branches';
 import { ReposService } from './repos';
 
@@ -30,7 +30,7 @@ dbTest(
       await branchRepository.create({
         branch_id: branchId,
         repo_id: repo.repo_id,
-        created_by: generateId() as UUID,
+        created_by: 'test-user' as UUID,
         name: `rollback-branch-${index}`,
         ref: `rollback-branch-${index}`,
         branch_unique_id: 8000 + index,

@@ -1,13 +1,12 @@
 /**
  * Wrap an AGENT executor spawn in an OS sandbox (`bubblewrap`: user + mount
- * namespaces, plus a PID namespace where the host allows it). Applied by
- * `spawnExecutorLocal` — the chokepoint for agent workloads: prompt tasks and
- * web terminals, across all agentic tools (tool-agnostic).
+ * namespaces, plus a PID namespace where the host allows it). Applied by the
+ * local executor spawn chokepoints for agent workloads and branch-scoped
+ * request commands, across all agentic tools (tool-agnostic).
  *
- * NOT applied to daemon-internal command spawns (`requestExecutor` /
- * `startInteractiveExecutor`: git-state/autocomplete probes, file reads, OAuth
- * flows) — those are Agor's own trusted code with no agent-authored payload,
- * analogous to repo-level ops running unwrapped.
+ * Branch-scoped request executors are wrapped when their server-authoritative
+ * payload includes a branch cwd. Other daemon-internal commands remain
+ * unwrapped because they have no branch filesystem projection.
  *
  * The network namespace stays shared (no `--unshare-net`), so the executor
  * keeps its daemon/model connectivity. Network egress control, if wanted, is
@@ -30,7 +29,7 @@ import {
   resolveBwrapArgs,
   type SandboxPathContext,
 } from '@agor/core/config';
-import { bwrapOnPath, probeBwrapPidNamespace, probeBwrapUserns } from '@agor/core/unix';
+import { probeBwrapPidNamespace, probeBwrapSecurityBaseline } from '@agor/core/unix';
 
 export interface SandboxWrap {
   cmd: string;
@@ -53,14 +52,18 @@ function canonicalizeExistingPath(path: string): string {
   return existsSync(path) ? realpathSync(path) : resolve(path);
 }
 
-// FUNCTIONAL availability: bwrap must be on PATH AND able to create an
+// SECURITY + FUNCTIONAL availability: bwrap must be 0.12.0+ (safe sandbox
+// setup path resolution), support descriptor binds, and be able to create an
 // unprivileged user namespace on this host (installed-but-blocked is common on
-// hardened kernels). Cached once — the kernel/userns capability does not change
-// during a daemon's lifetime, and the probe spawns a process.
+// hardened kernels). Cached once because the probes spawn processes.
 let bwrapAvailableCache: boolean | undefined;
 function bwrapAvailable(): boolean {
   if (bwrapAvailableCache === undefined) {
-    bwrapAvailableCache = bwrapOnPath() && probeBwrapUserns();
+    // Descriptor binds are part of Agor's sandbox baseline, not an optional
+    // Codex-only enhancement. They are the only race-safe way to project an
+    // actor-writable credential file into a branch SDK home without resolving
+    // its pathname again during mount setup.
+    bwrapAvailableCache = probeBwrapSecurityBaseline();
   }
   return bwrapAvailableCache;
 }
@@ -105,8 +108,15 @@ export function buildSandboxWrap(params: {
   ownerHomeStore?: string;
   /** Tenant-scoped worktrees root resolved from the immutable config. */
   worktreesRoot?: string;
-  /** RBAC-resolved fs access of the session owner to the branch. Default 'write'. */
+  /** RBAC-resolved fs access of the current prompt actor. Default 'write'. */
   branchAccess?: 'write' | 'read' | 'none';
+  /**
+   * Per-branch SDK home to bind into the sandbox (design §7). Absolute host
+   * path of `branch-homes/<branchId>`; unset for an execution-home Session.
+   */
+  branchSdkHomeDir?: string;
+  /** Child fd numbers pinned to credential files mounted inside the branch SDK home. */
+  branchSdkCredentialBinds?: Array<{ fd: number; destination: string }>;
   /** Immutable deployment paths injected by configureExecutor at startup. */
   runtimePaths: SandboxRuntimePaths;
 }): SandboxWrap | null {
@@ -119,6 +129,8 @@ export function buildSandboxWrap(params: {
     ownerHomeStore,
     worktreesRoot,
     branchAccess,
+    branchSdkHomeDir,
+    branchSdkCredentialBinds,
     runtimePaths,
   } = params;
   if (!sandbox?.enabled) return null;
@@ -127,7 +139,7 @@ export function buildSandboxWrap(params: {
     process.platform !== 'linux'
       ? `filesystem sandbox requires Linux (bubblewrap); platform is ${process.platform}`
       : !bwrapAvailable()
-        ? '`bwrap` (bubblewrap) is missing or cannot create an unprivileged user namespace'
+        ? '`bwrap` 0.12.0+ is missing, cannot create an unprivileged user namespace, or lacks functional --bind-fd support'
         : null;
   if (unavailableReason) {
     if (sandbox.fail_if_unavailable) {
@@ -161,9 +173,26 @@ export function buildSandboxWrap(params: {
     }
   }
 
+  if (branchSdkHomeDir) {
+    // The branch home is `--bind`ed at its own real path; bwrap aborts on a
+    // missing --bind source and dropMasksForMissingTargets never drops a --bind
+    // (design §7.2), so guarantee the source exists here — same precedent as the
+    // owner home store above.
+    try {
+      mkdirSync(branchSdkHomeDir, { recursive: true });
+    } catch (err) {
+      throw new Error(
+        `Per-branch SDK home ${branchSdkHomeDir} could not be created: ` +
+          `${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+  }
+
   const ctx: SandboxPathContext = {
     branchPath,
     branchAccess,
+    branchSdkHomeDir,
+    branchSdkCredentialBinds,
     pidNamespace: pidNamespaceAvailable(),
     homeDir: home,
     canonicalHomeDir: canonicalizeExistingPath(home),

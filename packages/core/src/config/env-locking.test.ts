@@ -125,11 +125,7 @@ describe('env-locking', () => {
     it('should prevent race conditions with multiple concurrent calls', async () => {
       const executionOrder: string[] = [];
 
-      // Per-user locks serialize same-user calls; different users run concurrently
-      // because process.env is a shared global. The invariant is that each user
-      // uses DISTINCT env var keys — two users sharing the same key name would
-      // require a global mutex (not implemented). Use unique keys here so
-      // concurrent execution can't stomp on each other.
+      // process.env is shared across all users, so every call must serialize.
       vi.mocked(resolverModule.resolveUserEnvironment)
         .mockResolvedValueOnce({ USER_1_SPECIFIC_KEY: 'user-1-value' })
         .mockResolvedValueOnce({ USER_2_SPECIFIC_KEY: 'user-2-value' });
@@ -377,7 +373,7 @@ describe('env-locking', () => {
       expect(fn1EndIdx).toBeLessThan(fn2StartIdx);
     });
 
-    it('should allow parallel access for different users', async () => {
+    it('should serialize access for different users', async () => {
       const executionLog: string[] = [];
 
       vi.mocked(resolverModule.resolveUserEnvironment)
@@ -395,19 +391,47 @@ describe('env-locking', () => {
         withUserEnvironment('user-2' as UserID, mockDb as Database, () => fn('user-2')),
       ]);
 
-      // Both should run concurrently
+      // Both should run, but user 2 must not enter until user 1 restores the
+      // process environment.
       expect(executionLog).toContain('user-1-start');
       expect(executionLog).toContain('user-2-start');
       expect(executionLog).toContain('user-1-end');
       expect(executionLog).toContain('user-2-end');
 
-      // Check that they overlap (interleaved execution)
-      const _user1StartIdx = executionLog.indexOf('user-1-start');
+      const user1StartIdx = executionLog.indexOf('user-1-start');
       const user2StartIdx = executionLog.indexOf('user-2-start');
       const user1EndIdx = executionLog.indexOf('user-1-end');
 
-      // user2 should start before user1 ends
-      expect(user2StartIdx).toBeLessThan(user1EndIdx);
+      expect(user1StartIdx).toBeLessThan(user1EndIdx);
+      expect(user1EndIdx).toBeLessThan(user2StartIdx);
+    });
+
+    it("does not expose one user's variables to another user", async () => {
+      vi.mocked(resolverModule.resolveUserEnvironment)
+        .mockResolvedValueOnce({ USER_ONE_SECRET: 'one' })
+        .mockResolvedValueOnce({ USER_TWO_SECRET: 'two' });
+
+      let releaseUserOne!: () => void;
+      const userOneBlocked = new Promise<void>((resolve) => {
+        releaseUserOne = resolve;
+      });
+      let userTwoEntered = false;
+
+      const userOne = withUserEnvironment('user-1' as UserID, mockDb as Database, async () => {
+        expect(process.env.USER_ONE_SECRET).toBe('one');
+        await userOneBlocked;
+      });
+      const userTwo = withUserEnvironment('user-2' as UserID, mockDb as Database, async () => {
+        userTwoEntered = true;
+        expect(process.env.USER_ONE_SECRET).toBeUndefined();
+        expect(process.env.USER_TWO_SECRET).toBe('two');
+      });
+
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(userTwoEntered).toBe(false);
+      releaseUserOne();
+      await Promise.all([userOne, userTwo]);
     });
   });
 });

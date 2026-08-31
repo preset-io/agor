@@ -313,28 +313,42 @@ type CapturedGitState = {
 async function captureGitStateForSession(
   client: AgorClient,
   sessionId: SessionID,
+  taskId: TaskID,
   phase: 'start' | 'end'
 ): Promise<CapturedGitState | undefined> {
   try {
     const session = await client.service('sessions').get(sessionId);
     if (!session.branch_id) {
-      console.warn(`[Git SHA Capture] Session has no branch_id at task ${phase}`);
+      console.warn(
+        `[Git SHA Capture] Session has no branch_id phase=${phase} ` +
+          `session=${shortId(sessionId)} task=${shortId(taskId)}`
+      );
       return undefined;
     }
 
     const branch = await client.service('branches').get(session.branch_id);
+    const branchContext =
+      `phase=${phase} session=${shortId(sessionId)} task=${shortId(taskId)} ` +
+      `branch=${shortId(branch.branch_id)} storage_mode=${branch.storage_mode ?? 'worktree'} ` +
+      `archived=${branch.archived ? 'true' : 'false'} ` +
+      `filesystem_status=${branch.filesystem_status ?? 'ready'}`;
     if (!branch.path) {
-      console.warn(`[Git SHA Capture] Branch has no path at task ${phase}`);
+      console.warn(`[Git SHA Capture] Branch has no path ${branchContext}`);
       return undefined;
     }
 
     const sha = await getGitState(branch.path);
+    if (sha === 'unknown') {
+      console.warn(`[Git SHA Capture] Git state unknown ${branchContext}`);
+      return { sha, ref: 'unknown' };
+    }
+
     let ref = 'unknown';
     try {
       ref = await getCurrentBranch(branch.path);
     } catch (error) {
       console.warn(
-        `[Git SHA Capture] Failed to capture git ref at task ${phase}:`,
+        `[Git SHA Capture] Failed to capture git ref ${branchContext}:`,
         error instanceof Error ? error.message : String(error)
       );
     }
@@ -345,16 +359,21 @@ async function captureGitStateForSession(
 
     return { sha, ref };
   } catch (error) {
-    console.warn(`[Git SHA Capture] Failed to capture git state at task ${phase}:`, error);
+    console.warn(
+      `[Git SHA Capture] Failed to capture git state phase=${phase} ` +
+        `session=${shortId(sessionId)} task=${shortId(taskId)}:`,
+      error
+    );
     return undefined;
   }
 }
 
 export async function captureGitStateAtTaskEnd(
   client: AgorClient,
-  sessionId: SessionID
+  sessionId: SessionID,
+  taskId: TaskID
 ): Promise<CapturedGitState | undefined> {
-  return captureGitStateForSession(client, sessionId, 'end');
+  return captureGitStateForSession(client, sessionId, taskId, 'end');
 }
 
 export async function stampGitStateAtTaskStart(
@@ -362,7 +381,7 @@ export async function stampGitStateAtTaskStart(
   sessionId: SessionID,
   taskId: TaskID
 ): Promise<void> {
-  const gitState = await captureGitStateForSession(client, sessionId, 'start');
+  const gitState = await captureGitStateForSession(client, sessionId, taskId, 'start');
   if (!gitState) return;
 
   try {
@@ -373,7 +392,11 @@ export async function stampGitStateAtTaskStart(
       },
     });
   } catch (error) {
-    console.warn('[Git SHA Capture] Failed to stamp task start git state:', error);
+    console.warn(
+      `[Git SHA Capture] Failed to stamp task start git state session=${shortId(sessionId)} ` +
+        `task=${shortId(taskId)}:`,
+      error
+    );
   }
 }
 
@@ -575,7 +598,7 @@ export async function executeToolTask(params: {
     );
 
     // Capture git SHA at task end
-    const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
+    const gitStateAtEnd = await captureGitStateForSession(client, sessionId, taskId, 'end');
 
     // Determine task status based on SDK result
     // - wasStopped: user explicitly stopped the task
@@ -689,7 +712,7 @@ export async function executeToolTask(params: {
     console.error(`[${toolName}] execution failed category=task_execution`);
 
     // Capture git SHA at task end (even for failed tasks)
-    const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
+    const gitStateAtEnd = await captureGitStateForSession(client, sessionId, taskId, 'end');
 
     // Build patch data
     const patchData: Partial<Task> = {

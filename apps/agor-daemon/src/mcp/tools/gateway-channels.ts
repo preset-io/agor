@@ -10,6 +10,7 @@ import {
   getConnector,
   isSlackFileSourceAllowed,
   isSlackWriteTargetAllowed,
+  redactGatewayChannelSecrets,
   requiredBotEvents,
   requiredBotScopes,
   type SlackChannelHistoryRequest,
@@ -28,7 +29,6 @@ import {
   type ChannelType,
   DEFAULT_DISCORD_CATCH_UP,
   GATEWAY_REDACTED_SENTINEL,
-  GATEWAY_SENSITIVE_CONFIG_FIELDS,
   type GatewayChannel,
   type GatewayChannelCreateData,
   type GatewayChannelPatchData,
@@ -46,6 +46,7 @@ import {
   type SessionID,
   type SlackAgentToolCapability,
   type UserID,
+  type UserRole,
   type UUID,
   withDiscordConfigDefaults,
 } from '@agor/core/types';
@@ -58,9 +59,9 @@ import {
 import type { GatewayService } from '../../services/gateway.js';
 import { issueExecutorCommandToken } from '../../services/session-token-service.js';
 import { hasBranchPermission } from '../../utils/branch-authorization.js';
+import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
-import { redactGatewayChannelForTransport } from '../../utils/gateway-channel-redaction.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
 import { getUploadLimits } from '../../utils/upload.js';
 import { getUploadStagingStore } from '../../utils/upload-staging.js';
@@ -849,11 +850,8 @@ type GatewayChannelSummary = Omit<
 };
 
 function redactGatewayChannel(channel: GatewayChannel): GatewayChannelSummary {
-  const redacted = redactGatewayChannelForTransport(channel);
+  const redacted = redactGatewayChannelSecrets(channel);
   const config = { ...(redacted.config ?? {}) };
-  for (const field of GATEWAY_SENSITIVE_CONFIG_FIELDS) {
-    if (config[field]) config[field] = GATEWAY_REDACTED_SENTINEL;
-  }
   for (const field of GATEWAY_INTERNAL_CONFIG_KEYS) {
     delete config[field];
   }
@@ -1470,6 +1468,21 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       if (!tenantId || !session || !ctx.sessionId) {
         throw new Error('Upload materialization requires tenant-bound session context');
       }
+      const workspace = await runWithMcpTenantDatabaseScope(ctx, async (db) => {
+        const branchRepo = new BranchRepository(db);
+        const branch = await branchRepo.findById(session.branch_id);
+        if (!branch) throw new Error(`Branch not found: ${session.branch_id}`);
+        const fsAccess = await ensureBranchWorkspaceAccess(
+          branchRepo,
+          branch,
+          ctx.userId,
+          ctx.authenticatedUser.role as UserRole,
+          'session',
+          'write',
+          ctx.app.get('config').execution?.allow_superadmin === true
+        );
+        return { branch, fsAccess };
+      });
       const ref = args.uploadRef as import('@agor/core/types').UploadRef;
       const store = getUploadStagingStore();
       const metadata = await store.inspect({
@@ -1493,6 +1506,8 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
             sessionId: ctx.sessionId,
             uploadRef: ref,
             filename: metadata.name,
+            cwd: workspace.branch.path,
+            principalBranchAccess: workspace.fsAccess,
           },
         },
         {
@@ -1504,6 +1519,11 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
               ctx.app.get('config')
             )
           ),
+          templateVariables: {
+            branch_id: workspace.branch.branch_id,
+            user_id: ctx.userId,
+            branch_fs_access: workspace.fsAccess,
+          },
         }
       );
       if (!result.success) {
@@ -2051,6 +2071,17 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
       const branch = target.branch;
       if (!branch) throw new Error('Gateway target branch is unavailable');
       if (args.source.kind === 'branch') {
+        const branchFsAccess = await runWithMcpTenantDatabaseScope(ctx, (db) =>
+          ensureBranchWorkspaceAccess(
+            new BranchRepository(db),
+            branch,
+            ctx.userId,
+            ctx.authenticatedUser.role as UserRole,
+            'session',
+            'read',
+            ctx.app.get('config').execution?.allow_superadmin === true
+          )
+        );
         const result = await requestExecutor(
           {
             command: 'branch.gateway.slack-file-upload',
@@ -2070,6 +2101,8 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
               filename: args.filename,
               comment: args.comment,
               maxBytes: getUploadLimits().maxFileBytes,
+              cwd: branch.path,
+              principalBranchAccess: branchFsAccess,
             },
           },
           {
@@ -2081,6 +2114,11 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
                 ctx.app.get('config')
               )
             ),
+            templateVariables: {
+              branch_id: branch.branch_id,
+              user_id: ctx.userId,
+              branch_fs_access: branchFsAccess,
+            },
           }
         );
         if (!result.success) {

@@ -87,7 +87,7 @@ Terms you'll see across the codebase, UI, and docs:
 | **Daemon**         | The FeathersJS server (`apps/agor-daemon`) that owns the database, services, WebSocket events, and MCP HTTP endpoint. Default port 3030.                                                        |
 | **Executor**       | Process-isolated agent runtime in `packages/executor/`. Spawns Claude / Codex / Gemini / OpenCode via their SDKs locally, sandboxed, or through a delegated external substrate.                 |
 | **MCP**            | Model Context Protocol. Agor exposes itself as an MCP server (`POST /mcp`) so agents can introspect sessions, branches, boards, etc.                                                            |
-| **RBAC**           | Branch-scoped permission tiers (`none`/`view`/`session`/`prompt`/`all`). Feature-flagged via `execution.branch_rbac`. See "Feature Flags" below.                                                |
+| **RBAC**           | Normalized board/branch capability policies with immutable primary owners, named users/groups, unmatched-member fallback, and branch file access. Feature-flagged via `execution.branch_rbac`.  |
 | **Execution mode** | `simple` / `sandbox` / `delegated` — trusted local, fail-closed local filesystem sandbox, or explicitly delegated external execution. The config key remains `unix_user_mode` temporarily.      |
 | **Genealogy**      | Parent/child + fork ancestry of a session. Surfaced as a tree inside a branch card.                                                                                                             |
 | **Short ID**       | First 8 chars of a UUIDv7, used in UI and CLI. Resolved at API boundary via a `resolveShortId` hook. See [`context/concepts/id-management.md`](context/concepts/id-management.md).              |
@@ -254,42 +254,47 @@ mode a terminal is a shell as the daemon account and can expose daemon state;
 use `sandbox` for fail-closed local filesystem isolation, or a reviewed
 `delegated` substrate for external execution.
 
-### Permission Tiers (`others_can`)
+### Capability policies
 
-The `others_can` field on branches controls what non-owners can do:
+Every board and branch has one immutable primary owner. A board stores a
+`board_access` policy and one complete default `BranchPermissionConfig`.
+Branches bind to that package with `inherit | override`; an override begins as
+a copy of the current board template.
 
-| Tier      | Rank | Description                                                                                                                                    |
-| --------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `none`    | -1   | No access (branch is completely private to owners)                                                                                             |
-| `view`    | 0    | Can read branches, sessions, tasks, messages                                                                                                   |
-| `session` | 1    | **Default.** Can create new sessions (running as own identity) and prompt own sessions only                                                    |
-| `prompt`  | 2    | Can prompt ANY session, including other users' sessions. **Warning: sessions retain the original creator's execution and credential context.** |
-| `all`     | 3    | Full control (create/update/delete sessions)                                                                                                   |
+- Board roles: Viewer, Editor, Manager.
+- Branch roles: Viewer, Collaborator, Manager.
+- Branch file access: `none | read | write`.
+- Terminal is derived from Collaborator/Manager plus non-`none` file access.
+- Manager is cumulative but never implies foreign-session prompt authority.
+- Each entry references exactly one user or group. Direct-user entries shadow
+  groups; otherwise active group grants combine and filesystem access takes the
+  maximum.
+- `Others` matches only active same-tenant members with no direct/group match.
 
-The `session` tier is the safe default — it lets collaborators work independently without being able to borrow other users' execution contexts.
-
----
-
-### Branch-Level Flags
-
-Beyond `others_can`/`others_fs_access`, individual branches expose opt-in
-security toggles stored alongside permissions:
-
-| Flag                                | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ----------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dangerously_allow_session_sharing` | `false` | When OFF (safe default), `agor_sessions_spawn` and `agor_sessions_prompt(mode:"fork"\|"subsession")` attribute the new child session to the **calling** user — it runs under the caller's execution-home and credential route. When ON, legacy behavior is restored: the child inherits `parent.created_by`, so a collaborator can effectively spawn agents that execute as the original session owner's execution context. Admins are always attributed to themselves regardless of this flag. Cross-user spawns under the legacy path emit `[SECURITY]` warning logs. See [`context/explorations/session-sharing.md`](context/explorations/session-sharing.md). |
+Shared session prompting is tenant-gated and explicitly enabled in the complete
+board-default or branch-override configuration. It applies only to branch-home
+Sessions: the conversation and branch SDK state are shared, while task
+attribution, execution home, managed env/connector credentials, private MCP
+visibility, and branch mounts use the actual caller. Historical execution-home
+Sessions are never shareable. See
+[`context/explorations/session-sharing.md`](context/explorations/session-sharing.md).
 
 ---
 
 ### Implementation Notes
 
-- Branch owners, grants, and `others_can` exist independently of execution mode.
+- Normalized board/branch capability policies exist independently of execution
+  mode. Historical owner/grant tables and `others_can` fields are inert,
+  fail-closed compatibility shells.
+- Policy tables persist fixed roles (plus branch filesystem access), not
+  capability JSON. API capability arrays are derived and validated read
+  models; SQL inventory predicates compare normalized role/principal columns.
 - `sandbox` uses application RBAC to derive filesystem mounts; it creates no
   POSIX users or groups.
-- `delegated` passes trusted tenant/user identifiers and the transitional home
-  key to an external launcher; the launcher owns enforcement.
+- `delegated` passes trusted tenant/user identifiers, `{branch_fs_access}`, and
+  the transitional home key to an external launcher; the launcher owns enforcement.
 - Historical `unix_group` columns remain nullable and ignored at runtime.
-- The Owners & Permissions UI is controlled by `branch_rbac`.
+- The Permissions UI is controlled by `branch_rbac`.
 
 Related files:
 

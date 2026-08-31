@@ -47,6 +47,7 @@ import {
   isDeploymentAgenticToolAvailable,
   isTenantAgenticToolEnabled,
   normalizePersistedScheduleAgenticToolConfig,
+  resolveExecutionSecurityMode,
   unixUserModeRequiresExecutionHomeKey,
 } from '@agor/core/config';
 import {
@@ -106,6 +107,11 @@ import {
   roundToMinute,
 } from '@agor/core/utils/cron';
 import Handlebars from 'handlebars';
+import {
+  resolveBranchSdkHomeIncompatibility,
+  resolveNewSessionSdkHomeScope,
+  type SdkHomeMode,
+} from '../branch-sdk-home.js';
 import type { Application } from '../declarations';
 import {
   materializedAgenticToolConfigurationToScheduleConfig,
@@ -224,6 +230,7 @@ export class ScheduleNotReadyError extends Error {
   public readonly code:
     | 'schedule_disabled'
     | 'schedule_incomplete'
+    | 'schedule_permission_revoked'
     | 'schedule_initialization_retry_pending'
     | 'schedule_agentic_tool_removed'
     | 'schedule_invalid_config';
@@ -231,6 +238,7 @@ export class ScheduleNotReadyError extends Error {
     code:
       | 'schedule_disabled'
       | 'schedule_incomplete'
+      | 'schedule_permission_revoked'
       | 'schedule_initialization_retry_pending'
       | 'schedule_agentic_tool_removed'
       | 'schedule_invalid_config',
@@ -284,12 +292,18 @@ function isInjectedSchedulerCrash(error: unknown): boolean {
 export interface SchedulerConfig {
   /** Immutable deployment configuration captured when the daemon starts. */
   deploymentPolicy?: DeploymentAgenticToolPolicy;
+  /** App-layer branch RBAC posture captured when the daemon starts. */
+  appRbacEnabled?: boolean;
   /** Tick interval in milliseconds (default: 30000 = 30s) */
   tickInterval?: number;
   /** Grace period for missed runs in milliseconds (default: 120000 = 2min) */
   gracePeriod?: number;
   /** Execution mode for home-key validation (default: 'simple') */
   unixUserMode?: UnixUserMode;
+  /** Deployment default used only when admitting a fresh scheduled Session. */
+  sdkHomeMode?: SdkHomeMode;
+  /** Local executor can project caller auth with a pinned sandbox file bind. */
+  secureLocalCredentialOverlay?: boolean;
   /** Static/single-tenant id used for request-less cron ticks. Undefined means discover due schedule tenants from schedule rows. */
   tenantId?: TenantID | string;
   /** Maximum due schedules read per scan (default: 25). */
@@ -316,9 +330,12 @@ export interface SchedulerTestHooks {
 
 interface ResolvedSchedulerConfig {
   deploymentPolicy: DeploymentAgenticToolPolicy;
+  appRbacEnabled: boolean;
   tickInterval: number;
   gracePeriod: number;
   unixUserMode: UnixUserMode;
+  sdkHomeMode: SdkHomeMode;
+  secureLocalCredentialOverlay: boolean;
   tenantId?: TenantID | string;
   scanBatchSize: number;
   maxIdleInterval: number;
@@ -362,9 +379,12 @@ export class SchedulerService {
     }
     this.config = {
       deploymentPolicy: config.deploymentPolicy ?? { managed: false, installed: new Set() },
+      appRbacEnabled: config.appRbacEnabled ?? resolveExecutionSecurityMode().appRbacEnabled,
       tickInterval: config.tickInterval ?? 30000, // 30 seconds
       gracePeriod: config.gracePeriod ?? 120000, // 2 minutes
       unixUserMode: config.unixUserMode ?? 'simple',
+      sdkHomeMode: config.sdkHomeMode ?? 'inherit',
+      secureLocalCredentialOverlay: config.secureLocalCredentialOverlay ?? false,
       tenantId:
         typeof config.tenantId === 'string' && config.tenantId.trim()
           ? config.tenantId.trim()
@@ -843,6 +863,18 @@ export class SchedulerService {
         `Schedule ${schedule.schedule_id} references missing branch ${schedule.branch_id}`
       );
     }
+    if (this.config.appRbacEnabled) {
+      const creatorAccess = await this.withTenantDatabase(() =>
+        this.branchRepo.resolveUserAccess(branch, schedule.created_by)
+      );
+      if (!['session', 'prompt', 'all'].includes(creatorAccess.can)) {
+        if (!manual) await this.advanceScheduleCursor(schedule, now);
+        throw new ScheduleNotReadyError(
+          'schedule_permission_revoked',
+          `Schedule creator ${schedule.created_by} no longer has Collaborator access to branch ${schedule.branch_id}`
+        );
+      }
+    }
     // Prepare all configuration outside the admission transaction. The only
     // work performed while the schedule row is locked is existing/busy checks
     // and the session insert.
@@ -877,6 +909,19 @@ export class SchedulerService {
     ) {
       throw new BadRequest(`${resolvedConfig.activeTool} is disabled for this workspace`);
     }
+    // Native Codex auth cannot be projected safely into branch-owned state.
+    // Resolve it before admission so a rejected scheduled run cannot leave an
+    // otherwise-unused branch permanently adopted. Executor startup repeats
+    // the check for defense in depth and actor-sensitive shared prompts.
+    const branchSdkHomeIncompatibility = await this.withTenantDatabase(() =>
+      resolveBranchSdkHomeIncompatibility({
+        tool: resolvedConfig.activeTool,
+        delegated: this.config.unixUserMode === 'delegated',
+        secureLocalCredentialOverlay: this.config.secureLocalCredentialOverlay,
+        userId: schedule.created_by as import('@agor/core/types').UserID,
+        db: this.db,
+      })
+    );
     const effectiveMcpIds =
       schedule.mcp_server_ids !== undefined
         ? schedule.mcp_server_ids
@@ -915,6 +960,25 @@ export class SchedulerService {
         }
 
         const runIndex = (await this.sessionRepo.countByScheduleId(schedule.schedule_id)) + 1;
+        const currentBranch = await this.branchRepo.findById(branch.branch_id);
+        if (!currentBranch) {
+          throw new EntityNotFoundError('Branch', branch.branch_id);
+        }
+        const sdkHomeAdmission = resolveNewSessionSdkHomeScope({
+          branchSdkHomeIntent: currentBranch.sdk_home ?? null,
+          enabledForNewSessions: this.config.sdkHomeMode === 'per_branch',
+        });
+        if (sdkHomeAdmission.scope === 'branch') {
+          const unsupportedReason = branchSdkHomeIncompatibility;
+          if (unsupportedReason) {
+            throw new BadRequest(
+              `${resolvedConfig.activeTool} cannot use a branch SDK home because ${unsupportedReason}`
+            );
+          }
+        }
+        if (sdkHomeAdmission.adoptBranch) {
+          await this.branchRepo.adoptSdkHome(currentBranch.branch_id);
+        }
         const session: Partial<Session> = {
           session_id: candidateSessionId,
           branch_id: branch.branch_id,
@@ -923,6 +987,7 @@ export class SchedulerService {
           status: SessionStatus.IDLE,
           created_by: schedule.created_by,
           unix_username: unixUsername,
+          sdk_home_scope: sdkHomeAdmission.scope,
           scheduled_run_at: scheduledRunAt,
           scheduled_from_branch: true,
           schedule_id: schedule.schedule_id,
@@ -1361,24 +1426,45 @@ export class SchedulerService {
     await this.config.testHooks?.afterMcpAttachments?.(session);
 
     const tenantId = getCurrentTenantId();
-    const task = await this.atInitializationStage(
-      'prompt_admission',
-      async () =>
-        (await this.app.service('/sessions/:id/prompt').create(
-          {
-            prompt: renderedPrompt,
-            permissionMode: session.permission_config?.mode || 'acceptEdits',
-            stream: true,
-            idempotencyTaskId: initialTaskId,
-          },
-          {
-            route: { id: session.session_id },
-            provider: undefined,
-            ...(creator ? { user: creator } : {}),
-            ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
-          } as import('@agor/core/types').AuthenticatedParams & { route: { id: string } }
-        )) as Task
-    );
+    const task = await this.atInitializationStage('prompt_admission', async () => {
+      // Internal prompt calls skip provider hooks. Re-evaluate at the Task
+      // boundary so a revocation that races Session admission, or occurs
+      // before crash recovery, cannot launch new work. An already-admitted
+      // stable Task has crossed this boundary and is only reconciled here.
+      if (this.config.appRbacEnabled && !existingInitialTask) {
+        const authority = await this.withTenantDatabase(() =>
+          this.branchRepo.resolveSessionPromptAuthority(
+            session.branch_id,
+            session.created_by as UUID,
+            session.created_by as UUID,
+            session.sdk_home_scope
+          )
+        );
+        if (!authority.allowed) {
+          throw new PermanentScheduledInitializationError(
+            'schedule_permission_revoked' as Exclude<
+              SchedulerInitializationFailureCode,
+              'initialization_transient'
+            >,
+            'prompt_admission'
+          );
+        }
+      }
+      return (await this.app.service('/sessions/:id/prompt').create(
+        {
+          prompt: renderedPrompt,
+          permissionMode: session.permission_config?.mode || 'acceptEdits',
+          stream: true,
+          idempotencyTaskId: initialTaskId,
+        },
+        {
+          route: { id: session.session_id },
+          provider: undefined,
+          ...(creator ? { user: creator } : {}),
+          ...(tenantId ? { tenant: { tenant_id: tenantId, source: 'explicit' as const } } : {}),
+        } as import('@agor/core/types').AuthenticatedParams & { route: { id: string } }
+      )) as Task;
+    });
     await this.config.testHooks?.afterPromptDispatch?.(task);
 
     this.logWorkEvent(

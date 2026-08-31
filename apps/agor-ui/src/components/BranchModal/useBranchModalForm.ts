@@ -20,15 +20,17 @@
 import type {
   AgorClient,
   Branch,
-  BranchGroupGrantWithGroup,
-  BranchPermissionLevel,
+  BranchCapabilityPolicy,
+  CapabilityPolicyWorkspacePreferences,
   EffectiveBranchAccess,
+  EffectiveCapabilityPolicyAccess,
   Group,
   TeammateConfig,
   User,
 } from '@agor-live/client';
 import { getTeammateConfig, hasMinimumRole, isTeammate, ROLES } from '@agor-live/client';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAuthConfig } from '../../hooks/useAuthConfig';
 
 /** Patchable subset of `Branch` writable from the modal form. */
 export type BranchUpdate = Omit<
@@ -42,8 +44,6 @@ export type BranchUpdate = Omit<
 };
 
 /** Derive directly from Branch so the union stays in sync with core. */
-export type FsAccessLevel = NonNullable<Branch['others_fs_access']>;
-
 export interface GeneralFormState {
   boardId: string | undefined;
   issueUrl: string;
@@ -58,17 +58,6 @@ export interface TeammateFormState {
   description: string;
 }
 
-export interface PermissionsFormState {
-  permissionSource: NonNullable<Branch['permission_source']>;
-  selectedOwnerIds: string[];
-  othersCan: BranchPermissionLevel;
-  othersFsAccess: FsAccessLevel;
-  allowSessionSharing: boolean;
-  groupGrants: Array<{ group_id: string; can: BranchPermissionLevel; fs_access?: FsAccessLevel }>;
-}
-
-export type GroupGrantsStatus = 'loading' | 'loaded' | 'unavailable';
-
 export interface BranchModalFormApi {
   // General slice
   general: GeneralFormState;
@@ -81,37 +70,29 @@ export interface BranchModalFormApi {
   teammateChanged: boolean;
 
   // Permissions slice
-  permissions: PermissionsFormState;
-  setPermissions: <K extends keyof PermissionsFormState>(
-    key: K,
-    value: PermissionsFormState[K]
-  ) => void;
   permissionsChanged: boolean;
+  capabilityPolicy: BranchCapabilityPolicy | null;
+  setCapabilityPolicy: (value: BranchCapabilityPolicy) => void;
+  workspacePreferences: CapabilityPolicyWorkspacePreferences;
 
-  // Owners metadata (loaded async)
-  owners: User[];
   allUsers: User[];
   allGroups: Group[];
-  groupGrantsStatus: GroupGrantsStatus;
-  groupGrantsError: Error | null;
-  rbacEnabled: boolean;
-  loadingOwners: boolean;
-  /**
-   * Whether the modal should render the Permissions tab.
-   *
-   * Admins keep the tab while permissions metadata is loading/partial so a
-   * secondary endpoint failure (for example group grants) cannot hide branch
-   * management from them. Non-admins keep it during owner loading, then only
-   * retain it if they are confirmed branch owners.
-   */
+  permissionsLoading: boolean;
   canViewPermissions: boolean;
-  /** Non-fatal owners-load failure (network / server error, not 404). */
-  ownersLoadError: Error | null;
+  permissionsLoadError: Error | null;
 
   // Permissions used for gating UI
   canEditGeneral: boolean;
+  canManagePolicy: boolean;
   canEditPermissions: boolean;
   canControlEnvironment: boolean;
+
+  // Board-move validation: `board_id` is a Select of every board the caller
+  // can VIEW, not just the ones they can attach a branch to, so a selection
+  // can't be pre-filtered the way other fields are disabled outright. This
+  // is checked reactively once a target board is actually picked.
+  boardAttachChecking: boolean;
+  boardAttachError: string | null;
 
   // Aggregate state
   hasChanges: boolean;
@@ -146,20 +127,6 @@ const buildTeammateDefaults = (branch: Branch | null): TeammateFormState => {
   };
 };
 
-const buildPermissionsDefaults = (branch: Branch | null, owners: User[]): PermissionsFormState => ({
-  permissionSource: branch?.permission_source || 'override',
-  selectedOwnerIds:
-    owners.length > 0
-      ? owners.map((o) => o.user_id)
-      : branch?.created_by
-        ? [branch.created_by]
-        : [],
-  othersCan: branch?.others_can || 'session',
-  othersFsAccess: branch?.others_fs_access || 'read',
-  allowSessionSharing: Boolean(branch?.dangerously_allow_session_sharing),
-  groupGrants: [],
-});
-
 const sortedJson = (xs: string[]): string => JSON.stringify([...xs].sort());
 
 export function useBranchModalForm({
@@ -168,16 +135,22 @@ export function useBranchModalForm({
   currentUser,
   open,
 }: UseBranchModalFormOptions): BranchModalFormApi {
-  // Async-loaded owners data
-  const [owners, setOwners] = useState<User[]>([]);
+  const { featuresConfig } = useAuthConfig();
+  // Unknown/legacy health responses fail closed: the normalized permissions
+  // surface must not appear until the daemon explicitly advertises RBAC.
+  const branchRbacEnabled = featuresConfig?.branchRbac === true;
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
-  const [rbacEnabled, setRbacEnabled] = useState<boolean>(true);
-  const [loadingOwners, setLoadingOwners] = useState<boolean>(true);
-  const [groupGrantsStatus, setGroupGrantsStatus] = useState<GroupGrantsStatus>('loading');
-  const [groupGrantsError, setGroupGrantsError] = useState<Error | null>(null);
+  const [permissionsLoading, setPermissionsLoading] = useState<boolean>(true);
   const [effectiveAccess, setEffectiveAccess] = useState<EffectiveBranchAccess | null>(null);
-  const [ownersLoadError, setOwnersLoadError] = useState<Error | null>(null);
+  const [capabilityPolicy, setCapabilityPolicyState] = useState<BranchCapabilityPolicy | null>(
+    null
+  );
+  const [workspacePreferences, setWorkspacePreferences] =
+    useState<CapabilityPolicyWorkspacePreferences>({ session_sharing_enabled: false });
+  const [permissionsLoadError, setPermissionsLoadError] = useState<Error | null>(null);
+  const [boardAttachChecking, setBoardAttachChecking] = useState(false);
+  const [boardAttachError, setBoardAttachError] = useState<string | null>(null);
 
   const [saving, setSaving] = useState(false);
 
@@ -185,9 +158,6 @@ export function useBranchModalForm({
   const [general, setGeneralState] = useState<GeneralFormState>(() => buildGeneralDefaults(branch));
   const [teammate, setTeammateState] = useState<TeammateFormState>(() =>
     buildTeammateDefaults(branch)
-  );
-  const [permissions, setPermissionsState] = useState<PermissionsFormState>(() =>
-    buildPermissionsDefaults(branch, [])
   );
 
   // Which branch did we initialize for? Used to detect branch swaps while the
@@ -199,6 +169,7 @@ export function useBranchModalForm({
   const generalTouchedRef = useRef<boolean>(false);
   const teammateTouchedRef = useRef<boolean>(false);
   const permissionsTouchedRef = useRef<boolean>(false);
+  const initialCapabilityPolicyRef = useRef<BranchCapabilityPolicy | null>(null);
 
   const setGeneral = useCallback<BranchModalFormApi['setGeneral']>((key, value) => {
     generalTouchedRef.current = true;
@@ -210,9 +181,9 @@ export function useBranchModalForm({
     setTeammateState((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  const setPermissions = useCallback<BranchModalFormApi['setPermissions']>((key, value) => {
+  const setCapabilityPolicy = useCallback((value: BranchCapabilityPolicy) => {
     permissionsTouchedRef.current = true;
-    setPermissionsState((prev) => ({ ...prev, [key]: value }));
+    setCapabilityPolicyState(value);
   }, []);
 
   // Branch lifecycle. Handles three scenarios:
@@ -237,14 +208,11 @@ export function useBranchModalForm({
       permissionsTouchedRef.current = false;
       setGeneralState(buildGeneralDefaults(branch));
       setTeammateState(buildTeammateDefaults(branch));
-      setPermissionsState(buildPermissionsDefaults(branch, []));
-      setOwners([]);
+      setCapabilityPolicyState(null);
+      initialCapabilityPolicyRef.current = null;
       setAllUsers([]);
       setAllGroups([]);
-      setRbacEnabled(true);
-      setGroupGrantsStatus('loading');
-      setGroupGrantsError(null);
-      setLoadingOwners(true);
+      setPermissionsLoading(true);
       return;
     }
     // Same branch, refreshed prop. Resync any slice the user hasn't touched.
@@ -254,141 +222,113 @@ export function useBranchModalForm({
     if (!teammateTouchedRef.current) {
       setTeammateState(buildTeammateDefaults(branch));
     }
-    // Permissions slice — only non-owner fields here; selectedOwnerIds is
-    // resynced from the owners-load effect below using the same touched gate.
-    if (!permissionsTouchedRef.current) {
-      setPermissionsState((prev) => ({
-        ...prev,
-        othersCan: branch.others_can || 'session',
-        othersFsAccess: branch.others_fs_access || 'read',
-        allowSessionSharing: Boolean(branch.dangerously_allow_session_sharing),
-      }));
-    }
   }, [open, branch]);
 
-  // Load owners + all users/groups for the permissions tab.
-  //
-  // RBAC feature detection must be based only on the owners endpoint. Group
-  // grants are additive metadata; if that endpoint is missing/failing (for
-  // example during a rolling deploy or against an older daemon) we should keep
-  // the tab visible for admins/owners rather than treating the whole RBAC
-  // surface as disabled.
+  const branchId = branch?.branch_id;
+
+  // Load the normalized permission package and its principal directory.
   useEffect(() => {
-    if (!open || !client || !branch) return;
-    const branchId = branch.branch_id;
+    if (!open || !client || !branchId) return;
+    if (!branchRbacEnabled) {
+      setPermissionsLoading(false);
+      setPermissionsLoadError(null);
+      setCapabilityPolicyState(null);
+      setEffectiveAccess(null);
+      setAllUsers([]);
+      setAllGroups([]);
+      setWorkspacePreferences({ session_sharing_enabled: false });
+      return;
+    }
     let cancelled = false;
-
     const load = async () => {
+      setPermissionsLoading(true);
+      setPermissionsLoadError(null);
       try {
-        setLoadingOwners(true);
-        setOwnersLoadError(null);
-        setGroupGrantsStatus('loading');
-        setGroupGrantsError(null);
-        setEffectiveAccess(null);
-        const effectiveAccessPromise = client
-          .service('branches/:id/effective-access')
-          .find({ route: { id: branchId } })
-          .catch((error: unknown) => {
-            console.warn('Failed to load effective branch access:', error);
-            return null;
-          });
-        const ownersResponse = await client
-          .service('branches/:id/owners')
-          .find({ route: { id: branchId } });
-        if (cancelled) return;
-        const resolvedEffectiveAccess = await effectiveAccessPromise;
-        if (cancelled) return;
-        setEffectiveAccess(resolvedEffectiveAccess as EffectiveBranchAccess | null);
-        const ownersData = ownersResponse as User[];
-        setOwners(ownersData);
-        setRbacEnabled(true);
-        // Only seed selectedOwnerIds if the user hasn't touched the permissions
-        // slice yet — preserves their in-flight edits across data refreshes.
-        if (!permissionsTouchedRef.current) {
-          const ownerIds =
-            ownersData.length > 0
-              ? ownersData.map((o) => o.user_id)
-              : branch.created_by
-                ? [branch.created_by]
-                : [];
-          setPermissionsState((prev) => ({
-            ...prev,
-            selectedOwnerIds: ownerIds,
-          }));
-        }
-
-        try {
-          const users = await client.service('users').findAll({});
-          if (!cancelled) setAllUsers(users);
-        } catch (error) {
-          if (!cancelled) {
-            console.warn('Failed to load users for branch permissions:', error);
-          }
-        }
-
-        // Owners/users gate owner and branch-level editability. Group grants
-        // are optional auxiliary metadata with their own status; keep loading
-        // them independently so a slow/missing group-grants endpoint does not
-        // hold owner/branch-level controls disabled.
-        if (!cancelled) {
-          setLoadingOwners(false);
-        }
-
-        try {
-          const [groups, grantsResponse] = await Promise.all([
+        const [policyResult, accessResult, usersResult, groupsResult, preferencesResult] =
+          await Promise.allSettled([
+            client.service('branches/:id/permissions').find({ route: { id: branchId } }),
+            client.service('branches/:id/effective-access').find({ route: { id: branchId } }),
+            client.service('users').findAll({}),
             client.service('groups').findAll({ query: { archived: false } }),
-            client.service('branches/:id/group-grants').find({ route: { id: branchId } }),
+            client.service('workspace-preferences').find(),
           ]);
-          if (cancelled) return;
-          setAllGroups(groups as Group[]);
-          const grants = (grantsResponse as BranchGroupGrantWithGroup[]).map((grant) => ({
-            group_id: grant.group_id,
-            can: grant.can,
-            fs_access: grant.fs_access as FsAccessLevel | undefined,
-          }));
-          setGroupGrantsStatus('loaded');
-          setGroupGrantsError(null);
-          if (!permissionsTouchedRef.current) {
-            setPermissionsState((prev) => ({ ...prev, groupGrants: grants }));
-          }
-        } catch (error) {
-          if (!cancelled) {
-            setAllGroups([]);
-            setGroupGrantsStatus('unavailable');
-            setGroupGrantsError(error instanceof Error ? error : new Error(String(error)));
-            console.warn('Failed to load branch group permissions:', error);
-          }
-        }
-        // biome-ignore lint/suspicious/noExplicitAny: error from feathers client is loosely typed
-      } catch (error: any) {
         if (cancelled) return;
-        if (error?.code === 404 || error?.message?.includes('not found')) {
-          setRbacEnabled(false);
-          setOwners([]);
-          setAllUsers([]);
-          setAllGroups([]);
-          setGroupGrantsStatus('unavailable');
-          setGroupGrantsError(error instanceof Error ? error : new Error(String(error)));
-        } else {
-          // Surface the failure to the modal. Without this, a non-admin owner
-          // sees a silently-locked-down modal (owners=[] makes isOwner false →
-          // canEdit* false) with no way to know what happened.
-          const err = error instanceof Error ? error : new Error(String(error));
-          console.error('Failed to load branch owners:', err);
-          setOwnersLoadError(err);
-          setAllGroups([]);
-          setGroupGrantsStatus('unavailable');
-          setGroupGrantsError(err);
-        }
+        if (policyResult.status !== 'fulfilled') throw policyResult.reason;
+        const loadedPolicy = policyResult.value;
+        setCapabilityPolicyState(loadedPolicy);
+        initialCapabilityPolicyRef.current = structuredClone(loadedPolicy);
+        setEffectiveAccess(
+          accessResult.status === 'fulfilled'
+            ? (accessResult.value as unknown as EffectiveBranchAccess)
+            : null
+        );
+        const users = usersResult.status === 'fulfilled' ? (usersResult.value as User[]) : [];
+        setAllUsers(users);
+        setAllGroups(groupsResult.status === 'fulfilled' ? (groupsResult.value as Group[]) : []);
+        setWorkspacePreferences(
+          preferencesResult.status === 'fulfilled'
+            ? preferencesResult.value
+            : { session_sharing_enabled: false }
+        );
+      } catch (error) {
+        if (cancelled) return;
+        const next = error instanceof Error ? error : new Error(String(error));
+        setPermissionsLoadError(next);
+        setCapabilityPolicyState(null);
+      } finally {
+        if (!cancelled) setPermissionsLoading(false);
       }
-      if (!cancelled) setLoadingOwners(false);
     };
-
-    load();
+    void load();
     return () => {
       cancelled = true;
     };
-  }, [open, client, branch]);
+  }, [open, client, branchId, branchRbacEnabled]);
+
+  // Validate a newly-selected target board once it's actually picked, rather
+  // than trying to pre-filter the Select's options: the board list is scoped
+  // to "boards I can VIEW", and knowing which of those the caller can also
+  // attach a branch to would mean an effective-access call per board. The
+  // daemon rejects a move to a board without `board.attach_branch` (or away
+  // from the current board without `board.edit`), so this mirrors that one
+  // check for the one board actually chosen.
+  const targetBoardId = general.boardId;
+  useEffect(() => {
+    if (!open || !client || !branchRbacEnabled) {
+      setBoardAttachError(null);
+      return;
+    }
+    const originalBoardId = branch?.board_id || undefined;
+    if (!targetBoardId || targetBoardId === originalBoardId) {
+      setBoardAttachError(null);
+      return;
+    }
+    let cancelled = false;
+    setBoardAttachChecking(true);
+    setBoardAttachError(null);
+    client
+      .service('boards/:id/effective-access')
+      .find({ route: { id: targetBoardId } })
+      .then((access: unknown) => {
+        if (cancelled) return;
+        const capabilities = (access as EffectiveCapabilityPolicyAccess).capabilities;
+        if (!capabilities.includes('board.attach_branch')) {
+          setBoardAttachError('You need Board Editor or Manager access to move a branch here.');
+        }
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setBoardAttachError(
+          error instanceof Error ? error.message : 'Could not verify access to that board.'
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setBoardAttachChecking(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, client, branchRbacEnabled, branch?.board_id, targetBoardId]);
 
   // Change detection per slice
   const isTeammateBranch = branch ? isTeammate(branch) : false;
@@ -415,129 +355,66 @@ export function useBranchModalForm({
     );
   }, [branch, teammate, isTeammateBranch]);
 
-  // Owner add/remove diffs vs. permission-field edits are tracked separately:
-  // owner changes route to the nested owners service while field changes go
-  // into the branch PATCH. They commit at different points in the save flow
-  // (owner-removes happen LAST so the caller doesn't lose authorization
-  // mid-save), so we want to know which kind of change we have.
-  const ownersChanged = useMemo(() => {
-    if (!branch || !rbacEnabled) return false;
-    const currentOwnerIds = owners.map((o) => o.user_id as string);
-    return (
-      permissions.selectedOwnerIds.length !== currentOwnerIds.length ||
-      permissions.selectedOwnerIds.some((id) => !currentOwnerIds.includes(id))
-    );
-  }, [branch, rbacEnabled, owners, permissions.selectedOwnerIds]);
-
-  const permissionFieldsChanged = useMemo(() => {
-    if (!branch || !rbacEnabled) return false;
-    return (
-      permissions.othersCan !== (branch.others_can || 'session') ||
-      permissions.othersFsAccess !== (branch.others_fs_access || 'read') ||
-      permissions.allowSessionSharing !== Boolean(branch.dangerously_allow_session_sharing) ||
-      permissions.permissionSource !== (branch.permission_source || 'override')
-    );
-  }, [branch, rbacEnabled, permissions]);
-
-  // Conservative dirty bit: any edit in the permissions tab may require
-  // re-saving branch group grants. The save path diffs against the server
-  // before writing, so this remains safe for owner-only/field-only edits.
-  const groupGrantsChanged = Boolean(
-    branch && rbacEnabled && groupGrantsStatus === 'loaded' && permissionsTouchedRef.current
+  const permissionsChanged = Boolean(
+    capabilityPolicy &&
+      initialCapabilityPolicyRef.current &&
+      JSON.stringify(capabilityPolicy) !== JSON.stringify(initialCapabilityPolicyRef.current)
   );
-
-  const permissionsChanged = ownersChanged || permissionFieldsChanged || groupGrantsChanged;
 
   const hasChanges = generalChanged || teammateChanged || permissionsChanged;
 
-  // Permission gating
+  // Permission gating. The legacy effective-access adapter maps Manager to all.
   const currentUserId = currentUser?.user_id;
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
   const isSuperAdmin = hasMinimumRole(currentUser?.role, ROLES.SUPERADMIN);
-  const isOwner = owners.some((o) => o.user_id === currentUserId);
+  const isPrimaryOwner = capabilityPolicy?.primary_owner_user_id === currentUserId;
+  const canManagePolicy = Boolean(
+    branchRbacEnabled &&
+      capabilityPolicy &&
+      (isSuperAdmin || effectiveAccess?.can === 'all' || isPrimaryOwner)
+  );
   const isCreator = branch?.created_by === currentUserId;
-  const canControlEnvironment =
-    isAdmin ||
-    effectiveAccess?.can === 'all' ||
-    isOwner ||
-    branch?.others_can === 'all' ||
-    (!rbacEnabled && isCreator);
-  const canViewPermissions = rbacEnabled && (isAdmin || loadingOwners || isOwner);
-
-  // Backend branch mutations are authorized by branch ownership or superadmin
-  // branch-RBAC bypass. Plain admins can view the tab as a diagnostic/admin
-  // affordance, but enabling controls for non-owner admins would lead to save
-  // failures for owner/permission-field mutations.
-  const canEditGeneral = loadingOwners ? isSuperAdmin : !rbacEnabled || isSuperAdmin || isOwner;
-  const canEditPermissions = isSuperAdmin || (!loadingOwners && isOwner);
+  const canControlEnvironment = branchRbacEnabled
+    ? canManagePolicy
+    : isAdmin || isCreator || branch?.others_can === 'all';
+  const canViewPermissions = branchRbacEnabled && Boolean(capabilityPolicy);
+  // Preserve the legacy open-RBAC form behavior while the normalized policy
+  // feature is disabled. The server remains authoritative for every write.
+  const canEditGeneral = branchRbacEnabled ? canManagePolicy : true;
+  // Every authenticated viewer may author their own personal session-sharing
+  // rule; only policy managers can change access entries or binding mode.
+  const canEditPermissions = Boolean(branchRbacEnabled && capabilityPolicy && currentUserId);
 
   const reset = useCallback(() => {
     setGeneralState(buildGeneralDefaults(branch));
     setTeammateState(buildTeammateDefaults(branch));
-    setPermissionsState(buildPermissionsDefaults(branch, owners));
+    setCapabilityPolicyState(
+      initialCapabilityPolicyRef.current
+        ? structuredClone(initialCapabilityPolicyRef.current)
+        : null
+    );
     generalTouchedRef.current = false;
     teammateTouchedRef.current = false;
     permissionsTouchedRef.current = false;
-  }, [branch, owners]);
+  }, [branch]);
 
   const save = useCallback(async (): Promise<{ ok: true } | { ok: false; error: Error }> => {
-    if (!branch || !client) {
-      return { ok: false, error: new Error('Modal not ready') };
-    }
-
+    if (!branch || !client) return { ok: false, error: new Error('Modal not ready') };
+    // Belt-and-suspenders: the Save button is already disabled while this is
+    // set, but save() is also exported directly, so re-check here too.
+    if (boardAttachError) return { ok: false, error: new Error(boardAttachError) };
     setSaving(true);
     try {
-      const currentOwnerIds = owners.map((o) => o.user_id as string);
-      const ownersToAdd = permissions.selectedOwnerIds.filter(
-        (id) => !currentOwnerIds.includes(id)
-      );
-      const ownersToRemove = currentOwnerIds.filter(
-        (id) => !permissions.selectedOwnerIds.includes(id)
-      );
-
-      // Pre-flight defensive guard — never let the form end up with zero
-      // owners. The UI already prevents this but a paranoid check here
-      // protects against owners reloaded mid-edit.
-      if (rbacEnabled && ownersChanged && permissions.selectedOwnerIds.length === 0) {
-        throw new Error('At least one owner is required');
-      }
-      // NOTE: unlike boards, branches have no private/shared visibility mode
-      // (see PermissionsTab: `showVisibility={false}`, `visibility: 'shared'`).
-      // `others_can: 'none'` is simply the most restrictive non-owner fallback
-      // tier — it does NOT imply a single solo owner. A branch can be co-owned
-      // by several users while remaining closed to everyone else, so there is
-      // deliberately no "exactly one owner when others_can === none" guard here
-      // (that rule belongs to boards, which do have an `access_mode` column).
-
-      // 1. Add new owners FIRST so a transfer like "remove me, add Bob"
-      // doesn't briefly leave an empty owner set, and so Bob can pick up
-      // ownership before we apply other changes.
-      if (rbacEnabled && ownersChanged && canEditPermissions) {
-        for (const userId of ownersToAdd) {
-          await client
-            .service('branches/:id/owners')
-            .create({ user_id: userId }, { route: { id: branch.branch_id } });
-        }
-      }
-
-      // 2. Build a single patch payload for the branch row. ONLY include
-      // permission fields if they actually changed — including them on an
-      // owner-only transfer would force a redundant authorization check
-      // that the about-to-be-removed owner may not pass.
       const updates: BranchUpdate = {};
-
       if (generalChanged && canEditGeneral) {
         updates.board_id = general.boardId || undefined;
         updates.issue_url = general.issueUrl.trim() === '' ? null : general.issueUrl;
         updates.pull_request_url = general.prUrl.trim() === '' ? null : general.prUrl;
-        if (!isTeammateBranch) {
-          updates.notes = general.notes.trim() === '' ? null : general.notes;
-        }
+        if (!isTeammateBranch) updates.notes = general.notes.trim() === '' ? null : general.notes;
         if (sortedJson(general.mcpServerIds) !== sortedJson(branch.mcp_server_ids || [])) {
           updates.mcp_server_ids = general.mcpServerIds;
         }
       }
-
       if (teammateChanged && isTeammateBranch && canEditGeneral) {
         const config = getTeammateConfig(branch);
         if (config) {
@@ -551,112 +428,41 @@ export function useBranchModalForm({
           updates.notes = teammate.description.trim() || null;
         }
       }
-
-      if (rbacEnabled && permissionFieldsChanged && canEditPermissions) {
-        updates.others_can = permissions.othersCan;
-        updates.others_fs_access = permissions.othersFsAccess;
-        updates.dangerously_allow_session_sharing = permissions.allowSessionSharing;
-        updates.permission_source = permissions.permissionSource;
+      // Persist a policy transition first. Moving an inherited branch is
+      // intentionally rejected by the server until its current complete
+      // package has been materialized as an override, so this ordering lets a
+      // user choose Override and a new board in one explicit Save.
+      if (permissionsChanged && capabilityPolicy) {
+        const saved = await client
+          .service('branches/:id/permissions')
+          .patch(null, capabilityPolicy, { route: { id: branch.branch_id } });
+        setCapabilityPolicyState(saved);
+        initialCapabilityPolicyRef.current = structuredClone(saved);
       }
-
       if (Object.keys(updates).length > 0) {
-        // Call the service directly — going through a parent helper would let
-        // it swallow the error and we'd report a false success. Runs BEFORE
-        // the owner-remove pass so the current user (who may be losing
-        // ownership) is still authorized to PATCH at this point.
         await client.service('branches').patch(branch.branch_id, updates as Partial<Branch>);
       }
-
-      // 3. Upsert/remove branch group grants.
-      if (rbacEnabled && canEditPermissions && groupGrantsStatus === 'loaded') {
-        const currentGrants = (await client
-          .service('branches/:id/group-grants')
-          .find({ route: { id: branch.branch_id } })) as BranchGroupGrantWithGroup[];
-        const desired = permissions.groupGrants;
-        const desiredIds = new Set(desired.map((g) => g.group_id));
-        for (const grant of desired) {
-          const current = currentGrants.find((g) => g.group_id === grant.group_id);
-          if (
-            !current ||
-            current.can !== grant.can ||
-            (current.fs_access || undefined) !== (grant.fs_access || undefined)
-          ) {
-            await client
-              .service('branches/:id/group-grants')
-              .create(
-                { group_id: grant.group_id, can: grant.can, fs_access: grant.fs_access },
-                { route: { id: branch.branch_id } }
-              );
-          }
-        }
-        for (const current of currentGrants) {
-          if (!desiredIds.has(current.group_id)) {
-            await client
-              .service('branches/:id/group-grants')
-              .remove(current.group_id, { route: { id: branch.branch_id } });
-          }
-        }
-      }
-
-      // 4. Remove old owners LAST — after every authorization-requiring call
-      // has fired. A typical owner transfer (Alice removes self + adds Bob)
-      // would otherwise reach the PATCH step de-authorized.
-      if (rbacEnabled && ownersChanged && canEditPermissions) {
-        for (const userId of ownersToRemove) {
-          await client
-            .service('branches/:id/owners')
-            .remove(userId, { route: { id: branch.branch_id } });
-        }
-      }
-
-      // Refresh owners cache so the next change-detection cycle reflects the
-      // saved state. Doing this lazily here avoids forcing a parent re-fetch.
-      if (rbacEnabled && permissionsChanged) {
-        try {
-          const response = await client
-            .service('branches/:id/owners')
-            .find({ route: { id: branch.branch_id } });
-          const ownersData = response as User[];
-          setOwners(ownersData);
-          setPermissionsState((prev) => ({
-            ...prev,
-            selectedOwnerIds: ownersData.map((o) => o.user_id),
-          }));
-        } catch (err) {
-          console.error('Failed to reload owners after save:', err);
-        }
-      }
-
-      // Clear all touched flags — the form is once again clean against the
-      // server state. WebSocket-driven prop updates may resync slices freely.
       generalTouchedRef.current = false;
       teammateTouchedRef.current = false;
       permissionsTouchedRef.current = false;
-
       return { ok: true };
     } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      return { ok: false, error: err };
+      return { ok: false, error: error instanceof Error ? error : new Error(String(error)) };
     } finally {
       setSaving(false);
     }
   }, [
     branch,
     client,
-    rbacEnabled,
-    ownersChanged,
-    permissionFieldsChanged,
-    permissionsChanged,
-    canEditPermissions,
-    groupGrantsStatus,
-    owners,
-    permissions,
+    boardAttachError,
     generalChanged,
     canEditGeneral,
     general,
     isTeammateBranch,
     teammateChanged,
     teammate,
+    permissionsChanged,
+    capabilityPolicy,
   ]);
 
   return {
@@ -666,21 +472,21 @@ export function useBranchModalForm({
     teammate,
     setTeammate,
     teammateChanged,
-    permissions,
-    setPermissions,
     permissionsChanged,
-    owners,
+    capabilityPolicy,
+    setCapabilityPolicy,
+    workspacePreferences,
     allUsers,
     allGroups,
-    groupGrantsStatus,
-    groupGrantsError,
-    rbacEnabled,
-    loadingOwners,
+    permissionsLoading,
     canViewPermissions,
-    ownersLoadError,
+    permissionsLoadError,
     canEditGeneral,
+    canManagePolicy,
     canEditPermissions,
     canControlEnvironment,
+    boardAttachChecking,
+    boardAttachError,
     hasChanges,
     saving,
     save,

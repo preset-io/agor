@@ -63,13 +63,38 @@ describe('TasksService executor heartbeat helpers', () => {
     };
     const service = Object.create(TasksService.prototype) as TasksService;
     Reflect.set(service, 'taskRepo', {
-      reportRuntimeTelemetry: vi.fn().mockResolvedValue(null),
-      findById: vi.fn().mockResolvedValue(stoppingTask),
+      reportRuntimeTelemetry: vi.fn().mockResolvedValue({
+        outcome: 'control',
+        task: stoppingTask,
+      }),
+    });
+    Reflect.set(service, 'db', { run() {} });
+    Reflect.set(service, 'runtimeAuthorityOptions', {
+      branchRbacEnabled: true,
+    });
+    Reflect.set(service, 'executorCredentialRevoker', {
+      isTaskTokenAuthorityCurrent: vi.fn().mockResolvedValue(true),
     });
 
-    await expect(service.reportRuntimeTelemetry({ task_id: stoppingTask.task_id })).resolves.toBe(
-      stoppingTask
-    );
+    await expect(
+      service.reportRuntimeTelemetry({ task_id: stoppingTask.task_id }, {
+        provider: 'rest',
+        tenant: { tenant_id: 'tenant-a', source: 'auth_claim' },
+        authentication: {
+          strategy: 'jwt',
+          accessToken: 'verified-runtime-bearer',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-task',
+            sub: 'user-a',
+            tenant_id: 'tenant-a',
+            session_id: stoppingTask.session_id,
+            task_id: stoppingTask.task_id,
+            branch_id: 'branch-a',
+          },
+        },
+      } as never)
+    ).resolves.toBe(stoppingTask);
   });
 
   it('does not let an executor terminal patch bypass coordinator-owned stopping', async () => {

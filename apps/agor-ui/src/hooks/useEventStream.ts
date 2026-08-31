@@ -4,8 +4,10 @@
  * Only listens when enabled, captures all events from the socket
  */
 
-import type { AgorClient } from '@agor-live/client';
+import { type AgorClient, PRESENCE_SOCKET_EVENT_NAMES } from '@agor-live/client';
 import { useCallback, useEffect, useState } from 'react';
+
+const PRESENCE_EVENT_NAMES = new Set<string>(PRESENCE_SOCKET_EVENT_NAMES);
 
 export interface SocketEvent {
   id: string;
@@ -62,13 +64,7 @@ export function useEventStream(options: UseEventStreamOptions): UseEventStreamRe
 
       // Determine event type based on naming convention
       let type = 'other';
-      if (
-        eventName === 'cursor-move' ||
-        eventName === 'cursor-leave' ||
-        eventName === 'cursor-moved' ||
-        eventName === 'cursor-left' ||
-        eventName === 'presence-updated'
-      ) {
+      if (PRESENCE_EVENT_NAMES.has(eventName)) {
         type = 'cursor';
       } else if (eventName.includes('message') || eventName === 'thinking:chunk') {
         type = 'message';

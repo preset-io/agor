@@ -45,7 +45,6 @@ import {
 import { sanitizeDbError } from '../sanitize-error';
 import {
   branches,
-  branchOwners,
   messages,
   type SessionInsert,
   type SessionRow,
@@ -63,6 +62,11 @@ import {
 } from './base';
 import { visibleBranchAccessCondition } from './branch-access';
 import { deepMerge } from './merge-utils';
+import {
+  extractMessageText,
+  findLatestAssistantMessages,
+  truncateMessageText,
+} from './message-activity';
 
 /**
  * Session with enriched last message
@@ -112,6 +116,19 @@ function isSessionTimestampNeutralPatch(updates: SessionUpdate): boolean {
   return keys.length === 1 && keys[0] === 'ready_for_prompt' && updates.ready_for_prompt === false;
 }
 
+/** Options for the SQL-backed session list page used by board/branch views. */
+export interface SessionPageOptions {
+  boardId?: string;
+  branchId?: BranchID;
+  branchIds?: BranchID[];
+  archived?: boolean;
+  sortUpdatedAt?: 1 | -1;
+  sortCreatedAt?: 1 | -1;
+  limit?: number;
+  skip?: number;
+  visibleToUserId?: UUID;
+}
+
 /**
  * Session repository implementation
  */
@@ -155,6 +172,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           : new Date(row.created_at).toISOString(),
         created_by: row.created_by,
         unix_username: row.unix_username || null,
+        sdk_home_scope: row.sdk_home_scope,
         branch_id: row.branch_id as UUID,
         branch_board_id: boardId,
         url,
@@ -214,6 +232,10 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       agentic_tool_preset_id: session.agentic_tool_preset_id ?? null,
       created_by: session.created_by,
       unix_username: session.unix_username ?? null, // Immutable execution-home stamp set at creation
+      // Direct repository callers intentionally retain the legacy-safe
+      // default. The Sessions service is the policy boundary that opts a new
+      // session into branch-owned SDK state.
+      sdk_home_scope: session.sdk_home_scope ?? 'execution_home',
       board_id: null, // Board ID tracked separately in boards.sessions array
       parent_session_id: session.genealogy?.parent_session_id ?? null,
       forked_from_session_id: session.genealogy?.forked_from_session_id ?? null,
@@ -394,11 +416,22 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    *
    * LEFT JOINs with branches to populate board_id and url in a single query.
    */
-  async findAll(filter?: { visibleToUserId?: UUID }): Promise<Session[]> {
+  async findAll(filter?: {
+    visibleToUserId?: UUID;
+    branchId?: BranchID;
+    branchIds?: BranchID[];
+    archived?: boolean;
+  }): Promise<Session[]> {
+    if (filter?.branchIds?.length === 0) return [];
     try {
       const baseUrl = await getBaseUrl();
 
       const conditions = [];
+      if (filter?.branchId) conditions.push(eq(sessions.branch_id, filter.branchId));
+      if (filter?.branchIds) conditions.push(inArray(sessions.branch_id, filter.branchIds));
+      if (filter?.archived !== undefined) {
+        conditions.push(eq(sessions.archived, filter.archived));
+      }
       if (filter?.visibleToUserId) {
         conditions.push(visibleBranchAccessCondition(this.db, filter.visibleToUserId));
       }
@@ -408,13 +441,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         ? select(this.db)
             .from(sessions)
             .leftJoin(branches, eq(sessions.branch_id, branches.branch_id))
-            .leftJoin(
-              branchOwners,
-              and(
-                eq(branchOwners.branch_id, branches.branch_id),
-                eq(branchOwners.user_id, filter.visibleToUserId)
-              )
-            )
         : select(this.db)
             .from(sessions)
             .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
@@ -500,13 +526,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
         ? select(this.db)
             .from(sessions)
             .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
-            .leftJoin(
-              branchOwners,
-              and(
-                eq(branchOwners.branch_id, branches.branch_id),
-                eq(branchOwners.user_id, filter.visibleToUserId)
-              )
-            )
         : select(this.db)
             .from(sessions)
             .innerJoin(branches, eq(sessions.branch_id, branches.branch_id));
@@ -549,19 +568,16 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
    * @returns `{ data, total }` where `total` is the full match count (so Feathers
    *          pagination and the client `findAll` loop behave correctly).
    */
-  async findPage(opts: {
-    boardId?: string;
-    archived?: boolean;
-    sortUpdatedAt?: 1 | -1;
-    limit?: number;
-    skip?: number;
-    visibleToUserId?: UUID;
-  }): Promise<{ data: Session[]; total: number }> {
+  async findPage(opts: SessionPageOptions): Promise<{ data: Session[]; total: number }> {
     try {
+      if (opts.branchIds?.length === 0) return { data: [], total: 0 };
       const baseUrl = await getBaseUrl();
 
       const conditions = [];
       if (opts.boardId !== undefined) conditions.push(eq(branches.board_id, opts.boardId));
+      if (opts.branchId !== undefined) conditions.push(eq(sessions.branch_id, opts.branchId));
+      if (opts.branchIds !== undefined)
+        conditions.push(inArray(sessions.branch_id, opts.branchIds));
       if (opts.archived !== undefined) conditions.push(eq(sessions.archived, opts.archived));
       if (opts.visibleToUserId) {
         conditions.push(visibleBranchAccessCondition(this.db, opts.visibleToUserId));
@@ -570,18 +586,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
 
       // Total matching rows — drives Feathers pagination + the findAll loop.
       // biome-ignore lint/suspicious/noExplicitAny: Conditional query builder shape differs with the RBAC join
-      let countQuery: any = select(this.db, { count: sql<number>`count(*)` })
+      const countQuery: any = select(this.db, { count: sql<number>`count(*)` })
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
-      if (opts.visibleToUserId) {
-        countQuery = countQuery.leftJoin(
-          branchOwners,
-          and(
-            eq(branchOwners.branch_id, branches.branch_id),
-            eq(branchOwners.user_id, opts.visibleToUserId)
-          )
-        );
-      }
       const countRow = await (whereClause ? countQuery.where(whereClause) : countQuery).one();
       const total = Number(countRow?.count ?? 0);
 
@@ -590,20 +597,24 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       let dataQuery: any = select(this.db)
         .from(sessions)
         .leftJoin(branches, eq(sessions.branch_id, branches.branch_id));
-      if (opts.visibleToUserId) {
-        dataQuery = dataQuery.leftJoin(
-          branchOwners,
-          and(
-            eq(branchOwners.branch_id, branches.branch_id),
-            eq(branchOwners.user_id, opts.visibleToUserId)
-          )
-        );
-      }
       if (whereClause) dataQuery = dataQuery.where(whereClause);
+      const logicalUpdatedAt = sql`COALESCE(${sessions.updated_at}, ${sessions.created_at})`;
       if (opts.sortUpdatedAt !== undefined) {
         dataQuery = dataQuery.orderBy(
-          opts.sortUpdatedAt === -1 ? desc(sessions.updated_at) : sessions.updated_at
+          opts.sortUpdatedAt === -1 ? desc(logicalUpdatedAt) : asc(logicalUpdatedAt),
+          asc(sessions.session_id)
         );
+      } else if (opts.sortCreatedAt !== undefined) {
+        dataQuery = dataQuery.orderBy(
+          opts.sortCreatedAt === -1 ? desc(sessions.created_at) : asc(sessions.created_at),
+          asc(sessions.session_id)
+        );
+      } else {
+        // Always provide a stable order for offset pagination, even when the
+        // caller only scopes by board/branch. The ID tie-breaker prevents
+        // equal timestamps (and backend physical row order) from duplicating
+        // or omitting rows across continuation pages.
+        dataQuery = dataQuery.orderBy(asc(sessions.created_at), asc(sessions.session_id));
       }
       if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
       if (opts.skip) dataQuery = dataQuery.offset(opts.skip);
@@ -779,6 +790,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     options: { replaceAgenticConfig?: boolean } = {}
   ): Promise<Session> {
     try {
+      if (Object.hasOwn(updates, 'sdk_home_scope')) {
+        throw new RepositoryError('Session sdk_home_scope is immutable after creation');
+      }
       const fullId = await this.resolveId(id);
       const baseUrl = await getBaseUrl();
 
@@ -1432,9 +1446,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
   /**
    * Find all sessions in branches accessible to a user (optimized RBAC query)
    *
-   * Uses INNER JOIN + LEFT JOIN to filter sessions by branch access in one query
-   * instead of N+1. Returns sessions where user is a branch owner OR branch.others_can
-   * allows at least 'view' access.
+   * Uses the normalized branch-access predicate in one joined query instead
+   * of N+1 point checks. Its direct-entry, additive-group, and unmatched-Others
+   * precedence is shared with branch inventory and point authorization.
    *
    * Also populates board_id and url via the branches JOIN.
    *
@@ -1460,10 +1474,6 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     const results = await select(this.db)
       .from(sessions)
       .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
-      .leftJoin(
-        branchOwners,
-        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
       .where(whereCondition)
       .all();
 
@@ -1518,47 +1528,13 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     try {
       const sessionIds = sessions.map((s) => s.session_id);
 
-      // Import messages table dynamically
-      const { messages: messagesTable } = await import('../schema');
-
-      // Get last assistant message for each session using N+1 queries
-      // This is acceptable since we're enriching a small number of sessions at a time
-      // Much better than fetching all messages which could be huge for long-running sessions
       const lastMessageBySession = new Map<string, string>();
-
-      for (const sessionId of sessionIds) {
-        const query = select(this.db, {
-          data: messagesTable.data,
-        })
-          .from(messagesTable)
-          .where(and(eq(messagesTable.session_id, sessionId), eq(messagesTable.role, 'assistant')));
-
-        // Chain orderBy and limit, then execute with one()
-        // The spread operator in the wrapper passes through these methods
-        const lastMessage = await query.orderBy(desc(messagesTable.index)).limit(1).one();
-
-        if (lastMessage) {
-          // Extract text content from message data and truncate to requested length
-          const messageData = lastMessage.data as {
-            content?: Array<{ type: string; text?: string }>;
-          };
-          let fullText = '';
-
-          // Extract text from content blocks (messages can have multiple content blocks)
-          if (messageData?.content && Array.isArray(messageData.content)) {
-            fullText = messageData.content
-              .filter((block) => block.type === 'text' && block.text)
-              .map((block) => block.text)
-              .join('\n');
-          }
-
-          // Truncate to requested length
-          if (fullText.length > truncationLength) {
-            fullText = `${fullText.substring(0, truncationLength)}...`;
-          }
-
-          lastMessageBySession.set(sessionId, fullText);
-        }
+      const lastMessages = await findLatestAssistantMessages(this.db, sessionIds);
+      for (const lastMessage of lastMessages) {
+        lastMessageBySession.set(
+          lastMessage.session_id,
+          truncateMessageText(extractMessageText(lastMessage.data), truncationLength)
+        );
       }
 
       // Enrich sessions with last message

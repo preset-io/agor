@@ -18,6 +18,7 @@ async function listen(handler: http.RequestListener): Promise<string> {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   clearAuthCodeTokenCache();
   clearAllJWTTokens();
   await Promise.all(
@@ -31,6 +32,21 @@ afterEach(async () => {
 });
 
 describe('resolveMCPAuthHeaders OAuth authority', () => {
+  it('does not probe client credentials after a tenant/user-scoped authoritative miss', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const auth = {
+      type: 'oauth' as const,
+      oauth_client_id: 'client',
+      oauth_client_secret: 'secret',
+      oauth_token_url: 'https://provider.example/token',
+    };
+    await expect(
+      resolveMCPAuthHeaders(auth, 'https://provider.example/mcp', {
+        oauthCredentialAuthority: 'executor_repository',
+      })
+    ).resolves.toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
   it('never reads an origin-only browser OAuth cache entry', async () => {
     __seedAuthCodeTokenCacheForTests(
       'https://mcp.example.test/.well-known/oauth-protected-resource',

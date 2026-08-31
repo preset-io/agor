@@ -4,6 +4,7 @@ import {
   RepoRepository,
   SessionRelationshipRepository,
   SessionRepository,
+  UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, Session, SessionID, UUID } from '@agor/core/types';
@@ -54,6 +55,19 @@ async function createBranch(
   name = `feature-${generateId()}`,
   overrides: Partial<Branch> = {}
 ): Promise<UUID> {
+  const createdBy = overrides.created_by ?? TEST_USER_ID;
+  const primaryOwner = overrides.primary_owner_user_id ?? createdBy;
+  const users = new UsersRepository(db);
+  const existingUserIds = new Set((await users.findAll()).map((user) => user.user_id));
+  for (const userId of new Set([createdBy, primaryOwner])) {
+    if (!existingUserIds.has(userId)) {
+      await users.create({
+        user_id: userId,
+        email: `${userId}@sessions-archive.test`,
+        role: ROLES.MEMBER,
+      });
+    }
+  }
   const repoRepo = new RepoRepository(db);
   const branchRepo = new BranchRepository(db);
   const repo = await repoRepo.create({
@@ -74,7 +88,7 @@ async function createBranch(
     path: `/tmp/test-repo-${generateId()}`,
     base_ref: 'main',
     new_branch: false,
-    created_by: TEST_USER_ID,
+    created_by: createdBy,
     ...overrides,
   });
   return branch.branch_id as UUID;
@@ -287,7 +301,10 @@ describe('SessionsService archive routes', () => {
     'rejects external archive and unarchive before mutating when RBAC prompt permission is missing',
     async ({ db }) => {
       const service = new SessionsService(db, makeAppWithConfig({ branchRbac: true }));
-      const branchId = await createBranch(db, 'rbac-session-only', { others_can: 'session' });
+      const branchId = await createBranch(db, 'rbac-session-only', {
+        primary_owner_user_id: OTHER_USER_ID,
+        others_can: 'session',
+      });
       const parent = await createSession(db, branchId, { created_by: TEST_USER_ID });
       const child = await createSession(db, branchId, {
         created_by: OTHER_USER_ID,

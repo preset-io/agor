@@ -294,27 +294,30 @@ describe('resolveDeploymentConfig', () => {
     expect(deployment.capabilities.codexDeviceAuth).toBe(false);
   });
 
-  it('admits HA device auth only with a concrete exact-user credential route', () => {
-    const deployment = resolveDeploymentConfig(
-      {
-        ...haConfig,
-        execution: {
-          ...haConfig.execution,
-          unix_user_mode: 'sandbox',
-          executor_storage: {
-            user_home: 'persistent-per-user',
-            user_home_locking: 'cross-replica-flock',
-            branch_workspace: 'shared',
-            base_repository: 'shared',
+  it.each(['sandbox', 'delegated'] as const)(
+    'admits HA device auth with a concrete %s exact-user credential route',
+    (unixUserMode) => {
+      const deployment = resolveDeploymentConfig(
+        {
+          ...haConfig,
+          execution: {
+            ...haConfig.execution,
+            unix_user_mode: unixUserMode,
+            executor_storage: {
+              user_home: 'persistent-per-user',
+              user_home_locking: 'cross-replica-flock',
+              branch_workspace: 'shared',
+              base_repository: 'shared',
+            },
           },
         },
-      },
-      secrets
-    );
-    expect(deployment.mode).toBe('ha');
-    if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
-    expect(deployment.capabilities.codexDeviceAuth).toBe(true);
-  });
+        secrets
+      );
+      expect(deployment.mode).toBe('ha');
+      if (deployment.mode !== 'ha') throw new Error('Expected HA deployment');
+      expect(deployment.capabilities.codexDeviceAuth).toBe(true);
+    }
+  );
 
   it('gates HA Codex credential mutation without cross-replica flock', () => {
     const deployment = resolveDeploymentConfig(

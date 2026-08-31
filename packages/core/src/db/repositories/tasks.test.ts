@@ -4,18 +4,18 @@
  * Tests for type-safe CRUD operations on tasks with short ID support.
  */
 
-import type { MessageID, Task, TaskPendingDispatchStatus, UUID } from '@agor/core/types';
+import type { MessageID, Task, TaskPendingDispatchStatus, UserID, UUID } from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest, setTestBranchUserRole } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, RepositoryError } from './base';
 import { BranchRepository } from './branches';
 import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
-import { TaskRepository } from './tasks';
+import { MISSING_TASK_ACTOR_ERROR, TaskRepository } from './tasks';
 import { UsersRepository } from './users';
 
 /**
@@ -86,6 +86,22 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
   });
 
   return session.session_id;
+}
+
+async function bindTestRuntimeAuthority(db: Database, taskRepo: TaskRepository, task: Task) {
+  const session = await new SessionRepository(db).findById(task.session_id);
+  if (!session?.branch_id) throw new Error('Test runtime Session Branch is unavailable');
+  await taskRepo.bindExecutorLaunchAuthority(task.task_id, {
+    branchRbacEnabled: true,
+  });
+  return {
+    token_fingerprint: 'a'.repeat(64),
+    principal_user_id: task.created_by,
+    session_id: task.session_id,
+    branch_id: session.branch_id,
+    branchRbacEnabled: true,
+    standalone_token_current: true,
+  };
 }
 
 // ============================================================================
@@ -722,7 +738,7 @@ describe('TaskRepository.findAll', () => {
       permission_source: 'override',
       others_can: 'none',
     });
-    await branches.addOwner(visibleBranch.branch_id, viewerId);
+    await setTestBranchUserRole(db, visibleBranch.branch_id, viewerId as UserID, 'manager');
     const visibleSession = await sessions.create({
       session_id: generateId(),
       branch_id: visibleBranch.branch_id,
@@ -980,6 +996,55 @@ describe('TaskRepository.findRunning', () => {
     const running = await taskRepo.findRunning();
 
     expect(running).toHaveLength(2);
+  });
+});
+
+describe('TaskRepository.findExecutingByCreator', () => {
+  dbTest('returns every executing state for only the immutable prompt actor', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const users = new UsersRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const actor = await users.create({ email: `actor-${generateId()}@example.com`, name: 'Actor' });
+    const other = await users.create({ email: `other-${generateId()}@example.com`, name: 'Other' });
+
+    for (const status of [
+      TaskStatus.DISPATCHING,
+      TaskStatus.RUNNING,
+      TaskStatus.STOPPING,
+      TaskStatus.AWAITING_PERMISSION,
+      TaskStatus.AWAITING_INPUT,
+    ]) {
+      await taskRepo.create(
+        createTaskData({ session_id: sessionId, created_by: actor.user_id, status })
+      );
+    }
+    await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        created_by: actor.user_id,
+        status: TaskStatus.COMPLETED,
+      })
+    );
+    await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        created_by: other.user_id,
+        status: TaskStatus.RUNNING,
+      })
+    );
+
+    const executing = await taskRepo.findExecutingByCreator(actor.user_id);
+    expect(executing).toHaveLength(5);
+    expect(executing.every((task) => task.created_by === actor.user_id)).toBe(true);
+    expect(new Set(executing.map((task) => task.status))).toEqual(
+      new Set([
+        TaskStatus.DISPATCHING,
+        TaskStatus.RUNNING,
+        TaskStatus.STOPPING,
+        TaskStatus.AWAITING_PERMISSION,
+        TaskStatus.AWAITING_INPUT,
+      ])
+    );
   });
 });
 
@@ -1241,31 +1306,41 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     const task = await taskRepo.create(
       createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
     await taskRepo.connectExecutor(task.task_id);
 
     const first = await taskRepo.reportRuntimeTelemetry(
       task.task_id,
+      authority,
       { sequence: 2, kind: 'progress', detail: 'tool.start' },
       new Date('2026-01-01T00:00:02.000Z')
     );
     const retry = await taskRepo.reportRuntimeTelemetry(
       task.task_id,
+      authority,
       { sequence: 2, kind: 'waiting' },
       new Date('2026-01-01T00:00:03.000Z')
     );
 
     expect(first).toMatchObject({
-      last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
-      latest_executor_pulse: {
-        sequence: 2,
-        kind: 'progress',
-        detail: 'tool.start',
-        observed_at: '2026-01-01T00:00:02.000Z',
+      outcome: 'continued',
+      task: {
+        last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
+        latest_executor_pulse: {
+          sequence: 2,
+          kind: 'progress',
+          detail: 'tool.start',
+          observed_at: '2026-01-01T00:00:02.000Z',
+        },
       },
     });
     expect(retry).toMatchObject({
-      last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
-      latest_executor_pulse: first?.latest_executor_pulse,
+      outcome: 'continued',
+      task: {
+        last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
+        latest_executor_pulse:
+          first.outcome === 'continued' ? first.task.latest_executor_pulse : {},
+      },
     });
   });
 
@@ -1277,6 +1352,7 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       const task = await taskRepo.create(
         createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
       );
+      const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
       await taskRepo.connectExecutor(task.task_id);
       await taskRepo.claimTermination({
         taskId: task.task_id,
@@ -1288,16 +1364,20 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       await expect(
         taskRepo.reportRuntimeTelemetry(
           task.task_id,
+          authority,
           { sequence: 3, kind: 'progress', detail: 'provider.cancel.pending' },
           new Date('2026-01-01T00:00:03.000Z')
         )
       ).resolves.toMatchObject({
-        status: TaskStatus.STOPPING,
-        last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
-        latest_executor_pulse: {
-          sequence: 3,
-          kind: 'progress',
-          detail: 'provider.cancel.pending',
+        outcome: 'continued',
+        task: {
+          status: TaskStatus.STOPPING,
+          last_executor_heartbeat_at: '2026-01-01T00:00:03.000Z',
+          latest_executor_pulse: {
+            sequence: 3,
+            kind: 'progress',
+            detail: 'provider.cancel.pending',
+          },
         },
       });
     }
@@ -1309,6 +1389,7 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     const task = await taskRepo.create(
       createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
     await taskRepo.connectExecutor(task.task_id);
     const claim = await taskRepo.claimTermination({
       taskId: task.task_id,
@@ -1324,7 +1405,10 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       new Date('2026-01-01T00:00:03.000Z')
     );
 
-    await expect(taskRepo.reportRuntimeTelemetry(task.task_id)).resolves.toBeNull();
+    await expect(taskRepo.reportRuntimeTelemetry(task.task_id, authority)).resolves.toMatchObject({
+      outcome: 'control',
+      task: { status: TaskStatus.STOPPING },
+    });
   });
 
   dbTest(
@@ -1335,6 +1419,7 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       const task = await taskRepo.create(
         createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
       );
+      const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
       await taskRepo.connectExecutor(task.task_id);
       await taskRepo.claimTermination({
         taskId: task.task_id,
@@ -1364,14 +1449,18 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
       await expect(
         taskRepo.reportRuntimeTelemetry(
           task.task_id,
+          authority,
           { sequence: 4, kind: 'progress', detail: 'provider.cancel.still_pending' },
           new Date('2026-01-01T00:00:04.000Z')
         )
       ).resolves.toMatchObject({
-        status: TaskStatus.STOPPING,
-        sdk_failure: { termination: 'unverified' },
-        last_executor_heartbeat_at: '2026-01-01T00:00:04.000Z',
-        latest_executor_pulse: { sequence: 4, detail: 'provider.cancel.still_pending' },
+        outcome: 'continued',
+        task: {
+          status: TaskStatus.STOPPING,
+          sdk_failure: { termination: 'unverified' },
+          last_executor_heartbeat_at: '2026-01-01T00:00:04.000Z',
+          latest_executor_pulse: { sequence: 4, detail: 'provider.cancel.still_pending' },
+        },
       });
     }
   );
@@ -1382,11 +1471,16 @@ describe('TaskRepository.reportRuntimeTelemetry', () => {
     const task = await taskRepo.create(
       createTaskData({ session_id: sessionId, status: TaskStatus.DISPATCHING })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
 
-    expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
+    expect(await taskRepo.reportRuntimeTelemetry(task.task_id, authority)).toMatchObject({
+      outcome: 'control',
+    });
     await taskRepo.connectExecutor(task.task_id);
     await taskRepo.update(task.task_id, { status: TaskStatus.COMPLETED });
-    expect(await taskRepo.reportRuntimeTelemetry(task.task_id)).toBeNull();
+    expect(await taskRepo.reportRuntimeTelemetry(task.task_id, authority)).toMatchObject({
+      outcome: 'control',
+    });
   });
 });
 
@@ -1654,13 +1748,14 @@ describe('TaskRepository.update', () => {
     const task = await taskRepo.create(
       createTaskData({
         session_id: sessionId,
-        status: TaskStatus.RUNNING,
-        executor_connected_at: '2026-07-10T20:00:00.000Z',
-        last_executor_heartbeat_at: '2026-07-10T20:00:01.000Z',
+        status: TaskStatus.DISPATCHING,
       })
     );
+    const authority = await bindTestRuntimeAuthority(db, taskRepo, task);
+    await taskRepo.connectExecutor(task.task_id, new Date('2026-07-10T20:00:01.000Z'));
     await taskRepo.reportRuntimeTelemetry(
       task.task_id,
+      authority,
       undefined,
       new Date('2026-07-10T20:00:05Z')
     );
@@ -2548,6 +2643,7 @@ describe('TaskRepository edge cases', () => {
 function createPendingInput(overrides: {
   session_id: string;
   status: TaskPendingDispatchStatus;
+  created_by?: string;
   full_prompt?: string;
   metadata?: Parameters<TaskRepository['createPending']>[0]['metadata'];
 }): Parameters<TaskRepository['createPending']>[0] {
@@ -2556,7 +2652,7 @@ function createPendingInput(overrides: {
       TaskRepository['createPending']
     >[0]['session_id'],
     full_prompt: overrides.full_prompt ?? 'test prompt',
-    created_by: 'test-user',
+    created_by: overrides.created_by ?? 'test-user',
     status: overrides.status,
     metadata: overrides.metadata,
   };
@@ -2744,6 +2840,60 @@ describe('TaskRepository.createPending', () => {
     expect(claim.outcome).toBe('claimed');
     expect(claim.task.queue_position).toBeUndefined();
     expect((await taskRepo.findById(queued.task_id))?.queue_position).toBeUndefined();
+  });
+
+  dbTest('atomically fails a queued head whose immutable actor was deleted', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const users = new UsersRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const actor = await users.create({
+      email: `${generateId()}-queued-actor@example.com`,
+      role: 'member',
+    });
+    const queued = await taskRepo.createPending(
+      createPendingInput({
+        session_id: sessionId,
+        status: TaskStatus.QUEUED,
+        created_by: actor.user_id,
+      })
+    );
+    await users.delete(actor.user_id);
+
+    await expect(taskRepo.failQueuedTaskIfCreatorMissing(queued.task_id)).resolves.toMatchObject({
+      outcome: 'actor_missing',
+      task: {
+        status: TaskStatus.FAILED,
+        queue_position: undefined,
+        error_message: MISSING_TASK_ACTOR_ERROR,
+      },
+    });
+    await expect(
+      taskRepo.claimDispatchAndProjectSession(queued.task_id, TaskStatus.QUEUED, {
+        status: TaskStatus.DISPATCHING,
+      })
+    ).resolves.toMatchObject({ outcome: 'condition_changed', task: { status: TaskStatus.FAILED } });
+  });
+
+  dbTest('never overwrites a dispatch claim while checking a queue actor', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const queued = await taskRepo.createPending(
+      createPendingInput({ session_id: sessionId, status: TaskStatus.QUEUED })
+    );
+    await expect(
+      taskRepo.claimDispatchAndProjectSession(queued.task_id, TaskStatus.QUEUED, {
+        status: TaskStatus.DISPATCHING,
+      })
+    ).resolves.toMatchObject({ outcome: 'claimed' });
+
+    await expect(taskRepo.failQueuedTaskIfCreatorMissing(queued.task_id)).resolves.toMatchObject({
+      outcome: 'condition_changed',
+      task: { status: TaskStatus.DISPATCHING },
+    });
+    await expect(taskRepo.findById(queued.task_id)).resolves.toMatchObject({
+      status: TaskStatus.DISPATCHING,
+      queue_position: undefined,
+    });
   });
 
   dbTest(

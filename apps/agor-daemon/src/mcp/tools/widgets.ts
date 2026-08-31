@@ -25,7 +25,6 @@ import type {
   Session,
   TaskID,
   User,
-  UserID,
   WidgetMessageMetadata,
 } from '@agor/core/types';
 import { getRequiredSecretFields, hasMinimumRole, MessageRole, ROLES } from '@agor/core/types';
@@ -104,16 +103,12 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // schema because Zod transforms degrade MCP JSON Schema discovery.
       const toolParams = normalizeEnvVarsParams(envVarsParamsSchema.parse(args));
 
-      // Look up the host session + its creator. The session creator is the
-      // identity whose env vars get written and read by the executor — this
-      // matches the `dangerously_allow_session_sharing: false` semantics.
-      const session = (await ctx.app
-        .service('sessions')
-        .get(currentSessionId, ctx.baseServiceParams)) as Session;
-      const sessionCreatorId = session.created_by as UserID;
-      const creator = (await ctx.app
+      // MCP session tokens are minted for the current prompt's actor. Use that
+      // same identity for environment variables even when the actor is
+      // prompting a shared Session owned by someone else.
+      const promptActor = (await ctx.app
         .service('users')
-        .get(sessionCreatorId, ctx.baseServiceParams)) as User;
+        .get(ctx.userId, ctx.baseServiceParams)) as User;
 
       const params: EnvVarsParams = toolParams;
 
@@ -122,7 +117,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // the agent. Global-only check is intentional — session-scoped values
       // depend on session_env_selections which we don't read here.
       const presentEverywhere = allNamesPresentInScope(
-        creator.env_vars,
+        promptActor.env_vars,
         params.names,
         'global' as EnvVarScope
       );

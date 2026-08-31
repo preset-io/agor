@@ -27,13 +27,7 @@ import {
   txAsDb,
   update,
 } from '../database-wrapper';
-import {
-  branches,
-  branchOwners,
-  type ScheduleInsert,
-  type ScheduleRow,
-  schedules,
-} from '../schema';
+import { branches, type ScheduleInsert, type ScheduleRow, schedules } from '../schema';
 import {
   attachHiddenTenant,
   type BaseRepository,
@@ -297,8 +291,7 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
    * Find schedules visible to a user via branch RBAC.
    *
    * Mirrors `SessionRepository.findAccessibleSessions`: returns schedules
-   * whose parent branch the user can `view` — either as a branch owner
-   * or because `branches.others_can != 'none'`.
+   * whose parent branch the normalized effective policy grants `branch.view`.
    *
    * Only call when RBAC is enabled. When disabled, the `scopeScheduleQuery`
    * hook is not registered and `findAll` is used instead.
@@ -315,10 +308,6 @@ export class ScheduleRepository implements BaseRepository<Schedule, Partial<Sche
     const results = await select(this.db)
       .from(schedules)
       .innerJoin(branches, eq(schedules.branch_id, branches.branch_id))
-      .leftJoin(
-        branchOwners,
-        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
       .where(and(...conditions))
       .all();
 

@@ -69,6 +69,73 @@ describe('ExecutorHeartbeatCallbackRunner', () => {
     ).toBe(false);
   });
 
+  it('keeps reserved launcher credentials in the trusted heartbeat helper only', () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const originalEnvironment = process.env;
+    const launcherCredentials = {
+      AGOR_CLOUD_API_BASE_URL: 'https://synthetic-heartbeat.invalid/api',
+      AGOR_CLOUD_RUNTIME_CREDENTIAL_ID: 'synthetic-heartbeat-credential-id',
+      AGOR_CLOUD_RUNTIME_SIGNING_KEY: 'synthetic-heartbeat-signing-key',
+      AGOR_CLOUD_FUTURE_HELPER_CREDENTIAL: 'synthetic-future-helper-credential',
+    } as const;
+    const withheldDaemonEnvironment = {
+      DATABASE_URL: 'postgres://synthetic-daemon.invalid/agor',
+      AGOR_MASTER_SECRET: 'synthetic-deployment-master-secret',
+      AGOR_JWT_SECRET: 'synthetic-daemon-jwt-secret',
+      OPENAI_API_KEY: 'synthetic-openai-provider-credential',
+      ANTHROPIC_API_KEY: 'synthetic-anthropic-provider-credential',
+      SYNTHETIC_DAEMON_INTERNAL_SECRET: 'synthetic-unknown-daemon-secret',
+    } as const;
+    process.env = {
+      ...originalEnvironment,
+      ...launcherCredentials,
+      ...withheldDaemonEnvironment,
+      // Exercise the real Object.entries(process.env) boundary with a key that
+      // exists but has no value; it must not become a child-env property.
+      AGOR_CLOUD_UNDEFINED_CREDENTIAL: undefined,
+    };
+    try {
+      createRunner({
+        callback: {
+          command_template: '/opt/agor-cloud/bin/agor-cloud-executor-launch heartbeat',
+          timeout_ms: 100,
+        },
+      }).run(payload);
+      expect(spawnMock).toHaveBeenCalledWith(
+        'sh',
+        ['-c', '/opt/agor-cloud/bin/agor-cloud-executor-launch heartbeat'],
+        expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
+      );
+      const options = spawnMock.mock.calls[0]?.[2] as { env: Record<string, string> };
+      expect(options.env.PATH).toBe(process.env.PATH);
+      expect(options.env).toMatchObject(launcherCredentials);
+      expect(options.env).not.toHaveProperty('AGOR_CLOUD_UNDEFINED_CREDENTIAL');
+
+      for (const name of Object.keys(withheldDaemonEnvironment)) {
+        expect(options.env, `${name} reached the heartbeat helper`).not.toHaveProperty(name);
+      }
+
+      const serializedPayload = String(child.stdin.end.mock.calls[0]?.[0]);
+      expect(JSON.parse(serializedPayload)).toEqual(payload);
+      for (const value of [
+        ...Object.values(launcherCredentials),
+        ...Object.values(withheldDaemonEnvironment),
+      ]) {
+        expect(serializedPayload).not.toContain(value);
+      }
+
+      child.emit('exit', 1, null);
+      expect(warnSpy).toHaveBeenCalledWith('[executor-heartbeat] Callback exited with code 1');
+      const warningOutput = warnSpy.mock.calls.flat().join(' ');
+      for (const value of Object.values(launcherCredentials)) {
+        expect(warningOutput).not.toContain(value);
+      }
+    } finally {
+      process.env = originalEnvironment;
+    }
+  });
+
   it('keeps callback coalesced after timeout until the process exits', () => {
     vi.useFakeTimers();
     const firstChild = new FakeChildProcess();

@@ -62,9 +62,20 @@ vi.mock('./SessionRunSettingsPopover', () => ({
   SessionRunSettingsPopover: () => null,
 }));
 
-const reactive = vi.hoisted(() => ({ tasks: [] as Task[] }));
+const reactive = vi.hoisted(() => {
+  const state = { tasks: [] as Task[] };
+  return {
+    get tasks() {
+      return state.tasks;
+    },
+    set tasks(tasks: Task[]) {
+      state.tasks = tasks;
+    },
+    useSharedReactiveSession: vi.fn(() => ({ state: { tasks: state.tasks } })),
+  };
+});
 vi.mock('../../hooks/useSharedReactiveSession', () => ({
-  useSharedReactiveSession: () => ({ state: { tasks: reactive.tasks } }),
+  useSharedReactiveSession: reactive.useSharedReactiveSession,
 }));
 
 const connected = {
@@ -94,6 +105,16 @@ const branch = {
   filesystem_status: 'ready',
   archived: false,
 } as unknown as Branch;
+
+function stopIo() {
+  const socket = {
+    connected: true,
+    timeout: vi.fn(() => socket),
+    once: vi.fn(),
+    off: vi.fn(),
+  };
+  return socket;
+}
 
 function renderPanel({
   onOpenTerminal = vi.fn(),
@@ -241,6 +262,15 @@ describe('SessionPanel search control', () => {
     fireEvent.keyDown(searchInput, { key: 'Escape' });
     expect(getSearchRow()).toHaveStyle({ maxHeight: '0px' });
   });
+
+  it('retains the same lazy reactive-session cache key as ConversationView', () => {
+    renderPanel();
+
+    expect(reactive.useSharedReactiveSession).toHaveBeenLastCalledWith(null, session.session_id, {
+      enabled: true,
+      reactiveOptions: { taskHydration: 'lazy' },
+    });
+  });
 });
 
 describe('SessionPanel historical runtime handling and terminal actions', () => {
@@ -276,24 +306,80 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
         status: 'running',
       } as Task,
     ];
-    const create = vi.fn().mockRejectedValue(new Error('database scope missing'));
+    const create = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('database scope missing'), { code: 500 }));
+    const get = vi.fn().mockRejectedValue(new Error('task read unavailable'));
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
     renderPanel({
       client: {
-        service: () => ({
-          create,
-          find: vi.fn().mockResolvedValue({ data: [] }),
-          on: vi.fn(),
-          off: vi.fn(),
-        }),
+        io: stopIo(),
+        service: (path: string) =>
+          path === 'tasks'
+            ? ({ get, on: vi.fn(), off: vi.fn() } as never)
+            : ({
+                create,
+                find: vi.fn().mockResolvedValue({ data: [] }),
+                on: vi.fn(),
+                off: vi.fn(),
+              } as never),
       } as unknown as AgorClient,
       activeSession: { ...session, status: 'running', agentic_tool: 'codex' },
     });
 
     fireEvent.click(await screen.findByRole('button', { name: /stop/i }));
 
-    await waitFor(() => expect(create).toHaveBeenCalledWith({}));
+    await waitFor(() =>
+      expect(create).toHaveBeenCalledWith({
+        expected_task_id: '018f0000-0000-7000-8000-000000000010',
+      })
+    );
+    expect(get).not.toHaveBeenCalled();
     expect(await screen.findByText('Failed to stop execution. You can try again.')).toBeVisible();
+  });
+
+  it('reconciles a committed Stop when the Socket.IO acknowledgement is lost without retrying', async () => {
+    const taskId = '018f0000-0000-7000-8000-000000000012';
+    reactive.tasks = [
+      {
+        task_id: taskId,
+        session_id: session.session_id,
+        status: 'running',
+      } as Task,
+    ];
+    const create = vi.fn().mockRejectedValue(new Error('socket disconnected before ack'));
+    const get = vi.fn().mockResolvedValue({
+      task_id: taskId,
+      session_id: session.session_id,
+      status: 'stopping',
+      termination_request: {
+        cause: 'user_stop',
+        requested_at: '2026-08-29T00:00:00.000Z',
+      },
+    } as Task);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    renderPanel({
+      client: {
+        io: stopIo(),
+        service: (path: string) =>
+          path === 'tasks'
+            ? ({ get, on: vi.fn(), off: vi.fn() } as never)
+            : ({ create, on: vi.fn(), off: vi.fn() } as never),
+      } as unknown as AgorClient,
+      activeSession: { ...session, status: 'running', agentic_tool: 'codex' },
+    });
+
+    fireEvent.click(await screen.findByRole('button', { name: /stop/i }));
+
+    expect(
+      await screen.findByText('Stop was accepted; waiting for executor termination.')
+    ).toBeVisible();
+    expect(create).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledWith({ expected_task_id: taskId });
+    expect(get).toHaveBeenCalledWith(taskId);
+    expect(
+      screen.queryByText('Failed to stop execution. You can try again.')
+    ).not.toBeInTheDocument();
   });
 
   it('distinguishes accepted-but-pending Stop from an initial request failure', async () => {
@@ -310,6 +396,7 @@ describe('SessionPanel historical runtime handling and terminal actions', () => 
     });
     renderPanel({
       client: {
+        io: stopIo(),
         service: () => ({
           create,
           find: vi.fn().mockResolvedValue({ data: [] }),

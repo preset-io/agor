@@ -16,6 +16,8 @@ import type {
   GatewayChannel,
   GatewayOutboundMessage,
   SessionID,
+  SessionPromptAuthority,
+  SessionSdkHomeScope,
   ThreadSessionMap,
   User,
   UserID,
@@ -53,6 +55,11 @@ vi.mock('@agor/core/config', async (importOriginal) => {
     ...actual,
     assertInlineAgenticConfigurationAllowed: vi.fn(async () => undefined),
     getBaseUrl: vi.fn(async () => 'https://agor.example.com'),
+    resolveExecutionSecurityMode: vi.fn(() => ({
+      appRbacEnabled: true,
+      unixUserMode: 'simple',
+      requiresExecutionHomeKey: false,
+    })),
   };
 });
 
@@ -155,6 +162,15 @@ function makeGatewayHarness(args: {
   db?: TenantScopeAwareDatabase;
   user?: User;
   alignedUser?: User | null;
+  branchPermission?: 'none' | 'view' | 'session' | 'prompt' | 'all';
+  promptAuthority?: {
+    allowed: boolean;
+    execution_user_id?: UserID;
+    source: SessionPromptAuthority['source'];
+    denial_reason?: SessionPromptAuthority['denial_reason'];
+  };
+  sessionSdkHomeScope?: SessionSdkHomeScope;
+  sessionOwnerUserId?: UserID;
   outboundSeed?: GatewayOutboundMessage | null;
   setMCPServers?: (sessionId: SessionID, serverIds: string[], label: string) => Promise<void>;
 }) {
@@ -215,6 +231,37 @@ function makeGatewayHarness(args: {
     findById: vi.fn(async () => channel),
     listenerClaimIsCurrent: vi.fn(async () => true),
     updateLastMessage: vi.fn(async () => undefined),
+  };
+  const resolveUserAccess = vi.fn(async () => ({
+    can: args.branchPermission ?? 'all',
+    fs_access: 'write',
+    is_owner: (args.sessionOwnerUserId ?? executionUser.user_id) === executionUser.user_id,
+    source: 'owner',
+  }));
+  const resolveSessionPromptAuthority = vi.fn(
+    async () =>
+      args.promptAuthority ?? {
+        allowed: true,
+        execution_user_id: args.sessionOwnerUserId ?? executionUser.user_id,
+        source:
+          args.sessionOwnerUserId && args.sessionOwnerUserId !== executionUser.user_id
+            ? 'branch_session'
+            : 'own_session',
+      }
+  );
+  const branchRepo = {
+    findById: vi.fn(async () => ({ branch_id: channel.target_branch_id })),
+    resolveUserAccess,
+    resolveSessionPromptAuthority,
+  };
+  const sessionRepo = {
+    findById: vi.fn(async (sessionId: SessionID) => ({
+      session_id: sessionId,
+      branch_id: channel.target_branch_id,
+      created_by: args.sessionOwnerUserId ?? executionUser.user_id,
+      status: SessionStatus.IDLE,
+      sdk_home_scope: args.sessionSdkHomeScope ?? 'execution_home',
+    })),
   };
   const threadMapRepo = {
     findByChannelAndThread: vi.fn(async () => mapping),
@@ -305,6 +352,8 @@ function makeGatewayHarness(args: {
   );
   const completeReplyAdmission = vi.fn(async () => args.outboundSeed ?? undefined);
   (service as unknown as { channelRepo: typeof channelRepo }).channelRepo = channelRepo;
+  (service as unknown as { branchRepo: typeof branchRepo }).branchRepo = branchRepo;
+  (service as unknown as { sessionRepo: typeof sessionRepo }).sessionRepo = sessionRepo;
   (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
   (
     service as unknown as {
@@ -331,6 +380,10 @@ function makeGatewayHarness(args: {
     sessionsGet,
     setMCPServers,
     channelRepo,
+    branchRepo,
+    sessionRepo,
+    resolveUserAccess,
+    resolveSessionPromptAuthority,
     threadMapRepo,
     outboundRepo,
     findByEmailForAlignment,
@@ -400,6 +453,151 @@ describe('gateway tenant metadata helpers', () => {
 
     expect(tenantIdFromGatewayChannel(channel)).toBe('tenant-channel');
     expect(Object.keys(channel)).not.toContain('tenant_id');
+  });
+});
+
+describe('GatewayService inbound permission admission', () => {
+  it('does not create a gateway session after the execution user loses Collaborator access', async () => {
+    const { service, sessionsCreate, promptCreate, resolveUserAccess } = makeGatewayHarness({
+      existingMapping: null,
+      branchPermission: 'view',
+    });
+
+    await expect(
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'C123-100.000000',
+        text: 'start a session',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '100.000000',
+        },
+      })
+    ).rejects.toThrow(/Collaborator access is required to create a session/);
+
+    expect(resolveUserAccess).toHaveBeenCalledOnce();
+    expect(sessionsCreate).not.toHaveBeenCalled();
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a mapped execution-home denial without retrying the gateway event', async () => {
+    const sessionOwnerUserId = 'session-owner' as UserID;
+    const sendMessage = vi.fn(async () => undefined);
+    const { service, promptCreate, resolveSessionPromptAuthority } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      sessionOwnerUserId,
+      connector: { sendMessage },
+      promptAuthority: {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      },
+    });
+
+    await expect(
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'C123-100.000000',
+        text: 'continue',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '103.000000',
+        },
+      })
+    ).resolves.toEqual({ success: false, sessionId: '', created: false });
+
+    expect(resolveSessionPromptAuthority).toHaveBeenCalledWith(
+      slackChannel.target_branch_id,
+      user.user_id,
+      sessionOwnerUserId,
+      'execution_home'
+    );
+    await vi.waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          text: expect.stringMatching(/uses its owner's execution home/i),
+        })
+      )
+    );
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('allows a foreign collaborator to prompt a branch-scoped mapped session', async () => {
+    const sessionOwnerUserId = 'session-owner' as UserID;
+    const { service, promptCreate, resolveSessionPromptAuthority } = makeGatewayHarness({
+      existingMapping: makeMapping(),
+      sessionOwnerUserId,
+      sessionSdkHomeScope: 'branch',
+      promptAuthority: {
+        allowed: true,
+        execution_user_id: user.user_id,
+        source: 'branch_session',
+      },
+    });
+
+    await expect(
+      service.create({
+        channel_key: 'slack-key',
+        thread_id: 'C123-100.000000',
+        text: 'continue',
+        metadata: {
+          channel: 'C123',
+          channel_type: 'channel',
+          slack_has_mention: true,
+          slack_message_ts: '103.000000',
+        },
+      })
+    ).resolves.toMatchObject({ success: true, sessionId: 'sess-1', created: false });
+
+    expect(resolveSessionPromptAuthority).toHaveBeenCalledWith(
+      slackChannel.target_branch_id,
+      user.user_id,
+      sessionOwnerUserId,
+      'branch'
+    );
+    expect(promptCreate).toHaveBeenCalledOnce();
+  });
+
+  it('edits a GitHub processing acknowledgement with the execution-home denial', async () => {
+    const githubChannel = {
+      ...slackChannel,
+      id: 'chan-github-denial',
+      channel_type: 'github',
+      channel_key: 'github-denial-key',
+      config: {},
+    } as GatewayChannel;
+    const sendMessage = vi.fn(async () => undefined);
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: githubChannel,
+      existingMapping: makeMapping(),
+      sessionOwnerUserId: 'session-owner' as UserID,
+      connector: { sendMessage },
+      promptAuthority: {
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      },
+    });
+
+    await expect(
+      service.create({
+        channel_key: githubChannel.channel_key,
+        thread_id: 'preset-io/agor#2587',
+        text: '@agor continue',
+        metadata: { processing_comment_id: 42 },
+      })
+    ).resolves.toEqual({ success: false, sessionId: '', created: false });
+
+    expect(sendMessage).toHaveBeenCalledWith({
+      threadId: 'preset-io/agor#2587',
+      text: expect.stringMatching(/uses its owner's execution home/i),
+      metadata: { edit_comment_id: 42 },
+    });
+    expect(promptCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -551,6 +749,68 @@ describe('GatewayService user alignment operational logs', () => {
 });
 
 describe('GatewayService multi-tenant process state', () => {
+  it.each([
+    ['anonymous', { provider: 'rest' }, null],
+    [
+      'same-tenant unauthorized',
+      { provider: 'rest', user: { ...user, role: 'member' } },
+      {
+        session_id: 'sess-1',
+        branch_id: 'branch-1',
+        created_by: 'other-user',
+      },
+    ],
+    [
+      'superadmin with bypass disabled',
+      { provider: 'rest', user: { ...user, role: 'superadmin' } },
+      {
+        session_id: 'sess-1',
+        branch_id: 'branch-1',
+        created_by: 'other-user',
+      },
+    ],
+    ['cross-tenant', { provider: 'rest', user: { ...user, role: 'member' } }, null],
+  ])(
+    'denies transported routeMessage for %s with zero provider activity',
+    async (_name, params, session) => {
+      const sendMessage = vi.fn();
+      const service = new GatewayService(
+        { run: vi.fn() } as never,
+        {
+          service: vi.fn(),
+          get: vi.fn(() => ({ execution: { allow_superadmin: false } })),
+        } as never
+      );
+      Object.assign(service as unknown as Record<string, unknown>, {
+        sessionRepo: { findById: vi.fn(async () => session) },
+        branchRepo: {
+          findById: vi.fn(async () => ({
+            branch_id: 'branch-1',
+            created_by: 'other-user',
+            others_can: 'view',
+          })),
+          isOwner: vi.fn(async () => false),
+          resolveUserPermission: vi.fn(async () => 'view'),
+        },
+        threadMapRepo: { findBySession: vi.fn() },
+        channelRepo: { findById: vi.fn() },
+      });
+      vi.mocked(getConnector).mockReturnValue({ sendMessage, channelType: 'slack' });
+
+      await expect(
+        service.routeMessage(
+          { session_id: 'sess-1', message: 'CANARY_OUTBOUND_MUST_NOT_SEND' },
+          params as never
+        )
+      ).rejects.toThrow();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(
+        (service as unknown as { threadMapRepo: { findBySession: ReturnType<typeof vi.fn> } })
+          .threadMapRepo.findBySession
+      ).not.toHaveBeenCalled();
+    }
+  );
+
   it('does not use the local listener cache as PostgreSQL outbound authority', async () => {
     const sendMessage = vi.fn(async () => 'sent-1');
     const service = new GatewayService({ run: vi.fn() } as never, { service: vi.fn() } as never);
@@ -952,10 +1212,7 @@ describe('GatewayService Slack thread catch-up', () => {
         slack_last_delivered_ts: '103.000000',
       })
     );
-    expect(warn).toHaveBeenCalledWith(
-      '[gateway] Failed to fetch Slack thread catch-up context:',
-      expect.any(Error)
-    );
+    expect(warn).toHaveBeenCalledWith('[gateway] Failed to fetch Slack thread catch-up context');
     warn.mockRestore();
   });
 
@@ -1162,10 +1419,7 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
     expect(prompt).toContain('fallback request');
     expect(prompt).not.toContain('**Slack context**');
     expectFinalStartupBootstrapHint(prompt);
-    expect(warn).toHaveBeenCalledWith(
-      '[gateway] Failed to fetch Slack thread catch-up context:',
-      expect.any(Error)
-    );
+    expect(warn).toHaveBeenCalledWith('[gateway] Failed to fetch Slack thread catch-up context');
   });
 
   it('appends the hint after preserved outbound-seed provenance and consumes the seed', async () => {
@@ -3252,6 +3506,28 @@ describe('GatewayService Discord beta routing', () => {
     expect(mapping.metadata).not.toHaveProperty('gateway_reply_aliases');
   });
 
+  it('uses a content-free failure code for provider routing logs', async () => {
+    const canary = 'private-user@example.test workspace-secret-label';
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const mapping = makeMapping();
+    const harness = makeGatewayHarness({
+      channel: slackChannel,
+      existingMapping: mapping,
+      connector: { sendMessage: vi.fn(async () => Promise.reject(new Error(canary))) },
+    });
+
+    await expect(
+      harness.service.routeMessage({ session_id: mapping.session_id, message: 'reply' })
+    ).resolves.toEqual({ routed: false, channelType: 'slack' });
+
+    const logged = errorLog.mock.calls.flat().join(' ');
+    expect(logged).toContain(`channel_id=${slackChannel.id}`);
+    expect(logged).toContain('code=provider_request_failed');
+    expect(logged).not.toContain(canary);
+    expect(logged).not.toContain('private-user@example.test');
+    errorLog.mockRestore();
+  });
+
   it('suppresses the legacy after-hook send when a durable Discord intent exists', async () => {
     const sendMessage = vi.fn(async () => '623456789012345678');
     const mapping = makeMapping({
@@ -3864,7 +4140,7 @@ describe('GatewayService outbound emit allowed_channel_ids enforcement', () => {
     });
 
     await expect(service.emitMessage(emitData({ target: 'channel:C999' }))).rejects.toThrow(
-      /allowed_channel_ids/
+      /provider_request_failed/
     );
     expect(sendSlackMessage).not.toHaveBeenCalled();
     expect(outboundRepo.create).not.toHaveBeenCalled();
@@ -3878,10 +4154,24 @@ describe('GatewayService outbound emit allowed_channel_ids enforcement', () => {
     });
 
     await expect(service.emitMessage(emitData({ target: '#general' }))).rejects.toThrow(
-      /allowed_channel_ids/
+      /provider_request_failed/
     );
     expect(resolveChannelByName).toHaveBeenCalledWith('general');
     expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not expose provider-authored text from proactive outbound failures', async () => {
+    const canary = 'private-user@example.test workspace-secret-label';
+    const sendDirectMessage = vi.fn(async () => Promise.reject(new Error(canary)));
+    const { service } = makeAllowlistHarness({ connectorExtras: { sendDirectMessage } });
+
+    const failure = await service
+      .emitMessage(emitData({ target: 'channel:C123' }))
+      .catch((error: unknown) => error as Error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toBe('Slack API failure: provider_request_failed');
+    expect(failure.message).not.toMatch(/private-user|workspace/);
   });
 
   it('allows an email target resolved to a DM even with an allowlist configured', async () => {

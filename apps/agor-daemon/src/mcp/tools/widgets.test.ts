@@ -120,7 +120,7 @@ function makeApp(opts: {
       get: async (...args: unknown[]) => {
         calls.push({ service: 'users', method: 'get', args });
         return {
-          user_id: opts.sessionCreator,
+          user_id: args[0],
           env_vars: opts.creatorEnvVars ?? {},
         };
       },
@@ -535,6 +535,28 @@ describe('agor_widgets_request_env_vars', () => {
     expect(promptData.metadata.widget_id).toBe(widgetId);
     expect(promptData.idempotencyTaskId).toBe(widgetAutoResumeTaskId(widgetId as MessageID));
     expect(promptData.idempotencyTaskId).not.toBe(widgetId);
+  });
+
+  it('reads the prompt actor env vars rather than the shared Session owner', async () => {
+    const { app, calls } = makeApp({
+      sessionCreator: 'session-owner',
+      creatorEnvVars: { HUBSPOT_API_KEY: { set: true, scope: 'global' } },
+    });
+    const captured = registerAndCapture({
+      app,
+      userId: 'prompt-actor',
+      sessionId: 'sess-1',
+    });
+
+    const result = await captured.agor_widgets_request_env_vars.cb({
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      auto_resume: true,
+    });
+
+    expect(JSON.parse(result.content[0].text).status).toBe('already_present');
+    const userLookup = calls.find((call) => call.service === 'users' && call.method === 'get');
+    expect(userLookup?.args[0]).toBe('prompt-actor');
   });
 
   it('does NOT short-circuit when even one requested name is missing', async () => {

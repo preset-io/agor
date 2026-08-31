@@ -144,7 +144,7 @@ and oldest local request. Useful metrics are:
 - rejected gateway requests by stable, secret-free reason in logs;
 - database health/latency from the normal daemon health path.
 
-The target budgets remain at most 5 ms p95 and 25 ms p99 admission and 20 ms p95
+The target budgets remain `<=5 ms` p95 and `<=25 ms` p99 admission and `<=20 ms` p95
 forwarding overhead. This phase has no measured HA/99.99% availability evidence. It performs one
 initial authority/material load and one final durable authority check per
 physical hop; it does not maintain lease, mutation, quarantine, or outbox rows.

@@ -74,7 +74,13 @@ async function* streamMockEvents() {
 vi.mock('./app-server-client.js', () => appServerMocks);
 vi.mock('@agor/core/mcp', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
-  return { ...actual, ...mcpScopingMocks };
+  return {
+    ...actual,
+    ...mcpScopingMocks,
+    resolveScopedMCPAuthHeaders: vi.fn(({ server }) =>
+      mcpAuthMocks.resolveMCPAuthHeaders(server.auth, server.url)
+    ),
+  };
 });
 vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => configMocks);
@@ -2242,7 +2248,6 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       '019e3700-aaaa-bbbb-cccc-dddddddddddd',
       expect.objectContaining({
         forUserId: '019e3700-user-user-user-user00000001',
-        sessionOwnerId,
       }),
       // Codex can drop individual tools but has no way to prompt.
       { toolFiltering: 'exclude' }
@@ -2355,7 +2360,9 @@ describe('CodexPromptService - buildMcpServersConfig', () => {
       );
       expect(JSON.stringify(warn.mock.calls)).not.toContain(sentinel);
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('Auth header resolution failed server_id=')
+        expect.stringContaining(
+          'executor=codex servers=1 credential_unavailable=0 resolution_failed=1'
+        )
       );
     } finally {
       warn.mockRestore();

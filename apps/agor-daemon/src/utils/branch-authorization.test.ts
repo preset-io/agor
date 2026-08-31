@@ -5,7 +5,7 @@
  * Covers the security invariants introduced by the superadmin role feature.
  */
 
-import type { SessionRepository } from '@agor/core/db';
+import type { BranchRepository, SessionRepository } from '@agor/core/db';
 import type { Branch, BranchPermissionLevel, HookContext, Session } from '@agor/core/types';
 import { ROLES } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
@@ -114,12 +114,13 @@ describe('hasBranchPermission', () => {
 
     it('superadmin treated as regular user when flag disabled', () => {
       const wt = makeBranch({ others_can: 'view' });
-      // Can view because others_can=view (not because of superadmin)
-      expect(hasBranchPermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN, false)).toBe(true);
-      // Cannot prompt because others_can=view only
-      expect(hasBranchPermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN, false)).toBe(
-        false
+      // Repository-resolved Viewer access applies; the global bypass does not.
+      expect(hasBranchPermission(wt, USER_ID, false, 'view', ROLES.SUPERADMIN, false, 'view')).toBe(
+        true
       );
+      expect(
+        hasBranchPermission(wt, USER_ID, false, 'prompt', ROLES.SUPERADMIN, false, 'view')
+      ).toBe(false);
     });
   });
 
@@ -145,9 +146,16 @@ describe('hasBranchPermission', () => {
       ['none', 'session', false],
       ['none', 'prompt', false],
       ['none', 'all', false],
-    ])('others_can=%s, required=%s → %s', (othersCan, required, expected) => {
-      const wt = makeBranch({ others_can: othersCan });
-      expect(hasBranchPermission(wt, USER_ID, false, required, ROLES.MEMBER)).toBe(expected);
+    ])('effective=%s, required=%s → %s', (effective, required, expected) => {
+      const wt = makeBranch({ others_can: 'all' });
+      expect(hasBranchPermission(wt, USER_ID, false, required, ROLES.MEMBER, true, effective)).toBe(
+        expected
+      );
+    });
+
+    it('ignores an inert legacy others_can value when no normalized result is supplied', () => {
+      const wt = makeBranch({ others_can: 'all' });
+      expect(hasBranchPermission(wt, USER_ID, false, 'view', ROLES.MEMBER)).toBe(false);
     });
   });
 });
@@ -168,19 +176,23 @@ describe('resolveBranchPermission', () => {
     expect(resolveBranchPermission(wt, USER_ID, false, ROLES.SUPERADMIN)).toBe('all');
   });
 
-  it('member gets others_can level', () => {
-    const wt = makeBranch({ others_can: 'prompt' });
-    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('prompt');
+  it('member gets the normalized effective level', () => {
+    const wt = makeBranch({ others_can: 'none' });
+    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER, true, 'prompt')).toBe(
+      'prompt'
+    );
   });
 
-  it('member gets none when others_can=none', () => {
-    const wt = makeBranch({ others_can: 'none' });
+  it('member fails closed without a normalized effective level', () => {
+    const wt = makeBranch({ others_can: 'all' });
     expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('none');
   });
 
-  it('member gets session when others_can=session', () => {
-    const wt = makeBranch({ others_can: 'session' });
-    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER)).toBe('session');
+  it('member gets normalized Collaborator access', () => {
+    const wt = makeBranch({ others_can: 'none' });
+    expect(resolveBranchPermission(wt, USER_ID, false, ROLES.MEMBER, true, 'session')).toBe(
+      'session'
+    );
   });
 
   it('superadmin resolves to all even with others_can=session', () => {
@@ -214,56 +226,69 @@ function makeHookContext(overrides: {
 }
 
 describe('ensureCanPromptInSession', () => {
-  const hook = ensureCanPromptInSession();
+  const hookWithAuthority = (
+    allowed: boolean,
+    denialReason:
+      | 'branch_access_required'
+      | 'branch_session_sharing_disabled' = 'branch_session_sharing_disabled'
+  ) =>
+    ensureCanPromptInSession({
+      branchRepository: {
+        resolveSessionPromptAuthority: vi.fn().mockResolvedValue({
+          allowed,
+          source: allowed ? 'own_session' : 'denied',
+          ...(allowed ? {} : { denial_reason: denialReason }),
+        }),
+      } as unknown as BranchRepository,
+    });
 
-  describe('session tier — own sessions', () => {
-    it('allows prompting own session with session permission', () => {
+  describe('canonical prompt authority', () => {
+    it('allows prompting an authorized own session', async () => {
+      const hook = hookWithAuthority(true);
       const wt = makeBranch({ others_can: 'session' });
       const ctx = makeHookContext({
         branch: wt,
         session: { created_by: USER_ID },
         userId: USER_ID,
       });
-      expect(() => hook(ctx)).not.toThrow();
+      await expect(hook(ctx)).resolves.toBe(ctx);
     });
 
-    it('denies prompting another users session with session permission', () => {
+    it('denies prompting another user session when branch sharing is disabled', async () => {
+      const hook = hookWithAuthority(false);
       const wt = makeBranch({ others_can: 'session' });
       const ctx = makeHookContext({
         branch: wt,
         session: { created_by: OTHER_USER_ID },
         userId: USER_ID,
       });
-      expect(() => hook(ctx)).toThrow(/you can only prompt sessions you created/i);
+      await expect(hook(ctx)).rejects.toThrow(/branch does not allow shared session prompting/i);
     });
-  });
 
-  describe('prompt tier — any session', () => {
-    it('allows prompting another users session with prompt permission', () => {
+    it('allows prompting another user session when canonical authority allows it', async () => {
+      const hook = hookWithAuthority(true);
       const wt = makeBranch({ others_can: 'prompt' });
       const ctx = makeHookContext({
         branch: wt,
         session: { created_by: OTHER_USER_ID },
         userId: USER_ID,
       });
-      expect(() => hook(ctx)).not.toThrow();
+      await expect(hook(ctx)).resolves.toBe(ctx);
     });
-  });
 
-  describe('view tier — denied', () => {
-    it('denies prompting own session with view permission', () => {
+    it('denies prompting an own session without Collaborator access', async () => {
+      const hook = hookWithAuthority(false, 'branch_access_required');
       const wt = makeBranch({ others_can: 'view' });
       const ctx = makeHookContext({
         branch: wt,
         session: { created_by: USER_ID },
         userId: USER_ID,
       });
-      expect(() => hook(ctx)).toThrow(/need 'prompt' permission/i);
+      await expect(hook(ctx)).rejects.toThrow(/Only Collaborators and Managers/i);
     });
-  });
 
-  describe('owner bypass', () => {
-    it('owner can prompt any session regardless of others_can', () => {
+    it('accepts repository-authorized primary-owner access', async () => {
+      const hook = hookWithAuthority(true);
       const wt = makeBranch({ others_can: 'none' });
       const ctx = makeHookContext({
         branch: wt,
@@ -271,12 +296,13 @@ describe('ensureCanPromptInSession', () => {
         userId: USER_ID,
         isOwner: true,
       });
-      expect(() => hook(ctx)).not.toThrow();
+      await expect(hook(ctx)).resolves.toBe(ctx);
     });
   });
 
   describe('internal calls bypass', () => {
-    it('skips check for internal calls (no provider)', () => {
+    it('skips check for internal calls (no provider)', async () => {
+      const hook = ensureCanPromptInSession();
       const wt = makeBranch({ others_can: 'none' });
       const ctx = makeHookContext({
         branch: wt,
@@ -285,7 +311,7 @@ describe('ensureCanPromptInSession', () => {
       });
       // Remove provider to simulate internal call
       ctx.params.provider = undefined;
-      expect(() => hook(ctx)).not.toThrow();
+      await expect(hook(ctx)).resolves.toBe(ctx);
     });
   });
 });
@@ -307,7 +333,7 @@ describe('request-scoped RBAC loading', () => {
   }
 
   it('reuses a loaded session and branch across RBAC hooks in one request', async () => {
-    const sessionService = { get: vi.fn(async () => session) };
+    const sessionRepo = { findById: vi.fn(async () => session) };
     const branchRepo = makeBranchRepo();
     const ctx = {
       path: 'messages',
@@ -320,33 +346,34 @@ describe('request-scoped RBAC loading', () => {
       },
     } as unknown as HookContext;
 
-    await loadSession(sessionService)(ctx);
-    await loadSession(sessionService)(ctx);
+    await loadSession(sessionRepo)(ctx);
+    await loadSession(sessionRepo)(ctx);
     await loadBranchFromSession(branchRepo as never)(ctx);
     await loadBranchFromSession(branchRepo as never)(ctx);
 
-    expect(sessionService.get).toHaveBeenCalledTimes(1);
+    expect(sessionRepo.findById).toHaveBeenCalledTimes(1);
     expect(branchRepo.findById).toHaveBeenCalledTimes(1);
     expect(branchRepo.isOwner).toHaveBeenCalledTimes(1);
     expect(branchRepo.resolveUserPermission).toHaveBeenCalledTimes(1);
   });
 
-  it('marks sessions.get hook-loaded session as prefetched for the service get()', async () => {
-    const sessionService = { get: vi.fn(async () => session) };
+  it('canonicalizes and passes the repository-loaded session to the service get()', async () => {
+    const sessionRepo = { findById: vi.fn(async () => session) };
     const branchRepo = makeBranchRepo();
     const ctx = {
       path: 'sessions',
       method: 'get',
-      id: session.session_id,
+      id: 'session-c',
       params: {
         provider: 'rest',
         user: { user_id: USER_ID, role: ROLES.MEMBER },
       },
     } as unknown as HookContext;
 
-    await loadSessionBranch(sessionService, branchRepo as never)(ctx);
+    await loadSessionBranch(sessionRepo, branchRepo as never)(ctx);
 
-    expect(sessionService.get).toHaveBeenCalledTimes(1);
+    expect(sessionRepo.findById).toHaveBeenCalledWith('session-c');
+    expect(ctx.id).toBe(session.session_id);
     expect(ctx.params.session).toBe(session);
     expect(
       (ctx.params as { _agorPrefetchedRecord?: { record: unknown } })._agorPrefetchedRecord
@@ -355,6 +382,28 @@ describe('request-scoped RBAC loading', () => {
       idField: 'session_id',
       record: session,
     });
+  });
+
+  it('canonicalizes session IDs in the shared session authorization hook', async () => {
+    const sessionRepo = { findById: vi.fn(async () => session) };
+    const ctx = {
+      path: 'sessions',
+      method: 'patch',
+      id: 'session-c',
+      params: {
+        provider: 'rest',
+        user: { user_id: USER_ID, role: ROLES.MEMBER },
+        sessionId: 'session-c',
+      },
+    } as unknown as HookContext;
+
+    await loadSession(sessionRepo)(ctx);
+
+    expect(ctx.id).toBe(session.session_id);
+    expect(
+      (ctx.params as { _agorPrefetchedRecord?: { id: string; record: unknown } })
+        ._agorPrefetchedRecord
+    ).toEqual({ id: session.session_id, idField: 'session_id', record: session });
   });
 
   // Every id-addressed verb must resolve here. A verb missing from the branch

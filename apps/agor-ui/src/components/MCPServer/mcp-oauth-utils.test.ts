@@ -192,6 +192,17 @@ describe('extractOAuthConfigForTesting', () => {
 });
 
 describe('buildAuthFromValues', () => {
+  it('does not submit hidden remote auth for a stdio server', () => {
+    const values = {
+      transport: 'stdio',
+      auth_type: 'bearer',
+      auth_token: 'stale-token',
+    };
+
+    expect(buildAuthFromValues(values)).toBeUndefined();
+    expect(buildAuthFromValues(values, { forPatch: true })).toBeNull();
+  });
+
   it('preserves a legacy absent DCR field across an unrelated edit', () => {
     expect(
       buildAuthFromValues(

@@ -3,7 +3,9 @@ import { rm } from 'node:fs/promises';
 import http from 'node:http';
 import {
   BranchRepository,
+  CapabilityPolicyRepository,
   createDatabaseAsync,
+  generateId,
   MCPServerRepository,
   RepoRepository,
   runMigrations,
@@ -19,6 +21,7 @@ import {
 import type { Application } from '@agor/core/feathers';
 import { refreshAndPersistToken } from '@agor/core/tools/mcp/oauth-refresh';
 import {
+  capabilityPolicyPresetCapabilities,
   type MCPServer,
   type MCPServerID,
   TaskStatus,
@@ -132,13 +135,36 @@ async function harness(options: HarnessOptions) {
     branch_unique_id: Date.now() % 1_000_000,
     path: `/tmp/${randomUUID()}`,
     created_by: user.user_id as UUID,
-    others_can: options.separatePrincipal ? 'prompt' : undefined,
   });
+  if (options.separatePrincipal) {
+    const policies = new CapabilityPolicyRepository(rawDb);
+    const current = await policies.getBranchPolicy(branch.branch_id);
+    const config = structuredClone(current.override_config!);
+    config.access.sharing_mode = 'shared';
+    config.access.entries = [
+      {
+        entry_id: generateId(),
+        principal: { principal_type: 'user', user_id: principal.user_id },
+        preset: 'collaborator',
+        capabilities:
+          capabilityPolicyPresetCapabilities('branch_access', 'collaborator', 'read') ?? [],
+        fs_access: 'read',
+      },
+    ];
+    config.allow_shared_session_prompts = true;
+    await policies.replaceBranchPolicy(
+      branch.branch_id,
+      { ...current, override_config: config },
+      user.user_id
+    );
+    await policies.setWorkspacePreferences({ session_sharing_enabled: true }, user.user_id);
+  }
   const session = await new SessionRepository(rawDb).create({
     session_id: randomUUID(),
     branch_id: branch.branch_id,
     agentic_tool: 'codex',
     created_by: user.user_id as UserID,
+    sdk_home_scope: options.separatePrincipal ? 'branch' : 'execution_home',
   });
   const task = await new TaskRepository(rawDb).create({
     task_id: randomUUID(),
@@ -156,7 +182,7 @@ async function harness(options: HarnessOptions) {
     scope: options.server.scope ?? 'global',
     source: 'user',
     enabled: true,
-    owner_user_id: user.user_id as UserID,
+    owner_user_id: principal.user_id as UserID,
   });
   if (server.scope === 'session') {
     await new SessionMCPServerRepository(rawDb).addServer(session.session_id, server.mcp_server_id);
@@ -167,7 +193,7 @@ async function harness(options: HarnessOptions) {
   const oauthTokenUserId =
     server.auth?.type === 'oauth' && (server.auth.oauth_mode ?? 'per_user') === 'shared'
       ? null
-      : (user.user_id as UserID);
+      : (principal.user_id as UserID);
   if (server.auth?.type === 'oauth') {
     await new UserMCPOAuthTokenRepository(rawDb).saveToken(oauthTokenUserId, server.mcp_server_id, {
       accessToken: options.oauthAccessToken ?? 'oauth-access-token-initial',
@@ -232,7 +258,7 @@ async function harness(options: HarnessOptions) {
       task_id: task.task_id,
       session_id: session.session_id,
       principal_user_id: principal.user_id,
-      credential_user_id: user.user_id,
+      credential_user_id: principal.user_id,
       mcp_server_id: server.mcp_server_id,
       config_version: server.config_version ?? 1,
       material_hash: mcpEgressMaterialHash(
@@ -378,6 +404,30 @@ describe('authoritative MCP gateway real transport', () => {
     expect(authorization).toBe(`Bearer ${secret}`);
     expect([...forwarded.response.headers.keys()]).not.toContain('x-private');
     expect(await forwarded.response.text()).not.toContain(secret);
+  });
+
+  it('uses the actual prompting principal OAuth grant for a shared session', async () => {
+    let authorization: string | undefined;
+    const url = await listen((request, response) => {
+      authorization = request.headers.authorization;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"jsonrpc":"2.0","id":1,"result":{}}');
+    });
+    const h = await harness({
+      server: {
+        transport: 'http',
+        url: `${url}/mcp`,
+        auth: { type: 'oauth', oauth_mode: 'per_user' },
+      },
+      separatePrincipal: true,
+      branchRbacEnabled: true,
+      oauthAccessToken: 'prompt-caller-oauth-token',
+    });
+
+    expect(h.oauthTokenUserId).toBe(h.principal.user_id);
+    expect(h.oauthTokenUserId).not.toBe(h.user.user_id);
+    await expect(h.request('POST', initialize)).resolves.toBeDefined();
+    expect(authorization).toBe('Bearer prompt-caller-oauth-token');
   });
 
   it('rejects GET before provider dispatch', async () => {
@@ -1010,7 +1060,15 @@ describe('authoritative MCP gateway real transport', () => {
     });
     const pending = h.request('POST', initialize);
     await dnsObserved;
-    await new BranchRepository(h.rawDb).update(h.branch.branch_id, { others_can: 'view' });
+    const policies = new CapabilityPolicyRepository(h.rawDb);
+    const current = await policies.getBranchPolicy(h.branch.branch_id);
+    const config = structuredClone(current.override_config!);
+    config.allow_shared_session_prompts = false;
+    await policies.replaceBranchPolicy(
+      h.branch.branch_id,
+      { ...current, override_config: config },
+      h.user.user_id
+    );
     releaseDns();
 
     await expect(pending).rejects.toMatchObject({ code: 'branch_revoked' });

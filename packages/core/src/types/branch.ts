@@ -352,6 +352,12 @@ export interface Branch {
 
   // ===== RBAC: App-layer permissions (rbac.md) =====
 
+  /** Immutable primary owner. This is intentionally independent of attribution. */
+  primary_owner_user_id?: UUID;
+
+  /** Whether the complete branch permission package is inherited or overridden. */
+  permission_binding?: 'inherit' | 'override';
+
   /**
    * Whether this branch uses its own permission fields or aligns to board defaults.
    * Existing branches default/read as 'override' for backcompat.
@@ -413,29 +419,55 @@ export interface Branch {
    */
   clone_depth?: number;
 
-  // ===== Session Sharing (legacy identity-borrow opt-in) =====
-
   /**
-   * DANGEROUS: Allow legacy "identity borrowing" on session spawn/fork.
+   * Per-branch SDK home intent (design §9.2).
    *
-   * Default (false / undefined): When user A calls `agor_sessions_spawn` or
-   * `agor_sessions_prompt(mode:"fork"|"subsession")` against user B's session,
-   * the new child session is attributed to A — `child.created_by = A.id` —
-   * and uses A's execution-home, credentials, and env vars.
+   * `undefined`/`null` = inherit today's behavior — no relocated SDK home; the
+   * agentic tool's state lives in whatever home the sandbox `home_mode`
+   * presents. `'per_branch'` = this branch has its own SDK home under
+   * `branch-homes/<branchId>` (path derived from `branch_id` by
+   * `getBranchHomePath`; only the intent is stored, never a path).
+   * This is a server-managed read model; generic Branch create/patch callers
+   * cannot set or clear it.
    *
-   * When true: legacy behavior is preserved — the child inherits
-   * `parent.created_by`, so it executes under the *parent owner's* identity
-   * even when spawned by a different caller. This effectively lets a
-   * collaborator run code as the session creator (similar to what
-   * `others_can: 'prompt'` already permits for direct prompts), and is
-   * preserved only for parity with pre-existing automation that relies on it.
-   *
-   * Admins (role >= admin) are *always* attributed to themselves regardless
-   * of this flag.
-   *
-   * Cross-user spawns under this flag are logged loudly by the daemon.
+   * STICKY: once set, this value — not the live
+   * `execution.sandbox.sdk_home_mode` deployment flag — is the default for
+   * future independent Sessions and owns the directory lifecycle. Each
+   * Session's immutable `sdk_home_scope` governs its actual mount, so older
+   * Sessions deliberately continue using their historical execution home.
+   * Flipping the flag back to `inherit` only stops unadopted branches from
+   * transitioning; it never strands accumulated Claude/Codex/… history.
    */
-  dangerously_allow_session_sharing?: boolean;
+  sdk_home?: 'per_branch' | null;
+}
+
+export type BranchFilesystemReadinessState = 'pending' | 'ready' | 'failed' | 'unavailable';
+
+/**
+ * Classify whether a branch can safely host filesystem-backed work.
+ *
+ * Keep this interpretation shared between UI and automation callers. Legacy
+ * rows without a filesystem status are ready; archived or cleaned-up branches
+ * are terminal and unavailable.
+ */
+export function classifyBranchFilesystemReadiness(
+  branch: Pick<Branch, 'archived' | 'filesystem_status'>
+): BranchFilesystemReadinessState {
+  if (branch.archived) return 'unavailable';
+
+  switch (branch.filesystem_status) {
+    case undefined:
+    case 'ready':
+      return 'ready';
+    case 'creating':
+      return 'pending';
+    case 'failed':
+      return 'failed';
+    case 'preserved':
+    case 'cleaned':
+    case 'deleted':
+      return 'unavailable';
+  }
 }
 
 /**

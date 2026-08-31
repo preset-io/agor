@@ -9,8 +9,11 @@ import { PAGINATION } from '@agor/core/config';
 import {
   BoardObjectRepository,
   BoardRepository,
+  mapBoardExportBlobToCreateData,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { BadRequest } from '@agor/core/feathers';
+import { isValidUUID } from '@agor/core/ids';
 import {
   buildTeammateWelcomeNoteObject,
   TEAMMATE_WELCOME_NOTE_OBJECT_ID,
@@ -46,6 +49,39 @@ export interface BoardParams
   teammateWelcomeNoteMutated?: boolean;
   /** Internal RBAC SQL pushdown marker set by register-hooks for external regular users. */
   _agorSqlBoardAccessUserId?: UUID;
+}
+
+function shouldSqlPageBoardQuery(query?: Record<string, unknown>): boolean {
+  if (!query) return true;
+  const allowed = new Set(['archived', 'board_id', 'lean', '$limit', '$skip', '$sort']);
+  if (Object.keys(query).some((key) => !allowed.has(key) || key === '$select')) return false;
+  if (query.archived !== undefined && typeof query.archived !== 'boolean') return false;
+  if (query.lean !== undefined && typeof query.lean !== 'boolean') return false;
+  if (query.board_id !== undefined) {
+    const value = query.board_id;
+    if (typeof value !== 'string') {
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        !Array.isArray((value as { $in?: unknown }).$in) ||
+        !(value as { $in: unknown[] }).$in.every((id) => typeof id === 'string')
+      ) {
+        return false;
+      }
+    }
+  }
+  const sort = query.$sort as Record<string, unknown> | undefined;
+  if (sort) {
+    const columns = new Set(['board_id', 'name', 'slug', 'created_at', 'updated_at']);
+    if (
+      Object.keys(sort).some(
+        (field) => !columns.has(field) || (sort[field] !== 1 && sort[field] !== -1)
+      )
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -145,6 +181,41 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     return this.boardRepo.findAll(filter);
   }
 
+  override async find(params?: BoardParams) {
+    const query = params?.query as Record<string, unknown> | undefined;
+    if (shouldSqlPageBoardQuery(query)) {
+      const boardFilter = query?.board_id;
+      const boardIds =
+        typeof boardFilter === 'string'
+          ? [boardFilter as BoardID]
+          : boardFilter &&
+              typeof boardFilter === 'object' &&
+              Array.isArray((boardFilter as { $in?: unknown }).$in)
+            ? (boardFilter as { $in: BoardID[] }).$in
+            : undefined;
+      const requestedLimit =
+        typeof query?.$limit === 'number' ? query.$limit : PAGINATION.DEFAULT_LIMIT;
+      const limit = Math.min(requestedLimit, PAGINATION.MAX_LIMIT);
+      const skip = typeof query?.$skip === 'number' ? query.$skip : 0;
+      const page = await this.boardRepo.findPage({
+        archived: typeof query?.archived === 'boolean' ? query.archived : undefined,
+        boardIds,
+        visibleToUserId: params?._agorSqlBoardAccessUserId,
+        lean: query?.lean === true,
+        limit,
+        offset: skip,
+        sort: query?.$sort as Record<string, 1 | -1> | undefined,
+      });
+      return {
+        total: page.total,
+        limit,
+        skip,
+        data: page.data,
+      };
+    }
+    return super.find(params);
+  }
+
   /**
    * Custom method: Find board by slug
    */
@@ -156,14 +227,15 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     data: Partial<Board> | Partial<Board>[],
     params?: BoardParams
   ): Promise<Board | Board[]> {
+    for (const candidate of Array.isArray(data) ? data : [data]) {
+      if (
+        candidate.board_id !== undefined &&
+        (typeof candidate.board_id !== 'string' || !isValidUUID(candidate.board_id))
+      ) {
+        throw new BadRequest('board_id must be a canonical UUIDv7');
+      }
+    }
     const result = (await super.create(data, params)) as Board | Board[];
-    const creatorId = params?.user?.user_id;
-    if (!creatorId) return result;
-
-    const boards = Array.isArray(result) ? result : [result];
-    await Promise.all(
-      boards.map((board) => this.boardRepo.addOwner(board.board_id, creatorId as UUID))
-    );
     return result;
   }
 
@@ -352,11 +424,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     // Hook chain enforces auth before we get here.
     const userId = params!.user!.user_id;
     this.boardRepo.validateBoardBlob(blob);
-    const data = this.buildBoardDataFromBlob(blob, userId);
+    const data = mapBoardExportBlobToCreateData(blob, userId);
 
     // Create board through repository (not super.create to avoid double-emit issues)
     const board = await this.boardRepo.create(data);
-    await this.boardRepo.addOwner(board.board_id, userId as UUID);
 
     // Note: Events must be emitted by the caller using app.service('boards').emit()
     // this.emit() doesn't work reliably in custom methods due to execution context
@@ -420,10 +491,9 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     const userId = params!.user!.user_id;
     const resolvedBoardId = await this.resolveBoardId(boardIdentifier);
     const blob = await this.boardRepo.toBlob(resolvedBoardId);
-    const boardData = this.buildBoardDataFromBlob(blob, userId, name);
+    const boardData = mapBoardExportBlobToCreateData(blob, userId, name);
     // Create board through repository (not super.create to avoid double-emit issues)
     const clonedBoard = await this.boardRepo.create(boardData);
-    await this.boardRepo.addOwner(clonedBoard.board_id, userId as UUID);
 
     // Note: Events must be emitted by the caller using app.service('boards').emit()
     // this.emit() doesn't work reliably in custom methods due to execution context
@@ -515,28 +585,6 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     }
 
     return board.board_id;
-  }
-
-  private buildBoardDataFromBlob(
-    blob: BoardExportBlob,
-    userId: string,
-    nameOverride?: string
-  ): Partial<Board> {
-    const name = nameOverride ?? blob.name;
-    const slug = nameOverride ? nameOverride : (blob.slug ?? blob.name);
-
-    return {
-      name,
-      slug,
-      description: blob.description,
-      icon: blob.icon,
-      color: blob.color,
-      background_color: blob.background_color,
-      custom_css: blob.custom_css,
-      objects: blob.objects,
-      custom_context: blob.custom_context,
-      created_by: userId,
-    };
   }
 }
 

@@ -1,213 +1,56 @@
-/**
- * PermissionsTab — rendering tests.
- *
- * The tab is a controlled view: it never owns save state, just renders the
- * RBAC controls and forwards changes through `setField`. These tests pin
- * the visible behaviors that matter to users.
- */
-
-import { fireEvent, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { makeUser, renderWithApp } from '../testUtils';
-import type { PermissionsFormState } from '../useBranchModalForm';
+import { makeBranchPolicy, makeUser, renderWithApp } from '../testUtils';
 import { PermissionsTab } from './PermissionsTab';
 
-const defaultState: PermissionsFormState = {
-  selectedOwnerIds: ['user-1'],
-  othersCan: 'session',
-  othersFsAccess: 'read',
-  allowSessionSharing: false,
-  groupGrants: [],
-};
+const common = {
+  loading: false,
+  canManageAccess: true,
+  allGroups: [],
+  currentUser: makeUser(),
+  client: null,
+  permissionUsers: [makeUser()],
+  capabilityPolicy: makeBranchPolicy(),
+  onCapabilityPolicyChange: vi.fn(),
+  workspacePreferences: { session_sharing_enabled: true },
+} as const;
 
 describe('PermissionsTab', () => {
-  it('renders owners + permission controls', () => {
-    renderWithApp(
-      <PermissionsTab
-        loadingOwners={false}
-        canEdit={true}
-        allUsers={[makeUser()]}
-        currentUser={makeUser()}
-        state={defaultState}
-        setField={vi.fn()}
-      />
-    );
-    expect(screen.getByText('Permission Mode')).toBeInTheDocument();
-    expect(screen.getByText('Owners')).toBeInTheDocument();
-    expect(screen.getByText('Others Can')).toBeInTheDocument();
-    expect(screen.getByText('Filesystem Access')).toBeInTheDocument();
-    expect(screen.getByText('Allow legacy session sharing')).toBeInTheDocument();
+  it('renders the canonical branch policy editor and immutable primary owner', () => {
+    renderWithApp(<PermissionsTab {...common} />);
+
+    expect(screen.getByText('Branch permissions')).toBeInTheDocument();
+    expect(screen.getByLabelText('Primary owner for this branch')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Shared' })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Add user/group' })).toBeInTheDocument();
+    expect(screen.queryByText('Others Can')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save/i })).not.toBeInTheDocument();
   });
 
-  it('shows the unix-identity warning when others_can = prompt', () => {
-    renderWithApp(
-      <PermissionsTab
-        loadingOwners={false}
-        canEdit={true}
-        allUsers={[makeUser()]}
-        currentUser={makeUser()}
-        state={{ ...defaultState, othersCan: 'prompt' }}
-        setField={vi.fn()}
-      />
-    );
-    expect(screen.getByText('Cross-user execution risk')).toBeInTheDocument();
+  it('keeps access controls read only when the caller cannot manage policy', () => {
+    renderWithApp(<PermissionsTab {...common} canManageAccess={false} />);
+
+    expect(screen.getByRole('radio', { name: 'Private' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: 'Shared' })).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Add user/group' })).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Others fallback role' })).toBeDisabled();
   });
 
-  it('shows the dangerous warning when legacy session sharing is on', () => {
-    renderWithApp(
-      <PermissionsTab
-        loadingOwners={false}
-        canEdit={true}
-        allUsers={[makeUser()]}
-        currentUser={makeUser()}
-        state={{ ...defaultState, allowSessionSharing: true }}
-        setField={vi.fn()}
-      />
+  it('renders a bounded loading skeleton until the normalized package arrives', () => {
+    const { container } = renderWithApp(
+      <PermissionsTab {...common} loading capabilityPolicy={null} />
     );
-    expect(screen.getByText(/Dangerous: identity borrowing/i)).toBeInTheDocument();
+
+    expect(container.querySelector('.ant-skeleton')).toBeInTheDocument();
+    expect(screen.queryByText('Branch permissions')).not.toBeInTheDocument();
   });
 
-  it('toggles allowSessionSharing through setField', () => {
-    const setField = vi.fn();
+  it('fails closed with the permission load error', () => {
     renderWithApp(
-      <PermissionsTab
-        loadingOwners={false}
-        canEdit={true}
-        allUsers={[makeUser()]}
-        currentUser={makeUser()}
-        state={defaultState}
-        setField={setField}
-      />
+      <PermissionsTab {...common} error={new Error('Permission package unavailable')} />
     );
 
-    const sharingSwitch = screen.getByRole('switch');
-    fireEvent.click(sharingSwitch);
-    expect(setField).toHaveBeenCalledWith('allowSessionSharing', true);
-  });
-
-  it('does NOT render a Save button — save lives at the modal level', () => {
-    renderWithApp(
-      <PermissionsTab
-        loadingOwners={false}
-        canEdit={true}
-        allUsers={[makeUser()]}
-        currentUser={makeUser()}
-        state={{ ...defaultState, othersCan: 'prompt' }}
-        setField={vi.fn()}
-      />
-    );
-    expect(screen.queryByRole('button', { name: /save/i })).toBeNull();
-    expect(screen.queryByRole('button', { name: /reset/i })).toBeNull();
-  });
-
-  it('disables all controls when canEdit is false', () => {
-    renderWithApp(
-      <PermissionsTab
-        loadingOwners={false}
-        canEdit={false}
-        allUsers={[makeUser()]}
-        currentUser={makeUser()}
-        state={defaultState}
-        setField={vi.fn()}
-      />
-    );
-    expect(screen.getByRole('switch')).toBeDisabled();
-  });
-
-  it('warns when group permissions are unavailable without hiding branch-level controls', () => {
-    renderWithApp(
-      <PermissionsTab
-        loadingOwners={false}
-        canEdit={true}
-        allUsers={[makeUser()]}
-        currentUser={makeUser()}
-        state={defaultState}
-        setField={vi.fn()}
-        groupGrantsStatus="unavailable"
-        groupGrantsError={new Error('not found')}
-      />
-    );
-
-    expect(screen.getByText('Group permissions unavailable')).toBeInTheDocument();
-    expect(screen.getByText('Others Can')).toBeInTheDocument();
-    expect(screen.getByText('Filesystem Access')).toBeInTheDocument();
-  });
-
-  it('renders explicit None and allows transitioning away from it', () => {
-    const setField = vi.fn();
-    renderWithApp(
-      <PermissionsTab
-        loadingOwners={false}
-        canEdit
-        allUsers={[makeUser()]}
-        currentUser={makeUser()}
-        allGroups={[{ group_id: 'group-1', name: 'Reviewers' } as never]}
-        state={{
-          ...defaultState,
-          permissionSource: 'override',
-          othersCan: 'none',
-          othersFsAccess: 'write',
-          groupGrants: [{ group_id: 'group-1', can: 'view' }],
-        }}
-        setField={setField}
-      />
-    );
-
-    const selector = screen.getByRole('combobox', { name: 'Others Can' });
-    expect(selector).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.getByText('None')).toBeInTheDocument();
-    expect(screen.getAllByText('Reviewers').length).toBeGreaterThan(0);
-    expect(screen.getByText('Filesystem Access')).toBeInTheDocument();
-    expect(screen.queryByText(/Owner-only access/)).not.toBeInTheDocument();
-    fireEvent.mouseDown(selector);
-    fireEvent.click(screen.getByText('View', { selector: '.ant-select-item-option-content' }));
-    expect(setField).toHaveBeenCalledWith('othersCan', 'view');
-  });
-
-  it('shows None as an available branch fallback', () => {
-    renderWithApp(
-      <PermissionsTab
-        loadingOwners={false}
-        canEdit
-        allUsers={[makeUser()]}
-        currentUser={makeUser()}
-        state={defaultState}
-        setField={vi.fn()}
-      />
-    );
-
-    const selector = screen.getByRole('combobox', { name: 'Others Can' });
-    fireEvent.mouseDown(selector);
-    expect(
-      screen.getByText('None', { selector: '.ant-select-item-option-content' })
-    ).toBeInTheDocument();
-  });
-
-  it('distinguishes an inherited board None default from a branch override', () => {
-    const client = {
-      service: () => ({ find: vi.fn(async () => []) }),
-    };
-    renderWithApp(
-      <PermissionsTab
-        loadingOwners={false}
-        canEdit
-        allUsers={[makeUser()]}
-        currentUser={makeUser()}
-        client={client as never}
-        board={
-          {
-            board_id: 'board-1',
-            access_mode: 'shared',
-            default_others_can: 'none',
-          } as never
-        }
-        state={{ ...defaultState, permissionSource: 'board' }}
-        setField={vi.fn()}
-      />
-    );
-
-    expect(screen.getByText('Aligned with board permissions')).toBeInTheDocument();
-    expect(screen.getByText('none')).toBeInTheDocument();
-    expect(screen.queryByRole('combobox', { name: 'Others Can' })).not.toBeInTheDocument();
+    expect(screen.getByText('Permission package unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('Branch permissions')).not.toBeInTheDocument();
   });
 });

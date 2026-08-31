@@ -60,8 +60,13 @@ const AUTH_PARAMS = {
   user: { user_id: 'user-1', email: 'u@example.com', role: 'member' },
 } as never;
 
-function service(app: { service: () => unknown }) {
-  const delegate = createCodexAuthImportService(app as never, TEST_DB);
+function service(app: { service: () => unknown }, invalidateCredentialBinds = vi.fn()) {
+  const delegate = createCodexAuthImportService(
+    app as never,
+    TEST_DB,
+    undefined,
+    invalidateCredentialBinds
+  );
   return {
     create: (...args: Parameters<typeof delegate.create>) =>
       runWithTenantContext('tenant-test', () => delegate.create(...args)),
@@ -137,7 +142,11 @@ describe('codex-auth-import', () => {
 
   it('writes, verifies, flips the auth method, and returns non-secret metadata only', async () => {
     const { app, usersService } = makeApp();
-    const result = await service(app).create({ authJson: VALID_AUTH_JSON }, AUTH_PARAMS);
+    const invalidateCredentialBinds = vi.fn(async () => undefined);
+    const result = await service(app, invalidateCredentialBinds).create(
+      { authJson: VALID_AUTH_JSON },
+      AUTH_PARAMS
+    );
 
     expect(writeCodexAuthCredentialMock).toHaveBeenCalledTimes(1);
     const [writtenContent, routing] = writeCodexAuthCredentialMock.mock.calls[0];
@@ -151,6 +160,11 @@ describe('codex-auth-import', () => {
     );
 
     expect(result).toMatchObject({ status: 'authenticated', authMode: 'chatgpt' });
+    expect(invalidateCredentialBinds).toHaveBeenCalledWith({
+      tenantId: 'tenant-test',
+      userId: 'user-1',
+      reason: 'credentials_imported',
+    });
     expect(JSON.stringify(result)).not.toContain('refresh-xyz');
     expect(JSON.stringify(result)).not.toContain('access-abc');
   });

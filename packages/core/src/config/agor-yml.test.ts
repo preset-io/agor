@@ -283,6 +283,18 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(compose).toMatch(/- CREATE_RBAC_TEST_USERS=\$\{CREATE_RBAC_TEST_USERS:-\}/);
   });
 
+  it('makes branch SDK homes the rich/full RBAC fixture default', () => {
+    const baseCompose = fs.readFileSync(path.join(REPO_ROOT, 'docker-compose.yml'), 'utf8');
+    const richOverlay = fs.readFileSync(
+      path.join(REPO_ROOT, 'docker-compose.postgres.yml'),
+      'utf8'
+    );
+    expect(baseCompose).toMatch(/AGOR_SANDBOX_SDK_HOME_MODE=\$\{AGOR_SANDBOX_SDK_HOME_MODE:-\}/);
+    expect(richOverlay).toMatch(
+      /AGOR_SANDBOX_SDK_HOME_MODE=\$\{AGOR_SANDBOX_SDK_HOME_MODE:-per_branch\}/
+    );
+  });
+
   it('keeps persisted deployment secrets stable when switching postgres variants', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML);
     expect(env).not.toBeNull();
@@ -382,6 +394,30 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(resolveVariant(env!, 'postgres-demo')!.start).toBe(
       withFixtures(resolveVariant(env!, 'postgres')!.start)
     );
+  });
+
+  it('explicitly acknowledges offline cutovers only for isolated managed dev variants', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+
+    for (const name of [
+      'rich',
+      'full',
+      'sqlite',
+      'sandbox',
+      'sandbox-peruser',
+      'postgres',
+      'sqlite-demo',
+      'postgres-demo',
+    ]) {
+      expect(resolveVariant(env!, name)?.start, `${name}.start`).toContain(
+        'AGOR_MIGRATION_OFFLINE_CUTOVER=true'
+      );
+    }
+
+    // HA has its own one-shot migrator and must not leak this standalone
+    // development acknowledgement into daemon replicas.
+    expect(resolveVariant(env!, 'ha')?.start).not.toContain('AGOR_MIGRATION_OFFLINE_CUTOVER=true');
   });
 });
 

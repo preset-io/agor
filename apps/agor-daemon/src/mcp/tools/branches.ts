@@ -1,4 +1,4 @@
-import { BranchRepository, shortId } from '@agor/core/db';
+import { BranchRepository, CapabilityPolicyRepository, shortId } from '@agor/core/db';
 import type {
   Board,
   BoardID,
@@ -11,10 +11,10 @@ import type {
   UUID,
   ZoneBoardObject,
 } from '@agor/core/types';
-import { BRANCH_PERMISSION_LEVELS, getTeammateConfig, isTeammate } from '@agor/core/types';
+import { getTeammateConfig, isTeammate } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type {
   BoardsServiceImpl,
@@ -26,6 +26,15 @@ import { issueExecutorCommandToken } from '../../services/session-token-service.
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
+import {
+  BRANCH_FILESYSTEM_READY_POLL_INTERVAL_MS,
+  type BranchFilesystemReadinessResult,
+  DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+  MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+  MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+  waitForBranchFilesystemReady,
+} from '../branch-filesystem-readiness.js';
+import { branchCapabilityPolicySchema } from '../capability-policy-schema.js';
 import {
   resolveBoardId,
   resolveBranchId,
@@ -44,7 +53,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, sessionContextRequiredResult, textResult } from '../server.js';
-import { runWithMcpTenantDatabaseScope } from '../tenant-scope.js';
+import { runWithMcpTenantDatabaseScope, runWithMcpTenantDatabaseWrite } from '../tenant-scope.js';
 import { assertValidVariant } from './_environment-helpers.js';
 
 const BRANCH_NAME_PATTERN = /^[a-z0-9-]+$/;
@@ -85,6 +94,81 @@ function containsTeammateKnowledgeConfigMutation(customContext: unknown): boolea
 
 function normalizeFilesystemStatus(branch: Branch): CleanupCandidateFilesystemStatus {
   return branch.filesystem_status ?? 'ready';
+}
+
+function readinessPoll(branchId: string) {
+  return {
+    tool: 'agor_branches_wait_for_ready',
+    arguments: { branchId },
+  };
+}
+
+const branchFilesystemReadyWaitTimeoutSchema = z
+  .number({ error: 'waitTimeoutMs must be a number when provided.' })
+  .int('waitTimeoutMs must be an integer.')
+  .min(
+    MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+    `waitTimeoutMs must be at least ${MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}.`
+  )
+  .max(
+    MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+    `waitTimeoutMs must be at most ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}.`
+  )
+  .optional()
+  .describe(
+    `Maximum milliseconds to wait (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}).`
+  );
+
+function readinessResponse(result: BranchFilesystemReadinessResult): {
+  readiness: Record<string, unknown>;
+  isError: boolean;
+} {
+  const readiness: Record<string, unknown> = {
+    outcome: result.outcome,
+    elapsed_ms: result.elapsedMs,
+    timeout_ms: result.timeoutMs,
+    poll_interval_ms: BRANCH_FILESYSTEM_READY_POLL_INTERVAL_MS,
+  };
+
+  if (result.outcome === 'ready') {
+    readiness.message = 'Branch filesystem is ready for session creation.';
+    return { readiness, isError: false };
+  }
+
+  if (result.outcome === 'timeout') {
+    readiness.message =
+      'Timed out while the branch filesystem is still being created. The wait did not modify or cancel materialization; call agor_branches_wait_for_ready before creating a session.';
+    readiness.poll = readinessPoll(result.branch.branch_id);
+    return { readiness, isError: false };
+  }
+
+  readiness.message =
+    result.outcome === 'failed'
+      ? result.branch.error_message || 'Branch filesystem creation failed.'
+      : `Branch filesystem is unavailable (${result.unavailableReason ?? 'terminal state'}).`;
+  if (result.unavailableReason) readiness.reason = result.unavailableReason;
+  return { readiness, isError: true };
+}
+
+function mcpRequestSignal(requestContext: ServerContext): AbortSignal {
+  return requestContext.mcpReq.signal;
+}
+
+/**
+ * Feathers authorization hooks cache loaded records on params for the duration
+ * of one service call. A readiness wait spans multiple observations, so every
+ * read needs a pristine params object or it can reuse the first branch row.
+ * Whitelist the trusted MCP identity fields instead of cloning hook-added data
+ * that may already be present after optional Session authorization.
+ */
+function freshMcpServiceParams(ctx: McpContext): McpContext['baseServiceParams'] {
+  const { authenticated, provider, tenant, user } = ctx.baseServiceParams;
+  return {
+    ...(user ? { user: { ...user } } : {}),
+    ...(authenticated !== undefined ? { authenticated } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    ...(tenant ? { tenant: { ...tenant } } : {}),
+  };
 }
 
 function parseCleanupCutoff(args: { archivedBefore?: string; archivedOlderThanDays?: number }): {
@@ -190,7 +274,50 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const branch = await ctx.app
         .service('branches')
         .get(args.branchId, branchParams as Parameters<BranchesServiceImpl['get']>[1]);
-      return textResult(branch);
+      const permissions = await ctx.app
+        .service('branches/:id/permissions')
+        .find({ ...ctx.baseServiceParams, route: { id: branch.branch_id } });
+      return textResult({ ...branch, permissions });
+    }
+  );
+
+  server.registerTool(
+    'agor_branches_wait_for_ready',
+    {
+      description:
+        'Wait for asynchronous branch filesystem materialization before creating a session. ' +
+        'This read-only, retry-safe tool performs an immediate authorized read, then polls the shared database once per second. ' +
+        'It returns the authoritative refreshed branch when ready, a structured terminal error if creation failed or the branch became unavailable, ' +
+        'or a timeout result that preserves the branch so this tool can be called again. Branch creation itself remains asynchronous.',
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      inputSchema: z.object({
+        branchId: mcpRequiredId('branchId', 'Branch'),
+        waitTimeoutMs: branchFilesystemReadyWaitTimeoutSchema.describe(
+          `Maximum milliseconds to wait (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}). ` +
+            "Waits longer than the MCP client's request deadline require a matching client timeout. " +
+            'For longer clone/materialization jobs, safely call this read-only tool again.'
+        ),
+      }),
+    },
+    async (args, requestContext) => {
+      const timeoutMs = args.waitTimeoutMs ?? DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS;
+      const branches = ctx.app.service('branches');
+      const result = await waitForBranchFilesystemReady({
+        branchId: args.branchId,
+        timeoutMs,
+        signal: mcpRequestSignal(requestContext),
+        readBranch: (branchId) =>
+          branches.get(
+            branchId,
+            freshMcpServiceParams(ctx) as Parameters<BranchesServiceImpl['get']>[1]
+          ),
+      });
+
+      const formatted = readinessResponse(result);
+      return {
+        ...textResult({ branch: result.branch, _readiness: formatted.readiness }),
+        ...(formatted.isError ? { isError: true } : {}),
+      };
     }
   );
 
@@ -295,7 +422,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         excludePrivate: z
           .boolean()
           .optional()
-          .describe('Exclude branches with others_can="none" (private to owners). Default: true.'),
+          .describe('Exclude branches whose effective policy is Private. Default: true.'),
         pathExists: z
           .boolean()
           .optional()
@@ -339,6 +466,17 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       } = await findAllArchivedBranchesForCleanup(ctx, query);
 
       const repoIds = [...new Set(branches.map((branch) => branch.repo_id))];
+      const sharingModes = await runWithMcpTenantDatabaseScope<Map<BranchID, 'private' | 'shared'>>(
+        ctx,
+        (db) =>
+          (
+            new CapabilityPolicyRepository(db) as CapabilityPolicyRepository & {
+              getBranchSharingModes(
+                branchIds: readonly BranchID[]
+              ): Promise<Map<BranchID, 'private' | 'shared'>>;
+            }
+          ).getBranchSharingModes(branches.map((branch) => branch.branch_id))
+      );
       const reposById = new Map<string, Repo>();
       await Promise.all(
         repoIds.map(async (repoId) => {
@@ -417,7 +555,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             return false;
           }
           if (excludeTeammates && isTeammate(branch)) return false;
-          if (excludePrivate && branch.others_can === 'none') return false;
+          if (excludePrivate && sharingModes.get(branch.branch_id) === 'private') return false;
           if (args.pathExists !== undefined && pathExists !== args.pathExists) return false;
           return true;
         });
@@ -441,7 +579,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         issue_url: branch.issue_url ?? null,
         notes_preview: notesPreview(branch.notes),
         is_teammate: isTeammate(branch),
-        is_private: branch.others_can === 'none',
+        is_private: sharingModes.get(branch.branch_id) === 'private',
       }));
 
       return textResult({
@@ -480,6 +618,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'and branchName to your desired unique name (e.g., sourceBranch="issue-282", branchName="issue-282-review-1"). ' +
         'Use zoneId to place the branch in a specific zone (pin only, no trigger). ' +
         'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation. ' +
+        'Filesystem materialization is asynchronous by default. Set waitForReady=true to wait for a bounded ' +
+        'authoritative result in this call, or use the retry-safe agor_branches_wait_for_ready tool separately. ' +
         'To create a long-lived Agor teammate (a persistent AI teammate that manages other branches ' +
         'and maintains memory), pass the teammate object — this is the ONLY supported way to make a ' +
         'teammate via MCP. Teammate status cannot be toggled later with agor_branches_update. ' +
@@ -588,6 +728,17 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             'Common shallow value: 100. Trade-off: smaller disk footprint, but ' +
             '`git log` past N commits is broken and some rebase operations fail.'
         ),
+        waitForReady: z
+          .boolean()
+          .optional()
+          .describe(
+            'Wait for filesystem materialization before returning (default: false). ' +
+              'This is an opt-in convenience on a non-idempotent create; if the client loses the response, creation still continues. ' +
+              'Use the separate retry-safe agor_branches_wait_for_ready tool to recover from timeouts.'
+          ),
+        waitTimeoutMs: branchFilesystemReadyWaitTimeoutSchema.describe(
+          `Maximum milliseconds to wait when waitForReady=true (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}). Requires waitForReady=true; waits longer than the MCP client's request deadline require a matching client timeout.`
+        ),
         teammate: z
           .object({
             displayName: z
@@ -624,7 +775,11 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ),
       }),
     },
-    async (args) => {
+    async (args, requestContext) => {
+      if (args.waitTimeoutMs !== undefined && args.waitForReady !== true) {
+        throw new Error('waitTimeoutMs requires waitForReady=true.');
+      }
+
       const repoId = await resolveRepoId(ctx, coerceString(args.repoId)!);
       let branchName = coerceString(args.branchName)!;
       const originalName = branchName;
@@ -814,29 +969,57 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const storageMode = args.storage_mode as 'worktree' | 'clone' | undefined;
       const cloneDepth = typeof args.clone_depth === 'number' ? args.clone_depth : undefined;
 
-      const branch = await reposService.createBranch(
-        repoId,
-        {
-          name: branchName,
-          ref,
-          createBranch,
-          refType,
-          ...(pullLatest !== undefined ? { pullLatest } : {}),
-          ...(sourceBranch ? { sourceBranch } : {}),
-          ...(issueUrl ? { issue_url: issueUrl } : {}),
-          ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
-          boardId,
-          ...(zoneId ? { zoneId } : {}),
-          ...(variant ? { environment_variant: variant } : {}),
-          ...(storageMode ? { storage_mode: storageMode } : {}),
-          ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
-          ...(teammateConfig ? { custom_context: { teammate: teammateConfig } } : {}),
-        },
-        ctx.baseServiceParams
+      // `createBranch` is deliberately NOT a Feathers transport method (it takes
+      // `(id, data)`), so this direct call bypasses the around hooks that enter
+      // the tenant database scope for the HTTP `/repos/:id/branches` route. In
+      // `required_from_auth` mode the guarded daemon-database proxy then throws
+      // `MissingTenantDatabaseScopeError` on the first `this.db` touch. Re-enter
+      // the authenticated tenant scope here so the metadata writes join one
+      // tenant transaction — exactly like the HTTP route — while the readiness
+      // wait below stays outside it and never holds a transaction across polls.
+      const branch = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        reposService.createBranch(
+          repoId,
+          {
+            name: branchName,
+            ref,
+            createBranch,
+            refType,
+            ...(pullLatest !== undefined ? { pullLatest } : {}),
+            ...(sourceBranch ? { sourceBranch } : {}),
+            ...(issueUrl ? { issue_url: issueUrl } : {}),
+            ...(pullRequestUrl ? { pull_request_url: pullRequestUrl } : {}),
+            boardId,
+            ...(zoneId ? { zoneId } : {}),
+            ...(variant ? { environment_variant: variant } : {}),
+            ...(storageMode ? { storage_mode: storageMode } : {}),
+            ...(cloneDepth !== undefined ? { clone_depth: cloneDepth } : {}),
+            ...(teammateConfig ? { custom_context: { teammate: teammateConfig } } : {}),
+          },
+          ctx.baseServiceParams
+        )
       );
 
+      const readinessResult = args.waitForReady
+        ? await waitForBranchFilesystemReady({
+            branchId: branch.branch_id,
+            timeoutMs: args.waitTimeoutMs ?? DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+            signal: mcpRequestSignal(requestContext),
+            readBranch: (branchId) =>
+              ctx.app
+                .service('branches')
+                .get(
+                  branchId,
+                  freshMcpServiceParams(ctx) as Parameters<BranchesServiceImpl['get']>[1]
+                ),
+          })
+        : undefined;
+
       // Build response with appropriate notes
-      const response: Record<string, unknown> = { ...branch };
+      const response: Record<string, unknown> = { ...(readinessResult?.branch ?? branch) };
+
+      const formattedReadiness = readinessResult ? readinessResponse(readinessResult) : undefined;
+      if (formattedReadiness) response._readiness = formattedReadiness.readiness;
 
       if (branchName !== originalName) {
         response._note = `Name '${originalName}' was already taken. Created as '${branchName}' instead (autoSuffix applied).`;
@@ -878,7 +1061,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           'Use agor_branches_set_zone to pin this branch to a specific zone and optionally trigger zone prompt templates.';
       }
 
-      return textResult(response);
+      return {
+        ...textResult(response),
+        ...(formattedReadiness?.isError ? { isError: true } : {}),
+      };
     }
   );
 
@@ -887,7 +1073,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
     'agor_branches_update',
     {
       description:
-        'Update metadata for an existing branch (issue/PR URLs, notes, board placement, attention state, custom context, RBAC permissions, owners)',
+        'Update metadata for an existing branch (issue/PR URLs, notes, board placement, attention state, and custom context). Use agor_branches_permissions_update for access.',
       annotations: { idempotentHint: true },
       inputSchema: z.object({
         branchId: mcpOptionalId(
@@ -940,46 +1126,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           .optional()
           .describe(
             'Branch/card attention highlight state. Pass true to mark the branch as needing attention, or false to clear it.'
-          ),
-        // RBAC fields (optional, safe to ignore for single-user setups)
-        othersCan: z
-          .enum(BRANCH_PERMISSION_LEVELS)
-          .optional()
-          .describe(
-            'App-layer permission for non-owner users. ' +
-              '"none" = no access, "view" = read-only, "session" = can create & prompt own sessions, ' +
-              '"prompt" = can prompt ANY session (including other users\'), "all" = full access. ' +
-              'Always effective regardless of Unix isolation mode. Single-user setups can ignore this.'
-          ),
-        permissionSource: z
-          .enum(['board', 'override'])
-          .optional()
-          .describe(
-            'Choose whether effective non-owner access is inherited from the board or read from this branch override. Set "override" with othersCan="none" for an explicit private fallback.'
-          ),
-        othersFsAccess: z
-          .enum(['none', 'read', 'write'])
-          .optional()
-          .describe(
-            'OS-level filesystem permission for non-owner users. ' +
-              '"none" = no filesystem access, "read" = read-only, "write" = read-write. ' +
-              'Only effective when Unix isolation (AGOR_UNIX_MODE) is configured. ' +
-              'Has no effect in simple mode. Single-user setups can ignore this.'
-          ),
-        addOwnerIds: z
-          .array(mcpRequiredId('addOwnerIds[]', 'User', 'User ID'))
-          .optional()
-          .describe(
-            'User IDs to ADD as owners of this branch. ' +
-              'Owners have full access regardless of othersCan/othersFsAccess settings. ' +
-              'Idempotent — adding an existing owner is a no-op.'
-          ),
-        removeOwnerIds: z
-          .array(mcpRequiredId('removeOwnerIds[]', 'User', 'User ID'))
-          .optional()
-          .describe(
-            'User IDs to REMOVE as owners of this branch. ' +
-              'Idempotent — removing a non-owner is a no-op.'
           ),
       }),
     },
@@ -1049,87 +1195,41 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         fieldsProvided++;
         updates.needs_attention = args.needsAttention;
       }
-      if (args.othersCan !== undefined) {
-        fieldsProvided++;
-        updates.others_can = args.othersCan;
-      }
-      if (args.permissionSource !== undefined) {
-        fieldsProvided++;
-        updates.permission_source = args.permissionSource;
-      }
-      if (args.othersFsAccess !== undefined) {
-        fieldsProvided++;
-        updates.others_fs_access = args.othersFsAccess;
-      }
-      const hasOwnerChanges =
-        (args.addOwnerIds && args.addOwnerIds.length > 0) ||
-        (args.removeOwnerIds && args.removeOwnerIds.length > 0);
-      if (hasOwnerChanges) fieldsProvided++;
-
       if (fieldsProvided === 0) throw new Error('provide at least one field to update');
 
-      // Patch branch fields (skip if only owner changes)
-      let branch: Branch;
-      if (Object.keys(updates).length > 0) {
-        branch = (await ctx.app
-          .service('branches')
-          .patch(
-            resolvedBranchId as string,
-            updates as unknown as Partial<Branch>,
-            ctx.baseServiceParams
-          )) as Branch;
-      } else {
-        branch = (await ctx.app
-          .service('branches')
-          .get(resolvedBranchId as string, ctx.baseServiceParams)) as Branch;
-      }
-
-      // Handle owner additions/removals via the owners service (includes unix sync hooks)
-      const ownerErrors: string[] = [];
-      if (hasOwnerChanges) {
-        if (ctx.app.get('config').execution?.branch_rbac !== true) {
-          ownerErrors.push(
-            'Owner changes ignored: branch RBAC is not enabled. Enable branch_rbac in config to manage owners.'
-          );
-        } else {
-          const branchOwnersService = ctx.app.service('branches/:id/owners');
-          // Use full UUID from resolved branch (not the potentially-short input ID)
-          const routeParams = {
-            ...ctx.baseServiceParams,
-            route: { id: branch.branch_id },
-          };
-
-          if (args.addOwnerIds) {
-            for (const ownerId of args.addOwnerIds) {
-              try {
-                await branchOwnersService.create({ user_id: ownerId }, routeParams);
-              } catch (error) {
-                ownerErrors.push(
-                  `Failed to add owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
-                );
-              }
-            }
-          }
-
-          if (args.removeOwnerIds) {
-            for (const ownerId of args.removeOwnerIds) {
-              try {
-                await branchOwnersService.remove(ownerId, routeParams);
-              } catch (error) {
-                ownerErrors.push(
-                  `Failed to remove owner ${ownerId}: ${error instanceof Error ? error.message : String(error)}`
-                );
-              }
-            }
-          }
-        }
-      }
+      const branch = (await ctx.app
+        .service('branches')
+        .patch(
+          resolvedBranchId,
+          updates as unknown as Partial<Branch>,
+          ctx.baseServiceParams
+        )) as Branch;
 
       return textResult({
         branch,
         note: 'Branch metadata updated successfully.',
-        ...(ownerErrors.length > 0 ? { ownerWarnings: ownerErrors } : {}),
       });
+    }
+  );
+
+  server.registerTool(
+    'agor_branches_permissions_update',
+    {
+      description:
+        'Replace a branch permission package, including its inherit/override binding and shared-session switch. ' +
+        'Read the current revision with agor_branches_get first. Primary ownership is immutable.',
+      annotations: { idempotentHint: true },
+      inputSchema: z.object({
+        branchId: mcpRequiredId('branchId', 'Branch'),
+        permissions: branchCapabilityPolicySchema,
+      }),
+    },
+    async (args) => {
+      const branchId = coerceString(args.branchId)!;
+      const permissions = await ctx.app
+        .service('branches/:id/permissions')
+        .patch(null, args.permissions, { ...ctx.baseServiceParams, route: { id: branchId } });
+      return textResult(permissions);
     }
   );
 
@@ -1170,7 +1270,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
+      const branchIdInput = coerceString(args.branchId)!;
       const zoneId = args.zoneId === null ? null : coerceString(args.zoneId)!;
       const rawTargetSessionId = coerceString(args.targetSessionId);
       const triggerTemplate = args.triggerTemplate === true;
@@ -1181,6 +1281,11 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         );
       }
 
+      // branches.get resolves short IDs and returns the canonical authorized
+      // entity. Keep it for the rest of this operation instead of resolving
+      // with one get and reading the same branch again below.
+      const branch = await ctx.app.service('branches').get(branchIdInput, ctx.baseServiceParams);
+      const branchId = branch.branch_id;
       const targetSession = rawTargetSessionId
         ? ((await ctx.app
             .service('sessions')
@@ -1196,9 +1301,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ? `📍 MCP clearing zone pin for branch ${shortId(branchId)}`
           : `📍 MCP pinning branch ${shortId(branchId)} to zone ${zoneId}`
       );
-
-      // Get branch to find its board
-      const branch = await ctx.app.service('branches').get(branchId, ctx.baseServiceParams);
 
       if (triggerTemplate && targetSession && targetSession.branch_id !== branch.branch_id) {
         throw new Error(
@@ -1230,9 +1332,12 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       };
 
       if (zoneId === null) {
-        const boardObject = await boardObjectsService.findByBranchId(
-          branchId as BranchID,
-          ctx.baseServiceParams
+        // findByBranchId is a custom (non-transport) method on the board-objects
+        // service and reads `this.db` directly without an internal scope helper,
+        // so enter the tenant DB scope for this read (the surrounding patch/create
+        // are transport methods that enter it via their own hooks).
+        const boardObject = await runWithMcpTenantDatabaseScope(ctx, () =>
+          boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams)
         );
         if (!boardObject) {
           return textResult({
@@ -1273,7 +1378,9 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       const { x: relativeX, y: relativeY } = computeZoneRelativePosition(zone as ZoneBoardObject);
 
       let boardObject: import('@agor/core/types').BoardEntityObject | null =
-        await boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams);
+        await runWithMcpTenantDatabaseScope(ctx, () =>
+          boardObjectsService.findByBranchId(branchId as BranchID, ctx.baseServiceParams)
+        );
 
       if (!boardObject) {
         // Create new board object

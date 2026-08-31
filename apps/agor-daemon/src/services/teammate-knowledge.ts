@@ -86,7 +86,10 @@ export async function ensureTeammateKnowledgeNamespace(
     (namespace) => !namespace.archived && isPrimaryTeammateNamespace(namespace, branch.branch_id)
   );
 
-  const createdBy = (userId ?? branch.created_by ?? null) as UserID | null;
+  const createdBy = (userId ??
+    branch.primary_owner_user_id ??
+    branch.created_by ??
+    null) as UserID | null;
   const namespace =
     existing ??
     (

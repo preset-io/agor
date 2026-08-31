@@ -84,17 +84,17 @@ describe('migration status introspection', () => {
     expect(sqliteMigration?.impact).toBe(postgresqlMigration?.impact);
   });
 
-  it('never requires offline acknowledgement for an existing SQLite database', () => {
+  it('requires offline acknowledgement for the SQLite RBAC cutover on an existing database', () => {
     const report = introspectMigrationStatus('sqlite', {
       applied: ['0000_init'],
-      pending: ['0074_knowledge_embedding_claims'],
+      pending: ['0098_board_branch_capability_policies'],
       dbAheadOfBinary: false,
     });
     expect(report.dialect).toBe('sqlite');
-    expect(report.requiresOfflineCutover).toBe(false);
+    expect(report.requiresOfflineCutover).toBe(true);
     expect(report.pendingMigrations[0]).toMatchObject({
-      requiresOfflineCutover: false,
-      impact: { userAction: 'none' },
+      requiresOfflineCutover: true,
+      impact: { userAction: 'required', rollbackCompatibility: 'incompatible' },
     });
   });
 

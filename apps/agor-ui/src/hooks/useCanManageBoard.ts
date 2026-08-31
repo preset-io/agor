@@ -1,16 +1,10 @@
-import type {
-  AgorClient,
-  Board,
-  BoardGroupGrantWithGroup,
-  GroupMembership,
-  User,
-} from '@agor-live/client';
-import { hasMinimumRole, ROLES } from '@agor-live/client';
+import type { AgorClient, Board, GroupMembership, User } from '@agor-live/client';
+import { hasMinimumRole, ROLES, resolveCapabilityPolicyAccess } from '@agor-live/client';
 import { useEffect, useState } from 'react';
 
 /**
- * Resolve the UI equivalent of BoardRepository.canMutate from canonical
- * owner, group-grant, membership, creator, and role inputs.
+ * Resolve board-management capability from the same normalized policy used by
+ * the daemon. Board access is intentionally independent of child branches.
  */
 export function useCanManageBoard(
   client: AgorClient | null,
@@ -23,32 +17,29 @@ export function useCanManageBoard(
     let cancelled = false;
     setCanManage(false);
     if (!board || !user || !client || board.archived) return;
-    if (hasMinimumRole(user.role, ROLES.ADMIN) || board.created_by === user.user_id) {
+    if (hasMinimumRole(user.role, ROLES.ADMIN) || board.primary_owner_user_id === user.user_id) {
       setCanManage(true);
       return;
     }
     if (!hasMinimumRole(user.role, ROLES.MEMBER)) return;
 
     void Promise.all([
-      client.service('boards/:id/owners').find({ route: { id: board.board_id } }),
-      client.service('boards/:id/group-grants').find({ route: { id: board.board_id } }),
+      client.service('boards/:id/permissions').find({ route: { id: board.board_id } }),
       client.service('group-memberships').findAll({ query: { user_id: user.user_id } }),
     ])
-      .then(([owners, grants, memberships]) => {
+      .then(([permissions, memberships]) => {
         if (cancelled) return;
-        const groupIds = new Set((memberships as GroupMembership[]).map((item) => item.group_id));
-        setCanManage(
-          (owners as User[]).some((owner) => owner.user_id === user.user_id) ||
-            (board.access_mode !== 'private' &&
-              (grants as BoardGroupGrantWithGroup[]).some(
-                (grant) => grant.can === 'all' && groupIds.has(grant.group_id)
-              ))
-        );
+        const access = resolveCapabilityPolicyAccess({
+          policy: permissions.board_access,
+          primary_owner_user_id: permissions.primary_owner_user_id,
+          user_id: user.user_id,
+          user_status: 'active',
+          active_group_ids: (memberships as GroupMembership[]).map((item) => item.group_id),
+        });
+        setCanManage(access.capabilities.includes('board.edit'));
       })
-      .catch((error: unknown) => {
-        // A 404 is the daemon's documented signal that board RBAC services are
-        // disabled. Fail closed for disconnects and authorization/server errors.
-        if (!cancelled) setCanManage((error as { code?: number })?.code === 404);
+      .catch(() => {
+        if (!cancelled) setCanManage(false);
       });
 
     return () => {

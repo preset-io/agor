@@ -1,6 +1,6 @@
 {
   "name": "@agor-live/copilot",
-  "version": "0.25.2",
+  "version": "0.26.0",
   "description": "Version-aligned copilot agentic tool integration for Agor",
   "type": "module",
   "main": "./dist/index.js",

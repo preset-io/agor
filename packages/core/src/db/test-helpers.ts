@@ -15,9 +15,22 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type {
+  BranchID,
+  CapabilityPolicyFsAccess,
+  CapabilityPolicyPresetId,
+  UserID,
+  UUID,
+} from '@agor/core/types';
+import { eq } from 'drizzle-orm';
 import { test } from 'vitest';
+import { generateId } from '../lib/ids';
+import { capabilityPolicyPresetCapabilities } from '../types/capability-policy';
 import { createDatabase, type Database } from './client';
+import { insert, select } from './database-wrapper';
 import { initializeDatabase } from './migrate';
+import { CapabilityPolicyRepository } from './repositories/capability-policies';
+import { users } from './schema';
 
 /**
  * Test fixture providing fresh in-memory database for each test.
@@ -52,7 +65,6 @@ export const dbTest = test.extend<{ db: Database }>({
 
     // Initialize schema (creates all tables, indexes, etc.)
     await initializeDatabase(db);
-
     try {
       // Provide database to test
       await use(db);
@@ -66,3 +78,85 @@ export const dbTest = test.extend<{ db: Database }>({
     }
   },
 });
+
+/**
+ * Explicitly seed a stable owner principal for tests that create protected
+ * Boards or Branches. The generic `dbTest` fixture intentionally stays empty
+ * so unrelated repository tests retain production-like count semantics.
+ */
+export async function ensureTestUser(db: Database, userId: UserID = 'test-user' as UserID) {
+  const existing = await select(db, { user_id: users.user_id })
+    .from(users)
+    .where(eq(users.user_id, userId))
+    .one();
+  if (existing) return userId;
+
+  await insert(db, users)
+    .values({
+      user_id: userId,
+      created_at: new Date(),
+      email: `${userId}@agor.test`,
+      password: 'not-a-login-secret',
+      role: 'member',
+      data: {},
+    })
+    .run();
+  return userId;
+}
+
+/** Opt-in database fixture for repository suites built around `test-user`. */
+export const ownedDbTest = dbTest.extend<{ protectedOwner: undefined }>({
+  protectedOwner: [
+    async ({ db }, use) => {
+      await ensureTestUser(db);
+      await use(undefined);
+    },
+    { auto: true },
+  ],
+});
+
+/** Add or replace one direct-user entry through the canonical test seam. */
+export async function setTestBranchUserRole(
+  db: Database,
+  branchId: BranchID,
+  userId: UserID,
+  preset: CapabilityPolicyPresetId = 'manager',
+  fsAccess: CapabilityPolicyFsAccess = 'none',
+  actorId: UserID = userId
+): Promise<void> {
+  const policies = new CapabilityPolicyRepository(db);
+  const current = await policies.getBranchPolicy(branchId);
+  const base =
+    current.binding_mode === 'inherit' ? current.inherited_config : current.override_config;
+  if (!base) throw new Error('Missing branch permission configuration');
+  const capabilities = capabilityPolicyPresetCapabilities('branch_access', preset, fsAccess);
+  if (!capabilities) throw new Error(`Invalid branch test role: ${preset}`);
+  await policies.replaceBranchPolicy(
+    branchId,
+    {
+      ...current,
+      binding_mode: 'override',
+      override_config: {
+        ...base,
+        access: {
+          ...base.access,
+          sharing_mode: 'shared',
+          entries: [
+            ...base.access.entries.filter(
+              (entry) =>
+                entry.principal.principal_type !== 'user' || entry.principal.user_id !== userId
+            ),
+            {
+              entry_id: generateId() as UUID,
+              principal: { principal_type: 'user', user_id: userId },
+              preset,
+              capabilities,
+              fs_access: fsAccess,
+            },
+          ],
+        },
+      },
+    },
+    actorId
+  );
+}

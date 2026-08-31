@@ -74,7 +74,7 @@ const baseProps = {
   client: null,
   modelLabel: undefined,
   modelConfig: undefined,
-  onModelConfigChange: vi.fn(),
+  onModelConfigCommit: vi.fn(),
   onOpenSessionSettings: undefined,
   onSendPrompt: vi.fn(),
   onStop: vi.fn(),
@@ -129,6 +129,14 @@ describe('SessionFooter', () => {
   it('Stop button is rendered when session is running', () => {
     render(<SessionFooter {...baseProps} isRunning={true} />, { wrapper: Wrapper });
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
+  });
+
+  it('disables Stop while the daemon connection is unavailable', () => {
+    const { container } = render(
+      <SessionFooter {...baseProps} isRunning={true} connectionDisabled={true} />,
+      { wrapper: Wrapper }
+    );
+    expect(container.querySelector('button.ant-btn-dangerous')).toBeDisabled();
   });
 
   it('shows stopping feedback immediately while the Stop request is in flight', () => {

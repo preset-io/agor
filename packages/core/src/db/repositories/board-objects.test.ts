@@ -10,9 +10,10 @@ import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { boardObjects, boards } from '../schema';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { EntityNotFoundError, RepositoryError } from './base';
 import { BoardObjectRepository } from './board-objects';
+import { BoardRepository } from './boards';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
 
@@ -48,6 +49,7 @@ function createBranchData(overrides?: { branch_id?: BranchID; repo_id?: UUID; na
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     created_by: 'test-user' as UUID,
+    primary_owner_user_id: 'test-user' as UUID,
   };
 }
 
@@ -59,14 +61,13 @@ async function createBoard(
   overrides?: { board_id?: BoardID; name?: string; access_mode?: 'private' | 'shared' }
 ) {
   const boardId = (overrides?.board_id ?? generateId()) as BoardID;
-  await (db as any).insert(boards).values({
+  const board = await new BoardRepository(db).create({
     board_id: boardId,
-    created_at: new Date(),
     created_by: 'test-user',
     name: overrides?.name ?? 'Test Board',
-    data: { access_mode: overrides?.access_mode ?? 'shared' },
+    access_mode: overrides?.access_mode ?? 'shared',
   });
-  return boardId;
+  return board.board_id;
 }
 
 // ============================================================================
@@ -75,7 +76,7 @@ async function createBoard(
 
 describe('BoardObjectRepository.findVisibleToUser', () => {
   dbTest(
-    'should require board visibility for loose objects but branch visibility for branch objects',
+    'should require board visibility for every object and branch visibility for branch objects',
     async ({ db }) => {
       const repoRepo = new RepoRepository(db);
       const branchRepo = new BranchRepository(db);
@@ -124,18 +125,14 @@ describe('BoardObjectRepository.findVisibleToUser', () => {
       });
 
       const visible = await boRepo.findVisibleToUser(userId, { board_id: privateBoardId });
-      expect(visible.map((object) => object.object_id).sort()).toEqual(
-        [looseObjectId, visibleBranchObject.object_id].sort()
-      );
+      expect(visible).toEqual([]);
       await expect(boRepo.countVisibleToUser(userId, { board_id: privateBoardId })).resolves.toBe(
-        2
+        0
       );
       await expect(
         boRepo.findVisibleByObjectId(userId, visibleBranchObject.object_id)
-      ).resolves.toMatchObject({ object_id: visibleBranchObject.object_id });
-      await expect(boRepo.findVisibleByObjectId(userId, looseObjectId)).resolves.toMatchObject({
-        object_id: looseObjectId,
-      });
+      ).resolves.toBeNull();
+      await expect(boRepo.findVisibleByObjectId(userId, looseObjectId)).resolves.toBeNull();
       await expect(
         boRepo.findVisibleByObjectId(userId, hiddenBranchObject.object_id)
       ).resolves.toBeNull();
@@ -416,13 +413,16 @@ describe('BoardObjectRepository.findAll', () => {
     const boRepo = new BoardObjectRepository(db);
 
     const repo = await repoRepo.create(createRepoData());
-    const visibleBranch = await wtRepo.create(
-      createBranchData({ repo_id: repo.repo_id, name: 'visible' })
-    );
-    const hiddenBranch = await wtRepo.create(
-      createBranchData({ repo_id: repo.repo_id, name: 'hidden' })
-    );
-    await wtRepo.update(hiddenBranch.branch_id, { others_can: 'none' });
+    const visibleBranch = await wtRepo.create({
+      ...createBranchData({ repo_id: repo.repo_id, name: 'visible' }),
+      permission_source: 'override',
+      others_can: 'view',
+    });
+    const hiddenBranch = await wtRepo.create({
+      ...createBranchData({ repo_id: repo.repo_id, name: 'hidden' }),
+      permission_source: 'override',
+      others_can: 'none',
+    });
     const boardId = await createBoard(db);
     const layoutObjectId = generateId();
 

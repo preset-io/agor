@@ -13,16 +13,102 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { probeBwrapBindFd } from '../unix/bwrap';
 import {
   CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES,
   compareAndSwapCredentialFile,
   ensureCredentialAuthorityLayout,
   mutateCredentialFile,
+  openCredentialFileForBind,
   readCredentialAuthorityFile,
   readCredentialFile,
 } from './credential-file';
 
 describe('credential file directory capability', () => {
+  it.runIf(process.platform === 'linux' && probeBwrapBindFd())(
+    'persists writes through a bubblewrap fd bind without touching the mountpoint inode',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-credential-bwrap-'));
+      const sourceHome = join(root, 'caller', '.codex');
+      const branchHome = join(root, 'branch', 'codex');
+      const source = join(sourceHome, 'auth.json');
+      const destination = join(branchHome, 'auth.json');
+      await mkdir(sourceHome, { recursive: true });
+      await mkdir(branchHome, { recursive: true });
+      await writeFile(source, 'before');
+      await writeFile(destination, '');
+
+      const handle = await openCredentialFileForBind(source);
+      try {
+        const result = spawnSync(
+          'bwrap',
+          [
+            '--unshare-user',
+            '--ro-bind',
+            '/',
+            '/',
+            '--bind',
+            root,
+            root,
+            '--bind-fd',
+            '3',
+            destination,
+            '--',
+            'sh',
+            '-c',
+            'printf refreshed > "$1"',
+            'sh',
+            destination,
+          ],
+          { stdio: ['ignore', 'pipe', 'pipe', handle.fd] }
+        );
+        expect(result.status, result.stderr.toString()).toBe(0);
+      } finally {
+        await handle.close();
+      }
+
+      await expect(readFile(source, 'utf8')).resolves.toBe('refreshed');
+      await expect(readFile(destination, 'utf8')).resolves.toBe('');
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
+    'pins the validated auth inode across a pathname replacement',
+    async () => {
+      const codexHome = await mkdtemp(join(tmpdir(), 'agor-credential-bind-'));
+      const target = join(codexHome, 'auth.json');
+      const openedTarget = join(codexHome, 'auth.opened.json');
+      await writeFile(target, 'original');
+
+      const handle = await openCredentialFileForBind(target);
+      try {
+        await rename(target, openedTarget);
+        await writeFile(target, 'replacement');
+
+        await expect(handle.readFile('utf8')).resolves.toBe('original');
+        await expect(readFile(target, 'utf8')).resolves.toBe('replacement');
+      } finally {
+        await handle.close();
+      }
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
+    'rejects symlink and multiply-linked bind sources',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-credential-bind-reject-'));
+      const real = join(root, 'real.json');
+      const symlinked = join(root, 'symlink.json');
+      const hardlinked = join(root, 'hardlink.json');
+      await writeFile(real, 'credential');
+      await symlink(real, symlinked);
+      await expect(openCredentialFileForBind(symlinked)).rejects.toThrow();
+
+      await link(real, hardlinked);
+      await expect(openCredentialFileForBind(real)).rejects.toThrow(/hard links/);
+    }
+  );
+
   it.runIf(process.platform === 'linux')(
     'safely materializes real authority leaves without truncating existing bytes',
     async () => {
@@ -293,6 +379,37 @@ describe('credential file directory capability', () => {
   );
 
   it.runIf(process.platform === 'linux')(
+    'tolerates a static symlinked home but still refuses a symlinked credential leaf',
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-credential-home-alias-'));
+      const realHome = join(root, 'real-home');
+      const codexHome = join(realHome, '.codex');
+      await mkdir(codexHome, { recursive: true });
+      await writeFile(join(codexHome, 'auth.json'), 'caller-secret');
+
+      // A static, admin-owned home alias (e.g. /home/<user> ->
+      // /var/lib/.../<user>). Reading and binding through it must succeed —
+      // the old full-path O_NOFOLLOW walk failed closed here with ENOTDIR.
+      const aliasHome = join(root, 'alias-home');
+      await symlink(realHome, aliasHome);
+      const aliasedAuth = join(aliasHome, '.codex', 'auth.json');
+      await expect(readCredentialFile(aliasedAuth)).resolves.toBe('caller-secret');
+      const handle = await openCredentialFileForBind(aliasedAuth);
+      await handle.close();
+
+      // ...but a symlinked LEAF `.codex` (the sandbox-writable component) is
+      // still rejected, preserving the anti-cross-home-symlink guarantee.
+      const swappedHome = join(root, 'swapped-home');
+      const otherCodex = join(root, 'other', '.codex');
+      await mkdir(swappedHome, { recursive: true });
+      await mkdir(otherCodex, { recursive: true });
+      await writeFile(join(otherCodex, 'auth.json'), 'other-secret');
+      await symlink(otherCodex, join(swappedHome, '.codex'));
+      await expect(readCredentialFile(join(swappedHome, '.codex', 'auth.json'))).rejects.toThrow();
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
     'keeps mutation attached to the opened directory during a path swap',
     async () => {
       const root = await mkdtemp(join(tmpdir(), 'agor-credential-swap-'));
@@ -339,3 +456,5 @@ describe('credential file directory capability', () => {
     }
   );
 });
+
+import { spawnSync } from 'node:child_process';

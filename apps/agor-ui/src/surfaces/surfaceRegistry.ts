@@ -103,10 +103,26 @@ export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
   branding: surfaceTitle('Artifact'),
 });
 
+export const RBAC_POLICY_PROTOTYPE_ROUTE_PATH = '/demo/rbac-policy' as const;
+
+/**
+ * Development prototypes must never become production surfaces by accident.
+ * Keeping route construction pure also lets tests prove the production path
+ * list excludes the prototype even though Vitest itself runs in DEV mode.
+ */
+export function getDemoRoutePaths(includeDevelopmentPrototypes = import.meta.env.DEV): string[] {
+  return [
+    '/demo/streamdown',
+    '/demo/marketing-screenshots',
+    '/demo/marketing-video',
+    ...(includeDevelopmentPrototypes ? [RBAC_POLICY_PROTOTYPE_ROUTE_PATH] : []),
+  ];
+}
+
 export const DEMO_SURFACE = defineSurface({
   id: 'demo',
   label: 'Demo',
-  routePaths: ['/demo/streamdown', '/demo/marketing-screenshots', '/demo/marketing-video'],
+  routePaths: getDemoRoutePaths(),
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: false,

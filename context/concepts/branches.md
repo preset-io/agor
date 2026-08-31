@@ -16,11 +16,11 @@ Conventional unit: **1 branch = 1 feature / 1 PR / 1 dev environment**.
 
 ## Persistence
 
-The `branches` table is normalized (was nested in `repos` JSON blob historically):
+The `branches` table is normalized (was nested in `repos` JSON historically):
 
-- Materialized columns for query/index: `name`, `ref`, `path`, `branch`, `issue_url`, `pull_request_url`, `board_id`, `unique_id` (port assignment), `others_can`, `dangerously_allow_session_sharing`.
+- Materialized columns for query/index include `name`, `ref`, `path`, `branch`, `issue_url`, `pull_request_url`, `board_id`, `unique_id` (port assignment), immutable `primary_owner_user_id`, and `permission_binding` (`inherit | override`).
 - Other state (notes, env config overrides, etc.) lives in JSON.
-- `branch_owners` (when `branch_rbac` enabled) is a side table — see `context/guides/rbac-and-unix-isolation.md`.
+- `branch_permission_configs` and `branch_permission_entries` are authoritative when `branch_rbac` is enabled. The complete config also stores the shared-session prompt switch. A branch either inherits its board's entire template or uses one complete override. Historical owner/grant fields are inert compatibility shells.
 
 Schemas: `packages/core/src/db/schema.{sqlite,postgres}.ts`.
 Repository: `packages/core/src/db/repositories/branches.ts`.
@@ -31,12 +31,15 @@ Type: `packages/core/src/types/branch.ts`.
 
 - **Never use subprocess for git.** Always `simple-git` via `packages/core/src/git/index.ts`.
 - **Port allocation** uses `branch.unique_id` (monotonic per repo). Templates like `{{add 9000 branch.unique_id}}` resolve in environment configs.
-- **Deleting a branch** must cascade through: stop environment, kill terminals, delete `branch_owners` rows, delete sessions (and their tasks/messages), then `git worktree remove`. The CLI has the canonical sequence; mirror it from there if you're rewriting it.
+- **Deleting a branch** must cascade through: stop environment, kill terminals, delete normalized policy rows and sessions (including tasks/messages), then remove the git workspace. The service owns the canonical sequence.
+- **Moving a branch** while its permissions are inherited is rejected. Switch it to an override first so changing boards cannot silently change access.
+- **Deleting a board** first materializes every inheriting branch as an override, including the shared-session prompt switch.
 - **Sessions reference branches**, not the other way around. Cascading from branch → sessions, not sessions → branch.
 - **RBAC is feature-flagged.** Code paths must work whether `execution.branch_rbac` is on or off. See AGENTS.md "Feature Flags" section.
 
 ## Where the UI lives
 
 - Card on board: `apps/agor-ui/src/components/BranchCard/`
-- Modal (5 tabs: Overview, Sessions, Environment, Schedule, Owners): `apps/agor-ui/src/components/BranchModal/`
-- Owners section is conditionally rendered when `branch_rbac` is on.
+- Modal permissions tab: `apps/agor-ui/src/components/BranchModal/`
+- Shared board/branch editor primitives: `apps/agor-ui/src/components/permissions/CapabilityPolicyEditor/`
+- Permissions are conditionally rendered when `branch_rbac` is on.

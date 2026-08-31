@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   BannerDecision,
   type BannerDecisionInput,
+  credentialRemediationTarget,
   decideBanner,
-  hasAnyLlmKey,
+  hasConfiguredCredentialFor,
   ProbeState,
-  resolveProbeAgent,
+  resolvedCredentialOwner,
+  resolveGovernedProbeAgent,
   resolveProbeState,
 } from './bannerLogic';
 
@@ -19,6 +21,7 @@ const baseInput: BannerDecisionInput = {
   gatewayChannelCount: 0,
   integrationsHydrated: true,
   integrationsBannerDismissed: false,
+  credentialWarningDismissed: false,
 };
 
 const asUser = (partial: Partial<User>): User => partial as User;
@@ -50,6 +53,17 @@ describe('decideBanner — fail-safe amber banners', () => {
     expect(
       decideBanner({ ...baseInput, hasLlm: true, probeState: ProbeState.Unauthenticated })
     ).toBe(BannerDecision.KeyInvalid);
+  });
+
+  it('a snoozed credential warning stays hidden without becoming an integrations prompt', () => {
+    expect(
+      decideBanner({
+        ...baseInput,
+        hasLlm: true,
+        probeState: ProbeState.Unauthenticated,
+        credentialWarningDismissed: true,
+      })
+    ).toBe(BannerDecision.None);
   });
 });
 
@@ -128,49 +142,59 @@ describe('decideBanner — onboarding gate', () => {
   });
 });
 
-describe('resolveProbeAgent', () => {
+describe('resolveGovernedProbeAgent — matches session creation', () => {
+  const setting = (tool: AgenticToolName, enabled: boolean) => ({
+    tool,
+    revision: 0,
+    deployment_available: true,
+    enabled,
+    resolution_policy: 'user_preferred' as const,
+    inline_configuration_allowed: true,
+    connection: {},
+  });
+
   it('prefers the explicit primary coding agent', () => {
     expect(
-      resolveProbeAgent(
+      resolveGovernedProbeAgent(
         asUser({
           primary_agentic_tool: 'gemini',
           agentic_tools: { codex: { OPENAI_API_KEY: 'sk' } },
-        })
+        }),
+        new Map([['gemini', setting('gemini', true)]])
       )
     ).toBe('gemini');
   });
 
-  it('prefers the tool a stored DB key points at', () => {
-    expect(resolveProbeAgent(asUser({ agentic_tools: { codex: { OPENAI_API_KEY: 'sk' } } }))).toBe(
-      'codex'
-    );
-  });
-
-  it('resolves the tool a Cursor / Copilot stored key points at', () => {
-    expect(resolveProbeAgent(asUser({ agentic_tools: { cursor: { CURSOR_API_KEY: 'k' } } }))).toBe(
-      'cursor'
-    );
+  it('does not let another tool credential/default override the creation default', () => {
+    const settings = new Map([
+      ['claude-code', setting('claude-code', true)],
+      ['codex', setting('codex', true)],
+    ]);
     expect(
-      resolveProbeAgent(asUser({ agentic_tools: { copilot: { COPILOT_GITHUB_TOKEN: 't' } } }))
-    ).toBe('copilot');
+      resolveGovernedProbeAgent(
+        asUser({
+          agentic_tools: { codex: { OPENAI_API_KEY: 'sk' } },
+          default_agentic_config: { codex: {} },
+        }),
+        settings
+      )
+    ).toBe('claude-code');
   });
 
-  it('falls back to the onboarding-selected agent when no DB key is present', () => {
-    expect(resolveProbeAgent(asUser({ default_agentic_config: { gemini: {} } }))).toBe('gemini');
-    // OpenCode is server-based (no credential field) — a user who selected it must
-    // still resolve to probing opencode, not fall through to claude-code.
-    expect(resolveProbeAgent(asUser({ default_agentic_config: { opencode: {} } }))).toBe(
-      'opencode'
-    );
-  });
-
-  it('falls back to claude-code when nothing is known', () => {
-    expect(resolveProbeAgent(null)).toBe('claude-code');
-    expect(resolveProbeAgent(asUser({}))).toBe('claude-code');
+  it('uses the canonical creation order when the preferred tools are disabled', () => {
+    const settings = new Map([
+      ['claude-code', setting('claude-code', false)],
+      ['codex', setting('codex', false)],
+      ['gemini', setting('gemini', false)],
+      ['opencode', setting('opencode', true)],
+      ['cursor', setting('cursor', true)],
+      ['copilot', setting('copilot', true)],
+    ]);
+    expect(resolveGovernedProbeAgent(asUser({}), settings)).toBe('opencode');
   });
 });
 
-describe('resolveProbeState — multi-tool fallback', () => {
+describe('resolveProbeState — selected tool only', () => {
   const collect = (map: Partial<Record<AgenticToolName, AuthCheckStatus>>) => {
     const calls: AgenticToolName[] = [];
     const checkStatus = (tool: AgenticToolName): Promise<AuthCheckStatus> => {
@@ -180,110 +204,95 @@ describe('resolveProbeState — multi-tool fallback', () => {
     return { calls, checkStatus };
   };
 
-  it('returns Authenticated on a working primary without any fallback probes', async () => {
+  it('returns Authenticated on a working selected tool', async () => {
     const { calls, checkStatus } = collect({ codex: 'authenticated' });
-    expect(await resolveProbeState(checkStatus, 'codex', false)).toBe(ProbeState.Authenticated);
+    expect(await resolveProbeState(checkStatus, 'codex')).toBe(ProbeState.Authenticated);
     expect(calls).toEqual(['codex']);
   });
 
-  it('returns Unknown (fail safe) when the primary probe is unknown', async () => {
+  it('returns Unknown (fail safe) when the selected probe is unknown', async () => {
     const { checkStatus } = collect({ 'claude-code': 'unknown' });
-    expect(await resolveProbeState(checkStatus, 'claude-code', false)).toBe(ProbeState.Unknown);
+    expect(await resolveProbeState(checkStatus, 'claude-code')).toBe(ProbeState.Unknown);
   });
 
-  it('does NOT fall back when a stored key is present — unauthenticated is key-invalid', async () => {
-    const { calls, checkStatus } = collect({ gemini: 'unauthenticated' });
-    expect(await resolveProbeState(checkStatus, 'gemini', true)).toBe(ProbeState.Unauthenticated);
-    expect(calls).toEqual(['gemini']);
-  });
-
-  it('probes other native tools when primary is unauthenticated and no key; a hit clears the banner', async () => {
-    // gemini (wrong resolved tool) unauthenticated, but claude /login works.
+  it('does not collapse another agent failure into the selected agent verdict', async () => {
     const { calls, checkStatus } = collect({
-      gemini: 'unauthenticated',
       'claude-code': 'authenticated',
+      codex: 'unauthenticated',
     });
-    expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Authenticated);
-    expect(calls).toContain('claude-code');
-  });
-
-  it('concludes Unauthenticated only when EVERY probe positively says so', async () => {
-    const { checkStatus } = collect({}); // everything defaults to unauthenticated
-    expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Unauthenticated);
+    expect(await resolveProbeState(checkStatus, 'claude-code')).toBe(ProbeState.Authenticated);
+    expect(calls).toEqual(['claude-code']);
   });
 
   it('clears the No-AI banner for a native subscription login with no stored key', async () => {
-    // Regression: the in-app Claude OAuth sign-in deletes the pasted token (so
-    // hasLlm is false) and check-auth reports the native login authenticated.
-    // The probe must resolve Authenticated so the amber "No AI connected" banner
-    // is not shown for a freshly-connected subscription user.
+    // The in-app Claude OAuth sign-in removes any pasted API key, while the
+    // selected Claude probe still reports the native login as authenticated.
     const { checkStatus } = collect({ 'claude-code': 'authenticated' });
-    const probeState = await resolveProbeState(checkStatus, 'claude-code', false);
+    const probeState = await resolveProbeState(checkStatus, 'claude-code');
     expect(probeState).toBe(ProbeState.Authenticated);
     expect(decideBanner({ ...baseInput, hasLlm: false, probeState })).not.toBe(BannerDecision.NoAi);
   });
 
-  it('fails safe to Unknown if any fallback probe is unknown', async () => {
-    const { checkStatus } = collect({ gemini: 'unauthenticated', 'claude-code': 'unknown' });
-    expect(await resolveProbeState(checkStatus, 'gemini', false)).toBe(ProbeState.Unknown);
+  it('returns Unauthenticated only on a positive rejection for the selected tool', async () => {
+    const { calls, checkStatus } = collect({ gemini: 'unauthenticated' });
+    expect(await resolveProbeState(checkStatus, 'gemini')).toBe(ProbeState.Unauthenticated);
+    expect(calls).toEqual(['gemini']);
+  });
+});
+
+describe('hasConfiguredCredentialFor — active policy route', () => {
+  const settings = (
+    resolution_policy: 'user_required' | 'user_preferred' | 'tenant_preferred' | 'tenant_required',
+    tenantConfigured: boolean
+  ) => ({
+    tool: 'claude-code' as const,
+    deployment_available: true,
+    enabled: true,
+    inline_configuration_allowed: true,
+    resolution_policy,
+    connection: { ANTHROPIC_API_KEY: { configured: tenantConfigured } },
   });
 
-  it('does not re-probe the primary tool during fallback', async () => {
-    const { calls, checkStatus } = collect({
-      'claude-code': 'unauthenticated',
-      codex: 'unauthenticated',
+  it('ignores inactive Claude API keys while subscription auth is selected', () => {
+    const user = asUser({
+      agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+      agentic_auth_methods: { 'claude-code': 'subscription' },
     });
-    await resolveProbeState(checkStatus, 'claude-code', false);
-    expect(calls.filter((t) => t === 'claude-code')).toHaveLength(1);
+    expect(hasConfiguredCredentialFor(user, 'claude-code', settings('user_required', false))).toBe(
+      false
+    );
   });
-});
 
-describe('other-tool false positives (Cursor / Copilot / OpenCode)', () => {
-  it('a Cursor-connected user probes cursor and, once authenticated, sees no "No AI" banner', () => {
-    const user = asUser({ agentic_tools: { cursor: { CURSOR_API_KEY: 'k' } } });
-    expect(resolveProbeAgent(user)).toBe('cursor');
-    // hasLlm is true (stored key) → an unauthenticated probe would word as key-invalid,
-    // but an authenticated probe shows no amber banner at all.
+  it('does not count a user key under tenant-required policy', () => {
+    const user = asUser({
+      agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+      agentic_auth_methods: { 'claude-code': 'api_key' },
+    });
     expect(
-      decideBanner({ ...baseInput, hasLlm: true, probeState: ProbeState.Authenticated })
-    ).not.toBe(BannerDecision.KeyInvalid);
-  });
-
-  it('an OpenCode user (no DB key) probes opencode; authenticated → no "No AI" banner', () => {
-    const user = asUser({ default_agentic_config: { opencode: {} } });
-    expect(resolveProbeAgent(user)).toBe('opencode');
-    expect(hasAnyLlmKey(user)).toBe(false);
-    expect(
-      decideBanner({ ...baseInput, hasLlm: false, probeState: ProbeState.Authenticated })
-    ).not.toBe(BannerDecision.NoAi);
-  });
-});
-
-describe('hasAnyLlmKey', () => {
-  it('is false for a user with no stored keys (executor-filesystem creds are invisible here)', () => {
-    expect(hasAnyLlmKey(asUser({}))).toBe(false);
-    expect(hasAnyLlmKey(null)).toBe(false);
-  });
-
-  it('is true for any supported tool with a stored key, including Cursor / Copilot', () => {
-    expect(
-      hasAnyLlmKey(asUser({ agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: 'sk' } } }))
-    ).toBe(true);
-    expect(hasAnyLlmKey(asUser({ agentic_tools: { cursor: { CURSOR_API_KEY: 'k' } } }))).toBe(true);
-    expect(
-      hasAnyLlmKey(asUser({ agentic_tools: { copilot: { COPILOT_GITHUB_TOKEN: 't' } } }))
-    ).toBe(true);
-  });
-
-  it('reads keys stored as plain env vars too', () => {
-    expect(hasAnyLlmKey(asUser({ env_vars: { GEMINI_API_KEY: { value: 'g' } } }))).toBe(true);
-  });
-
-  it('ignores non-credential fields — a base-URL-only user has no key', () => {
-    expect(
-      hasAnyLlmKey(
-        asUser({ agentic_tools: { 'claude-code': { ANTHROPIC_BASE_URL: 'https://x' } } })
-      )
+      hasConfiguredCredentialFor(user, 'claude-code', settings('tenant_required', false))
     ).toBe(false);
+  });
+
+  it('routes preferred policies to the owner that actually supplies the connection', () => {
+    const user = asUser({
+      agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+      agentic_auth_methods: { 'claude-code': 'api_key' },
+    });
+    expect(resolvedCredentialOwner(user, 'claude-code', settings('tenant_preferred', false))).toBe(
+      'user'
+    );
+    expect(
+      resolvedCredentialOwner(asUser({}), 'claude-code', settings('user_preferred', true))
+    ).toBe('tenant');
+  });
+
+  it('separates effective tenant ownership from a user-preferred member override', () => {
+    expect(credentialRemediationTarget('tenant', 'user_preferred', false)).toBe('user');
+    expect(credentialRemediationTarget('tenant', 'tenant_preferred', false)).toBe(
+      'workspace-admin'
+    );
+    expect(credentialRemediationTarget('tenant', 'tenant_required', false)).toBe('workspace-admin');
+    expect(credentialRemediationTarget('tenant', 'user_preferred', true)).toBe('tenant');
+    expect(credentialRemediationTarget('user', 'tenant_preferred', false)).toBe('user');
   });
 });

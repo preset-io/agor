@@ -34,7 +34,12 @@ describe('AgenticToolPresetsManager authority lifetime', () => {
     await screen.findByText('No presets');
     fireEvent.click(screen.getByRole('button', { name: /New preset$/ }));
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'A reconnect draft' } });
-    fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+    // Form validation makes the save handler async. Keep the interaction in an
+    // async act boundary so React commits the pending-save render before the
+    // test inspects it, independent of scheduler load in the sharded suite.
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'OK' }));
+    });
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(screen.getByRole('button', { name: /OK$/ })).toHaveClass('ant-btn-loading');
 

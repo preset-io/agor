@@ -40,14 +40,19 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const boardId = await resolveBoardId(ctx, coerceString(args.boardId)!);
       const title = coerceString(args.title)!;
-      const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
+      // boards.get already resolves exact and short IDs. Reuse the authorized
+      // canonical entity instead of resolving it with one get and immediately
+      // reading the same board again.
+      const board = await ctx.app
+        .service('boards')
+        .get(coerceString(args.boardId)!, ctx.baseServiceParams);
       let zoneData: ZoneBoardObject | undefined;
       const zoneId = coerceString(args.zoneId);
       if (zoneId) {
         const zone = board.objects?.[zoneId];
-        if (zone?.type !== 'zone') throw new Error(`Zone ${zoneId} not found on board ${boardId}`);
+        if (zone?.type !== 'zone')
+          throw new Error(`Zone ${zoneId} not found on board ${board.board_id}`);
         zoneData = zone;
       }
 
@@ -100,7 +105,12 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
     },
     async (args) => {
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
-      const cardWithType = await cardsService.getWithType(args.cardId);
+      // getWithType() reads the card repository over `this.db` directly and is
+      // not a Feathers transport method, so enter the tenant DB scope here (the
+      // other cards custom-method calls in this file do the same).
+      const cardWithType = await runWithMcpTenantDatabaseScope(ctx, () =>
+        cardsService.getWithType(args.cardId)
+      );
       if (!cardWithType) throw new Error(`Card ${args.cardId} not found`);
       return textResult(cardWithType);
     }
@@ -356,12 +366,15 @@ export function registerCardTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const boardId = await resolveBoardId(ctx, coerceString(args.boardId)!);
       const cardsArr = args.cards;
       if (!Array.isArray(cardsArr) || cardsArr.length === 0)
         throw new Error('non-empty cards array is required');
 
-      const board = await ctx.app.service('boards').get(boardId, ctx.baseServiceParams);
+      // Preserve the same short-ID resolution and authorization boundary while
+      // avoiding resolveBoardId() + boards.get() for the same entity.
+      const board = await ctx.app
+        .service('boards')
+        .get(coerceString(args.boardId)!, ctx.baseServiceParams);
       const cardsService = ctx.app.service('cards') as unknown as CardsService;
 
       const results = [];

@@ -12,6 +12,7 @@ export const SETTINGS_SECTIONS = [
   'teammates',
   'cards',
   'artifacts',
+  'workspace-preferences',
   'mcp',
   'agentic-tools',
   'gateway',

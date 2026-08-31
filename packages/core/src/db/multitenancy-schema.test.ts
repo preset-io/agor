@@ -20,9 +20,10 @@ function postgresSchemaTenantTables(): string[] {
 }
 
 function retiredTenantTables(): Set<string> {
-  const migration = readRepoFile(
-    'packages/core/drizzle/postgres/0067_drop_serialized_sessions.sql'
-  );
+  const migration = [
+    readRepoFile('packages/core/drizzle/postgres/0067_drop_serialized_sessions.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0099_shared_session_prompting.sql'),
+  ].join('\n');
   return new Set(
     [...migration.matchAll(/DROP TABLE(?: IF EXISTS)? "([^"]+)"/g)].map((match) => match[1])
   );
@@ -55,6 +56,9 @@ function migrationTenantTables(): string[] {
   const codexDeviceAuthMigration = readRepoFile(
     'packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'
   );
+  const capabilityPoliciesMigration = readRepoFile(
+    'packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'
+  );
   const retiredTables = retiredTenantTables();
   return [
     ...new Set(
@@ -69,6 +73,7 @@ function migrationTenantTables(): string[] {
         ...discordGatewayHybridMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...externalIdentitiesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
         ...codexDeviceAuthMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
+        ...capabilityPoliciesMigration.matchAll(/CREATE TABLE "([^"]+)" \([\s\S]*?"tenant_id"/g),
       ]
         .map((m) => m[1])
         .filter((table) => !retiredTables.has(table))
@@ -88,6 +93,7 @@ function rlsPolicyTables(): string[] {
     readRepoFile('packages/core/drizzle/postgres/0094_discord_gateway_hybrid.sql'),
     readRepoFile('packages/core/drizzle/postgres/0090_external_user_identities.sql'),
     readRepoFile('packages/core/drizzle/postgres/0091_codex_device_auth_attempts.sql'),
+    readRepoFile('packages/core/drizzle/postgres/0095_board_branch_capability_policies.sql'),
   ].join('\n');
   const retiredTables = retiredTenantTables();
   return [

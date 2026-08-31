@@ -18,9 +18,15 @@ const teammateMutation = (branchId: string) => ({ branchId, expectedUserId: CALL
 let uniqueId = 9_000;
 
 async function ensureCaller(db: Database) {
-  await new UsersRepository(db).create({
-    user_id: CALLER,
-    email: 'caller@example.com',
+  await ensureUser(db, CALLER);
+}
+
+async function ensureUser(db: Database, userId: UUID) {
+  const users = new UsersRepository(db);
+  if ((await users.findAll()).some((user) => user.user_id === userId)) return;
+  await users.create({
+    user_id: userId,
+    email: `${userId}@example.com`,
     role: 'member',
   });
 }
@@ -36,6 +42,8 @@ async function createBranch(
     permission_source?: 'board' | 'override';
   }
 ): Promise<BranchID> {
+  const createdBy = overrides?.created_by ?? CALLER;
+  await ensureUser(db, createdBy);
   const slug = `repo-${uniqueId}`;
   const repo = await new RepoRepository(db).create({
     repo_id: generateId(),
@@ -55,7 +63,7 @@ async function createBranch(
     branch_unique_id: uniqueId++,
     path: `/tmp/${name}`,
     board_id: overrides?.board_id,
-    created_by: overrides?.created_by ?? CALLER,
+    created_by: createdBy,
     permission_source: overrides?.permission_source ?? 'override',
     others_can: overrides?.others_can ?? 'session',
     archived: overrides?.archived,

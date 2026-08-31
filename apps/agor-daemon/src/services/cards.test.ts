@@ -8,7 +8,7 @@
 import { BoardRepository, CardRepository, type Database, generateId } from '@agor/core/db';
 import type { BoardID, Card } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { CardsService } from './cards';
 
 async function seed(db: Database) {

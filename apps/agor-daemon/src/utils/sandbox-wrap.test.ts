@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/unix', () => ({
   bwrapOnPath: () => true,
+  probeBwrapSecurityBaseline: () => true,
   probeBwrapUserns: () => true,
   probeBwrapPidNamespace: () => false,
 }));
@@ -246,6 +247,7 @@ test "$(cat "$HOME/.codex/auth.json")" = codex-visible
     const hiddenOwnerStore = join(runtimePaths.dataHome, 'tenants', 'default', 'homes', 'owner');
     const hiddenClaudeDirectory = join(hiddenOwnerStore, '.claude');
     const credentialPath = join(hiddenClaudeDirectory, '.credentials.json');
+    await mkdir(hiddenOwnerStore, { recursive: true });
     await ensureCredentialAuthorityLayout(credentialPath);
     await Promise.all([
       writeFile(credentialPath, 'hidden-refresh-secret'),

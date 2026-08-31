@@ -55,7 +55,7 @@ function makeCtx(
     service(name: string) {
       if (name !== 'users') throw new Error(`Unexpected service call: ${name}`);
       return {
-        get: vi.fn(async () => ({ user_id: 'user-creator', env_vars: user.env_vars ?? {} })),
+        get: vi.fn(async (id: UserID) => ({ user_id: id, env_vars: user.env_vars ?? {} })),
         patch: patchSpy,
       };
     },
@@ -280,7 +280,7 @@ describe('env_vars widget — buildResultMeta', () => {
 });
 
 describe('env_vars widget — applySubmit', () => {
-  it('calls users.patch with { env_vars, env_var_scopes } for the session creator', async () => {
+  it('calls users.patch with { env_vars, env_var_scopes } for the prompt actor', async () => {
     const { ctx, patchSpy } = makeCtx();
     await envVarsWidget.applySubmit(
       ctx,
@@ -315,13 +315,31 @@ describe('env_vars widget — applySubmit', () => {
       { values: { HUBSPOT_API_KEY: 'shh' }, use_existing: [], scope: 'global' },
       { names: ['HUBSPOT_API_KEY'], reason: 'call hubspot', auto_resume: true }
     );
-    const [, , params] = patchSpy.mock.calls[0];
+    const [patchedUserId, , params] = patchSpy.mock.calls[0];
+    expect(patchedUserId).toBe('user-admin');
     // Auth params carry the SUBMITTER identity so the patch is attributable.
     expect(params).toMatchObject({
       user: { user_id: 'user-admin', role: 'admin' },
       authenticated: true,
     });
     expect(getTrustedUserMutationPurpose(params)).toBe('env-vars-widget');
+  });
+
+  it('rejects a guest session-scoped value instead of creating an unusable selection', async () => {
+    const { ctx: baseCtx, patchSpy } = makeCtx();
+    const guestCtx = {
+      ...baseCtx,
+      submitterUserId: 'user-guest' as UserID,
+    };
+
+    await expect(
+      envVarsWidget.applySubmit(
+        guestCtx,
+        { values: { HUBSPOT_API_KEY: 'shh' }, use_existing: [], scope: 'session' },
+        { names: ['HUBSPOT_API_KEY'], reason: 'call hubspot', auto_resume: true }
+      )
+    ).rejects.toThrow(/only be configured by the session owner/i);
+    expect(patchSpy).not.toHaveBeenCalled();
   });
 
   it('writes ALL submitted names in one patch call', async () => {
@@ -436,17 +454,18 @@ describe('env_vars widget — applySubmit', () => {
     expect(patchSpy).not.toHaveBeenCalled();
   });
 
-  it('rejects blocklisted names before patching', async () => {
+  it('passes an explicitly configured runtime-control name to the user service', async () => {
     const { ctx, patchSpy } = makeCtx();
-    // PATH is on the blocklist (system identity).
-    await expect(
-      envVarsWidget.applySubmit(
-        ctx,
-        { values: { PATH: '/tmp/evil' }, use_existing: [], scope: 'global' },
-        { names: ['PATH'], reason: 'why', auto_resume: true }
-      )
-    ).rejects.toThrow(/blocked|cannot be set/i);
-    expect(patchSpy).not.toHaveBeenCalled();
+    await envVarsWidget.applySubmit(
+      ctx,
+      { values: { PATH: '/tmp/user-bin' }, use_existing: [], scope: 'global' },
+      { names: ['PATH'], reason: 'why', auto_resume: true }
+    );
+    expect(patchSpy).toHaveBeenCalledWith(
+      'user-creator',
+      { env_vars: { PATH: '/tmp/user-bin' }, env_var_scopes: { PATH: 'global' } },
+      expect.any(Object)
+    );
   });
 
   it('surfaces validation errors from the users-service patch', async () => {

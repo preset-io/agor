@@ -17,6 +17,7 @@ vi.mock('./handlers/sdk/tool-registry.js', () => ({
   ToolRegistry: { execute: runtime.execute },
 }));
 
+import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE } from '@agor/core/types';
 import { AgorExecutor } from './index.js';
 import { globalPermissionManager } from './permissions/permission-manager.js';
 
@@ -111,9 +112,10 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(exit).toHaveBeenCalledWith(70);
   });
 
-  it('aborts immediately but retains liveness until it can report quiescence', async () => {
+  it('exits authorization revocation cooperatively with a sanitized message and quiescence ack', async () => {
     const reportTerminationComplete = vi.fn().mockResolvedValue({});
     const heartbeatStop = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const executor = new AgorExecutor({
       sessionToken: 'token',
       sessionId: 'session-1',
@@ -128,7 +130,7 @@ describe('AgorExecutor watchdog handoff', () => {
       heartbeat: { stop: typeof heartbeatStop } | null;
       abortController: AbortController;
       handleTaskLifecycleUpdate(task: unknown): void;
-      reportTerminationComplete(): Promise<void>;
+      recoverTerminationAfterExecutionError(): Promise<boolean>;
     };
     executor.client = { service: () => ({ reportTerminationComplete }) };
     executor.heartbeat = { stop: heartbeatStop };
@@ -137,14 +139,17 @@ describe('AgorExecutor watchdog handoff', () => {
       task_id: 'task-1',
       status: 'stopping',
       termination_request: {
-        cause: 'user_stop',
+        cause: 'authorization_revoked',
         requested_at: '2026-07-23T12:00:00.000Z',
+        error_message: AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
       },
     });
 
     expect(executor.abortController.signal.aborted).toBe(true);
+    expect(warn).toHaveBeenCalledWith(AUTHORIZATION_REVOKED_TERMINATION_MESSAGE);
     expect(heartbeatStop).not.toHaveBeenCalled();
-    await executor.reportTerminationComplete();
+    // `run()` maps this recovered result to its normal code-0 exit path.
+    await expect(executor.recoverTerminationAfterExecutionError()).resolves.toBe(true);
     expect(reportTerminationComplete).toHaveBeenCalledWith({
       task_id: 'task-1',
       requested_at: '2026-07-23T12:00:00.000Z',

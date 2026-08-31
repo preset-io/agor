@@ -29,6 +29,19 @@ describe('MCP mutation transaction binding', () => {
     }
   });
 
+  it('preserves Feathers count-only pagination for $limit: 0', async () => {
+    const base = await databaseWithServer('base');
+    databases.push(base.db);
+    const service = createMCPServersService(base.db as TenantScopeAwareDatabase);
+
+    await expect(service.find({ query: { $limit: 0 } } as MCPServerParams)).resolves.toEqual({
+      total: 1,
+      limit: 0,
+      skip: 0,
+      data: [],
+    });
+  });
+
   it('keeps overlapping requests isolated even when they reuse one params object', async () => {
     const base = await databaseWithServer('base');
     const first = await databaseWithServer('first');

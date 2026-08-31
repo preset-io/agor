@@ -1,21 +1,21 @@
-# Build & push the Agor container image.
+# Build, smoke-test, and (for non-PR events) publish the Agor container image.
 #
-# Builds the `production-source` target of docker/Dockerfile and pushes it to
-# Docker Hub (Buildx + GHA cache + docker/metadata tags).
+# Builds the `production-source` target of docker/Dockerfile and, on non-PR
+# events, pushes it to Docker Hub (Buildx + GHA cache + docker/metadata tags).
 #
 # `production-source` builds agor-live from THIS checkout (turbo build via
 # packages/agor-live/build.sh), so the image is pinned to the built commit
 # rather than `agor-live@latest` on npm.
 #
-# Publish model: a successful CI run for a main push first publishes
+# Publish model: pull requests build and smoke-test the production image from
+# their checkout without authenticating to Docker Hub, publishing an image, or
+# exporting an untrusted PR-scoped cache. They can restore the trusted cache
+# produced by non-PR events. A successful CI run for a main push first publishes
 # :<full-sha>, then a serialized promotion may move :main and :latest. Those
 # mutable tags always identify a successfully tested main image; when a newer
 # main commit is red, they remain on the last successful promotion. v* tags
-# and every in-repository PR commit publish directly (PRs use the PR *head* SHA
-# and re-point :pr-<n> on each update), so trusted commits remain deployable by
-# their own SHA. Fork and Dependabot PRs still build and run the boot smoke
-# test, but cannot publish because GitHub intentionally withholds repository
-# secrets from them.
+# and manual runs publish directly, so those trusted commits remain deployable
+# by their own SHA.
 #
 # Pushes to Docker Hub (docker.io/preset/agor). Required repo secrets
 # (Settings → Secrets and variables → Actions):
@@ -70,26 +70,25 @@ jobs:
           # contents match the :<sha> tag.
           ref: ${{ env.IMAGE_REVISION }}
 
+      - name: Validate image publication policy
+        run: node scripts/check-image-publication-policy.mjs
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      # Fork and Dependabot PRs cannot access repository secrets. Keep their
-      # build and smoke test useful without authenticating or publishing.
+      # Pull requests never need registry credentials: every PR validates the
+      # production image locally, including forks and Dependabot.
       - name: Log in to Docker Hub
-        if: >-
-          github.event_name != 'pull_request' ||
-          (
-            github.event.pull_request.head.repo.full_name == github.repository &&
-            github.event.pull_request.user.login != 'dependabot[bot]'
-          )
+        if: github.event_name != 'pull_request'
         uses: docker/login-action@v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       # Build once into the local Docker store so it can be smoke-tested before
-      # anything is published. The push step below reuses this build via the
-      # GHA layer cache, so it only re-exports layers.
+      # anything is published. Pull requests restore the trusted GHA cache but
+      # do not export a PR-scoped cache: the source layer changes per commit and
+      # measured exports cost more time than they save.
       - name: Build image
         uses: docker/build-push-action@v6
         with:
@@ -104,7 +103,7 @@ jobs:
           load: true
           tags: ${{ env.IMAGE }}:smoke
           cache-from: type=gha,scope=agor-image
-          cache-to: type=gha,mode=max,scope=agor-image
+          cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max,scope=agor-image' || '' }}
 
       # Boot the container and require a healthy daemon: exercises the deployed
       # tree end to end (entrypoint init, db migrate, @agor/* symlink
@@ -129,6 +128,7 @@ jobs:
           exit 1
 
       - name: Docker metadata
+        if: github.event_name != 'pull_request'
         id: meta
         uses: docker/metadata-action@v5
         with:
@@ -138,22 +138,16 @@ jobs:
           flavor: latest=false
           tags: |
             type=raw,value=${{ env.IMAGE_REVISION }}
-            type=ref,event=pr
             type=semver,pattern={{version}}
           labels: |
             org.opencontainers.image.title=agor
             org.opencontainers.image.revision=${{ env.IMAGE_REVISION }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
-      # Publish trusted events after the smoke test. Fork and Dependabot PRs
-      # stop here after validating the same production image locally.
+      # Publish trusted non-PR events after the smoke test. Keep the historical
+      # job/check name for branch-protection and dashboard compatibility.
       - name: Push image
-        if: >-
-          github.event_name != 'pull_request' ||
-          (
-            github.event.pull_request.head.repo.full_name == github.repository &&
-            github.event.pull_request.user.login != 'dependabot[bot]'
-          )
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
           context: .

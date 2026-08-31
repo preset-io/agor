@@ -44,10 +44,12 @@
     "check:multitenancy-boundaries": "node scripts/check-multitenancy-boundaries.mjs",
     "check:daemon-filesystem-boundaries": "node scripts/check-daemon-filesystem-boundaries.mjs",
     "check:realtime-boundaries": "node scripts/check-realtime-boundaries.mjs",
+    "check:ci-test-coverage": "node scripts/check-ci-test-coverage.mjs",
+    "check:image-publication-policy": "node scripts/check-image-publication-policy.mjs",
     "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs",
     "test:sandbox-migration": "node --test scripts/strict-to-sandbox-migration.test.mjs",
     "check:agentic-tool-packages": "node scripts/check-agentic-tool-packages.mjs",
-    "test:ha:docker": "node --test docker/ha/dev-launcher.test.mjs && node scripts/test-daemon-ha.mjs"
+    "test:ha:docker": "node --test docker/ha/dev-launcher.test.mjs && node scripts/test-daemon-ha.mjs && node scripts/test-ha-mcp-branch-create.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.7",

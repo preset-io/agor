@@ -20,6 +20,7 @@ import { initializeDatabase } from './migrate';
 import { BranchRepository } from './repositories/branches';
 import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
+import { UsersRepository } from './repositories/users';
 import * as pg from './schema.postgres';
 import { deleteTenantData } from './tenant-deletion';
 import {
@@ -47,6 +48,11 @@ let branchUniqueSeq = Date.now() % 1_000_000;
 
 async function seedTenant(db: Database, tenantId: string): Promise<void> {
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    await new UsersRepository(scoped).create({
+      user_id: 'write-gate-test-user' as UUID,
+      email: `write-gate-${tenantId}-${generateId()}@example.invalid`,
+      role: 'member',
+    });
     const repoId = generateId();
     await new RepoRepository(scoped).create({
       repo_id: repoId,
