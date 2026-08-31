@@ -7,7 +7,6 @@ import {
   credentialWarningDismissalKey,
   writeCredentialWarningDismissed,
 } from './credentialWarningDismissal';
-import { integrationsBannerDismissalKey } from './integrationsBannerDismissal';
 import { OnboardingBanners, type OnboardingBannersProps } from './OnboardingBanners';
 
 const onboardedUser = (userId: string, overrides: Partial<User> = {}): User =>
@@ -696,7 +695,7 @@ describe('OnboardingBanners probe effect', () => {
     const first = render(<OnboardingBanners {...props} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Maybe later' }));
     await waitFor(() => expect(screen.queryByText(/Connect Slack/)).toBeNull());
-    expect(window.localStorage.getItem(integrationsBannerDismissalKey('user-1'))).not.toBeNull();
+    expect(window.localStorage.getItem('agor-integrations-banner-dismissed:user-1')).not.toBeNull();
     first.unmount();
 
     const second = render(<OnboardingBanners {...props} />);

@@ -15,6 +15,7 @@ import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
 import { Alert, Button, Space } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
+import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
 import {
   BannerDecision,
@@ -33,11 +34,6 @@ import {
   readCredentialWarningDismissed,
   writeCredentialWarningDismissed,
 } from './credentialWarningDismissal';
-import {
-  integrationsBannerDismissalKey,
-  readIntegrationsBannerDismissed,
-  writeIntegrationsBannerDismissed,
-} from './integrationsBannerDismissal';
 
 export interface OnboardingBannersProps {
   user: User | null | undefined;
@@ -128,7 +124,6 @@ export function OnboardingBanners({
     owner: string;
     states: Partial<Record<AgenticToolName, ProbeState>>;
   }>({ owner: '', states: {} });
-  const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
   const [credentialWarningDismissed, setCredentialWarningDismissed] = useState(false);
   const [softWarningDismissed, setSoftWarningDismissed] = useState(false);
   const agenticToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
@@ -136,6 +131,12 @@ export function OnboardingBanners({
 
   // Pre-compute user-derived values so the effect captures primitives, not the full user object.
   const userId = user?.user_id;
+  // Teal "Maybe later" persists per user, mirroring the SessionFooter MCP-banner
+  // dismissal (localStorage via useLocalStorage). Once dismissed it stays dismissed.
+  const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useLocalStorage<boolean>(
+    `agor-integrations-banner-dismissed:${userId ?? 'anonymous'}`,
+    false
+  );
   const onboardingCompleted = !!user?.onboarding_completed;
   const probeAgent = resolveGovernedProbeAgent(user, agenticToolSettings);
   const probeSettings = agenticToolSettings.get(probeAgent as never);
@@ -260,22 +261,13 @@ export function OnboardingBanners({
     );
   }, [userId, probeAgent, warningFingerprint]);
 
-  useEffect(() => {
-    if (!userId || typeof window === 'undefined') {
-      setIntegrationsBannerDismissed(false);
-      return;
-    }
-    setIntegrationsBannerDismissed(readIntegrationsBannerDismissed(window.localStorage, userId));
-  }, [userId]);
-
   // localStorage writes are not delivered back to the tab that made them, but
-  // other tabs receive a storage event. Mirror those so a dismissal has
+  // other tabs receive a storage event. Mirror those so an amber dismissal has
   // browser-wide semantics. `event.key === null` is a full clear().
   useEffect(() => {
     if (!userId || typeof window === 'undefined') return;
     const warningKey = credentialWarningDismissalKey('warning', userId, probeAgent);
     const partialKey = credentialWarningDismissalKey('partial', userId, probeAgent);
-    const integrationsKey = integrationsBannerDismissalKey(userId);
     const handleStorage = (event: StorageEvent) => {
       if (event.storageArea !== null && event.storageArea !== window.localStorage) return;
       if (event.key === null || event.key === warningKey) {
@@ -298,11 +290,6 @@ export function OnboardingBanners({
             probeAgent,
             warningFingerprint
           )
-        );
-      }
-      if (event.key === null || event.key === integrationsKey) {
-        setIntegrationsBannerDismissed(
-          readIntegrationsBannerDismissed(window.localStorage, userId)
         );
       }
     };
@@ -331,12 +318,6 @@ export function OnboardingBanners({
       warningFingerprint
     );
     setSoftWarningDismissed(true);
-  };
-  const dismissIntegrationsBanner = () => {
-    if (userId && typeof window !== 'undefined') {
-      writeIntegrationsBannerDismissed(window.localStorage, userId);
-    }
-    setIntegrationsBannerDismissed(true);
   };
 
   const decision = decideBanner({
@@ -441,7 +422,7 @@ export function OnboardingBanners({
           title="Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track issues."
           action={
             <Space size="small">
-              <Button type="text" size="small" onClick={dismissIntegrationsBanner}>
+              <Button type="text" size="small" onClick={() => setIntegrationsBannerDismissed(true)}>
                 Maybe later
               </Button>
               <Button type="primary" size="small" onClick={() => onOpenWorkspaceSettings('mcp')}>
