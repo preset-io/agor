@@ -498,9 +498,10 @@ export interface MCPCatalogConnectService {
  * Credential reuse has to know which protected resource a grant was actually
  * minted for, and that is a column on `user_mcp_oauth_tokens`
  * (`oauth_resource_uri`) which no read path puts on an `mcp_servers` payload —
- * the hydrate hook copies the token and its expiry and nothing else. Rather
- * than give this service a database handle and a tenant scope of its own, the
- * daemon injects the one read, so everything else here stays service calls.
+ * the hydrate hook copies the token and its expiry and nothing else. The
+ * daemon injects those bounded reads and the short-scope runner used by the
+ * two internal MCP-server methods that bypass ordinary Feathers hooks, so this
+ * service never holds a database scope across the remote endpoint probe.
  *
  * Required rather than optional, though only credential reuse reads it. An
  * optional version was written first and had exactly the failure mode this
@@ -509,6 +510,12 @@ export interface MCPCatalogConnectService {
  * to catch that than a bug report about consenting twice.
  */
 export interface MCPCatalogConnectDeps {
+  /**
+   * Opens one short tenant database unit for direct, internal service methods.
+   * Connect is a long route and must not retain this scope across its remote
+   * authentication probe.
+   */
+  runInTenantDatabaseScope<T>(params: AuthenticatedParams, work: () => Promise<T>): Promise<T>;
   listCandidates(userId: UserID, params: AuthenticatedParams): Promise<MCPCatalogServerCandidate[]>;
   getCandidate(
     userId: UserID,
@@ -919,9 +926,12 @@ export function createMCPCatalogConnectService(
       const operationGeneration = {
         ownerUserId: userId,
         catalogEntryName: entry.name,
-        value: await (
-          service('mcp-servers') as unknown as MCPServersService
-        ).claimCatalogConnectGeneration(userId, entry.name),
+        value: await deps.runInTenantDatabaseScope(params, () =>
+          (service('mcp-servers') as unknown as MCPServersService).claimCatalogConnectGeneration(
+            userId,
+            entry.name
+          )
+        ),
       };
       const connectGeneration = bearerToken === undefined ? undefined : operationGeneration;
       let auth: MCPAuth;
@@ -1137,9 +1147,11 @@ export function createMCPCatalogConnectService(
             // Atomic liveness/adoption check. A concurrent unique-conflict
             // loser may now be using this row; in that case it owns the row's
             // continued life and compensation must leave it in place.
-            await service('mcp-servers').removeIfUnattached(
-              mcpServer.mcp_server_id,
-              operationGeneration
+            await deps.runInTenantDatabaseScope(params, () =>
+              service('mcp-servers').removeIfUnattached(
+                mcpServer.mcp_server_id,
+                operationGeneration
+              )
             );
           } catch (cleanupError) {
             const safe = sanitizeMCPExternalError(cleanupError, { stage: 'runtime' });

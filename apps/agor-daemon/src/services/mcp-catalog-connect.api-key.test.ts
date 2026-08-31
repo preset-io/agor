@@ -239,6 +239,10 @@ async function buildDaemon(entry: MCPCatalogEntry = CURATED) {
     }) as unknown as AuthenticatedParams;
   const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
   const connectDeps = {
+    runInTenantDatabaseScope: <T>(
+      _params: AuthenticatedParams,
+      work: () => Promise<T>
+    ): Promise<T> => work(),
     listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
     getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
       candidateRepo.getForUser(userId, serverId),
