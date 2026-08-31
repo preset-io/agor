@@ -181,7 +181,7 @@ const userPatchLocks = new Map<string, Promise<void>>();
 const sqliteTenantAuthorityLocks = new Map<string, Promise<void>>();
 
 async function withSqliteTenantAuthorityLock<T>(
-  db: TenantScopeAwareDatabase,
+  db: TenantScopeAwareDatabase | TenantScopedDatabase,
   params: Params | undefined,
   work: () => Promise<T>
 ): Promise<T> {
