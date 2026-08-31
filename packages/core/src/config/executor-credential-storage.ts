@@ -52,6 +52,7 @@ export function hasContainedClaudeRuntimeCredentials(
   config: Pick<AgorConfig, 'execution'>
 ): boolean {
   return (
+    config.execution?.unix_user_mode === 'sandbox' &&
     hasExactUserExecutorCredentialHome(config) &&
     config.execution?.unix_user_mode === 'sandbox' &&
     !config.execution?.executor_command_template &&
