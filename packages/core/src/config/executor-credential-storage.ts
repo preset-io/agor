@@ -53,6 +53,7 @@ export function hasContainedClaudeRuntimeCredentials(
 ): boolean {
   return (
     hasExactUserExecutorCredentialHome(config) &&
+    config.execution?.unix_user_mode === 'sandbox' &&
     !config.execution?.executor_command_template &&
     config.execution?.sandbox?.enabled === true &&
     config.execution.sandbox.home_mode === 'per_user' &&
