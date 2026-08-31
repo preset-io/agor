@@ -145,143 +145,152 @@ export const BranchModal: React.FC<BranchModalProps> = ({
     }
   };
 
-  const tabItems = [
-    // Teammate tab — only for teammates, shown first
-    ...(isATeammate
-      ? [
-          {
-            key: 'teammate',
-            label: 'Teammate',
-            children: (
-              <TeammateTab
-                branch={branch}
-                canEdit={form.canEditGeneral}
-                state={form.teammate}
-                setField={form.setTeammate}
-              />
-            ),
-          },
-        ]
-      : []),
-    {
-      key: 'general',
-      label: 'General',
-      children: (
-        <GeneralTab
-          branch={branch}
-          repo={repo}
-          sessions={sessions}
-          boards={mapToArray(boardById)}
-          mcpServers={mapToArray(mcpServerById)}
-          canEdit={form.canEditGeneral}
-          state={form.general}
-          setField={form.setGeneral}
-          onArchiveOrDelete={onArchiveOrDelete}
+  // Tabs shared by both branch and teammate records, in their common order.
+  const sessionsTab = {
+    key: 'sessions',
+    label: (
+      <span>
+        Sessions{' '}
+        <Badge
+          count={sessions.length}
+          showZero
+          size="small"
+          style={{ backgroundColor: token.colorPrimaryBgHover }}
         />
-      ),
-    },
-    {
-      key: 'sessions',
-      label: (
-        <span>
-          Sessions{' '}
-          <Badge
-            count={sessions.length}
-            showZero
-            size="small"
-            style={{ backgroundColor: token.colorPrimaryBgHover }}
-          />
-        </span>
-      ),
-      children: (
-        <SessionsTab
-          branch={branch}
-          sessions={sessions}
-          client={client}
-          onSessionClick={(sessionId) => {
-            onSessionClick?.(sessionId);
-            onClose();
-          }}
-        />
-      ),
-    },
-    {
-      key: 'environment',
-      label: 'Environment',
-      children: (
-        <EnvironmentTab
-          branch={branch}
-          repo={repo}
-          client={client}
-          onUpdateRepo={onUpdateRepo}
-          onUpdateBranch={onUpdateBranch}
-          canControlEnvironment={form.canControlEnvironment}
-        />
-      ),
-    },
-    {
-      key: 'files',
-      label: 'Files',
-      children: <FilesTab branch={branch} client={client} />,
-    },
-    // Permissions tab — shown for RBAC-capable admins/owners. Keep it visible
-    // while owner data is loading so confirmed owners do not see the tab
-    // disappear just because async permissions metadata has not arrived yet.
-    ...(form.canViewPermissions
-      ? [
-          {
-            key: 'permissions',
-            label: 'Permissions',
-            children: (
-              <PermissionsTab
-                loadingOwners={form.loadingOwners}
-                canEdit={form.canEditPermissions}
-                allUsers={form.allUsers}
-                allGroups={form.allGroups}
-                groupGrantsStatus={form.groupGrantsStatus}
-                groupGrantsError={form.groupGrantsError}
-                currentUser={currentUser}
-                client={client}
-                board={branchBoard}
-                state={form.permissions}
-                setField={form.setPermissions}
-                ownersLoadError={form.ownersLoadError}
-              />
-            ),
-          },
-        ]
-      : []),
-    {
-      key: 'schedule',
-      label: 'Schedules',
-      children: (
-        <ScheduleTab
-          branch={branch}
-          client={client}
-          mcpServerById={mcpServerById}
-          currentUser={currentUser}
-          userById={userById}
-          onOpenSession={(sessionId) => {
-            onSessionClick?.(sessionId);
-            onClose();
-          }}
-        />
-      ),
-    },
-    // Knowledge is teammate-only and intentionally last for now: it is
-    // configuration-adjacent but less central than the primary branch/session tabs.
-    ...(isATeammate
-      ? [
-          {
-            key: 'knowledge',
-            label: 'Teammate Knowledge',
-            children: (
-              <KnowledgeTab branch={branch} client={client} canEdit={form.canEditGeneral} />
-            ),
-          },
-        ]
-      : []),
-  ];
+      </span>
+    ),
+    children: (
+      <SessionsTab
+        branch={branch}
+        sessions={sessions}
+        client={client}
+        onSessionClick={(sessionId) => {
+          onSessionClick?.(sessionId);
+          onClose();
+        }}
+      />
+    ),
+  };
+  const environmentTab = {
+    key: 'environment',
+    label: 'Environment',
+    children: (
+      <EnvironmentTab
+        branch={branch}
+        repo={repo}
+        client={client}
+        onUpdateRepo={onUpdateRepo}
+        onUpdateBranch={onUpdateBranch}
+        canControlEnvironment={form.canControlEnvironment}
+      />
+    ),
+  };
+  const filesTab = {
+    key: 'files',
+    label: 'Files',
+    children: <FilesTab branch={branch} client={client} />,
+  };
+  // Permissions tab — shown for RBAC-capable admins/owners. Keep it visible
+  // while owner data is loading so confirmed owners do not see the tab
+  // disappear just because async permissions metadata has not arrived yet.
+  const permissionsTabs = form.canViewPermissions
+    ? [
+        {
+          key: 'permissions',
+          label: 'Permissions',
+          children: (
+            <PermissionsTab
+              loadingOwners={form.loadingOwners}
+              canEdit={form.canEditPermissions}
+              allUsers={form.allUsers}
+              allGroups={form.allGroups}
+              groupGrantsStatus={form.groupGrantsStatus}
+              groupGrantsError={form.groupGrantsError}
+              currentUser={currentUser}
+              client={client}
+              board={branchBoard}
+              state={form.permissions}
+              setField={form.setPermissions}
+              ownersLoadError={form.ownersLoadError}
+            />
+          ),
+        },
+      ]
+    : [];
+  const scheduleTab = {
+    key: 'schedule',
+    label: 'Schedules',
+    children: (
+      <ScheduleTab
+        branch={branch}
+        client={client}
+        mcpServerById={mcpServerById}
+        currentUser={currentUser}
+        userById={userById}
+        onOpenSession={(sessionId) => {
+          onSessionClick?.(sessionId);
+          onClose();
+        }}
+      />
+    ),
+  };
+
+  // Teammates lead with the Teammate tab (Board + default MCP servers are folded
+  // into it) followed by Knowledge, and drop the branch-only General tab; regular
+  // branches keep General first. The rest of the order is shared.
+  const tabItems = isATeammate
+    ? [
+        {
+          key: 'teammate',
+          label: 'Teammate',
+          children: (
+            <TeammateTab
+              branch={branch}
+              canEdit={form.canEditGeneral}
+              state={form.teammate}
+              setField={form.setTeammate}
+              boards={mapToArray(boardById)}
+              mcpServers={mapToArray(mcpServerById)}
+              general={form.general}
+              setGeneral={form.setGeneral}
+            />
+          ),
+        },
+        {
+          key: 'knowledge',
+          label: 'Knowledge',
+          children: <KnowledgeTab branch={branch} client={client} canEdit={form.canEditGeneral} />,
+        },
+        sessionsTab,
+        environmentTab,
+        filesTab,
+        ...permissionsTabs,
+        scheduleTab,
+      ]
+    : [
+        {
+          key: 'general',
+          label: 'General',
+          children: (
+            <GeneralTab
+              branch={branch}
+              repo={repo}
+              sessions={sessions}
+              boards={mapToArray(boardById)}
+              mcpServers={mapToArray(mcpServerById)}
+              canEdit={form.canEditGeneral}
+              state={form.general}
+              setField={form.setGeneral}
+              onArchiveOrDelete={onArchiveOrDelete}
+            />
+          ),
+        },
+        sessionsTab,
+        environmentTab,
+        filesTab,
+        ...permissionsTabs,
+        scheduleTab,
+      ];
 
   // Modal-level footer: one Save action for all form-contributing tabs
   // (General, Teammate, Permissions). Tabs like Environment / Sessions /
