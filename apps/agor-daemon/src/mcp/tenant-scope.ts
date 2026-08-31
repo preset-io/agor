@@ -1,4 +1,4 @@
-import type { TenantScopeAwareDatabase } from '@agor/core/db';
+import type { TenantScopeAwareDatabase, TenantScopedDatabase } from '@agor/core/db';
 import {
   assertTenantWritable,
   bindRepositoryToTenantUnitOfWork,
@@ -28,6 +28,21 @@ export async function runWithMcpTenantDatabaseScope<T>(
   const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
   if (!tenantId) return work(ctx.db);
   return runWithTenantDatabaseScope(ctx.db, tenantId, () => work(ctx.db));
+}
+
+/**
+ * Open one short, positively tenant-bound database unit for helpers whose type
+ * contract requires a {@link TenantScopedDatabase}. Unlike the compatibility
+ * wrapper above, this cannot fall back to an unscoped handle when MCP tenant
+ * identity is absent.
+ */
+export async function runWithMcpTenantDatabaseUnit<T>(
+  ctx: McpContext,
+  work: (db: TenantScopedDatabase) => Promise<T>
+): Promise<T> {
+  const tenantId = ctx.baseServiceParams.tenant?.tenant_id;
+  if (!tenantId) throw new Error('MCP tenant database unit requires tenant identity');
+  return runWithTenantDatabaseScope(ctx.db, tenantId, work);
 }
 
 /**

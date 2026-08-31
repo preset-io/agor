@@ -7,6 +7,7 @@ import {
   GatewayChannelRepository,
   SessionRepository,
   ThreadSessionMapRepository,
+  UsersRepository,
 } from '@agor/core/db';
 import {
   buildSlackManifest,
@@ -71,9 +72,9 @@ vi.mock('../../utils/upload-staging.js', () => ({
 }));
 
 type ServiceStub = Record<string, (...args: unknown[]) => unknown>;
-function makeFakeApp(services: Record<string, ServiceStub>) {
+function makeFakeApp(services: Record<string, ServiceStub>, config: Record<string, unknown> = {}) {
   return {
-    get: () => ({}),
+    get: (name: string) => (name === 'config' ? config : {}),
     service: (name: string) => {
       const svc = services[name];
       if (!svc) throw new Error(`Unexpected service call: ${name}`);
@@ -164,10 +165,21 @@ async function captureTools(
  * resolves to a session on the given branch. null simulates a stale/missing
  * session, which the binding must treat as fail-closed.
  */
-function spyCallerSessionBranch(branchId: string | null) {
-  return vi
-    .spyOn(SessionRepository.prototype, 'findById')
-    .mockResolvedValue((branchId ? { session_id: 'sess-1', branch_id: branchId } : null) as any);
+function spyCallerSessionBranch(
+  branchId: string | null,
+  session: { created_by?: string; sdk_home_scope?: 'execution_home' | 'branch' } = {}
+) {
+  return vi.spyOn(SessionRepository.prototype, 'findById').mockResolvedValue(
+    (branchId
+      ? {
+          session_id: 'sess-1',
+          branch_id: branchId,
+          created_by: 'user-1',
+          sdk_home_scope: 'execution_home',
+          ...session,
+        }
+      : null) as any
+  );
 }
 
 const slackChannel = {
@@ -190,6 +202,7 @@ const branch = {
   branch_id: 'branch-1',
   name: 'slack-work',
   path: '/tenant-test/branch-1',
+  primary_owner_user_id: 'branch-owner',
   others_can: 'view',
 };
 
@@ -216,6 +229,11 @@ beforeEach(() => {
     fs_access: 'write',
     is_owner: false,
     source: 'others',
+  });
+  vi.spyOn(BranchRepository.prototype, 'resolveSessionPromptAuthority').mockResolvedValue({
+    allowed: true,
+    execution_user_id: 'user-1' as any,
+    source: 'own_session',
   });
 });
 
@@ -2003,17 +2021,25 @@ describe('gateway agent-tool capability gating (MCP)', () => {
 
   describe('agor_upload_materialize', () => {
     const uploadRef = 'upl_00000000-0000-4000-8000-000000000001';
+    const stagedUpload = {
+      ref: uploadRef,
+      name: 'brief.txt',
+      mimeType: 'text/plain',
+      size: 16,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      expiresAt: '2026-01-02T00:00:00.000Z',
+      provenance: 'browser',
+    } as const;
+    const perUserSandboxConfig = {
+      paths: { data_home: '/srv/agor-data' },
+      execution: {
+        unix_user_mode: 'sandbox',
+        sandbox: { enabled: true, home_mode: 'per_user' },
+      },
+    };
 
     it('projects normalized branch write access into the executor command', async () => {
-      uploadStoreMock.inspect.mockResolvedValue({
-        ref: uploadRef,
-        name: 'brief.txt',
-        mimeType: 'text/plain',
-        size: 16,
-        createdAt: '2026-01-01T00:00:00.000Z',
-        expiresAt: '2026-01-02T00:00:00.000Z',
-        provenance: 'browser',
-      });
+      uploadStoreMock.inspect.mockResolvedValue(stagedUpload);
       vi.mocked(requestExecutor).mockResolvedValue({
         success: true,
         data: { path: '.agor/session-staging/brief.txt' },
@@ -2041,6 +2067,117 @@ describe('gateway agent-tool capability gating (MCP)', () => {
           },
         })
       );
+    });
+
+    it('resolves the owner-scoped sandbox home for a private RBAC branch', async () => {
+      uploadStoreMock.inspect.mockResolvedValue(stagedUpload);
+      vi.spyOn(UsersRepository.prototype, 'findById').mockResolvedValue({
+        user_id: 'user-1',
+        filesystem_home: null,
+      } as any);
+      vi.mocked(requestExecutor).mockImplementation(async (payload: any) =>
+        payload.params?.sandboxHomeStore
+          ? { success: true, data: { path: '.agor/session-staging/brief.txt' } }
+          : {
+              success: false,
+              error: {
+                code: 'EXECUTOR_SPAWN_ERROR',
+                message:
+                  'Executor sandbox setup failed: sandbox home_mode=per_user requires an owner home store, but none was resolved. Refusing to fall back to a shared home (fail closed).',
+              },
+            }
+      );
+      spyCallerSessionBranch('branch-1');
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member', makeFakeApp({}, perUserSandboxConfig));
+      await expect(tools.agor_upload_materialize.handler({ uploadRef })).resolves.toBeDefined();
+
+      expect(requestExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            sandboxHomeStore: '/srv/agor-data/tenants/tenant-test/homes/user-1',
+          }),
+        }),
+        expect.objectContaining({
+          templateVariables: expect.objectContaining({ user_id: 'user-1' }),
+        })
+      );
+    });
+
+    it('uses prompt authority for a shared branch-home session, not its foreign owner home', async () => {
+      uploadStoreMock.inspect.mockResolvedValue(stagedUpload);
+      vi.spyOn(BranchRepository.prototype, 'resolveSessionPromptAuthority').mockResolvedValue({
+        allowed: true,
+        execution_user_id: 'user-1' as any,
+        source: 'branch_session',
+      });
+      const findUser = vi
+        .spyOn(UsersRepository.prototype, 'findById')
+        .mockResolvedValue({ user_id: 'user-1', filesystem_home: null } as any);
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: true,
+        data: { path: '.agor/session-staging/brief.txt' },
+      });
+      spyCallerSessionBranch('branch-1', {
+        created_by: 'foreign-session-owner',
+        sdk_home_scope: 'branch',
+      });
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+
+      const tools = await captureTools('member', makeFakeApp({}, perUserSandboxConfig));
+      await tools.agor_upload_materialize.handler({ uploadRef });
+
+      expect(findUser).toHaveBeenCalledWith('user-1');
+      expect(requestExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            sandboxHomeStore: '/srv/agor-data/tenants/tenant-test/homes/user-1',
+          }),
+        }),
+        expect.objectContaining({
+          templateVariables: expect.objectContaining({ user_id: 'user-1' }),
+        })
+      );
+      expect(JSON.stringify(vi.mocked(requestExecutor).mock.calls[0])).not.toContain(
+        'foreign-session-owner'
+      );
+    });
+
+    it('rejects unresolved or denied execution-home authority without spawning', async () => {
+      spyCallerSessionBranch('branch-1', {
+        created_by: 'foreign-session-owner',
+        sdk_home_scope: 'execution_home',
+      });
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+      vi.spyOn(BranchRepository.prototype, 'resolveSessionPromptAuthority').mockResolvedValue({
+        allowed: false,
+        source: 'denied',
+        denial_reason: 'execution_home_sharing_disabled',
+      });
+
+      const tools = await captureTools('member', makeFakeApp({}, perUserSandboxConfig));
+      await expect(tools.agor_upload_materialize.handler({ uploadRef })).rejects.toThrow(
+        "uses its owner's execution home and cannot be shared"
+      );
+      expect(uploadStoreMock.inspect).not.toHaveBeenCalled();
+      expect(requestExecutor).not.toHaveBeenCalled();
+    });
+
+    it('fails closed when prompt authority omits the execution-home owner', async () => {
+      spyCallerSessionBranch('branch-1');
+      vi.spyOn(BranchRepository.prototype, 'findById').mockResolvedValue(branch as any);
+      vi.spyOn(BranchRepository.prototype, 'resolveSessionPromptAuthority').mockResolvedValue({
+        allowed: true,
+        source: 'own_session',
+      });
+
+      const tools = await captureTools('member');
+      await expect(tools.agor_upload_materialize.handler({ uploadRef })).rejects.toThrow(
+        'refusing to use a shared home (fail closed)'
+      );
+      expect(uploadStoreMock.inspect).not.toHaveBeenCalled();
+      expect(requestExecutor).not.toHaveBeenCalled();
     });
 
     it('rejects materialization when the caller has only branch filesystem read access', async () => {
