@@ -63,6 +63,35 @@ describe('MCPServerRepository.create', () => {
     expect(created.source).toBe('user');
   });
 
+  dbTest(
+    'accepts canonical UUIDv4 and UUIDv7 owners at the persistence boundary',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const legacyUserId = '707bae66-dda5-4c01-9136-a5cda16e048e' as UserID;
+      const currentUserId = generateId() as UserID;
+
+      for (const [name, owner_user_id] of [
+        ['legacy-owner', legacyUserId],
+        ['current-owner', currentUserId],
+      ] as const) {
+        await expect(
+          repo.create(createMCPServerData({ name, owner_user_id }))
+        ).resolves.toMatchObject({ owner_user_id });
+      }
+    }
+  );
+
+  dbTest('rejects short and non-UUID owners at the persistence boundary', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+
+    for (const owner_user_id of ['01933e4a7b897c35a8f39d2e', 'not-a-uuid']) {
+      await expect(
+        repo.create(createMCPServerData({ owner_user_id: owner_user_id as UserID }))
+      ).rejects.toThrow('owner_user_id must be a canonical full UUID or null');
+    }
+    expect(await repo.findAll()).toHaveLength(0);
+  });
+
   dbTest('should create MCP server with session scope', async ({ db }) => {
     const repo = new MCPServerRepository(db);
     const data = createMCPServerData({

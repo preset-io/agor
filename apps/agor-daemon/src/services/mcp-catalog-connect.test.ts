@@ -46,9 +46,6 @@ function createMCPCatalogConnectService(
     has_row_secret: Boolean(value.auth?.type === 'bearer' && value.auth.token),
   });
   const fallback: MCPCatalogConnectDeps = {
-    async resolveUserId(userId) {
-      return userId as UserID;
-    },
     async listCandidates(_userId, params) {
       const result = await app.service('mcp-servers').find(params);
       return (Array.isArray(result) ? result : result.data).map(candidate);
@@ -361,7 +358,6 @@ function buildApp(
   };
   const deps: {
     readGrantResourceUri: ReturnType<typeof vi.fn>;
-    resolveUserId: (userId: string) => Promise<UserID>;
     listCandidates: (
       userId: UserID,
       params: AuthenticatedParams
@@ -380,7 +376,6 @@ function buildApp(
         (server) => server.mcp_server_id === serverId
       )?.url;
     }),
-    resolveUserId: async (userId) => userId as UserID,
     listCandidates: async () => [],
     getCandidate: async () => undefined,
     isGrantAuthorized: async () => true,
@@ -530,6 +525,24 @@ describe('mcp-catalog/connect', () => {
     // the baseline and each refusal test overrides it.
     probeRemoteAuthType.mockResolvedValue('none');
   });
+
+  it.each(['000000000000700080000000', 'not-a-user-id'])(
+    'rejects non-canonical authenticated identity %s instead of resolving it',
+    async (userId) => {
+      const { app, created, deps, generationClaims } = buildApp(CURATED);
+      const invalidParams = {
+        ...params,
+        user: { ...params.user, user_id: userId },
+      } as AuthenticatedParams;
+
+      await expect(
+        createMCPCatalogConnectService(app, deps).create(request, invalidParams)
+      ).rejects.toThrow(/canonical full UUID/);
+      expect(deps.listCandidates).not.toHaveBeenCalled();
+      expect(generationClaims).toEqual([]);
+      expect(created.mcpServers).toEqual([]);
+    }
+  );
 
   it('derives the whole server config from the catalog entry', async () => {
     const { app, created, deps } = buildApp(CURATED);

@@ -20,7 +20,6 @@ import {
   MCPServerRepository,
   runMigrations,
   setMcpMemberPolicy,
-  shortId,
   type TenantScopeAwareDatabase,
   UserMCPOAuthTokenRepository,
   UsersRepository,
@@ -37,7 +36,6 @@ import type {
 } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
-import { createRegisteredMCPCatalogConnectService } from '../register-routes.js';
 import {
   createMcpServerWriteAuthorizationHook,
   type McpServerWriteHookContext,
@@ -97,10 +95,9 @@ async function buildDaemon(
 
   const app = feathers();
   app.use('mcp-servers', createMCPServersService(db));
-  const registeredHooks = captureRegisteredMcpServerCreateHooks(db);
   app.service('mcp-servers').hooks({
     before: {
-      create: registeredHooks.create as never,
+      create: [createMcpServerWriteAuthorizationHook(db) as never],
     },
   } as never);
   app.use('mcp-catalog', {
@@ -121,17 +118,25 @@ async function buildDaemon(
 
   // The shape a REST request arrives with: an external provider and the
   // authenticated caller. Connect passes it straight through to its own writes.
-  const paramsFor = (caller: User, callerRole: UserRole, presentedUserId = caller.user_id) =>
+  const paramsFor = (caller: User, callerRole: UserRole) =>
     ({
       provider: 'rest',
       authenticated: true,
-      user: { user_id: presentedUserId, role: callerRole },
+      user: { user_id: caller.user_id, role: callerRole },
     }) as unknown as AuthenticatedParams;
 
-  const connectAs = (caller: User, callerRole: UserRole, presentedUserId = caller.user_id) =>
-    createRegisteredMCPCatalogConnectService(app, db).create(
+  const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
+  const connectDeps = {
+    listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
+    getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
+      candidateRepo.getForUser(userId, serverId),
+    isGrantAuthorized: async () => false,
+  };
+
+  const connectAs = (caller: User, callerRole: UserRole) =>
+    createMCPCatalogConnectService(app, connectDeps).create(
       CONNECT_REQUEST,
-      paramsFor(caller, callerRole, presentedUserId)
+      paramsFor(caller, callerRole)
     );
   const connect = () => connectAs(user, role);
   const serverRepository = new MCPServerRepository(rawDb);
@@ -165,20 +170,7 @@ describe('marketplace install, as it lands in the database', () => {
     });
   });
 
-  it('resolves a short authenticated user ID at the production route boundary', async () => {
-    const { user, connectAs, installedServers } = await buildDaemon('allow_crud');
-
-    const result = await connectAs(user, 'member', shortId(user.user_id));
-
-    const [server] = await installedServers();
-    expect(server?.owner_user_id).toBe(user.user_id);
-    expect(result.mcp_server.owner_user_id).toBe(user.user_id);
-    expect(result.session).toMatchObject({ status: 'idle' });
-    expect(JSON.stringify(result)).not.toContain('oauth_access_token');
-    expect(JSON.stringify(result)).not.toContain('oauth_refresh_token');
-  });
-
-  it('accepts the canonical legacy UUID user ID shape deployed in production', async () => {
+  it('accepts the authentication-hydrated legacy UUID user ID deployed in production', async () => {
     const { connectAs, addUser, installedServers } = await buildDaemon('allow_crud');
     const legacyUserId = '707bae66-dda5-4c01-9136-a5cda16e048e' as UserID;
     const legacy = await addUser('legacy-production-shape@agor.live', 'member', legacyUserId);
@@ -422,11 +414,7 @@ describe('the write hook this seam depends on', () => {
     });
 
     const registeredHooks = captureRegisteredMcpServerCreateHooks(db);
-    const createAs = async (
-      caller: User,
-      data: Record<string, unknown>,
-      presentedUserId = caller.user_id
-    ) => {
+    const createAs = async (caller: User, data: Record<string, unknown>) => {
       const context = {
         method: 'create',
         data: {
@@ -439,7 +427,7 @@ describe('the write hook this seam depends on', () => {
         },
         params: {
           provider: 'rest',
-          user: { user_id: presentedUserId, role: 'member' },
+          user: { user_id: caller.user_id, role: 'member' },
         } as unknown as AuthenticatedParams,
       } satisfies McpServerWriteHookContext;
       for (const hook of registeredHooks.create) await hook(context);
@@ -463,12 +451,15 @@ describe('the write hook this seam depends on', () => {
     return { bob, mallory, createAs, patchAs };
   };
 
-  it('is registered on mcp-servers create by registerHooks, not just constructible', async () => {
+  it('trusts the authentication-hydrated owner, not a request-supplied owner', async () => {
     const { bob, mallory, createAs } = await standUpDaemonHooks();
 
     await expect(
       createAs(mallory, { transport: 'http', owner_user_id: bob.user_id })
     ).rejects.toThrow(/only create MCP servers owned by yourself/);
+
+    const context = await createAs(mallory, { transport: 'http' });
+    expect((context.data as { owner_user_id?: string }).owner_user_id).toBe(mallory.user_id);
   });
 
   it('runs as the registered chain, not as a blanket denier', async () => {
@@ -481,21 +472,6 @@ describe('the write hook this seam depends on', () => {
     const context = await createAs(bob, { transport: 'http' });
 
     expect((context.data as { owner_user_id?: string }).owner_user_id).toBe(bob.user_id);
-  });
-
-  it('canonicalizes private ownership and preserves an explicit shared create', async () => {
-    const { bob, createAs } = await standUpDaemonHooks('allow_crud');
-    const presented = shortId(bob.user_id);
-
-    const privateContext = await createAs(bob, { transport: 'http' }, presented);
-    const sharedContext = await createAs(
-      bob,
-      { transport: 'http', owner_user_id: null },
-      presented
-    );
-
-    expect((privateContext.data as { owner_user_id?: string }).owner_user_id).toBe(bob.user_id);
-    expect((sharedContext.data as { owner_user_id?: string | null }).owner_user_id).toBeNull();
   });
 
   it.each(['marketplace', 'future-mode'])(
@@ -675,7 +651,6 @@ describe('credential reuse, against real grants', () => {
     // grant" is decided by the same key the production wiring uses.
     const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
     const deps = {
-      resolveUserId: async (userId: string) => userId as UserID,
       listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
       getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
         candidateRepo.getForUser(userId, serverId),

@@ -78,28 +78,6 @@ export interface McpServerWriteDecision {
 type McpServerWriteAuthorizationDatabase = TenantScopeAwareDatabase | TenantScopedDatabase;
 
 /**
- * Resolve the authenticated user's public ID shape to the tenant-owned users
- * row before it is copied into an MCP ownership foreign key.
- *
- * Authentication normally carries the full database ID. Socket/service
- * callers can, however, carry the public short form, and older hosted users
- * retain canonical pre-UUIDv7 UUIDs. Full UUIDs are already persistence keys;
- * only abbreviated shapes need a tenant-scoped repository lookup.
- */
-export async function resolveCanonicalMcpOwnerUserId(
-  db: McpServerWriteAuthorizationDatabase,
-  presentedUserId: string
-): Promise<UserID> {
-  if (isCanonicalFullUuid(presentedUserId)) return presentedUserId as UserID;
-
-  const user = await new UsersRepository(db).findById(presentedUserId);
-  if (!user || !isCanonicalFullUuid(user.user_id)) {
-    throw new NotAuthenticated('Authenticated user identity could not be resolved');
-  }
-  return user.user_id as UserID;
-}
-
-/**
  * The extra params the marketplace connect service sets on its own
  * `mcp-servers` create, naming the entry it resolved from the catalog.
  *
@@ -148,8 +126,11 @@ export interface McpCatalogInstallParams {
  * — it is what `POST /mcp-servers` is for.
  *
  * The owner is read from the authenticated caller, not from the install params:
- * connect only ever installs for its own caller, and taking it from `params.user`
- * means no daemon-side caller can name someone else's identity by mistake.
+ * every authentication strategy hydrates `params.user` from the users table,
+ * so its full canonical ID is trusted here. A member's request-supplied owner
+ * remains untrusted and is policy-stamped or rejected below. Connect only ever
+ * installs for its own caller, so no daemon-side caller can name someone else's
+ * identity by mistake.
  */
 function resolveCatalogInstall(
   params: AuthenticatedParams | undefined,
@@ -461,24 +442,8 @@ export async function authorizeMcpServerWrite(
   params: AuthenticatedParams | undefined,
   request: McpServerWriteRequest
 ): Promise<McpServerWriteDecision> {
-  let canonicalParams = params;
-  const presentedUser = params?.user;
-  if (
-    params?.provider &&
-    presentedUser?.user_id &&
-    !(presentedUser as { _isServiceAccount?: boolean })._isServiceAccount
-  ) {
-    const userId = await resolveCanonicalMcpOwnerUserId(db, presentedUser.user_id);
-    if (userId !== presentedUser.user_id) {
-      canonicalParams = {
-        ...params,
-        user: { ...presentedUser, user_id: userId },
-      } as AuthenticatedParams;
-    }
-  }
-
-  const decision = await decidePolicyAndOwnership(db, canonicalParams, request);
-  const install = resolveCatalogInstall(canonicalParams, request);
+  const decision = await decidePolicyAndOwnership(db, params, request);
+  const install = resolveCatalogInstall(params, request);
   return install === undefined
     ? decision
     : {
@@ -500,6 +465,14 @@ async function decidePolicyAndOwnership(
   if (!user) throw new NotAuthenticated('Authentication required');
   if ((user as { _isServiceAccount?: boolean })._isServiceAccount === true) return {};
 
+  // Keep the role floor ahead of identity validation and all policy/database
+  // work. Authentication supplies the users-table key; short IDs are public
+  // addressing conveniences and are never resolved at this ownership boundary.
+  const isAdmin = hasMinimumRole(user.role, ROLES.ADMIN);
+  if (!isAdmin) assertAtLeastMember(user.role);
+  if (!isCanonicalFullUuid(user.user_id)) {
+    throw new NotAuthenticated('Authenticated user identity must be a canonical full UUID');
+  }
   const userId = user.user_id as UserID;
 
   // Ownership binds a configured credential to one execution identity, so
@@ -519,9 +492,7 @@ async function decidePolicyAndOwnership(
 
   // Admins administer every server, including private ones. They still cannot
   // use one they do not own — that is the session-side rule, not this one.
-  if (hasMinimumRole(user.role, ROLES.ADMIN)) return {};
-
-  assertAtLeastMember(user.role);
+  if (isAdmin) return {};
 
   const policy = await resolveMcpMemberPolicy(db, userId, params.tenant?.tenant_id);
   // Only the marketplace connect service sets this, and it cannot arrive on a
