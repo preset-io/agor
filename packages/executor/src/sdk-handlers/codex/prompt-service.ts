@@ -122,7 +122,7 @@ const GATEWAY_MCP_STARTUP_TIMEOUT_MS = 30_000;
 type CodexLifecycleFailureCode =
   | 'authentication_required'
   | 'completed_without_response'
-  | 'provider_turn_failed'
+  | 'turn_failed'
   | 'stream_start_failed'
   | 'stream_interrupted'
   | 'stream_ended_without_completion';
@@ -131,9 +131,9 @@ const CODEX_LIFECYCLE_MESSAGES: Record<CodexLifecycleFailureCode, string> = {
   authentication_required:
     'Codex authentication is not configured. Review Codex authentication settings and retry the prompt.',
   completed_without_response:
-    'Codex completed after a provider stream error but returned no assistant response. Retry the prompt.',
-  provider_turn_failed:
-    'The Codex provider failed the turn. Retry the prompt; review Codex authentication or provider status if it continues.',
+    'Codex completed after a stream error but returned no assistant response. Retry the prompt.',
+  turn_failed:
+    'Codex failed the turn. Retry the prompt; review Codex authentication or runtime status if it continues.',
   stream_start_failed: 'Codex could not start the turn. Retry the prompt.',
   stream_interrupted: 'The Codex turn was interrupted before completion. Retry the prompt.',
   stream_ended_without_completion:
@@ -193,7 +193,7 @@ function isKnownCodexBoundaryError(
   }
 }
 
-function logCodexProviderFailure(
+function logCodexRuntimeFailure(
   event: 'stream_error_observed' | 'turn_completed_without_response' | 'turn_failed',
   error: unknown,
   sessionId: SessionID,
@@ -204,7 +204,7 @@ function logCodexProviderFailure(
     ...(category ? { category } : {}),
   });
   const code = safe.diagnostic.code;
-  const message = `[codex.provider] event=${event} session_id=${sessionId} category=${safe.category} type=${safe.diagnostic.type}${code ? ` code=${code}` : ''}`;
+  const message = `[codex.runtime] event=${event} session_id=${sessionId} category=${safe.category} type=${safe.diagnostic.type}${code ? ` code=${code}` : ''}`;
   if (event === 'stream_error_observed') {
     console.warn(`${message} outcome=awaiting_terminal_event`);
   } else {
@@ -1504,7 +1504,7 @@ export class CodexPromptService {
             }
 
             if (observedStreamError && !receivedAssistantMessage) {
-              logCodexProviderFailure(
+              logCodexRuntimeFailure(
                 'turn_completed_without_response',
                 observedStreamError,
                 sessionId
@@ -1673,7 +1673,7 @@ export class CodexPromptService {
             // Turn complete, emit final message
             receivedTerminalEvent = true;
             if (observedStreamError && !receivedAssistantMessage) {
-              logCodexProviderFailure(
+              logCodexRuntimeFailure(
                 'turn_completed_without_response',
                 observedStreamError,
                 sessionId
@@ -1705,14 +1705,14 @@ export class CodexPromptService {
           case 'turn.failed': {
             receivedTerminalEvent = true;
             const missingAuthentication = !this.apiKey && !this.useNativeAuth;
-            logCodexProviderFailure(
+            logCodexRuntimeFailure(
               'turn_failed',
               event.error,
               sessionId,
               missingAuthentication ? 'configuration_required' : undefined
             );
             throw new CodexLifecycleError(
-              missingAuthentication ? 'authentication_required' : 'provider_turn_failed'
+              missingAuthentication ? 'authentication_required' : 'turn_failed'
             );
           }
 
@@ -1724,7 +1724,7 @@ export class CodexPromptService {
             // not parse provider prose or terminate early: remember the error
             // and wait for the authoritative turn.completed / turn.failed / EOF.
             observedStreamError = event;
-            logCodexProviderFailure('stream_error_observed', event, sessionId);
+            logCodexRuntimeFailure('stream_error_observed', event, sessionId);
             break;
           }
 
