@@ -11,6 +11,18 @@ import { UserSettingsModal } from './UserSettingsModal';
 const { syncGroupsForUser } = vi.hoisted(() => ({ syncGroupsForUser: vi.fn() }));
 vi.mock('./groupMembershipSync', () => ({ syncGroupsForUser }));
 
+vi.mock('../EmojiPickerInput/AgorEmojiPickerInner', () => ({
+  default: ({ onEmojiClick }: { onEmojiClick: (data: { emoji: string }) => void }) => (
+    <button
+      type="button"
+      aria-label="Choose tools emoji"
+      onClick={() => onEmojiClick({ emoji: '🛠️' })}
+    >
+      tools
+    </button>
+  ),
+}));
+
 vi.mock('../ApiKeyFields', () => ({
   ApiKeyFields: () => null,
   TOOL_FIELD_CONFIGS: {
@@ -175,6 +187,41 @@ function makeUser(overrides: Partial<User> = {}): User {
 const ASYNC = { timeout: 10_000 };
 
 describe('UserSettingsModal', { timeout: 60_000 }, () => {
+  it('renders the emoji picker beside the name and saves both for a local user', async () => {
+    const user = makeUser({ emoji: '🧭' });
+    const onUpdate = vi.fn(async () => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    // Let the auth-capability hook settle before retaining a reference to the
+    // Popover trigger; its hydration re-render replaces the initial button.
+    await act(async () => {});
+
+    const picker = screen.getByRole('button', { name: 'Choose emoji' });
+    const name = screen.getByRole('textbox', { name: 'Name' });
+    expect(picker).toHaveTextContent('🧭');
+    expect(picker.parentElement).toBe(name.parentElement);
+
+    fireEvent.change(name, { target: { value: 'Updated Admin' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled(), ASYNC);
+    expect(onUpdate.mock.calls[0]?.[1]).toMatchObject({
+      emoji: '🧭',
+      name: 'Updated Admin',
+      email: user.email,
+    });
+  });
+
   it('keeps deferred resume distinct from destructive restart', async () => {
     const onReopenOnboarding = vi.fn(async () => undefined);
     const user = makeUser({
@@ -508,7 +555,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
         }),
       })
     );
-    const user = makeUser({ role: 'admin' });
+    const user = makeUser({ role: 'admin', emoji: '🧭' });
     const onUpdate = vi.fn(async () => {});
 
     renderWithApp(
@@ -526,6 +573,11 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(screen.getByPlaceholderText('John Doe')).toBeDisabled();
     expect(screen.getByPlaceholderText('user@example.com')).toBeDisabled();
     expect(screen.queryByRole('menuitem', { name: /security/i })).not.toBeInTheDocument();
+    const emojiPicker = screen.getByRole('button', { name: 'Choose emoji' });
+    expect(emojiPicker).toBeEnabled();
+    expect(emojiPicker).toHaveTextContent('🧭');
+    fireEvent.click(emojiPicker);
+    fireEvent.click(await screen.findByRole('button', { name: 'Choose tools emoji' }));
     const useSlackAvatar = screen.getByRole('switch');
     expect(useSlackAvatar).toBeEnabled();
     fireEvent.click(useSlackAvatar);
@@ -543,6 +595,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     const patch = onUpdate.mock.calls[0][1];
     expect(patch.preferences?.audio?.enabled).toBe(true);
     expect(patch.preferences?.use_slack_avatar).toBe(false);
+    expect(patch.emoji).toBe('🛠️');
     expect(patch).not.toHaveProperty('email');
     expect(patch).not.toHaveProperty('name');
     expect(patch).not.toHaveProperty('role');

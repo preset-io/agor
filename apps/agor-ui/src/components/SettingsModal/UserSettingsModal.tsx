@@ -89,6 +89,7 @@ import {
 } from '../AgenticToolConfigForm';
 import { ApiKeyFields, type FieldStatus, TOOL_FIELD_CONFIGS } from '../ApiKeyFields';
 import { CodexAuthSettings } from '../CodexAuth';
+import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { EnvVarEditor } from '../EnvVarEditor';
 import { HighlightMatch } from '../HighlightMatch';
 import { SessionMcpServersField } from '../MCPServerSelect';
@@ -502,6 +503,7 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       form.setFieldsValue({
         email: userData.email,
         name: userData.name,
+        emoji: userData.emoji,
         role: userData.role,
         unix_username: userData.unix_username,
         groupIds: [],
@@ -800,7 +802,11 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
       let preferencesTouched = false;
 
       if (panels.has('profile')) {
-        const values = form.getFieldsValue(['email', 'name', 'role', 'useSlackAvatar']);
+        const values = form.getFieldsValue(['email', 'name', 'emoji', 'role', 'useSlackAvatar']);
+        // Emoji is Agor-owned profile data even when name/email come from an
+        // external identity provider, so it is intentionally independent of
+        // `canWriteIdentity`.
+        updates.emoji = values.emoji;
         if (canWriteIdentity) {
           updates.email = values.email;
           updates.name = values.name;
@@ -1672,8 +1678,18 @@ const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
         />
       )}
       <Form form={form} layout="vertical" onValuesChange={() => markMainPanelDirty('profile')}>
-        <FieldRow label="Name" name="name" help={identityWriteHelp}>
-          <Input placeholder="John Doe" disabled={!canWriteIdentity} />
+        <FieldRow label="Name" help={identityWriteHelp}>
+          <Space.Compact style={{ display: 'flex', width: '100%' }}>
+            <FormEmojiPickerInput fieldName="emoji" defaultEmoji="👤" disabled={!canEditTarget} />
+            <Form.Item name="name" noStyle>
+              <Input
+                aria-label="Name"
+                placeholder="John Doe"
+                disabled={!canWriteIdentity}
+                style={{ flex: 1, minWidth: 0 }}
+              />
+            </Form.Item>
+          </Space.Compact>
         </FieldRow>
 
         <FieldRow
