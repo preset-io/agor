@@ -463,6 +463,7 @@ describe('ConfigService.resolveApiKey', () => {
         {
           provider: 'socketio',
           tenant: { tenant_id: 'tenant-1' },
+          user: { user_id: opts.prompter },
           authentication: {
             strategy: 'jwt',
             payload: {
@@ -862,6 +863,7 @@ describe('ConfigService.resolveApiKey', () => {
         {
           provider: 'socketio',
           tenant: { tenant_id: 'tenant-1' },
+          user: { user_id: 'creator-1' },
           authentication: {
             strategy: 'jwt',
             payload: {
