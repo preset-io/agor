@@ -195,6 +195,52 @@ describe('GatewayChannelRepository', () => {
       }
     );
 
+    dbTest(
+      'rejects noncanonical Teams user mappings on disabled create and patch',
+      async ({ db }) => {
+        const branch = await seedBranch(db);
+        const repo = new GatewayChannelRepository(db);
+        const invalidMaps: unknown[] = [
+          { 'aad-object-1': 'user@example.com' },
+          { 'aad-object-1': 'not-a-uuid' },
+          { 'aad-object-1': '01933e4a' },
+          { 'aad-object-1': '01933e4a-7b89-4c35-a8f3-9d2e1c4b5a6f' },
+          { 'aad-object-1': '01933E4A-7B89-7C35-A8F3-9D2E1C4B5A6F' },
+        ];
+
+        for (const userMap of invalidMaps) {
+          await expect(
+            repo.create({
+              name: 'Invalid Teams draft',
+              created_by: generateId() as UUID,
+              target_branch_id: branch.branch_id as UUID,
+              channel_type: 'teams',
+              enabled: false,
+              config: { user_map: userMap },
+            })
+          ).rejects.toThrow('full lowercase UUIDv7 Agor User IDs');
+        }
+
+        const draft = await repo.create({
+          name: 'Teams draft',
+          created_by: generateId() as UUID,
+          target_branch_id: branch.branch_id as UUID,
+          channel_type: 'teams',
+          enabled: false,
+          config: {
+            user_map: {
+              'aad-object-1': '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+            },
+          },
+        });
+        await expect(
+          repo.update(draft.id, {
+            config: { user_map: { 'aad-object-1': 'user@example.com' } },
+          })
+        ).rejects.toThrow('full lowercase UUIDv7 Agor User IDs');
+      }
+    );
+
     dbTest('rejects an enabled channel created without secrets', async ({ db }) => {
       const branch = await seedBranch(db);
       const repo = new GatewayChannelRepository(db);
@@ -585,6 +631,45 @@ describe('GatewayChannelRepository', () => {
       const rotated = await repo.update(channel.id, { config: { bot_token: 'new-token' } });
       expect(rotated.provider_installation_id).toBeNull();
       expect(rotated.provider_config_generation).toBe(3);
+    });
+
+    dbTest('rotates only a Teams app password without fencing provider work', async ({ db }) => {
+      const branch = await seedBranch(db);
+      const repo = new GatewayChannelRepository(db);
+      const channel = await repo.create({
+        name: 'Teams credential rotation',
+        created_by: generateId() as UUID,
+        target_branch_id: branch.branch_id as UUID,
+        channel_type: 'teams',
+        agor_user_id: generateId() as UUID,
+        provider_installation_id: 'teams-app',
+        config: {
+          app_id: 'teams-app',
+          app_password: 'old-secret',
+          microsoft_tenant_id: 'tenant-1',
+        },
+      });
+      const claim = await repo.claimListener({
+        channelId: channel.id,
+        claimToken: 'teams-rotation-claim',
+        leaseDurationMs: 30_000,
+        instanceId: 'teams-rotation-instance',
+        bootId: 'teams-rotation-boot',
+      });
+      expect(claim.outcome).toBe('claimed');
+
+      const rotated = await repo.update(channel.id, { config: { app_password: 'new-secret' } });
+      expect(rotated.config.app_password).toBe('new-secret');
+      expect(rotated.provider_installation_id).toBe('teams-app');
+      expect(rotated.provider_config_generation).toBe(channel.provider_config_generation);
+      expect(await repo.listenerClaimIsCurrent(channel.id, 'teams-rotation-claim')).toBe(true);
+
+      const authorityChanged = await repo.update(channel.id, { config: { app_id: 'new-app' } });
+      expect(authorityChanged.config.app_id).toBe('new-app');
+      expect(authorityChanged.provider_installation_id).toBe('new-app');
+      expect(authorityChanged.provider_config_generation).toBe(
+        channel.provider_config_generation + 1
+      );
     });
 
     it('rejects unsupported capability requests and empty allowlists', () => {

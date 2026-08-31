@@ -63,7 +63,9 @@ describe('buildTenantInsertOrder', () => {
 describe('tenantPortabilityForeignKeys', () => {
   it('freezes the exact schema-derived movable FK set', () => {
     const foreignKeys = tenantPortabilityForeignKeys();
-    expect(foreignKeys).toHaveLength(109);
+    // The current schema retains the Teams gateway HA relations alongside the
+    // main branch's shared-session policy consolidation.
+    expect(foreignKeys).toHaveLength(113);
     expect(Object.isFrozen(foreignKeys)).toBe(true);
     const structuralKeys = foreignKeys.map((foreignKey) =>
       [
@@ -79,6 +81,33 @@ describe('tenantPortabilityForeignKeys', () => {
       expect(Object.isFrozen(foreignKey.childColumns)).toBe(true);
       expect(Object.isFrozen(foreignKey.parentColumns)).toBe(true);
     }
+  });
+
+  it('includes the intentional Teams gateway HA relations', () => {
+    expect(tenantPortabilityForeignKeys()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          childTable: 'teams_conversation_addresses',
+          childColumns: ['gateway_channel_id'],
+          parentTable: 'gateway_channels',
+        }),
+        expect.objectContaining({
+          childTable: 'teams_message_deliveries',
+          childColumns: ['gateway_channel_id'],
+          parentTable: 'gateway_channels',
+        }),
+        expect.objectContaining({
+          childTable: 'teams_message_deliveries',
+          childColumns: ['message_id'],
+          parentTable: 'messages',
+        }),
+        expect.objectContaining({
+          childTable: 'teams_message_deliveries',
+          childColumns: ['thread_session_map_id'],
+          parentTable: 'thread_session_map',
+        }),
+      ])
+    );
   });
 
   it('moves normalized board and branch policies with their resources and principals', () => {

@@ -39,6 +39,7 @@ import {
   SessionRepository,
   shortId,
   TaskRepository,
+  TeamsMessageDeliveryRepository,
   type TenantScopeAwareDatabase,
   ThreadSessionMapRepository,
   UserMCPOAuthTokenRepository,
@@ -83,11 +84,13 @@ import type {
   GatewayOutboundReplyAdmission,
   MCPServerID,
   Message,
+  MessageID,
   MessageSource,
   Session,
   SessionID,
   Task,
   TaskID,
+  TeamsUserMap,
   TenantID,
   ThreadSessionMap,
   User,
@@ -96,6 +99,7 @@ import type {
 import {
   DEFAULT_DISCORD_CATCH_UP,
   hasMinimumRole,
+  isCanonicalUuidV7,
   isDiscordSnowflake,
   ROLES,
   SessionStatus,
@@ -114,6 +118,7 @@ import {
 } from '../utils/gateway-attachments.js';
 import { fetchGatewayCatchUp, GatewayCatchUpError } from '../utils/gateway-catch-up.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
+import { isVerifiedHttpGatewayCreate } from './gateway-authority.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import type { SessionParams } from './sessions.js';
 
@@ -133,6 +138,8 @@ interface PostMessageData {
   gateway_inbound_event_id?: import('@agor/core/types').GatewayInboundEventID;
   listener_claim_token?: string;
   listener_channel_id?: import('@agor/core/types').GatewayChannelID;
+  /** Decrypted only for the alignment lookup; never persisted as metadata. */
+  teams_user_aad_object_id?: string;
 }
 
 /**
@@ -305,7 +312,9 @@ function hasListeningConfig(channel: GatewayChannel): boolean {
         (config.watch_repos as string[] | undefined)?.length
       );
     case 'teams':
-      return !!(config.app_id && config.app_password);
+      // Teams ingress is the shared queue-first HTTP route. It has no
+      // process-local listener and therefore is never a listener candidate.
+      return false;
     case 'shortcut':
       return !!config.api_token;
     case 'discord':
@@ -476,6 +485,25 @@ function quoteForPrompt(text: string, maxChars = 2000): string {
     .split(/\r?\n/)
     .map((line) => `> ${line}`)
     .join('\n');
+}
+
+function safeTeamsMappingMetadata(
+  metadata: Record<string, unknown> | null | undefined
+): Record<string, unknown> {
+  const safe: Record<string, unknown> = {};
+  for (const key of [
+    'teams_conversation_type',
+    'teams_channel_type',
+    'teams_channel_name',
+    'teams_team_name',
+    'teams_user_name',
+    'teams_has_mention',
+    'requires_mapping_verification',
+  ]) {
+    const value = metadata?.[key];
+    if (typeof value === 'string' || typeof value === 'boolean') safe[key] = value;
+  }
+  return safe;
 }
 
 function getSlackMessageTs(metadata?: Record<string, unknown>): string | undefined {
@@ -790,7 +818,8 @@ function buildGatewayContext(channel: GatewayChannel, data: PostMessageData): Ga
 
     case 'teams': {
       const conversationType = meta.teams_conversation_type as string | undefined;
-      const isPersonal = conversationType === 'personal';
+      const isPersonal =
+        typeof conversationType === 'string' && conversationType.toLowerCase() === 'personal';
       let channelKind: string | undefined;
       if (isPersonal) {
         channelKind = 'DM';
@@ -849,6 +878,7 @@ export class GatewayService {
   private messagesRepo: MessagesRepository;
   private inboundEventRepo: GatewayInboundEventRepository;
   private deliveryRepo: DiscordMessageDeliveryRepository;
+  private teamsDeliveryRepo: TeamsMessageDeliveryRepository;
 
   private mcpServerRepo: MCPServerRepository;
   private userTokenRepo: UserMCPOAuthTokenRepository;
@@ -937,6 +967,10 @@ export class GatewayService {
       db,
       new DiscordMessageDeliveryRepository(db)
     );
+    this.teamsDeliveryRepo = bindRepositoryToTenantUnitOfWork(
+      db,
+      new TeamsMessageDeliveryRepository(db)
+    );
 
     this.mcpServerRepo = bindRepositoryToTenantUnitOfWork(db, new MCPServerRepository(db));
     this.userTokenRepo = bindRepositoryToTenantUnitOfWork(db, new UserMCPOAuthTokenRepository(db));
@@ -982,8 +1016,8 @@ export class GatewayService {
   private getActiveListener(channelId: string): GatewayConnector | undefined {
     // PostgreSQL outbound work is stateless and reloads fresh tenant-scoped
     // credentials. Never reuse a connector whose listener lease may have been
-    // revoked between renewal passes. Teams is the only connector that needs
-    // its process-local listener for replies, and is fail-closed in this mode.
+    // revoked between renewal passes. Teams outbound work is handled by its
+    // durable delivery worker and never uses this listener cache.
     if (this.durableListenerOwnership) return undefined;
     const tenantId = getCurrentTenantId();
     return tenantId ? this.activeListeners.get(this.listenerKey(tenantId, channelId)) : undefined;
@@ -1032,20 +1066,26 @@ export class GatewayService {
     text: string,
     opts?: { suppressSlack?: boolean; suppressDiscord?: boolean }
   ): Promise<void> {
+    // Teams has no fire-and-forget system-message path: every provider effect
+    // must be a durable delivery row carrying its encrypted ConversationReference.
     // GitHub and Shortcut have their own editable ack comment (the connector's
     // "Processing" / "👀 on it" comment that becomes the final reply), so they
     // suppress all gateway system messages here. Slack keeps durable routing
     // messages (session links/errors) but suppresses transient lifecycle noise
     // like "creating session" and queued/status rows via suppressSlack.
-    if (channel.channel_type === 'github' || channel.channel_type === 'shortcut') return;
+    if (
+      channel.channel_type === 'teams' ||
+      channel.channel_type === 'github' ||
+      channel.channel_type === 'shortcut'
+    )
+      return;
     if (channel.channel_type === 'slack' && opts?.suppressSlack) return;
     if (channel.channel_type === 'discord' && opts?.suppressDiscord) return;
 
     if (!hasConnector(channel.channel_type as ChannelType)) return;
     try {
-      // Prefer the active listener instance — webhook-based connectors (e.g. Teams)
-      // store ConversationReferences in memory on the listener instance.
-      // Creating a new connector via getConnector() would lose that state.
+      // Prefer the active listener instance for connectors that still own a live
+      // transport. Teams addresses are durable and are handled by its worker.
       const connector =
         this.getActiveListener(channel.id) ??
         getConnector(channel.channel_type as ChannelType, channel.config);
@@ -1136,6 +1176,26 @@ export class GatewayService {
       }
     }
 
+    return null;
+  }
+
+  /** Teams-only identity alignment: AAD object ID → immutable tenant user ID. */
+  private async resolveTeamsUser(opts: {
+    aadObjectId: string | undefined;
+    userMap: TeamsUserMap | undefined;
+  }): Promise<Awaited<ReturnType<UsersRepository['findById']>>> {
+    const mappedUserId = opts.aadObjectId ? opts.userMap?.[opts.aadObjectId] : undefined;
+    if (!isCanonicalUuidV7(mappedUserId)) return null;
+    const matched = await this.usersRepo.findById(mappedUserId);
+    if (matched) {
+      console.log(
+        `[gateway] Teams user alignment succeeded: source=user_map agor_user=${shortId(matched.user_id)}`
+      );
+      return matched;
+    }
+    console.warn(
+      '[gateway] Teams user alignment failed: source=user_map result=agor_user_not_found'
+    );
     return null;
   }
 
@@ -2121,6 +2181,7 @@ export class GatewayService {
    */
   async create(data: PostMessageData): Promise<PostMessageResult> {
     const durableListenerOwnership = await this.detectDurableListenerOwnership();
+    const verifiedHttpAuthority = isVerifiedHttpGatewayCreate(data);
     // 1. Authenticate via channel_key
     const channel = await this.channelRepo.findByKey(data.channel_key);
     if (!channel) {
@@ -2130,6 +2191,20 @@ export class GatewayService {
     if (!channel.enabled) {
       throw new Error('Channel is disabled');
     }
+    const channelConfig = channel.config as Record<string, unknown>;
+    if (channel.channel_type === 'teams') {
+      if (
+        !verifiedHttpAuthority ||
+        !data.gateway_inbound_event_id ||
+        data.listener_claim_token !== undefined
+      ) {
+        throw new Error(
+          'Gateway inbound event authority must be verified by the Teams queue or listener'
+        );
+      }
+    } else if (verifiedHttpAuthority) {
+      throw new Error('Invalid verified HTTP gateway authority');
+    }
     if (durableListenerOwnership && !data.gateway_inbound_event_id) {
       throw new Error(
         'Direct gateway inbound delivery is unsupported on PostgreSQL without a provider event identity'
@@ -2137,6 +2212,7 @@ export class GatewayService {
     }
     if (
       data.listener_claim_token &&
+      !verifiedHttpAuthority &&
       (data.listener_channel_id !== channel.id ||
         !(await this.channelRepo.listenerClaimIsCurrent(channel.id, data.listener_claim_token)))
     ) {
@@ -2198,12 +2274,7 @@ export class GatewayService {
     // rebuilding a prompt: the first delivery may have created the mapping and
     // therefore formatted an "initial" prompt, while a retry observes an
     // existing mapping and would otherwise produce a different prompt string.
-    if (
-      durableListenerOwnership &&
-      data.gateway_inbound_event_id &&
-      data.idempotency_task_id &&
-      existingMapping
-    ) {
+    if (data.gateway_inbound_event_id && data.idempotency_task_id && existingMapping) {
       const priorTask = await this.taskRepo.findById(data.idempotency_task_id);
       if (priorTask) {
         const priorSession = await this.sessionRepo.findById(existingMapping.session_id);
@@ -2306,6 +2377,24 @@ export class GatewayService {
       return { success: false, sessionId: '', created: false };
     }
 
+    if (channel.channel_type === 'teams') {
+      const conversationType = data.metadata?.teams_conversation_type;
+      const isPersonal =
+        typeof conversationType === 'string' && conversationType.toLowerCase() === 'personal';
+      const hasMention = data.metadata?.teams_has_mention === true;
+      // A standard/channel conversation is an observation surface, not a
+      // prompt surface: an unmentioned message can never create a Task, even
+      // when an older compatibility flag allowed replies in mapped threads.
+      // Personal chats remain mention-free; group chats and channels require
+      // an exact structured app-ID mention.
+      if (!isPersonal && !hasMention) {
+        console.debug(
+          `[gateway] IGNORED: Teams conversation message without required mention: channel=${shortId(channel.id)}, thread=${data.thread_id}`
+        );
+        return { success: false, sessionId: '', created: false };
+      }
+    }
+
     // 4. Reject unmapped thread replies that came through without mention.
     // Slack channel-like conversations now require explicit mentions for every
     // prompt. This legacy verification flag is kept for webhook-style connectors
@@ -2335,7 +2424,6 @@ export class GatewayService {
     const usersService = this.app.service('users') as {
       get: (id: string) => Promise<User>;
     };
-    const channelConfig = channel.config as Record<string, unknown>;
     const alignSlackUsers =
       channelConfig.align_slack_users === true || data.metadata?.align_slack_users === true;
     const alignGitHubUsers =
@@ -2344,12 +2432,24 @@ export class GatewayService {
       channelConfig.align_shortcut_users === true || data.metadata?.align_shortcut_users === true;
     const alignDiscordUsers =
       channel.channel_type === 'discord' && channelConfig.align_discord_users === true;
+    const alignTeamsUsers =
+      channel.channel_type === 'teams' &&
+      channelConfig.user_map &&
+      typeof channelConfig.user_map === 'object' &&
+      !Array.isArray(channelConfig.user_map) &&
+      Object.keys(channelConfig.user_map).length > 0;
 
     // Only fetch and use channel owner when NO alignment is active.
     // When alignment is ON, agor_user_id may be empty (the "Post messages as"
     // field is hidden in the UI), so we must not fetch it unconditionally.
     let user: User = null as unknown as User;
-    if (!alignSlackUsers && !alignGitHubUsers && !alignShortcutUsers && !alignDiscordUsers) {
+    if (
+      !alignSlackUsers &&
+      !alignGitHubUsers &&
+      !alignShortcutUsers &&
+      !alignDiscordUsers &&
+      !alignTeamsUsers
+    ) {
       if (!channel.agor_user_id) {
         const errMsg =
           'Channel configuration error: no "Post messages as" user set. An admin needs to edit the channel and select a user, or enable user alignment.';
@@ -2396,6 +2496,24 @@ export class GatewayService {
         console.log('[gateway] Discord user alignment failed: result=agor_user_not_found');
         return { success: false, sessionId: '', created: false };
       }
+    }
+
+    // Teams user alignment is explicit and tenant-local. An unmapped AAD
+    // object ID is rejected; it never inherits the channel owner's identity
+    // or falls back to an email match.
+    if (alignTeamsUsers) {
+      const matchedUser = await this.resolveTeamsUser({
+        aadObjectId:
+          typeof data.teams_user_aad_object_id === 'string'
+            ? data.teams_user_aad_object_id
+            : undefined,
+        userMap: channelConfig.user_map as TeamsUserMap | undefined,
+      });
+      if (!matchedUser) {
+        console.log('[gateway] Teams user alignment failed: result=agor_user_not_found');
+        return { success: false, sessionId: '', created: false };
+      }
+      user = await usersService.get(matchedUser.user_id);
     }
 
     // --- Slack user alignment ---
@@ -2550,7 +2668,7 @@ export class GatewayService {
     const agenticTool: AgenticToolName = requireActiveAgenticTool(
       agenticConfig?.agent ?? 'claude-code'
     );
-    // HTTP-originated requests carry an ambient tenant DB scope; socket-mode
+    // HTTP-originated requests carry an ambient tenant DB scope; long-lived
     // listener messages only carry tenant identity (runWithTenantContext).
     // Open a short tenant unit of work from that identity — same pattern as
     // bindRepositoryToTenantUnitOfWork — instead of assuming an ambient scope
@@ -2678,9 +2796,29 @@ export class GatewayService {
       const existingMetadata = ((existingMapping.metadata as Record<string, unknown>) ?? {}) as
         | Record<string, unknown>
         | undefined;
+      const metadataBase =
+        channel.channel_type === 'teams'
+          ? {
+              ...safeTeamsMappingMetadata(existingMetadata),
+              ...(typeof existingMetadata?.outbound_seed_id === 'string'
+                ? { outbound_seed_id: existingMetadata.outbound_seed_id }
+                : {}),
+              ...(typeof existingMetadata?.outbound_seed_initial_prompt_pending === 'boolean'
+                ? {
+                    outbound_seed_initial_prompt_pending:
+                      existingMetadata.outbound_seed_initial_prompt_pending,
+                  }
+                : {}),
+              ...(typeof existingMetadata?.outbound_seed_initial_event_id === 'string'
+                ? {
+                    outbound_seed_initial_event_id: existingMetadata.outbound_seed_initial_event_id,
+                  }
+                : {}),
+            }
+          : existingMetadata;
       const mergedMetadata = {
-        ...existingMetadata,
-        ...(data.metadata?.processing_comment_id
+        ...metadataBase,
+        ...(channel.channel_type !== 'teams' && data.metadata?.processing_comment_id
           ? { processing_comment_id: data.metadata.processing_comment_id }
           : {}),
         ...(typeof data.metadata?.slack_user_id === 'string'
@@ -2709,15 +2847,17 @@ export class GatewayService {
       }
 
       if (outboundSeed) {
-        await this.addGatewayReplyAliases(mappingForCursor, [
-          outboundSeed.platform_thread_id,
-          data.thread_id,
-          ...(Array.isArray(outboundSeed.metadata?.provider_reply_aliases)
-            ? outboundSeed.metadata.provider_reply_aliases.filter(
-                (alias): alias is string => typeof alias === 'string'
-              )
-            : []),
-        ]);
+        if (channel.channel_type !== 'teams') {
+          await this.addGatewayReplyAliases(mappingForCursor, [
+            outboundSeed.platform_thread_id,
+            data.thread_id,
+            ...(Array.isArray(outboundSeed.metadata?.provider_reply_aliases)
+              ? outboundSeed.metadata.provider_reply_aliases.filter(
+                  (alias): alias is string => typeof alias === 'string'
+                )
+              : []),
+          ]);
+        }
         if (outboundAdmission) {
           await this.outboundRepo.completeReplyAdmission(
             outboundSeed.id as GatewayOutboundMessageID,
@@ -2864,6 +3004,7 @@ export class GatewayService {
       let session: Session;
       if (
         data.listener_claim_token &&
+        !verifiedHttpAuthority &&
         !(await this.channelRepo.listenerClaimIsCurrent(channel.id, data.listener_claim_token))
       ) {
         throw new Error('Gateway listener ownership lost before Session admission');
@@ -2993,7 +3134,9 @@ export class GatewayService {
                 : {}),
             }
           : {
-              ...(data.metadata ?? {}),
+              ...(channel.channel_type === 'teams'
+                ? safeTeamsMappingMetadata(data.metadata)
+                : (data.metadata ?? {})),
               ...(outboundSeed ? { outbound_seed_id: outboundSeed.id } : {}),
               ...(outboundSeed
                 ? {
@@ -3003,7 +3146,7 @@ export class GatewayService {
                       : {}),
                   }
                 : {}),
-              ...(outboundReplyAliases.length > 0
+              ...(outboundReplyAliases.length > 0 && channel.channel_type !== 'teams'
                 ? { gateway_reply_aliases: [...new Set(outboundReplyAliases)] }
                 : {}),
             };
@@ -3038,7 +3181,9 @@ export class GatewayService {
       }
 
       if (outboundAdmission && mappingForCursor) {
-        await this.addGatewayReplyAliases(mappingForCursor, outboundReplyAliases);
+        if (channel.channel_type !== 'teams') {
+          await this.addGatewayReplyAliases(mappingForCursor, outboundReplyAliases);
+        }
         await this.outboundRepo.completeReplyAdmission(
           outboundSeed!.id as GatewayOutboundMessageID,
           sessionId
@@ -3318,6 +3463,7 @@ export class GatewayService {
       const tenantId = getCurrentTenantId();
       if (
         data.listener_claim_token &&
+        !verifiedHttpAuthority &&
         !(await this.channelRepo.listenerClaimIsCurrent(channel.id, data.listener_claim_token))
       ) {
         throw new Error('Gateway listener ownership lost before Task admission');
@@ -3505,6 +3651,14 @@ export class GatewayService {
     if (data.message_id && (await this.deliveryRepo.findByMessageId(data.message_id))) {
       return { routed: true, channelType: 'discord' };
     }
+    if (
+      data.message_id &&
+      (await this.teamsDeliveryRepo.findByMessageId(data.message_id as MessageID))
+    ) {
+      // Teams assistant delivery is owned by the HA worker. The legacy
+      // after-hook must not send a second provider effect.
+      return { routed: true, channelType: 'teams' };
+    }
 
     // Fast path: skip DB lookup entirely when no channels are configured
     if (!(await this.shouldQueryGatewayRouting())) {
@@ -3535,6 +3689,12 @@ export class GatewayService {
       }
     }
 
+    if (channel.channel_type === 'teams') {
+      // A mapped Teams message without an intent is not safe to send directly:
+      // it would bypass the generation fence and ambiguous-effect state.
+      return { routed: false, channelType: 'teams' };
+    }
+
     // Check if we have a connector for this channel type
     if (!hasConnector(channel.channel_type as ChannelType)) {
       console.warn(`[gateway] No connector for channel type: ${channel.channel_type}`);
@@ -3557,10 +3717,10 @@ export class GatewayService {
       return { routed: true, channelType: channel.channel_type };
     }
 
-    // Non-GitHub channels (e.g. Slack, Teams): send immediately
+    // Non-buffered legacy channels send immediately; Teams is handled above by its worker.
     try {
-      // Prefer the active listener instance — webhook-based connectors (e.g. Teams)
-      // store ConversationReferences in memory on the listener instance.
+      // Prefer the active listener instance for connectors that still own a live
+      // transport. Teams addresses are durable and are handled by its worker.
       const connector =
         this.getActiveListener(channel.id) ??
         getConnector(channel.channel_type as ChannelType, channel.config);
@@ -4121,13 +4281,6 @@ export class GatewayService {
     if (this.listenerLifecycleGenerations.get(key) !== generation) return;
     if (this.activeListeners.has(key)) {
       return; // Already listening
-    }
-
-    if (this.durableListenerOwnership && channel.channel_type === 'teams') {
-      console.error(
-        `[distributed-work.gateway-listener] event=provider_unsupported provider=teams tenant_id=${JSON.stringify(listenerTenantId)} channel_id=${JSON.stringify(channel.id)} reason=${JSON.stringify('Teams webhook ingress and ConversationReference routing are process-local')}`
-      );
-      return;
     }
 
     let lease = claimedLease;

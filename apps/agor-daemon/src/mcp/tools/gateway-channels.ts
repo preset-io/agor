@@ -7,6 +7,7 @@ import {
 import {
   buildDiscordSetupArtifact,
   buildSlackManifest,
+  buildTeamsSetupManifest,
   getConnector,
   isSlackFileSourceAllowed,
   isSlackWriteTargetAllowed,
@@ -20,6 +21,7 @@ import {
   type SlackThreadHistoryRequest,
   type SlackThreadHistoryResult,
   type SlackWizardOptions,
+  teamsGatewayCallbackUrl,
   validateDiscordSetup,
 } from '@agor/core/gateway';
 import {
@@ -48,7 +50,9 @@ import {
   type UserID,
   type UserRole,
   type UUID,
+  validateTeamsConfig,
   withDiscordConfigDefaults,
+  withTeamsConfigDefaults,
 } from '@agor/core/types';
 import type { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -63,6 +67,7 @@ import { ensureBranchWorkspaceAccess } from '../../utils/branch-workspace-path.j
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { ingestInboundAttachments, isIngestableFile } from '../../utils/gateway-attachments.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
+import { readTeamsGatewayDiagnostics } from '../../utils/teams-gateway-diagnostics.js';
 import { getUploadLimits } from '../../utils/upload.js';
 import { getUploadStagingStore } from '../../utils/upload-staging.js';
 import {
@@ -383,7 +388,11 @@ const gatewayChannelCreateSchema = z
       });
     }
     const config =
-      value.channelType === 'discord' ? withDiscordConfigDefaults(rawConfig) : rawConfig;
+      value.channelType === 'discord'
+        ? withDiscordConfigDefaults(rawConfig)
+        : value.channelType === 'teams'
+          ? withTeamsConfigDefaults(rawConfig)
+          : rawConfig;
     addPublicConfigIssues(config, issue, value.channelType === 'discord', false);
 
     // Disabled channels are drafts: they may omit required credentials so they
@@ -434,6 +443,21 @@ const gatewayChannelCreateSchema = z
         path: ['config', 'app_id'],
         message: 'config.app_id is required for Teams gateway channels.',
       });
+    }
+    if (value.channelType === 'teams') {
+      const validation = validateTeamsConfig(config, {
+        requireAppPassword: value.enabled !== false,
+      });
+      for (const message of validation.errors) {
+        // The disabled-draft flow deliberately defers only the secret. The
+        // app identity and bounded runtime policy are still validated now.
+        if (value.enabled === false && message === 'app_password is required') continue;
+        issue.addIssue({
+          code: 'custom',
+          path: ['config'],
+          message: `Invalid Teams gateway configuration: ${message}.`,
+        });
+      }
     }
 
     if (value.channelType === 'discord') {
@@ -876,7 +900,11 @@ function toServiceCreateData(
   args: z.infer<typeof gatewayChannelCreateSchema>
 ): GatewayChannelCreateData {
   const config =
-    args.channelType === 'discord' ? withDiscordConfigDefaults(args.config) : args.config;
+    args.channelType === 'discord'
+      ? withDiscordConfigDefaults(args.config)
+      : args.channelType === 'teams'
+        ? withTeamsConfigDefaults(args.config)
+        : args.config;
   return {
     name: args.name,
     channel_type: args.channelType,
@@ -1111,6 +1139,36 @@ const discordSetupSchema = z
       });
     }
   });
+
+const teamsSetupSchema = z.strictObject({
+  appId: mcpRequiredString('appId', 'Microsoft Entra application (client) ID.'),
+  gatewayChannelId: mcpRequiredId(
+    'gatewayChannelId',
+    'Gateway channel',
+    'Existing Teams gateway channel ID used in the shared callback URL.'
+  ),
+  displayName: mcpOptionalNonEmptyString('displayName', 'Teams app display name.'),
+  callbackOrigin: z
+    .string()
+    .url()
+    .refine((value) => {
+      try {
+        const url = new URL(value);
+        return (
+          url.protocol === 'https:' &&
+          !url.username &&
+          !url.password &&
+          url.pathname === '/' &&
+          !url.search &&
+          !url.hash
+        );
+      } catch {
+        return false;
+      }
+    }, 'callbackOrigin must be an HTTPS origin without a path')
+    .optional()
+    .describe('Public HTTPS origin hosting Agor, for example https://agor.example.com.'),
+});
 
 function toSlackWizardOptions(
   args: z.infer<typeof slackManifestGenerateSchema>
@@ -1717,6 +1775,91 @@ export function registerGatewayChannelTools(server: McpServer, ctx: McpContext):
           'A verified Discord application can be enabled on only one channel globally; duplicate attempts receive a generic conflict without tenant or channel details.',
           'Outbound targets are fresh channel:<snowflake> seeds; Discord thread identifiers are not accepted for proactive MCP sends. The first human reply consumes the durable seed.',
         ],
+      });
+    }
+  );
+
+  server.registerTool(
+    'agor_gateway_teams_setup',
+    {
+      description:
+        'Generate the Microsoft Teams gateway setup artifact (admin-only): a desired Teams app manifest, the shared Agor callback URL, standard-channel RSC permission, and explicit setup caveats. This is pure and honest: it creates no Azure/Teams resource, validates no credentials, and does not verify a live installation.',
+      annotations: { readOnlyHint: true },
+      inputSchema: teamsSetupSchema,
+    },
+    async (args) => {
+      requireAdmin(ctx, 'generate Teams setup guidance');
+      const manifest = buildTeamsSetupManifest({
+        appId: args.appId,
+        gatewayChannelId: args.gatewayChannelId,
+        ...(args.displayName ? { displayName: args.displayName } : {}),
+        ...(args.callbackOrigin ? { callbackOrigin: args.callbackOrigin } : {}),
+      });
+      const callbackUrl = teamsGatewayCallbackUrl({
+        appId: args.appId,
+        gatewayChannelId: args.gatewayChannelId,
+        ...(args.displayName ? { displayName: args.displayName } : {}),
+        ...(args.callbackOrigin ? { callbackOrigin: args.callbackOrigin } : {}),
+      });
+      return textResult({
+        manifest,
+        callback_url: callbackUrl,
+        rsc_permissions: ['ChannelMessage.Read.Group'],
+        setup_steps: [
+          'Register or select the Microsoft Entra application and Azure Bot identity for this channel; keep the app ID and tenant ID aligned with the Agor channel configuration.',
+          'Configure the Azure Bot messaging endpoint to callback_url. Agor owns one shared HTTPS route; there is no per-channel port or path to configure.',
+          'Install the desired manifest in Teams and grant the standard-channel RSC permission where required by the tenant.',
+          'Use the secure credential widget for the app password, then enable the channel only after the redacted status shows the canonical identity is configured.',
+        ],
+        caveats: [
+          'GENERATED ONLY — no Azure or Teams resource was created, no credential was validated, and live activity delivery was not verified.',
+          'Standard-channel RSC catch-up is bounded and best-effort. It is not used to acknowledge or block the current mention, and Agor does not claim Graph correlation from this artifact.',
+          'Outbound delivery is durable and HA, but a provider timeout after the effect marker is terminal ambiguous; operators must inspect the delivery rather than blindly retrying.',
+        ],
+      });
+    }
+  );
+
+  server.registerTool(
+    'agor_gateway_teams_status',
+    {
+      description:
+        'Report the daemon-owned Teams gateway runtime contract (admin-only). With gatewayChannelId, include bounded per-channel ingress, catch-up, and outbound queue diagnosis with safe state and terminal identifiers; it does not probe Azure, Teams, Graph, credentials, or claim live provider health.',
+      annotations: { readOnlyHint: true },
+      inputSchema: z.strictObject({
+        gatewayChannelId: mcpOptionalId(
+          'gatewayChannelId',
+          'Teams gateway channel',
+          'Optional Teams gateway channel ID for bounded queue diagnosis.'
+        ),
+      }),
+    },
+    async (args) => {
+      requireAdmin(ctx, 'read Teams gateway status');
+      const worker = ctx.app.get('teamsGatewayWorker') as
+        | { getStatus?: () => Record<string, unknown> }
+        | undefined;
+      const status = {
+        status: worker?.getStatus?.() ?? { running: false },
+        live_provider_verification: 'not_performed',
+        callback_url_mode: 'shared /gateway/teams/:gatewayChannelId/activities',
+      };
+      if (!args.gatewayChannelId) return textResult(status);
+      return runWithMcpTenantDatabaseScope(ctx, async (db) => {
+        const channel = await new GatewayChannelRepository(db).findById(args.gatewayChannelId!);
+        if (!channel) throw new Error(`Gateway channel not found: ${args.gatewayChannelId}`);
+        if (channel.channel_type !== 'teams') {
+          throw new Error(`Gateway channel ${channel.id} is not a Teams channel`);
+        }
+        return textResult({
+          ...status,
+          channel: {
+            id: channel.id,
+            enabled: channel.enabled,
+            provider_config_generation: channel.provider_config_generation,
+          },
+          diagnosis: await readTeamsGatewayDiagnostics(db, channel.id),
+        });
       });
     }
   );

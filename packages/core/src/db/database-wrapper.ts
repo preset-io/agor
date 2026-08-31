@@ -128,6 +128,36 @@ export function isPostgresDatabase(db: Database): db is PostgresJsDatabase<typeo
   return !('run' in db);
 }
 
+/**
+ * Build a dialect-native current-time expression. A supplied fallback exists
+ * only for deterministic SQLite repository tests; PostgreSQL always reads the
+ * transaction/database clock so a caller cannot influence an ownership fence.
+ */
+export function databaseNowExpression(db: Database, fallback?: Date): SQL | Date {
+  if (isPostgresDatabase(db)) return sql`CURRENT_TIMESTAMP`;
+  return fallback ?? sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`;
+}
+
+/** Read the database clock while already inside a transaction with a locked row. */
+export async function getDatabaseNow(
+  db: Database,
+  table: SQLiteTable | PgTable,
+  where: SQLWrapper,
+  fallback?: Date
+): Promise<Date | null> {
+  if (isSQLiteDatabase(db) && fallback) return fallback;
+  const row = (await select(db, {
+    value: databaseNowExpression(db),
+  })
+    .from(table)
+    .where(where)
+    .one()) as { value?: unknown } | null;
+  if (!row || row.value === undefined || row.value === null) return null;
+  if (row.value instanceof Date) return row.value;
+  const value = new Date(row.value as string | number);
+  return Number.isNaN(value.getTime()) ? null : value;
+}
+
 /** Return the canonical dialect for an already-created database instance. */
 export function getDatabaseInstanceDialect(db: Database): DatabaseDialect {
   return isSQLiteDatabase(db) ? 'sqlite' : 'postgresql';

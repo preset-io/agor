@@ -1097,12 +1097,28 @@ describe('GatewayChannelsTable Teams create wizard', () => {
       target: { value: 'app-123' },
     });
     fireEvent.change(screen.getByPlaceholderText('Client secret value'), {
-      target: { value: 'secret' },
+      target: { value: 's e c r e t' },
     });
     fireEvent.change(document.querySelector('#teams_tenant_id') as HTMLInputElement, {
       target: { value: 'tenant-123' },
     });
 
+    expandPanel('Delivery and catch-up');
+    const userMap = screen.getByLabelText('Teams → Agor User ID map (JSON)');
+    fireEvent.change(userMap, { target: { value: '{"aad-object-1":"user@example.com"}' } });
+    clickButton(/Create channel/);
+    await waitFor(() =>
+      expect(document.querySelector('.ant-form-item-explain-error')?.textContent).toContain(
+        'full lowercase UUIDv7 Agor User IDs'
+      )
+    );
+    expect(channelCreate).not.toHaveBeenCalled();
+
+    fireEvent.change(userMap, {
+      target: {
+        value: '{"aad-object-1":"01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f"}',
+      },
+    });
     clickButton(/Create channel/);
     await waitFor(() => expect(channelCreate).toHaveBeenCalledTimes(1));
     expect(channelCreate.mock.calls[0][0]).toMatchObject({
@@ -1110,7 +1126,12 @@ describe('GatewayChannelsTable Teams create wizard', () => {
       name: 'My Teams',
       target_branch_id: 'branch-1',
       agor_user_id: 'user-1',
-      config: { app_id: 'app-123', tenant_id: 'tenant-123' },
+      config: {
+        app_id: 'app-123',
+        app_password: 'secret',
+        microsoft_tenant_id: 'tenant-123',
+        user_map: { 'aad-object-1': '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' },
+      },
     });
     // Same headroom rationale as the GitHub wizard test above: opens the real
     // channel-type Select, so it's among the heaviest tests in this file.

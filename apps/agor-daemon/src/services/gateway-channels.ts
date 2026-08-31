@@ -63,6 +63,21 @@ type PersistedGatewayChannelWriteData =
   | PersistedGatewayChannelCreateData
   | PersistedGatewayChannelPatchData;
 
+function isTeamsCredentialOnlyPatch(
+  data: GatewayChannelPatchData,
+  channelType: GatewayChannel['channel_type']
+): boolean {
+  if (
+    channelType !== 'teams' ||
+    Object.keys(data).length !== 1 ||
+    !data.config ||
+    Array.isArray(data.config)
+  )
+    return false;
+  const keys = Object.keys(data.config);
+  return keys.length === 1 && keys[0] === 'app_password';
+}
+
 /**
  * Public GatewayChannel transport surface. `update` is deliberately absent so
  * whole-row `PUT` never reaches the inherited DrizzleService implementation.
@@ -259,7 +274,7 @@ export class GatewayChannelsService extends DrizzleService<
     assertServiceWriteFields('Gateway channel', rawData, GATEWAY_CHANNEL_WRITE_FIELDS, params);
     data = pickWriteFields<GatewayChannelPatchData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
 
-    const authorityPatch = isGatewayProviderAuthorityPatch(data);
+    let authorityPatch = isGatewayProviderAuthorityPatch(data);
     if ((id === null || Array.isArray(id)) && authorityPatch) {
       throw new BadRequest('Gateway provider-authority changes cannot be multi-patched');
     }
@@ -275,6 +290,9 @@ export class GatewayChannelsService extends DrizzleService<
       ? await this.withTenantDatabase(params, async () => {
           const current = await this.channelRepo.findById(String(id));
           if (!current) throw new BadRequest('Gateway channel was not found');
+          authorityPatch =
+            !isTeamsCredentialOnlyPatch(data, current.channel_type) &&
+            isGatewayProviderAuthorityPatch(data);
 
           let persistedData: PersistedGatewayChannelPatchData = data;
           if (

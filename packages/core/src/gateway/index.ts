@@ -82,11 +82,25 @@ export {
   requiredBotScopes,
   SLACK_AGENT_TOOL_SCOPES,
 } from './connectors/slack-manifest';
+export type { NormalizedTeamsActivity } from './connectors/teams';
 export {
+  createTeamsAuthConfiguration,
+  createTeamsCloudAdapter,
   extractQuotedReplyText,
+  normalizeTeamsActivity,
   parseThreadId as parseTeamsThreadId,
   TeamsConnector,
+  teamsSafeInboundMetadata,
 } from './connectors/teams';
+export type { TeamsCatchUpActivity, TeamsCatchUpResult } from './connectors/teams-catch-up';
+export { boundTeamsCatchUp } from './connectors/teams-catch-up';
+export type { TeamsSetupManifestOptions } from './connectors/teams-manifest';
+export {
+  buildTeamsSetupManifest,
+  TEAMS_BOT_SCOPES,
+  TEAMS_RSC_APPLICATION_PERMISSIONS,
+  teamsGatewayCallbackUrl,
+} from './connectors/teams-manifest';
 export type { GatewayContext } from './context';
 export { formatGatewayContext } from './context';
 export type {

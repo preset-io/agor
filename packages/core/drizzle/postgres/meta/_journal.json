@@ -694,6 +694,13 @@
       "when": 1788206400000,
       "tag": "0099_shared_session_prompting",
       "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1788206400001,
+      "tag": "0100_slow_virginia_dare",
+      "breakpoints": true
     }
   ]
 }

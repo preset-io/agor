@@ -19,11 +19,13 @@ import {
   type SlackWizardOptions,
   slackAppManifestUrl,
 } from '@agor/core/gateway/slack-manifest';
+import { buildTeamsSetupManifest } from '@agor/core/gateway/teams-manifest';
 import {
   DEFAULT_DISCORD_CATCH_UP,
   MAX_DISCORD_CATCH_UP,
   MIN_DISCORD_CATCH_UP,
   validateDiscordConfig,
+  validateTeamsUserMap,
 } from '@agor/core/types';
 import type {
   AgenticToolName,
@@ -118,6 +120,20 @@ import { BranchSelect } from './BranchSelect';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { UserSelect } from './UserSelect';
+
+const validateTeamsUserMapField = (_: unknown, value: unknown) => {
+  if (typeof value !== 'string' || !value.trim()) return Promise.resolve();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return Promise.reject(new Error('Enter a valid JSON object.'));
+  }
+  const validation = validateTeamsUserMap(parsed);
+  return validation.ok
+    ? Promise.resolve()
+    : Promise.reject(new Error(validation.errors[0] ?? 'Invalid Teams user map.'));
+};
 
 interface GatewayChannelsTableProps {
   client: AgorClient | null;
@@ -606,6 +622,42 @@ const CompactAlert: React.FC<{
         icon: { fontSize: token.fontSizeSM, marginInlineEnd: 8 },
         title: { marginBottom: body == null ? 0 : 2 },
       }}
+    />
+  );
+};
+
+const TeamsManifestPanel: React.FC<{ appId: string; gatewayChannelId: string }> = ({
+  appId,
+  gatewayChannelId,
+}) => {
+  const manifest = useMemo(
+    () =>
+      JSON.stringify(
+        buildTeamsSetupManifest({
+          appId,
+          gatewayChannelId,
+          callbackOrigin: typeof window === 'undefined' ? undefined : window.location.origin,
+        }),
+        null,
+        2
+      ),
+    [appId, gatewayChannelId]
+  );
+  return (
+    <CompactAlert
+      type="info"
+      heading="Teams app manifest"
+      expandable
+      description={
+        <>
+          Paste the desired manifest into Teams Developer Portal. This is setup guidance, not a live
+          installation check; RSC catch-up remains bounded and best-effort.
+          <pre style={{ maxHeight: 180, overflow: 'auto', marginTop: 8, whiteSpace: 'pre-wrap' }}>
+            {manifest}
+          </pre>
+        </>
+      }
+      style={{ marginTop: 12 }}
     />
   );
 };
@@ -2230,6 +2282,7 @@ const ChannelFormFields: React.FC<{
                   <Space>
                     {opt.icon}
                     {opt.label}
+                    {opt.value === 'teams' && <Tag color="gold">Experimental</Tag>}
                     {opt.comingSoon && <Tag style={{ marginInlineStart: 4 }}>Coming soon</Tag>}
                   </Space>
                 </Select.Option>
@@ -2747,7 +2800,7 @@ const ChannelFormFields: React.FC<{
 
                     <CompactAlert
                       type="info"
-                      heading="Azure Bot Setup"
+                      heading="Azure Bot Setup · Experimental"
                       expandable
                       description={
                         <span>
@@ -2759,12 +2812,21 @@ const ChannelFormFields: React.FC<{
                           >
                             Azure Portal
                           </Typography.Link>
-                          . Both single-tenant and multi-tenant bots are supported. The{' '}
-                          <strong>Tenant ID</strong> is required so the bot can send replies. Then
-                          sideload the bot as a Teams app via a custom manifest.
+                          . This integration is single-tenant only. The <strong>Tenant ID</strong>{' '}
+                          is required so the bot can send replies. Then sideload the bot as a Teams
+                          app via a custom manifest. Teams delivery is experimental until live
+                          provider QA is complete.
                         </span>
                       }
                     />
+                    {mode === 'edit' &&
+                      editingChannel?.id &&
+                      typeof editingChannel.config?.app_id === 'string' && (
+                        <TeamsManifestPanel
+                          appId={editingChannel.config.app_id}
+                          gatewayChannelId={editingChannel.id}
+                        />
+                      )}
                   </>
                 ),
               },
@@ -2789,27 +2851,23 @@ const ChannelFormFields: React.FC<{
                       are always enabled.
                     </Typography.Text>
 
-                    <Form.Item
-                      label="Require @mention in channels"
-                      name="teams_require_mention"
-                      valuePropName="checked"
-                      initialValue={true}
-                      tooltip="When enabled, bot only responds when @mentioned in Teams channels (recommended)"
-                    >
-                      <Switch />
-                    </Form.Item>
+                    <Typography.Text type="secondary">
+                      Personal chats are accepted without a mention. Group chats and channels
+                      require a structured mention of this bot's app ID; display names and legacy
+                      require_mention settings cannot bypass that boundary.
+                    </Typography.Text>
                   </>
                 ),
               },
 
-              // ── Webhook Configuration ──
+              // ── Delivery and catch-up ──
               {
-                key: 'teams-webhook',
+                key: 'teams-delivery',
                 label: (
                   <SectionLabel
                     icon={<ToolOutlined />}
-                    title="Webhook Configuration"
-                    subtitle="port & path"
+                    title="Delivery and catch-up"
+                    subtitle="durable queue"
                   />
                 ),
                 children: (
@@ -2818,27 +2876,86 @@ const ChannelFormFields: React.FC<{
                       type="secondary"
                       style={{ fontSize: 12, display: 'block', marginBottom: 12 }}
                     >
-                      The Teams connector runs an HTTP server for the Bot Framework messaging
-                      endpoint. Configure the port and path to match your Azure Bot&apos;s messaging
-                      endpoint URL.
+                      Agor receives activities at one shared endpoint, commits them to an encrypted
+                      durable queue, and acknowledges Teams before worker processing. Catch-up is
+                      bounded and best-effort; it never delays the current mention.
                     </Typography.Text>
 
                     <Form.Item
-                      label="Webhook Port"
-                      name="teams_webhook_port"
-                      initialValue={3978}
-                      tooltip="Port for the Bot Framework HTTP endpoint"
+                      label="Allowed team IDs"
+                      name="teams_allowed_team_ids"
+                      tooltip="Optional. Leave blank to allow all teams in this tenant. Separate IDs with commas or new lines."
                     >
-                      <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
+                      <Input.TextArea rows={2} placeholder="team-id-1, team-id-2" />
                     </Form.Item>
 
                     <Form.Item
-                      label="Webhook Path"
-                      name="teams_webhook_path"
-                      initialValue="/api/messages"
-                      tooltip="URL path for the Bot Framework messaging endpoint"
+                      label="Allowed channel IDs"
+                      name="teams_allowed_channel_ids"
+                      tooltip="Optional. Separate IDs with commas or new lines."
                     >
-                      <Input placeholder="/api/messages" />
+                      <Input.TextArea rows={2} placeholder="19:...@thread.tacv2" />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Allowed user AAD object IDs"
+                      name="teams_allowed_user_aad_object_ids"
+                      tooltip="Optional. Separate IDs with commas or new lines."
+                    >
+                      <Input.TextArea rows={2} placeholder="aad-object-id-1, aad-object-id-2" />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Teams → Agor User ID map (JSON)"
+                      name="teams_user_map"
+                      rules={[{ validator: validateTeamsUserMapField }]}
+                      tooltip="Optional JSON object mapping Teams AAD object IDs to immutable tenant-owned Agor User IDs."
+                    >
+                      <Input.TextArea
+                        rows={3}
+                        placeholder={'{"aad-object-id":"01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f"}'}
+                      />
+                    </Form.Item>
+
+                    <Form.Item
+                      label="Catch-up mode"
+                      name="teams_catch_up_mode"
+                      initialValue="best_effort"
+                    >
+                      <Select
+                        options={[
+                          { value: 'best_effort', label: 'Best effort (bounded)' },
+                          { value: 'off', label: 'Off' },
+                        ]}
+                      />
+                    </Form.Item>
+
+                    <Space.Compact block>
+                      <Form.Item
+                        label="Max catch-up messages"
+                        name="teams_catch_up_max_messages"
+                        initialValue={50}
+                        style={{ flex: 1 }}
+                      >
+                        <InputNumber min={1} max={100} style={{ width: '100%' }} />
+                      </Form.Item>
+                      <Form.Item
+                        label="Max prompt bytes"
+                        name="teams_catch_up_max_prompt_bytes"
+                        initialValue={16384}
+                        style={{ flex: 1 }}
+                      >
+                        <InputNumber min={1} max={65536} style={{ width: '100%' }} />
+                      </Form.Item>
+                    </Space.Compact>
+
+                    <Form.Item
+                      label="Enable outbound replies"
+                      name="teams_outbound_enabled"
+                      valuePropName="checked"
+                      initialValue={true}
+                    >
+                      <Switch />
                     </Form.Item>
                   </>
                 ),
@@ -4028,10 +4145,38 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (values.teams_app_password) {
         config.app_password = sanitizeSecretValue(values.teams_app_password as string);
       }
-      config.tenant_id = values.teams_tenant_id;
-      config.webhook_port = (values.teams_webhook_port as number) ?? 3978;
-      config.webhook_path = (values.teams_webhook_path as string) || '/api/messages';
-      config.require_mention = values.teams_require_mention ?? true;
+      config.microsoft_tenant_id = values.teams_tenant_id;
+      // Group chats and channels always require a structured app-ID mention;
+      // retain the canonical value so legacy config cannot weaken that fence.
+      config.require_mention = true;
+      const teamsList = (value: unknown): string[] =>
+        typeof value === 'string'
+          ? value
+              .split(/[\n,]/)
+              .map((item) => item.trim())
+              .filter(Boolean)
+          : Array.isArray(value)
+            ? value.filter(
+                (item): item is string => typeof item === 'string' && item.trim().length > 0
+              )
+            : [];
+      config.allowed_team_ids = teamsList(values.teams_allowed_team_ids);
+      config.allowed_channel_ids = teamsList(values.teams_allowed_channel_ids);
+      config.allowed_user_aad_object_ids = teamsList(values.teams_allowed_user_aad_object_ids);
+      if (typeof values.teams_user_map === 'string' && values.teams_user_map.trim()) {
+        try {
+          config.user_map = JSON.parse(values.teams_user_map as string);
+        } catch {
+          // validateJSON reports the form error; do not replace the last valid value.
+        }
+      }
+      config.outbound_enabled = values.teams_outbound_enabled ?? true;
+      config.catch_up = {
+        mode: values.teams_catch_up_mode ?? 'best_effort',
+        max_messages: (values.teams_catch_up_max_messages as number) ?? 50,
+        max_prompt_bytes: (values.teams_catch_up_max_prompt_bytes as number) ?? 16 * 1024,
+        request_timeout_ms: 2_000,
+      };
     } else if (values.channel_type === 'shortcut') {
       if (values.shortcut_api_token) {
         config.api_token = sanitizeSecretValue(values.shortcut_api_token as string);
@@ -4391,10 +4536,27 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       }
     } else if (channel.channel_type === 'teams') {
       formValues.teams_app_id = config?.app_id;
-      formValues.teams_tenant_id = config?.tenant_id;
-      formValues.teams_webhook_port = (config?.webhook_port as number) ?? 3978;
-      formValues.teams_webhook_path = (config?.webhook_path as string) || '/api/messages';
-      formValues.teams_require_mention = config?.require_mention ?? true;
+      formValues.teams_tenant_id = config?.microsoft_tenant_id ?? config?.tenant_id;
+      formValues.teams_allowed_team_ids = ((config?.allowed_team_ids as string[]) ?? []).join('\n');
+      formValues.teams_allowed_channel_ids = ((config?.allowed_channel_ids as string[]) ?? []).join(
+        '\n'
+      );
+      formValues.teams_allowed_user_aad_object_ids = (
+        (config?.allowed_user_aad_object_ids as string[]) ?? []
+      ).join('\n');
+      const teamsUserMap = config?.user_map as Record<string, string> | undefined;
+      if (
+        teamsUserMap &&
+        typeof teamsUserMap === 'object' &&
+        Object.keys(teamsUserMap).length > 0
+      ) {
+        formValues.teams_user_map = JSON.stringify(teamsUserMap, null, 2);
+      }
+      const catchUp = config?.catch_up as Record<string, unknown> | undefined;
+      formValues.teams_catch_up_mode = catchUp?.mode ?? 'best_effort';
+      formValues.teams_catch_up_max_messages = catchUp?.max_messages ?? 50;
+      formValues.teams_catch_up_max_prompt_bytes = catchUp?.max_prompt_bytes ?? 16 * 1024;
+      formValues.teams_outbound_enabled = config?.outbound_enabled ?? true;
     } else if (channel.channel_type === 'shortcut') {
       formValues.shortcut_agent_member_id = config?.agent_member_id;
       formValues.shortcut_mention_name = config?.mention_name;
@@ -4534,6 +4696,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       render: (type: ChannelType) => (
         <Tag icon={getChannelTypeIcon(type)} color={getChannelTypeColor(type)}>
           {type.charAt(0).toUpperCase() + type.slice(1)}
+          {type === 'teams' && ' · Experimental'}
         </Tag>
       ),
     },

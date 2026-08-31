@@ -55,6 +55,7 @@ import {
   sessionMcpServers,
   sessions,
   shortId,
+  TeamsMessageDeliveryRepository,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
   type UserMCPOAuthToken,
@@ -439,8 +440,12 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
   app.use('/leaderboard', createLeaderboardService(db));
   const deliveryRepository = new DiscordMessageDeliveryRepository(db);
+  const teamsDeliveryRepository = new TeamsMessageDeliveryRepository(db);
   const messagesService = createMessagesService(db, (tx, message) =>
-    deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+    Promise.all([
+      deliveryRepository.enqueueForMessageInTransaction(tx, message),
+      teamsDeliveryRepository.enqueueForMessageInTransaction(tx, message),
+    ]).then(() => undefined)
   ) as unknown as MessagesServiceImpl;
   const messageOpenApiProperties = {
     message_id: { type: 'string', format: 'uuid' },

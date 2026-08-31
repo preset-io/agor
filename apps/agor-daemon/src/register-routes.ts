@@ -169,6 +169,7 @@ import {
   deliverPermissionDecision,
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
+import { registerTeamsGatewayIngressRoute } from './routes/teams-gateway-ingress.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
 import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
@@ -827,6 +828,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
   } = ctx;
 
   registerExecutorResponseRoutes(app);
+  registerTeamsGatewayIngressRoute({ app, db });
 
   // Health and launch auth share the exact startup-resolved provider. The
   // public DTO is immutable and contains no verification or exchange secrets.

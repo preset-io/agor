@@ -34,7 +34,7 @@ Things that still warrant caution:
 
 The Message Gateway connects external messaging platforms to Agor's agent sessions. Mention your Slack or Discord bot in a supported channel, mention `@agor` on a GitHub PR, or mention the configured assistant in a Shortcut story comment, and Agor spins up a coding session on the right branch with the right agent, then routes responses back to the platform. In Slack and Discord channel-like surfaces, every prompt requires an explicit bot mention.
 
-> Currently supports **Slack**, **Discord**, **GitHub**, **Shortcut**, and **Microsoft Teams**. WhatsApp and Telegram connectors are planned.
+> Currently supports **Slack**, **Discord**, **GitHub**, **Shortcut**, and **Microsoft Teams (Experimental)**. WhatsApp and Telegram connectors are planned.
 
 <img
   src="/screenshots/marketing/agor-marketing-slack-thread.png"
@@ -63,7 +63,7 @@ You can create multiple channels for the same or different branches. For example
 - **"Scout"** runs Claude Code (Sonnet 4.5) on a lighter review branch, trust mode, no MCP servers
 - **"Codex Runner"** runs Codex on a `superset-frontend` branch for quick JS tasks
 
-Gateway channels keep an internal per-channel key for Agor's generic inbound endpoint, but supported integrations usually do not require you to copy it anywhere. Slack uses Socket Mode, while GitHub and Shortcut use API polling; no public webhook URL is needed for those connectors.
+Gateway channels keep an internal per-channel key for Agor's generic inbound endpoint, but supported integrations usually do not require you to copy it anywhere. Slack uses Socket Mode, GitHub and Shortcut use API polling, and Teams uses one shared HTTPS activity route; no per-channel webhook port or process-local callback server is configured.
 
 ## How It Works
 
@@ -107,11 +107,11 @@ The outbound routing is a lightweight after-hook on message creation. For sessio
 Standalone SQLite installations require no new configuration and keep the
 historical process-local listener lifecycle.
 
-> **Provider limit in PostgreSQL mode:** Slack, GitHub, Shortcut, and Discord listeners
-> support distributed ownership. Microsoft Teams currently depends on a local
-> Bot Framework port and in-memory conversation references, so Agor fails its
-> listener closed on PostgreSQL. Teams remains available only in standalone
-> SQLite until its ingress and reply-routing contract is redesigned.
+> **Teams ingress (Experimental):** Microsoft Teams uses the shared
+> `/gateway/teams/:gatewayChannelId/activities` route. The activity is authenticated
+> with the Microsoft Agents SDK and encrypted into a durable queue before Agor
+> returns HTTP 200. The same route and worker contract apply to SQLite and
+> PostgreSQL; no process-local ConversationReference is an authority.
 
 On PostgreSQL, every daemon performs bounded recurring discovery. A durable,
 database-time lease on each gateway channel chooses one listener owner; daemon
@@ -153,6 +153,8 @@ Session and Task remain deduplicated.
 
 The legacy generic channel-key inbound endpoint has no provider-event identity,
 so it is available only on standalone SQLite and fails closed on PostgreSQL.
+Teams does not use that endpoint: a stable Teams activity ID is the durable
+occurrence identity, and retries converge on one Agor Task.
 
 Migrations `0066_gateway_listener_discovery` and
 `0076_gateway_listener_ha` install the narrow discovery policy, lease columns,
@@ -476,30 +478,34 @@ Follow-up mentions in the same Shortcut thread continue the existing session. Co
 
 ## Setting Up Microsoft Teams Integration
 
-> **PostgreSQL multi-daemon limitation:** Teams listener startup currently
-> fails closed on PostgreSQL. Its webhook server and proactive-reply
-> `ConversationReference` are process-local, so the connector cannot safely
-> support load-balanced replica ingress yet. Teams remains available in the
-> standalone SQLite deployment path. Use Slack, GitHub, or Shortcut for a
-> shared PostgreSQL daemon fleet until durable Teams ingress/routing lands.
+Teams (Experimental) uses a shared queue-first HTTPS ingress and a durable
+worker. The implementation has database fences for stable activity IDs,
+claim recovery, encrypted `ConversationReference` refresh, and cross-replica
+lane ordering; live provider QA is still required before claiming load-balanced
+deployment safety.
+The operator status is deliberately narrower than a live provider health check;
+setup artifacts and status do not contact Azure, Teams, or Graph.
 
 ### How It Works
 
-When you message Agor's bot in a 1:1 chat (or `@mention` it in a Teams channel), Agor receives the activity through a [Bot Framework](https://dev.botframework.com) webhook and creates a session. The session runs on the target branch, and the agent's response is posted back into the same conversation under the bot's identity.
+When you message Agor's bot in a 1:1 chat (or `@mention` it in a Teams channel), Agor receives the activity through a [Bot Framework](https://dev.botframework.com) callback and creates a session. The session runs on the target branch, and the agent's response is posted back into the same conversation under the bot's identity.
 
 Key differences from Slack and GitHub:
 
-- **Webhook, not polling or WebSocket.** Inbound messages arrive at an HTTP endpoint (default `/api/messages` on port `3978`) that the Azure Bot's messaging endpoint points to. The daemon must be reachable from Azure (e.g., via a public host or tunnel).
-- **Bot Framework identity.** Replies are sent as the registered Azure Bot, using a `ConversationReference` captured from the inbound activity (proactive messaging).
-- **1:1 DM vs channel threads.** In a personal (1:1) chat, every message routes to that conversation's session. In a channel or group chat, Agor replies in the same thread and, by default, only responds when `@mentioned` (configurable). The bot mention is stripped before the text reaches the agent.
-- **Thread IDs.** Conversations map to `{conversationId}|{activityId}`; personal chats are normalized to the conversation so follow-up messages stay in one session.
+- **Shared callback, not a per-channel server.** Point the Azure Bot messaging endpoint at `https://<your-daemon-host>/gateway/teams/<gateway-channel-id>/activities`. The host must be reachable over public HTTPS; there is no Teams webhook port or path setting in Agor.
+- **SDK-owned identity.** The Microsoft Agents `CloudAdapter` and `authorizeJWT` perform Bot Framework signature/JWKS and audience validation. Agor additionally binds the verified issuer, Teams channel, configured tenant, activity service URL, and configured allowlists before queue admission.
+- **Single-tenant scope.** This integration supports one configured Microsoft Entra tenant per Teams bot; multi-tenant bot operation is not supported.
+- **Queue-first acknowledgement.** Valid activities and their refreshed encrypted conversation address commit before HTTP 200. Invalid identity, tenant, service URL, endorsement, allowlist, or configuration-generation checks persist nothing.
+- **Conversation mapping.** Personal messages are mention-free; `groupChat` and channel messages require a structured mention entity whose ID exactly matches the bot App ID (`app-id` or `28:app-id`). Display names and the legacy `require_mention` setting cannot bypass that rule. Personal and `groupChat` messages map to the whole conversation. Standard-channel messages map to the root reply chain, and unmentioned channel messages never create Tasks. A later structured mention may receive bounded, best-effort human context from Graph/RSC when the cursor and trigger correlate; failures fall back to the current mention.
+- **Durable outbound.** Replies are claimed from a Teams-specific delivery table. A provider rejection is canceled; a timeout or crash after the effect marker is a visible `ambiguous` terminal state and is never blindly retried.
+- **Conversation-address lifetime.** Each verified activity refreshes its encrypted Bot Framework conversation address for 24 hours using database time. The address must be refreshed by a later activity before outbound delivery after expiry.
 
 ### 1. Create an Azure Bot
 
 1. In the [Azure Portal](https://portal.azure.com), create an **Azure Bot** resource backed by an app registration.
 2. Note the **App ID** (Application/client ID) and create a **client secret**. Copy the secret _value_, not its ID.
 3. Note the **Tenant ID** (required so the bot can acquire tokens to send replies).
-4. Under the bot's **Configuration**, set the **Messaging endpoint** to `https://<your-daemon-host>/api/messages` (matching the webhook path and port you configure in Agor).
+4. Under the bot's **Configuration**, set the **Messaging endpoint** to the shared callback URL shown by the Agor setup artifact or Teams channel edit panel.
 5. Under **Channels**, add the **Microsoft Teams** channel.
 
 ### 2. Add the App to Teams
@@ -518,17 +524,21 @@ Key differences from Slack and GitHub:
    - **App ID.** Your Azure Bot's Application (client) ID.
    - **App Password.** The Azure Bot client secret value (encrypted at rest).
    - **Tenant ID.** Your Azure AD tenant ID.
-3. Optionally configure:
-   - **Webhook Port.** Port for the Bot Framework endpoint (default: `3978`).
-   - **Webhook Path.** Path for inbound activities (default: `/api/messages`).
-   - **Require mention.** Require an `@mention` to trigger in channels and group chats (default: on).
-4. Save. The webhook listener starts immediately.
+3. Optionally configure the team, channel, and user AAD-object allowlists, the Teams AAD-object-to-immutable-Agor-User-ID `user_map`, bounded catch-up limits, and outbound delivery. Group chats and channels always require the structured App-ID mention described above.
+4. Save. The shared callback route is available immediately; the durable worker processes admitted activities asynchronously.
+
+For standard-channel catch-up, install the recommended `ChannelMessage.Read.Group`
+application RSC permission from the generated manifest. Catch-up is bounded and
+best-effort, never blocks the current mention, and requires live provider QA to
+prove Graph-history correlation and load-balanced behavior. Use `agor_gateway_teams_setup` for the manifest and
+`agor_gateway_teams_status` for daemon-owned status; both are honest about what
+they do not verify.
 
 ### 4. Message the Bot or @mention agor
 
 In a 1:1 chat, just message the bot. In a channel, post `@agor review this thread`. Agor:
 
-1. Receives the activity via the webhook.
+1. Authenticates and durably queues the activity via the shared callback.
 2. Creates (or resumes) the session mapped to that conversation.
 3. Runs the agent on the target branch.
 4. Posts the agent's response back into the same chat or channel thread.
@@ -555,8 +565,8 @@ The gateway is built as a set of loosely coupled components:
 - **Gateway Service** (`/gateway`). Orchestrates inbound routing (platform to session) and outbound routing (session to platform). Custom FeathersJS service.
 - **Gateway Channels** (`/gateway-channels`). CRUD for channel configurations with encrypted credential storage.
 - **Thread-Session Map** (`/thread-session-map`). Persists the mapping between platform thread IDs and Agor session IDs.
-- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `DiscordConnector` (Discord Gateway), `GitHubConnector` and `ShortcutConnector` (API polling), and `TeamsConnector` (Bot Framework webhook). Adding a new platform means implementing `sendMessage()` and optionally `sendDirectMessage()` and `startListening()`.
-- **Outbound Hook.** FeathersJS `after.create` hook on the messages service. Fire-and-forget; never blocks message creation.
+- **Connector Layer.** Platform-agnostic `GatewayConnector` interface with a registry pattern. Currently: `SlackConnector` (Socket Mode), `DiscordConnector` (Discord Gateway), `GitHubConnector` and `ShortcutConnector` (API polling), and a stateless `TeamsConnector` (Agents SDK outbound). Teams HTTP authentication, encrypted ingress, claims, mapping, and catch-up are owned by the shared daemon route/worker rather than a connector-local server.
+- **Outbound Hook.** FeathersJS `after.create` hook on the messages service. Provider-specific durable delivery intents are queued in the same tenant transaction; workers perform provider effects after a claim and persist definitive or ambiguous terminal state.
 
 ### Adding a New Platform
 
@@ -644,10 +654,12 @@ The `blocks` field is opaque platform-specific data. Currently only the Slack co
 
 ### Teams
 
-- **Bot doesn't receive messages.** Confirm the Azure Bot's **Messaging endpoint** points at `https://<your-daemon-host>/api/messages` and that the host is reachable from Azure. Check daemon logs for `[teams] Webhook server listening on port ...`.
-- **"Authentication failed" or replies never send.** Verify the **App ID**, **App Password** (the secret _value_), and **Tenant ID** are correct. A wrong or expired client secret blocks the bot from acquiring a token to reply.
-- **Bot doesn't respond to channel mentions.** In channels and group chats the bot only responds when `@mentioned`. Make sure the app is installed with the `team`/`groupChat` scope.
-- **Port already in use.** The default webhook port is `3978`. Change **Webhook Port** in the channel config if it collides with another service.
+- **Bot doesn't receive messages.** Confirm the Azure Bot messaging endpoint is the shared `https://<your-daemon-host>/gateway/teams/<gateway-channel-id>/activities` URL and that the host is reachable over HTTPS. Check the Teams gateway worker status; this does not substitute for live provider QA.
+- **Authentication or tenant rejection.** Verify the canonical **App ID**, **App Password** (the secret _value_), and **Microsoft Tenant ID**. The activity audience, Bot Framework issuer, Teams tenant, service URL, and configured allowlists must all match. Rejected activities are not persisted.
+- **Bot doesn't respond to channel mentions.** Channels and group chats require a structured `@mention` whose entity ID is the exact App ID (or `28:` + App ID); display names are not sufficient. Confirm the app has `team`/`groupChat` scope and that the team/channel/user allowlists include the activity.
+- **Catch-up did not run.** Standard-channel catch-up requires the recommended RSC permission and is bounded best-effort. It never blocks the current mention and may be unavailable; live provider QA still gates any claim of Graph correlation.
+- **Outbound shows ambiguous.** A timeout or crash after the durable effect marker means the provider may have accepted the message. Inspect the delivery state and reconcile with Teams before any operator action; Agor does not blind-retry it.
+- **Disable or rotate config.** Disable and credential/config identity changes fence old workers and outbound delivery through the channel generation. Re-enable only after the canonical identity is restored.
 
 ### General
 

@@ -430,6 +430,12 @@
       "import": "./dist/gateway/connectors/discord-setup.js",
       "require": "./dist/gateway/connectors/discord-setup.cjs"
     },
+    "./gateway/teams-manifest": {
+      "source": "./src/gateway/connectors/teams-manifest.ts",
+      "types": "./dist/gateway/connectors/teams-manifest.d.ts",
+      "import": "./dist/gateway/connectors/teams-manifest.js",
+      "require": "./dist/gateway/connectors/teams-manifest.cjs"
+    },
     "./git/pure": {
       "source": "./src/git/pure.ts",
       "types": "./dist/git/pure.d.ts",
@@ -514,6 +520,8 @@
     "@feathersjs/socketio-client": "^5.0.46",
     "@feathersjs/typebox": "^5.0.46",
     "@libsql/client": "^0.17.4",
+    "@microsoft/agents-activity": "1.8.1",
+    "@microsoft/agents-hosting": "1.8.1",
     "@slack/socket-mode": "^2.0.7",
     "@slack/types": "^2.22.0",
     "@slack/web-api": "^7.19.0",
@@ -543,7 +551,6 @@
     "@types/node": "^24.6.0",
     "@vitest/coverage-v8": "^4.1.10",
     "analytics": "^0.8.19",
-    "botbuilder": "^4.23.3",
     "concurrently": "^9.2.1",
     "drizzle-kit": "^0.31.10",
     "handlebars": "^4.7.8",

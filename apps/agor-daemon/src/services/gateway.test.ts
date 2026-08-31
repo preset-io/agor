@@ -18,6 +18,7 @@ import type {
   SessionID,
   SessionPromptAuthority,
   SessionSdkHomeScope,
+  TeamsUserMap,
   ThreadSessionMap,
   User,
   UserID,
@@ -26,6 +27,7 @@ import { SessionStatus } from '@agor/core/types';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ingestInboundAttachments } from '../utils/gateway-attachments.js';
 import { GatewayService, tenantIdFromGatewayChannel } from './gateway.js';
+import { withVerifiedHttpGatewayAuthority } from './gateway-authority.js';
 import { SessionsService } from './sessions.js';
 
 vi.mock('@agor/agentic-tools/config', async (importOriginal) => {
@@ -341,6 +343,7 @@ function makeGatewayHarness(args: {
     }),
   };
   const findByEmailForAlignment = vi.fn(async () => args.alignedUser ?? null);
+  const findById = vi.fn(async () => args.alignedUser ?? null);
   const admitReplySession = vi.fn(async () =>
     args.outboundSeed
       ? {
@@ -357,9 +360,12 @@ function makeGatewayHarness(args: {
   (service as unknown as { threadMapRepo: typeof threadMapRepo }).threadMapRepo = threadMapRepo;
   (
     service as unknown as {
-      usersRepo: { findByEmailForAlignment: typeof findByEmailForAlignment };
+      usersRepo: {
+        findByEmailForAlignment: typeof findByEmailForAlignment;
+        findById: typeof findById;
+      };
     }
-  ).usersRepo = { findByEmailForAlignment };
+  ).usersRepo = { findByEmailForAlignment, findById };
   const outboundRepo = {
     admitReplySession,
     completeReplyAdmission,
@@ -387,6 +393,7 @@ function makeGatewayHarness(args: {
     threadMapRepo,
     outboundRepo,
     findByEmailForAlignment,
+    findById,
     admitReplySession,
     completeReplyAdmission,
   };
@@ -674,6 +681,42 @@ describe('GatewayService user alignment operational logs', () => {
       expect(output).not.toContain(value);
     }
   }
+
+  it('resolves Teams AAD mappings by tenant-scoped immutable User ID, never email', async () => {
+    const { service, findById, findByEmailForAlignment } = makeGatewayHarness({ alignedUser });
+    const resolveTeamsUser = service as unknown as {
+      resolveTeamsUser(opts: {
+        aadObjectId: string | undefined;
+        userMap: TeamsUserMap | undefined;
+      }): Promise<User | null>;
+    };
+
+    await expect(
+      resolveTeamsUser.resolveTeamsUser({
+        aadObjectId: 'aad-object-1',
+        userMap: { 'aad-object-1': alignedUser.user_id },
+      })
+    ).resolves.toBe(alignedUser);
+    expect(findById).toHaveBeenCalledWith(alignedUser.user_id);
+    expect(findByEmailForAlignment).not.toHaveBeenCalled();
+
+    for (const invalidUserId of [
+      'user@example.com',
+      'not-a-uuid',
+      '01933e4a',
+      '01933e4a-7b89-4c35-a8f3-9d2e1c4b5a6f',
+      '01933E4A-7B89-7C35-A8F3-9D2E1C4B5A6F',
+    ]) {
+      findById.mockClear();
+      await expect(
+        resolveTeamsUser.resolveTeamsUser({
+          aadObjectId: 'aad-object-1',
+          userMap: { 'aad-object-1': invalidUserId } as unknown as TeamsUserMap,
+        })
+      ).resolves.toBeNull();
+      expect(findById).not.toHaveBeenCalled();
+    }
+  });
 
   it('logs exact user_map and email-fallback outcomes without external identities', async () => {
     const { service, findByEmailForAlignment } = makeGatewayHarness({ alignedUser });
@@ -1669,6 +1712,87 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
 });
 
 describe('GatewayService durable listener delivery fences', () => {
+  it('requires exact structured mentions in Teams group chats despite require_mention false', async () => {
+    const channel = {
+      ...slackChannel,
+      id: 'teams-group-mention-channel' as never,
+      channel_type: 'teams',
+      channel_key: 'teams-group-mention-key',
+      config: {
+        app_id: 'teams-app',
+        app_password: 'secret',
+        microsoft_tenant_id: 'tenant-a',
+        require_mention: false,
+      },
+    } as GatewayChannel;
+    const { service, promptCreate } = makeGatewayHarness({
+      channel,
+      existingMapping: makeMapping({ channel_id: channel.id, thread_id: '19:group@thread.v2' }),
+    });
+
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: '19:group@thread.v2',
+      text: 'display name only',
+      metadata: {
+        teams_conversation_type: 'groupChat',
+        teams_has_mention: false,
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000097' as never,
+    };
+    await expect(service.create(withVerifiedHttpGatewayAuthority(data))).resolves.toMatchObject({
+      success: false,
+      created: false,
+    });
+    expect(promptCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects direct Teams creates without durable ownership and accepts the verified HTTP path', async () => {
+    const channel: GatewayChannel = {
+      ...slackChannel,
+      id: 'teams-authority-channel' as never,
+      channel_type: 'teams',
+      channel_key: 'teams-authority-key',
+      config: {
+        app_id: 'teams-app',
+        app_password: 'secret',
+        microsoft_tenant_id: 'tenant-a',
+        require_mention: true,
+      },
+      provider_installation_id: 'teams-app',
+      provider_config_generation: 3,
+    } as GatewayChannel;
+    const mapping = makeMapping({
+      channel_id: channel.id,
+      thread_id: '19:channel|root-1',
+      session_id: 'sess-teams' as never,
+    });
+    const { service } = makeGatewayHarness({ channel, existingMapping: mapping });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: false,
+      taskRepo: { findById: vi.fn(async () => null) },
+    });
+    const data = {
+      channel_key: channel.channel_key,
+      thread_id: mapping.thread_id,
+      text: 'hello',
+      user_name: 'Ada',
+      metadata: {
+        teams_conversation_type: 'channel',
+        teams_has_mention: true,
+      },
+      gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000099' as never,
+      idempotency_task_id: '01927f9d-0000-7000-8000-000000000098' as never,
+      idempotency_session_id: mapping.session_id,
+    };
+
+    await expect(service.create(data)).rejects.toThrow(/authority must be verified/i);
+    await expect(service.create(withVerifiedHttpGatewayAuthority(data))).resolves.toMatchObject({
+      success: true,
+      taskId: 'task-1',
+    });
+  });
+
   it('uses short guarded tenant DB scopes while keeping provider startup outside transactions', async () => {
     const { db, observations, touch, transactions } = makeGuardedPostgresDatabase();
     expect(() => (db as unknown as { marker(): void }).marker()).toThrow(
@@ -2774,6 +2898,50 @@ describe('GatewayService Discord beta routing', () => {
       expect(sessionsCreate).not.toHaveBeenCalled();
     }
   );
+
+  it('accepts direct Discord with an event identity but rejects missing identity under durable ownership', async () => {
+    const { service, promptCreate } = makeGatewayHarness({
+      channel: discordChannel,
+      existingMapping: null,
+      outboundSeed: {
+        id: 'discord-seed',
+        gateway_channel_id: discordChannel.id,
+        channel_type: 'discord',
+        platform_channel_id: '323456789012345678',
+        platform_message_id: '523456789012345678',
+        platform_thread_id: 'discord:message:323456789012345678:523456789012345678',
+        platform_permalink: null,
+        target_branch_id: discordChannel.target_branch_id,
+        emitted_by_user_id: 'user-1',
+        emitted_by_session_id: null,
+        emitted_by_task_id: null,
+        emitted_by_schedule_id: null,
+        message_text: 'proactive seed',
+        message_preview: 'proactive seed',
+        metadata: { provider_reply_aliases: [] },
+        consumed_by_session_id: null,
+        consumed_at: null,
+        created_at: '2026-06-22T00:00:00.000Z',
+        updated_at: '2026-06-22T00:00:00.000Z',
+      } as GatewayOutboundMessage,
+    });
+    Object.assign(service as unknown as Record<string, unknown>, {
+      durableListenerOwnership: true,
+    });
+
+    await expect(
+      service.create({
+        ...validDiscordInbound(),
+        gateway_inbound_event_id: '01927f9d-0000-7000-8000-000000000099' as never,
+      })
+    ).resolves.toMatchObject({ success: true, created: true });
+    expect(promptCreate).toHaveBeenCalledOnce();
+
+    await expect(service.create(validDiscordInbound())).rejects.toThrow(
+      'Direct gateway inbound delivery is unsupported on PostgreSQL without a provider event identity'
+    );
+    expect(promptCreate).toHaveBeenCalledOnce();
+  });
 
   it('writes a new Discord mapping with the verified provider thread Snowflake', async () => {
     const harness = makeGatewayHarness({ channel: discordChannel, existingMapping: null });

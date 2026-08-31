@@ -42,6 +42,7 @@ import { KnowledgeEmbeddingIndexer } from './services/knowledge-embedding-indexe
 import { SchedulerService } from './services/scheduler.js';
 import { SessionQueueWorker } from './services/session-queue-worker.js';
 import { TaskRuntimeReconciler } from './services/task-runtime-reconciler.js';
+import { TeamsGatewayWorker } from './services/teams-gateway-worker.js';
 import type { TerminalsService } from './services/terminals.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { scrubManagedGitRemoteCredentials } from './utils/git-remote-credential-scan.js';
@@ -50,6 +51,7 @@ import {
   getDaemonUrl,
   requestExecutor,
 } from './utils/spawn-executor.js';
+import { createTeamsStandardChannelHistoryFetcher } from './utils/teams-channel-history.js';
 
 const DEBUG_STARTUP =
   process.env.AGOR_DEBUG_STARTUP === '1' || process.env.DEBUG?.includes('startup');
@@ -871,6 +873,20 @@ export async function startup(ctx: StartupContext): Promise<void> {
   discordMessageDeliveryWorker.start();
   console.log('📨 Discord message delivery worker started');
 
+  const teamsGatewayWorker = new TeamsGatewayWorker(db, {
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+    gatewayService: gatewayService
+      ? { create: gatewayService.create.bind(gatewayService) }
+      : undefined,
+    // The worker owns the real bounded Graph/RSC fetcher. Tests may replace
+    // it, but production startup never relies on an injected-only hook.
+    catchUp: createTeamsStandardChannelHistoryFetcher(),
+  });
+  app.set('teamsGatewayWorker', teamsGatewayWorker);
+  teamsGatewayWorker.start();
+  console.log('📨 Teams gateway HA worker started');
+
   // 11. Graceful shutdown handler
   let shutdownStarted = false;
   const shutdown = async (signal: string) => {
@@ -928,6 +944,8 @@ export async function startup(ctx: StartupContext): Promise<void> {
       // Stop gateway listeners
       console.log('📨 Stopping discord message delivery worker...');
       await discordMessageDeliveryWorker.stop();
+      console.log('📨 Stopping Teams gateway HA worker...');
+      await teamsGatewayWorker.stop();
 
       if (gatewayService) {
         console.log('🌐 Stopping gateway listeners...');

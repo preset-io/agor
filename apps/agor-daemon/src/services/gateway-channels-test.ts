@@ -19,6 +19,7 @@ import type {
   GatewayConnectionTestResult,
 } from '@agor/core/types';
 import { GATEWAY_REDACTED_SENTINEL, GATEWAY_SENSITIVE_CONFIG_FIELDS } from '@agor/core/types';
+import { teamsGatewayErrorCode } from '../utils/teams-error.js';
 
 export interface GatewayChannelTestInput {
   gatewayChannelId?: string;
@@ -91,7 +92,12 @@ export function createGatewayChannelsTestService(db: TenantScopeAwareDatabase) {
           failures: [
             {
               capability: 'config',
-              reason: error instanceof Error ? error.message : String(error),
+              reason:
+                channelType === 'teams'
+                  ? teamsGatewayErrorCode(error)
+                  : error instanceof Error
+                    ? error.message
+                    : String(error),
             },
           ],
           notVerifiable: [],
