@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
 import type { Task, User } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { resolveQueuedTaskActor } from './register-routes';
+import { assertTaskExecutorPrincipal, resolveQueuedTaskActor } from './register-routes';
 
 describe('prompt and widget transaction scopes', () => {
   const source = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
@@ -68,6 +69,30 @@ describe('prompt and widget transaction scopes', () => {
     expect(prompt).toContain('normalizeMessageSource(data.messageSource, params)');
     expect(prompt).toContain('buildPromptTaskMetadata(data.metadata, messageSource, createdBy');
     expect(run).toContain('messageSource: normalizeMessageSource(data.messageSource, params)');
+    expect(run).toContain('assertTaskExecutorPrincipal(task, params)');
+  });
+
+  it("does not let a collaborator run another actor's pre-created Task", () => {
+    const task = { created_by: 'actor-a' } as Pick<Task, 'created_by'>;
+
+    expect(assertTaskExecutorPrincipal(task, { user: { user_id: 'actor-a' } as User })).toBe(
+      'actor-a'
+    );
+    expect(() =>
+      assertTaskExecutorPrincipal(task, { user: { user_id: 'actor-b' } as User })
+    ).toThrow(Forbidden);
+    expect(() => assertTaskExecutorPrincipal(task, {})).toThrow(NotAuthenticated);
+  });
+
+  it('finalizes executor spawn failures as trusted daemon writes', () => {
+    const catchStart = source.indexOf('const failureParams = { ...params, provider: undefined };');
+    const catchEnd = source.indexOf('Failed to emit tasks:failed event', catchStart);
+    const spawnFailure = source.slice(catchStart, catchEnd);
+
+    expect(catchStart).toBeGreaterThan(0);
+    expect(catchEnd).toBeGreaterThan(catchStart);
+    expect(spawnFailure).toContain("'Task',\n          failureParams");
+    expect(spawnFailure).toContain('params: failureParams');
   });
 
   it('commits required session configuration before using ordinary prompt admission', () => {

@@ -35,6 +35,10 @@ interface GeneralTabProps {
   state: GeneralFormState;
   setField: <K extends keyof GeneralFormState>(key: K, value: GeneralFormState[K]) => void;
   onArchiveOrDelete?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
+  /** Verifying `board.attach_branch` on a newly-picked target board. */
+  boardAttachChecking?: boolean;
+  /** Set once verification finds the caller can't move a branch onto the picked board. */
+  boardAttachError?: string | null;
 }
 
 export const GeneralTab: React.FC<GeneralTabProps> = ({
@@ -47,6 +51,8 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
   state,
   setField,
   onArchiveOrDelete,
+  boardAttachChecking = false,
+  boardAttachError = null,
 }) => {
   const [archiveDeleteModalOpen, setArchiveDeleteModalOpen] = useState(false);
   const branchById = useAgorStore(selectBranchById);
@@ -117,13 +123,23 @@ export const GeneralTab: React.FC<GeneralTabProps> = ({
             Work Context
           </Typography.Text>
           <Form layout="horizontal" colon={false}>
-            <Form.Item label="Board" labelCol={{ span: 6 }} wrapperCol={{ span: 18 }}>
+            <Form.Item
+              label="Board"
+              labelCol={{ span: 6 }}
+              wrapperCol={{ span: 18 }}
+              validateStatus={boardAttachError ? 'error' : undefined}
+              help={
+                boardAttachError ||
+                (boardAttachChecking ? 'Checking access to that board…' : undefined)
+              }
+            >
               <Select
                 value={state.boardId}
                 onChange={(value) => setField('boardId', value)}
                 placeholder="Select board (optional)..."
                 allowClear
                 disabled={!canEdit}
+                loading={boardAttachChecking}
                 options={boardSelectOptions(boards, branchById)}
               />
             </Form.Item>

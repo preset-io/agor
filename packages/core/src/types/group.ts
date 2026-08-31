@@ -52,7 +52,6 @@ export interface BoardGroupGrantWithGroup extends BoardGroupGrant {
 export interface EffectiveBranchAccess {
   can: BranchPermissionLevel;
   fs_access?: BranchFsAccessLevel;
-  dangerously_allow_session_sharing?: boolean;
   is_owner: boolean;
   source: 'owner' | 'group' | 'board_group' | 'others' | 'board' | 'superadmin';
   group_ids?: GroupID[];

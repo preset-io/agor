@@ -308,6 +308,16 @@ template instead of passing a literal or empty tenant value. In
 `required_from_auth` mode, every executor launch requires an active tenant
 context, whether or not its template uses the placeholder.
 
+> **Trusted launcher boundary:** Configuring `executor_command_template` (or an
+> executor-heartbeat callback command) designates an operator-authored helper,
+> not a user-authored command. Agor gives only these helper processes its minimal
+> runtime environment plus defined ambient `AGOR_CLOUD_*` launcher credentials;
+> database, master, provider, and other daemon secrets remain excluded. The
+> helper grant is non-transitive. A workload must run in a pod/container, UID,
+> and process boundary that cannot inspect the credential-bearing helper through
+> `/proc`; merely deleting names from the child's direct environment is not
+> sufficient isolation.
+
 `{unix_user}` is validated against the delegated home-key format and Agor refuses
 to execute the template when the value is malformed — it is rendered into a
 `sh -c` command and commonly used as a path segment for per-user home mounts.
@@ -342,7 +352,10 @@ creates a bounded in-memory waiter and passes a one-attempt response capability
 inside the stdin payload. The executor sends its final result to that exact
 daemon over authenticated HTTP NDJSON. The waiter returns as soon as the daemon
 accepts the final frame; launcher exit is not the result transport. Stdout and
-stderr remain logs only.
+stderr from templated launchers are discarded because the helper holds launcher
+credentials; Agor logs only closed spawn/exit metadata. Helpers should report
+operational state through authenticated structured protocols rather than raw
+process streams.
 
 ### Autonomous Fire-and-Forget Design
 

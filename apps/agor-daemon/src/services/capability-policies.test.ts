@@ -102,7 +102,7 @@ async function fixture(db: Database) {
     entry('branch_access', collaborator.user_id, 'collaborator', 'read'),
   ];
   await policies.replaceBranchPolicy(branch.branch_id, branchPolicy, owner.user_id);
-  await policies.setWorkspacePreferences({ personal_session_sharing_enabled: true }, admin.user_id);
+  await policies.setWorkspacePreferences({ session_sharing_enabled: true }, admin.user_id);
   return {
     owner: owner.user_id as UserID,
     manager: manager.user_id as UserID,
@@ -115,86 +115,48 @@ async function fixture(db: Database) {
 }
 
 describe('capability policy services', () => {
-  dbTest(
-    'lets board managers edit policy but never another owner personal sharing rule',
-    async ({ db }) => {
-      const value = await fixture(db);
-      const app = feathers();
-      setupCapabilityPolicyServices(app, db as never);
-      const service = app.service('boards/:id/permissions');
-      const managerParams = { ...params(value.manager), route: { id: value.boardId } } as never;
-      const current = (await service.find(managerParams)) as BoardCapabilityPolicies;
-      const changed = structuredClone(current);
-      changed.board_access.others = {
-        preset: 'viewer',
-        capabilities: ['board.view'],
-        fs_access: 'none',
-      };
-      await expect(service.patch(null, changed, managerParams)).resolves.toMatchObject({
-        board_access_revision: 3,
-      });
+  dbTest('lets board managers manage the branch-template sharing switch', async ({ db }) => {
+    const value = await fixture(db);
+    const app = feathers();
+    setupCapabilityPolicyServices(app, db as never);
+    const service = app.service('boards/:id/permissions');
+    const managerParams = { ...params(value.manager), route: { id: value.boardId } } as never;
+    const current = (await service.find(managerParams)) as BoardCapabilityPolicies;
+    const changed = structuredClone(current);
+    changed.board_access.others = {
+      preset: 'viewer',
+      capabilities: ['board.view'],
+      fs_access: 'none',
+    };
+    changed.branch_template.allow_shared_session_prompts = true;
+    await expect(service.patch(null, changed, managerParams)).resolves.toMatchObject({
+      board_access_revision: 3,
+      branch_template: { allow_shared_session_prompts: true },
+    });
+  });
 
-      const forbidden = structuredClone(
-        (await service.find(managerParams)) as BoardCapabilityPolicies
-      );
-      forbidden.branch_template.session_sharing.owner_rules = [
-        {
-          session_owner_user_id: value.owner,
-          enabled: true,
-          grantees: [
-            {
-              grant_id: generateId(),
-              principal: { principal_type: 'user', user_id: value.manager },
-            },
-          ],
-        },
-      ];
-      await expect(service.patch(null, forbidden, managerParams)).rejects.toMatchObject({
-        code: 403,
-      });
-    }
-  );
+  dbTest('does not let board viewers change access or shared-session defaults', async ({ db }) => {
+    const value = await fixture(db);
+    const app = feathers();
+    setupCapabilityPolicyServices(app, db as never);
+    const service = app.service('boards/:id/permissions');
+    const viewerParams = { ...params(value.viewer), route: { id: value.boardId } } as never;
+    const current = (await service.find(viewerParams)) as BoardCapabilityPolicies;
+    const sharing = structuredClone(current);
+    sharing.branch_template.allow_shared_session_prompts = true;
+    await expect(service.patch(null, sharing, viewerParams)).rejects.toMatchObject({ code: 403 });
 
-  dbTest(
-    'lets a viewer author only their own board-default session sharing rule',
-    async ({ db }) => {
-      const value = await fixture(db);
-      const app = feathers();
-      setupCapabilityPolicyServices(app, db as never);
-      const service = app.service('boards/:id/permissions');
-      const viewerParams = { ...params(value.viewer), route: { id: value.boardId } } as never;
-      const current = (await service.find(viewerParams)) as BoardCapabilityPolicies;
-      const ownSharing = structuredClone(current);
-      ownSharing.branch_template.session_sharing.owner_rules.push({
-        session_owner_user_id: value.viewer,
-        enabled: true,
-        grantees: [
-          {
-            grant_id: generateId(),
-            principal: { principal_type: 'user', user_id: value.manager },
-          },
-        ],
-      });
-      await expect(service.patch(null, ownSharing, viewerParams)).resolves.toMatchObject({
-        branch_template: {
-          session_sharing: {
-            owner_rules: [expect.objectContaining({ session_owner_user_id: value.viewer })],
-          },
-        },
-      });
-
-      const accessEscalation = structuredClone(
-        (await service.find(viewerParams)) as BoardCapabilityPolicies
-      );
-      accessEscalation.board_access.entries = [];
-      await expect(service.patch(null, accessEscalation, viewerParams)).rejects.toMatchObject({
-        code: 403,
-      });
-    }
-  );
+    const accessEscalation = structuredClone(
+      (await service.find(viewerParams)) as BoardCapabilityPolicies
+    );
+    accessEscalation.board_access.entries = [];
+    await expect(service.patch(null, accessEscalation, viewerParams)).rejects.toMatchObject({
+      code: 403,
+    });
+  });
 
   dbTest(
-    'keeps branch manager policy edits cumulative and collaborator sharing owner-scoped',
+    'lets branch managers toggle sharing while collaborators remain read-only',
     async ({ db }) => {
       const value = await fixture(db);
       const app = feathers();
@@ -206,28 +168,16 @@ describe('capability policy services', () => {
       } as never;
       const current = (await service.find(collaboratorParams)) as BranchCapabilityPolicy;
       const ownSharing = structuredClone(current);
-      ownSharing.override_config!.session_sharing.owner_rules.push({
-        session_owner_user_id: value.collaborator,
-        enabled: true,
-        grantees: [
-          {
-            grant_id: generateId(),
-            principal: { principal_type: 'user', user_id: value.manager },
-          },
-        ],
-      });
-      await expect(service.patch(null, ownSharing, collaboratorParams)).resolves.toMatchObject({
-        override_config: {
-          session_sharing: {
-            owner_rules: [expect.objectContaining({ session_owner_user_id: value.collaborator })],
-          },
-        },
+      ownSharing.override_config!.allow_shared_session_prompts = true;
+      await expect(service.patch(null, ownSharing, collaboratorParams)).rejects.toMatchObject({
+        code: 403,
       });
 
       const managerParams = { ...params(value.manager), route: { id: value.branchId } } as never;
       const managerEdit = structuredClone(
         (await service.find(managerParams)) as BranchCapabilityPolicy
       );
+      managerEdit.override_config!.allow_shared_session_prompts = true;
       const collaboratorEntry = managerEdit.override_config!.access.entries.find(
         (candidate) =>
           candidate.principal.principal_type === 'user' &&
@@ -238,27 +188,11 @@ describe('capability policy services', () => {
       collaboratorEntry.capabilities = ['branch.view'];
       await expect(service.patch(null, managerEdit, managerParams)).resolves.toMatchObject({
         override_config: {
+          allow_shared_session_prompts: true,
           access: {
             entries: expect.arrayContaining([expect.objectContaining({ preset: 'viewer' })]),
           },
         },
-      });
-
-      const removeForeignRule = structuredClone(
-        (await service.find(managerParams)) as BranchCapabilityPolicy
-      );
-      removeForeignRule.override_config!.session_sharing.owner_rules = [];
-      await expect(service.patch(null, removeForeignRule, managerParams)).rejects.toMatchObject({
-        code: 403,
-      });
-
-      const discardForeignRule = structuredClone(
-        (await service.find(managerParams)) as BranchCapabilityPolicy
-      );
-      discardForeignRule.binding_mode = 'inherit';
-      delete discardForeignRule.override_config;
-      await expect(service.patch(null, discardForeignRule, managerParams)).rejects.toMatchObject({
-        code: 403,
       });
     }
   );
@@ -269,28 +203,17 @@ describe('capability policy services', () => {
     setupCapabilityPolicyServices(app, db as never);
     await app
       .service('workspace-preferences')
-      .patch(null, { personal_session_sharing_enabled: false }, params(value.admin, 'admin'));
+      .patch(null, { session_sharing_enabled: false }, params(value.admin, 'admin'));
 
     const service = app.service('branches/:id/permissions');
-    const collaboratorParams = {
-      ...params(value.collaborator),
+    const managerParams = {
+      ...params(value.manager),
       route: { id: value.branchId },
     } as never;
-    const changed = structuredClone(
-      (await service.find(collaboratorParams)) as BranchCapabilityPolicy
-    );
-    changed.override_config!.session_sharing.owner_rules.push({
-      session_owner_user_id: value.collaborator,
-      enabled: true,
-      grantees: [
-        {
-          grant_id: generateId(),
-          principal: { principal_type: 'user', user_id: value.manager },
-        },
-      ],
-    });
+    const changed = structuredClone((await service.find(managerParams)) as BranchCapabilityPolicy);
+    changed.override_config!.allow_shared_session_prompts = true;
 
-    await expect(service.patch(null, changed, collaboratorParams)).rejects.toMatchObject({
+    await expect(service.patch(null, changed, managerParams)).rejects.toMatchObject({
       code: 403,
     });
   });
@@ -302,11 +225,11 @@ describe('capability policy services', () => {
     const service = app.service('workspace-preferences');
 
     await expect(
-      service.patch(null, { personal_session_sharing_enabled: false }, params(value.manager))
+      service.patch(null, { session_sharing_enabled: false }, params(value.manager))
     ).rejects.toMatchObject({ code: 403 });
     await expect(
-      service.patch(null, { personal_session_sharing_enabled: false }, params(value.admin, 'admin'))
-    ).resolves.toEqual({ personal_session_sharing_enabled: false });
+      service.patch(null, { session_sharing_enabled: false }, params(value.admin, 'admin'))
+    ).resolves.toEqual({ session_sharing_enabled: false });
   });
 
   dbTest('rejects stale global-admin claims after the tenant fence', async ({ db }) => {
@@ -327,7 +250,7 @@ describe('capability policy services', () => {
     await expect(
       app
         .service('workspace-preferences')
-        .patch(null, { personal_session_sharing_enabled: false }, staleAdminParams)
+        .patch(null, { session_sharing_enabled: false }, staleAdminParams)
     ).rejects.toMatchObject({ code: 403 });
   });
 });

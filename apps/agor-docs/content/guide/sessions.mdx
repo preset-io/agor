@@ -224,7 +224,11 @@ All of this is changeable at any point. You don't have to start a new session to
 
 _Session Settings modal: model, effort, permissions, MCP, env vars, callbacks, all editable mid-session for supported runtimes._
 
-Forks and spawned children copy selection names for continuity, never stored values. Each child resolves the copied names against the child session's own attributed owner. With `dangerously_allow_session_sharing` off (the default), a cross-user child is attributed to the caller, so a copied name cannot borrow the parent's secret. Callbacks carry message content, not an environment grant.
+Forks and spawned children copy selection names for continuity, never stored values. Each child
+resolves the copied names against its attributed owner. When a collaborator forks or spawns from a
+shared branch-scoped session, the child is attributed to that collaborator, so a copied name cannot
+borrow the parent's secret. Execution-home sessions cannot be continued across users. Callbacks
+carry message content, not an environment grant.
 
 ### Historical Claude CLI sessions
 

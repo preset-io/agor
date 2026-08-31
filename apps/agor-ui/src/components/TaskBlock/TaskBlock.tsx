@@ -9,6 +9,7 @@
  * - Groups 3+ sequential tool-only messages into ToolBlock
  */
 
+import { AUTHORIZATION_REVOKED_TERMINATION_MESSAGE } from '@agor/core/types';
 import type { AgenticToolName, AgorClient, StreamingMessageState } from '@agor-live/client';
 import {
   type Message,
@@ -123,7 +124,15 @@ export function isVerifiedRuntimeInterruption(task: Task, isLatestTask = false):
     isLatestTask &&
     task.status === TaskStatus.FAILED &&
     task.sdk_failure?.termination === 'verified' &&
-    task.termination_request?.cause !== 'user_stop'
+    task.termination_request?.cause !== 'user_stop' &&
+    task.termination_request?.cause !== 'authorization_revoked'
+  );
+}
+
+/** Authorization withdrawal is already durable on the Task; no transcript row is needed. */
+export function isAuthorizationRevokedFailure(task: Task): boolean {
+  return (
+    task.status === TaskStatus.FAILED && task.termination_request?.cause === 'authorization_revoked'
   );
 }
 
@@ -179,6 +188,18 @@ function RuntimeInterruptionNotice({
           </Button>
         ) : undefined
       }
+    />
+  );
+}
+
+function AuthorizationRevokedNotice({ task }: { task: Task }) {
+  return (
+    <Alert
+      type="warning"
+      showIcon
+      style={{ marginBottom: 12 }}
+      title="Task access revoked"
+      description={task.error_message || AUTHORIZATION_REVOKED_TERMINATION_MESSAGE}
     />
   );
 }
@@ -739,6 +760,9 @@ export const TaskBlock = React.memo<TaskBlockProps>(
                 <div style={{ paddingTop: token.sizeUnit }}>
                   {isVerifiedRuntimeInterruption(task, isLatestTask) && (
                     <RuntimeInterruptionNotice task={task} sessionId={sessionId} client={client} />
+                  )}
+                  {isAuthorizationRevokedFailure(task) && (
+                    <AuthorizationRevokedNotice task={task} />
                   )}
                   {/* Show loading spinner while fetching messages */}
                   {messagesLoading && (

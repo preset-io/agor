@@ -175,6 +175,10 @@ services:
       # persistent private home inside the sandbox. Default (unset/shared) uses
       # the daemon user's home.
       - AGOR_SANDBOX_HOME_MODE=${AGOR_SANDBOX_HOME_MODE:-}
+      # Optional branch-owned SDK state. Empty preserves the deployment-safe
+      # `inherit` default; the rich/full PostgreSQL overlay opts into
+      # `per_branch` so its RBAC fixtures exercise the complete sharing model.
+      - AGOR_SANDBOX_SDK_HOME_MODE=${AGOR_SANDBOX_SDK_HOME_MODE:-}
       # Optional PostgreSQL/RBAC development fixtures. This must be forwarded
       # explicitly: --env-file supplies Compose interpolation values but does
       # not inject arbitrary variables into the container by itself.

@@ -83,7 +83,21 @@ export type TerminationCause =
   | 'user_stop'
   | 'startup_timeout'
   | 'heartbeat_lost'
-  | 'sdk_health_failure';
+  | 'sdk_health_failure'
+  | 'authorization_revoked';
+
+/** Fixed server/executor copy for runtime authorization withdrawal. */
+export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =
+  'Authorization to continue this task was revoked.';
+
+/** Why a durable termination request is waiting for another HA coordinator. */
+export const TERMINATION_COORDINATION_PENDING_CODES = [
+  'non_owner_replica',
+  'coordination_in_progress',
+] as const;
+
+export type TerminationCoordinationPendingCode =
+  (typeof TERMINATION_COORDINATION_PENDING_CODES)[number];
 
 /**
  * Expiring, database-fenced ownership of one containment attempt.

@@ -151,33 +151,20 @@ async function harness(options: HarnessOptions) {
         fs_access: 'read',
       },
     ];
-    config.session_sharing.owner_rules = [
-      {
-        session_owner_user_id: user.user_id,
-        enabled: true,
-        grantees: [
-          {
-            grant_id: generateId(),
-            principal: { principal_type: 'user', user_id: principal.user_id },
-          },
-        ],
-      },
-    ];
+    config.allow_shared_session_prompts = true;
     await policies.replaceBranchPolicy(
       branch.branch_id,
       { ...current, override_config: config },
       user.user_id
     );
-    await policies.setWorkspacePreferences(
-      { personal_session_sharing_enabled: true },
-      user.user_id
-    );
+    await policies.setWorkspacePreferences({ session_sharing_enabled: true }, user.user_id);
   }
   const session = await new SessionRepository(rawDb).create({
     session_id: randomUUID(),
     branch_id: branch.branch_id,
     agentic_tool: 'codex',
     created_by: user.user_id as UserID,
+    sdk_home_scope: options.separatePrincipal ? 'branch' : 'execution_home',
   });
   const task = await new TaskRepository(rawDb).create({
     task_id: randomUUID(),
@@ -1076,7 +1063,7 @@ describe('authoritative MCP gateway real transport', () => {
     const policies = new CapabilityPolicyRepository(h.rawDb);
     const current = await policies.getBranchPolicy(h.branch.branch_id);
     const config = structuredClone(current.override_config!);
-    config.session_sharing.owner_rules = [];
+    config.allow_shared_session_prompts = false;
     await policies.replaceBranchPolicy(
       h.branch.branch_id,
       { ...current, override_config: config },

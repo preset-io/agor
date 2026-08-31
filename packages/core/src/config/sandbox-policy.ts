@@ -134,6 +134,26 @@ export interface SandboxPathContext {
   agorConfigPath?: string;
   /** Absolute path to `~/.agor/agor.db` — masked under protect_secrets. */
   agorDbPath?: string;
+  /**
+   * Per-branch SDK home to bind INTO the sandbox at its own real path (design
+   * §7). When set, the branch's `branch-homes/<branchId>` directory is
+   * `--bind`ed at the identical absolute path inside the sandbox, so the tool's
+   * relocated config/state env vars (which name real sub-paths of this dir)
+   * resolve to the same location inside and outside the sandbox. The daemon
+   * guarantees the source exists before spawn (bwrap aborts on a missing
+   * `--bind` source; `dropMasksForMissingTargets` only drops tmpfs/ro-bind,
+   * never `--bind` — design §7.2). Unset means this Session is stamped for its
+   * execution home, even if another Session on the branch uses branch state.
+   */
+  branchSdkHomeDir?: string;
+  /**
+   * Already-open caller credential inodes to mount over files inside
+   * {@link branchSdkHomeDir}. File descriptors are child-process descriptor
+   * numbers, not host paths; this prevents a symlink swap between validation
+   * and bubblewrap setup. Destinations must already exist and stay below the
+   * branch SDK home. Currently used only for Codex `auth.json`.
+   */
+  branchSdkCredentialBinds?: Array<{ fd: number; destination: string }>;
 }
 
 /**
@@ -301,7 +321,15 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
         args.push('--ro-bind-try', ctx.agenticToolsPath, destination);
       }
     }
+    // Per-branch SDK home (design §7.1). Bound at its own real path, ON TOP of
+    // the home overlay and after the agentic-tools re-expose, but BEFORE the
+    // unconditional trust-root masks below. The branch-homes root lives under
+    // the tenant data root, which the overlay masks with a tmpfs above; bwrap
+    // resolves the bind SOURCE from the host root before applying that mask, so
+    // re-exposing it here is valid.
+    appendBranchSdkHomeBinds(args, ctx);
     for (const p of sandbox.extra_allow_write ?? []) args.push('--bind', p, p);
+    appendBranchSdkCredentialBinds(args, ctx);
     for (const p of sandbox.extra_deny_read ?? []) args.push('--ro-bind', '/dev/null', p);
 
     // Daemon trust-root masks — UNCONDITIONAL (not gated on protect_secrets).
@@ -351,7 +379,13 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
       args.push('--bind-try', join(ctx.homeDir, sub), join(ctx.homeDir, sub));
     }
   }
+  // Per-branch SDK home (design §7.1). Inserted AFTER the home-subdir binds so
+  // it overrides them: the tool's env vars point into this branch-owned mount
+  // rather than the daemon's real home, giving one directory per branch instead
+  // of one shared home for all branches and users.
+  appendBranchSdkHomeBinds(args, ctx);
   for (const p of sandbox.extra_allow_write ?? []) args.push('--bind', p, p);
+  appendBranchSdkCredentialBinds(args, ctx);
 
   // ── denials LAST so they win over any writable/home bind above ──
   if (protectSecrets) {
@@ -371,6 +405,42 @@ export function resolveBwrapArgs(sandbox: AgorSandboxSettings, ctx: SandboxPathC
   args.push('--chdir', ctx.branchPath);
 
   return args;
+}
+
+/**
+ * Append the per-branch SDK home binds (design §7). Shared by both home modes so
+ * the mount is identical regardless of overlay. The branch home is bound at its
+ * own real path. No-op for an execution-home Session — the inert default path.
+ */
+function appendBranchSdkHomeBinds(args: string[], ctx: SandboxPathContext): void {
+  if (!ctx.branchSdkHomeDir) return;
+  if (!isAbsolute(ctx.branchSdkHomeDir)) {
+    throw new Error(`Invalid branch SDK home ${ctx.branchSdkHomeDir}: expected an absolute path`);
+  }
+  args.push('--bind', ctx.branchSdkHomeDir, ctx.branchSdkHomeDir);
+}
+
+/** Mount validated credential inodes after the writable branch home. */
+function appendBranchSdkCredentialBinds(args: string[], ctx: SandboxPathContext): void {
+  if (!ctx.branchSdkCredentialBinds?.length) return;
+  if (!ctx.branchSdkHomeDir || !isAbsolute(ctx.branchSdkHomeDir)) {
+    throw new Error('Branch SDK credential binds require an absolute branch SDK home');
+  }
+  for (const bind of ctx.branchSdkCredentialBinds) {
+    if (!Number.isSafeInteger(bind.fd) || bind.fd < 3) {
+      throw new Error(`Invalid branch SDK credential file descriptor ${bind.fd}`);
+    }
+    if (
+      !isAbsolute(bind.destination) ||
+      relative(ctx.branchSdkHomeDir, bind.destination) === '' ||
+      !isPathWithin(bind.destination, ctx.branchSdkHomeDir)
+    ) {
+      throw new Error(
+        `Branch SDK credential destination ${bind.destination} must stay below ${ctx.branchSdkHomeDir}`
+      );
+    }
+    args.push('--bind-fd', String(bind.fd), bind.destination);
+  }
 }
 
 function isPathWithin(candidate: string, parent: string): boolean {

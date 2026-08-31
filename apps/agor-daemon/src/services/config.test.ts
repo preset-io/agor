@@ -140,6 +140,7 @@ describe('ConfigService.resolveApiKey', () => {
       { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
       {
         provider: 'socketio',
+        user: { user_id: 'creator-1' },
         authentication: {
           strategy: 'jwt',
           payload: {
@@ -158,6 +159,44 @@ describe('ConfigService.resolveApiKey', () => {
       db: {},
       tool: 'codex',
     });
+  });
+
+  it('rejects a task-scoped executor principal that differs from the Task creator', async () => {
+    const service = new ConfigService({} as never);
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'creator-1' as UserID,
+              session_id: 'session-1',
+            })),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+        {
+          provider: 'socketio',
+          user: { user_id: 'collaborator-2' },
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              session_id: 'session-1',
+            },
+          },
+        } as never
+      )
+    ).rejects.toThrow('Executor token task scope could not be verified');
+
+    expect(configMocks.resolveApiKey).not.toHaveBeenCalled();
   });
 
   it('does not grant plaintext credentials to taskless command delegation', async () => {
@@ -206,6 +245,7 @@ describe('ConfigService.resolveApiKey', () => {
         { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
         {
           provider: 'socketio',
+          user: { user_id: 'creator-1' },
           authentication: {
             strategy: 'jwt',
             payload: {
@@ -246,6 +286,7 @@ describe('ConfigService.resolveApiKey', () => {
       {
         provider: 'socketio',
         tenant,
+        user: { user_id: 'creator-1' },
         authentication: {
           strategy: 'jwt',
           payload: {
@@ -313,6 +354,7 @@ describe('ConfigService.resolveApiKey', () => {
         { taskId: 'task-1' as TaskID, keyName: 'ANTHROPIC_API_KEY', tool: 'codex' },
         {
           provider: 'socketio',
+          user: { user_id: 'creator-1' },
           authentication: {
             strategy: 'jwt',
             payload: {
@@ -348,6 +390,7 @@ describe('ConfigService.resolveApiKey', () => {
         { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'opencode' },
         {
           provider: 'socketio',
+          user: { user_id: 'creator-1' },
           authentication: {
             strategy: 'jwt',
             payload: {
@@ -406,6 +449,7 @@ describe('ConfigService.resolveApiKey', () => {
         {
           provider: 'socketio',
           tenant: { tenant_id: 'tenant-1' },
+          user: { user_id: 'creator-1' },
           authentication: {
             strategy: 'jwt',
             payload: {
@@ -482,6 +526,7 @@ describe('ConfigService.resolveApiKey', () => {
           {
             provider: 'socketio',
             tenant: { tenant_id: 'tenant-1' },
+            user: { user_id: prompterId },
             authentication: {
               strategy: 'jwt',
               payload: {
@@ -534,6 +579,7 @@ describe('ConfigService.resolveApiKey', () => {
         {
           provider: 'socketio',
           tenant: { tenant_id: 'tenant-1' },
+          user: { user_id: 'creator-1' },
           authentication: {
             strategy: 'jwt',
             payload: {
@@ -585,6 +631,7 @@ describe('ConfigService.resolveApiKey', () => {
         { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
         {
           provider: 'socketio',
+          user: { user_id: 'prompter-1' },
           authentication: {
             strategy: 'jwt',
             payload: {
@@ -598,5 +645,62 @@ describe('ConfigService.resolveApiKey', () => {
       )
     ).rejects.toBeInstanceOf(Forbidden);
     expect(homeMocks.resolveExecutionCredentialHome).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses the foreign Task actor native auth for a branch-scoped Codex Session', async () => {
+    configMocks.resolveApiKey.mockResolvedValue({
+      apiKey: null,
+      source: 'user',
+      useNativeAuth: true,
+    });
+    const service = new ConfigService(
+      {} as never,
+      {
+        multi_tenancy: { mode: 'static' },
+        execution: { unix_user_mode: 'sandbox' },
+      } as never
+    );
+    service.app = {
+      service(name: string) {
+        if (name === 'tasks') {
+          return {
+            get: vi.fn(async () => ({
+              created_by: 'prompter-1' as UserID,
+              session_id: 'session-1',
+            })),
+          };
+        }
+        if (name === 'sessions') {
+          return {
+            get: vi.fn(async () => ({
+              agentic_tool: 'codex',
+              created_by: 'owner-2',
+              sdk_home_scope: 'branch',
+            })),
+          };
+        }
+        throw new Error(`unexpected service ${name}`);
+      },
+    } as never;
+
+    await expect(
+      service.resolveApiKey(
+        { taskId: 'task-1' as TaskID, keyName: 'OPENAI_API_KEY', tool: 'codex' },
+        {
+          provider: 'socketio',
+          user: { user_id: 'prompter-1' },
+          authentication: {
+            strategy: 'jwt',
+            payload: {
+              type: 'executor-session',
+              purpose: 'executor-task',
+              task_id: 'task-1',
+              session_id: 'session-1',
+            },
+          },
+        } as never
+      )
+    ).resolves.toMatchObject({ useNativeAuth: true });
+    expect(homeMocks.resolveExecutionCredentialHome).not.toHaveBeenCalled();
   });
 });

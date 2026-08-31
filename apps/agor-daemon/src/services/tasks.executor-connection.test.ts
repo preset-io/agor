@@ -93,6 +93,7 @@ describe('TasksService executor patches', () => {
 });
 
 describe('TasksService runtime telemetry', () => {
+  const branchId = '018f0000-0000-7000-8000-000000000004';
   const task = {
     task_id: '018f0000-0000-7000-8000-000000000001',
     session_id: '018f0000-0000-7000-8000-000000000002',
@@ -107,27 +108,66 @@ describe('TasksService runtime telemetry', () => {
     last_executor_heartbeat_at: '2026-01-01T00:00:02.000Z',
   } as Task;
 
+  function runtimeParams(tenantId = 'tenant-a') {
+    return {
+      provider: 'rest',
+      tenant: { tenant_id: tenantId, source: 'auth_claim' },
+      authentication: {
+        strategy: 'jwt',
+        accessToken: 'verified-runtime-bearer',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-task',
+          sub: task.created_by,
+          tenant_id: tenantId,
+          session_id: task.session_id,
+          task_id: task.task_id,
+          branch_id: branchId,
+        },
+      },
+    } as never;
+  }
+
+  function setRuntimeDependencies(service: TasksService) {
+    Reflect.set(service, 'db', { run() {} });
+    Reflect.set(service, 'runtimeAuthorityOptions', {
+      branchRbacEnabled: true,
+    });
+    Reflect.set(service, 'executorCredentialRevoker', {
+      isTaskTokenAuthorityCurrent: vi.fn().mockResolvedValue(true),
+    });
+  }
+
   it('validates, persists, and publishes one bounded pulse fact', async () => {
     const service = Object.create(TasksService.prototype) as TasksService;
     const emit = vi.fn();
-    const reportRuntimeTelemetry = vi.fn().mockResolvedValue(task);
+    const reportRuntimeTelemetry = vi.fn().mockResolvedValue({ outcome: 'continued', task });
     const heartbeatCallback = vi.fn().mockResolvedValue(undefined);
     Reflect.set(service, 'taskRepo', { reportRuntimeTelemetry });
     Reflect.set(service, 'handleExecutorHeartbeat', heartbeatCallback);
     Reflect.set(service, 'heartbeatCallbackRunner', { isConfigured: () => false });
     Reflect.set(service, 'app', { service: () => ({ emit }) });
+    setRuntimeDependencies(service);
 
-    const result = await service.reportRuntimeTelemetry({
-      task_id: task.task_id,
-      pulse: { sequence: 1, kind: 'progress', detail: 'tool.start' },
-    });
+    const result = await service.reportRuntimeTelemetry(
+      {
+        task_id: task.task_id,
+        pulse: { sequence: 1, kind: 'progress', detail: 'tool.start' },
+      },
+      runtimeParams()
+    );
 
     expect(result).toBe(task);
-    expect(reportRuntimeTelemetry).toHaveBeenCalledWith(task.task_id, {
-      sequence: 1,
-      kind: 'progress',
-      detail: 'tool.start',
-    });
+    expect(reportRuntimeTelemetry).toHaveBeenCalledWith(
+      task.task_id,
+      expect.objectContaining({
+        principal_user_id: task.created_by,
+        session_id: task.session_id,
+        branch_id: branchId,
+        standalone_token_current: true,
+      }),
+      { sequence: 1, kind: 'progress', detail: 'tool.start' }
+    );
     expect(emit).toHaveBeenCalledWith('patched', task, expect.objectContaining({ path: 'tasks' }));
   });
 
@@ -157,7 +197,7 @@ describe('TasksService runtime telemetry', () => {
       });
       const emit = vi.fn();
       Reflect.set(service, 'taskRepo', {
-        reportRuntimeTelemetry: vi.fn().mockResolvedValue(task),
+        reportRuntimeTelemetry: vi.fn().mockResolvedValue({ outcome: 'continued', task }),
       });
       Reflect.set(service, 'heartbeatCallbackRunner', {
         isConfigured: () => true,
@@ -165,11 +205,10 @@ describe('TasksService runtime telemetry', () => {
       });
       Reflect.set(service, 'findHeartbeatBranchId', findHeartbeatBranchId);
       Reflect.set(service, 'app', { service: () => ({ emit }) });
+      setRuntimeDependencies(service);
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-      await service.reportRuntimeTelemetry({ task_id: task.task_id }, {
-        tenant: { tenant_id: tenantId, source: 'auth_claim' },
-      } as never);
+      await service.reportRuntimeTelemetry({ task_id: task.task_id }, runtimeParams(tenantId));
       await vi.waitFor(() => expect(callbackRun).toHaveBeenCalledOnce());
 
       expect(findHeartbeatBranchId).toHaveBeenCalledWith(task.session_id);

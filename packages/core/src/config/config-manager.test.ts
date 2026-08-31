@@ -298,6 +298,24 @@ describe('resolveEffectiveConfig', () => {
     expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
     expect(resolved.execution?.branch_rbac).not.toBe(true); // not sandbox mode → no forced RBAC
   });
+
+  it('projects the SDK-home rollout override without implicitly enabling the sandbox', () => {
+    const enabled = resolveEffectiveConfig({}, { AGOR_SANDBOX_SDK_HOME_MODE: 'per_branch' });
+    expect(enabled.execution?.sandbox).toEqual({ sdk_home_mode: 'per_branch' });
+    expect(enabled.execution?.branch_rbac).not.toBe(true);
+
+    const disabled = resolveEffectiveConfig(
+      { execution: { sandbox: { sdk_home_mode: 'per_branch' } } },
+      { AGOR_SANDBOX_SDK_HOME_MODE: 'inherit' }
+    );
+    expect(disabled.execution?.sandbox?.sdk_home_mode).toBe('inherit');
+  });
+
+  it('rejects an unknown AGOR_SANDBOX_SDK_HOME_MODE override', () => {
+    expect(() => resolveEffectiveConfig({}, { AGOR_SANDBOX_SDK_HOME_MODE: 'branch' })).toThrow(
+      /must be one of: inherit, per_branch/
+    );
+  });
 });
 
 describe('assertValidEffectiveExecutionConfig', () => {

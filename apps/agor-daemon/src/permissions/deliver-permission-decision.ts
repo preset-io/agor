@@ -12,7 +12,10 @@ import type {
   UUID,
 } from '@agor/core/types';
 import { PermissionScope, PermissionStatus } from '@agor/core/types';
-import { resolveSessionPromptAccess } from '../utils/branch-authorization.js';
+import {
+  resolveSessionPromptAccess,
+  sessionPromptDeniedMessage,
+} from '../utils/branch-authorization.js';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
 export type PermissionDecisionDelivery = PermissionDecision & {
@@ -89,23 +92,19 @@ export async function deliverPermissionDecision(options: {
   const session = (await app.service('sessions').get(sessionId, params)) as Session;
 
   // Viewing a Session is not sufficient to control its executor. Permission
-  // decisions use the same owner-authored sharing policy as prompting.
+  // decisions use the same branch-session sharing authority as prompting.
   if (authorization.branchRbacEnabled) {
     const branch = await authorization.branchRepository.findById(session.branch_id);
     if (!branch) throw new NotFound(`Branch ${session.branch_id} not found`);
     const userId = decidedBy as UUID;
-    const { allowed, effectiveLevel } = await resolveSessionPromptAccess({
+    const { allowed, denialReason } = await resolveSessionPromptAccess({
       branchRepository: authorization.branchRepository,
       branch,
       session,
       userId,
     });
     if (!allowed) {
-      throw new Forbidden(
-        `You have '${effectiveLevel}' permission on this branch, which does not allow ` +
-          `responding to permission requests. Collaborator access is required, ` +
-          `and foreign sessions must be shared by their owner.`
-      );
+      throw new Forbidden(sessionPromptDeniedMessage({ denial_reason: denialReason }));
     }
   }
 

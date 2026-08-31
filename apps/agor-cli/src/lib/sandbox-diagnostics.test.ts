@@ -30,7 +30,14 @@ describe('diagnoseSandbox', () => {
   });
 
   it('reports disabled when the flag is off', () => {
-    const d = diagnoseSandbox({ execution: { sandbox: { enabled: false } } }, 'linux', () => true);
+    const d = diagnoseSandbox(
+      { execution: { sandbox: { enabled: false } } },
+      'linux',
+      () => true,
+      () => true,
+      () => true,
+      () => true
+    );
     expect(d.enabled).toBe(false);
     expect(d.ok).toBe(false);
   });
@@ -57,9 +64,17 @@ describe('diagnoseSandbox', () => {
       { execution: { sandbox: { enabled: true } } },
       'linux',
       () => true,
+      () => true,
+      () => true,
       () => true
     );
-    expect(pass.deps.map((x) => x.name)).toEqual(['bwrap', 'unprivileged userns', 'PID namespace']);
+    expect(pass.deps.map((x) => x.name)).toEqual([
+      'bwrap',
+      'safe setup paths',
+      'unprivileged userns',
+      'descriptor binds',
+      'PID namespace',
+    ]);
     expect(pass.ok).toBe(true);
 
     // bwrap installed but userns blocked (hardened kernel) → NOT ok.
@@ -68,7 +83,9 @@ describe('diagnoseSandbox', () => {
       { execution: { sandbox: { enabled: true } } },
       'linux',
       () => false,
-      () => false
+      () => false,
+      () => true,
+      () => true
     );
     expect(blocked.deps.find((x) => x.name === 'unprivileged userns')?.present).toBe(false);
     expect(blocked.ok).toBe(false);
@@ -80,10 +97,37 @@ describe('diagnoseSandbox', () => {
       { execution: { sandbox: { enabled: true } } },
       'linux',
       () => true, // userns ok
-      () => false // PID ns blocked (container)
+      () => false, // PID ns blocked (container)
+      () => true, // 0.12+ setup path resolution
+      () => true // fd binds
     );
     const pidDep = d.deps.find((x) => x.name === 'PID namespace');
     expect(pidDep).toMatchObject({ required: false, present: false });
     expect(d.ok).toBe(true); // still usable — userns is the required baseline
+  });
+
+  it('fails closed when setup paths or descriptor binds are unsafe', () => {
+    process.env.PATH = fakeBin;
+    const oldVersion = diagnoseSandbox(
+      { execution: { sandbox: { enabled: true } } },
+      'linux',
+      () => true,
+      () => true,
+      () => false,
+      () => true
+    );
+    expect(oldVersion.deps.find((x) => x.name === 'safe setup paths')?.present).toBe(false);
+    expect(oldVersion.ok).toBe(false);
+
+    const noBindFd = diagnoseSandbox(
+      { execution: { sandbox: { enabled: true } } },
+      'linux',
+      () => true,
+      () => true,
+      () => true,
+      () => false
+    );
+    expect(noBindFd.deps.find((x) => x.name === 'descriptor binds')?.present).toBe(false);
+    expect(noBindFd.ok).toBe(false);
   });
 });

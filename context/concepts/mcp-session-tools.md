@@ -67,9 +67,10 @@ deleting the relationship. Spawned child and `btw` callbacks remain one-shot.
 ## Security note for spawn/fork
 
 Creating a new session attributes that new conversation to the caller. Continuing
-an existing foreign-owned native conversation is different: it requires
-`sessions.prompt_own` on the branch, the tenant-level personal-sharing gate,
-and an owner-authored user/group grant. The original session owner and genealogy
-are preserved, while the task, managed credentials, MCP visibility, and branch
-filesystem projection use the actual caller. See
+an existing foreign-owned branch-home conversation requires
+`sessions.prompt_own`, the tenant workspace preference, and the effective
+branch sharing switch. The conversation and branch SDK state are preserved,
+while the task, execution home, managed credentials, MCP visibility, and
+branch filesystem projection use the actual caller. Execution-home Sessions
+are never shareable. See
 [`context/explorations/session-sharing.md`](../explorations/session-sharing.md).

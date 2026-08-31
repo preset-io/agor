@@ -1,7 +1,7 @@
 import { shortId, type TaskRepository } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import type { Params, SessionID } from '@agor/core/types';
-import { isSessionExecuting, SessionStatus } from '@agor/core/types';
+import type { Params, SessionID, SessionStopResult, TaskID } from '@agor/core/types';
+import { isSessionExecuting, isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
 import type { SessionsServiceImpl } from '../declarations.js';
 import {
   requestExecutorTermination,
@@ -11,20 +11,14 @@ import {
 import { requireActiveAgenticTool } from './agentic-tool-runtime.js';
 import type { findActiveTasksForSession } from './session-tasks.js';
 
-export interface StopSessionResult {
-  success: boolean;
-  status?: typeof SessionStatus.IDLE;
-  reason?: string;
-  stoppedTaskId?: string;
-  queuedTasksPreserved?: number;
-}
-
 export interface StopSessionDeps {
   app: Application;
   taskRepo: Pick<TaskRepository, 'findQueued'>;
   sessionsService: Pick<SessionsServiceImpl, 'get' | 'patch'>;
   findActiveTasks: typeof findActiveTasksForSession;
   requestTermination?: typeof requestExecutorTermination;
+  /** Opens a required tenant database scope for nested service reads. */
+  runInTenantDatabaseScope: <T>(work: () => Promise<T>) => Promise<T>;
   /**
    * Opens one fresh, write-gated tenant database unit for each durable
    * termination step. The Stop route itself deliberately has no route-wide
@@ -74,9 +68,11 @@ export async function stopSessionPreserveQueue(
   deps: StopSessionDeps,
   sessionId: SessionID,
   params: Params = {},
-  options: { reason?: string } = {}
-): Promise<StopSessionResult> {
-  const session = await deps.sessionsService.get(sessionId, params);
+  options: { reason?: string; expectedTaskId?: TaskID } = {}
+): Promise<SessionStopResult> {
+  const session = await deps.runInTenantDatabaseScope(() =>
+    deps.sessionsService.get(sessionId, params)
+  );
 
   // Stop is idempotent across retries and the per-session turn lock. A
   // concurrent caller can observe the first caller's already-committed idle
@@ -85,6 +81,7 @@ export async function stopSessionPreserveQueue(
     const queuedTasks = await deps.taskRepo.findQueued(sessionId);
     return {
       success: true,
+      outcome: 'already_idle',
       status: SessionStatus.IDLE,
       reason: 'Session is already idle',
       queuedTasksPreserved: queuedTasks.length,
@@ -94,20 +91,26 @@ export async function stopSessionPreserveQueue(
   if (!isSessionExecuting(session)) {
     return {
       success: false,
+      outcome: 'not_stoppable',
       reason: `Session cannot be stopped (status: ${session.status})`,
     };
   }
 
-  const targetTasksArray = await deps.findActiveTasks(deps.app, sessionId, params);
+  const targetTasksArray = await deps.runInTenantDatabaseScope(() =>
+    deps.findActiveTasks(deps.app, sessionId, params)
+  );
   const queuedTasks = await deps.taskRepo.findQueued(sessionId);
 
   if (targetTasksArray.length === 0) {
     console.warn(
       `⚠️  [Stop] No active tasks for session ${shortId(sessionId)}, resetting to IDLE${options.reason ? ` (reason: ${options.reason})` : ''}`
     );
-    await markStoppedSessionPromptableNoDrain(deps.sessionsService, sessionId, params);
+    await deps.runInFreshTenantWriteDatabase(() =>
+      markStoppedSessionPromptableNoDrain(deps.sessionsService, sessionId, params)
+    );
     return {
       success: true,
+      outcome: 'stopped',
       status: SessionStatus.IDLE,
       reason: 'No active tasks found, session reset to idle',
       queuedTasksPreserved: queuedTasks.length,
@@ -115,6 +118,14 @@ export async function stopSessionPreserveQueue(
   }
 
   const latestTask = targetTasksArray[0];
+  if (options.expectedTaskId && latestTask.task_id !== options.expectedTaskId) {
+    return {
+      success: false,
+      outcome: 'condition_changed',
+      reason: 'Execution changed before Stop could be claimed. Review the current state and retry.',
+      queuedTasksPreserved: queuedTasks.length,
+    };
+  }
 
   console.log(
     `🛑 [Stop] Stopping task ${shortId(latestTask.task_id)} for session ${shortId(sessionId)}${options.reason ? ` (reason: ${options.reason})` : ''}`
@@ -131,13 +142,42 @@ export async function stopSessionPreserveQueue(
     params,
     runInFreshTenantWriteDatabase: deps.runInFreshTenantWriteDatabase,
   });
-  if (termination.status !== 'terminal') {
+  if (termination.status === 'pending') {
     return {
       success: false,
+      outcome: 'pending',
+      status: SessionStatus.STOPPING,
+      reason: termination.reason,
+      stoppedTaskId: latestTask.task_id,
+      queuedTasksPreserved: queuedTasks.length,
+      pendingCode: termination.pendingCode,
+    };
+  }
+  if (termination.status === 'unverified') {
+    if (isTerminalTaskStatus(termination.task.status)) {
+      return {
+        success: false,
+        outcome: 'condition_changed',
+        reason: termination.reason,
+        stoppedTaskId: latestTask.task_id,
+        queuedTasksPreserved: queuedTasks.length,
+      };
+    }
+    return {
+      success: false,
+      outcome: 'unverified',
+      status: SessionStatus.STOPPING,
+      reason: termination.task.error_message ?? termination.reason,
+      stoppedTaskId: latestTask.task_id,
+      queuedTasksPreserved: queuedTasks.length,
+    };
+  }
+  if (termination.status === 'condition_changed') {
+    return {
+      success: false,
+      outcome: 'condition_changed',
       reason:
-        termination.task.error_message ??
-        termination.reason ??
-        'Task state changed before Stop could be completed.',
+        termination.task.error_message ?? 'Task state changed before Stop could be completed.',
       stoppedTaskId: latestTask.task_id,
       queuedTasksPreserved: queuedTasks.length,
     };
@@ -145,6 +185,7 @@ export async function stopSessionPreserveQueue(
 
   return {
     success: true,
+    outcome: 'stopped',
     status: SessionStatus.IDLE,
     stoppedTaskId: latestTask.task_id,
     queuedTasksPreserved: queuedTasks.length,

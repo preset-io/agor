@@ -666,6 +666,34 @@
       "when": 1787745600000,
       "tag": "0095_board_branch_capability_policies",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1787947200000,
+      "tag": "0096_strip_stdio_remote_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "7",
+      "when": 1788033600000,
+      "tag": "0097_branch_sdk_home",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1788120000000,
+      "tag": "0098_session_sdk_home_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1788206400000,
+      "tag": "0099_shared_session_prompting",
+      "breakpoints": true
     }
   ]
 }

@@ -77,6 +77,15 @@ export const sessions = pgTable(
     // This ensures SDK session data remains accessible in the original home directory
     unix_username: text('unix_username'),
 
+    // Immutable SDK-state boundary. Existing sessions keep using their
+    // historical execution home; only newly admitted sessions may use the
+    // branch-owned SDK home.
+    sdk_home_scope: text('sdk_home_scope', {
+      enum: ['execution_home', 'branch'],
+    })
+      .notNull()
+      .default('execution_home'),
+
     // Materialized for filtering/joins (cross-DB compatible)
     status: text('status', {
       enum: [
@@ -389,6 +398,12 @@ export const tasks = pgTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
+        /**
+         * Immutable filesystem authority projected when this executor was
+         * launched. Internal repository fact; deliberately omitted from the
+         * public Task DTO and never accepted from executor writes.
+         */
+        executor_launch_fs_access_floor?: import('@agor/core/types').CapabilityPolicyFsAccess;
       }>()
       .notNull(),
   },
@@ -607,7 +622,6 @@ export const boards = pgTable(
         access_mode?: 'private' | 'shared';
         default_others_can?: import('@agor/core/types').BranchPermissionLevel;
         default_others_fs_access?: 'none' | 'read' | 'write';
-        default_dangerously_allow_session_sharing?: boolean;
         color?: string;
         icon?: string;
         background_color?: string; // Background color for the board canvas
@@ -829,6 +843,15 @@ export const branches = pgTable(
     // a non-null clone_depth on worktree-mode rows.
     clone_depth: integer('clone_depth'),
 
+    // Per-branch SDK home intent (design §9.2). NULL = inherit today's behavior
+    // (no branch SDK home). 'per_branch' = this branch has its own relocated SDK
+    // home under `branch-homes/<branchId>`. Stored as an intent enum, NOT a path
+    // — the path is derived from branch_id by a single resolver (getBranchHomePath)
+    // so it cannot drift or be injected. Sticky once set: the value here — not
+    // the live `execution.sandbox.sdk_home_mode` flag — governs whether an
+    // existing branch keeps its home (design §8B.3). Validated at the app layer.
+    sdk_home: text('sdk_home', { enum: ['per_branch'] }).$type<'per_branch'>(),
+
     // JSON blob for everything else
     data: t
       .json<unknown>('data')
@@ -879,10 +902,6 @@ export const branches = pgTable(
         mcp_server_ids?: string[];
 
         // DANGEROUS: opt-in to legacy session-spawn identity borrowing.
-        // When true, agor_sessions_spawn / agor_sessions_prompt(mode:"fork"|"subsession")
-        // attribute the new child session to the parent owner instead of the
-        // MCP-authenticated caller. See packages/core/src/types/branch.ts.
-        dangerously_allow_session_sharing?: boolean;
       }>()
       .notNull(),
   },
@@ -1424,6 +1443,7 @@ export const branchPermissionConfigs = pgTable(
     others_fs_access: text('others_fs_access', { enum: ['none', 'read', 'write'] })
       .notNull()
       .default('none'),
+    allow_shared_session_prompts: t.bool('allow_shared_session_prompts').notNull().default(false),
     revision: integer('revision').notNull().default(1),
     updated_by: varchar('updated_by', { length: 36 }).references(() => users.user_id, {
       onDelete: 'set null',
@@ -1539,98 +1559,6 @@ export const branchPermissionEntries = pgTable(
     ),
     principalCheck: check(
       'branch_permission_entries_principal_check',
-      sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
-    ),
-  })
-);
-
-/** Personal, owner-authored opt-in to prompt sessions from the owner's home. */
-export const branchSessionSharingRules = pgTable(
-  'branch_session_sharing_rules',
-  {
-    tenant_id: text('tenant_id').notNull().default('default'),
-    config_id: varchar('config_id', { length: 36 }).notNull(),
-    session_owner_user_id: varchar('session_owner_user_id', { length: 36 }).notNull(),
-    enabled: t.bool('enabled').notNull().default(false),
-    updated_at: t.timestamp('updated_at').notNull(),
-  },
-  (table) => ({
-    configFk: foreignKey({
-      columns: [table.tenant_id, table.config_id],
-      foreignColumns: [branchPermissionConfigs.tenant_id, branchPermissionConfigs.config_id],
-      name: 'branch_session_sharing_rules_tenant_config_fk',
-    }).onDelete('cascade'),
-    ownerFk: foreignKey({
-      columns: [table.tenant_id, table.session_owner_user_id],
-      foreignColumns: [users.tenant_id, users.user_id],
-      name: 'branch_session_sharing_rules_tenant_owner_fk',
-    }).onDelete('cascade'),
-    tenantIdx: index('branch_session_sharing_rules_tenant_id_idx').on(table.tenant_id),
-    pk: primaryKey({ columns: [table.tenant_id, table.config_id, table.session_owner_user_id] }),
-    ownerIdx: index('branch_session_sharing_rules_owner_idx').on(table.session_owner_user_id),
-  })
-);
-
-export const branchSessionSharingGrants = pgTable(
-  'branch_session_sharing_grants',
-  {
-    tenant_id: text('tenant_id').notNull().default('default'),
-    grant_id: varchar('grant_id', { length: 36 }).primaryKey(),
-    config_id: varchar('config_id', { length: 36 }).notNull(),
-    session_owner_user_id: varchar('session_owner_user_id', { length: 36 }).notNull(),
-    user_id: varchar('user_id', { length: 36 }),
-    group_id: varchar('group_id', { length: 36 }),
-    created_at: t.timestamp('created_at').notNull(),
-  },
-  (table) => ({
-    tenantIdx: index('branch_session_sharing_grants_tenant_id_idx').on(table.tenant_id),
-    ruleFk: foreignKey({
-      columns: [table.tenant_id, table.config_id, table.session_owner_user_id],
-      foreignColumns: [
-        branchSessionSharingRules.tenant_id,
-        branchSessionSharingRules.config_id,
-        branchSessionSharingRules.session_owner_user_id,
-      ],
-      name: 'branch_session_sharing_grants_tenant_rule_fk',
-    }).onDelete('cascade'),
-    userFk: foreignKey({
-      columns: [table.tenant_id, table.user_id],
-      foreignColumns: [users.tenant_id, users.user_id],
-      name: 'branch_session_sharing_grants_tenant_user_fk',
-    }).onDelete('cascade'),
-    groupFk: foreignKey({
-      columns: [table.tenant_id, table.group_id],
-      foreignColumns: [groups.tenant_id, groups.group_id],
-      name: 'branch_session_sharing_grants_tenant_group_fk',
-    }).onDelete('cascade'),
-    ruleIdx: index('branch_session_sharing_grants_rule_idx').on(
-      table.config_id,
-      table.session_owner_user_id
-    ),
-    userIdx: index('branch_session_sharing_grants_user_idx').on(
-      table.tenant_id,
-      table.user_id,
-      table.config_id
-    ),
-    groupIdx: index('branch_session_sharing_grants_group_idx').on(
-      table.tenant_id,
-      table.group_id,
-      table.config_id
-    ),
-    ruleUserUnique: uniqueIndex('branch_session_sharing_grants_rule_user_unique').on(
-      table.tenant_id,
-      table.config_id,
-      table.session_owner_user_id,
-      table.user_id
-    ),
-    ruleGroupUnique: uniqueIndex('branch_session_sharing_grants_rule_group_unique').on(
-      table.tenant_id,
-      table.config_id,
-      table.session_owner_user_id,
-      table.group_id
-    ),
-    principalCheck: check(
-      'branch_session_sharing_grants_principal_check',
       sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
     ),
   })
@@ -3340,8 +3268,6 @@ export type BoardAccessPolicyRow = typeof boardAccessPolicies.$inferSelect;
 export type BoardAccessEntryRow = typeof boardAccessEntries.$inferSelect;
 export type BranchPermissionConfigRow = typeof branchPermissionConfigs.$inferSelect;
 export type BranchPermissionEntryRow = typeof branchPermissionEntries.$inferSelect;
-export type BranchSessionSharingRuleRow = typeof branchSessionSharingRules.$inferSelect;
-export type BranchSessionSharingGrantRow = typeof branchSessionSharingGrants.$inferSelect;
 export type BranchGroupGrantRow = typeof branchGroupGrants.$inferSelect;
 export type BoardGroupGrantRow = typeof boardGroupGrants.$inferSelect;
 export type BoardOwnerRow = typeof boardOwners.$inferSelect;

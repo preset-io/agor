@@ -200,7 +200,7 @@ describe('configured executor spawning', () => {
         '-c',
         expect.stringMatching(/^kubectl run executor-[0-9a-f]{8} --user agor-exec -- prompt$/),
       ],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
     expect(JSON.parse(proc.written)).toMatchObject({
       command: 'prompt',
@@ -209,38 +209,90 @@ describe('configured executor spawning', () => {
     });
   });
 
-  it('does not expose daemon or user secrets to the templated launcher environment', async () => {
+  it('keeps reserved launcher credentials in the trusted template process only', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);
-    const previousDatabaseUrl = process.env.DATABASE_URL;
-    const previousMasterSecret = process.env.AGOR_MASTER_SECRET;
-    process.env.DATABASE_URL = 'postgres://daemon-secret';
-    process.env.AGOR_MASTER_SECRET = 'deployment-secret';
+    const launcherCredentials = {
+      AGOR_CLOUD_API_BASE_URL: 'https://synthetic-launcher.invalid/api',
+      AGOR_CLOUD_RUNTIME_CREDENTIAL_ID: 'synthetic-launcher-credential-id',
+      AGOR_CLOUD_RUNTIME_SIGNING_KEY: 'synthetic-launcher-signing-key',
+      // A future launcher field is covered by the reserved prefix contract,
+      // not an allowlist that can silently fall behind the launcher.
+      AGOR_CLOUD_FUTURE_LAUNCHER_CREDENTIAL: 'synthetic-future-launcher-credential',
+    } as const;
+    const withheldDaemonEnvironment = {
+      DATABASE_URL: 'postgres://synthetic-daemon.invalid/agor',
+      AGOR_MASTER_SECRET: 'synthetic-deployment-master-secret',
+      AGOR_JWT_SECRET: 'synthetic-daemon-jwt-secret',
+      AGOR_ADMIN_PASSWORD: 'synthetic-bootstrap-password',
+      REDIS_URL: 'redis://synthetic-daemon.invalid',
+      OPENAI_API_KEY: 'synthetic-openai-provider-credential',
+      ANTHROPIC_API_KEY: 'synthetic-anthropic-provider-credential',
+      GEMINI_API_KEY: 'synthetic-gemini-provider-credential',
+      GOOGLE_APPLICATION_CREDENTIALS: '/synthetic/daemon/google-credentials.json',
+      AWS_SECRET_ACCESS_KEY: 'synthetic-object-store-credential',
+      SYNTHETIC_DAEMON_INTERNAL_SECRET: 'synthetic-unknown-future-daemon-secret',
+    } as const;
+    const ambient = { ...launcherCredentials, ...withheldDaemonEnvironment };
+    const previous = Object.fromEntries(Object.keys(ambient).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, ambient);
     try {
+      const { createUserProcessEnvironment } = await import('@agor/core/config');
       const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
       configureExecutor(
         { executor_command_template: 'launch -- {command}' },
         LOCAL_RESPONSE_OPTIONS
       );
 
-      spawnExecutor(
-        { command: 'prompt', env: { USER_SECRET: 'payload-only' } },
-        { preparedEnv: { USER_SECRET: 'payload-only' } }
-      );
+      // Exercise the real session-env assembly boundary rather than handing a
+      // made-up env object directly to spawnExecutor.
+      const sessionEnv = await createUserProcessEnvironment(undefined, undefined, {
+        SYNTHETIC_SESSION_SETTING: 'ordinary-session-value',
+      });
+      spawnExecutor({ command: 'prompt', env: sessionEnv }, { preparedEnv: sessionEnv });
+
+      const streamCanary = launcherCredentials.AGOR_CLOUD_RUNTIME_SIGNING_KEY;
+      proc.stdout.emit('data', Buffer.from(`launcher stdout ${streamCanary}`));
+      proc.stderr.emit('data', Buffer.from(`launcher stderr ${streamCanary}`));
 
       const launcherOptions = spawnMock.mock.calls[0][2] as {
         env: Record<string, string>;
+        stdio: string[];
       };
+      const executorPayload = JSON.parse(proc.written) as {
+        env: Record<string, string>;
+      };
+
       expect(launcherOptions.env.PATH).toBe(process.env.PATH);
-      expect(launcherOptions.env.DATABASE_URL).toBeUndefined();
-      expect(launcherOptions.env.AGOR_MASTER_SECRET).toBeUndefined();
-      expect(launcherOptions.env.USER_SECRET).toBeUndefined();
-      expect(JSON.parse(proc.written).env).toEqual({ USER_SECRET: 'payload-only' });
+      expect(launcherOptions.env).toMatchObject(launcherCredentials);
+      expect(launcherOptions.stdio).toEqual(['pipe', 'ignore', 'ignore']);
+      expect(launcherOptions.env.SYNTHETIC_SESSION_SETTING).toBeUndefined();
+      expect(executorPayload.env.SYNTHETIC_SESSION_SETTING).toBe('ordinary-session-value');
+      expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain(streamCanary);
+      expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(streamCanary);
+
+      for (const [name, value] of Object.entries(withheldDaemonEnvironment)) {
+        expect(launcherOptions.env, `${name} reached the templated launcher`).not.toHaveProperty(
+          name
+        );
+        expect(executorPayload.env, `${name} reached the executor payload`).not.toHaveProperty(
+          name
+        );
+        expect(proc.written).not.toContain(value);
+      }
+      for (const [name, value] of Object.entries(launcherCredentials)) {
+        expect(sessionEnv, `${name} reached the resolved session env`).not.toHaveProperty(name);
+        expect(executorPayload.env, `${name} reached the executor payload`).not.toHaveProperty(
+          name
+        );
+        expect(proc.written).not.toContain(value);
+      }
     } finally {
-      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
-      else process.env.DATABASE_URL = previousDatabaseUrl;
-      if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
-      else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+      for (const key of Object.keys(ambient)) {
+        const value = previous[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 
@@ -267,7 +319,7 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', 'explicit explicit-user git.clone'],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
   });
 
@@ -303,8 +355,66 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', 'launch --user alice -- branch.files.browse'],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
+  });
+
+  it('keeps trusted credentials out of request payloads and launcher output logs', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const ambient = {
+      AGOR_CLOUD_RUNTIME_SIGNING_KEY: 'synthetic-request-launcher-signing-key',
+      AGOR_CLOUD_FUTURE_REQUEST_CREDENTIAL: 'synthetic-request-launcher-future-key',
+      DATABASE_URL: 'postgres://synthetic-request-daemon.invalid/agor',
+      AGOR_MASTER_SECRET: 'synthetic-request-master-secret',
+      OPENAI_API_KEY: 'synthetic-request-provider-secret',
+    } as const;
+    const previous = Object.fromEntries(Object.keys(ambient).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, ambient);
+
+    try {
+      const { requestExecutor } = await import('./spawn-executor');
+      const promise = requestExecutor(
+        {
+          command: 'branch.files.browse',
+          env: { SYNTHETIC_REQUEST_SETTING: 'ordinary-request-value' },
+        },
+        { executorCommandTemplate: 'launch {command}' }
+      );
+      proc.stdout.emit('data', Buffer.from(ambient.AGOR_CLOUD_RUNTIME_SIGNING_KEY));
+      proc.stderr.emit('data', Buffer.from(ambient.AGOR_CLOUD_FUTURE_REQUEST_CREDENTIAL));
+
+      const options = spawnMock.mock.calls[0][2] as {
+        env: Record<string, string>;
+        stdio: string[];
+      };
+      const executorPayload = JSON.parse(proc.written) as { env: Record<string, string> };
+      expect(options.env).toMatchObject({
+        AGOR_CLOUD_RUNTIME_SIGNING_KEY: ambient.AGOR_CLOUD_RUNTIME_SIGNING_KEY,
+        AGOR_CLOUD_FUTURE_REQUEST_CREDENTIAL: ambient.AGOR_CLOUD_FUTURE_REQUEST_CREDENTIAL,
+      });
+      expect(options.stdio).toEqual(['pipe', 'ignore', 'ignore']);
+      expect(executorPayload.env).toEqual({
+        SYNTHETIC_REQUEST_SETTING: 'ordinary-request-value',
+      });
+      for (const [name, value] of Object.entries(ambient)) {
+        if (!name.startsWith('AGOR_CLOUD_')) expect(options.env).not.toHaveProperty(name);
+        expect(executorPayload.env).not.toHaveProperty(name);
+        expect(proc.written).not.toContain(value);
+        expect(JSON.stringify(vi.mocked(console.log).mock.calls)).not.toContain(value);
+        expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(value);
+      }
+
+      await deliverExecutorResponse(proc, { success: true, data: { files: [] } });
+      proc.emit('exit', 0);
+      await expect(promise).resolves.toEqual({ success: true, data: { files: [] } });
+    } finally {
+      for (const key of Object.keys(ambient)) {
+        const value = previous[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
   });
 
   it('calls onExit for templated spawns', async () => {
@@ -361,7 +471,7 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', 'injected injected-user prompt'],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
   });
 
@@ -405,7 +515,7 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', "launch --tenant-id 'tenant-'\\''abc' -- git.clone"],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
   });
 
@@ -442,7 +552,7 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', "launch --tenant-id 'trusted-tenant' -- git.clone"],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
   });
 
@@ -470,7 +580,7 @@ describe('configured executor spawning', () => {
     expect(spawnMock).toHaveBeenCalledWith(
       'sh',
       ['-c', "launch --tenant-id 'tenant-run' -- git.repo.inspect"],
-      expect.objectContaining({ stdio: ['pipe', 'pipe', 'pipe'] })
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
     );
   });
 
@@ -566,6 +676,57 @@ describe('configured executor spawning', () => {
         stdio: ['pipe', 'pipe', 'pipe'],
       })
     );
+  });
+
+  it('maps a pinned credential source onto child fd 3 without serializing it', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    sandboxWrapMock.mockReturnValue({
+      cmd: 'bwrap',
+      args: ['--bind-fd', '3', '/branch-home/codex/auth.json', '--', 'executor'],
+      extraEnv: {},
+    });
+    const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+    configureExecutor(
+      { sandbox: { enabled: true, fail_if_unavailable: true } },
+      {
+        ...LOCAL_RESPONSE_OPTIONS,
+        sandboxRuntimePaths: {
+          homeDir: '/home/agor',
+          dataHome: '/home/agor/.agor',
+          protectedDataRoots: ['/home/agor/.agor'],
+          worktreesRoot: '/home/agor/.agor/worktrees',
+          agenticToolsPath: '/opt/agor/agentic-tools',
+          agorConfigPath: '/home/agor/.agor/config.yaml',
+        },
+      }
+    );
+
+    spawnExecutor(
+      {
+        command: 'prompt',
+        params: {
+          cwd: '/home/agor/.agor/worktrees/repo/feature',
+          sandboxBranchSdkHome: '/branch-home',
+        },
+      },
+      {
+        localSandboxFileBinds: [{ sourceFd: 47, destination: '/branch-home/codex/auth.json' }],
+      }
+    );
+
+    expect(sandboxWrapMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        branchSdkCredentialBinds: [{ fd: 3, destination: '/branch-home/codex/auth.json' }],
+      })
+    );
+    expect(spawnMock).toHaveBeenCalledWith(
+      'bwrap',
+      expect.any(Array),
+      expect.objectContaining({ stdio: ['pipe', 'inherit', 'inherit', 47] })
+    );
+    expect(proc.written).not.toContain('47');
+    expect(proc.written).not.toContain('localSandboxFileBinds');
   });
 
   it('waits for asynchronous spawn readiness before sending the executor payload', async () => {
