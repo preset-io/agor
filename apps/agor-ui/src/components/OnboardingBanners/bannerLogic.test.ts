@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import {
   BannerDecision,
   type BannerDecisionInput,
+  credentialFingerprint,
   credentialRemediationTarget,
   decideBanner,
   hasConfiguredCredentialFor,
   ProbeState,
+  probeableTools,
   resolvedCredentialOwner,
   resolveGovernedProbeAgent,
   resolveProbeState,
@@ -16,12 +18,14 @@ const baseInput: BannerDecisionInput = {
   onboardingCompleted: true,
   hasLlm: false,
   probeState: ProbeState.Unknown,
+  hasWorkingAlternative: false,
   canManageMcp: true,
   mcpServerCount: 0,
   gatewayChannelCount: 0,
   integrationsHydrated: true,
   integrationsBannerDismissed: false,
   credentialWarningDismissed: false,
+  softWarningDismissed: false,
 };
 
 const asUser = (partial: Partial<User>): User => partial as User;
@@ -55,7 +59,7 @@ describe('decideBanner — fail-safe amber banners', () => {
     ).toBe(BannerDecision.KeyInvalid);
   });
 
-  it('a snoozed credential warning stays hidden without becoming an integrations prompt', () => {
+  it('a dismissed credential warning stays hidden without becoming an integrations prompt', () => {
     expect(
       decideBanner({
         ...baseInput,
@@ -64,6 +68,65 @@ describe('decideBanner — fail-safe amber banners', () => {
         credentialWarningDismissed: true,
       })
     ).toBe(BannerDecision.None);
+  });
+});
+
+describe('decideBanner — multi-tool softening', () => {
+  it('softens to the partial-AI notice when the governed tool is broken but another works', () => {
+    expect(
+      decideBanner({
+        ...baseInput,
+        hasLlm: true,
+        probeState: ProbeState.Unauthenticated,
+        hasWorkingAlternative: true,
+      })
+    ).toBe(BannerDecision.PartialAi);
+  });
+
+  it('keeps the amber warning when NO credentialed tool passes its probe', () => {
+    expect(
+      decideBanner({
+        ...baseInput,
+        hasLlm: true,
+        probeState: ProbeState.Unauthenticated,
+        hasWorkingAlternative: false,
+      })
+    ).toBe(BannerDecision.KeyInvalid);
+  });
+
+  it('lets the partial-AI notice be dismissed freely and independently of the amber snooze', () => {
+    expect(
+      decideBanner({
+        ...baseInput,
+        hasLlm: true,
+        probeState: ProbeState.Unauthenticated,
+        hasWorkingAlternative: true,
+        softWarningDismissed: true,
+        // A dismissed amber warning must NOT hide a live partial notice, and vice versa.
+        credentialWarningDismissed: false,
+      })
+    ).toBe(BannerDecision.None);
+    expect(
+      decideBanner({
+        ...baseInput,
+        hasLlm: true,
+        probeState: ProbeState.Unauthenticated,
+        hasWorkingAlternative: true,
+        credentialWarningDismissed: true,
+        softWarningDismissed: false,
+      })
+    ).toBe(BannerDecision.PartialAi);
+  });
+
+  it('never softens without positive proof: an Unknown governed probe shows nothing', () => {
+    expect(
+      decideBanner({
+        ...baseInput,
+        hasLlm: true,
+        probeState: ProbeState.Unknown,
+        hasWorkingAlternative: true,
+      })
+    ).not.toBe(BannerDecision.PartialAi);
   });
 });
 
@@ -191,6 +254,99 @@ describe('resolveGovernedProbeAgent — matches session creation', () => {
       ['copilot', setting('copilot', true)],
     ]);
     expect(resolveGovernedProbeAgent(asUser({}), settings)).toBe('opencode');
+  });
+});
+
+describe('probeableTools — governed default plus credentialed alternatives', () => {
+  const setting = (tool: AgenticToolName, enabled: boolean) => ({
+    tool,
+    revision: 0,
+    deployment_available: true,
+    enabled,
+    resolution_policy: 'user_preferred' as const,
+    inline_configuration_allowed: true,
+    connection: {},
+  });
+
+  it('probes only the governed tool when no other tool is credentialed', () => {
+    expect(
+      probeableTools(
+        asUser({ primary_agentic_tool: 'claude-code' }),
+        new Map([['claude-code', setting('claude-code', true)]])
+      )
+    ).toEqual(['claude-code']);
+  });
+
+  it('adds each enabled, credentialed alternative after the governed tool', () => {
+    const tools = probeableTools(
+      asUser({
+        primary_agentic_tool: 'claude-code',
+        agentic_tools: { codex: { OPENAI_API_KEY: true } },
+      }),
+      new Map([
+        ['claude-code', setting('claude-code', true)],
+        ['codex', setting('codex', true)],
+      ])
+    );
+    expect(tools[0]).toBe('claude-code');
+    expect(tools).toContain('codex');
+  });
+
+  it('never probes a disabled alternative even if it has a credential', () => {
+    const tools = probeableTools(
+      asUser({
+        primary_agentic_tool: 'claude-code',
+        agentic_tools: { codex: { OPENAI_API_KEY: true } },
+      }),
+      new Map([
+        ['claude-code', setting('claude-code', true)],
+        ['codex', setting('codex', false)],
+      ])
+    );
+    expect(tools).toEqual(['claude-code']);
+  });
+});
+
+describe('credentialFingerprint — per-tool change detection', () => {
+  const base = asUser({
+    agentic_tools: { 'claude-code': { ANTHROPIC_API_KEY: true } },
+    agentic_auth_methods: { 'claude-code': 'api_key' },
+  });
+
+  it('is stable when an unrelated tool credential changes', () => {
+    const before = credentialFingerprint(base, 'claude-code');
+    const after = credentialFingerprint(
+      asUser({
+        agentic_tools: {
+          'claude-code': { ANTHROPIC_API_KEY: true },
+          codex: { OPENAI_API_KEY: true },
+        },
+        agentic_auth_methods: { 'claude-code': 'api_key' },
+      }),
+      'claude-code'
+    );
+    expect(after).toBe(before);
+  });
+
+  it('changes when the tool loses its stored credential', () => {
+    expect(credentialFingerprint(asUser({ agentic_tools: {} }), 'claude-code')).not.toBe(
+      credentialFingerprint(base, 'claude-code')
+    );
+  });
+
+  it('changes when the tenant revision advances', () => {
+    const withRevision = (revision: number) => ({
+      tool: 'claude-code' as const,
+      revision,
+      deployment_available: true,
+      enabled: true,
+      resolution_policy: 'tenant_preferred' as const,
+      inline_configuration_allowed: true,
+      connection: { ANTHROPIC_API_KEY: { configured: true } },
+    });
+    expect(credentialFingerprint(base, 'claude-code', withRevision(1))).not.toBe(
+      credentialFingerprint(base, 'claude-code', withRevision(2))
+    );
   });
 });
 

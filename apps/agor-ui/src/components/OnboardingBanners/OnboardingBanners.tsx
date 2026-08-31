@@ -2,35 +2,42 @@
  * OnboardingBanners — persistent banners shown after onboarding if steps were skipped.
  *
  * Priority order (only one shows at a time):
- * 1. AI warning — the check-auth probe found no working LLM credential.
- * 2. Connection warning — a DB key exists but the probe rejected it.
+ * 1. AI warning — no credentialed tool passes the check-auth probe.
+ * 2. Partial-AI notice — the governed tool is broken but another tool works.
  * 3. Integrations info — AI ok, no MCP servers and no gateway channels.
  *
- * Both warning banners require POSITIVE proof (probe Unauthenticated); the
- * decision logic lives in `bannerLogic.ts`.
+ * The amber warnings require POSITIVE proof (probe Unauthenticated); the softened
+ * notice additionally requires positive proof that another tool works. Decision
+ * logic lives in `bannerLogic.ts`.
  */
 
 import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
 import type { AgenticToolName, AuthCheckResult, User } from '@agor-live/client';
 import { Alert, Button, Space } from 'antd';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAgorStore } from '../../store/agorStore';
 import {
   BannerDecision,
+  credentialFingerprint,
   credentialRemediationTarget,
   decideBanner,
   hasConfiguredCredentialFor,
   ProbeState,
+  probeableTools,
   resolvedCredentialOwner,
   resolveGovernedProbeAgent,
   resolveProbeState,
 } from './bannerLogic';
 import {
-  clearCredentialWarningSnooze,
-  credentialWarningSnoozeStorageKey,
-  readCredentialWarningSnooze,
-  writeCredentialWarningSnooze,
+  credentialWarningDismissalKey,
+  readCredentialWarningDismissed,
+  writeCredentialWarningDismissed,
 } from './credentialWarningDismissal';
+import {
+  integrationsBannerDismissalKey,
+  readIntegrationsBannerDismissed,
+  writeIntegrationsBannerDismissed,
+} from './integrationsBannerDismissal';
 
 export interface OnboardingBannersProps {
   user: User | null | undefined;
@@ -54,7 +61,8 @@ export interface OnboardingBannersProps {
   connectionReady: boolean;
 }
 
-function AmberBanner({
+function CredentialBanner({
+  type = 'warning',
   message,
   buttonLabel,
   onClick,
@@ -62,6 +70,7 @@ function AmberBanner({
   onDismiss,
   dismissLabel,
 }: {
+  type?: 'warning' | 'info';
   message: string;
   buttonLabel?: string;
   onClick?: () => void;
@@ -74,7 +83,7 @@ function AmberBanner({
     <Alert
       banner
       showIcon
-      type="warning"
+      type={type}
       title={message}
       closable={{ closeIcon: true, onClose: onDismiss, 'aria-label': dismissLabel }}
       action={
@@ -115,20 +124,13 @@ export function OnboardingBanners({
   credentialVersion,
   connectionReady,
 }: OnboardingBannersProps) {
-  const [probeResult, setProbeResult] = useState<{ owner: string; state: ProbeState }>({
-    owner: '',
-    state: ProbeState.Unknown,
-  });
-  const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
-  const [credentialWarningSnoozedUntil, setCredentialWarningSnoozedUntil] = useState<number | null>(
-    null
-  );
-  const [probeRefreshVersion, setProbeRefreshVersion] = useState(0);
-  const priorCredentialRevision = useRef<{
+  const [probeResult, setProbeResult] = useState<{
     owner: string;
-    userVersion: number;
-    workspaceRevision: number;
-  } | null>(null);
+    states: Partial<Record<AgenticToolName, ProbeState>>;
+  }>({ owner: '', states: {} });
+  const [integrationsBannerDismissed, setIntegrationsBannerDismissed] = useState(false);
+  const [credentialWarningDismissed, setCredentialWarningDismissed] = useState(false);
+  const [softWarningDismissed, setSoftWarningDismissed] = useState(false);
   const agenticToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
   const agenticToolSettingsHydrated = useAgorStore((state) => state.agenticToolSettingsHydrated);
 
@@ -142,58 +144,79 @@ export function OnboardingBanners({
   const credentialOwner = resolvedCredentialOwner(user, probeAgent, probeSettings);
   const canManageWorkspaceCredentials = user?.role === 'admin' || user?.role === 'superadmin';
   const displayName = AGENTIC_TOOL_DISPLAY_NAMES[probeAgent] ?? probeAgent;
-  const dismissalOwner = userId ? `${userId}:${probeAgent}` : null;
   const userCredentialRevision = user?.updated_at ? String(user.updated_at) : '';
-  const workspaceCredentialRevision = probeSettings?.revision ?? 0;
+  const warningFingerprint = credentialFingerprint(user, probeAgent, probeSettings);
 
-  // Auth-method marker for the selected tool's subscription/native path. It
-  // lands server-side via its own service and can change without a stored key
-  // or credentialVersion bump. Keep only the selected primitive in the probe
-  // key so a login for an unrelated tool does not re-probe this one.
-  const probeAuthMethod =
-    probeAgent === 'codex' || probeAgent === 'claude-code'
-      ? user?.agentic_auth_methods?.[probeAgent]
-      : undefined;
+  // Every enabled tool the user/tenant already has a credential for, governed
+  // tool first. `probeToolsSignature` keys the memo on CONTENT so an unrelated
+  // App-shell render that reallocates arrays does not re-fire the probe.
+  const probeTools = probeableTools(user, agenticToolSettings);
+  const probeToolsSignature = JSON.stringify(probeTools);
+  const toolsToProbe = useMemo(
+    () => JSON.parse(probeToolsSignature) as AgenticToolName[],
+    [probeToolsSignature]
+  );
+
+  // Auth-method markers for the probed tools' subscription/native paths. They
+  // land server-side via their own service and can change without a stored key
+  // or credentialVersion bump. Only the derived primitives belong in the probe
+  // key so a login for an unrelated tool does not re-probe this set.
+  const probeAuthMethods = toolsToProbe.map((tool) =>
+    tool === 'codex' || tool === 'claude-code' ? user?.agentic_auth_methods?.[tool] : undefined
+  );
+  const probeSettingsList = toolsToProbe.map(
+    (tool) => agenticToolSettings.get(tool as never) ?? null
+  );
   const probeOwner = JSON.stringify([
     userId,
     userCredentialRevision,
     onboardingCompleted,
     connectionReady,
     agenticToolSettingsHydrated,
-    probeAgent,
-    probeEnabled,
-    probeSettings,
+    probeToolsSignature,
+    probeSettingsList,
     credentialVersion,
-    probeRefreshVersion,
-    probeAuthMethod,
+    probeAuthMethods,
   ]);
   // Never render an old user's/tool's verdict for one frame while the effect
   // below is scheduling its replacement.
-  const probeState = probeResult.owner === probeOwner ? probeResult.state : ProbeState.Unknown;
+  const currentStates = probeResult.owner === probeOwner ? probeResult.states : {};
+  const probeState = currentStates[probeAgent] ?? ProbeState.Unknown;
+  const workingAlternative =
+    toolsToProbe.find(
+      (tool) => tool !== probeAgent && currentStates[tool] === ProbeState.Authenticated
+    ) ?? null;
+  const workingAlternativeName = workingAlternative
+    ? (AGENTIC_TOOL_DISPLAY_NAMES[workingAlternative] ?? workingAlternative)
+    : '';
 
-  // One selected-tool probe per identity/credential change. Deps are
-  // primitives/stable so the effect never re-fires on board navigation or
-  // unrelated App-shell renders. `updated_at` deliberately covers a same-field
-  // credential rotation delivered by realtime (presence stays `true`, so a
-  // boolean-only dependency would be stale). userId resets state on a switch;
-  // credentialVersion covers the local save path before realtime lands;
-  // probeAuthMethod re-probes after a selected-tool subscription/native login
-  // lands server-side (device sign-in, auth.json import) — paths that bump
-  // neither hasLlm nor credentialVersion — and covers a second browser tab too.
+  // One fan-out probe per identity/credential change. Deps are primitives/stable
+  // so the effect never re-fires on board navigation or unrelated App-shell
+  // renders. `updated_at`/`credentialVersion` cover a same-field rotation and
+  // the local save path before realtime lands; `probeAuthMethods` re-probes
+  // after a subscription/native login (device sign-in, auth.json import) that
+  // bumps neither, and covers a second browser tab.
   useEffect(() => {
     if (!onboardingCompleted || !connectionReady || !agenticToolSettingsHydrated || !probeEnabled) {
-      setProbeResult({ owner: probeOwner, state: ProbeState.Unknown });
+      setProbeResult({ owner: probeOwner, states: {} });
       return;
     }
-    setProbeResult({ owner: probeOwner, state: ProbeState.Unknown });
+    setProbeResult({ owner: probeOwner, states: {} });
     let cancelled = false;
-    resolveProbeState((tool) => onCheckAuth(tool).then((result) => result.status), probeAgent)
-      .then((state) => {
-        if (!cancelled) setProbeResult({ owner: probeOwner, state });
-      })
-      .catch(() => {
-        if (!cancelled) setProbeResult({ owner: probeOwner, state: ProbeState.Unknown });
-      });
+    Promise.all(
+      toolsToProbe.map((tool) =>
+        resolveProbeState(
+          (probeTool) => onCheckAuth(probeTool).then((result) => result.status),
+          tool
+        )
+          .then((state) => [tool, state] as const)
+          .catch(() => [tool, ProbeState.Unknown] as const)
+      )
+    ).then((entries) => {
+      if (!cancelled) {
+        setProbeResult({ owner: probeOwner, states: Object.fromEntries(entries) });
+      }
+    });
     return () => {
       cancelled = true;
     };
@@ -201,111 +224,133 @@ export function OnboardingBanners({
     onboardingCompleted,
     connectionReady,
     agenticToolSettingsHydrated,
-    probeAgent,
     probeEnabled,
     onCheckAuth,
+    toolsToProbe,
     probeOwner,
   ]);
 
-  // A warning can be snoozed for 24 hours, scoped to one user + one selected
-  // tool. Local user saves and durable workspace-settings revisions clear it,
-  // so failed reconnects are immediately actionable; successful reconnects
-  // disappear through the probe. Wait for policy hydration before recording
-  // the workspace revision, otherwise an initial 0 -> persisted revision load
-  // would incorrectly erase a snooze on every page refresh.
+  // Persistent, per-user+tool dismissals. They survive reloads and time; a stale
+  // entry (the tool's credential fingerprint changed) is cleared on read, so a
+  // real warning is never hidden by an out-of-date dismissal. Keyed on the
+  // fingerprint so an unrelated tool's save cannot resurface this warning.
   useEffect(() => {
-    if (!agenticToolSettingsHydrated) return;
-
-    const previous = priorCredentialRevision.current;
-    const credentialChanged =
-      !!dismissalOwner &&
-      previous?.owner === dismissalOwner &&
-      (previous.userVersion !== credentialVersion ||
-        previous.workspaceRevision !== workspaceCredentialRevision);
-
-    if (!userId || !dismissalOwner || typeof window === 'undefined') {
-      priorCredentialRevision.current = null;
-      setCredentialWarningSnoozedUntil(null);
+    if (!userId || typeof window === 'undefined') {
+      setCredentialWarningDismissed(false);
+      setSoftWarningDismissed(false);
       return;
     }
+    setCredentialWarningDismissed(
+      readCredentialWarningDismissed(
+        window.localStorage,
+        'warning',
+        userId,
+        probeAgent,
+        warningFingerprint
+      )
+    );
+    setSoftWarningDismissed(
+      readCredentialWarningDismissed(
+        window.localStorage,
+        'partial',
+        userId,
+        probeAgent,
+        warningFingerprint
+      )
+    );
+  }, [userId, probeAgent, warningFingerprint]);
 
-    priorCredentialRevision.current = {
-      owner: dismissalOwner,
-      userVersion: credentialVersion,
-      workspaceRevision: workspaceCredentialRevision,
-    };
-
-    if (credentialChanged) {
-      clearCredentialWarningSnooze(window.localStorage, userId, probeAgent);
+  useEffect(() => {
+    if (!userId || typeof window === 'undefined') {
+      setIntegrationsBannerDismissed(false);
+      return;
     }
-    const snoozedUntil = credentialChanged
-      ? null
-      : readCredentialWarningSnooze(window.localStorage, userId, probeAgent);
-    setCredentialWarningSnoozedUntil(snoozedUntil);
-  }, [
-    agenticToolSettingsHydrated,
-    credentialVersion,
-    dismissalOwner,
-    probeAgent,
-    userId,
-    workspaceCredentialRevision,
-  ]);
+    setIntegrationsBannerDismissed(readIntegrationsBannerDismissed(window.localStorage, userId));
+  }, [userId]);
 
-  // localStorage changes are not delivered back to the tab that made them,
-  // but other tabs receive a storage event. Mirror those changes so a snooze
-  // or credential-save clear has browser-wide semantics. Clearing starts from
-  // Unknown and re-probes rather than briefly resurfacing a day-old rejection.
+  // localStorage writes are not delivered back to the tab that made them, but
+  // other tabs receive a storage event. Mirror those so a dismissal has
+  // browser-wide semantics. `event.key === null` is a full clear().
   useEffect(() => {
     if (!userId || typeof window === 'undefined') return;
-    const key = credentialWarningSnoozeStorageKey(userId, probeAgent);
+    const warningKey = credentialWarningDismissalKey('warning', userId, probeAgent);
+    const partialKey = credentialWarningDismissalKey('partial', userId, probeAgent);
+    const integrationsKey = integrationsBannerDismissalKey(userId);
     const handleStorage = (event: StorageEvent) => {
-      if (
-        event.key !== key ||
-        (event.storageArea !== null && event.storageArea !== window.localStorage)
-      ) {
-        return;
+      if (event.storageArea !== null && event.storageArea !== window.localStorage) return;
+      if (event.key === null || event.key === warningKey) {
+        setCredentialWarningDismissed(
+          readCredentialWarningDismissed(
+            window.localStorage,
+            'warning',
+            userId,
+            probeAgent,
+            warningFingerprint
+          )
+        );
       }
-      const snoozedUntil = readCredentialWarningSnooze(window.localStorage, userId, probeAgent);
-      setCredentialWarningSnoozedUntil(snoozedUntil);
-      if (snoozedUntil === null) setProbeRefreshVersion((version) => version + 1);
+      if (event.key === null || event.key === partialKey) {
+        setSoftWarningDismissed(
+          readCredentialWarningDismissed(
+            window.localStorage,
+            'partial',
+            userId,
+            probeAgent,
+            warningFingerprint
+          )
+        );
+      }
+      if (event.key === null || event.key === integrationsKey) {
+        setIntegrationsBannerDismissed(
+          readIntegrationsBannerDismissed(window.localStorage, userId)
+        );
+      }
     };
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
-  }, [probeAgent, userId]);
-
-  useEffect(() => {
-    if (!credentialWarningSnoozedUntil || typeof window === 'undefined') return;
-
-    const timer = window.setTimeout(
-      () => {
-        setCredentialWarningSnoozedUntil(null);
-        // A day-old rejection is no longer authoritative enough to re-display.
-        // Re-probe from Unknown before reminding the user.
-        setProbeRefreshVersion((version) => version + 1);
-      },
-      Math.min(credentialWarningSnoozedUntil - Date.now(), 2_147_483_647)
-    );
-    return () => window.clearTimeout(timer);
-  }, [credentialWarningSnoozedUntil]);
+  }, [userId, probeAgent, warningFingerprint]);
 
   const dismissCredentialWarning = () => {
     if (!userId || typeof window === 'undefined') return;
-    setCredentialWarningSnoozedUntil(
-      writeCredentialWarningSnooze(window.localStorage, userId, probeAgent)
+    writeCredentialWarningDismissed(
+      window.localStorage,
+      'warning',
+      userId,
+      probeAgent,
+      warningFingerprint
     );
+    setCredentialWarningDismissed(true);
+  };
+  const dismissSoftWarning = () => {
+    if (!userId || typeof window === 'undefined') return;
+    writeCredentialWarningDismissed(
+      window.localStorage,
+      'partial',
+      userId,
+      probeAgent,
+      warningFingerprint
+    );
+    setSoftWarningDismissed(true);
+  };
+  const dismissIntegrationsBanner = () => {
+    if (userId && typeof window !== 'undefined') {
+      writeIntegrationsBannerDismissed(window.localStorage, userId);
+    }
+    setIntegrationsBannerDismissed(true);
   };
 
   const decision = decideBanner({
     onboardingCompleted,
     hasLlm,
     probeState,
+    hasWorkingAlternative: workingAlternative !== null,
     canManageMcp,
     mcpServerCount,
     gatewayChannelCount,
     integrationsHydrated,
     integrationsBannerDismissed,
-    credentialWarningDismissed:
-      credentialWarningSnoozedUntil !== null && credentialWarningSnoozedUntil > Date.now(),
+    credentialWarningDismissed,
+    softWarningDismissed,
   });
   const remediationTarget = credentialRemediationTarget(
     credentialOwner,
@@ -327,7 +372,7 @@ export function OnboardingBanners({
       return null;
     case BannerDecision.NoAi:
       return (
-        <AmberBanner
+        <CredentialBanner
           message={
             workspaceManagedForMember
               ? `${displayName} is managed by your workspace but isn't connected. Ask a workspace admin to configure it before starting ${displayName} sessions.`
@@ -345,12 +390,12 @@ export function OnboardingBanners({
           onClick={openCredentialSettings}
           docsHref="https://agor.live/guide"
           onDismiss={dismissCredentialWarning}
-          dismissLabel={`Snooze ${displayName} warning for 24 hours`}
+          dismissLabel={`Dismiss ${displayName} warning`}
         />
       );
     case BannerDecision.KeyInvalid:
       return (
-        <AmberBanner
+        <CredentialBanner
           message={
             workspaceManagedForMember
               ? `${displayName} rejected the workspace-managed credential. Ask a workspace admin to update it before starting new ${displayName} sessions.`
@@ -367,7 +412,24 @@ export function OnboardingBanners({
           }
           onClick={openCredentialSettings}
           onDismiss={dismissCredentialWarning}
-          dismissLabel={`Snooze ${displayName} warning for 24 hours`}
+          dismissLabel={`Dismiss ${displayName} warning`}
+        />
+      );
+    case BannerDecision.PartialAi:
+      return (
+        <CredentialBanner
+          type="info"
+          message={`${displayName} isn't connected, but ${workingAlternativeName} is working. New ${displayName} sessions won't run until you reconnect it — your ${workingAlternativeName} sessions are unaffected.`}
+          buttonLabel={
+            workspaceManagedForMember
+              ? undefined
+              : personalOverrideForWorkspaceFallback
+                ? `Add personal ${displayName} credential`
+                : `Reconnect ${displayName}`
+          }
+          onClick={openCredentialSettings}
+          onDismiss={dismissSoftWarning}
+          dismissLabel={`Dismiss ${displayName} notice`}
         />
       );
     case BannerDecision.Integrations:
@@ -379,7 +441,7 @@ export function OnboardingBanners({
           title="Connect Slack, GitHub, or other tools via MCP to let your AI post updates and track issues."
           action={
             <Space size="small">
-              <Button type="text" size="small" onClick={() => setIntegrationsBannerDismissed(true)}>
+              <Button type="text" size="small" onClick={dismissIntegrationsBanner}>
                 Maybe later
               </Button>
               <Button type="primary" size="small" onClick={() => onOpenWorkspaceSettings('mcp')}>
