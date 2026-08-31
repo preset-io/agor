@@ -434,7 +434,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
           AND namespace_row.nspname = 'public'
           AND table_row.relname IN (
             'branches','board_access_policies','board_access_entries','branch_permission_configs',
-            'branch_permission_entries','branch_session_sharing_grants'
+            'branch_permission_entries'
           )
       `
     );
@@ -452,7 +452,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
       ['branch_permission_entries_role_check', /none.*viewer.*collaborator.*manager/i],
       ['branch_permission_entries_fs_access_check', /none.*read.*write/i],
       ['branch_permission_entries_principal_check', /user_id.*group_id/i],
-      ['branch_session_sharing_grants_principal_check', /user_id.*group_id/i],
     ] as const;
     for (const [name, expression] of expected) {
       expect(checks.get(name), name).toMatch(expression);

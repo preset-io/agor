@@ -2,6 +2,7 @@ import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mcpAuthMocks = vi.hoisted(() => ({ resolveMCPAuthHeaders: vi.fn() }));
+const claudeSdkMocks = vi.hoisted(() => ({ query: vi.fn() }));
 
 // Mock minimal dependencies
 vi.mock('@agor/core/lib/validation', () => ({
@@ -11,7 +12,10 @@ vi.mock('@agor/core/db', () => ({
   // shortId is used in log lines inside query-builder; passthrough mock.
   shortId: vi.fn((id: string) => id),
 }));
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }));
+vi.mock('@anthropic-ai/claude-agent-sdk', () => claudeSdkMocks);
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(async () => claudeSdkMocks),
+}));
 vi.mock('@agor/core/templates/session-context', () => ({
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
 }));
@@ -131,6 +135,23 @@ describe('setupQuery - Local Settings Support', () => {
     } finally {
       logSpy.mockRestore();
     }
+  });
+
+  it('retains only UTF-8 byte metadata from provider stderr', async () => {
+    const deps = createMockDeps();
+    const setup = await setupQuery('test-session' as SessionID, 'test prompt', deps);
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const captureStderr = callArgs.options.stderr as (data: unknown) => void;
+    const sentinel = 'SENTINEL_CLAUDE_STDERR_SECRET_🔐';
+
+    captureStderr(sentinel);
+    captureStderr({ reflected: sentinel });
+
+    expect(setup.getStderrMetadata()).toEqual({
+      hasStderr: true,
+      byteLength: Buffer.byteLength(sentinel),
+    });
+    expect(JSON.stringify(setup.getStderrMetadata())).not.toContain(sentinel);
   });
 
   // Pin the literal disallow list so a stray edit to the constant

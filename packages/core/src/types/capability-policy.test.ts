@@ -4,14 +4,12 @@ import {
   normalizeCapabilityPolicyCapabilities,
   removeCapabilityPolicyCapability,
   resolveCapabilityPolicyAccess,
-  validateBranchSessionSharingDraft,
   validateCapabilityPolicyDraft,
 } from './capability-policy';
 import type { CapabilityPolicyDraft, GroupID, UserID, UUID } from './index';
 
 const groupId = '00000000-0000-0000-0000-000000000101' as GroupID;
 const entryId = '00000000-0000-0000-0000-000000000201' as UUID;
-const ownerId = '00000000-0000-0000-0000-000000000301' as UserID;
 
 function branchPolicy(overrides: Partial<CapabilityPolicyDraft> = {}): CapabilityPolicyDraft {
   return {
@@ -104,37 +102,6 @@ describe('capability policy proposal contract', () => {
       })
     );
     expect(issues.map((issue) => issue.code)).toContain('terminal_requires_filesystem_access');
-  });
-
-  it('keeps personal session-sharing rules singular, active, and one-principal-per-entry', () => {
-    const issues = validateBranchSessionSharingDraft({
-      owner_rules: [
-        {
-          session_owner_user_id: ownerId,
-          enabled: false,
-          grantees: [
-            {
-              grant_id: entryId,
-              principal: { principal_type: 'user', user_id: ownerId },
-            },
-            {
-              grant_id: '00000000-0000-0000-0000-000000000202' as UUID,
-              principal: { principal_type: 'user', user_id: ownerId },
-            },
-          ],
-        },
-        { session_owner_user_id: ownerId, enabled: true, grantees: [] },
-      ],
-    });
-
-    expect(issues.map((issue) => issue.code)).toEqual(
-      expect.arrayContaining([
-        'disabled_rule_has_grantees',
-        'self_grant',
-        'duplicate_grantee',
-        'duplicate_owner_rule',
-      ])
-    );
   });
 });
 

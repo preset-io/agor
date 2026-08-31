@@ -5,6 +5,7 @@
  */
 
 import type {
+  CapabilityPolicyFsAccess,
   ExecutorPulse,
   ExecutorTerminationCompleteInput,
   SdkFailure,
@@ -54,6 +55,7 @@ import {
   update,
 } from '../database-wrapper';
 import { type SessionRow, sessions, type TaskInsert, type TaskRow, tasks, users } from '../schema';
+import { getCurrentTenantId } from '../tenant-context';
 import {
   AmbiguousIdError,
   type BaseRepository,
@@ -62,7 +64,11 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleSessionReferenceAccessExists } from './branch-access';
+import {
+  resolveSessionRuntimeBranchAccess,
+  visibleSessionReferenceAccessExists,
+} from './branch-access';
+import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
 
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
@@ -99,6 +105,16 @@ function isSQLiteBusyError(error: unknown): boolean {
     return true;
   }
   return 'cause' in error && isSQLiteBusyError(error.cause);
+}
+
+function fsAccessRank(access: CapabilityPolicyFsAccess): number {
+  return access === 'write' ? 2 : access === 'read' ? 1 : 0;
+}
+
+function requireRuntimeTenantId(): string {
+  const tenantId = getCurrentTenantId();
+  if (!tenantId) throw new RepositoryError('Runtime authority tenant scope is unavailable');
+  return tenantId;
 }
 
 function withTerminalTiming(
@@ -140,6 +156,44 @@ export interface TerminationClaimInput {
   requireExecutorDisconnected?: boolean;
   now?: Date;
 }
+
+export interface ExecutorLaunchAuthorityOptions {
+  branchRbacEnabled: boolean;
+}
+
+export interface ExecutorLaunchAuthority {
+  principal_user_id: string;
+  session_id: string;
+  branch_id: string;
+  fs_access: CapabilityPolicyFsAccess;
+}
+
+/** Server-authenticated Task-token scope supplied to the repository hot path. */
+export interface TaskRuntimeAuthorityScope extends ExecutorLaunchAuthorityOptions {
+  token_fingerprint: string;
+  principal_user_id: string;
+  session_id: string;
+  branch_id: string;
+  /** O(1) standalone authority decision; PostgreSQL validates its durable row in-transaction. */
+  standalone_token_current?: boolean;
+}
+
+export type RuntimeTelemetryAuthorityDenialReason =
+  | 'token_revoked'
+  | 'principal_unavailable'
+  | 'branch_capability_revoked'
+  | 'filesystem_access_revoked'
+  | 'launch_authority_missing';
+
+export type RuntimeTelemetryReportResult =
+  | { outcome: 'continued'; task: Task }
+  | { outcome: 'control'; task: Task }
+  | { outcome: 'scope_mismatch'; task: Task }
+  | {
+      outcome: 'authorization_revoked';
+      task: Task;
+      reason: RuntimeTelemetryAuthorityDenialReason;
+    };
 
 export interface TerminationClaimResult {
   outcome: 'claimed' | 'unchanged' | 'condition_changed' | 'terminal';
@@ -366,6 +420,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    */
   private rowToTask(row: TaskRow): Task {
     const storedTerminationRequest = row.data.termination_request;
+    const { executor_launch_fs_access_floor: _executorLaunchFsAccessFloor, ...publicData } =
+      row.data;
     const coordination: TerminationCoordinationClaim | undefined =
       row.termination_coordination_token &&
       row.termination_coordination_claimed_at &&
@@ -395,7 +451,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         ? new Date(row.last_executor_heartbeat_at).toISOString()
         : undefined,
       created_by: row.created_by,
-      ...row.data,
+      ...publicData,
       ...(storedTerminationRequest
         ? {
             termination_request: {
@@ -733,6 +789,25 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     }
   }
 
+  /** Active executor turns attributed to one immutable prompt actor. */
+  async findExecutingByCreator(userId: string): Promise<Task[]> {
+    try {
+      const rows = await select(this.db)
+        .from(tasks)
+        .where(
+          and(eq(tasks.created_by, userId), inArray(tasks.status, [...EXECUTING_TASK_STATUSES]))
+        )
+        .all();
+
+      return rows.map((row: TaskRow) => this.rowToTask(row));
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to find executing tasks for creator: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
   /**
    * Find orphaned tasks (dispatching, running, stopping, awaiting permission, or awaiting input)
    * These are tasks that were interrupted when daemon stopped.
@@ -1064,20 +1139,141 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
     });
   }
 
-  /** Atomically stamp heartbeat time and advance the latest pulse fact. */
+  /**
+   * Resolve and immutably bind the filesystem floor used for one Task launch.
+   *
+   * Task.created_by and Task -> Session -> Branch are the only principal and
+   * resource sources. A retry may observe the same floor, but it can never
+   * replace a write projection with read/none (or read with none).
+   */
+  async bindExecutorLaunchAuthority(
+    id: string,
+    options: ExecutorLaunchAuthorityOptions
+  ): Promise<ExecutorLaunchAuthority> {
+    return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+      if (
+        row.status !== TaskStatus.DISPATCHING ||
+        row.executor_connected_at ||
+        row.data.termination_request
+      ) {
+        throw new RepositoryError('Task is not awaiting executor launch authority');
+      }
+      const access = await resolveSessionRuntimeBranchAccess(txDb, {
+        sessionId: row.session_id,
+        principalUserId: row.created_by,
+        ...options,
+      });
+      if (!access?.can_prompt_session) {
+        throw new RepositoryError('Authorization to launch this task is unavailable');
+      }
+
+      const existingFloor = row.data.executor_launch_fs_access_floor;
+      const requestedFloor = access.fs_access;
+      if (existingFloor && fsAccessRank(access.fs_access) < fsAccessRank(existingFloor)) {
+        throw new RepositoryError('Authorization to launch this task is unavailable');
+      }
+      const floor = existingFloor ?? requestedFloor;
+      const data = existingFloor
+        ? row.data
+        : { ...row.data, executor_launch_fs_access_floor: floor };
+      if (!existingFloor) {
+        await update(txDb, tasks).set({ data }).where(eq(tasks.task_id, fullId)).run();
+      }
+      return {
+        principal_user_id: row.created_by,
+        session_id: row.session_id,
+        branch_id: access.branch_id,
+        fs_access: floor,
+      };
+    });
+  }
+
+  /**
+   * Revalidate exact runtime authority, then atomically stamp heartbeat/pulse.
+   * Explicit denial returns the unchanged Task so the service can claim the
+   * existing fenced termination path. Store/query errors throw and roll back,
+   * leaving the stale-heartbeat supervisor as the existing bounded backstop.
+   */
   async reportRuntimeTelemetry(
     id: string,
+    authority: TaskRuntimeAuthorityScope,
     pulse?: Omit<ExecutorPulse, 'observed_at'>,
     observedAt?: Date
-  ): Promise<Task | null> {
+  ): Promise<RuntimeTelemetryReportResult> {
     return this.mutateLockedTask(id, async (txDb, row, fullId) => {
+      const current = this.rowToTask(row);
       // STOPPING remains executor-owned until the scoped executor reports
       // quiescence. An unverified containment guard is not proof of absence,
       // so a still-live executor may continue publishing useful evidence and
       // eventually recover the request with a late task/request-fenced ack.
-      if (!executorMayReportTelemetry(row)) return null;
+      if (!executorMayReportTelemetry(row)) return { outcome: 'control', task: current };
 
-      const heartbeatAt = await this.mutationNow(txDb, fullId, observedAt);
+      const access = await resolveSessionRuntimeBranchAccess(txDb, {
+        sessionId: row.session_id,
+        principalUserId: row.created_by,
+        branchRbacEnabled: authority.branchRbacEnabled,
+      });
+      if (
+        authority.principal_user_id !== row.created_by ||
+        authority.session_id !== row.session_id ||
+        !access ||
+        authority.branch_id !== access.branch_id
+      ) {
+        return { outcome: 'scope_mismatch', task: current };
+      }
+
+      const floor = row.data.executor_launch_fs_access_floor;
+      if (!floor) {
+        return {
+          outcome: 'authorization_revoked',
+          task: current,
+          reason: 'launch_authority_missing',
+        };
+      }
+      if (!access.principal_available) {
+        return {
+          outcome: 'authorization_revoked',
+          task: current,
+          reason: 'principal_unavailable',
+        };
+      }
+      if (!access.can_prompt_session) {
+        return {
+          outcome: 'authorization_revoked',
+          task: current,
+          reason: 'branch_capability_revoked',
+        };
+      }
+      if (fsAccessRank(access.fs_access) < fsAccessRank(floor)) {
+        return {
+          outcome: 'authorization_revoked',
+          task: current,
+          reason: 'filesystem_access_revoked',
+        };
+      }
+
+      const tokenCurrent = isPostgresDatabase(this.db)
+        ? await new ExecutorSessionTokenAuthorityRepository(txDb).isCurrent({
+            tenantId: requireRuntimeTenantId(),
+            tokenFingerprint: authority.token_fingerprint,
+            sessionId: authority.session_id,
+            taskId: fullId,
+            branchId: authority.branch_id,
+            userId: authority.principal_user_id,
+          })
+        : authority.standalone_token_current === true;
+      if (!tokenCurrent) {
+        return {
+          outcome: 'authorization_revoked',
+          task: current,
+          reason: 'token_revoked',
+        };
+      }
+
+      const heartbeatAt = observedAt ?? access.observed_at;
+      if (!Number.isFinite(heartbeatAt.getTime())) {
+        throw new RepositoryError('Runtime authority observation time is invalid');
+      }
 
       const previous = row.data.latest_executor_pulse;
       const latest =
@@ -1089,7 +1285,10 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         .set({ last_executor_heartbeat_at: heartbeatAt, data })
         .where(eq(tasks.task_id, fullId))
         .run();
-      return this.rowToTask({ ...row, last_executor_heartbeat_at: heartbeatAt, data });
+      return {
+        outcome: 'continued',
+        task: this.rowToTask({ ...row, last_executor_heartbeat_at: heartbeatAt, data }),
+      };
     });
   }
 
@@ -1567,7 +1766,15 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             termination_coordination_instance_id: insertData.termination_coordination_instance_id,
             termination_coordination_boot_id: insertData.termination_coordination_boot_id,
             termination_unverified_at: insertData.termination_unverified_at,
-            data: insertData.data,
+            data: {
+              ...insertData.data,
+              ...(currentRow.data.executor_launch_fs_access_floor
+                ? {
+                    executor_launch_fs_access_floor:
+                      currentRow.data.executor_launch_fs_access_floor,
+                  }
+                : {}),
+            },
           })
           .where(eq(tasks.task_id, fullId))
           .run();

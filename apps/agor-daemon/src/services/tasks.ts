@@ -17,8 +17,12 @@ import {
 } from '@agor/core/config';
 import {
   assertTenantWritable,
+  type CurrentTaskExecutorSessionTokenAuthority,
+  type ExecutorLaunchAuthority,
+  type ExecutorLaunchAuthorityOptions,
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
+  isPostgresDatabaseHandle,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
@@ -32,7 +36,7 @@ import {
   type TerminationSettlementInput,
   type TerminationSettlementResult,
 } from '@agor/core/db';
-import { type Application, BadRequest, Conflict } from '@agor/core/feathers';
+import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
   AuthenticatedParams,
@@ -53,6 +57,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
   ExecutorPulseKind,
   isTerminalTaskStatus,
   SDK_WATCHDOG_FAILURE_REASONS,
@@ -61,6 +66,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runtime-scope.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import {
   recordDispatchClaim,
@@ -84,7 +90,10 @@ import type { SessionsService } from './sessions';
 
 export interface TaskExecutorCredentialRevoker {
   revokeTaskTokens(taskId: string): Promise<number>;
+  isTaskTokenAuthorityCurrent?(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean>;
 }
+
+export type TaskRuntimeAuthorityOptions = ExecutorLaunchAuthorityOptions;
 
 /**
  * Task service params
@@ -167,7 +176,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   constructor(
     db: TenantScopeAwareDatabase,
     app: Application,
-    private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker
+    private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker,
+    private readonly runtimeAuthorityOptions: TaskRuntimeAuthorityOptions = {
+      branchRbacEnabled: app.get?.('config')?.execution?.branch_rbac === true,
+    }
   ) {
     const taskRepo = new TaskRepository(db);
     super(taskRepo, {
@@ -1485,6 +1497,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     return task;
   }
 
+  /** Internal launch boundary; not exposed through the Feathers transport. */
+  bindExecutorLaunchAuthority(taskId: string): Promise<ExecutorLaunchAuthority> {
+    return this.taskRepo.bindExecutorLaunchAuthority(taskId, this.runtimeAuthorityOptions);
+  }
+
   async reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: TaskParams): Promise<Task> {
     if (data.pulse) {
       const { sequence, kind, detail } = data.pulse;
@@ -1502,15 +1519,84 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       }
     }
 
-    const task = await this.taskRepo.reportRuntimeTelemetry(data.task_id, data.pulse);
-    if (!task) {
+    const authority = authenticatedTaskExecutorRuntimeAuthority(params);
+    if (!authority || authority.taskId !== data.task_id) {
+      throw new Forbidden('A token scoped to this executor task is required');
+    }
+
+    // PostgreSQL validates the durable credential row in the same transaction
+    // as the Task heartbeat write. Standalone SQLite has no durable authority
+    // table, so its existing process-local fingerprint map supplies the exact
+    // O(1) decision. Store errors propagate and no heartbeat is refreshed.
+    let standaloneTokenCurrent: boolean | undefined;
+    if (!isPostgresDatabaseHandle(this.db)) {
+      const check = this.executorCredentialRevoker?.isTaskTokenAuthorityCurrent;
+      if (!check) throw new Error('Executor task token authority is unavailable');
+      standaloneTokenCurrent = await check.call(this.executorCredentialRevoker, {
+        tenantId: authority.tenantId,
+        tokenFingerprint: authority.tokenFingerprint,
+        sessionId: authority.sessionId,
+        taskId: authority.taskId,
+        branchId: authority.branchId,
+        userId: authority.userId,
+      });
+    }
+
+    const persistTelemetry = () =>
+      this.taskRepo.reportRuntimeTelemetry(
+        data.task_id,
+        {
+          token_fingerprint: authority.tokenFingerprint,
+          principal_user_id: authority.userId,
+          session_id: authority.sessionId,
+          branch_id: authority.branchId,
+          ...this.runtimeAuthorityOptions,
+          ...(standaloneTokenCurrent === undefined
+            ? {}
+            : { standalone_token_current: standaloneTokenCurrent }),
+        },
+        data.pulse
+      );
+
+    // PostgreSQL tenant-owned services run inside a request transaction. The
+    // repository takes the Task row lock while deciding whether this heartbeat
+    // may refresh liveness. Commit that short unit before a denial enters the
+    // termination coordinator, whose fresh claim must lock the same Task row.
+    // SQLite services carry tenant identity only, so their repository mutation
+    // already commits before this method continues.
+    const report = isPostgresDatabaseHandle(this.db)
+      ? await withFreshTenantWrite(this.db, authority.tenantId, persistTelemetry)
+      : await persistTelemetry();
+
+    if (report.outcome === 'scope_mismatch') {
+      // Do not let a wrong-scope credential stop somebody else's runtime.
+      throw new Forbidden('Executor task authority does not match this runtime');
+    }
+    if (report.outcome === 'authorization_revoked') {
+      console.warn(
+        `[task.authorization] event=runtime_revoked task_id=${shortId(data.task_id)} ` +
+          `reason=${report.reason}`
+      );
+      return beginExecutorTermination({
+        app: this.app,
+        taskId: report.task.task_id,
+        cause: 'authorization_revoked',
+        errorMessage: AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+        params,
+        runInFreshTenantWriteDatabase: (work) =>
+          withFreshTenantWrite(this.db, authority.tenantId, work),
+      });
+    }
+    if (report.outcome === 'control') {
       // Heartbeat responses are also the executor's durable control-plane
-      // read. This lets a reconnected executor observe STOPPING through any
-      // daemon even before cross-replica realtime fanout is enabled.
-      const current = await this.taskRepo.findById(data.task_id);
-      if (current?.status === TaskStatus.STOPPING && current.termination_request) return current;
+      // read. A reconnected executor observes STOPPING through any daemon even
+      // if a realtime notification was missed.
+      if (report.task.status === TaskStatus.STOPPING && report.task.termination_request) {
+        return report.task;
+      }
       throw new Conflict(`Task ${shortId(data.task_id)} is not connected and active`);
     }
+    const task = report.task;
     analyticsLogger.track(
       'executor.heartbeat',
       {
@@ -1690,7 +1776,8 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
 export function createTasksService(
   db: TenantScopeAwareDatabase,
   app: Application,
-  executorCredentialRevoker?: TaskExecutorCredentialRevoker
+  executorCredentialRevoker?: TaskExecutorCredentialRevoker,
+  runtimeAuthorityOptions?: TaskRuntimeAuthorityOptions
 ): TasksService {
-  return new TasksService(db, app, executorCredentialRevoker);
+  return new TasksService(db, app, executorCredentialRevoker, runtimeAuthorityOptions);
 }

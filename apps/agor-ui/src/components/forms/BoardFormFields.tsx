@@ -1,4 +1,5 @@
 import type { Board, Group, User } from '@agor-live/client';
+import { LockOutlined } from '@ant-design/icons';
 import type { FormInstance } from 'antd';
 import { Alert, Form, Input, Space, Tabs, Typography } from 'antd';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
@@ -67,9 +68,6 @@ export function extractBoardFormValues(
           default_others_can:
             values.access_mode === 'private' ? 'none' : values.default_others_can || 'session',
           default_others_fs_access: values.default_others_fs_access || 'read',
-          default_dangerously_allow_session_sharing: Boolean(
-            values.default_dangerously_allow_session_sharing
-          ),
         }),
     custom_context: values.custom_context ? JSON.parse(values.custom_context) : null,
   } as unknown as Partial<Board>;
@@ -91,6 +89,14 @@ export interface BoardFormFieldsProps {
   allGroups?: Group[];
   /** Normalized permission editor mounted by BoardEditModal and persisted separately. */
   capabilityPolicyEditor?: React.ReactNode;
+  /**
+   * Whether the caller may edit the board's general settings (name,
+   * description, appearance). Defaults to `true` for the legacy/non-RBAC
+   * path, where every board mutator has always been allowed to save.
+   * `board.edit` is a single capability covering all of these fields
+   * together, so they're gated uniformly rather than field-by-field.
+   */
+  canEditGeneral?: boolean;
 }
 
 /**
@@ -109,24 +115,42 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
   allUsers = [],
   allGroups = [],
   capabilityPolicyEditor,
+  canEditGeneral = true,
 }) => {
   const generalFields = (
     <>
-      <Form.Item label="Name" required style={{ marginBottom: 24 }}>
+      <Form.Item
+        label="Name"
+        required
+        style={{ marginBottom: 24 }}
+        help={
+          canEditGeneral ? undefined : (
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              <LockOutlined style={{ marginRight: 4 }} />
+              You don't have permission to edit this board.
+            </Typography.Text>
+          )
+        }
+      >
         <Space.Compact style={{ display: 'flex' }}>
-          <FormEmojiPickerInput fieldName="icon" defaultEmoji="📋" />
+          <FormEmojiPickerInput fieldName="icon" defaultEmoji="📋" disabled={!canEditGeneral} />
           <Form.Item
             name="name"
             noStyle
             rules={[{ required: true, message: 'Please enter a board name' }]}
           >
-            <Input placeholder="My Board" style={{ flex: 1 }} autoFocus={autoFocus} />
+            <Input
+              placeholder="My Board"
+              style={{ flex: 1 }}
+              autoFocus={autoFocus}
+              disabled={!canEditGeneral}
+            />
           </Form.Item>
         </Space.Compact>
       </Form.Item>
 
       <Form.Item label="Description" name="description">
-        <Input.TextArea placeholder="Optional description..." rows={3} />
+        <Input.TextArea placeholder="Optional description..." rows={3} disabled={!canEditGeneral} />
       </Form.Item>
     </>
   );
@@ -139,9 +163,6 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
     []) as RbacPermissionValue['groupGrants'];
   const defaultOthersCan = Form.useWatch('default_others_can', watchOptions) || 'session';
   const defaultOthersFsAccess = Form.useWatch('default_others_fs_access', watchOptions) || 'read';
-  const defaultSessionSharing = Boolean(
-    Form.useWatch('default_dangerously_allow_session_sharing', watchOptions)
-  );
 
   const permissionValue: RbacPermissionValue = {
     visibility: boardVisibility,
@@ -149,7 +170,6 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
     groupGrants,
     othersCan: boardVisibility === 'private' ? 'none' : defaultOthersCan,
     othersFsAccess: defaultOthersFsAccess,
-    allowSessionSharing: defaultSessionSharing,
   };
 
   const setPermissionField = <K extends keyof RbacPermissionValue>(
@@ -161,9 +181,6 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
     if (key === 'groupGrants') form.setFieldsValue({ board_group_grants: value });
     if (key === 'othersCan') form.setFieldsValue({ default_others_can: value });
     if (key === 'othersFsAccess') form.setFieldsValue({ default_others_fs_access: value });
-    if (key === 'allowSessionSharing') {
-      form.setFieldsValue({ default_dangerously_allow_session_sharing: value });
-    }
   };
 
   const legacyPermissionsFields = (
@@ -200,7 +217,21 @@ export const BoardFormFields: React.FC<BoardFormFieldsProps> = ({
 
   const permissionsFields = capabilityPolicyEditor ?? legacyPermissionsFields;
 
-  const cssFields = <BoardBackgroundEditor form={form} resetSignal={backgroundResetSignal} />;
+  // The background editor has several controls (preset gallery, gradient
+  // helper) that write to the form directly rather than through a masked
+  // input, so disabling its individual fields wouldn't actually stop an
+  // edit. Swap in a read-only notice instead of fighting to disable every
+  // control inside it.
+  const cssFields = canEditGeneral ? (
+    <BoardBackgroundEditor form={form} resetSignal={backgroundResetSignal} />
+  ) : (
+    <Alert
+      type="info"
+      showIcon
+      icon={<LockOutlined />}
+      message="You don't have permission to edit this board's appearance."
+    />
+  );
 
   return (
     <Tabs

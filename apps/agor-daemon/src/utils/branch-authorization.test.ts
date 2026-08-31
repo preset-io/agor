@@ -226,12 +226,18 @@ function makeHookContext(overrides: {
 }
 
 describe('ensureCanPromptInSession', () => {
-  const hookWithAuthority = (allowed: boolean) =>
+  const hookWithAuthority = (
+    allowed: boolean,
+    denialReason:
+      | 'branch_access_required'
+      | 'branch_session_sharing_disabled' = 'branch_session_sharing_disabled'
+  ) =>
     ensureCanPromptInSession({
       branchRepository: {
         resolveSessionPromptAuthority: vi.fn().mockResolvedValue({
           allowed,
-          reason: allowed ? 'own_session' : 'session_owner_did_not_share',
+          source: allowed ? 'own_session' : 'denied',
+          ...(allowed ? {} : { denial_reason: denialReason }),
         }),
       } as unknown as BranchRepository,
     });
@@ -248,7 +254,7 @@ describe('ensureCanPromptInSession', () => {
       await expect(hook(ctx)).resolves.toBe(ctx);
     });
 
-    it('denies prompting another user session without an owner grant', async () => {
+    it('denies prompting another user session when branch sharing is disabled', async () => {
       const hook = hookWithAuthority(false);
       const wt = makeBranch({ others_can: 'session' });
       const ctx = makeHookContext({
@@ -256,7 +262,7 @@ describe('ensureCanPromptInSession', () => {
         session: { created_by: OTHER_USER_ID },
         userId: USER_ID,
       });
-      await expect(hook(ctx)).rejects.toThrow(/owner has not shared/i);
+      await expect(hook(ctx)).rejects.toThrow(/branch does not allow shared session prompting/i);
     });
 
     it('allows prompting another user session when canonical authority allows it', async () => {
@@ -271,14 +277,14 @@ describe('ensureCanPromptInSession', () => {
     });
 
     it('denies prompting an own session without Collaborator access', async () => {
-      const hook = hookWithAuthority(false);
+      const hook = hookWithAuthority(false, 'branch_access_required');
       const wt = makeBranch({ others_can: 'view' });
       const ctx = makeHookContext({
         branch: wt,
         session: { created_by: USER_ID },
         userId: USER_ID,
       });
-      await expect(hook(ctx)).rejects.toThrow(/Collaborator access is required/i);
+      await expect(hook(ctx)).rejects.toThrow(/Only Collaborators and Managers/i);
     });
 
     it('accepts repository-authorized primary-owner access', async () => {

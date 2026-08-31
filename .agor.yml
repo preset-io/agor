@@ -67,8 +67,8 @@ environment:
         docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres down
       description: >-
-        PostgreSQL + branch RBAC + fail-closed per-user sandbox, with Alice/Bob fixtures. Standalone
-        development only; HA remains a separate variant.
+        PostgreSQL + branch RBAC + fail-closed per-user sandbox + per-branch SDK homes, with
+        Alice/Bob fixtures. Standalone development only; HA remains a separate variant.
       nuke: >-
         docker compose -f docker-compose.yml -f docker-compose.postgres.yml -p
         agor-{{branch.name}} --profile postgres down -v

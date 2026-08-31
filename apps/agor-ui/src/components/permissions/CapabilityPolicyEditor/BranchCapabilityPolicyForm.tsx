@@ -23,8 +23,7 @@ interface BranchCapabilityPolicyFormProps {
   onChange: (value: BranchCapabilityPolicyDraft) => void;
   principals: CapabilityPolicyPrincipalDescriptor[];
   subjects: EffectiveAccessSubject[];
-  currentUserId: UserID;
-  personalSessionSharingWorkspaceEnabled?: boolean;
+  sessionSharingWorkspaceEnabled?: boolean;
   canManageAccess?: boolean;
 }
 
@@ -46,17 +45,9 @@ const privateBranchPolicy = (): CapabilityPolicyDraft => ({
   others: { preset: 'none', capabilities: [], fs_access: 'none' },
 });
 
-const privateBranchConfig = (currentUserId: UserID): BranchPermissionConfigDraft => ({
+const privateBranchConfig = (): BranchPermissionConfigDraft => ({
   access: privateBranchPolicy(),
-  session_sharing: {
-    owner_rules: [
-      {
-        session_owner_user_id: currentUserId,
-        enabled: false,
-        grantees: [],
-      },
-    ],
-  },
+  allow_shared_session_prompts: false,
 });
 
 export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProps> = ({
@@ -64,15 +55,14 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
   onChange,
   principals,
   subjects,
-  currentUserId,
-  personalSessionSharingWorkspaceEnabled = true,
+  sessionSharingWorkspaceEnabled = true,
   canManageAccess = true,
 }) => {
   const { token } = theme.useToken();
   const [confirmInherit, setConfirmInherit] = useState(false);
   const [confirmPrivate, setConfirmPrivate] = useState(false);
   const owner = findUserDescriptor(principals, value.primary_owner_user_id);
-  const inheritedConfig = value.inherited_config ?? privateBranchConfig(currentUserId);
+  const inheritedConfig = value.inherited_config ?? privateBranchConfig();
   const effectiveConfig =
     value.binding_mode === 'override'
       ? (value.override_config ?? structuredClone(inheritedConfig))
@@ -199,14 +189,13 @@ export const BranchCapabilityPolicyForm: React.FC<BranchCapabilityPolicyFormProp
         value={effectiveConfig}
         onChange={(overrideConfig) => onChange({ ...value, override_config: overrideConfig })}
         accessReadOnly={value.binding_mode === 'inherit' || !canManageAccess}
-        sharingReadOnly={value.binding_mode === 'inherit'}
+        sharingReadOnly={value.binding_mode === 'inherit' || !canManageAccess}
         showModeSelector={false}
         primaryOwnerUserId={value.primary_owner_user_id}
-        currentUserId={currentUserId}
         principals={principals}
         subjects={subjects}
         sharingScope="branch"
-        personalSessionSharingWorkspaceEnabled={personalSessionSharingWorkspaceEnabled}
+        sessionSharingWorkspaceEnabled={sessionSharingWorkspaceEnabled}
       />
     </Flex>
   );

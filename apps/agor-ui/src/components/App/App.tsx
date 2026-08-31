@@ -67,6 +67,7 @@ import {
 import type { AgenticToolOption, CreateRepoOptions } from '../../types';
 import { initializeAudioOnInteraction } from '../../utils/audio';
 import { useThemedMessage } from '../../utils/message';
+import type { OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import { resolveQuickStartMcpServerIds } from '../../utils/resolveQuickStartMcpServerIds';
 import { hasExplicitEntityRouteTarget } from '../../utils/routeTargets';
 import { startTeammateBootstrapSession } from '../../utils/startTeammateBootstrapSession';
@@ -167,7 +168,10 @@ export interface AppProps {
   openUserSettings?: boolean; // Open user settings modal directly (e.g., from onboarding)
   initialUserSettingsTab?: string; // Deep-link target tab when opening user settings
   onUserSettingsClose?: () => void; // Called when user settings modal closes
-  onRestartOnboarding?: (shouldApply?: () => boolean) => void | Promise<void>;
+  onReopenOnboarding?: (
+    mode: OnboardingReopenMode,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
   openNewBranchModal?: boolean; // Open new branch modal
   onNewBranchModalClose?: () => void; // Called when new branch modal closes
   suppressLeftPanel?: boolean; // Temporarily hide the teammate/comments panel behind modal-first flows
@@ -370,7 +374,7 @@ export const App: React.FC<AppProps> = ({
   onDeleteComment,
   onLogout,
   onRetryConnection,
-  onRestartOnboarding,
+  onReopenOnboarding,
   instanceLabel,
   instanceDescription,
   webTerminalEnabled = false,
@@ -1917,9 +1921,9 @@ export const App: React.FC<AppProps> = ({
           currentUser={user || null}
           client={client}
           onUpdate={onUpdateUser}
-          onRestartOnboarding={async (shouldApply) => {
+          onReopenOnboarding={async (mode, shouldApply) => {
             if (shouldApply && !shouldApply()) return;
-            await onRestartOnboarding?.(shouldApply);
+            await onReopenOnboarding?.(mode, shouldApply);
             if (shouldApply && !shouldApply()) return;
             setUserSettingsOpen(false);
             setUserSettingsInitialTool(undefined);

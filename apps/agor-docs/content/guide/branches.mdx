@@ -279,14 +279,20 @@ A branch can inherit its board's defaults or override the whole package. Choosin
 | Role         | What it allows                                                                      |
 | ------------ | ----------------------------------------------------------------------------------- |
 | Viewer       | View the branch and its conversations                                               |
-| Collaborator | Viewer access plus creating and prompting their own sessions                        |
+| Collaborator | Viewer access plus creating and prompting branch-home Sessions                      |
 | Manager      | Collaborator access plus branch, environment, session-lifecycle, and access control |
 
 File access is selected separately as `none`, `read`, or `read/write`. A Collaborator or Manager can open a terminal only with `read` or `read/write` file access.
 
 Each access row names one person or group. A direct person entry wins over group memberships. Otherwise group entries combine and the highest file access wins. **Others** applies only to active members of the workspace who have no direct or group match.
 
-Manager does not mean “prompt as anyone.” Prompting another person's existing session requires that owner to grant personal session sharing and a workspace administrator to enable the feature. Because continuing the native conversation uses the owner's home, read [the session-sharing FAQ](/faq#session-sharing-home-access) before enabling it.
+Collaborators and Managers may prompt another person's branch-home Session only
+when a workspace admin enables session sharing and the effective branch
+permission package enables **Allow shared session prompting**. The prompt is
+attributed to and executes as the actual caller; only the conversation and
+branch SDK state are shared. Sessions that use their creator's execution
+home—including Sessions created before a branch adopts branch SDK homes—are
+never shareable. Start a new independent branch-home Session instead.
 
 See **[Security](/security)** for deployment modes and the trust boundary discussion.
 

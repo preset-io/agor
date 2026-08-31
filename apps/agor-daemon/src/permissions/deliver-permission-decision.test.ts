@@ -225,7 +225,7 @@ describe('deliverPermissionDecision', () => {
         params,
         authorization,
       })
-    ).rejects.toThrow("'view' permission");
+    ).rejects.toThrow(/don't have permission to prompt this branch/i);
     expect(messages.findByTask).not.toHaveBeenCalled();
     expect(messages.emit).not.toHaveBeenCalled();
   });

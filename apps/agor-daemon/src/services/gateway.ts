@@ -110,7 +110,7 @@ import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
 import { getSessionUrl } from '@agor/core/utils/url';
 import { gatewayAgenticConfigToInlineConfiguration } from '../utils/agentic-configuration-sources.js';
 import { requireActiveAgenticTool } from '../utils/agentic-tool-runtime.js';
-import { hasBranchPermission } from '../utils/branch-authorization.js';
+import { hasBranchPermission, sessionPromptDeniedMessage } from '../utils/branch-authorization.js';
 import { gatewayInboundSessionId, gatewayInboundTaskId } from '../utils/durable-task-id.js';
 import {
   buildPromptWithAttachments,
@@ -150,6 +150,13 @@ interface PostMessageResult {
   sessionId: string;
   created: boolean;
   taskId?: TaskID;
+}
+
+/** Safe, terminal authorization denial that may be shown on the gateway. */
+class GatewayPromptAuthorizationError extends Forbidden {
+  constructor(readonly userMessage: string) {
+    super(`Gateway inbound denied: ${userMessage}`);
+  }
 }
 
 /**
@@ -1048,15 +1055,17 @@ export class GatewayService {
   }
 
   /**
-   * Send a system message to the platform thread (fire-and-forget).
-   * Useful for giving the user visibility into what's happening.
+   * Send a best-effort system message to the platform thread. Most progress
+   * callers intentionally fire and forget; authorization denials await it so
+   * the durable provider event is not acknowledged before the user-facing
+   * explanation has been handed to the connector.
    */
-  private sendSystemMessage(
+  private async sendSystemMessage(
     channel: GatewayChannel,
     threadId: string,
     text: string,
     opts?: { suppressSlack?: boolean; suppressDiscord?: boolean }
-  ): void {
+  ): Promise<void> {
     // Teams has no fire-and-forget system-message path: every provider effect
     // must be a durable delivery row carrying its encrypted ConversationReference.
     // GitHub and Shortcut have their own editable ack comment (the connector's
@@ -1080,14 +1089,44 @@ export class GatewayService {
       const connector =
         this.getActiveListener(channel.id) ??
         getConnector(channel.channel_type as ChannelType, channel.config);
-      connector
-        .sendMessage({
-          threadId,
-          ...formatGatewaySystemPayload(channel.channel_type as ChannelType, text),
-        })
-        .catch((err) => console.warn('[gateway] Debug message failed:', err));
-    } catch {
+      await connector.sendMessage({
+        threadId,
+        ...formatGatewaySystemPayload(channel.channel_type as ChannelType, text),
+      });
+    } catch (error) {
       // Ignore — debug messages are best-effort
+      console.warn('[gateway] Debug message failed:', error);
+    }
+  }
+
+  /**
+   * Surface a prompt denial where the external user actually asked. GitHub and
+   * Shortcut normally suppress gateway system messages because their
+   * processing acknowledgement is editable, so use that same comment rather
+   * than leaving a permanent "working" acknowledgement behind.
+   */
+  private async sendPromptAuthorizationDenied(
+    channel: GatewayChannel,
+    data: Pick<PostMessageData, 'thread_id' | 'metadata'>,
+    message: string
+  ): Promise<void> {
+    if (channel.channel_type !== 'github' && channel.channel_type !== 'shortcut') {
+      await this.sendSystemMessage(channel, data.thread_id, message);
+      return;
+    }
+    try {
+      const connector =
+        this.getActiveListener(channel.id) ??
+        getConnector(channel.channel_type as ChannelType, channel.config);
+      await connector.sendMessage({
+        threadId: data.thread_id,
+        text: `⚠️ ${message}`,
+        metadata: data.metadata?.processing_comment_id
+          ? { edit_comment_id: data.metadata.processing_comment_id }
+          : undefined,
+      });
+    } catch (error) {
+      console.warn('[gateway] Failed to post prompt authorization denial:', error);
     }
   }
 
@@ -1968,8 +2007,9 @@ export class GatewayService {
   /**
    * Resolve the target Session again immediately before prompt admission.
    * This both binds a durable thread mapping to its configured branch and
-   * applies owner-authored personal session sharing for aligned users. A
-   * Manager role alone never grants authority over another user's home.
+   * applies the Session's immutable sharing boundary: branch Sessions require
+   * Collaborator access and both sharing switches, while execution-home
+   * Sessions are never shareable.
    */
   private async requireInboundPromptAuthority(
     channel: GatewayChannel,
@@ -1978,21 +2018,20 @@ export class GatewayService {
   ): Promise<Session> {
     const session = await this.sessionRepo.findById(sessionId);
     if (!session || session.branch_id !== channel.target_branch_id) {
-      throw new Forbidden('Gateway inbound denied: target session is unavailable');
+      throw new GatewayPromptAuthorizationError(
+        "This gateway thread's Agor session is no longer available."
+      );
     }
     if (!this.appRbacEnabled) return session;
 
     const authority = await this.branchRepo.resolveSessionPromptAuthority(
       channel.target_branch_id,
       userId,
-      session.created_by as UserID
+      session.created_by as UserID,
+      session.sdk_home_scope
     );
     if (!authority.allowed) {
-      throw new Forbidden(
-        session.created_by === userId
-          ? 'Gateway inbound denied: Collaborator access is required to prompt this session'
-          : 'Gateway inbound denied: the session owner has not shared their sessions with this user'
-      );
+      throw new GatewayPromptAuthorizationError(sessionPromptDeniedMessage(authority));
     }
     return session;
   }
@@ -2613,7 +2652,13 @@ export class GatewayService {
     // Session. Re-check at the actual Session/Task admission boundaries below
     // so a revoked aligned user cannot keep using a durable platform thread.
     if (existingMapping) {
-      await this.requireInboundPromptAuthority(channel, existingMapping.session_id, user.user_id);
+      try {
+        await this.requireInboundPromptAuthority(channel, existingMapping.session_id, user.user_id);
+      } catch (error) {
+        if (!(error instanceof GatewayPromptAuthorizationError)) throw error;
+        await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        return { success: false, sessionId: '', created: false };
+      }
     } else {
       await this.requireInboundSessionCreateAccess(channel, user.user_id);
     }
@@ -3531,6 +3576,18 @@ export class GatewayService {
         });
       }
     } catch (error) {
+      if (error instanceof GatewayPromptAuthorizationError) {
+        await this.sendPromptAuthorizationDenied(channel, data, error.userMessage);
+        this.updateProgressAfterCommit({
+          session_id: sessionId,
+          state: 'failed',
+          error_message: 'prompt_not_authorized',
+        });
+        // Authorization is a terminal outcome for this provider occurrence,
+        // not a transient delivery failure. Retrying cannot make the already
+        // denied event safe to admit and would spam the same visible message.
+        return { success: false, sessionId: '', created: false };
+      }
       const safeError = gatewayFailureCode(error);
       console.error(
         `[gateway] Failed to send prompt to session: channel_id=${channel.id} code=${safeError}`

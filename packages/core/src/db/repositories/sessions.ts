@@ -172,6 +172,7 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
           : new Date(row.created_at).toISOString(),
         created_by: row.created_by,
         unix_username: row.unix_username || null,
+        sdk_home_scope: row.sdk_home_scope,
         branch_id: row.branch_id as UUID,
         branch_board_id: boardId,
         url,
@@ -231,6 +232,10 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
       agentic_tool_preset_id: session.agentic_tool_preset_id ?? null,
       created_by: session.created_by,
       unix_username: session.unix_username ?? null, // Immutable execution-home stamp set at creation
+      // Direct repository callers intentionally retain the legacy-safe
+      // default. The Sessions service is the policy boundary that opts a new
+      // session into branch-owned SDK state.
+      sdk_home_scope: session.sdk_home_scope ?? 'execution_home',
       board_id: null, // Board ID tracked separately in boards.sessions array
       parent_session_id: session.genealogy?.parent_session_id ?? null,
       forked_from_session_id: session.genealogy?.forked_from_session_id ?? null,
@@ -785,6 +790,9 @@ export class SessionRepository implements BaseRepository<Session, Partial<Sessio
     options: { replaceAgenticConfig?: boolean } = {}
   ): Promise<Session> {
     try {
+      if (Object.hasOwn(updates, 'sdk_home_scope')) {
+        throw new RepositoryError('Session sdk_home_scope is immutable after creation');
+      }
       const fullId = await this.resolveId(id);
       const baseUrl = await getBaseUrl();
 

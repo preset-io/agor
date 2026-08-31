@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => {
     others_can: 'session',
     created_by: 'user-1',
     archived: false,
+    sdk_home: undefined as 'per_branch' | undefined,
   };
   const state = {
     branch,
@@ -228,6 +229,40 @@ describe('branch-scoped terminal identity', () => {
 });
 
 describe('process-affine attachment creation', () => {
+  it('keeps shared SDK homes out of interactive terminal launches', async () => {
+    mocks.config = {
+      daemon: { port: 3030 },
+      execution: {
+        branch_rbac: false,
+        unix_user_mode: 'delegated',
+        sandbox: { sdk_home_mode: 'per_branch' },
+      },
+    };
+    mocks.resolveDelegatedHomeKey.mockReturnValue({
+      unixUser: 'alice',
+      delegatedHomeKey: 'alice',
+    });
+    mocks.branchesById.set('branch-1', { ...mocks.branch, sdk_home: 'per_branch' });
+    const service = new TerminalsService(makeApp() as never, {} as never);
+
+    await service.create({ branchId: 'branch-1' as BranchID }, params as never);
+
+    expect(mocks.spawnExecutorFireAndForget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.not.objectContaining({ sandboxBranchSdkHome: expect.anything() }),
+      }),
+      expect.objectContaining({
+        env: expect.not.objectContaining({
+          CLAUDE_CONFIG_DIR: expect.anything(),
+          CODEX_HOME: expect.anything(),
+        }),
+        templateVariables: expect.objectContaining({
+          branch_sdk_home: '',
+        }),
+      })
+    );
+  });
+
   it('subscribes the requesting browser before the executor can emit startup state', async () => {
     const order: string[] = [];
     mocks.joinRequestingSocket.mockImplementation(async () => {

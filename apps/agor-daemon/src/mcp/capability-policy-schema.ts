@@ -26,19 +26,9 @@ function policy(kind: 'board_access' | 'branch_access') {
   });
 }
 
-const sessionSharing = z.object({
-  owner_rules: z.array(
-    z.object({
-      session_owner_user_id: id,
-      enabled: z.boolean(),
-      grantees: z.array(z.object({ grant_id: id, principal })),
-    })
-  ),
-});
-
 export const branchPermissionConfigSchema = z.object({
   access: policy('branch_access'),
-  session_sharing: sessionSharing,
+  allow_shared_session_prompts: z.boolean(),
 });
 
 export const boardCapabilityPoliciesSchema = z.object({

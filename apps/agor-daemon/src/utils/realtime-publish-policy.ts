@@ -333,6 +333,7 @@ export const REALTIME_PUBLISH_POLICY = {
   'cursor-models': { audience: 'none', why: 'Per-caller model list.' },
   health: { audience: 'none', why: 'Liveness probe.' },
   'boards/:id/aligned-branches': { audience: 'none', why: 'Query route.' },
+  'boards/:id/effective-access': { audience: 'none', why: 'Query route.' },
   'branches/:id/effective-access': { audience: 'none', why: 'Query route.' },
   'branches/:id/fs-access-users': { audience: 'none', why: 'Query route.' },
   'me/artifact-trust-grants': { audience: 'none', why: 'Trust grants belonging to the caller.' },

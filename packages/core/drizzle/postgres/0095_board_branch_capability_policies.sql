@@ -1,5 +1,22 @@
 SET LOCAL lock_timeout = '3s';
 --> statement-breakpoint
+-- Drop FORCE RLS so the owning migrate role sees every tenant during the
+-- cross-tenant backfill/normalization below; without this the statements run
+-- against only the 'default' tenant and SET NOT NULL fails. Restored at the end.
+ALTER TABLE "boards" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branches" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "users" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "board_owners" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branch_owners" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "board_group_grants" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branch_group_grants" NO FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
 -- Offline/big-bang RBAC remodel. No runtime dual-read/dual-write bridge is retained.
 ALTER TABLE "boards" ADD COLUMN "primary_owner_user_id" varchar(36);
 --> statement-breakpoint
@@ -248,12 +265,18 @@ FROM board_group_grants bg JOIN boards b ON b.tenant_id=bg.tenant_id AND b.board
 WHERE bg.can<>'none' AND COALESCE(b.data->>'access_mode','shared')='shared';
 --> statement-breakpoint
 
+-- A branch may carry a stale permission_source='board' while its board_id is
+-- NULL or dangling (the board was deleted). The board_config LEFT JOIN is then
+-- unmatched, so inheriting its others_role/others_fs_access would insert NULL
+-- into NOT NULL columns. Guard every board-inheritance branch on a resolved
+-- board_config and otherwise fall back to the branch's own others_can/fs, the
+-- same path used for genuine 'override' branches.
 INSERT INTO branch_permission_configs
 SELECT br.tenant_id,gen_random_uuid()::text,NULL,br.branch_id,1,
- CASE WHEN br.permission_source='board' THEN 'shared'
+ CASE WHEN br.permission_source='board' AND board_config.config_id IS NOT NULL THEN 'shared'
   WHEN COALESCE(br.others_can,'session')<>'none' OR EXISTS(SELECT 1 FROM branch_owners bo WHERE bo.tenant_id=br.tenant_id AND bo.branch_id=br.branch_id AND bo.user_id<>br.primary_owner_user_id) OR EXISTS(SELECT 1 FROM branch_group_grants bg WHERE bg.tenant_id=br.tenant_id AND bg.branch_id=br.branch_id AND bg.can<>'none') THEN 'shared' ELSE 'private' END,
- CASE WHEN br.permission_source='board' THEN board_config.others_role ELSE CASE COALESCE(br.others_can,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
- CASE WHEN br.permission_source='board' THEN board_config.others_fs_access WHEN COALESCE(br.others_can,'session')='none' THEN 'none' ELSE COALESCE(br.others_fs_access,'read') END,
+ CASE WHEN br.permission_source='board' AND board_config.config_id IS NOT NULL THEN board_config.others_role ELSE CASE COALESCE(br.others_can,'session') WHEN 'none' THEN 'none' WHEN 'view' THEN 'viewer' WHEN 'all' THEN 'manager' ELSE 'collaborator' END END,
+ CASE WHEN br.permission_source='board' AND board_config.config_id IS NOT NULL THEN board_config.others_fs_access WHEN COALESCE(br.others_can,'session')='none' THEN 'none' ELSE COALESCE(br.others_fs_access,'read') END,
  1,br.primary_owner_user_id,COALESCE(br.created_at,now()),COALESCE(br.updated_at,br.created_at,now())
 FROM branches br
 LEFT JOIN branch_permission_configs board_config ON board_config.tenant_id=br.tenant_id AND board_config.board_id=br.board_id
@@ -361,3 +384,19 @@ ALTER TABLE branch_session_sharing_grants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE branch_session_sharing_grants FORCE ROW LEVEL SECURITY;
 --> statement-breakpoint
 CREATE POLICY "tenant_isolation_branch_session_sharing_grants" ON "branch_session_sharing_grants" USING (tenant_id=COALESCE(NULLIF(current_setting('agor.tenant_id',true),''),'default')) WITH CHECK (tenant_id=COALESCE(NULLIF(current_setting('agor.tenant_id',true),''),'default'));
+--> statement-breakpoint
+
+-- Restore FORCE row-level security dropped at the top of this migration.
+ALTER TABLE "boards" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branches" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "users" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "board_owners" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branch_owners" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "board_group_grants" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+ALTER TABLE "branch_group_grants" FORCE ROW LEVEL SECURITY;

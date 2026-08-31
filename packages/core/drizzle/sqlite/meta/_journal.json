@@ -684,7 +684,35 @@
     {
       "idx": 99,
       "version": "6",
-      "when": 1787879296198,
+      "when": 1787947200000,
+      "tag": "0099_strip_stdio_remote_fields",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "6",
+      "when": 1788033600000,
+      "tag": "0100_branch_sdk_home",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "6",
+      "when": 1788120000000,
+      "tag": "0101_session_sdk_home_scope",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "6",
+      "when": 1788206400000,
+      "tag": "0102_shared_session_prompting",
+      "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "6",
+      "when": 1788206400001,
       "tag": "0099_needy_lady_bullseye",
       "breakpoints": true
     }

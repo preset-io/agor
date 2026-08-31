@@ -1,7 +1,8 @@
 /**
  * SessionTokenService - delegated executor JWT issuance and authority policy.
  *
- * Standalone SQLite preserves the historical process-local raw-token Map.
+ * Standalone SQLite preserves the historical process-local authority Map,
+ * keyed by a SHA-256 fingerprint so the daemon need not retain raw bearers.
  * PostgreSQL stores only a SHA-256 fingerprint plus tenant/user/resource,
  * expiry, revocation, and use-policy facts. A valid JWT signature is necessary
  * but never sufficient: every authentication must also claim the authority row.
@@ -9,6 +10,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  type CurrentTaskExecutorSessionTokenAuthority,
   type ExecutorSessionTokenAuthorityClaim,
   type ExecutorSessionTokenAuthorityIssue,
   ExecutorSessionTokenAuthorityRepository,
@@ -99,6 +101,7 @@ export interface SessionTokenValidationScope {
 export interface SessionTokenAuthorityStore {
   issue(input: ExecutorSessionTokenAuthorityIssue): Promise<void>;
   validateAndConsume(input: ExecutorSessionTokenAuthorityClaim): Promise<SessionInfo | null>;
+  isCurrent(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean>;
   revoke(tokenFingerprint: string, tenantId: string): Promise<boolean>;
   revokeByTask(taskId: string, tenantId: string): Promise<string[]>;
   purgeRetained(cutoff: Date): Promise<number>;
@@ -124,6 +127,12 @@ class PostgreSQLSessionTokenAuthorityStore implements SessionTokenAuthorityStore
       ...(authority.branchId ? { branch_id: authority.branchId } : {}),
       user_id: authority.userId,
     };
+  }
+
+  async isCurrent(input: CurrentTaskExecutorSessionTokenAuthority): Promise<boolean> {
+    return this.withIndependentTenantTransaction(input.tenantId, (scoped) =>
+      new ExecutorSessionTokenAuthorityRepository(scoped).isCurrent(input)
+    );
   }
 
   async revoke(tokenFingerprint: string, tenantId: string): Promise<boolean> {
@@ -349,9 +358,9 @@ export class SessionTokenService {
         maxUses,
       });
     } else {
-      // Compatibility boundary: standalone SQLite keeps the original raw-token
-      // Map, including its process-local revocation and use-count semantics.
-      this.tokens.set(token, {
+      // Compatibility boundary: standalone SQLite keeps process-local
+      // revocation/use-count semantics, but retains only the fingerprint.
+      this.tokens.set(fingerprintExecutorSessionToken(token), {
         ...(tenantId ? { tenant_id: tenantId } : {}),
         purpose,
         session_id: sessionId,
@@ -423,13 +432,14 @@ export class SessionTokenService {
       return sessionInfo;
     }
 
-    const data = this.tokens.get(token);
+    const tokenFingerprint = fingerprintExecutorSessionToken(token);
+    const data = this.tokens.get(tokenFingerprint);
     if (!data) {
       sessionTokenDebug('rejected_by_local_authority');
       return null;
     }
     if (this.now() >= data.expires_at) {
-      this.tokens.delete(token);
+      this.tokens.delete(tokenFingerprint);
       sessionTokenDebug('rejected_expired');
       return null;
     }
@@ -445,7 +455,7 @@ export class SessionTokenService {
       return null;
     }
     if (data.max_uses > 0 && data.use_count >= data.max_uses) {
-      this.tokens.delete(token);
+      this.tokens.delete(tokenFingerprint);
       sessionTokenDebug('rejected_max_uses');
       return null;
     }
@@ -460,15 +470,41 @@ export class SessionTokenService {
     };
   }
 
+  /**
+   * Check the current authority behind an already-authenticated Task bearer.
+   * Callers supply only the server-derived fingerprint and verified claims.
+   */
+  async isTaskTokenAuthorityCurrent(
+    input: CurrentTaskExecutorSessionTokenAuthority
+  ): Promise<boolean> {
+    if (this.authorityStore) return this.authorityStore.isCurrent(input);
+
+    const data = this.tokens.get(input.tokenFingerprint);
+    if (!data) return false;
+    if (this.now() >= data.expires_at) {
+      this.tokens.delete(input.tokenFingerprint);
+      return false;
+    }
+    return (
+      data.tenant_id === input.tenantId &&
+      data.purpose === EXECUTOR_SESSION_TOKEN_PURPOSE &&
+      data.session_id === input.sessionId &&
+      data.task_id === input.taskId &&
+      data.branch_id === input.branchId &&
+      data.user_id === input.userId
+    );
+  }
+
   /** Revoke one exact bearer. PostgreSQL failures are surfaced to the caller. */
   async revokeToken(token: string): Promise<boolean> {
     if (!this.authorityStore) {
-      const existing = this.tokens.get(token);
-      const revoked = this.tokens.delete(token);
+      const tokenFingerprint = fingerprintExecutorSessionToken(token);
+      const existing = this.tokens.get(tokenFingerprint);
+      const revoked = this.tokens.delete(tokenFingerprint);
       if (revoked) {
         await this.onRevoked?.({
           ...(existing?.tenant_id ? { tenantId: existing.tenant_id } : {}),
-          tokenFingerprint: fingerprintExecutorSessionToken(token),
+          tokenFingerprint,
         });
       }
       return revoked;
@@ -501,16 +537,16 @@ export class SessionTokenService {
     if (!taskId) throw new Error('Executor task token revocation requires a task ID');
 
     if (!this.authorityStore) {
-      const revoked: Array<{ token: string; data: SessionTokenData }> = [];
-      for (const [token, data] of this.tokens.entries()) {
+      const revoked: Array<{ tokenFingerprint: string; data: SessionTokenData }> = [];
+      for (const [tokenFingerprint, data] of this.tokens.entries()) {
         if (data.task_id !== taskId) continue;
-        this.tokens.delete(token);
-        revoked.push({ token, data });
+        this.tokens.delete(tokenFingerprint);
+        revoked.push({ tokenFingerprint, data });
       }
-      for (const { token, data } of revoked) {
+      for (const { tokenFingerprint, data } of revoked) {
         await this.onRevoked?.({
           ...(data.tenant_id ? { tenantId: data.tenant_id } : {}),
-          tokenFingerprint: fingerprintExecutorSessionToken(token),
+          tokenFingerprint,
         });
       }
       return revoked.length;
@@ -538,9 +574,9 @@ export class SessionTokenService {
     }
 
     let count = 0;
-    for (const [token, data] of this.tokens.entries()) {
+    for (const [tokenFingerprint, data] of this.tokens.entries()) {
       if (now >= data.expires_at) {
-        this.tokens.delete(token);
+        this.tokens.delete(tokenFingerprint);
         count += 1;
       }
     }

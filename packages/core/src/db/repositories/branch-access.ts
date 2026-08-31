@@ -1,9 +1,15 @@
 /** Shared SQL predicates for normalized board/branch capability policies. */
 
-import type { UUID } from '@agor/core/types';
+import type { CapabilityPolicyFsAccess, SessionID, UserID, UUID } from '@agor/core/types';
 import { and, eq, exists, inArray, or, type SQL, type SQLWrapper, sql } from 'drizzle-orm';
-import type { Database } from '../client';
 import {
+  CAPABILITY_POLICY_SESSION_SHARING_KEY,
+  CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
+} from '../../types/capability-policy';
+import type { Database } from '../client';
+import { select } from '../database-wrapper';
+import {
+  appVariables,
   boardAccessEntries,
   boardAccessPolicies,
   boards,
@@ -15,6 +21,7 @@ import {
   messages,
   sessions,
   tasks,
+  users,
 } from '../schema';
 
 type UserIdExpression = UUID | SQLWrapper;
@@ -74,6 +81,191 @@ function effectiveConfigCondition(): SQL {
       )
     ) ?? sql`false`
   );
+}
+
+/**
+ * Closed point projection used by Task launch and heartbeat revalidation.
+ *
+ * It deliberately returns only the facts those consumers use. The richer
+ * policy read model still owns permission-editor explanations and group IDs.
+ */
+export interface SessionRuntimeBranchAccess {
+  branch_id: string;
+  principal_available: boolean;
+  can_prompt_session: boolean;
+  fs_access: CapabilityPolicyFsAccess;
+  /** Database time in PostgreSQL; callers may override it in deterministic tests. */
+  observed_at: Date;
+}
+
+function numericValue(value: unknown, fallback = -1): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function fsAccessFromRank(rank: number): CapabilityPolicyFsAccess {
+  return rank >= 2 ? 'write' : rank >= 1 ? 'read' : 'none';
+}
+
+function roleGrantsSessionPrompt(role: unknown): boolean {
+  return role === 'collaborator' || role === 'manager';
+}
+
+/**
+ * Resolve one principal's current right to prompt one exact Session and its
+ * effective Branch filesystem access in one bounded SQL statement.
+ *
+ * The scalar subqueries mirror the normalized-policy precedence exactly:
+ * primary owner -> direct-user shadow -> additive active groups -> unmatched
+ * Others. Fixed cumulative roles let group capability be represented by the
+ * greatest role rank, while filesystem access is ranked independently.
+ * Global superadmin bypass is intentionally excluded: administration does not
+ * grant prompt authority or widen one principal's projected Branch mounts.
+ */
+export async function resolveSessionRuntimeBranchAccess(
+  db: Database,
+  input: {
+    sessionId: SessionID | string;
+    principalUserId: UserID | string;
+    branchRbacEnabled: boolean;
+  }
+): Promise<SessionRuntimeBranchAccess | null> {
+  const principal = input.principalUserId;
+  const directRole = sql<string | null>`(
+    SELECT ${branchPermissionEntries.role}
+    FROM ${branchPermissionEntries}
+    WHERE ${branchPermissionEntries.config_id} = ${branchPermissionConfigs.config_id}
+      AND ${branchPermissionEntries.user_id} = ${principal}
+    LIMIT 1
+  )`;
+  const directFsAccess = sql<string | null>`(
+    SELECT ${branchPermissionEntries.fs_access}
+    FROM ${branchPermissionEntries}
+    WHERE ${branchPermissionEntries.config_id} = ${branchPermissionConfigs.config_id}
+      AND ${branchPermissionEntries.user_id} = ${principal}
+    LIMIT 1
+  )`;
+  const activeGroupRoleRank = sql<number>`COALESCE((
+    SELECT MAX(CASE ${branchPermissionEntries.role}
+      WHEN 'manager' THEN 3
+      WHEN 'collaborator' THEN 2
+      WHEN 'viewer' THEN 1
+      ELSE 0 END)
+    FROM ${branchPermissionEntries}
+    INNER JOIN ${groupMemberships}
+      ON ${groupMemberships.group_id} = ${branchPermissionEntries.group_id}
+     AND ${groupMemberships.user_id} = ${principal}
+    INNER JOIN ${groups}
+      ON ${groups.group_id} = ${branchPermissionEntries.group_id}
+     AND ${groups.archived} = false
+    WHERE ${branchPermissionEntries.config_id} = ${branchPermissionConfigs.config_id}
+  ), -1)`;
+  const activeGroupFsRank = sql<number>`COALESCE((
+    SELECT MAX(CASE ${branchPermissionEntries.fs_access}
+      WHEN 'write' THEN 2
+      WHEN 'read' THEN 1
+      ELSE 0 END)
+    FROM ${branchPermissionEntries}
+    INNER JOIN ${groupMemberships}
+      ON ${groupMemberships.group_id} = ${branchPermissionEntries.group_id}
+     AND ${groupMemberships.user_id} = ${principal}
+    INNER JOIN ${groups}
+      ON ${groups.group_id} = ${branchPermissionEntries.group_id}
+     AND ${groups.archived} = false
+    WHERE ${branchPermissionEntries.config_id} = ${branchPermissionConfigs.config_id}
+  ), -1)`;
+  const row = await select(db, {
+    branch_id: branches.branch_id,
+    session_owner_user_id: sessions.created_by,
+    session_sdk_home_scope: sessions.sdk_home_scope,
+    principal_user_id: users.user_id,
+    branch_primary_owner_user_id: branches.primary_owner_user_id,
+    sharing_mode: branchPermissionConfigs.sharing_mode,
+    others_role: branchPermissionConfigs.others_role,
+    others_fs_access: branchPermissionConfigs.others_fs_access,
+    allow_shared_session_prompts: branchPermissionConfigs.allow_shared_session_prompts,
+    direct_role: directRole,
+    direct_fs_access: directFsAccess,
+    active_group_role_rank: activeGroupRoleRank,
+    active_group_fs_rank: activeGroupFsRank,
+    workspace_sharing_enabled: exists(
+      selectRaw(db)
+        .from(appVariables)
+        .where(
+          and(
+            eq(appVariables.namespace, CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE),
+            eq(appVariables.key, CAPABILITY_POLICY_SESSION_SHARING_KEY),
+            eq(appVariables.value_text, 'true')
+          )
+        )
+    ),
+    observed_at: sql<Date>`CURRENT_TIMESTAMP`,
+  })
+    .from(sessions)
+    .innerJoin(branches, eq(branches.branch_id, sessions.branch_id))
+    .innerJoin(branchPermissionConfigs, effectiveConfigCondition())
+    .leftJoin(users, eq(users.user_id, principal))
+    .where(eq(sessions.session_id, input.sessionId))
+    .limit(1)
+    .one();
+  if (!row) return null;
+
+  const principalUserId =
+    typeof row.principal_user_id === 'string' ? row.principal_user_id : undefined;
+  const isPrimaryOwner =
+    principalUserId !== undefined && row.branch_primary_owner_user_id === principalUserId;
+  const directMatched = typeof row.direct_role === 'string';
+  const groupRoleRank = numericValue(row.active_group_role_rank);
+  const groupFsRank = numericValue(row.active_group_fs_rank);
+
+  let canPromptOwn = false;
+  let fsAccess: CapabilityPolicyFsAccess = 'none';
+  if (principalUserId && (!input.branchRbacEnabled || isPrimaryOwner)) {
+    canPromptOwn = true;
+    fsAccess = 'write';
+  } else if (principalUserId && row.sharing_mode === 'shared') {
+    if (directMatched) {
+      canPromptOwn = roleGrantsSessionPrompt(row.direct_role);
+      fsAccess =
+        row.direct_fs_access === 'write'
+          ? 'write'
+          : row.direct_fs_access === 'read'
+            ? 'read'
+            : 'none';
+    } else if (groupRoleRank >= 0) {
+      canPromptOwn = groupRoleRank >= 2;
+      fsAccess = fsAccessFromRank(groupFsRank);
+    } else {
+      canPromptOwn = roleGrantsSessionPrompt(row.others_role);
+      fsAccess =
+        row.others_fs_access === 'write'
+          ? 'write'
+          : row.others_fs_access === 'read'
+            ? 'read'
+            : 'none';
+    }
+  }
+
+  const ownsSession =
+    principalUserId !== undefined && principalUserId === row.session_owner_user_id;
+  const sharedSessionAllowed =
+    row.session_sdk_home_scope === 'branch' &&
+    Boolean(row.workspace_sharing_enabled) &&
+    Boolean(row.allow_shared_session_prompts);
+  const observedAt =
+    row.observed_at instanceof Date ? row.observed_at : new Date(String(row.observed_at));
+  return {
+    branch_id: String(row.branch_id),
+    principal_available: principalUserId !== undefined,
+    can_prompt_session: Boolean(
+      principalUserId &&
+        // RBAC-disabled admission intentionally permits any existing member to
+        // prompt the Session; its legacy filesystem projection remains write.
+        (!input.branchRbacEnabled || (canPromptOwn && (ownsSession || sharedSessionAllowed)))
+    ),
+    fs_access: principalUserId ? fsAccess : 'none',
+    observed_at: observedAt,
+  };
 }
 
 function directBranchEntryExists(db: Database, userId: UserIdExpression, capability?: string): SQL {
