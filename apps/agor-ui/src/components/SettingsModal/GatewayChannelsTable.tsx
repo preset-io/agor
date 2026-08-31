@@ -1077,7 +1077,7 @@ const SlackSetupWizard: React.FC<{
           rules={[{ required: true, message: 'Enter a name for the Slack app' }]}
           tooltip="Display name for the Slack app created from the manifest"
         >
-          <Input placeholder="Agor" />
+          <Input placeholder="Agor" style={FIELD_WIDTHS.short} />
         </Form.Item>
 
         <div style={{ marginBottom: 16 }}>
@@ -1322,7 +1322,7 @@ const SlackSetupWizard: React.FC<{
           rules={[{ required: true, message: 'Bot token is required' }]}
           tooltip="OAuth & Permissions → Bot User OAuth Token (xoxb-...)"
         >
-          <Input.Password placeholder="xoxb-..." />
+          <Input.Password placeholder="xoxb-..." style={FIELD_WIDTHS.short} />
         </Form.Item>
 
         <Form.Item
@@ -1331,7 +1331,7 @@ const SlackSetupWizard: React.FC<{
           rules={[{ required: true, message: 'App token is required' }]}
           tooltip="Basic Information → App-Level Tokens (xapp-...)"
         >
-          <Input.Password placeholder="xapp-..." />
+          <Input.Password placeholder="xapp-..." style={FIELD_WIDTHS.short} />
         </Form.Item>
 
         <Button
@@ -1718,7 +1718,10 @@ const ChannelFormFields: React.FC<{
                 </Typography.Paragraph>
 
                 <Form.Item label="App Name" name="github_app_name">
-                  <Input placeholder="Agor (optional — defaults to 'Agor')" />
+                  <Input
+                    placeholder="Agor (optional — defaults to 'Agor')"
+                    style={FIELD_WIDTHS.short}
+                  />
                 </Form.Item>
 
                 <Form.Item
@@ -1823,7 +1826,7 @@ const ChannelFormFields: React.FC<{
                   rules={[{ required: true, message: 'Enter your GitHub App ID' }]}
                   tooltip="Found on your GitHub App's settings page (General → About)"
                 >
-                  <Input placeholder="123456" />
+                  <Input placeholder="123456" style={FIELD_WIDTHS.short} />
                 </Form.Item>
 
                 <Form.Item
@@ -1844,7 +1847,7 @@ const ChannelFormFields: React.FC<{
                   name="github_installation_id"
                   tooltip="Shown by the setup callback, or available in your GitHub App's installation URL"
                 >
-                  <Input placeholder="123456789" />
+                  <Input placeholder="123456789" style={FIELD_WIDTHS.short} />
                 </Form.Item>
 
                 {githubError && (
@@ -1885,7 +1888,7 @@ const ChannelFormFields: React.FC<{
                                 name="github_app_id"
                                 tooltip="Found on your GitHub App's settings page (General → About)"
                               >
-                                <Input placeholder="123456" />
+                                <Input placeholder="123456" style={FIELD_WIDTHS.short} />
                               </Form.Item>
                               <Form.Item
                                 label="Private Key (PEM)"
@@ -1908,7 +1911,7 @@ const ChannelFormFields: React.FC<{
                                 name="github_installation_id"
                                 tooltip="Shown by the setup callback, or available in your GitHub App's installation URL"
                               >
-                                <Input placeholder="123456789" />
+                                <Input placeholder="123456789" style={FIELD_WIDTHS.short} />
                               </Form.Item>
                             </>
                           ),
@@ -2089,7 +2092,10 @@ const ChannelFormFields: React.FC<{
                       }
                       tooltip="Azure Bot Registration Application (client) ID"
                     >
-                      <Input placeholder="00000000-0000-0000-0000-000000000000" />
+                      <Input
+                        placeholder="00000000-0000-0000-0000-000000000000"
+                        style={FIELD_WIDTHS.short}
+                      />
                     </Form.Item>
 
                     <Form.Item
@@ -2104,6 +2110,7 @@ const ChannelFormFields: React.FC<{
                     >
                       <Input.Password
                         placeholder={mode === 'edit' ? '••••••••' : 'Client secret value'}
+                        style={FIELD_WIDTHS.short}
                       />
                     </Form.Item>
 
@@ -2118,7 +2125,10 @@ const ChannelFormFields: React.FC<{
                       ]}
                       tooltip="Azure AD Tenant ID. Required so the bot can acquire tokens to send replies."
                     >
-                      <Input placeholder="00000000-0000-0000-0000-000000000000" />
+                      <Input
+                        placeholder="00000000-0000-0000-0000-000000000000"
+                        style={FIELD_WIDTHS.short}
+                      />
                     </Form.Item>
 
                     <CompactAlert
@@ -2308,6 +2318,7 @@ const ChannelFormFields: React.FC<{
                     >
                       <Input.Password
                         placeholder={mode === 'edit' ? '••••••••' : 'Shortcut API token'}
+                        style={FIELD_WIDTHS.short}
                       />
                     </Form.Item>
 
@@ -2603,7 +2614,10 @@ const ChannelFormFields: React.FC<{
                           : 'No token stored yet. Enter the bot token (xoxb-...).'
                       }
                     >
-                      <Input.Password placeholder={botTokenStored ? '••••••••' : 'xoxb-...'} />
+                      <Input.Password
+                        placeholder={botTokenStored ? '••••••••' : 'xoxb-...'}
+                        style={FIELD_WIDTHS.short}
+                      />
                     </Form.Item>
 
                     <Form.Item
@@ -2620,7 +2634,10 @@ const ChannelFormFields: React.FC<{
                           : 'No token stored yet. Enter the app token (xapp-...).'
                       }
                     >
-                      <Input.Password placeholder={appTokenStored ? '••••••••' : 'xapp-...'} />
+                      <Input.Password
+                        placeholder={appTokenStored ? '••••••••' : 'xapp-...'}
+                        style={FIELD_WIDTHS.short}
+                      />
                     </Form.Item>
 
                     <CompactAlert
