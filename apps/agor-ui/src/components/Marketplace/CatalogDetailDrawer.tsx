@@ -22,7 +22,6 @@ import {
 } from '@ant-design/icons';
 import {
   Alert,
-  Avatar,
   Button,
   Checkbox,
   Descriptions,
@@ -44,6 +43,7 @@ import {
   explainAddRestriction,
   type MCPServerCapabilityContext,
 } from '../MCPServer/memberPolicy';
+import { CatalogEntryAvatar } from './CatalogEntryAvatar';
 import {
   capabilityLabel,
   catalogAuthenticationDetail,
@@ -400,9 +400,7 @@ const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
       title={
         entry && (
           <Space align="center" size={token.marginSM}>
-            <Avatar shape="square" size={40} src={entry.icon_url}>
-              {title.charAt(0).toUpperCase()}
-            </Avatar>
+            <CatalogEntryAvatar iconUrl={entry.icon_url} title={title} />
             <Flex vertical style={{ minWidth: 0 }}>
               <Text strong ellipsis>
                 {title}
