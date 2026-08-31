@@ -65,7 +65,6 @@ import {
 } from '../MCPServer/memberPolicy';
 import { useOAuthBrowserEventAttempt } from '../MCPServer/useOAuthBrowserEventAttempt';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
-import { MCPEgressGatewayStatus } from './MCPEgressGatewayStatus';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -978,16 +977,7 @@ const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
         {
           key: 'servers',
           label: 'Servers',
-          children: (
-            <>
-              <MCPEgressGatewayStatus
-                key={durableAuthorityKey ?? '__mcp-egress-status__'}
-                client={client}
-                connectionReady={connectionReady}
-              />
-              {serversPane}
-            </>
-          ),
+          children: serversPane,
         },
         {
           key: 'policy',

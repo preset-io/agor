@@ -50,7 +50,9 @@ Failures after dispatch remain ambiguous and keep their stricter recovery state.
 
 ## Rollout modes
 
-Configure the per-tenant mode in **Settings → MCP Servers**.
+Configure the per-tenant mode through the authenticated
+`PATCH /mcp-egress/status` operator API. The Settings UI does not expose gateway
+status or rollout controls.
 
 | Mode | Behavior |
 | --- | --- |
@@ -60,10 +62,10 @@ Configure the per-tenant mode in **Settings → MCP Servers**.
 | `enforced` | The same supported set is mediated and every raw-secret projection path fails closed. Enabling it requires an operator attestation that pre-gateway executors were terminated. |
 
 An administrator can always make an emergency downgrade to `observe` or `off`,
-even while local requests exist. The UI requires an explicit raw-secret-egress
-acknowledgement, and the daemon writes a security audit log with tenant, actor,
-and old/new modes. A downgrade restores direct secrets; it is an escape hatch,
-not a revocation operation.
+even while local requests exist. The API requires an explicit raw-secret-egress
+acknowledgement in the request, and the daemon writes a security audit log with
+tenant, actor, and old/new modes. A downgrade restores direct secrets; it is an
+escape hatch, not a revocation operation.
 
 ## Supported and refused transports
 
@@ -123,8 +125,9 @@ allowlisted and scanned. Provider bodies, URLs, and errors are never logged.
 
 ## Operations and health
 
-`GET /mcp-egress/status` is tenant-scoped and available to members; only admins
-see rollout controls. It reports the mode, exact guarantee, supported/refused
+`GET /mcp-egress/status` is tenant-scoped and available to members;
+`PATCH /mcp-egress/status` is restricted to admins. The status response reports
+the mode, exact guarantee, supported/refused
 transports, and **process-local** active capacity count, split into provider
 in-flight requests and credential/admission reservations. Oldest age covers
 both phases. It reports admission
@@ -133,9 +136,8 @@ manufacturing a healthy value from the status request itself. It also lists
 each visible server excluded for transport, `ask`, or missing OAuth authority
 with a recovery action; non-admins can read these diagnostics but cannot change
 rollout mode. Detail is bounded to 100 visible servers per response and reports
-when additional diagnostics were truncated. Non-admins do not see a noisy
-default-off banner when there are zero calls and zero exclusions; admins retain
-the compact rollout control.
+when additional diagnostics were truncated. These status and rollout endpoints
+remain available for operator automation but are not mounted by Settings.
 
 `GET /health` reports the rollout mode, database probe, local in-flight count,
 and oldest local request. Useful metrics are:
