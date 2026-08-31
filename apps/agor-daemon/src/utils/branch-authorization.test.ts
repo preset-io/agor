@@ -327,7 +327,7 @@ describe('request-scoped RBAC loading', () => {
   }
 
   it('reuses a loaded session and branch across RBAC hooks in one request', async () => {
-    const sessionService = { get: vi.fn(async () => session) };
+    const sessionRepo = { findById: vi.fn(async () => session) };
     const branchRepo = makeBranchRepo();
     const ctx = {
       path: 'messages',
@@ -340,33 +340,34 @@ describe('request-scoped RBAC loading', () => {
       },
     } as unknown as HookContext;
 
-    await loadSession(sessionService)(ctx);
-    await loadSession(sessionService)(ctx);
+    await loadSession(sessionRepo)(ctx);
+    await loadSession(sessionRepo)(ctx);
     await loadBranchFromSession(branchRepo as never)(ctx);
     await loadBranchFromSession(branchRepo as never)(ctx);
 
-    expect(sessionService.get).toHaveBeenCalledTimes(1);
+    expect(sessionRepo.findById).toHaveBeenCalledTimes(1);
     expect(branchRepo.findById).toHaveBeenCalledTimes(1);
     expect(branchRepo.isOwner).toHaveBeenCalledTimes(1);
     expect(branchRepo.resolveUserPermission).toHaveBeenCalledTimes(1);
   });
 
-  it('marks sessions.get hook-loaded session as prefetched for the service get()', async () => {
-    const sessionService = { get: vi.fn(async () => session) };
+  it('canonicalizes and passes the repository-loaded session to the service get()', async () => {
+    const sessionRepo = { findById: vi.fn(async () => session) };
     const branchRepo = makeBranchRepo();
     const ctx = {
       path: 'sessions',
       method: 'get',
-      id: session.session_id,
+      id: 'session-c',
       params: {
         provider: 'rest',
         user: { user_id: USER_ID, role: ROLES.MEMBER },
       },
     } as unknown as HookContext;
 
-    await loadSessionBranch(sessionService, branchRepo as never)(ctx);
+    await loadSessionBranch(sessionRepo, branchRepo as never)(ctx);
 
-    expect(sessionService.get).toHaveBeenCalledTimes(1);
+    expect(sessionRepo.findById).toHaveBeenCalledWith('session-c');
+    expect(ctx.id).toBe(session.session_id);
     expect(ctx.params.session).toBe(session);
     expect(
       (ctx.params as { _agorPrefetchedRecord?: { record: unknown } })._agorPrefetchedRecord
@@ -375,6 +376,28 @@ describe('request-scoped RBAC loading', () => {
       idField: 'session_id',
       record: session,
     });
+  });
+
+  it('canonicalizes session IDs in the shared session authorization hook', async () => {
+    const sessionRepo = { findById: vi.fn(async () => session) };
+    const ctx = {
+      path: 'sessions',
+      method: 'patch',
+      id: 'session-c',
+      params: {
+        provider: 'rest',
+        user: { user_id: USER_ID, role: ROLES.MEMBER },
+        sessionId: 'session-c',
+      },
+    } as unknown as HookContext;
+
+    await loadSession(sessionRepo)(ctx);
+
+    expect(ctx.id).toBe(session.session_id);
+    expect(
+      (ctx.params as { _agorPrefetchedRecord?: { id: string; record: unknown } })
+        ._agorPrefetchedRecord
+    ).toEqual({ id: session.session_id, idField: 'session_id', record: session });
   });
 
   // Every id-addressed verb must resolve here. A verb missing from the branch

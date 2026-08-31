@@ -299,6 +299,26 @@ export interface ServiceTypes {
   'agentic-tool-presets': AgenticToolPreset;
   'opencode-auth': OpenCodeProviderSettings;
   'opencode-models': OpenCodeModelCatalog;
+  'executor-git-environment': ExecutorGitEnvironment;
+}
+
+/**
+ * Bounded plaintext capability returned only to authenticated Git executors.
+ *
+ * Keep this public client DTO structural: `@agor/git` is a private workspace
+ * package and must not appear in the packed `@agor-live/client` declaration
+ * graph. A daemon-side type-equivalence test keeps it aligned with the
+ * authoritative Git transport allowlist.
+ */
+export interface ExecutorGitEnvironment {
+  GITHUB_TOKEN?: string;
+  GH_TOKEN?: string;
+  HTTP_PROXY?: string;
+  HTTPS_PROXY?: string;
+  NO_PROXY?: string;
+  ALL_PROXY?: string;
+  SSL_CERT_FILE?: string;
+  SSL_CERT_DIR?: string;
 }
 
 /**
@@ -654,16 +674,8 @@ export interface BoardsService extends AgorService<Board> {
   ensureTeammateWelcomeNote(data: TeammateWelcomeNoteRequest, params?: Params): Promise<Board>;
 }
 
-/**
- * Users service with git environment support
- */
+/** Users service custom methods. */
 export interface UsersService extends AgorService<User> {
-  /**
-   * Get the full resolved git environment for a user.
-   * Auth: service-account JWTs may fetch any user's env;
-   * regular users may only fetch their own.
-   */
-  getGitEnvironment(data: { userId: string }, params?: Params): Promise<Record<string, string>>;
   getAvatarSettings(data?: unknown, params?: Params): Promise<UserAvatarSettings>;
   updateAvatarSettings(
     data: Partial<UserAvatarSettings>,
@@ -1292,7 +1304,6 @@ function extendUsersService(client: AgorClient): void {
   if (usersService[USERS_SERVICE_EXTENDED]) return;
   if (typeof usersService.methods === 'function') {
     usersService.methods(
-      'getGitEnvironment',
       'getAvatarSettings',
       'updateAvatarSettings',
       'syncAvatars',

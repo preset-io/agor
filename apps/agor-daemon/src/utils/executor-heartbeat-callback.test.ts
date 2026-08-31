@@ -69,6 +69,28 @@ describe('ExecutorHeartbeatCallbackRunner', () => {
     ).toBe(false);
   });
 
+  it('runs the callback with a secret-free environment', () => {
+    const child = new FakeChildProcess();
+    spawnMock.mockReturnValue(child);
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousMasterSecret = process.env.AGOR_MASTER_SECRET;
+    process.env.DATABASE_URL = 'postgres://daemon-canary';
+    process.env.AGOR_MASTER_SECRET = 'master-canary';
+    try {
+      createRunner().run(payload);
+      const options = spawnMock.mock.calls[0]?.[2] as { env: Record<string, string> };
+      expect(options.env.PATH).toBe(process.env.PATH);
+      expect(options.env.DATABASE_URL).toBeUndefined();
+      expect(options.env.AGOR_MASTER_SECRET).toBeUndefined();
+    } finally {
+      child.emit('exit', 0, null);
+      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousDatabaseUrl;
+      if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
+      else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+    }
+  });
+
   it('keeps callback coalesced after timeout until the process exits', () => {
     vi.useFakeTimers();
     const firstChild = new FakeChildProcess();

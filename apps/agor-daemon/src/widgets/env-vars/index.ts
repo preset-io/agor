@@ -5,7 +5,7 @@
  * or more env vars (e.g. `HUBSPOT_API_KEY`). The values flow browser → daemon
  * via `POST /widgets/:widget_id/submit` (NOT through the agent context) and
  * land in the submitting prompt actor's `users.data.env_vars` via the existing
- * users service — encryption + blocklist + validation all reused. A shared
+ * users service — encryption and structural validation are reused. A shared
  * Session never lends or mutates its owner's credential environment.
  *
  * See §4 + §7 Part 2 of `docs/internal/in-conversation-widgets-design-2026-05-19.md`.
@@ -176,7 +176,7 @@ function validationMessage(errors: ValidationError[]): string {
 
 /**
  * Side-effect: persist the submitted values via the users service. Encryption,
- * blocklist, regex, and value-length checks all live inside that service —
+ * name, NUL, and value-length checks all live inside that service —
  * we deliberately do NOT reimplement them here.
  */
 async function applyEnvVarsSubmit(
@@ -184,10 +184,19 @@ async function applyEnvVarsSubmit(
   submit: EnvVarsSubmit,
   params: EnvVarsParams
 ): Promise<void> {
+  if (submit.scope === 'session' && ctx.submitterUserId !== ctx.sessionCreatorUserId) {
+    throw fieldBadRequest(
+      'Session-scoped environment variables can only be configured by the session owner',
+      Object.fromEntries(
+        params.names.map((name) => [name, 'Choose global scope for a shared session'])
+      )
+    );
+  }
+
   // Enforce that the browser submitted exactly the names the agent requested
   // (no more, no fewer). Without this, a tampered client could use the
   // `trustedEnvVarWrite` escape hatch to write arbitrary env vars onto the
-  // session creator's profile — widening the attack surface far beyond what
+  // submitter's profile — widening the attack surface far beyond what
   // the agent (and the user reviewing the widget) intended.
   const requestedNames = new Set(params.names);
   const submittedNames = orderedEnvVarNames(Object.keys(submit.values));
@@ -210,14 +219,14 @@ async function applyEnvVarsSubmit(
     );
   }
 
-  // Belt-and-braces: re-validate names against the same regex+blocklist
+  // Belt-and-braces: re-validate names against the same structural rules
   // the users service uses, surfacing a single combined error if anything
   // fails. The users service would reject the same way, but doing it here
   // up-front gives us a clearer error per name without partial writes.
   for (const name of submittedNames) {
     if (!isEnvVarAllowed(name)) {
-      throw fieldBadRequest(`Cannot set environment variable "${name}": blocked by allow-list`, {
-        [name]: 'Blocked by allow-list',
+      throw fieldBadRequest(`Invalid environment variable name "${name}"`, {
+        [name]: 'Invalid environment variable name',
       });
     }
     const errors = validateEnvVar(name, submit.values[name]);

@@ -552,6 +552,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async canMutate(boardId: string, userId: UUID): Promise<boolean> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);
+    return this.canMutateResolved(board, userId);
+  }
+
+  /** Resolve current edit authority for a canonical board loaded by this request. */
+  async canMutateResolved(board: Pick<Board, 'board_id'>, userId: UUID): Promise<boolean> {
     const access = await new CapabilityPolicyRepository(this.db).resolveBoardAccess(
       board.board_id,
       userId as UserID
@@ -572,6 +577,11 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async canView(boardId: string, userId: UUID): Promise<boolean> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);
+    return this.canViewResolved(board, userId);
+  }
+
+  /** Resolve current view authority for a canonical board loaded by this request. */
+  async canViewResolved(board: Pick<Board, 'board_id'>, userId: UUID): Promise<boolean> {
     const access = await new CapabilityPolicyRepository(this.db).resolveBoardAccess(
       board.board_id,
       userId as UserID

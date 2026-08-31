@@ -129,6 +129,7 @@ export {
   gatewayListenerFailure,
 } from './listener-error';
 export { gatewayFailureCode, sanitizeGatewayProviderError } from './provider-error';
+export { redactGatewayChannelSecrets } from './redaction';
 export {
   formatGatewayFollowUpRoutingMessage,
   formatGatewayMarkdownSessionReference,

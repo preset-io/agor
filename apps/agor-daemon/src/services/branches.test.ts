@@ -10,6 +10,7 @@ import {
   runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
+import { feathers } from '@agor/core/feathers';
 import {
   type Application,
   type BoardID,
@@ -697,6 +698,59 @@ describe('BranchesService environment start async behavior', () => {
           branch_fs_access: 'write',
         },
       })
+    );
+  });
+
+  it('resolves lifecycle credentials for the authenticated actor, not the branch creator', async () => {
+    const { service } = createServiceHarness();
+    const app = (service as unknown as { app: Application }).app as unknown as {
+      sessionTokenService: { generateCommandToken: ReturnType<typeof vi.fn> };
+    };
+    const branch = {
+      branch_id: 'wt-actor-env' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-actor-env',
+      path: '/tmp/wt-actor-env',
+      created_by: 'branch-owner' as UUID,
+      branch_unique_id: 1,
+      logs_command: 'docker compose logs --tail=100',
+    };
+    const actorId = 'collaborating-actor' as UUID;
+    const params = {
+      provider: 'rest',
+      user: { user_id: actorId, role: 'member' },
+    } as never;
+
+    vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
+      kind: 'shell',
+      command: branch.logs_command,
+    } as never);
+    const resolveContext = vi
+      .spyOn(service as never, 'resolveEnvironmentExecutorContext')
+      .mockResolvedValue({
+        env: { ACTOR_CANARY: 'present' },
+        delegatedHomeKey: undefined,
+        executionUserId: actorId,
+        branchFsAccess: 'read',
+      } as never);
+    mockedRequestExecutor.mockResolvedValue({
+      success: true,
+      data: { logs: 'ok', timestamp: '2026-08-26T00:00:00.000Z' },
+    });
+
+    await service.getLogs(branch.branch_id, params);
+
+    expect(resolveContext).toHaveBeenCalledWith(branch, params, 'read');
+    expect(app.sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
+      'environment-logs',
+      actorId,
+      branch.branch_id
+    );
+    expect(mockedRequestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({ env: { ACTOR_CANARY: 'present' } }),
+      expect.anything()
     );
   });
 
@@ -2564,6 +2618,71 @@ describe('BranchesService environment health requests', () => {
     globalThis.fetch = originalFetch;
   });
 
+  dbTest(
+    'reduces a standalone automatic observation from three wrapped gets to zero',
+    async ({ db }) => {
+      const user = await new UsersRepository(db).create({
+        email: `${generateId()}@example.com`,
+        name: 'Automatic health hook receipt',
+      });
+      const repo = await new RepoRepository(db).create({
+        repo_id: generateId(),
+        slug: `automatic-health-hook-${generateId()}`,
+        name: 'Automatic health hook receipt',
+        repo_type: 'remote',
+        remote_url: 'https://example.invalid/automatic-health-hook.git',
+        local_path: `/tmp/${generateId()}`,
+        default_branch: 'main',
+      });
+      const branch = await new BranchRepository(db).create({
+        branch_id: generateId() as BranchID,
+        repo_id: repo.repo_id,
+        name: `automatic-health-hook-${generateId()}`,
+        ref: 'main',
+        branch_unique_id: 8_650_000,
+        path: `/tmp/${generateId()}`,
+        created_by: user.user_id,
+        environment_instance: { status: 'running' },
+      });
+      const app = feathers();
+      const service = new BranchesService(db as never, app as unknown as Application);
+      app.use('branches', service as never, { methods: ['get'] });
+      let wrappedGets = 0;
+      app.service('branches').hooks({
+        around: {
+          get: [
+            async (_context, next) => {
+              wrappedGets += 1;
+              await next();
+            },
+          ],
+        },
+      });
+
+      const registered = app.service('branches') as unknown as BranchesService;
+
+      // This is the deployed pre-fix shape: the standalone monitor first used
+      // the registered get, then its direct internal checkHealth call used
+      // this.get() for the initial and final canonical loads. Feathers wraps
+      // both nested standard-method calls even though checkHealth itself is not
+      // a transport method.
+      await app.service('branches').get(branch.branch_id);
+      await registered.checkHealth(branch.branch_id);
+      expect(wrappedGets).toBe(3);
+
+      wrappedGets = 0;
+      const result = await registered.checkHealth(branch.branch_id, undefined, {
+        intent: 'automatic',
+      });
+
+      expect(result).toMatchObject({
+        branch_id: branch.branch_id,
+        environment_instance: { status: 'running' },
+      });
+      expect(wrappedGets).toBe(0);
+    }
+  );
+
   it('reports a healthy errored environment without reviving or persisting it', async () => {
     const branch = {
       branch_id: 'wt-health-recover' as BranchID,
@@ -2633,7 +2752,12 @@ describe('BranchesService environment health requests', () => {
       },
     } as unknown as Application;
     const service = new BranchesService(createTenantScopeTestDb() as never, app);
-    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    vi.spyOn(
+      service as unknown as {
+        getCanonicalBranch: (id: BranchID) => Promise<typeof branch>;
+      },
+      'getCanonicalBranch'
+    ).mockResolvedValue(branch);
     globalThis.fetch = vi.fn();
 
     await expect(

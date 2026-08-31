@@ -12,7 +12,7 @@
 import type { BranchID, Session, SessionID, UserID, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
 import { eq } from 'drizzle-orm';
-import { afterAll, beforeAll, describe, expect } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { select, update } from '../db/database-wrapper';
 import { encryptApiKey } from '../db/encryption';
 import { BranchRepository } from '../db/repositories/branches';
@@ -23,7 +23,11 @@ import { UsersRepository } from '../db/repositories/users';
 import { users } from '../db/schema';
 import { dbTest } from '../db/test-helpers';
 import { generateId } from '../lib/ids';
-import { createUserProcessEnvironment, resolveUserEnvironment } from './env-resolver';
+import {
+  buildAllowlistedEnv,
+  createUserProcessEnvironment,
+  resolveUserEnvironment,
+} from './env-resolver';
 import type { StoredEnvVar } from './env-vars';
 
 // Force real AES encryption so URL-shaped tool config (e.g. ANTHROPIC_BASE_URL)
@@ -194,6 +198,140 @@ describe('resolveUserEnvironment — scope filtering (v0.5)', () => {
     const envB = await resolveUserEnvironment(userId, db, { sessionId: sessionB });
     expect(envA.SHARED_NAME).toBe('secret');
     expect(envB.SHARED_NAME).toBeUndefined();
+  });
+
+  dbTest(
+    'a foreign session cannot select a same-named secret from the execution user',
+    async ({ db }) => {
+      const executionUserId = await createUserWithEnv(db, {
+        GLOBAL_SAFE: encEntry('global-value', 'global'),
+        SHARED_NAME: encEntry('execution-user-secret', 'session'),
+      });
+      const sessionOwnerId = await createUserWithEnv(db, {
+        SHARED_NAME: encEntry('session-owner-secret', 'session'),
+      });
+      const foreignSession = await createSessionForUser(db, sessionOwnerId);
+      await new SessionEnvSelectionRepository(db).add(foreignSession, 'SHARED_NAME');
+
+      const env = await resolveUserEnvironment(executionUserId, db, { sessionId: foreignSession });
+
+      expect(env.GLOBAL_SAFE).toBe('global-value');
+      expect(env.SHARED_NAME).toBeUndefined();
+    }
+  );
+});
+
+describe('buildAllowlistedEnv — daemon credential capabilities', () => {
+  it('forwards only explicit runtime metadata, never ambient account context', () => {
+    const input = {
+      HTTPS_PROXY: 'https://daemon:secret@proxy.example',
+      OPENAI_API_KEY: 'daemon-openai-secret',
+      GIT_AUTHOR_NAME: 'Daemon Account',
+      XDG_CONFIG_HOME: '/home/agor/.config',
+      GIT_CONFIG_PARAMETERS: "'protocol.file.allow=never'",
+    };
+    const saved = Object.fromEntries(Object.keys(input).map((key) => [key, process.env[key]]));
+    Object.assign(process.env, input);
+    try {
+      const env = buildAllowlistedEnv();
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.OPENAI_API_KEY).toBeUndefined();
+      expect(env.GIT_AUTHOR_NAME).toBeUndefined();
+      expect(env.XDG_CONFIG_HOME).toBeUndefined();
+      expect(env.GIT_CONFIG_PARAMETERS).toBe(input.GIT_CONFIG_PARAMETERS);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it('does not forward host SSH or GPG agent sockets', () => {
+    const saved = {
+      SSH_AUTH_SOCK: process.env.SSH_AUTH_SOCK,
+      SSH_AGENT_PID: process.env.SSH_AGENT_PID,
+      GPG_AGENT_INFO: process.env.GPG_AGENT_INFO,
+      GPG_TTY: process.env.GPG_TTY,
+      GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND,
+    };
+    process.env.SSH_AUTH_SOCK = '/tmp/daemon-agent.sock';
+    process.env.SSH_AGENT_PID = '1234';
+    process.env.GPG_AGENT_INFO = '/tmp/daemon-gpg.sock';
+    process.env.GPG_TTY = '/dev/pts/1';
+    process.env.GIT_SSH_COMMAND = 'daemon-ssh-wrapper';
+    try {
+      const env = buildAllowlistedEnv();
+      expect(env.SSH_AUTH_SOCK).toBeUndefined();
+      expect(env.SSH_AGENT_PID).toBeUndefined();
+      expect(env.GPG_AGENT_INFO).toBeUndefined();
+      expect(env.GPG_TTY).toBeUndefined();
+      expect(env.GIT_SSH_COMMAND).toBeUndefined();
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+});
+
+describe('createUserProcessEnvironment — explicit mapping validation', () => {
+  dbTest('passes configured names while rejecting malformed process entries', async ({ db }) => {
+    const env = await createUserProcessEnvironment(undefined, db, {
+      SAFE_ADDITIONAL_KEY: 'safe',
+      PATH: '/attacker',
+      'bad-key': 'malformed',
+      NUL_ADDITIONAL_KEY: 'bad\0value',
+    });
+
+    expect(env.SAFE_ADDITIONAL_KEY).toBe('safe');
+    expect(env['bad-key']).toBeUndefined();
+    expect(env.NUL_ADDITIONAL_KEY).toBeUndefined();
+    expect(env.PATH).toBe('/attacker');
+  });
+
+  dbTest('overlays trusted Git policy after user/additional mappings', async ({ db }) => {
+    const saved = process.env.GIT_CONFIG_PARAMETERS;
+    process.env.GIT_CONFIG_PARAMETERS = "'protocol.file.allow=never'";
+    try {
+      const userId = await createUserWithEnv(db, {
+        GIT_CONFIG_PARAMETERS: encEntry("'protocol.file.allow=user'", 'global'),
+      });
+      const env = await createUserProcessEnvironment(
+        userId,
+        db,
+        { GIT_CONFIG_PARAMETERS: "'protocol.file.allow=additional'" },
+        [
+          {
+            key: 'GIT_CONFIG_PARAMETERS',
+            value: "'protocol.file.allow=gateway'",
+            forceOverride: true,
+          },
+        ]
+      );
+      expect(env.GIT_CONFIG_PARAMETERS).toBe("'protocol.file.allow=never'");
+    } finally {
+      if (saved === undefined) delete process.env.GIT_CONFIG_PARAMETERS;
+      else process.env.GIT_CONFIG_PARAMETERS = saved;
+    }
+  });
+
+  dbTest('drops malformed, NUL-containing, and duplicate gateway entries', async ({ db }) => {
+    const env = await createUserProcessEnvironment(undefined, db, undefined, [
+      { key: 'SAFE_GATEWAY_KEY', value: 'safe', forceOverride: false },
+      { key: 'PATH', value: '/attacker', forceOverride: true },
+      { key: 'bad-key', value: 'malformed', forceOverride: true },
+      { key: 'NUL_GATEWAY_KEY', value: 'bad\0value', forceOverride: true },
+      { key: 'DUPLICATE_GATEWAY_KEY', value: 'fallback', forceOverride: false },
+      { key: 'DUPLICATE_GATEWAY_KEY', value: 'forced', forceOverride: true },
+    ]);
+
+    expect(env.SAFE_GATEWAY_KEY).toBe('safe');
+    expect(env['bad-key']).toBeUndefined();
+    expect(env.NUL_GATEWAY_KEY).toBeUndefined();
+    expect(env.DUPLICATE_GATEWAY_KEY).toBeUndefined();
+    expect(env.PATH).toBe('/attacker');
   });
 });
 

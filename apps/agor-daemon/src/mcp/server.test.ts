@@ -85,7 +85,8 @@ describe('MCP tool registry', () => {
     const expectedPropertiesByTool: Record<string, string[]> = {
       agor_sessions_prompt: ['sessionId', 'prompt', 'mode'],
       agor_boards_get: ['boardId'],
-      agor_branches_create: ['repoId', 'branchName', 'boardId'],
+      agor_branches_create: ['repoId', 'branchName', 'boardId', 'waitForReady', 'waitTimeoutMs'],
+      agor_branches_wait_for_ready: ['branchId', 'waitTimeoutMs'],
       agor_kb_get: ['uri', 'namespace', 'path'],
       agor_execute_tool: ['tool_name', 'arguments'],
     };

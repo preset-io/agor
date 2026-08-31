@@ -26,6 +26,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   type AgorExecutionSettings,
+  buildAllowlistedEnv,
   type ResolvedExecutorResponseConfig,
   resolveExecutorResponseConfig,
   resolveExecutorResponseTimeoutMs,
@@ -73,6 +74,23 @@ function withDaemonExecutorEnv(
     ...env,
     DAEMON_URL: daemonUrl,
     LOG_LEVEL: resolveExecutorLogLevel(env),
+  };
+}
+
+/**
+ * Environment for the local launcher process in templated/delegated mode.
+ *
+ * The executor's authenticated payload is sent over stdin; the intermediate
+ * `sh -c <launcher>` must not inherit the daemon's database URL, JWT/master
+ * secrets, provider credentials, or other ambient deployment configuration.
+ * Operators that need launcher authentication must arrange it outside the
+ * daemon environment (for example through the delegated substrate's workload
+ * identity) rather than implicitly exporting the daemon's credential bag.
+ */
+function resolveTemplateLauncherEnvironment(logLevel: string): Record<string, string> {
+  return {
+    ...buildAllowlistedEnv(),
+    LOG_LEVEL: logLevel,
   };
 }
 
@@ -601,7 +619,7 @@ function spawnExecutorWithTemplate(
   };
 
   const executorProcess = spawn('sh', ['-c', command], {
-    env: { ...process.env, LOG_LEVEL: logLevel },
+    env: resolveTemplateLauncherEnvironment(logLevel),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
@@ -675,7 +693,10 @@ function resolveLocalExecutorCwdFailure(
 function resolveLocalExecutorEnvironment(
   options: Pick<SpawnExecutorOptions, 'env' | 'preparedEnv'>
 ): Record<string, string> {
-  const env = options.env ?? (process.env as Record<string, string>);
+  // Safe default for every fixed executor command. Task/lifecycle callers pass
+  // an already resolved `preparedEnv`; other commands need only the curated
+  // host runtime, never the daemon's entire credential-bearing process.env.
+  const env = options.env ?? buildAllowlistedEnv();
   const source = options.preparedEnv ?? env;
   return withDaemonExecutorEnv(source, getDaemonUrl());
 }
@@ -1058,7 +1079,9 @@ export function startContainedExecutorCommand(
  * Run a short-lived executor command and wait for its authenticated response.
  *
  * Use this for daemon call sites that need an immediate answer (for example
- * autocomplete and git-state probes). Long-running commands and lifecycle
+ * autocomplete, branch inspection, and other bounded lifecycle probes).
+ * Prompt Git-state snapshots are captured inside the prompt executor; they do
+ * not use this request/response path. Long-running commands and lifecycle
  * tasks should keep using spawnExecutorFireAndForget().
  */
 export async function requestExecutor(
@@ -1269,7 +1292,7 @@ function requestExecutorWithTemplate(
   console.log(`${logPrefix} Running templated executor command: ${payload.command ?? '?'}`);
 
   const child = spawn('sh', ['-c', command], {
-    env: { ...process.env, LOG_LEVEL: logLevel },
+    env: resolveTemplateLauncherEnvironment(logLevel),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 

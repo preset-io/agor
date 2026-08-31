@@ -40,12 +40,17 @@ import {
   encryptApiKey,
   eq,
   generateId,
+  getCurrentTenantId,
   hashLocalPassword,
+  inArray,
   insert,
   isExecutionHomeKeyAvailable,
   isNull,
   jsonExtract,
+  runWithTenantDatabaseTransaction,
   select,
+  sessionEnvSelections,
+  sessions,
   sql,
   type TenantScopeAwareDatabase,
   type TenantScopedDatabase,
@@ -148,7 +153,6 @@ export const USERS_SERVICE_TRANSPORT_METHODS = [
   'create',
   'patch',
   'remove',
-  'getGitEnvironment',
   'getAvatarSettings',
   'updateAvatarSettings',
   'syncAvatars',
@@ -161,6 +165,44 @@ export const USERS_SERVICE_TRANSPORT_METHODS = [
 
 export const LOCAL_AUTH_LOOKUP_PARAM = Symbol('agor.users.local-auth-lookup');
 export const AUTH_INTERNAL_USER_LOOKUP_PARAM = Symbol('agor.users.auth-internal-lookup');
+const USER_PATCH_LOCK_HELD_PARAM = Symbol('agor.users.patch-lock-held');
+
+// SQLite runs one daemon and has no cross-process writer, but two async
+// requests can still read the same users.data snapshot and then overlap on the
+// one libSQL handle. Serialize per tenant/user through authorization,
+// encryption, and the final transaction. PostgreSQL keeps its database
+// advisory/CAS fences as the cross-replica authority; this local lock merely
+// avoids needless same-process conflicts there.
+const userPatchLocks = new Map<string, Promise<void>>();
+
+async function withUserPatchLock<T>(
+  id: UserID,
+  params: Params | undefined,
+  work: (params: Params) => Promise<T>
+): Promise<T> {
+  const tenantId =
+    (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ??
+    getCurrentTenantId() ??
+    '<standalone>';
+  const key = `${tenantId}\0${id}`;
+  const previous = userPatchLocks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  userPatchLocks.set(key, current);
+  await previous;
+  try {
+    const lockedParams = { ...(params ?? {}) } as Params & {
+      [USER_PATCH_LOCK_HELD_PARAM]: boolean;
+    };
+    lockedParams[USER_PATCH_LOCK_HELD_PARAM] = true;
+    return await work(lockedParams);
+  } finally {
+    release();
+    if (userPatchLocks.get(key) === current) userPatchLocks.delete(key);
+  }
+}
 
 export interface LocalAuthenticationLookupParams extends Params {
   [LOCAL_AUTH_LOOKUP_PARAM]?: true;
@@ -838,6 +880,13 @@ export class UsersService {
     if (typeof id !== 'string' || !id) {
       throw new BadRequest('Bulk user mutations are not supported');
     }
+    if (
+      !(params as (Params & { [USER_PATCH_LOCK_HELD_PARAM]?: boolean }) | undefined)?.[
+        USER_PATCH_LOCK_HELD_PARAM
+      ]
+    ) {
+      return withUserPatchLock(id, params, (lockedParams) => this.patch(id, data, lockedParams));
+    }
     assertSingleUserMutation(data);
     this.assertPatchAllowed(data);
     assertValidExecutionHomeKeyWrite(data.unix_username);
@@ -866,6 +915,7 @@ export class UsersService {
     }
     const now = new Date();
     const updates: Record<string, unknown> = { updated_at: now };
+    const selectionNamesToRemove = new Set<string>();
 
     // Handle password separately (needs hashing)
     if (assignedPassword !== undefined) {
@@ -1011,10 +1061,10 @@ export class UsersService {
             throw new Error(`Cannot set environment variable "${key}": ${reason}`);
           }
 
-          // Git tokens are embedded into a git-credentials file and a clone URL
-          // at runtime. Reject at ingest anything that doesn't match the
-          // `isLikelyGitToken` shape so shell metacharacters / whitespace cannot
-          // smuggle in even if the credential-file path later regresses.
+          // Managed Git consumes these values through its bounded transport DTO
+          // and accepts only the `isLikelyGitToken` shape before constructing an
+          // authorization header. Reject unusable values at ingest so the saved
+          // settings contract and the transport boundary stay aligned.
           if ((key === 'GITHUB_TOKEN' || key === 'GH_TOKEN') && value) {
             if (!isLikelyGitToken(value)) {
               throw new Error(
@@ -1027,6 +1077,7 @@ export class UsersService {
           if (value === null || value === undefined) {
             // Clear variable
             delete nextEnvVars[key];
+            selectionNamesToRemove.add(key);
             console.log(`🗑️  Cleared user env var: ${key}`);
           } else {
             // Validate and encrypt
@@ -1068,6 +1119,11 @@ export class UsersService {
             continue;
           }
           nextEnvVars[key] = { ...existing, scope };
+          // A selection is not a durable future grant. Clear it on every
+          // transition so global → session cannot reactivate stale metadata.
+          if (existing.scope !== scope) {
+            selectionNamesToRemove.add(key);
+          }
           console.log(`🔧 Updated scope for env var ${key}: ${scope}`);
         }
       }
@@ -1134,20 +1190,56 @@ export class UsersService {
     }
 
     const authorityActorPredicate = this.actorStillCurrentPredicate(authority.actor, params);
-    const row = await update(this.db, users)
-      .set(updates)
-      .where(
-        withTenantPredicate(
-          params,
-          and(eq(users.user_id, id), eq(users.role, authority.target.role), authorityActorPredicate)
-        )
-      )
-      .returning()
-      .one();
+    const row = await runWithTenantDatabaseTransaction(
+      this.db,
+      (params as AuthenticatedParams | undefined)?.tenant?.tenant_id ?? getCurrentTenantId(),
+      async (mutationDb) => {
+        const updated = await update(mutationDb, users)
+          .set(updates)
+          .where(
+            withTenantPredicate(
+              params,
+              and(
+                eq(users.user_id, id),
+                eq(users.role, authority.target.role),
+                // SQLite has no request-wide advisory lock. Compare the JSON
+                // snapshot so concurrent credential patches fail instead of
+                // silently replacing each other's encrypted values.
+                eq(users.data, authority.target.data),
+                authorityActorPredicate
+              )
+            )
+          )
+          .returning()
+          .one();
 
-    if (!row) {
-      throw new Forbidden(USER_AUTHORITY_DENIED);
-    }
+        if (!updated) {
+          throw new Forbidden(USER_AUTHORITY_DENIED);
+        }
+
+        // Keep metadata cleanup in the same native transaction as the secret
+        // mutation. A failed delete cannot commit the user JSON update alone.
+        if (selectionNamesToRemove.size > 0) {
+          await deleteFrom(mutationDb, sessionEnvSelections)
+            .where(
+              and(
+                // Keep owned-session filtering inside SQL rather than
+                // materializing every Session ID into a parameter list. A
+                // prolific user must still be able to delete one variable
+                // without exceeding SQLite/PostgreSQL bind limits.
+                sql`${sessionEnvSelections.session_id} IN (
+                  SELECT ${sessions.session_id}
+                  FROM ${sessions}
+                  WHERE ${sessions.created_by} = ${id}
+                )`,
+                inArray(sessionEnvSelections.env_var_name, [...selectionNamesToRemove])
+              )
+            )
+            .run();
+        }
+        return updated;
+      }
+    );
 
     const requesterId = (params as AuthenticatedParams | undefined)?.user?.user_id as
       | UserID
@@ -1288,63 +1380,13 @@ export class UsersService {
   }
 
   /**
-   * Get decrypted environment variables for a user (ALL scopes).
+   * Get the user's global environment through the canonical resolver.
    *
-   * Used by code paths that don't yet care about scope (legacy callers, terminal
-   * sessions in some modes). For session spawning, prefer the scope-aware
-   * `resolveUserEnvironment(userId, db, { sessionId })` in core/config.
+   * This legacy internal convenience must not bypass scope filtering. A caller
+   * that needs selected session variables must supply that session explicitly
+   * to `resolveUserEnvironment` instead of receiving every stored scope.
    */
   async getEnvironmentVariables(userId: UserID): Promise<Record<string, string>> {
-    const row = await select(this.db).from(users).where(eq(users.user_id, userId)).one();
-
-    if (!row) return {};
-
-    const data = row.data as { env_vars?: Record<string, string | StoredEnvVar> };
-    const stored = normalizeStoredEnvMap(data.env_vars);
-
-    const decryptedVars: Record<string, string> = {};
-    for (const [key, entry] of Object.entries(stored)) {
-      try {
-        decryptedVars[key] = decryptApiKey(entry.value_encrypted);
-      } catch (err) {
-        console.error(`Failed to decrypt env var ${key} for user ${userId}:`, err);
-        // Skip this variable (don't crash)
-      }
-    }
-
-    return decryptedVars;
-  }
-
-  /**
-   * Get the full resolved git environment for a user.
-   *
-   * Returns all user env vars (global scope) post-filterEnv, suitable for
-   * passing to git operations via `options.env`. The executor calls this via
-   * Feathers RPC so per-user credentials flow through the daemon's auth
-   * boundary instead of being baked into spawn payloads.
-   *
-   * Auth: explicit daemon service JWTs may fetch any user's env. Delegated
-   * executors and ordinary user JWTs may fetch only their own env.
-   */
-  async getGitEnvironment(
-    data: { userId: string },
-    params?: Params
-  ): Promise<Record<string, string>> {
-    const userId = data.userId as UserID;
-    const caller = (params as AuthenticatedParams | undefined)?.user;
-
-    // Auth check: explicit daemon service accounts can fetch any user's env;
-    // delegated executors and other user identities can fetch only their own.
-    if (params?.provider) {
-      if (!caller) {
-        throw new NotAuthenticated('Authentication required');
-      }
-      const isService = !!(caller as { _isServiceAccount?: boolean })._isServiceAccount;
-      if (!isService && caller.user_id !== userId) {
-        throw new Forbidden("Cannot access another user's git environment");
-      }
-    }
-
     return resolveUserEnvironment(userId, this.db);
   }
 

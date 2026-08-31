@@ -96,6 +96,10 @@ import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
 import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
+import {
+  type LatestSessionUpdateRequests,
+  runSessionUpdateWithLatestNotification,
+} from './utils/sessionUpdateNotifications';
 import { getRouterBasename, responsiveRoutePath } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
@@ -441,6 +445,7 @@ function AppContent() {
     },
   });
   const pendingEnvironmentToastsRef = useRef<Map<string, PendingEnvironmentToast>>(new Map());
+  const latestSessionUpdateRequestsRef = useRef<LatestSessionUpdateRequests>(new Map());
 
   useEffect(() => {
     if (!client) return;
@@ -1386,12 +1391,16 @@ function AppContent() {
 
   // Handle update session
   const handleUpdateSession = async (sessionId: string, updates: Partial<Session>) => {
-    const session = await updateSession(sessionId as SessionID, updates);
-    if (session) {
-      showSuccess('Session updated successfully!');
-    } else {
-      showError('Failed to update session');
-    }
+    const authority = appAuthorityGuard.begin();
+    await runSessionUpdateWithLatestNotification({
+      sessionId: sessionId as SessionID,
+      updates,
+      latestRequests: latestSessionUpdateRequestsRef.current,
+      authority,
+      updateSession,
+      showSuccess,
+      showError,
+    });
   };
 
   // Handle delete session

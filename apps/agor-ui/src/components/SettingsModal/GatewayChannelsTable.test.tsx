@@ -1097,7 +1097,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
       target: { value: 'app-123' },
     });
     fireEvent.change(screen.getByPlaceholderText('Client secret value'), {
-      target: { value: 'secret' },
+      target: { value: 's e c r e t' },
     });
     fireEvent.change(document.querySelector('#teams_tenant_id') as HTMLInputElement, {
       target: { value: 'tenant-123' },
@@ -1128,6 +1128,7 @@ describe('GatewayChannelsTable Teams create wizard', () => {
       agor_user_id: 'user-1',
       config: {
         app_id: 'app-123',
+        app_password: 'secret',
         microsoft_tenant_id: 'tenant-123',
         user_map: { 'aad-object-1': '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f' },
       },

@@ -1,3 +1,4 @@
+import { PAGINATION } from '@agor/core/config';
 import {
   AGENTIC_TOOL_NAMES,
   type ScheduleCreateData,
@@ -233,5 +234,110 @@ describe('schedule MCP input schemas', () => {
       { agentic_tool_config: { agentic_tool: 'codex', preset_id: 'preset-1' } },
       {}
     );
+  });
+
+  it('bulk-loads unique branches when filtering schedules by board', async () => {
+    const handlers = new Map<string, ToolHandler>();
+    const fakeServer = {
+      registerTool: (name: string, _cfg: unknown, cb: ToolHandler) => handlers.set(name, cb),
+    } as unknown as McpServer;
+    const schedules = [
+      { schedule_id: 'schedule-1', branch_id: 'branch-a' },
+      { schedule_id: 'schedule-2', branch_id: 'branch-a' },
+      { schedule_id: 'schedule-3', branch_id: 'branch-b' },
+    ];
+    const branchesFind = vi.fn(async () => [
+      { branch_id: 'branch-a', board_id: 'board-target' },
+      { branch_id: 'branch-b', board_id: 'board-other' },
+    ]);
+    const branchesGet = vi.fn();
+    const boardsGet = vi.fn(async () => ({ board_id: 'board-target' }));
+
+    registerScheduleTools(fakeServer, {
+      app: {
+        service(path: string) {
+          if (path === 'schedules') return { find: vi.fn(async () => schedules) };
+          if (path === 'branches') return { find: branchesFind, get: branchesGet };
+          if (path === 'boards') return { get: boardsGet };
+          throw new Error(`Unexpected service: ${path}`);
+        },
+      } as any,
+      db: {} as any,
+      userId: 'user-1' as any,
+      sessionId: undefined,
+      authenticatedUser: { user_id: 'user-1', email: 'user@example.com', role: 'member' } as any,
+      baseServiceParams: { provider: 'mcp' },
+    });
+
+    const response = (await handlers.get('agor_schedules_list')?.({
+      boardId: 'board-target',
+      limit: 25,
+      offset: 0,
+    })) as { content: Array<{ text: string }> };
+
+    expect(boardsGet).toHaveBeenCalledOnce();
+    expect(branchesGet).not.toHaveBeenCalled();
+    expect(branchesFind).toHaveBeenCalledWith({
+      query: {
+        branch_id: { $in: ['branch-a', 'branch-b'] },
+        $limit: 2,
+      },
+      paginate: false,
+      provider: 'mcp',
+    });
+    expect(JSON.parse(response.content[0].text).data).toHaveLength(2);
+  });
+
+  it('chunks branch authorization at the service pagination cap', async () => {
+    const handlers = new Map<string, ToolHandler>();
+    const fakeServer = {
+      registerTool: (name: string, _cfg: unknown, cb: ToolHandler) => handlers.set(name, cb),
+    } as unknown as McpServer;
+    const schedules = Array.from({ length: PAGINATION.MAX_LIMIT + 1 }, (_, index) => ({
+      schedule_id: `schedule-${index}`,
+      branch_id: `branch-${index}`,
+    }));
+    const branchesFind = vi.fn(async (params: { query: { branch_id: { $in: string[] } } }) =>
+      params.query.branch_id.$in.map((branch_id) => ({
+        branch_id,
+        board_id: 'board-target',
+      }))
+    );
+    const boardsGet = vi.fn(async () => ({ board_id: 'board-target' }));
+
+    registerScheduleTools(fakeServer, {
+      app: {
+        service(path: string) {
+          if (path === 'schedules') return { find: vi.fn(async () => schedules) };
+          if (path === 'branches') return { find: branchesFind };
+          if (path === 'boards') return { get: boardsGet };
+          throw new Error(`Unexpected service: ${path}`);
+        },
+      } as any,
+      db: {} as any,
+      userId: 'user-1' as any,
+      sessionId: undefined,
+      authenticatedUser: { user_id: 'user-1', email: 'user@example.com', role: 'member' } as any,
+      baseServiceParams: { provider: 'mcp' },
+    });
+
+    const response = (await handlers.get('agor_schedules_list')?.({
+      boardId: 'board-target',
+      limit: 25,
+      offset: 0,
+    })) as { content: Array<{ text: string }> };
+    const body = JSON.parse(response.content[0].text) as {
+      total: number;
+      data: unknown[];
+    };
+
+    expect(boardsGet).toHaveBeenCalledOnce();
+    expect(branchesFind).toHaveBeenCalledTimes(2);
+    expect(branchesFind.mock.calls.map(([params]) => params.query.branch_id.$in.length)).toEqual([
+      PAGINATION.MAX_LIMIT,
+      1,
+    ]);
+    expect(body.total).toBe(PAGINATION.MAX_LIMIT + 1);
+    expect(body.data).toHaveLength(25);
   });
 });

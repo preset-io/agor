@@ -16,9 +16,9 @@ import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
+import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 
 const Gemini = await loadManagedAgenticToolSdk<typeof GeminiTypes>('gemini');
 type ResumedSessionData = GeminiTypes.ResumedSessionData;
@@ -31,6 +31,7 @@ import {
   isMCPAbortError,
   listMcpToolsWithPermission,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+  resolveScopedMCPAuthHeaders,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
@@ -743,17 +744,26 @@ export class GeminiPromptService {
           { toolFiltering: 'exclude' }
         );
 
+        const authDiagnostics = new McpAuthDiagnosticAccumulator();
         // Convert to Gemini SDK format
-        for (const { server } of serversWithSource) {
+        for (const scoped of serversWithSource) {
+          const { server } = scoped;
           let headers: Record<string, string> | undefined;
           try {
-            const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+            const authHeaders = await resolveScopedMCPAuthHeaders(scoped, {
+              surfaceAuthorityError: true,
+            });
             headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
-          } catch (error) {
-            const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
-            console.warn(
-              `   ⚠️  Failed to resolve MCP auth headers server_id=${server.mcp_server_id} category=${safe.category} type=${safe.diagnostic.type}`
-            );
+            if (
+              server.transport !== 'stdio' &&
+              server.auth &&
+              server.auth.type !== 'none' &&
+              !authHeaders?.Authorization
+            ) {
+              authDiagnostics.recordUnavailable();
+            }
+          } catch {
+            authDiagnostics.recordResolutionFailure();
           }
 
           const excludeTools = listMcpToolsWithPermission(
@@ -804,6 +814,8 @@ export class GeminiPromptService {
             );
           }
         }
+
+        authDiagnostics.emitSummary('gemini');
 
         if (Object.keys(mcpServersConfig).length > 0) {
           console.log(

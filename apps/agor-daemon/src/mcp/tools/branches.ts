@@ -14,7 +14,7 @@ import type {
 import { getTeammateConfig, isTeammate } from '@agor/core/types';
 import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
-import type { McpServer } from '@modelcontextprotocol/server';
+import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type {
   BoardsServiceImpl,
@@ -26,6 +26,14 @@ import { issueExecutorCommandToken } from '../../services/session-token-service.
 import { isSuperAdmin } from '../../utils/branch-authorization.js';
 import { resolveDelegatedExecutionHomeKey } from '../../utils/executor-delegated-home.js';
 import { getDaemonUrl, requestExecutor } from '../../utils/spawn-executor.js';
+import {
+  BRANCH_FILESYSTEM_READY_POLL_INTERVAL_MS,
+  type BranchFilesystemReadinessResult,
+  DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+  MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+  MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+  waitForBranchFilesystemReady,
+} from '../branch-filesystem-readiness.js';
 import { branchCapabilityPolicySchema } from '../capability-policy-schema.js';
 import {
   resolveBoardId,
@@ -86,6 +94,81 @@ function containsTeammateKnowledgeConfigMutation(customContext: unknown): boolea
 
 function normalizeFilesystemStatus(branch: Branch): CleanupCandidateFilesystemStatus {
   return branch.filesystem_status ?? 'ready';
+}
+
+function readinessPoll(branchId: string) {
+  return {
+    tool: 'agor_branches_wait_for_ready',
+    arguments: { branchId },
+  };
+}
+
+const branchFilesystemReadyWaitTimeoutSchema = z
+  .number({ error: 'waitTimeoutMs must be a number when provided.' })
+  .int('waitTimeoutMs must be an integer.')
+  .min(
+    MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+    `waitTimeoutMs must be at least ${MIN_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}.`
+  )
+  .max(
+    MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+    `waitTimeoutMs must be at most ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}.`
+  )
+  .optional()
+  .describe(
+    `Maximum milliseconds to wait (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}).`
+  );
+
+function readinessResponse(result: BranchFilesystemReadinessResult): {
+  readiness: Record<string, unknown>;
+  isError: boolean;
+} {
+  const readiness: Record<string, unknown> = {
+    outcome: result.outcome,
+    elapsed_ms: result.elapsedMs,
+    timeout_ms: result.timeoutMs,
+    poll_interval_ms: BRANCH_FILESYSTEM_READY_POLL_INTERVAL_MS,
+  };
+
+  if (result.outcome === 'ready') {
+    readiness.message = 'Branch filesystem is ready for session creation.';
+    return { readiness, isError: false };
+  }
+
+  if (result.outcome === 'timeout') {
+    readiness.message =
+      'Timed out while the branch filesystem is still being created. The wait did not modify or cancel materialization; call agor_branches_wait_for_ready before creating a session.';
+    readiness.poll = readinessPoll(result.branch.branch_id);
+    return { readiness, isError: false };
+  }
+
+  readiness.message =
+    result.outcome === 'failed'
+      ? result.branch.error_message || 'Branch filesystem creation failed.'
+      : `Branch filesystem is unavailable (${result.unavailableReason ?? 'terminal state'}).`;
+  if (result.unavailableReason) readiness.reason = result.unavailableReason;
+  return { readiness, isError: true };
+}
+
+function mcpRequestSignal(requestContext: ServerContext): AbortSignal {
+  return requestContext.mcpReq.signal;
+}
+
+/**
+ * Feathers authorization hooks cache loaded records on params for the duration
+ * of one service call. A readiness wait spans multiple observations, so every
+ * read needs a pristine params object or it can reuse the first branch row.
+ * Whitelist the trusted MCP identity fields instead of cloning hook-added data
+ * that may already be present after optional Session authorization.
+ */
+function freshMcpServiceParams(ctx: McpContext): McpContext['baseServiceParams'] {
+  const { authenticated, provider, tenant, user } = ctx.baseServiceParams;
+  return {
+    ...(user ? { user: { ...user } } : {}),
+    ...(authenticated !== undefined ? { authenticated } : {}),
+    ...(provider !== undefined ? { provider } : {}),
+    ...(tenant ? { tenant: { ...tenant } } : {}),
+  };
 }
 
 function parseCleanupCutoff(args: { archivedBefore?: string; archivedOlderThanDays?: number }): {
@@ -195,6 +278,46 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         .service('branches/:id/permissions')
         .find({ ...ctx.baseServiceParams, route: { id: branch.branch_id } });
       return textResult({ ...branch, permissions });
+    }
+  );
+
+  server.registerTool(
+    'agor_branches_wait_for_ready',
+    {
+      description:
+        'Wait for asynchronous branch filesystem materialization before creating a session. ' +
+        'This read-only, retry-safe tool performs an immediate authorized read, then polls the shared database once per second. ' +
+        'It returns the authoritative refreshed branch when ready, a structured terminal error if creation failed or the branch became unavailable, ' +
+        'or a timeout result that preserves the branch so this tool can be called again. Branch creation itself remains asynchronous.',
+      annotations: { readOnlyHint: true, idempotentHint: true },
+      inputSchema: z.object({
+        branchId: mcpRequiredId('branchId', 'Branch'),
+        waitTimeoutMs: branchFilesystemReadyWaitTimeoutSchema.describe(
+          `Maximum milliseconds to wait (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}). ` +
+            "Waits longer than the MCP client's request deadline require a matching client timeout. " +
+            'For longer clone/materialization jobs, safely call this read-only tool again.'
+        ),
+      }),
+    },
+    async (args, requestContext) => {
+      const timeoutMs = args.waitTimeoutMs ?? DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS;
+      const branches = ctx.app.service('branches');
+      const result = await waitForBranchFilesystemReady({
+        branchId: args.branchId,
+        timeoutMs,
+        signal: mcpRequestSignal(requestContext),
+        readBranch: (branchId) =>
+          branches.get(
+            branchId,
+            freshMcpServiceParams(ctx) as Parameters<BranchesServiceImpl['get']>[1]
+          ),
+      });
+
+      const formatted = readinessResponse(result);
+      return {
+        ...textResult({ branch: result.branch, _readiness: formatted.readiness }),
+        ...(formatted.isError ? { isError: true } : {}),
+      };
     }
   );
 
@@ -495,6 +618,8 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         'and branchName to your desired unique name (e.g., sourceBranch="issue-282", branchName="issue-282-review-1"). ' +
         'Use zoneId to place the branch in a specific zone (pin only, no trigger). ' +
         'For zone trigger behavior (prompt templates), use agor_branches_set_zone after creation. ' +
+        'Filesystem materialization is asynchronous by default. Set waitForReady=true to wait for a bounded ' +
+        'authoritative result in this call, or use the retry-safe agor_branches_wait_for_ready tool separately. ' +
         'To create a long-lived Agor teammate (a persistent AI teammate that manages other branches ' +
         'and maintains memory), pass the teammate object — this is the ONLY supported way to make a ' +
         'teammate via MCP. Teammate status cannot be toggled later with agor_branches_update. ' +
@@ -603,6 +728,17 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
             'Common shallow value: 100. Trade-off: smaller disk footprint, but ' +
             '`git log` past N commits is broken and some rebase operations fail.'
         ),
+        waitForReady: z
+          .boolean()
+          .optional()
+          .describe(
+            'Wait for filesystem materialization before returning (default: false). ' +
+              'This is an opt-in convenience on a non-idempotent create; if the client loses the response, creation still continues. ' +
+              'Use the separate retry-safe agor_branches_wait_for_ready tool to recover from timeouts.'
+          ),
+        waitTimeoutMs: branchFilesystemReadyWaitTimeoutSchema.describe(
+          `Maximum milliseconds to wait when waitForReady=true (default ${DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}, max ${MAX_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS}). Requires waitForReady=true; waits longer than the MCP client's request deadline require a matching client timeout.`
+        ),
         teammate: z
           .object({
             displayName: z
@@ -639,7 +775,11 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ),
       }),
     },
-    async (args) => {
+    async (args, requestContext) => {
+      if (args.waitTimeoutMs !== undefined && args.waitForReady !== true) {
+        throw new Error('waitTimeoutMs requires waitForReady=true.');
+      }
+
       const repoId = await resolveRepoId(ctx, coerceString(args.repoId)!);
       let branchName = coerceString(args.branchName)!;
       const originalName = branchName;
@@ -850,8 +990,26 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         ctx.baseServiceParams
       );
 
+      const readinessResult = args.waitForReady
+        ? await waitForBranchFilesystemReady({
+            branchId: branch.branch_id,
+            timeoutMs: args.waitTimeoutMs ?? DEFAULT_BRANCH_FILESYSTEM_READY_WAIT_TIMEOUT_MS,
+            signal: mcpRequestSignal(requestContext),
+            readBranch: (branchId) =>
+              ctx.app
+                .service('branches')
+                .get(
+                  branchId,
+                  freshMcpServiceParams(ctx) as Parameters<BranchesServiceImpl['get']>[1]
+                ),
+          })
+        : undefined;
+
       // Build response with appropriate notes
-      const response: Record<string, unknown> = { ...branch };
+      const response: Record<string, unknown> = { ...(readinessResult?.branch ?? branch) };
+
+      const formattedReadiness = readinessResult ? readinessResponse(readinessResult) : undefined;
+      if (formattedReadiness) response._readiness = formattedReadiness.readiness;
 
       if (branchName !== originalName) {
         response._note = `Name '${originalName}' was already taken. Created as '${branchName}' instead (autoSuffix applied).`;
@@ -893,7 +1051,10 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           'Use agor_branches_set_zone to pin this branch to a specific zone and optionally trigger zone prompt templates.';
       }
 
-      return textResult(response);
+      return {
+        ...textResult(response),
+        ...(formattedReadiness?.isError ? { isError: true } : {}),
+      };
     }
   );
 
@@ -1099,7 +1260,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
       }),
     },
     async (args) => {
-      const branchId = await resolveBranchId(ctx, coerceString(args.branchId)!);
+      const branchIdInput = coerceString(args.branchId)!;
       const zoneId = args.zoneId === null ? null : coerceString(args.zoneId)!;
       const rawTargetSessionId = coerceString(args.targetSessionId);
       const triggerTemplate = args.triggerTemplate === true;
@@ -1110,6 +1271,11 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
         );
       }
 
+      // branches.get resolves short IDs and returns the canonical authorized
+      // entity. Keep it for the rest of this operation instead of resolving
+      // with one get and reading the same branch again below.
+      const branch = await ctx.app.service('branches').get(branchIdInput, ctx.baseServiceParams);
+      const branchId = branch.branch_id;
       const targetSession = rawTargetSessionId
         ? ((await ctx.app
             .service('sessions')
@@ -1125,9 +1291,6 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           ? `📍 MCP clearing zone pin for branch ${shortId(branchId)}`
           : `📍 MCP pinning branch ${shortId(branchId)} to zone ${zoneId}`
       );
-
-      // Get branch to find its board
-      const branch = await ctx.app.service('branches').get(branchId, ctx.baseServiceParams);
 
       if (triggerTemplate && targetSession && targetSession.branch_id !== branch.branch_id) {
         throw new Error(

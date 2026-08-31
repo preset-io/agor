@@ -73,63 +73,17 @@ describe('env-validation', () => {
     });
   });
 
-  describe('validateEnvVar - blocklist enforcement', () => {
-    it('should reject PATH variable', () => {
-      const errors = validateEnvVar('PATH', '/usr/bin');
-      expect(errors).toHaveLength(1);
-      expect(errors[0].code).toBe('blocked');
-      expect(errors[0].message).toContain('PATH');
-    });
-
-    it('should reject SHELL variable', () => {
-      const errors = validateEnvVar('SHELL', '/bin/bash');
-      expect(errors).toHaveLength(1);
-      expect(errors[0].code).toBe('blocked');
-    });
-
-    it('should reject HOME variable', () => {
-      const errors = validateEnvVar('HOME', '/home/user');
-      expect(errors).toHaveLength(1);
-      expect(errors[0].code).toBe('blocked');
-    });
-
-    it('should reject LD_PRELOAD variable', () => {
-      const errors = validateEnvVar('LD_PRELOAD', '/lib/malware.so');
-      expect(errors).toHaveLength(1);
-      expect(errors[0].code).toBe('blocked');
-    });
-
-    it('should reject DYLD_INSERT_LIBRARIES variable', () => {
-      const errors = validateEnvVar('DYLD_INSERT_LIBRARIES', '/lib/malware.dylib');
-      expect(errors).toHaveLength(1);
-      expect(errors[0].code).toBe('blocked');
-    });
-
-    it('should reject USER variable', () => {
-      const errors = validateEnvVar('USER', 'root');
-      expect(errors).toHaveLength(1);
-      expect(errors[0].code).toBe('blocked');
-    });
-
-    it('should reject AGOR_MASTER_SECRET variable', () => {
-      const errors = validateEnvVar('AGOR_MASTER_SECRET', 'secret123');
-      expect(errors).toHaveLength(1);
-      expect(errors[0].code).toBe('blocked');
-    });
-
-    it('should allow common token variables', () => {
-      const errors = validateEnvVar('GITHUB_TOKEN', 'token123');
-      expect(errors).toHaveLength(0);
-    });
-
-    it('should allow AWS keys', () => {
-      const errors = validateEnvVar('AWS_ACCESS_KEY_ID', 'key123');
-      expect(errors).toHaveLength(0);
-    });
-
-    it('should allow NPM_TOKEN', () => {
-      const errors = validateEnvVar('NPM_TOKEN', 'token123');
-      expect(errors).toHaveLength(0);
+  describe('validateEnvVar - explicit user mappings', () => {
+    it('allows runtime controls because they apply only to that user executor', () => {
+      for (const [name, value] of [
+        ['PATH', '/user/bin'],
+        ['HOME', '/user/home'],
+        ['NODE_OPTIONS', '--require ./user-hook.cjs'],
+        ['LD_PRELOAD', '/user/lib.so'],
+        ['AGOR_MASTER_SECRET', 'user-selected-value'],
+      ]) {
+        expect(validateEnvVar(name, value)).toEqual([]);
+      }
     });
   });
 
@@ -195,6 +149,15 @@ describe('env-validation', () => {
       const errors = validateEnvVar('GITHUB_TOKEN', value);
       expect(errors).toHaveLength(0);
     });
+
+    it('should reject NUL characters that Node cannot pass to a child process', () => {
+      const errors = validateEnvVar('GITHUB_TOKEN', 'prefix\0suffix');
+      expect(errors).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ field: 'value', code: 'invalid_character' }),
+        ])
+      );
+    });
   });
 
   describe('validateEnvVar - combined validation', () => {
@@ -236,11 +199,10 @@ describe('env-validation', () => {
       expect(formatted).toContain('pattern');
     });
 
-    it('should format blocked error message', () => {
-      const errors = validateEnvVar('PATH', '/usr/bin');
+    it('should format value error messages', () => {
+      const errors = validateEnvVar('PATH', '');
       const formatted = formatValidationError(errors[0]);
-      expect(formatted).toContain('PATH');
-      expect(formatted).toContain('cannot be set');
+      expect(formatted).toContain('cannot be empty');
     });
   });
 
@@ -289,15 +251,12 @@ describe('env-validation', () => {
       expect(errors).toHaveLength(0);
     });
 
-    it('should handle case-insensitive blocklist checking', () => {
-      // Test lowercase version of blocked var - fails both format AND blocklist
-      const errors1 = validateEnvVar('path'); // lowercase
-      // lowercase fails format check (must be UPPERCASE) and also blocklist (case-insensitive)
+    it('should reject lowercase and mixed-case names by the portable name syntax', () => {
+      const errors1 = validateEnvVar('path');
       expect(errors1.length).toBeGreaterThan(0);
       expect(errors1.some((e) => e.code === 'invalid_format')).toBe(true);
 
-      // Test mixed case - also fails format and blocklist
-      const errors2 = validateEnvVar('Path'); // mixed case
+      const errors2 = validateEnvVar('Path');
       expect(errors2.length).toBeGreaterThan(0);
       expect(errors2.some((e) => e.code === 'invalid_format')).toBe(true);
     });

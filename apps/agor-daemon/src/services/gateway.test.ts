@@ -729,6 +729,68 @@ describe('GatewayService user alignment operational logs', () => {
 });
 
 describe('GatewayService multi-tenant process state', () => {
+  it.each([
+    ['anonymous', { provider: 'rest' }, null],
+    [
+      'same-tenant unauthorized',
+      { provider: 'rest', user: { ...user, role: 'member' } },
+      {
+        session_id: 'sess-1',
+        branch_id: 'branch-1',
+        created_by: 'other-user',
+      },
+    ],
+    [
+      'superadmin with bypass disabled',
+      { provider: 'rest', user: { ...user, role: 'superadmin' } },
+      {
+        session_id: 'sess-1',
+        branch_id: 'branch-1',
+        created_by: 'other-user',
+      },
+    ],
+    ['cross-tenant', { provider: 'rest', user: { ...user, role: 'member' } }, null],
+  ])(
+    'denies transported routeMessage for %s with zero provider activity',
+    async (_name, params, session) => {
+      const sendMessage = vi.fn();
+      const service = new GatewayService(
+        { run: vi.fn() } as never,
+        {
+          service: vi.fn(),
+          get: vi.fn(() => ({ execution: { allow_superadmin: false } })),
+        } as never
+      );
+      Object.assign(service as unknown as Record<string, unknown>, {
+        sessionRepo: { findById: vi.fn(async () => session) },
+        branchRepo: {
+          findById: vi.fn(async () => ({
+            branch_id: 'branch-1',
+            created_by: 'other-user',
+            others_can: 'view',
+          })),
+          isOwner: vi.fn(async () => false),
+          resolveUserPermission: vi.fn(async () => 'view'),
+        },
+        threadMapRepo: { findBySession: vi.fn() },
+        channelRepo: { findById: vi.fn() },
+      });
+      vi.mocked(getConnector).mockReturnValue({ sendMessage, channelType: 'slack' });
+
+      await expect(
+        service.routeMessage(
+          { session_id: 'sess-1', message: 'CANARY_OUTBOUND_MUST_NOT_SEND' },
+          params as never
+        )
+      ).rejects.toThrow();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(
+        (service as unknown as { threadMapRepo: { findBySession: ReturnType<typeof vi.fn> } })
+          .threadMapRepo.findBySession
+      ).not.toHaveBeenCalled();
+    }
+  );
+
   it('does not use the local listener cache as PostgreSQL outbound authority', async () => {
     const sendMessage = vi.fn(async () => 'sent-1');
     const service = new GatewayService({ run: vi.fn() } as never, { service: vi.fn() } as never);
@@ -1130,10 +1192,7 @@ describe('GatewayService Slack thread catch-up', () => {
         slack_last_delivered_ts: '103.000000',
       })
     );
-    expect(warn).toHaveBeenCalledWith(
-      '[gateway] Failed to fetch Slack thread catch-up context:',
-      expect.any(Error)
-    );
+    expect(warn).toHaveBeenCalledWith('[gateway] Failed to fetch Slack thread catch-up context');
     warn.mockRestore();
   });
 
@@ -1340,10 +1399,7 @@ describe('GatewayService startup/bootstrap hint (#1982)', () => {
     expect(prompt).toContain('fallback request');
     expect(prompt).not.toContain('**Slack context**');
     expectFinalStartupBootstrapHint(prompt);
-    expect(warn).toHaveBeenCalledWith(
-      '[gateway] Failed to fetch Slack thread catch-up context:',
-      expect.any(Error)
-    );
+    expect(warn).toHaveBeenCalledWith('[gateway] Failed to fetch Slack thread catch-up context');
   });
 
   it('appends the hint after preserved outbound-seed provenance and consumes the seed', async () => {
@@ -3552,6 +3608,28 @@ describe('GatewayService Discord beta routing', () => {
     expect(mapping.metadata).not.toHaveProperty('gateway_reply_aliases');
   });
 
+  it('uses a content-free failure code for provider routing logs', async () => {
+    const canary = 'private-user@example.test workspace-secret-label';
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const mapping = makeMapping();
+    const harness = makeGatewayHarness({
+      channel: slackChannel,
+      existingMapping: mapping,
+      connector: { sendMessage: vi.fn(async () => Promise.reject(new Error(canary))) },
+    });
+
+    await expect(
+      harness.service.routeMessage({ session_id: mapping.session_id, message: 'reply' })
+    ).resolves.toEqual({ routed: false, channelType: 'slack' });
+
+    const logged = errorLog.mock.calls.flat().join(' ');
+    expect(logged).toContain(`channel_id=${slackChannel.id}`);
+    expect(logged).toContain('code=provider_request_failed');
+    expect(logged).not.toContain(canary);
+    expect(logged).not.toContain('private-user@example.test');
+    errorLog.mockRestore();
+  });
+
   it('suppresses the legacy after-hook send when a durable Discord intent exists', async () => {
     const sendMessage = vi.fn(async () => '623456789012345678');
     const mapping = makeMapping({
@@ -4164,7 +4242,7 @@ describe('GatewayService outbound emit allowed_channel_ids enforcement', () => {
     });
 
     await expect(service.emitMessage(emitData({ target: 'channel:C999' }))).rejects.toThrow(
-      /allowed_channel_ids/
+      /provider_request_failed/
     );
     expect(sendSlackMessage).not.toHaveBeenCalled();
     expect(outboundRepo.create).not.toHaveBeenCalled();
@@ -4178,10 +4256,24 @@ describe('GatewayService outbound emit allowed_channel_ids enforcement', () => {
     });
 
     await expect(service.emitMessage(emitData({ target: '#general' }))).rejects.toThrow(
-      /allowed_channel_ids/
+      /provider_request_failed/
     );
     expect(resolveChannelByName).toHaveBeenCalledWith('general');
     expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not expose provider-authored text from proactive outbound failures', async () => {
+    const canary = 'private-user@example.test workspace-secret-label';
+    const sendDirectMessage = vi.fn(async () => Promise.reject(new Error(canary)));
+    const { service } = makeAllowlistHarness({ connectorExtras: { sendDirectMessage } });
+
+    const failure = await service
+      .emitMessage(emitData({ target: 'channel:C123' }))
+      .catch((error: unknown) => error as Error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure.message).toBe('Slack API failure: provider_request_failed');
+    expect(failure.message).not.toMatch(/private-user|workspace/);
   });
 
   it('allows an email target resolved to a DM even with an allowlist configured', async () => {

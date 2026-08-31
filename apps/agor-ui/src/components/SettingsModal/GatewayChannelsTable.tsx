@@ -102,6 +102,7 @@ import {
 } from '@/hooks/useAuthorityOperationGuard';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
 import { buildModelConfigFromFormValues, getFormValuesFromConfig } from '../AgenticToolConfigForm';
@@ -2055,7 +2056,7 @@ function discordConfigFromFormValues(values: Record<string, unknown>): Record<st
   const botToken = readFormString(values.discord_bot_token);
   return {
     ...artifact.draft.config,
-    ...(botToken ? { bot_token: botToken } : {}),
+    ...(botToken ? { bot_token: sanitizeSecretValue(botToken) } : {}),
   };
 }
 
@@ -4018,8 +4019,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const handleSlackTest = useCallback(async () => {
     const values = createForm.getFieldsValue(true);
     await runConnectionProbe('slack', {
-      bot_token: values.bot_token,
-      app_token: values.app_token,
+      bot_token: values.bot_token ? sanitizeSecretValue(values.bot_token) : values.bot_token,
+      app_token: values.app_token ? sanitizeSecretValue(values.app_token) : values.app_token,
       enable_channels: values.enable_channels ?? false,
       enable_groups: values.enable_groups ?? false,
       enable_mpim: values.enable_mpim ?? false,
@@ -4045,7 +4046,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     const form = editModalOpen ? editForm : createForm;
     const values = form.getFieldsValue(true);
     const config: Record<string, unknown> = {};
-    if (values.shortcut_api_token) config.api_token = values.shortcut_api_token;
+    if (values.shortcut_api_token)
+      config.api_token = sanitizeSecretValue(values.shortcut_api_token);
     if (values.shortcut_agent_member_id) config.agent_member_id = values.shortcut_agent_member_id;
     if (values.shortcut_mention_name) config.mention_name = values.shortcut_mention_name;
     await runConnectionProbe(
@@ -4140,7 +4142,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       }
     } else if (values.channel_type === 'teams') {
       if (values.teams_app_id) config.app_id = values.teams_app_id;
-      if (values.teams_app_password) config.app_password = values.teams_app_password;
+      if (values.teams_app_password) {
+        config.app_password = sanitizeSecretValue(values.teams_app_password as string);
+      }
       config.microsoft_tenant_id = values.teams_tenant_id;
       // Group chats and channels always require a structured app-ID mention;
       // retain the canonical value so legacy config cannot weaken that fence.
@@ -4174,7 +4178,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         request_timeout_ms: 2_000,
       };
     } else if (values.channel_type === 'shortcut') {
-      if (values.shortcut_api_token) config.api_token = values.shortcut_api_token;
+      if (values.shortcut_api_token) {
+        config.api_token = sanitizeSecretValue(values.shortcut_api_token as string);
+      }
       if (values.shortcut_agent_member_id) {
         config.agent_member_id = values.shortcut_agent_member_id;
       } else {
@@ -4201,8 +4207,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         }
       }
     } else if (values.channel_type === 'slack') {
-      if (values.bot_token) config.bot_token = values.bot_token;
-      if (values.app_token) config.app_token = values.app_token;
+      if (values.bot_token) config.bot_token = sanitizeSecretValue(values.bot_token as string);
+      if (values.app_token) config.app_token = sanitizeSecretValue(values.app_token as string);
       // The Slack wizard only creates inbound/Socket-Mode channels (bot + app
       // token, Socket Mode required), so record that intent by default. This
       // makes getRequiredSecretFields require app_token for UI-created inbound

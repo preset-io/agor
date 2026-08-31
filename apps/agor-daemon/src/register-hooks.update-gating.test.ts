@@ -42,7 +42,8 @@ type CapturedHooks = {
  */
 const captureRegisteredHooks = (
   branchRbacEnabled: boolean,
-  branchRepositoryOverride?: RegisterHooksContext['branchRepository']
+  branchRepositoryOverride?: RegisterHooksContext['branchRepository'],
+  boardRepositoryOverride?: RegisterHooksContext['boardRepository']
 ): Map<string, CapturedHooks> => {
   const captured = new Map<string, CapturedHooks>();
   const visibleBranch = {
@@ -90,6 +91,7 @@ const captureRegisteredHooks = (
     sessionsService: {} as RegisterHooksContext['sessionsService'],
     messagesService: {} as RegisterHooksContext['messagesService'],
     boardsService: undefined,
+    boardRepository: boardRepositoryOverride,
     branchRepository:
       branchRepositoryOverride ??
       ({
@@ -105,6 +107,54 @@ const captureRegisteredHooks = (
 
   return captured;
 };
+
+describe('board get authorization prefetch', () => {
+  it('passes one freshly authorized canonical row into the service method', async () => {
+    const board = {
+      board_id: '00000000-0000-7000-8000-000000000010',
+      name: 'Authorized board',
+    };
+    const findBySlugOrId = vi.fn(async () => board);
+    const canViewResolved = vi.fn(async () => true);
+    const canView = vi.fn(() => {
+      throw new Error('must not reload the authorized board');
+    });
+    const boardRepository = {
+      findBySlugOrId,
+      canViewResolved,
+      canView,
+    } as unknown as NonNullable<RegisterHooksContext['boardRepository']>;
+    const hooks = captureRegisteredHooks(true, undefined, boardRepository).get('boards')?.before;
+    if (!hooks) throw new Error('boards registers no before hooks');
+    const context = {
+      path: 'boards',
+      method: 'get',
+      id: '00000000',
+      params: {
+        provider: 'socketio',
+        query: {},
+        user: {
+          user_id: '00000000-0000-7000-8000-0000000000ff',
+          role: 'member',
+        },
+      },
+    } as unknown as HookContext;
+
+    for (const hook of [...(hooks.all ?? []), ...(hooks.get ?? [])]) await hook(context);
+
+    expect(findBySlugOrId).toHaveBeenCalledOnce();
+    expect(canViewResolved).toHaveBeenCalledWith(board, '00000000-0000-7000-8000-0000000000ff');
+    expect(canView).not.toHaveBeenCalled();
+    expect(context.id).toBe(board.board_id);
+    expect(context.params).toMatchObject({
+      _agorPrefetchedRecord: {
+        id: board.board_id,
+        idField: 'board_id',
+        record: board,
+      },
+    });
+  });
+});
 
 describe('branch hard-delete realtime hook', () => {
   it('captures current authorized recipients before the branch and ACL rows are removed', async () => {

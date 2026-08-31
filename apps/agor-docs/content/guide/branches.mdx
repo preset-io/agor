@@ -83,6 +83,29 @@ Sessions, tasks, comments, and artifacts all reference a branch. **The branch is
 
 ---
 
+## Asynchronous filesystem readiness
+
+Branch creation records the branch and dispatches worktree or clone materialization asynchronously.
+The create response can therefore contain `filesystem_status: "creating"`; REST and UI creation are
+not blocked while Git work completes.
+
+MCP callers can set `waitForReady: true` on `agor_branches_create` to wait in the creation call, or
+use the retry-safe `agor_branches_wait_for_ready` tool before creating the first session. Waiting is
+opt-in, so existing MCP callers—and all REST and UI callers—remain asynchronous. Both paths check
+immediately, then perform a fresh tenant- and RBAC-scoped branch read once per second. They wait for
+45 seconds by default and accept a bounded `waitTimeoutMs` from 1 second to 5 minutes. Values longer
+than the MCP client's request deadline require that client or host deadline to be raised as well.
+
+The standalone wait tool is the safer choice when request replay is possible: branch creation is not
+idempotent, and losing a waited create response does not cancel the branch that was already created.
+Long clones can safely repeat the read-only wait call. A timeout preserves the branch and does not
+cancel or retry materialization; terminal failures return the refreshed branch and its persisted safe
+error. Client cancellation only stops further polling. No database transaction or connection is
+retained between reads; each individual read remains subject to the daemon's normal database query
+timeout.
+
+---
+
 ## Storage modes
 
 When you create a branch, Agor can materialize its working directory in two ways:

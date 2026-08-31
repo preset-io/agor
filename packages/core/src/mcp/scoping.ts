@@ -19,6 +19,7 @@
  * must never silently borrow the owner's Agor-managed connectors or credentials.
  */
 
+import { resolveMCPAuthHeaders } from '../tools/mcp/jwt-auth';
 import type { MCPServer, MCPServerFilters, MCPServerID, SessionID } from '../types';
 import { isMCPServerUsableBy } from './ownership';
 import {
@@ -70,6 +71,39 @@ function compareStrings(a: string, b: string): number {
 export interface MCPServerWithSource {
   server: MCPServer;
   source: 'session-assigned' | 'global';
+  /** Non-persisted result from the tenant/user-scoped executor credential authority. */
+  oauthAuthResolution: MCPOAuthAuthResolution;
+}
+
+export type MCPOAuthAuthResolution =
+  | 'not_applicable'
+  | 'not_attempted'
+  | 'available'
+  | 'unavailable'
+  | 'error';
+
+export class MCPOAuthAuthorityUnavailableError extends Error {
+  constructor() {
+    super('OAuth credential authority unavailable');
+    this.name = 'MCPOAuthAuthorityUnavailableError';
+  }
+}
+
+/** Resolve adapter headers while preserving the explicit credential-authority boundary. */
+export function resolveScopedMCPAuthHeaders(
+  scoped: MCPServerWithSource,
+  options: { surfaceAuthorityError?: boolean } = {}
+): Promise<Record<string, string> | undefined> {
+  if (scoped.oauthAuthResolution === 'error' && options.surfaceAuthorityError) {
+    return Promise.reject(new MCPOAuthAuthorityUnavailableError());
+  }
+  return resolveMCPAuthHeaders(scoped.server.auth, scoped.server.url, {
+    oauthCredentialAuthority:
+      scoped.oauthAuthResolution === 'not_attempted' ||
+      scoped.oauthAuthResolution === 'not_applicable'
+        ? 'configuration'
+        : 'executor_repository',
+  });
 }
 
 /**
@@ -158,7 +192,11 @@ export async function getMcpServersForSession(
       }
       if (!seenServerIds.has(server.mcp_server_id)) {
         seenServerIds.add(server.mcp_server_id);
-        servers.push({ server, source });
+        servers.push({
+          server,
+          source,
+          oauthAuthResolution: server.auth?.type === 'oauth' ? 'not_attempted' : 'not_applicable',
+        });
         return;
       }
 
@@ -314,6 +352,9 @@ export async function getMcpServersForSession(
           `   ℹ️  ${oauthServers.length} OAuth MCP server(s) resolved without executor auth-header hydrator`
         );
       } else {
+        for (const scoped of servers) {
+          if (scoped.server.auth?.type === 'oauth') scoped.oauthAuthResolution = 'unavailable';
+        }
         try {
           const authHeaders = await deps.mcpOAuthAuthHeadersRepo.getAuthHeaders(
             oauthServers.map((server) => server.mcp_server_id)
@@ -326,25 +367,20 @@ export async function getMcpServersForSession(
             const header = authHeaders[server.mcp_server_id];
             const bearer = /^Bearer\s+(.+)$/i.exec(header?.authorization ?? '')?.[1];
             if (!bearer) {
-              if (header?.error && header.error !== 'needs_reauth') {
-                console.warn(
-                  `   ⚠️  OAuth MCP server "${server.name}" auth unavailable: ${header.error}`
-                );
-              } else if (header?.error) {
-                mcpDebug(
-                  `   ℹ️  OAuth MCP server "${server.name}" auth unavailable: ${header.error}`
-                );
-              }
               continue;
             }
 
             servers[i] = {
               ...servers[i],
+              oauthAuthResolution: 'available',
               server: {
                 ...server,
                 auth: {
                   ...server.auth,
                   oauth_access_token: bearer,
+                  // The scoped repository returned a currently usable bearer;
+                  // a persisted expiry belongs to the configured token, not it.
+                  oauth_token_expires_at: undefined,
                 },
               },
             };
@@ -352,9 +388,10 @@ export async function getMcpServersForSession(
           }
           mcpDebug(`   🔐 Hydrated OAuth auth headers for ${hydrated} MCP server(s)`);
         } catch {
-          // Credential hydration failures may carry provider URLs or reflected
-          // headers. The caller receives structured recovery elsewhere.
-          console.warn('[mcp-auth] oauth_header_hydration_failed');
+          for (const scoped of servers) {
+            if (scoped.server.auth?.type === 'oauth') scoped.oauthAuthResolution = 'error';
+          }
+          console.warn('[mcp.auth] authority_unavailable authority=executor_repository');
         }
       }
     }

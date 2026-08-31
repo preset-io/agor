@@ -303,6 +303,7 @@ export const REDIS_FEATHERS_DENIED_PATHS = new Set([
   'user-api-keys',
   'external-launch',
   'config/resolve-api-key',
+  'executor-git-environment',
   'mcp-servers/oauth-start',
   'mcp-servers/oauth-callback',
   'mcp-servers/oauth-complete',

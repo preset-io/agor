@@ -4,10 +4,12 @@
  * CRUD + cascade + membership semantics for the v0.5 env-var-access join table.
  */
 
-import type { BranchID, Session, SessionID, UUID } from '@agor/core/types';
+import type { BranchID, Session, SessionID, UserID, UUID } from '@agor/core/types';
 import { SessionStatus } from '@agor/core/types';
+import { sql } from 'drizzle-orm';
 import { describe, expect } from 'vitest';
 import { generateId } from '../../lib/ids';
+import { executeRaw } from '../database-wrapper';
 import { ownedDbTest as dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
 import { RepoRepository } from './repos';
@@ -151,6 +153,26 @@ describe('SessionEnvSelectionRepository.setAll', () => {
     expect((await repo.listNames(session.session_id as SessionID)).sort()).toEqual(['A', 'B']);
     expect(await repo.listNames(otherSession.session_id as SessionID)).toEqual(['C']);
   });
+
+  dbTest('rolls the delete back when replacement insertion fails', async ({ db }) => {
+    const { session } = await setup(db);
+    const repo = new SessionEnvSelectionRepository(db);
+    await repo.setAll(session.session_id as SessionID, ['ORIGINAL']);
+    await executeRaw(
+      db,
+      sql`CREATE TRIGGER session_env_replacement_abort
+          BEFORE INSERT ON session_env_selections
+          WHEN NEW.env_var_name = 'FAIL_REPLACEMENT'
+          BEGIN
+            SELECT RAISE(ABORT, 'replacement failed');
+          END`
+    );
+
+    await expect(
+      repo.setAll(session.session_id as SessionID, ['FAIL_REPLACEMENT'])
+    ).rejects.toThrow(/Failed to set session env selections/);
+    expect(await repo.listNames(session.session_id as SessionID)).toEqual(['ORIGINAL']);
+  });
 });
 
 describe('SessionEnvSelectionRepository.asSet', () => {
@@ -164,6 +186,19 @@ describe('SessionEnvSelectionRepository.asSet', () => {
     expect(set.has('GITHUB_TOKEN')).toBe(true);
     expect(set.has('DATABASE_URL')).toBe(true);
     expect(set.has('NOT_SELECTED')).toBe(false);
+  });
+
+  dbTest('binds selection names to the session owner', async ({ db }) => {
+    const { session } = await setup(db);
+    const repo = new SessionEnvSelectionRepository(db);
+    await repo.add(session.session_id as SessionID, 'SAME_NAME');
+
+    expect(
+      await repo.asSetForOwner(session.session_id as SessionID, 'test-user' as UserID)
+    ).toEqual(new Set(['SAME_NAME']));
+    expect(
+      await repo.asSetForOwner(session.session_id as SessionID, 'different-user' as UserID)
+    ).toEqual(new Set());
   });
 });
 

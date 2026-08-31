@@ -34,7 +34,7 @@ const STANDALONE_AUTHORITY_SCOPE = '__standalone__:__standalone__:0';
  *     pre-seeded list for that service (default empty).
  *   - `service(name).on/removeListener` — wires up event handlers we
  *     dispatch from tests via `emit(name, event, payload)`.
- *   - `service(name).get(id)` — only used by the OAuth refetch path,
+ *   - `service(name).get(id)` — targeted deep-link / displayed-board reads,
  *     resolves with whatever the test stubbed.
  *   - `io.on/off` — captures connect / oauth listeners; tests don't
  *     trigger reconnect refetches.
@@ -86,7 +86,12 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
   const service = (name: string) => ({
     findAll: vi.fn((args) => recordAndRespond(name, 'findAll', args)),
     find: vi.fn((args) => recordAndRespond(name, 'find', args)),
-    get: vi.fn().mockResolvedValue(seed[`${name}:get`] ?? null),
+    get: vi.fn((id: unknown) => {
+      const key = `${name}:get`;
+      fetchCounts.set(key, (fetchCounts.get(key) ?? 0) + 1);
+      fetchArguments.set(key, [...(fetchArguments.get(key) ?? []), id]);
+      return Promise.resolve(seed[key] ?? null);
+    }),
     on: (event: string, fn: Listener) => {
       let svc = serviceListeners.get(name);
       if (!svc) {
@@ -140,9 +145,9 @@ function makeMockClient(seed: Record<string, unknown[]> = {}) {
     // a write DURING the fetch window — exactly the race the hydration guards.
     onFetch: (name: string, method: 'findAll' | 'find', fn: (call: number) => unknown) =>
       fetchHooks.set(`${name}:${method}`, fn),
-    fetchCount: (name: string, method: 'findAll' | 'find') =>
+    fetchCount: (name: string, method: 'findAll' | 'find' | 'get') =>
       fetchCounts.get(`${name}:${method}`) ?? 0,
-    fetchArguments: (name: string, method: 'findAll' | 'find') =>
+    fetchArguments: (name: string, method: 'findAll' | 'find' | 'get') =>
       fetchArguments.get(`${name}:${method}`) ?? [],
   };
 }
@@ -1081,7 +1086,7 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     };
     const seed: Record<string, unknown[]> = {};
     const gate = deferred();
-    const { client, onFetch } = makeMockClient(seed);
+    const { client, fetchCount, onFetch } = makeMockClient(seed);
     // Gated list (call 1) returns the lean board; hold the boards hydration
     // (call 2) open so the assertion sees the first-paint state — objects can
     // only have come from the targeted `boards.get`, never the hydration.
@@ -1100,6 +1105,8 @@ describe('useAgorData — lean boards list + objects hydration', () => {
       expect(board?.objects).toBeDefined();
       expect(Object.keys(board?.objects ?? {})).toContain('zone-1');
       expect(board?.custom_css).toBe('.x{}');
+      expect(fetchCount('boards', 'get')).toBe(1);
+      expect(fetchCount('branches', 'get')).toBe(0);
     } finally {
       gate.resolve();
       window.history.pushState({}, '', '/');
@@ -1122,7 +1129,7 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     };
     const seed: Record<string, unknown[]> = {};
     const gate = deferred();
-    const { client, onFetch } = makeMockClient(seed);
+    const { client, fetchCount, onFetch } = makeMockClient(seed);
     // Hold the boards hydration (call 2) open so the assertion sees first-paint
     // state — objects can only have come from the targeted `boards.get`.
     seed['boards:get'] = fullBoard as never;
@@ -1139,6 +1146,8 @@ describe('useAgorData — lean boards list + objects hydration', () => {
       const board = agorStore.getState().boardById.get(boardId);
       expect(board?.objects).toBeDefined();
       expect(Object.keys(board?.objects ?? {})).toContain('zone-1');
+      expect(fetchCount('boards', 'get')).toBe(1);
+      expect(fetchCount('branches', 'get')).toBe(0);
       expect(board?.custom_css).toBe('.x{}');
     } finally {
       gate.resolve();
@@ -1158,7 +1167,7 @@ describe('useAgorData — lean boards list + objects hydration', () => {
       objects: { 'z-b': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
     };
     const seed: Record<string, unknown[]> = {};
-    const { client, onFetch } = makeMockClient(seed);
+    const { client, fetchCount, onFetch } = makeMockClient(seed);
     // Home path (jsdom `/`): no board scope, no targeted get. The lean gated
     // fetch (call 1) carries no objects; the hydration (call 2) carries them.
     onFetch('boards', 'findAll', (call) => {
@@ -1169,5 +1178,39 @@ describe('useAgorData — lean boards list + objects hydration', () => {
     await flush();
     expect(agorStore.getState().boardById.get('board-A')?.objects).toBeDefined();
     expect(agorStore.getState().boardById.get('board-B')?.objects).toBeDefined();
+    expect(fetchCount('boards', 'get')).toBe(0);
+    expect(fetchCount('branches', 'get')).toBe(0);
+  });
+
+  it('does not repeat the displayed-board point read during reconnect resync', async () => {
+    window.history.pushState({}, '', '/b/displayed/');
+    const board = {
+      board_id: 'board-D',
+      slug: 'displayed',
+      name: 'Displayed',
+      objects: { 'zone-1': { type: 'zone', x: 0, y: 0, width: 1, height: 1 } },
+    };
+    const seed: Record<string, unknown[]> = {
+      boards: [board],
+      'boards:get': board as never,
+    };
+    const { client, emitIo, fetchCount } = makeMockClient(seed);
+    const { result } = renderHook(() => useAgorData(client));
+    try {
+      await waitForInitialLoad(result);
+      await flush();
+      expect(fetchCount('boards', 'get')).toBe(1);
+
+      act(() => emitIo('connect'));
+      await waitFor(() => expect(fetchCount('boards', 'findAll')).toBeGreaterThanOrEqual(3));
+      await flush();
+
+      // Silent reconnect uses the full boards.findAll snapshot. It deliberately
+      // skips the cold-load targeted get, so resync and idle do not poll boards.
+      expect(fetchCount('boards', 'get')).toBe(1);
+      expect(fetchCount('branches', 'get')).toBe(0);
+    } finally {
+      window.history.pushState({}, '', '/');
+    }
   });
 });

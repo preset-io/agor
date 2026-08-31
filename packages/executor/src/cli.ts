@@ -223,12 +223,12 @@ async function handlePromptPayload(
   // daemon passes approved env vars in the payload and we apply them here.
   // =========================================================================
   if (payload.env && Object.keys(payload.env).length > 0) {
-    // Filter out process-hijacking env vars (NODE_OPTIONS, LD_PRELOAD, PYTHON*, etc.)
-    // These could give an attacker RCE inside the executor context.
+    // Recheck process-map structure for delegated/imported payloads. Names are
+    // not semantically denied: this is the authenticated user's executor.
     const { filterEnv } = await import('@agor/core/config');
     const { env: safeEnv, rejected } = filterEnv(payload.env as Record<string, string>, (key) => {
       // Log key only — never the value, which is attacker-controlled.
-      executorCliDebug(`[executor] Rejected denied env var from payload: ${key}`);
+      executorCliDebug(`[executor] Rejected invalid env var from payload: ${key}`);
     });
     executorCliDebug(
       `[executor] Applying ${Object.keys(safeEnv).length} env vars from payload` +

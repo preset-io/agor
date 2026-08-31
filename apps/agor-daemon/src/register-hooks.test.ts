@@ -1522,6 +1522,12 @@ describe('registered file service RBAC database preload', () => {
           return { session_id: 'session-1', branch_id: 'branch-1' };
         }),
       };
+      const sessionsRepository = {
+        findById: vi.fn(async () => {
+          assertTenantScope();
+          return { session_id: 'session-1', branch_id: 'branch-1' };
+        }),
+      };
       const app = {
         service(servicePath: string) {
           return {
@@ -1551,7 +1557,8 @@ describe('registered file service RBAC database preload', () => {
         boardsService: undefined,
         branchRepository: branchRepository as RegisterHooksContext['branchRepository'],
         usersRepository: {} as RegisterHooksContext['usersRepository'],
-        sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+        sessionsRepository:
+          sessionsRepository as unknown as RegisterHooksContext['sessionsRepository'],
         deployment: { mode: 'standalone' },
       });
 
@@ -1574,8 +1581,10 @@ describe('registered file service RBAC database preload', () => {
 
       expect(context.params.branch?.branch_id).toBe('branch-1');
       expect(getCurrentTenantDatabaseScope()).toBeUndefined();
-      if (path === 'files') expect(sessionsService.get).toHaveBeenCalledOnce();
-      else expect(branchRepository.findById).toHaveBeenCalledOnce();
+      if (path === 'files') {
+        expect(sessionsRepository.findById).toHaveBeenCalledOnce();
+        expect(sessionsService.get).not.toHaveBeenCalled();
+      } else expect(branchRepository.findById).toHaveBeenCalledOnce();
     }
   );
 });

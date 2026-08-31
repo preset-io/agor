@@ -1,6 +1,7 @@
 import type { Application } from '@agor/core/feathers';
 import { describe, expect, it, vi } from 'vitest';
 import { sessionStreamRoomName } from '../realtime/routing.js';
+import { readFeathersInstrumentationReason } from '../utils/feathers-instrumentation.js';
 import { SESSION_STREAMS_AWARE_FLAG } from '../utils/realtime-publish.js';
 import { createSessionStreamsService } from './session-streams.js';
 
@@ -52,6 +53,9 @@ describe('session-streams service', () => {
       } as never)
     ).resolves.toEqual({ session_id: 's1', subscribed: true });
     expect(get).toHaveBeenCalledWith('s1', expect.objectContaining({ query: {} }));
+    expect(readFeathersInstrumentationReason(get.mock.calls[0]?.[1])).toBe(
+      'session_stream_admission'
+    );
     expect(join).toHaveBeenCalledWith(connection);
   });
 

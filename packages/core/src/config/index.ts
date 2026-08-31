@@ -8,6 +8,7 @@ export * from './agentic-tool-preset-resolver';
 export * from './config-manager';
 export * from './constants';
 export * from './deployment';
+export * from './diagnostic-redaction';
 export * from './env-blocklist';
 export * from './env-locking';
 export * from './env-resolver';

@@ -3,6 +3,7 @@ import type {
   KnowledgeSemanticSettingsPublic,
 } from '@agor/core/types';
 import { DEFAULT_KNOWLEDGE_SEMANTIC_POLICY } from '@agor/core/types';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 
 export const DEFAULT_KNOWLEDGE_SEMANTIC_SETTINGS: KnowledgeSemanticSettingsPublic = {
   ...DEFAULT_KNOWLEDGE_SEMANTIC_POLICY,
@@ -34,7 +35,7 @@ export function buildKnowledgeSemanticSettingsPatch(
   clearApiKey: boolean
 ): KnowledgeSemanticSettingsPatch {
   const settings = normalizeKnowledgeSemanticSettings(values);
-  const trimmedApiKey = apiKeyDraft.trim();
+  const sanitizedApiKey = sanitizeSecretValue(apiKeyDraft);
   return {
     enabled: settings.enabled,
     provider: settings.provider,
@@ -42,6 +43,6 @@ export function buildKnowledgeSemanticSettingsPatch(
     dimensions: settings.dimensions,
     chunking: { ...settings.chunking },
     indexing: { ...settings.indexing },
-    ...(clearApiKey ? { api_key: null } : trimmedApiKey ? { api_key: trimmedApiKey } : {}),
+    ...(clearApiKey ? { api_key: null } : sanitizedApiKey ? { api_key: sanitizedApiKey } : {}),
   };
 }

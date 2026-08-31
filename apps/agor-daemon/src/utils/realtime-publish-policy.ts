@@ -114,8 +114,8 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'useAgorData tracks per-session MCP attachment.',
   },
   'session-env-selections': {
-    audience: 'branch-or-session',
-    why: 'No browser subscriber today, but the row is session-scoped and was already scoped here; kept so a consumer can be added without a security decision.',
+    audience: 'none',
+    why: 'Selection names are credential metadata; there is no subscriber, and any future consumer needs an owner-aware disclosure decision.',
   },
 
   // ---------------------------------------------------------------------------
@@ -243,6 +243,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'auth/launch': { audience: 'none', why: 'Exchanges a launch token for a session.' },
   'check-auth': { audience: 'none', why: 'Echoes back the API key it was asked to validate.' },
   'config/resolve-api-key': { audience: 'none', why: 'Returns a provider API key.' },
+  'executor-git-environment': {
+    audience: 'none',
+    why: 'Returns a command-scoped Git credential DTO to one executor.',
+  },
   'api/v1/user/api-keys': { audience: 'none', why: 'Returns a freshly minted user API key.' },
   terminals: {
     audience: 'none',

@@ -193,7 +193,6 @@ function decryptConfig(config: Record<string, unknown>): Record<string, unknown>
       try {
         decrypted[field] = decryptApiKey(decrypted[field] as string);
       } catch (error) {
-        // If decryption fails (e.g., key changed), leave as-is
         console.error(
           `[gateway-channels] Failed to decrypt ${field}:`,
           error instanceof Error ? error.message : String(error)
@@ -201,6 +200,10 @@ function decryptConfig(config: Record<string, unknown>): Record<string, unknown>
         console.error(
           '[gateway-channels] Channel credentials may be corrupted or master secret changed'
         );
+        // Ciphertext and malformed legacy plaintext are never runtime
+        // credentials. Fail this one field closed rather than returning the
+        // stored representation to connectors or executor payload assembly.
+        delete decrypted[field];
       }
     }
   }
@@ -242,25 +245,27 @@ function decryptAgenticConfig(
   const rawEnvVars = decrypted.envVars;
 
   if (Array.isArray(rawEnvVars)) {
-    decrypted.envVars = (rawEnvVars as GatewayEnvVar[]).map((envVar) => {
+    decrypted.envVars = (rawEnvVars as GatewayEnvVar[]).flatMap((envVar) => {
       try {
-        return {
-          ...envVar,
-          value: envVar.value ? decryptApiKey(envVar.value) : envVar.value,
-        };
+        return [
+          {
+            ...envVar,
+            value: envVar.value ? decryptApiKey(envVar.value) : envVar.value,
+          },
+        ];
       } catch {
-        return envVar;
+        return [];
       }
     });
   } else if (rawEnvVars && typeof rawEnvVars === 'object') {
     // Legacy shape support: Record<string, string>
     decrypted.envVars = Object.fromEntries(
-      Object.entries(rawEnvVars as Record<string, unknown>).map(([key, value]) => {
-        if (typeof value !== 'string' || !value) return [key, value];
+      Object.entries(rawEnvVars as Record<string, unknown>).flatMap(([key, value]) => {
+        if (typeof value !== 'string' || !value) return [[key, value]];
         try {
-          return [key, decryptApiKey(value)];
+          return [[key, decryptApiKey(value)]];
         } catch {
-          return [key, value];
+          return [];
         }
       })
     );

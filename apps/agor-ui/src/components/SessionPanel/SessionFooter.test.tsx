@@ -74,7 +74,7 @@ const baseProps = {
   client: null,
   modelLabel: undefined,
   modelConfig: undefined,
-  onModelConfigChange: vi.fn(),
+  onModelConfigCommit: vi.fn(),
   onOpenSessionSettings: undefined,
   onSendPrompt: vi.fn(),
   onStop: vi.fn(),

@@ -11,6 +11,8 @@ import { Transform } from 'node:stream';
 import type { SessionInitializationRequest } from '@agor/core/api';
 import {
   type AgorConfig,
+  ENV_VAR_CONSTRAINTS,
+  isEnvVarAllowed,
   type ResolvedDeploymentConfig,
   type ResolvedExternalLaunchProvider,
   requireDeploymentId,
@@ -210,6 +212,7 @@ import {
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
+import { buildDatabaseHealthInfo } from './utils/database-health-diagnostics.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import {
   redactMCPServerSecrets,
@@ -2625,7 +2628,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
       res.status(status).json({ error: error instanceof Error ? error.message : 'Upload failed' });
     }
   });
-  const DEBUG_UPLOAD = process.env.NODE_ENV !== 'production';
+  const DEBUG_UPLOAD = process.env.AGOR_DEBUG_UPLOAD === 'true';
 
   // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
   const authorizeUpload: any = async (req: any, res: any, next: any) => {
@@ -2742,9 +2745,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       if (DEBUG_UPLOAD) {
         console.log(`   Uploaded ${uploadedFiles.length} file(s):`);
-        uploadedFiles.forEach((f) => {
-          console.log(`     - ${f.filename} (${(f.size / 1024).toFixed(2)} KB)`);
-        });
+        console.log(`   Total bytes: ${uploadedFiles.reduce((sum, f) => sum + f.size, 0)}`);
       }
 
       let notificationError: string | null = null;
@@ -2754,7 +2755,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           const promptText = message.replace(/\{filepath\}/g, handles);
 
           if (DEBUG_UPLOAD) {
-            console.log(`   Sending prompt to agent: ${promptText.substring(0, 100)}...`);
+            console.log('   Sending upload notification to agent');
           }
 
           const promptService = app.service('/sessions/:id/prompt');
@@ -2766,10 +2767,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             tenant: params.tenant,
           };
           await promptService.create({ prompt: promptText }, promptParams);
-        } catch (error) {
-          console.error('❌ [Upload Handler] Failed to notify agent:', error);
-          notificationError =
-            error instanceof Error ? error.message : 'Failed to send notification to agent';
+        } catch (_error) {
+          console.error('❌ [Upload Handler] Failed to notify agent');
+          notificationError = 'Failed to send notification to agent';
         }
       }
 
@@ -2788,7 +2788,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     if (DEBUG_UPLOAD) {
       console.log('📥 [Upload Route] Request received');
       console.log('   Method:', req.method);
-      console.log('   URL:', req.url);
+      console.log('   Route: session upload');
       console.log('   Content-Type:', req.headers['content-type']);
       console.log('   Has auth header:', !!req.headers.authorization);
       console.log(
@@ -2840,11 +2840,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     uploadHandler,
     // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     ((err: any, req: any, res: any, next: any) => {
-      console.error('❌ [Upload Route] Error occurred:', err.message);
-      console.error('   Stack:', err.stack);
+      console.error('❌ [Upload Route] Upload failed');
       res.status(err.status || 500).json({
-        error: err.message || 'Upload failed',
-        details: err.toString(),
+        error: 'Upload failed',
       });
       // biome-ignore lint/suspicious/noExplicitAny: Express 5 type compatibility
     }) as any
@@ -4379,19 +4377,42 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     sessionId: string,
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type
     params: any
-  ): Promise<void> => {
+  ): Promise<Session> => {
     const user = params?.user;
     if (!user) {
       throw new NotAuthenticated('Authentication required');
     }
-    // Fast-path for service accounts — skip the session lookup entirely.
-    if (user._isServiceAccount) return;
-
     const session = await sessionsService.get(sessionId, { provider: undefined });
     if (!session) {
       throw new NotFound(`Session not found: ${sessionId}`);
     }
-    checkSessionOwnerOrAdmin(user, session, superadminOpts);
+    if (!user._isServiceAccount) checkSessionOwnerOrAdmin(user, session, superadminOpts);
+    return session as Session;
+  };
+
+  /**
+   * A selection must name an existing session-scoped variable owned by this
+   * Session's creator. Keeping the check at the route boundary prevents an
+   * admin, provider-less caller, or malformed import from wiring arbitrary
+   * metadata that a later execution path might reinterpret as a secret grant.
+   */
+  const assertSelectableSessionEnvVarNames = async (
+    session: Session,
+    envVarNames: string[]
+  ): Promise<void> => {
+    const owner = (await usersService.get(session.created_by as UserID, {
+      provider: undefined,
+    })) as User;
+    for (const name of envVarNames) {
+      if (!ENV_VAR_CONSTRAINTS.NAME_PATTERN.test(name) || !isEnvVarAllowed(name)) {
+        throw new BadRequest(`Invalid session environment variable name: ${name}`);
+      }
+      if (owner.env_vars?.[name]?.scope !== 'session') {
+        throw new BadRequest(
+          `Environment variable ${name} is not a session-scoped variable owned by this session creator`
+        );
+      }
+    }
   };
 
   // Human/API reads retain the owner/admin rule. The sole exception is the
@@ -5137,7 +5158,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         }
         const name = data.envVarName.trim();
         if (!name) throw new BadRequest('envVarName must be non-empty');
-        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        const session = await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        await assertSelectableSessionEnvVarNames(session, [name]);
         await sessionEnvSelectionsService.add(id as SessionID, name, params);
         const relationship = {
           session_id: id,
@@ -5181,7 +5203,8 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
         const id = params.route?.id;
         if (!id) throw new BadRequest('Session ID required');
         const envVarNames = normalizeEnvVarNames(data?.envVarNames);
-        await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        const session = await requireSessionScopedConfigOwnerOrAdmin(id, params);
+        await assertSelectableSessionEnvVarNames(session, envVarNames);
         await sessionEnvSelectionsService.setAll(id as SessionID, envVarNames, params);
         try {
           emitServiceEvent(app, {
@@ -5276,7 +5299,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             }
           },
           setEnvVarNames: (envVarNames) =>
-            sessionEnvSelectionsService.setAll(session.session_id, envVarNames, params),
+            assertSelectableSessionEnvVarNames(session, envVarNames).then(() =>
+              sessionEnvSelectionsService.setAll(session.session_id, envVarNames, params)
+            ),
           publishMcpServersChanged: (serverIds) =>
             emitServiceEvent(app, {
               path: 'session-mcp-servers',
@@ -5397,14 +5422,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
       if (isAuthenticated) {
         const dialect = process.env.AGOR_DB_DIALECT === 'postgresql' ? 'postgresql' : 'sqlite';
-        let databaseInfo: { dialect: string; url?: string; path?: string };
-
-        if (dialect === 'postgresql') {
-          const maskedUrl = DB_PATH.replace(/:([^:@]+)@/, ':****@');
-          databaseInfo = { dialect, url: maskedUrl };
-        } else {
-          databaseInfo = { dialect, path: DB_PATH };
-        }
+        const databaseInfo = buildDatabaseHealthInfo(dialect, DB_PATH);
 
         // Diagnostic only; not in the public payload, doesn't gate readiness.
         // Gated behind auth like the rest of this block (any authenticated

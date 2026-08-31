@@ -56,6 +56,7 @@ import {
 import { fingerprintExecutorSessionToken } from '../services/session-token-service';
 import type { TerminalAttachmentIdentity } from '../services/terminals';
 import { TERMINAL_REQUEST_JOIN_CHANNEL } from '../terminal-socket-connection';
+import { FEATHERS_INSTRUMENTATION_REASON } from '../utils/feathers-instrumentation';
 import { executorTaskChannelName } from '../utils/realtime-publish';
 import {
   configureChannels,
@@ -89,7 +90,10 @@ interface FakeSocket {
   disconnect(close?: boolean): void;
   broadcast: {
     emit: (event: string, data: unknown) => void;
-    to: (channel: string) => { emit: (event: string, data: unknown) => void };
+    to: (channel: string) => {
+      emit: (event: string, data: unknown) => void;
+      readonly volatile: { emit: (event: string, data: unknown) => void };
+    };
   };
   // socket.to(room) — broadcasts to a room EXCLUDING this socket. Mirrors the
   // real socket.io semantics used by the terminal:output relay.
@@ -102,6 +106,8 @@ interface FakeSocket {
 interface FakeIO {
   connectionHandler?: (socket: FakeSocket) => void;
   emitted: Array<{ channel: string; event: string; data: unknown }>;
+  /** Best-effort packets emitted through Socket.IO's volatile operator. */
+  volatileEmitted: Array<{ channel: string; event: string; data: unknown }>;
   /** Sender ids passed through the sender-excluding `socket.to` path. */
   excludedSenders: string[];
   sockets: { sockets: Map<string, FakeSocket> };
@@ -155,12 +161,23 @@ function makeSocket(id = 'sock1', io?: FakeIO): FakeSocket {
       emit: (event: string, data: unknown) => {
         io?.emitted.push({ channel: '*', event, data });
       },
-      to: (channel: string) => ({
-        emit: (event: string, data: unknown) => {
+      to: (channel: string) => {
+        const emit = (event: string, data: unknown) => {
           io?.emitted.push({ channel, event, data });
           deliverToRoom(io, channel, event, data, id);
-        },
-      }),
+        };
+        return {
+          emit,
+          get volatile() {
+            return {
+              emit: (event: string, data: unknown) => {
+                io?.volatileEmitted.push({ channel, event, data });
+                emit(event, data);
+              },
+            };
+          },
+        };
+      },
     },
     to: (channel: string) => ({
       emit: (event: string, data: unknown) => {
@@ -202,6 +219,7 @@ function deliverToRoom(
 function makeIO(): FakeIO {
   const io: FakeIO = {
     emitted: [],
+    volatileEmitted: [],
     excludedSenders: [],
     sockets: { sockets: new Map() },
     middlewares: [],
@@ -1725,6 +1743,12 @@ describe('terminal:* handler authorization', () => {
           timestamp: expect.any(Number),
         },
       });
+      expect(io.volatileEmitted).toContainEqual(
+        expect.objectContaining({
+          channel: boardPresenceRoomName('default', 'board-1'),
+          event: PRESENCE_SOCKET_EVENTS.cursorMoved,
+        })
+      );
 
       expect(io.emitted).toContainEqual({
         channel: tenantChannelName('default'),
@@ -1770,6 +1794,40 @@ describe('terminal:* handler authorization', () => {
             entry.channel === boardPresenceRoomName('default', 'board-1')
         )
       ).toHaveLength(2);
+    });
+
+    it('does no Feathers or database work for accepted cursor samples after admission', async () => {
+      const { app, io } = buildHarness();
+      const originalService = (app as any).service;
+      const boardGet = vi.fn(async (boardId: string) => ({ board_id: boardId, archived: false }));
+      const boardFind = vi.fn();
+      const service = vi.fn((path: string) =>
+        path === 'boards' ? { get: boardGet, find: boardFind } : originalService(path)
+      );
+      (app as any).service = service;
+      const publisher = makeSocket('cheap-cursor-publisher', io);
+      asUser(publisher, ALICE);
+      connect(io, publisher);
+
+      await publisher.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.('board-1');
+      expect(boardGet).toHaveBeenCalledOnce();
+      service.mockClear();
+      boardGet.mockClear();
+
+      for (let index = 0; index < 20; index++) {
+        publisher.handlers.get(PRESENCE_SOCKET_EVENTS.cursorMove)?.({
+          boardId: 'board-1',
+          x: index,
+          y: index,
+        });
+      }
+
+      expect(service).not.toHaveBeenCalled();
+      expect(boardGet).not.toHaveBeenCalled();
+      expect(boardFind).not.toHaveBeenCalled();
+      expect(
+        io.volatileEmitted.filter((entry) => entry.event === PRESENCE_SOCKET_EVENTS.cursorMoved)
+      ).toHaveLength(20);
     });
 
     it('never derives a navbar board association from cursor-only authorization', async () => {
@@ -1994,10 +2052,24 @@ describe('terminal:* handler authorization', () => {
         expect.objectContaining({
           provider: 'socketio',
           tenant: expect.objectContaining({ tenant_id: 'default' }),
+          [FEATHERS_INSTRUMENTATION_REASON]: 'presence_cursor_admission',
         })
       );
       expect(getBoard).not.toHaveBeenCalledWith('over-bound', expect.anything());
       expect(socket.joined).toContain(boardPresenceRoomName('default', 'last-slot'));
+
+      // The UI emits on both Socket.IO connect and Feathers authentication.
+      // Once the first admission finishes, that duplicate event is an in-memory
+      // capability hit rather than a second boards.get authorization query.
+      await expect(
+        new Promise<{ ok: boolean }>((resolve) => {
+          void socket.handlers.get(PRESENCE_SOCKET_EVENTS.watchBoardCursors)?.(
+            'last-slot',
+            resolve
+          );
+        })
+      ).resolves.toEqual({ ok: true });
+      expect(getBoard).toHaveBeenCalledTimes(1);
     });
 
     it('invalidates a published board when a same-set synchronization is rate-limited', async () => {

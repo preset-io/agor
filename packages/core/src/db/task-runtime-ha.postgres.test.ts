@@ -9,7 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../lib/ids';
-import type { SessionID, TaskID, UUID } from '../types/id';
+import type { BranchID, SessionID, TaskID, UUID } from '../types/id';
 import { SessionStatus } from '../types/session';
 import { TaskStatus } from '../types/task';
 import { createDatabase, type Database } from './client';
@@ -31,6 +31,7 @@ let branchUnique = (Date.now() % 1_000_000) + 2_000_000;
 interface TenantSeed {
   tenantId: string;
   userId: UUID;
+  branchId: BranchID;
   sessionId: SessionID;
 }
 
@@ -68,6 +69,7 @@ async function seedTenant(db: Database, label: string): Promise<TenantSeed> {
     return {
       tenantId,
       userId: user.user_id as UUID,
+      branchId: branch.branch_id,
       sessionId: session.session_id,
     };
   });
@@ -135,6 +137,32 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('Task runtime HA (PostgreSQ
         status: TaskStatus.QUEUED,
         queue_position: 1,
       });
+    });
+  });
+
+  it('keeps deferred heartbeat branch projections inside the originating tenant', async () => {
+    const owner = await seedTenant(db, 'heartbeat-callback-owner');
+    const other = await seedTenant(db, 'heartbeat-callback-other');
+
+    await runWithTenantDatabaseScope(db, owner.tenantId, async (scoped) => {
+      // A fresh repository models the post-commit callback reopening a short
+      // database unit on whichever daemon receives the heartbeat.
+      await expect(new SessionRepository(scoped).findById(owner.sessionId)).resolves.toMatchObject({
+        session_id: owner.sessionId,
+        branch_id: owner.branchId,
+      });
+      await expect(
+        new SessionRepository(scoped).findBranchIdBySessionId(owner.sessionId)
+      ).resolves.toBe(owner.branchId);
+    });
+
+    await runWithTenantDatabaseScope(db, other.tenantId, async (scoped) => {
+      // The same globally unique Session id must not be usable to enrich a
+      // request or callback running under a different tenant's RLS scope.
+      await expect(new SessionRepository(scoped).findById(owner.sessionId)).resolves.toBeNull();
+      await expect(
+        new SessionRepository(scoped).findBranchIdBySessionId(owner.sessionId)
+      ).resolves.toBeNull();
     });
   });
 

@@ -81,6 +81,31 @@ describe('executor Codex auth dispatch', () => {
     });
   });
 
+  it('routes CODEX_HOME without copying daemon secrets into the helper', async () => {
+    runMock.mockResolvedValue({ success: true, data: { status: 'not-found' } });
+    const previousDatabaseUrl = process.env.DATABASE_URL;
+    const previousMasterSecret = process.env.AGOR_MASTER_SECRET;
+    process.env.DATABASE_URL = 'postgres://daemon-canary';
+    process.env.AGOR_MASTER_SECRET = 'master-canary';
+    try {
+      await inspectCodexAuthViaExecutor({
+        delegatedHomeKey: null,
+        userId: 'user-1',
+        codexHome: '/tenant/user/.codex',
+      });
+      const env = runMock.mock.calls[0]?.[1].env;
+      expect(env?.CODEX_HOME).toBe('/tenant/user/.codex');
+      expect(env?.PATH).toBe(process.env.PATH);
+      expect(env?.DATABASE_URL).toBeUndefined();
+      expect(env?.AGOR_MASTER_SECRET).toBeUndefined();
+    } finally {
+      if (previousDatabaseUrl === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = previousDatabaseUrl;
+      if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
+      else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+    }
+  });
+
   it('keeps generation-fenced HA mutations in the authority-owning daemon', async () => {
     const content = '{"tokens":{"refresh_token":"credential-json"}}';
     writeVerifiedCodexAuthFileMock.mockResolvedValue({

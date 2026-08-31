@@ -618,7 +618,10 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   const reactiveSessionId = session?.session_id ?? null;
   const { state: reactiveSessionState } = useSharedReactiveSession(client, reactiveSessionId, {
     enabled: open,
-    reactiveOptions: { taskHydration: 'none' },
+    // ConversationView retains the same lazy handle. Keeping the cache key
+    // identical collapses duplicate Session bootstrap/reconnect reads while
+    // preserving the transcript's latest-task hydration contract.
+    reactiveOptions: { taskHydration: 'lazy' },
   });
 
   const tasks = reactiveSessionState?.tasks || EMPTY_TASKS;
@@ -924,7 +927,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // lifetime-stable wrappers that delegate to the latest implementations via
   // a ref (re-pointed each render, right where the impls are defined).
   const footerHandlersRef = React.useRef<{
-    onModelConfigChange: (config: ModelConfig) => void;
+    onModelConfigCommit: (config: ModelConfig) => void;
     onSendPrompt: () => void;
     onStop: () => void;
     onFork: () => void;
@@ -938,8 +941,8 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   } | null>(null);
   const stableFooterHandlers = React.useMemo(
     () => ({
-      onModelConfigChange: (config: ModelConfig) =>
-        footerHandlersRef.current?.onModelConfigChange(config),
+      onModelConfigCommit: (config: ModelConfig) =>
+        footerHandlersRef.current?.onModelConfigCommit(config),
       onSendPrompt: () => footerHandlersRef.current?.onSendPrompt(),
       onStop: () => footerHandlersRef.current?.onStop(),
       onFork: () => footerHandlersRef.current?.onFork(),
@@ -1515,7 +1518,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
     }
   };
 
-  const handleModelConfigChange = (newConfig: ModelConfig) => {
+  const handleModelConfigCommit = (newConfig: ModelConfig) => {
     if (session && onUpdateSession) {
       const nextConfig: NonNullable<Session['model_config']> = {
         ...session.model_config,
@@ -1556,7 +1559,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
   // Render-phase ref write (instead of the usual useLayoutEffect) because the
   // impls above only exist when `session` is non-null, past the early return.
   footerHandlersRef.current = {
-    onModelConfigChange: handleModelConfigChange,
+    onModelConfigCommit: handleModelConfigCommit,
     onSendPrompt: handleSendPrompt,
     onStop: handleStop,
     onFork: handleFork,
@@ -1597,7 +1600,7 @@ const SessionPanel: React.FC<SessionPanelProps> = ({
       client={client}
       modelLabel={modelLabel}
       modelConfig={modelConfig}
-      onModelConfigChange={stableFooterHandlers.onModelConfigChange}
+      onModelConfigCommit={stableFooterHandlers.onModelConfigCommit}
       onOpenSessionSettings={onOpenSettings}
       onSendPrompt={stableFooterHandlers.onSendPrompt}
       onStop={stableFooterHandlers.onStop}

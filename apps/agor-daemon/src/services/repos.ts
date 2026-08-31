@@ -306,7 +306,8 @@ export class ReposService extends DrizzleService<Repo, Partial<Repo>, RepoParams
 
     // Fire and forget - spawn executor and return immediately.
     // Executor handles: git clone, .agor.yml parsing, repo row patching.
-    // Executor fetches per-user credentials via Feathers RPC (users.getGitEnvironment).
+    // Executor resolves the token principal's bounded Git capability through
+    // the executor-only credential service.
     // Unix permissions are applied synchronously inside that lifecycle executor.
     const app = this.app;
     // Capture the Feathers service so the `onExit` safety net (below) writes

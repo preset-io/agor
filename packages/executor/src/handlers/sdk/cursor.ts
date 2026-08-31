@@ -10,10 +10,9 @@
 
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { generateId, shortId } from '@agor/core/db';
-import { getMcpServersForSession } from '@agor/core/mcp';
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from '@agor/core/mcp';
 import { DEFAULT_CURSOR_MODEL } from '@agor/core/models';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type {
   ContentBlock,
   Message,
@@ -235,7 +234,8 @@ async function buildCursorMcpServers(args: {
     withheld: reporter.withheld,
   });
 
-  for (const { server } of serversWithSource) {
+  for (const scoped of serversWithSource) {
+    const { server } = scoped;
     const name = claimMcpName(server.name, claimed);
     if (server.transport === 'stdio') {
       if (!server.command) {
@@ -252,7 +252,7 @@ async function buildCursorMcpServers(args: {
     }
 
     if ((server.transport === 'http' || server.transport === 'sse') && server.url) {
-      const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+      const authHeaders = await resolveScopedMCPAuthHeaders(scoped);
       const headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
       mcpServers[name] = {
         type: server.transport,
@@ -615,7 +615,7 @@ export async function executeCursorTask(params: {
 
       const failed = runResult.status === 'error';
       const stopped = runResult.status === 'cancelled' || params.abortController.signal.aborted;
-      const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+      const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId, taskId);
       const taskPatch: Partial<Task> = {
         status: stopped ? 'stopped' : failed ? 'failed' : 'completed',
         completed_at: new Date().toISOString(),
@@ -641,7 +641,7 @@ export async function executeCursorTask(params: {
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
     console.error('[cursor] execution failed category=task_execution');
-    const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId);
+    const gitStateAtEnd = await captureGitStateAtTaskEnd(client, sessionId, taskId);
     const taskPatch: Partial<Task> = {
       status: 'failed',
       completed_at: new Date().toISOString(),

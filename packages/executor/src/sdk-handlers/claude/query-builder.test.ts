@@ -1,6 +1,8 @@
 import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const mcpAuthMocks = vi.hoisted(() => ({ resolveMCPAuthHeaders: vi.fn() }));
+
 // Mock minimal dependencies
 vi.mock('@agor/core/lib/validation', () => ({
   validateDirectory: vi.fn().mockResolvedValue(undefined),
@@ -16,15 +18,19 @@ vi.mock('@agor/core/templates/session-context', () => ({
 vi.mock('@agor/core/tools/mcp/http-headers', () => ({
   mergeMCPRemoteHeaders: vi.fn(({ custom, auth }) => ({ ...(custom || {}), ...(auth || {}) })),
 }));
-vi.mock('@agor/core/tools/mcp/jwt-auth', () => ({
-  resolveMCPAuthHeaders: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => ({
   getDaemonUrl: vi.fn().mockResolvedValue('http://localhost:3030'),
 }));
 vi.mock('@agor/core/mcp', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
-  return { ...actual, getMcpServersForSession: vi.fn().mockResolvedValue([]) };
+  return {
+    ...actual,
+    getMcpServersForSession: vi.fn().mockResolvedValue([]),
+    resolveScopedMCPAuthHeaders: vi.fn(({ server }) =>
+      mcpAuthMocks.resolveMCPAuthHeaders(server.auth, server.url)
+    ),
+  };
 });
 vi.mock('./models.js', () => ({
   DEFAULT_CLAUDE_MODEL: 'claude-sonnet-4-6',
