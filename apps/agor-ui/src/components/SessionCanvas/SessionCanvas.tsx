@@ -577,9 +577,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         try {
           let targetSessionId = sessionId;
 
-          // If creating new session, create it first. MCP servers attach in the
-          // same create call so the selection can't be silently dropped (#2629);
-          // a failure rejects here and surfaces via the catch below.
+          // Attach MCP in the create call so failures reject here, not silently dropped (#2629).
           if (sessionId === 'new') {
             const newSession = await client.service('sessions').create({
               branch_id: triggerModal.branchId,

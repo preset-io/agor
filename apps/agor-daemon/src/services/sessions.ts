@@ -527,10 +527,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
         sdk_home_scope: admission.scope,
       });
 
-      // An explicit create-time MCP selection must persist atomically with the
-      // session. addServer validates usability against the session owner and
-      // throws when it fails, so a bad server rolls the whole create back
-      // rather than silently dropping the selection (issue #2629).
+      // Attach in-transaction: a bad server rolls the create back, not a silent drop (#2629).
       if (explicitMcpServerIds && explicitMcpServerIds.length > 0) {
         const mcpRepo = new SessionMCPServerRepository(scoped);
         for (const serverId of explicitMcpServerIds) {
