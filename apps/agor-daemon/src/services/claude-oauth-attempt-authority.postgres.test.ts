@@ -1009,6 +1009,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     it('linearizes a route change after OAuth persistence and cleans the old home before patching the user', async () => {
       const seeded = await seed('route-change-race');
       const root = await mkdtemp(join(tmpdir(), 'agor-claude-route-change-'));
+      const overrideHome = await mkdtemp(join(tmpdir(), 'agor-claude-retired-override-'));
       try {
         const config = {
           paths: { data_home: root },
@@ -1095,7 +1096,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         );
         await didWrite;
 
-        const overrideHome = join(root, 'retired-override-home');
         let patchSettled = false;
         const patch = runWithTenantDatabaseScope(dbB, seeded.tenantId, () =>
           users.patch(seeded.userId, { filesystem_home: overrideHome })
@@ -1145,7 +1145,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           await authorityB.getForUser(seeded.tenantId, seeded.userId, attemptId)
         ).toMatchObject({ status: 'succeeded', isCurrent: false });
       } finally {
-        await rm(root, { recursive: true, force: true });
+        await Promise.all([
+          rm(root, { recursive: true, force: true }),
+          rm(overrideHome, { recursive: true, force: true }),
+        ]);
       }
     });
 

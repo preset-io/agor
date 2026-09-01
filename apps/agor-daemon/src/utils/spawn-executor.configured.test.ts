@@ -20,6 +20,8 @@ const {
   trackMock: vi.fn(),
   untrackMock: vi.fn(),
 }));
+// The concurrent main handoff regression still uses the pre-rename identifier.
+const sandboxWrapMock = buildSandboxWrapMock;
 
 const OAUTH_DATA_HOME = '/private/synthetic-home';
 const LOCAL_RESPONSE_OPTIONS = { localResponseOriginUrl: 'http://localhost:3030' } as const;
@@ -40,9 +42,13 @@ vi.mock('../executor-tracking.js', () => ({
   untrackExecutorProcess: untrackMock,
 }));
 
-vi.mock('@agor/core/codex/credential-file', () => ({
-  ensureCredentialAuthorityLayoutSync: ensureAuthorityMock,
-}));
+vi.mock('@agor/core/codex/credential-file', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@agor/core/codex/credential-file')>();
+  return {
+    ...actual,
+    ensureCredentialAuthorityLayoutSync: ensureAuthorityMock,
+  };
+});
 
 vi.mock('./sandbox-wrap.js', () => ({
   buildSandboxWrap: buildSandboxWrapMock,
@@ -169,8 +175,8 @@ describe('configured executor spawning', () => {
   beforeEach(async () => {
     vi.resetModules();
     spawnMock.mockReset();
-    buildSandboxWrapMock.mockReset();
-    buildSandboxWrapMock.mockReturnValue(null);
+    sandboxWrapMock.mockReset();
+    sandboxWrapMock.mockReturnValue(null);
     containMock.mockReset();
     containMock.mockResolvedValue({ status: 'verified_absent' });
     ensureAuthorityMock.mockClear();
