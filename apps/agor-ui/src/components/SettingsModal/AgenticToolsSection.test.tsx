@@ -14,6 +14,7 @@ const tools: TenantAgenticToolName[] = [
   'copilot',
   'cursor',
   'opencode',
+  'workload',
 ];
 
 describe('AgenticToolsSection deployment availability', () => {
