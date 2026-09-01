@@ -958,7 +958,7 @@ describe('saved-server capability discovery', () => {
     ).resolves.toMatchObject({ tools: mcpClientTestState.tools });
   });
 
-  it('reports rejected provider capability text as an invalid response without echoing it', async () => {
+  it('reports Agor persistence-policy rejection without blaming the provider or echoing it', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
     const harness = await createHarness(provider);
@@ -971,21 +971,32 @@ describe('saved-server capability discovery', () => {
       auth: { type: 'none' },
     });
     mcpClientTestState.tools = [{ name: 'unsafe', description: 'provider-secret\0suffix' }];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const result = await harness.app
-      .service('mcp-servers/discover')
-      .create({ mcp_server_id: server.mcp_server_id }, paramsFor(harness));
+    try {
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: server.mcp_server_id }, paramsFor(harness));
 
-    expect(result).toMatchObject({
-      success: false,
-      category: 'invalid_response',
-      error:
-        'The provider returned an invalid MCP response. Retry, then review the provider configuration.',
-    });
-    expect(JSON.stringify(result)).not.toContain('provider-secret');
-    await expect(
-      new MCPServerRepository(harness.rawDb).findById(server.mcp_server_id)
-    ).resolves.toMatchObject({ tools: undefined });
+      expect(result).toMatchObject({
+        success: false,
+        category: 'storage_policy_rejected',
+        action: 'contact_admin',
+        error:
+          "The MCP server's capabilities did not meet Agor's storage safety limits, so Agor did not save them. Ask an administrator to review the secure operational event.",
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[MCP Discovery] event=mcp_external_failure stage=discovery category=storage_policy_rejected type=Error reason=capability_persistence_validation_rejected'
+      );
+      expect(JSON.stringify({ result, logs: errorSpy.mock.calls })).not.toContain(
+        'provider-secret'
+      );
+      await expect(
+        new MCPServerRepository(harness.rawDb).findById(server.mcp_server_id)
+      ).resolves.toMatchObject({ tools: undefined });
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
 

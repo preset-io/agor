@@ -89,6 +89,7 @@ describe('MCP external error boundary', () => {
   it.each([
     ['provider_rejected', 'reauthenticate'],
     ['invalid_response', 'retry'],
+    ['storage_policy_rejected', 'contact_admin'],
     ['configuration_required', 'review_configuration'],
   ] as const)('preserves the closed %s category/action pair', (category, action) => {
     const typed = asMCPExternalError(undefined, { stage: 'jwt', category });
@@ -97,6 +98,35 @@ describe('MCP external error boundary', () => {
       action,
       diagnostic: { stage: 'oauth' },
     });
+  });
+
+  it('keeps the persistence-validation diagnostic and user contract closed', () => {
+    const safe = sanitizeMCPExternalError(new Error('SENTINEL_PROVIDER_FIELD'), {
+      stage: 'discovery',
+      category: 'storage_policy_rejected',
+      reason: 'capability_persistence_validation_rejected',
+    });
+
+    expect(safe).toEqual({
+      category: 'storage_policy_rejected',
+      action: 'contact_admin',
+      message:
+        "The MCP server's capabilities did not meet Agor's storage safety limits, so Agor did not save them. Ask an administrator to review the secure operational event.",
+      diagnostic: {
+        event: 'mcp_external_failure',
+        stage: 'discovery',
+        type: 'Error',
+        reason: 'capability_persistence_validation_rejected',
+      },
+    });
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+
+    const rejectedReason = sanitizeMCPExternalError(undefined, {
+      stage: 'discovery',
+      reason: 'SENTINEL_PROVIDER_REASON' as never,
+    });
+    expect(rejectedReason.diagnostic.reason).toBeUndefined();
+    expect(JSON.stringify(rejectedReason)).not.toContain('SENTINEL');
   });
 
   it('re-closes forged typed errors instead of trusting their public prose or metadata', () => {

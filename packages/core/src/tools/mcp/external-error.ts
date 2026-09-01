@@ -19,10 +19,16 @@ export type MCPExternalErrorCategory =
   | 'provider_unavailable'
   | 'provider_rejected'
   | 'invalid_response'
+  | 'storage_policy_rejected'
   | 'configuration_required'
   | 'unknown';
-export type MCPExternalErrorAction = 'retry' | 'reauthenticate' | 'review_configuration';
+export type MCPExternalErrorAction =
+  | 'retry'
+  | 'reauthenticate'
+  | 'review_configuration'
+  | 'contact_admin';
 export type MCPExternalErrorType = 'Error' | 'TypeError' | 'AbortError' | 'UnknownError';
+export type MCPExternalErrorReason = 'capability_persistence_validation_rejected';
 
 const ALLOWED_EXTERNAL_CODES = new Set([
   'ABORT_ERR',
@@ -48,6 +54,7 @@ export interface SanitizedMCPExternalError {
     stage: MCPExternalErrorStage;
     type: MCPExternalErrorType;
     code?: string;
+    reason?: MCPExternalErrorReason;
   };
 }
 
@@ -74,6 +81,9 @@ export class MCPExternalError extends Error {
       ...(safeAllowedCode(sanitized.diagnostic?.code)
         ? { code: safeAllowedCode(sanitized.diagnostic?.code) }
         : {}),
+      ...(safeReason(sanitized.diagnostic?.reason)
+        ? { reason: safeReason(sanitized.diagnostic?.reason) }
+        : {}),
     };
     trustedMCPExternalErrors.add(this);
   }
@@ -83,6 +93,7 @@ function safeCategory(category: unknown): MCPExternalErrorCategory {
   return category === 'provider_unavailable' ||
     category === 'provider_rejected' ||
     category === 'invalid_response' ||
+    category === 'storage_policy_rejected' ||
     category === 'configuration_required' ||
     category === 'unknown'
     ? category
@@ -107,6 +118,10 @@ function safeDiagnosticType(type: unknown): MCPExternalErrorType {
 
 function safeAllowedCode(code: unknown): string | undefined {
   return typeof code === 'string' && ALLOWED_EXTERNAL_CODES.has(code) ? code : undefined;
+}
+
+function safeReason(reason: unknown): MCPExternalErrorReason | undefined {
+  return reason === 'capability_persistence_validation_rejected' ? reason : undefined;
 }
 
 function safeInstanceOf(
@@ -186,6 +201,12 @@ function fixedContract(
         message:
           'The provider returned an invalid MCP response. Retry, then review the provider configuration.',
       };
+    case 'storage_policy_rejected':
+      return {
+        action: 'contact_admin',
+        message:
+          "The MCP server's capabilities did not meet Agor's storage safety limits, so Agor did not save them. Ask an administrator to review the secure operational event.",
+      };
     case 'configuration_required':
       return {
         action: 'review_configuration',
@@ -210,6 +231,7 @@ export function sanitizeMCPExternalError(
   options: {
     stage: MCPExternalErrorStage;
     category?: MCPExternalErrorCategory;
+    reason?: MCPExternalErrorReason;
   }
 ): SanitizedMCPExternalError {
   if (
@@ -222,6 +244,7 @@ export function sanitizeMCPExternalError(
       const contract = fixedContract(category);
       const diagnostic = safeOwnDataValue(error, 'diagnostic');
       const code = safeAllowedCode(safeOwnDataValue(diagnostic, 'code'));
+      const reason = safeReason(safeOwnDataValue(diagnostic, 'reason'));
       return {
         category,
         ...contract,
@@ -230,6 +253,7 @@ export function sanitizeMCPExternalError(
           stage: safeStage(options.stage),
           type: safeDiagnosticType(safeOwnDataValue(diagnostic, 'type')),
           ...(code ? { code } : {}),
+          ...(reason ? { reason } : {}),
         },
       };
     } catch {
@@ -253,6 +277,7 @@ export function sanitizeMCPExternalError(
       stage: safeStage(options.stage),
       type,
       ...(code ? { code } : {}),
+      ...(safeReason(options.reason) ? { reason: safeReason(options.reason) } : {}),
     },
   };
 }
