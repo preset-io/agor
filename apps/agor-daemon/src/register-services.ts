@@ -1847,6 +1847,13 @@ export async function registerMCPServices(
   const externalFailureOptionsForRecovery = (
     recovery: MCPAuthRecovery
   ): Parameters<typeof externalFailure>[3] => {
+    if (recovery.category === 'redirect_configuration_required') {
+      return {
+        category: 'configuration_required',
+        type: 'ConfigurationError',
+        reason: 'oauth_redirect_configuration_required',
+      };
+    }
     if (recovery.category === 'metadata_incompatible') {
       return {
         category: 'configuration_required',
@@ -4430,7 +4437,12 @@ export async function registerMCPServices(
             mcpServerId: data.mcp_server_id,
           });
           if (recovery.category === 'redirect_configuration_required') {
-            console.error('[OAuth Start] Failed category=PublicBaseUrlNotConfiguredError');
+            externalFailure(
+              'OAuth Start',
+              'oauth',
+              err,
+              externalFailureOptionsForRecovery(recovery)
+            );
             return {
               success: false,
               error: recovery.message,
@@ -5712,7 +5724,15 @@ export async function registerMCPServices(
             mcpTransport: InstanceType<typeof StreamableHTTPClientTransport>
           ) => {
             const timeout = new Promise<never>((_, reject) => {
-              setTimeout(() => reject(new Error('Connection timeout after 10 seconds')), 10000);
+              setTimeout(
+                () =>
+                  reject(
+                    Object.assign(new Error('Connection timeout after 10 seconds'), {
+                      code: 'ETIMEDOUT' as const,
+                    })
+                  ),
+                10000
+              );
             });
             await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
               Promise.race([mcpClient.connect(mcpTransport), timeout])
@@ -5750,7 +5770,12 @@ export async function registerMCPServices(
 
           const listTimeout = new Promise<never>((_, reject) => {
             setTimeout(
-              () => reject(new Error('List capabilities timeout after 10 seconds')),
+              () =>
+                reject(
+                  Object.assign(new Error('List capabilities timeout after 10 seconds'), {
+                    code: 'ETIMEDOUT' as const,
+                  })
+                ),
               10000
             );
           });

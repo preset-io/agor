@@ -20,7 +20,7 @@ describe('MCP external error boundary', () => {
     expect(serialized).not.toContain('SENTINEL');
     expect(safe.diagnostic.event).toBe('mcp_external_failure');
     expect(safe.diagnostic.stage).toBe('discovery');
-    expect(['Error', 'TypeError', 'UnknownError']).toContain(safe.diagnostic.type);
+    expect(['Error', 'TypeError', 'NetworkError', 'UnknownError']).toContain(safe.diagnostic.type);
     expect(thrown.message).toBe(safe.message);
   });
 
@@ -37,6 +37,24 @@ describe('MCP external error boundary', () => {
     expect(allowed.diagnostic.code).toBe('ECONNREFUSED');
     expect(rejected.diagnostic.code).toBeUndefined();
     expect(JSON.stringify({ allowed, rejected })).not.toContain('SENTINEL');
+  });
+
+  it.each([
+    ['PUBLIC_BASE_URL_NOT_CONFIGURED', 'ConfigurationError'],
+    ['unsafe_outbound_url', 'ConfigurationError'],
+    ['EAGOROUTBOUND', 'ConfigurationError'],
+    ['ETIMEDOUT', 'NetworkError'],
+  ] as const)('classifies the closed transport/configuration code %s', (code, type) => {
+    const safe = sanitizeMCPExternalError(
+      Object.assign(new Error('SENTINEL_SYSTEMIC_EGRESS_FAILURE'), { code }),
+      { stage: 'discovery' }
+    );
+
+    expect(safe).toMatchObject({
+      category: type === 'ConfigurationError' ? 'configuration_required' : 'provider_unavailable',
+      diagnostic: { code, type },
+    });
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
   });
 
   it.each([
@@ -119,6 +137,9 @@ describe('MCP external error boundary', () => {
     expect(isMCPAbortError(domAbort)).toBe(true);
     expect(isMCPAbortError(sdkAbort)).toBe(true);
     expect(isMCPAbortError(codeAbort)).toBe(true);
+    expect(sanitizeMCPExternalError(codeAbort, { stage: 'discovery' }).diagnostic.type).toBe(
+      'AbortError'
+    );
     expect(isMCPAbortError(hostile)).toBe(false);
     expect(hostileGetter).not.toHaveBeenCalled();
   });
@@ -183,6 +204,24 @@ describe('MCP external error boundary', () => {
       },
     });
     expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+  });
+
+  it('keeps only closed redirect and Catalog probe reasons', () => {
+    const redirect = sanitizeMCPExternalError(new Error('SENTINEL_REDIRECT'), {
+      stage: 'oauth',
+      category: 'configuration_required',
+      type: 'ConfigurationError',
+      reason: 'oauth_redirect_configuration_required',
+    });
+    const probe = sanitizeMCPExternalError(new Error('SENTINEL_PROBE'), {
+      stage: 'discovery',
+      category: 'provider_unavailable',
+      reason: 'catalog_probe_unreachable',
+    });
+
+    expect(redirect.diagnostic.reason).toBe('oauth_redirect_configuration_required');
+    expect(probe.diagnostic.reason).toBe('catalog_probe_unreachable');
+    expect(JSON.stringify({ redirect, probe })).not.toContain('SENTINEL');
   });
 
   it('re-closes forged typed errors instead of trusting their public prose or metadata', () => {
