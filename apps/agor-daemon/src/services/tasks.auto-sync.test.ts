@@ -1,6 +1,7 @@
 import type { Application } from '@agor/core/feathers';
+import { TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
-import { TasksService } from './tasks';
+import { shouldAutoSyncEnvironmentAfterTask, TasksService } from './tasks';
 
 /** Matches the stub used by the sibling service tests — auto-sync never touches the DB. */
 function createTenantScopeTestDb() {
@@ -86,6 +87,12 @@ function buildService() {
 }
 
 describe('TasksService auto-sync submits exact desired state internally', () => {
+  it('admits only successfully completed task revisions', () => {
+    expect(Object.values(TaskStatus).filter(shouldAutoSyncEnvironmentAfterTask)).toEqual([
+      TaskStatus.COMPLETED,
+    ]);
+  });
+
   it('never forwards executor-scoped credentials', async () => {
     const { run, calls } = buildService();
 

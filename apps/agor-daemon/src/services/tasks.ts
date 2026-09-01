@@ -117,6 +117,11 @@ function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): b
   return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
 }
 
+/** Only a successfully completed task may advance an automatic preview. */
+export function shouldAutoSyncEnvironmentAfterTask(status: Task['status']): boolean {
+  return status === TaskStatus.COMPLETED;
+}
+
 const TASK_SORT_FIELDS = new Set(['task_id', 'session_id', 'status', 'created_at', 'created_by']);
 
 /**
@@ -766,10 +771,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
             );
           });
 
-        // Headless "event-driven sync": the commit this task just produced is the
-        // trigger. If the branch runs a remote environment (variant defines a
-        // `sync` command) and it is running, push the branch's latest code into
-        // it — no polling, no click.
+        // Headless "event-driven sync": the commit a SUCCESSFUL task just
+        // produced is the trigger. Failed/stopped tasks may leave intentional
+        // partial work and require an explicit sync instead of silently
+        // replacing the developer's preview.
         //
         // Defer to AFTER this task-patch transaction commits (the same idiom the
         // executor dispatch uses): the sync itself dispatches an executor via
@@ -777,27 +782,29 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         // transaction — running it inline here would trap that spawn behind a
         // transaction that never re-fires its commit hook, so the sync would
         // never actually run. Best-effort: never blocks or fails completion.
-        const syncBranchId = session.branch_id;
-        try {
-          const desiredRevision = validateEnvironmentSourceRevision(task.git_state.sha_at_end);
-          deferWithTenantContext(
-            params,
-            () =>
-              this.maybeAutoSyncEnvironmentAfterTask(
-                syncBranchId,
-                desiredRevision,
-                task.created_by,
-                params
-              ),
-            (err) =>
-              console.warn(
-                `⚠️  [TasksService] Auto-sync trigger failed for session ${shortId(task.session_id)}: ${
-                  err instanceof Error ? err.message : String(err)
-                }`
-              )
-          );
-        } catch {
-          // Dirty, abbreviated, and unknown task-end states are not deployable facts.
+        if (shouldAutoSyncEnvironmentAfterTask(status)) {
+          const syncBranchId = session.branch_id;
+          try {
+            const desiredRevision = validateEnvironmentSourceRevision(task.git_state.sha_at_end);
+            deferWithTenantContext(
+              params,
+              () =>
+                this.maybeAutoSyncEnvironmentAfterTask(
+                  syncBranchId,
+                  desiredRevision,
+                  task.created_by,
+                  params
+                ),
+              (err) =>
+                console.warn(
+                  `⚠️  [TasksService] Auto-sync trigger failed for session ${shortId(task.session_id)}: ${
+                    err instanceof Error ? err.message : String(err)
+                  }`
+                )
+            );
+          } catch {
+            // Dirty, abbreviated, and unknown task-end states are not deployable facts.
+          }
         }
       }
 
