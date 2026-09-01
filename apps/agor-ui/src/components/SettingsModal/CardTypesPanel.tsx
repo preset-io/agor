@@ -21,7 +21,8 @@ import { useThemedMessage } from '@/utils/message';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { FormEmojiPickerInput } from '../EmojiPickerInput';
 import { HighlightMatch } from '../HighlightMatch';
-import { JSONEditor, validateJSON } from '../JSONEditor';
+import { validateJSON } from '../JSONEditor';
+import { CardTypeSchemaEditor } from './CardTypeSchemaEditor';
 import { ListPanelHeader } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
@@ -240,11 +241,10 @@ export const CardTypesPanel: React.FC<CardTypesPanelProps> = ({ client, cardType
           </Form.Item>
           <Form.Item
             name="json_schema"
-            label="JSON Schema (optional)"
-            help="Define a JSON Schema to validate card data"
+            label="Data schema (optional)"
             rules={[{ validator: validateJSON }]}
           >
-            <JSONEditor placeholder='{"type": "object", "properties": {...}}' rows={6} />
+            <CardTypeSchemaEditor key={editingType?.card_type_id ?? 'new'} />
           </Form.Item>
         </Form>
       </DrillInFrame>
