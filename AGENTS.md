@@ -413,9 +413,9 @@ probes the endpoint on every connect, whatever the entry says. A valid JSON-RPC
 `per_user` OAuth row; a non-OAuth challenge installs only when the entry carries
 a reviewed bearer-credential recipe and the caller supplies a key that passes a
 second `initialize`. When the probe contradicts the entry, the daemon logs it at
-`warn` with the stated and probed values; that log is the only thing that can
-catch a stale `auth_type`, because nothing else compares the file against the
-servers it describes.
+`warn` with the stated and probed values. The catalog health workflow repeats
+that comparison on curation pull requests and on a schedule, annotates
+transient reachability separately, and fails on actionable auth/OAuth drift.
 
 OAuth entries that omit `oauth.compatibility_mode` use an internal,
 non-persistable `marketplace` profile. This is not a general relaxed default: it
@@ -428,10 +428,13 @@ URL as the RFC 8707 resource, PKCE S256, and callback issuer validation. An
 explicit saved-row `strict` or `legacy` mode always wins. The catalog explicitly
 keeps Monday, Cloudflare, and ClickUp on `strict`; an edited/imported install, a
 removed entry, or any catalog configuration drift falls back to `strict`.
-GitHub, Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi were removed
-from the shelf because the review could not establish a safely bound
-client-registration or issuer path; do not re-add one merely because its
-endpoint still challenges for OAuth.
+Prisma, MongoDB, Box, HubSpot, Slack, PagerDuty, and Kagi remain off the shelf
+because the review could not establish a safely bound client-registration or
+issuer path; do not re-add one merely because its endpoint challenges for
+OAuth. GitHub instead uses its documented PAT bearer route: the catalog marks
+the OAuth challenge as a reviewed exception, Connect verifies each supplied PAT
+against the pinned endpoint, and the health audit reports separately if the
+OAuth metadata later becomes usable so the exception can be retired.
 
 An endpoint the probe finds behind a non-OAuth challenge is installed with a key
 the user pastes into the marketplace drawer. The key never goes in

@@ -21,6 +21,7 @@
     "docs:build": "pnpm --filter @agor/docs build",
     "docs:generate": "pnpm --filter @agor/docs generate",
     "audit:mcp-catalog": "NODE_OPTIONS=--conditions=source tsx scripts/audit-mcp-catalog.mts",
+    "typecheck:mcp-catalog-audit": "tsc -p scripts/tsconfig.mcp-catalog-audit.json",
     "lint": "biome check --diagnostic-level=warn --error-on-warnings . && node scripts/test-frontend-color-plugins.mjs",
     "lint:fix": "biome check --write .",
     "format": "prettier --write .",

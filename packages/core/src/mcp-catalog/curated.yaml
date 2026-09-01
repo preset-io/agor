@@ -432,7 +432,7 @@ entries:
     capabilities: [code-repos, issues, pull-requests, ci-cd, code-search, security-scan]
     benefit: Let an agent investigate repositories, issues, pull requests, Actions, and code without copying each artifact into the session.
     starter_prompt: Summarise my open pull requests, identify any failing checks, and suggest the next action for each one. Do not change anything.
-    permission_disclosure: Uses the GitHub personal access token you provide and can perform every operation that token and your repository permissions allow, including reading private code and creating or changing issues, pull requests, workflows, and repository content. Prefer a fine-grained, read-only token scoped only to the repositories needed. GitHub's remote endpoint advertises OAuth but does not publish Dynamic Client Registration, so Marketplace deliberately uses GitHub's documented bearer-token route instead of pretending OAuth can be set up.
+    permission_disclosure: Uses the GitHub personal access token you provide and can perform every operation that token and your repository permissions allow, including reading private code and creating or changing issues, pull requests, workflows, and repository content. Prefer a fine-grained, read-only token scoped only to the repositories needed. Organisation policy can restrict PAT access, and Enterprise Managed User PATs are disabled by default unless an enterprise administrator enables them. The server is available across GitHub plans, but individual MCP tools retain any paid GitHub or Copilot feature requirements. GitHub's remote endpoint advertises OAuth but does not publish Dynamic Client Registration, so Marketplace deliberately uses GitHub's documented bearer-token route instead of pretending OAuth can be set up.
     icon_url: https://github.githubassets.com/favicons/favicon.svg
     website_url: https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server
     popularity_rank: 1
@@ -753,9 +753,9 @@ unpublished:
     capabilities: [docs, code-search]
     benefit: Search and retrieve current Twilio documentation without granting access to a Twilio project.
     starter_prompt: Find the current Twilio documentation and a code example for sending an SMS, and cite the source pages.
-    permission_disclosure: Sends documentation searches to Twilio and reads only public Twilio documentation. It requires no account and cannot read customer data, send messages, or change a Twilio project.
+    permission_disclosure: Sends documentation searches to Twilio and reads only public Twilio documentation. It requires no account and cannot read customer data, send messages, or change a Twilio project. Twilio provides this service as Public Beta, subject to change, without coverage under the Twilio Support Terms or Service Level Agreement.
     icon_url: https://www.google.com/s2/favicons?domain=twilio.com&sz=64
-    website_url: https://www.twilio.com/docs
+    website_url: https://www.twilio.com/docs/ai/mcp
     popularity_rank: 58
     remote_url: https://mcp.twilio.com/docs
     transport: streamable-http
@@ -837,3 +837,4 @@ unpublished:
 # - GitHub's OAuth route publishes no DCR; the entry above uses its documented PAT route instead.
 # - Prisma and PagerDuty publish authorization-server issuer chains that do not bind safely.
 # - Kagi challenges with Bearer but publishes neither protected-resource nor authorization-server metadata.
+# - Typeform requires callback review/allowlisting; Contentful requires per-space configuration.

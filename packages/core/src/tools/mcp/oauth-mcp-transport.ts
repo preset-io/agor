@@ -1503,6 +1503,230 @@ function marketplaceResourceMetadataMatches(
   }
 }
 
+function assertOAuthProtectedResourceMetadata(
+  metadataUrl: string,
+  statedResource: OAuthMetadata['resource'],
+  resourceUri: string,
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode
+): void {
+  if (
+    compatibilityMode === 'strict'
+      ? statedResource !== resourceUri
+      : compatibilityMode === 'marketplace' &&
+        !marketplaceResourceMetadataMatches(metadataUrl, statedResource, resourceUri)
+  ) {
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Protected resource metadata does not match the MCP resource URI'
+    );
+  }
+}
+
+function assertOAuthDirectDiscoveryIssuer(
+  authServerMetadata: AuthorizationServerMetadata,
+  resourceUri: string,
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode
+): void {
+  if (compatibilityMode === 'strict') {
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Authorization-server-direct discovery requires explicit marketplace or legacy mode'
+    );
+  }
+  if (
+    compatibilityMode === 'marketplace' &&
+    !oauthIssuerOriginMatchesResource(authServerMetadata.issuer, resourceUri)
+  ) {
+    throw new OAuthConfigurationError(
+      'issuer_mismatch',
+      'Authorization-server-direct discovery issuer does not match the MCP resource origin'
+    );
+  }
+}
+
+interface OAuthAuthorizationContractOptions {
+  authServerMetadata: AuthorizationServerMetadata | null;
+  issuer: string;
+  resourceUri: string;
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  allowLocalhostHttp: boolean;
+  authorizationUrlOverride?: string;
+  tokenUrlOverride?: string;
+}
+
+/**
+ * Resolve and validate the authorization/token/issuer contract before any DCR
+ * or browser authorization side effect. The production flow and catalog audit
+ * deliberately share this exact predicate.
+ */
+function resolveOAuthAuthorizationContract(options: OAuthAuthorizationContractOptions): {
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+} {
+  const {
+    authServerMetadata,
+    issuer,
+    resourceUri,
+    compatibilityMode,
+    allowLocalhostHttp,
+    authorizationUrlOverride,
+    tokenUrlOverride,
+  } = options;
+  const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
+  if (!tokenEndpoint) {
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Authorization-server metadata does not provide a token endpoint'
+    );
+  }
+  const authorizationEndpoint =
+    authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
+  if (!authorizationEndpoint) {
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Authorization-server metadata does not provide an authorization endpoint'
+    );
+  }
+
+  assertSafeOAuthUrl(tokenEndpoint, { allowLocalhostHttp });
+  assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
+  if (compatibilityMode !== 'legacy') {
+    if (!authServerMetadata) {
+      throw new OAuthConfigurationError(
+        'metadata_unavailable',
+        'MCP OAuth issuer validation requires authorization-server metadata'
+      );
+    }
+    assertSafeOAuthUrl(authServerMetadata.issuer, { allowLocalhostHttp });
+    const issuerMatches =
+      compatibilityMode === 'strict'
+        ? authServerMetadata.issuer === issuer
+        : oauthIssuerIdentifiersMatch(authServerMetadata.issuer, issuer);
+    if (!issuerMatches) {
+      throw new OAuthConfigurationError('issuer_mismatch', 'Authorization server issuer mismatch');
+    }
+    const advertisedPKCEMethods = authServerMetadata.code_challenge_methods_supported;
+    if (
+      compatibilityMode === 'strict'
+        ? !advertisedPKCEMethods?.includes('S256')
+        : advertisedPKCEMethods !== undefined && !advertisedPKCEMethods.includes('S256')
+    ) {
+      throw new OAuthConfigurationError(
+        'pkce_required',
+        'Authorization server does not advertise required PKCE S256 support'
+      );
+    }
+    if (
+      compatibilityMode === 'strict' &&
+      authServerMetadata.authorization_response_iss_parameter_supported !== true
+    ) {
+      throw new OAuthConfigurationError(
+        'metadata_incompatible',
+        'Authorization server does not advertise the required callback issuer parameter'
+      );
+    }
+    if (
+      authorizationUrlOverride &&
+      authorizationUrlOverride !== authServerMetadata.authorization_endpoint
+    ) {
+      throw new OAuthConfigurationError(
+        'endpoint_override_mismatch',
+        'MCP OAuth authorization endpoint override does not match metadata'
+      );
+    }
+    if (tokenUrlOverride && tokenUrlOverride !== authServerMetadata.token_endpoint) {
+      throw new OAuthConfigurationError(
+        'endpoint_override_mismatch',
+        'MCP OAuth token endpoint override does not match metadata'
+      );
+    }
+  }
+
+  // The exact protected resource still travels on the eventual authorization
+  // and token requests; validating it here also rejects unsafe configured URLs
+  // before a catalog audit or production flow proceeds to registration.
+  assertSafeOAuthUrl(resourceUri, { allowLocalhostHttp });
+  return { authorizationEndpoint, tokenEndpoint };
+}
+
+export interface ValidatedMCPOAuthMetadata {
+  authServerMetadata: AuthorizationServerMetadata;
+  issuer: string;
+  registrationEndpoint?: string;
+}
+
+/**
+ * Fetch and validate the production OAuth metadata contract without performing
+ * Dynamic Client Registration or starting user authorization.
+ *
+ * This is the audit-safe boundary: discovery is supplied by the caller, every
+ * resource/issuer/endpoint/PKCE rule is the same helper used by
+ * `startMCPOAuthFlow`, and the function stops before the first provider-side
+ * mutation.
+ */
+export async function validateMCPOAuthMetadata(
+  discovery: MCPOAuthDiscoveryResult,
+  resourceUri: string,
+  options: {
+    compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
+    allowLocalhostHttp?: boolean;
+    assertCurrent?: () => void;
+  } = {}
+): Promise<ValidatedMCPOAuthMetadata> {
+  const compatibilityMode = options.compatibilityMode ?? 'strict';
+  const allowLocalhostHttp = options.allowLocalhostHttp === true;
+  let authServerMetadata: AuthorizationServerMetadata;
+  let issuer: string;
+
+  if (discovery.kind === 'authorization-server') {
+    assertOAuthDirectDiscoveryIssuer(discovery.authServerMetadata, resourceUri, compatibilityMode);
+    authServerMetadata = discovery.authServerMetadata;
+    issuer = authServerMetadata.issuer;
+  } else {
+    options.assertCurrent?.();
+    const resourceMetadata = await fetchResourceMetadata(discovery.metadataUrl, {
+      allowLocalhostHttp,
+      assertCurrent: options.assertCurrent,
+    });
+    options.assertCurrent?.();
+    assertOAuthProtectedResourceMetadata(
+      discovery.metadataUrl,
+      resourceMetadata.resource,
+      resourceUri,
+      compatibilityMode
+    );
+    if (
+      !Array.isArray(resourceMetadata.authorization_servers) ||
+      typeof resourceMetadata.authorization_servers[0] !== 'string'
+    ) {
+      throw new OAuthConfigurationError(
+        'metadata_incompatible',
+        'Protected resource metadata does not name an authorization server'
+      );
+    }
+    issuer = resourceMetadata.authorization_servers[0];
+    authServerMetadata = await fetchAuthorizationServerMetadata(issuer, {
+      compatibilityMode,
+      allowLocalhostHttp,
+      assertCurrent: options.assertCurrent,
+    });
+    options.assertCurrent?.();
+  }
+
+  resolveOAuthAuthorizationContract({
+    authServerMetadata,
+    issuer,
+    resourceUri,
+    compatibilityMode,
+    allowLocalhostHttp,
+  });
+  return {
+    authServerMetadata,
+    issuer,
+    registrationEndpoint: authServerMetadata.registration_endpoint,
+  };
+}
+
 /**
  * Start the OAuth 2.1 Authorization Code flow with PKCE
  *
@@ -1594,78 +1818,16 @@ async function startMCPOAuthFlowWithAS(opts: {
   // Validate the authorization contract before DCR creates durable state at
   // the provider. A strict-profile rejection must not leave an unused client
   // registration behind.
-  const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
-  if (!tokenEndpoint) {
-    throw new OAuthConfigurationError(
-      'metadata_unavailable',
-      'No token endpoint available. Either provide oauth_token_url in the MCP server config, ' +
-        'or ensure the authorization server supports RFC 8414 metadata discovery.'
-    );
-  }
-  const authorizationEndpoint =
-    authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
-  if (!authorizationEndpoint) {
-    throw new OAuthConfigurationError(
-      'metadata_unavailable',
-      'No authorization endpoint available. Either provide oauth_authorization_url in the MCP server config, ' +
-        'or ensure the authorization server supports RFC 8414 metadata discovery.'
-    );
-  }
+  const { authorizationEndpoint, tokenEndpoint } = resolveOAuthAuthorizationContract({
+    authServerMetadata,
+    issuer,
+    resourceUri,
+    compatibilityMode,
+    allowLocalhostHttp,
+    authorizationUrlOverride,
+    tokenUrlOverride,
+  });
   console.log('[MCP OAuth] OAuth endpoints resolved');
-
-  assertSafeOAuthUrl(tokenEndpoint, { allowLocalhostHttp });
-  assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
-  if (compatibilityMode !== 'legacy') {
-    if (!authServerMetadata) {
-      throw new OAuthConfigurationError(
-        'metadata_unavailable',
-        'MCP OAuth issuer validation requires authorization-server metadata'
-      );
-    }
-    assertSafeOAuthUrl(authServerMetadata.issuer, { allowLocalhostHttp });
-    const issuerMatches =
-      compatibilityMode === 'strict'
-        ? authServerMetadata.issuer === issuer
-        : oauthIssuerIdentifiersMatch(authServerMetadata.issuer, issuer);
-    if (!issuerMatches) {
-      throw new OAuthConfigurationError('issuer_mismatch', 'Authorization server issuer mismatch');
-    }
-    const advertisedPKCEMethods = authServerMetadata.code_challenge_methods_supported;
-    if (
-      compatibilityMode === 'strict'
-        ? !advertisedPKCEMethods?.includes('S256')
-        : advertisedPKCEMethods !== undefined && !advertisedPKCEMethods.includes('S256')
-    ) {
-      throw new OAuthConfigurationError(
-        'pkce_required',
-        'Authorization server does not advertise required PKCE S256 support'
-      );
-    }
-    if (
-      compatibilityMode === 'strict' &&
-      authServerMetadata.authorization_response_iss_parameter_supported !== true
-    ) {
-      throw new OAuthConfigurationError(
-        'metadata_incompatible',
-        'Authorization server does not advertise the required callback issuer parameter'
-      );
-    }
-    if (
-      authorizationUrlOverride &&
-      authorizationUrlOverride !== authServerMetadata.authorization_endpoint
-    ) {
-      throw new OAuthConfigurationError(
-        'endpoint_override_mismatch',
-        'MCP OAuth authorization endpoint override does not match metadata'
-      );
-    }
-    if (tokenUrlOverride && tokenUrlOverride !== authServerMetadata.token_endpoint) {
-      throw new OAuthConfigurationError(
-        'endpoint_override_mismatch',
-        'MCP OAuth token endpoint override does not match metadata'
-      );
-    }
-  }
 
   // Client ID resolution (DCR if available)
   let actualClientId = clientId;
@@ -1843,15 +2005,11 @@ export async function startMCPOAuthFlow(
     // identifier to bind. The marketplace fallback is therefore safe only
     // when the directly discovered issuer remains on the protected resource's
     // origin. Legacy mode retains its explicitly broader behavior.
-    if (
-      compatibilityMode === 'marketplace' &&
-      !oauthIssuerOriginMatchesResource(options.prefetchedAuthServerMetadata.issuer, resourceUri)
-    ) {
-      throw new OAuthConfigurationError(
-        'issuer_mismatch',
-        'Authorization-server-direct discovery issuer does not match the MCP resource origin'
-      );
-    }
+    assertOAuthDirectDiscoveryIssuer(
+      options.prefetchedAuthServerMetadata,
+      resourceUri,
+      compatibilityMode
+    );
     console.log('[MCP OAuth] Using prefetched AS metadata (RFC 9728 skipped)');
     return startMCPOAuthFlowWithAS({
       authServerMetadata: options.prefetchedAuthServerMetadata,
@@ -1892,17 +2050,12 @@ export async function startMCPOAuthFlow(
   });
   options?.assertCurrent?.();
 
-  if (
-    compatibilityMode === 'strict'
-      ? resourceMetadata.resource !== resourceUri
-      : compatibilityMode === 'marketplace' &&
-        !marketplaceResourceMetadataMatches(metadataUrl, resourceMetadata.resource, resourceUri)
-  ) {
-    throw new OAuthConfigurationError(
-      'metadata_incompatible',
-      'Protected resource metadata does not match the MCP resource URI'
-    );
-  }
+  assertOAuthProtectedResourceMetadata(
+    metadataUrl,
+    resourceMetadata.resource,
+    resourceUri,
+    compatibilityMode
+  );
 
   if (
     !resourceMetadata.authorization_servers ||

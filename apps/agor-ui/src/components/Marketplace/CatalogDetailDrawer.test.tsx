@@ -442,6 +442,16 @@ const SENTRY = {
   permission_disclosure: 'Reads issues and events from the Sentry organisations you authorise.',
 } as unknown as MCPCatalogEntry;
 
+const GITHUB = {
+  ...DATADOG,
+  name: 'io.github.github/github-mcp-server',
+  title: 'GitHub',
+  credentials: {
+    ...DATADOG.credentials,
+    label: 'Fine-grained personal access token',
+  },
+} as unknown as MCPCatalogEntry;
+
 function renderWithConnect(entry: MCPCatalogEntry) {
   const onConnect = vi.fn();
   const props = (
@@ -490,6 +500,13 @@ function renderWithConnect(entry: MCPCatalogEntry) {
 const keyField = () => screen.queryByPlaceholderText(/Paste your .* bearer access token/);
 
 describe('CatalogDetailDrawer API key', () => {
+  it('uses the catalog PAT terminology instead of calling GitHub credentials API keys', () => {
+    renderWithConnect(GITHUB);
+
+    expect(screen.getByText('Use your fine-grained personal access token')).toBeVisible();
+    expect(screen.queryByText('Use your API key')).not.toBeInTheDocument();
+  });
+
   it('erases same-entry consent and the pasted key on same-role identity replacement', () => {
     const { onConnect, replaceIdentity } = renderWithConnect(DATADOG);
     fireEvent.click(screen.getByRole('checkbox'));
@@ -513,6 +530,8 @@ describe('CatalogDetailDrawer API key', () => {
     // endpoint will refuse an install without a key anyway. Finding that out
     // at the button beats finding it out from the daemon.
     expect(keyField()).toBeVisible();
+    expect(screen.getByText('Use your personal access token')).toBeVisible();
+    expect(screen.queryByText('Use your API key')).not.toBeInTheDocument();
     expect(connectButton()).toBeDisabled();
 
     fireEvent.change(keyField() as HTMLElement, { target: { value: 'fake-key-1111' } });

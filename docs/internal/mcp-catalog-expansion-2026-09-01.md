@@ -19,19 +19,21 @@ endpoint. The date of every result below is 2026-09-01.
 | Microsoft Learn                  | Open `initialize`; listed the three Learn search/fetch tools; documentation search returned Microsoft Learn sources. Public, free, no authentication.                                                                                                   | [Microsoft Learn MCP](https://learn.microsoft.com/en-us/training/support/mcp)                                                          |
 | Microsoft Release Communications | Open `initialize` and listed Microsoft 365 roadmap and Azure update lookup tools. Public, free, no authentication.                                                                                                                                      | [Microsoft Release Communications MCP](https://learn.microsoft.com/en-us/microsoft-365/admin/manage/mrc-mcp)                           |
 | AWS Knowledge                    | Open `initialize`; documentation search returned AWS Lambda guidance and sources. No AWS credentials.                                                                                                                                                   | [AWS public Knowledge MCP example](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/registry-sync-records.html)           |
-| Twilio Docs                      | Open `initialize`; documentation search returned Twilio SMS sources. The endpoint exposes public docs, not a Twilio project.                                                                                                                            | [Twilio documentation](https://www.twilio.com/docs)                                                                                    |
+| Twilio Docs                      | Open `initialize`; documentation search returned Twilio SMS sources. The endpoint exposes public docs, not a Twilio project. Twilio labels the service Public Beta, subject to change, and outside its Support Terms and SLA.                           | [Twilio MCP server](https://www.twilio.com/docs/ai/mcp)                                                                                |
 | Docker Hardened Images           | Open `initialize` and public catalog/SBOM/CVE tools. Docker documents that only three private-mirror tools require Basic auth; the disclosure explicitly excludes those tools from this open catalog connection.                                        | [Docker DHI MCP](https://docs.docker.com/dhi/tools/mcp/)                                                                               |
 | Attio                            | OAuth challenge, exact protected resource, `https://app.attio.com` issuer, DCR, and PKCE S256. Available to members on all plans and acts with the user's permissions.                                                                                  | [Attio MCP](https://attio.com/help/reference/how-to-guides/attio-mcp-prompts-and-best-practices)                                       |
 | Expo                             | OAuth challenge, same-origin exact resource and issuer, DCR, and PKCE S256. The disclosure separates hosted EAS/project access from local simulator/dev-tools setup.                                                                                    | [Expo MCP](https://docs.expo.dev/mcp/)                                                                                                 |
 | LaunchDarkly                     | OAuth challenge, path-bound resource/issuer metadata, DCR, and PKCE S256. Vendor documentation says Federal and EU environments are unsupported.                                                                                                        | [LaunchDarkly MCP](https://launchdarkly.com/docs/home/getting-started/mcp)                                                             |
 | WorkOS                           | OAuth challenge, exact resource, `https://signin.workos.com` issuer, DCR, and PKCE S256. Vendor controls default new connections to sandbox and gates production/write access.                                                                          | [WorkOS MCP announcement and controls](https://workos.com/blog/install-workos-plugin-claude-chatgpt-codex)                             |
 
-The scheduled `.github/workflows/mcp-catalog-health.yml` audit repeats
-reachability, claimed auth, protected-resource/issuer discovery, PKCE, and
-client-registration readiness. External failures are structured warnings and a
-job summary, not a PR check: vendor downtime cannot make ordinary CI flaky.
-Unit tests replace both probe and OAuth discovery seams and never use the
-public internet.
+The `.github/workflows/mcp-catalog-health.yml` audit repeats reachability,
+claimed auth, the side-effect-free production protected-resource/issuer and
+endpoint validation, PKCE, and client-registration readiness. It runs daily and
+on curation/audit pull requests. Transient reachability and indeterminate
+metadata results remain annotated advisories; authentication contradictions,
+invalid OAuth contracts, and a newly usable OAuth path for a reviewed bearer
+exception fail with an actionable annotation. Unit tests replace both probe and
+OAuth discovery seams and never use the public internet.
 
 ## Explicit exclusions
 
