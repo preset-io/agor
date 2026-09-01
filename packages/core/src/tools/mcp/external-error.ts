@@ -184,7 +184,7 @@ function fixedContract(
       return {
         action: 'retry',
         message:
-          'The provider returned an invalid MCP authentication response. Retry, then review the provider configuration.',
+          'The provider returned an invalid MCP response. Retry, then review the provider configuration.',
       };
     case 'configuration_required':
       return {

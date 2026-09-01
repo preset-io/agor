@@ -90,6 +90,7 @@ function hasControlCharacter(value: string): boolean {
   });
 }
 
+/** MCP descriptions are protocol text and may legitimately be multiline. */
 function hasUnsafeDescriptionControlCharacter(value: string): boolean {
   for (const character of value) {
     const code = character.charCodeAt(0);
