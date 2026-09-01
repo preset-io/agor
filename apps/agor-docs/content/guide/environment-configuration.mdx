@@ -423,6 +423,35 @@ environment:
       app:    "https://apps.example.com/{{branch.name}}"
 ```
 
+### Lifecycle result contract
+
+A shell `start` command can publish runtime URLs and provider identity by writing
+exactly one control line to **stdout**:
+
+```text
+AGOR_ENVIRONMENT_RESULT={"version":1,"access_urls":[{"name":"App","url":"https://app.example.com/"},{"name":"Manager","url":"https://manager.example.com/"}],"health_url":"https://app.example.com/health","resource":{"provider":"github-codespaces","id":"opaque-provider-id","name":"example-space","manage_url":"https://github.com/codespaces/example-space"}}
+```
+
+For a webhook, return the JSON object itself as an `application/json` response;
+do not include the `AGOR_ENVIRONMENT_RESULT=` prefix. Diagnostic stderr is never
+parsed as control data. The control record is removed from user-visible command
+output and persisted logs.
+
+| Field              | Contract                                                                                                                      |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `version`          | Required. Must be `1`.                                                                                                        |
+| `access_urls`      | Optional non-empty array of at most 8 uniquely named URLs. Order is preserved; the first URL is the primary application link. |
+| `health_url`       | Optional health endpoint.                                                                                                     |
+| `resource`         | Optional provider identity containing at least one of `provider`, `id`, `name`, or `manage_url`. Never put credentials here.  |
+| `applied_revision` | Required for successful `sync`; the exact full lowercase 40- or 64-character Git object ID that was applied.                  |
+
+The encoded result is limited to 8 KiB. Names are limited to 64 characters and
+URLs to 2,048 characters. URLs must be HTTP(S) and cannot contain credentials,
+query strings, or fragments. Unknown fields, duplicate URL names, multiple
+result lines, malformed JSON, and mixed legacy/typed records fail closed. A
+dynamic health URL must also resolve exclusively to public addresses when Agor
+probes it; DNS is pinned and redirects are not followed.
+
 V1 webhooks are intentionally simple: GET only, no custom headers, no request
 body, no signing, and redirects are not followed. V1 webhook targets must be
 public HTTP(S) destinations; localhost, private/link-local ranges, and URL

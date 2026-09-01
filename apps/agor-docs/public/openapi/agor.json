@@ -11071,24 +11071,30 @@
         ],
         "responses": {
           "201": {
-            "description": "created",
+            "description": "The branch with its updated durable source-sync state.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/_id"
+                  "$ref": "#/components/schemas/branches"
                 }
               }
             }
           },
+          "400": {
+            "description": "The desired revision is missing or is not a full lowercase Git SHA-1/SHA-256 object ID."
+          },
           "401": {
             "description": "not authenticated"
+          },
+          "409": {
+            "description": "The environment lifecycle changed before the request could be applied."
           },
           "500": {
             "description": "general error"
           }
         },
-        "description": "Creates a new resource with data.",
-        "summary": "Creates a new resource with data",
+        "description": "Requests exact desired source state for a managed branch environment. The request records desired state; successful reconciliation is acknowledged separately through the environment lifecycle result.",
+        "summary": "Request exact managed-environment source revision",
         "tags": ["branches"],
         "security": [],
         "requestBody": {
@@ -11096,7 +11102,16 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/_id"
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["desired_revision"],
+                "properties": {
+                  "desired_revision": {
+                    "type": "string",
+                    "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                    "description": "Full lowercase Git SHA-1 or SHA-256 object ID to reconcile in the remote environment."
+                  }
+                }
               }
             }
           }
