@@ -34,9 +34,17 @@ export interface EnvironmentLifecycleResult {
   access_urls?: EnvironmentLifecycleAccessUrl[];
   health_url?: string;
   resource?: EnvironmentLifecycleResource;
+  /** Exact Git commit a source synchronization command actually applied. */
+  applied_revision?: string;
 }
 
-const RESULT_KEYS = new Set(['version', 'access_urls', 'health_url', 'resource']);
+const RESULT_KEYS = new Set([
+  'version',
+  'access_urls',
+  'health_url',
+  'resource',
+  'applied_revision',
+]);
 const ACCESS_URL_KEYS = new Set(['name', 'url']);
 const RESOURCE_KEYS = new Set(['provider', 'id', 'name', 'manage_url']);
 
@@ -68,6 +76,18 @@ function normalizeText(value: unknown, label: string, maxLength: number): string
     throw new Error(`${label} must be a non-empty bounded text value`);
   }
   return normalized;
+}
+
+/** Validate a full canonical SHA-1 or SHA-256 Git object ID. */
+export function validateEnvironmentSourceRevision(
+  value: unknown,
+  label = 'environment source revision'
+): string {
+  const revision = normalizeText(value, label, 64);
+  if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(revision)) {
+    throw new Error(`${label} must be a full lowercase Git SHA-1 or SHA-256 object ID`);
+  }
+  return revision;
 }
 
 function normalizeLifecycleUrl(value: unknown, label: string): string {
@@ -164,6 +184,14 @@ export function validateEnvironmentLifecycleResult(value: unknown): EnvironmentL
       ? { health_url: normalizeLifecycleUrl(record.health_url, 'environment result health_url') }
       : {}),
     ...(Object.hasOwn(record, 'resource') ? { resource: validateResource(record.resource) } : {}),
+    ...(Object.hasOwn(record, 'applied_revision')
+      ? {
+          applied_revision: validateEnvironmentSourceRevision(
+            record.applied_revision,
+            'environment result applied_revision'
+          ),
+        }
+      : {}),
   };
 }
 
@@ -196,6 +224,7 @@ export function lifecycleResultTemplateFacts(
     ...(result.resource?.id ? { resource_id: result.resource.id } : {}),
     ...(result.resource?.provider ? { resource_provider: result.resource.provider } : {}),
     ...(result.resource?.manage_url ? { manage_url: result.resource.manage_url } : {}),
+    ...(result.applied_revision ? { applied_revision: result.applied_revision } : {}),
   };
   for (const accessUrl of result.access_urls?.slice(1) ?? []) {
     const slug = accessUrl.name

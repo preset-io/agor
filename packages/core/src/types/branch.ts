@@ -581,6 +581,36 @@ export interface BranchEnvironmentInstance {
    */
   lifecycle_result?: EnvironmentLifecycleResult;
 
+  /** Durable desired/applied source reconciliation state for remote environments. */
+  source_sync?: {
+    /** Latest clean Git commit requested for this environment. */
+    desired_revision: string;
+    desired_at: string;
+    /** Latest commit the adapter truthfully acknowledged applying. */
+    applied_revision?: string;
+    applied_at?: string;
+    /** User identity whose credential route owns retries for this request. */
+    requested_by_user_id?: string;
+    /** Cross-replica, lease-bounded ownership of one exact revision attempt. */
+    active_attempt?: {
+      token: string;
+      revision: string;
+      environment_generation: number;
+      started_at: string;
+      lease_expires_at: string;
+      instance_id: string;
+      boot_id: string;
+    };
+    last_error?: {
+      revision: string;
+      timestamp: string;
+      message: string;
+    };
+    /** Durable exponential retry state; reset when desired_revision changes. */
+    failure_count?: number;
+    retry_not_before_at?: string;
+  };
+
   /**
    * Process logs (last N lines)
    *
@@ -642,6 +672,7 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'facts',
   'lifecycle_result',
   'startup_deadline_at',
+  'source_sync',
   // Derived from the reserved `url` fact, so it goes stale in exactly the same
   // situations facts do and has to be clearable alongside them.
   'access_urls',

@@ -39,6 +39,20 @@ describe('validateEnvironmentLifecycleResult', () => {
     });
   });
 
+  it('accepts only a full canonical revision acknowledgement', () => {
+    const revision = 'a'.repeat(40);
+    expect(validateEnvironmentLifecycleResult({ version: 1, applied_revision: revision })).toEqual({
+      version: 1,
+      applied_revision: revision,
+    });
+
+    for (const invalid of ['a'.repeat(12), 'A'.repeat(40), `${'a'.repeat(40)}-dirty`, 'unknown']) {
+      expect(() =>
+        validateEnvironmentLifecycleResult({ version: 1, applied_revision: invalid })
+      ).toThrow('full lowercase Git');
+    }
+  });
+
   it.each([
     null,
     [],
@@ -88,6 +102,7 @@ describe('lifecycleResultTemplateFacts', () => {
         ],
         health_url: 'https://shell.example.test/health',
         resource: { provider: 'github-codespaces', id: '123', name: 'space' },
+        applied_revision: 'b'.repeat(40),
       })
     ).toEqual({
       url: 'https://shell.example.test/',
@@ -96,6 +111,7 @@ describe('lifecycleResultTemplateFacts', () => {
       resource_id: '123',
       resource_provider: 'github-codespaces',
       url_manager: 'https://manager.example.test/',
+      applied_revision: 'b'.repeat(40),
     });
   });
 });

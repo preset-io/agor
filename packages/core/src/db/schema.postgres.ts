@@ -8,6 +8,7 @@
 import type {
   AgorGrants,
   AgorRuntimeConfig,
+  BranchEnvironmentInstance,
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
@@ -895,6 +896,7 @@ export const branches = pgTable(
             name: string;
             url: string;
           }>;
+          source_sync?: BranchEnvironmentInstance['source_sync'];
           logs?: string[];
         };
 

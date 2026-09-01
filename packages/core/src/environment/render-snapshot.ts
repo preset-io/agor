@@ -75,6 +75,8 @@ export interface RenderBranchInput {
    * performed while the environment is running.
    */
   facts?: Record<string, string>;
+  /** Exact desired source revision exposed only while rendering `sync`. */
+  sync_revision?: string;
 }
 
 /**
@@ -172,16 +174,23 @@ export function renderBranchSnapshot(
   const {
     custom,
     env: envFacts,
+    sync: _ignoredSync,
     ...nonCustomBase
   } = baseContext as {
     custom: Record<string, unknown>;
     env: Record<string, unknown>;
+    sync?: Record<string, unknown>;
   } & Record<string, unknown>;
   const overridden = deepMergeContext(
     nonCustomBase,
     env.template_overrides as Record<string, unknown> | undefined
   );
-  const context: Record<string, unknown> = { ...overridden, custom, env: envFacts };
+  const context: Record<string, unknown> = {
+    ...overridden,
+    custom,
+    env: envFacts,
+    sync: { revision: branch.sync_revision ?? '' },
+  };
 
   const snapshot: RenderedEnvironmentSnapshot = {
     variant: chosen,

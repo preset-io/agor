@@ -155,6 +155,31 @@ describe('renderBranchSnapshot', () => {
     expect(snapshot?.start).toBe('echo custom-app');
   });
 
+  it('renders the exact sync revision and does not let config shadow it', () => {
+    const revision = 'c'.repeat(40);
+    const env: RepoEnvironment = {
+      version: 2,
+      default: 'remote',
+      variants: {
+        remote: {
+          start: 'start',
+          stop: 'stop',
+          sync: 'sync --revision {{sync.revision}}',
+        },
+      },
+      template_overrides: {
+        sync: { revision: 'attacker-controlled' },
+      },
+    };
+
+    const snapshot = renderBranchSnapshot(
+      { slug: 'r', environment: env },
+      { ...branch, sync_revision: revision }
+    );
+
+    expect(snapshot?.sync).toBe(`sync --revision ${revision}`);
+  });
+
   it('deep-merges template_overrides into nested context', () => {
     const env: RepoEnvironment = {
       version: 2,
