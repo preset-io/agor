@@ -91,8 +91,10 @@ export type MCPCatalogCapability = (typeof MCP_CATALOG_CAPABILITIES)[number];
  * - `none`        — an unauthenticated JSON-RPC `initialize` handshake is
  *                   accepted; connect can proceed.
  * - `oauth`       — the endpoint answers 401 with an OAuth challenge.
- * - `credentials` — the endpoint answers 401/403 with a non-OAuth challenge,
- *                   so it wants an API key.
+ * - `credentials` — a reviewed bearer credential is the catalog's supported
+ *                   route. Normally the endpoint answers with a non-OAuth
+ *                   challenge; a rare reviewed exception may also advertise
+ *                   OAuth while accepting bearer tokens.
  * - `unknown`     — `curated.yaml` does not state one.
  *
  * Every value here is a claim about a third party's endpoint that a checked-in
@@ -181,6 +183,13 @@ export interface MCPCatalogEntryCredentials {
   acquisition_url: string;
   /** Vendor-specific label, e.g. "personal access token". */
   label?: string;
+  /**
+   * The endpoint advertises OAuth, but the vendor also officially supports a
+   * bearer token and its OAuth server cannot register an Agor client safely.
+   * Connect still verifies the token with a pinned initialize request. This is
+   * deliberately opt-in: an OAuth challenge never implies API-key support.
+   */
+  oauth_challenge_compatible?: true;
 }
 
 /**

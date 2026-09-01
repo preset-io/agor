@@ -46,6 +46,12 @@ export interface AuthProbeOptions {
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
 }
 
+export interface RemoteAuthProbeResult {
+  authType: MCPCatalogProbedAuthType;
+  /** Present only for an OAuth challenge; never contains a caller credential. */
+  wwwAuthenticate?: string;
+}
+
 /** True for a non-null, non-array object. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -202,30 +208,41 @@ async function sendInitialize(
  * `unknown` or `unreachable`, so a connect gets a clean refusal rather than a
  * stack trace. `unknown` means "not determined", never "open".
  */
-export async function probeRemoteAuthType(
+export async function probeRemoteAuth(
   remoteUrl: string,
   options: AuthProbeOptions = {}
-): Promise<MCPCatalogProbedAuthType> {
+): Promise<RemoteAuthProbeResult> {
   const attempt = await sendInitialize(remoteUrl, options);
   if ('failure' in attempt) {
-    return attempt.failure === 'refused' ? 'unknown' : 'unreachable';
+    return { authType: attempt.failure === 'refused' ? 'unknown' : 'unreachable' };
   }
   const { response } = attempt;
 
-  if (isOAuthRequired(response.status, response.headers)) return 'oauth';
+  if (isOAuthRequired(response.status, response.headers))
+    return {
+      authType: 'oauth',
+      wwwAuthenticate: response.headers.get('www-authenticate') ?? undefined,
+    };
 
   // A 401/403 without an OAuth challenge needs credentials the browser flow
   // cannot obtain, which is a different refusal to write than "sign in".
-  if (response.status === 401 || response.status === 403) return 'credentials';
+  if (response.status === 401 || response.status === 403) return { authType: 'credentials' };
 
   if (response.ok) {
     // `none` is the one verdict that installs anything, so it has to be earned
     // by a real handshake rather than by a 2xx. Anything else answering on this
     // URL is something the probe failed to identify.
-    return isInitializeResult(await response.text()) ? 'none' : 'unknown';
+    return { authType: isInitializeResult(await response.text()) ? 'none' : 'unknown' };
   }
 
-  return 'unreachable';
+  return { authType: 'unreachable' };
+}
+
+export async function probeRemoteAuthType(
+  remoteUrl: string,
+  options: AuthProbeOptions = {}
+): Promise<MCPCatalogProbedAuthType> {
+  return (await probeRemoteAuth(remoteUrl, options)).authType;
 }
 
 /**

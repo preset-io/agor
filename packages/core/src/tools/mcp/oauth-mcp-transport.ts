@@ -459,7 +459,7 @@ export async function resolveMCPOAuthDiscovery(
 /**
  * Fetch Protected Resource Metadata (RFC 9728)
  */
-async function fetchResourceMetadata(
+export async function fetchResourceMetadata(
   metadataUrl: string,
   options: { allowLocalhostHttp?: boolean; assertCurrent?: () => void } = {}
 ): Promise<OAuthMetadata> {

@@ -426,6 +426,39 @@ entries:
     transport: streamable-http
     auth_type: oauth
 
+  - name: io.github.github/github-mcp-server
+    title: GitHub
+    category: dev-tools
+    capabilities: [code-repos, issues, pull-requests, ci-cd, code-search, security-scan]
+    benefit: Let an agent investigate repositories, issues, pull requests, Actions, and code without copying each artifact into the session.
+    starter_prompt: Summarise my open pull requests, identify any failing checks, and suggest the next action for each one. Do not change anything.
+    permission_disclosure: Uses the GitHub personal access token you provide and can perform every operation that token and your repository permissions allow, including reading private code and creating or changing issues, pull requests, workflows, and repository content. Prefer a fine-grained, read-only token scoped only to the repositories needed. GitHub's remote endpoint advertises OAuth but does not publish Dynamic Client Registration, so Marketplace deliberately uses GitHub's documented bearer-token route instead of pretending OAuth can be set up.
+    icon_url: https://github.githubassets.com/favicons/favicon.svg
+    website_url: https://docs.github.com/en/copilot/how-tos/provide-context/use-mcp-in-your-ide/set-up-the-github-mcp-server
+    popularity_rank: 1
+    remote_url: https://api.githubcopilot.com/mcp/
+    transport: streamable-http
+    auth_type: credentials
+    credentials:
+      scheme: bearer
+      label: Fine-grained personal access token
+      acquisition_url: https://github.com/settings/personal-access-tokens/new
+      oauth_challenge_compatible: true
+
+  - name: com.microsoft/microsoft-learn-mcp
+    title: Microsoft Learn
+    category: search
+    capabilities: [docs, code-search]
+    benefit: Search current Microsoft product documentation and retrieve the exact source pages and code samples behind an answer.
+    starter_prompt: Find the current Microsoft guidance and a code sample for using managed identity from an Azure-hosted application. Cite the source pages.
+    permission_disclosure: Sends search terms and public Microsoft Learn URLs to Microsoft's public, read-only documentation service. It requires no account and cannot access tenant data or change Microsoft resources.
+    icon_url: https://www.google.com/s2/favicons?domain=learn.microsoft.com&sz=64
+    website_url: https://learn.microsoft.com/en-us/training/support/mcp
+    popularity_rank: 55
+    remote_url: https://learn.microsoft.com/api/mcp
+    transport: streamable-http
+    auth_type: none
+
 # Servers whose vendor runs a public MCP endpoint but has not published to the
 # registry. Their `name` is the reverse-DNS form of a domain the vendor owns —
 # the name the registry's own rules would require them to use — but nothing has
@@ -686,7 +719,121 @@ unpublished:
     transport: streamable-http
     auth_type: none
 
-# OAuth endpoints intentionally not offered after the 2026-08-19 read-only audit:
-# - GitHub, MongoDB, Box, HubSpot, and Slack publish no DCR endpoint or reviewed public client for Agor.
+  - name: com.microsoft.releasecommunications/mcp
+    title: Microsoft Release Communications
+    category: search
+    capabilities: [docs, web-search]
+    benefit: Search Microsoft 365 roadmap items and Azure updates from their official release feeds instead of relying on stale summaries.
+    starter_prompt: Show the most recent Microsoft 365 roadmap items about Teams and the latest Azure updates about managed identity, with source links.
+    permission_disclosure: Sends public release-feed searches to Microsoft. It requires no account, reads only public Microsoft 365 roadmap and Azure update data, and cannot access or change a tenant.
+    icon_url: https://www.google.com/s2/favicons?domain=microsoft.com&sz=64
+    website_url: https://learn.microsoft.com/en-us/microsoft-365/admin/manage/mrc-mcp
+    popularity_rank: 56
+    remote_url: https://www.microsoft.com/releasecommunications/mcp
+    transport: streamable-http
+    auth_type: none
+
+  - name: com.amazonaws/knowledge-mcp
+    title: AWS Knowledge
+    category: search
+    capabilities: [docs, code-search]
+    benefit: Search AWS documentation, recommendations, and regional availability through AWS's public knowledge service.
+    starter_prompt: Find the current AWS guidance for choosing and configuring a Lambda timeout, and cite the source pages.
+    permission_disclosure: Sends search terms to AWS and reads public AWS documentation and knowledge resources. It requires no AWS credentials and cannot inspect or change an AWS account.
+    icon_url: https://www.google.com/s2/favicons?domain=aws.amazon.com&sz=64
+    website_url: https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/registry-sync-records.html
+    popularity_rank: 57
+    remote_url: https://knowledge-mcp.global.api.aws
+    transport: streamable-http
+    auth_type: none
+
+  - name: com.twilio/docs-mcp
+    title: Twilio Docs
+    category: search
+    capabilities: [docs, code-search]
+    benefit: Search and retrieve current Twilio documentation without granting access to a Twilio project.
+    starter_prompt: Find the current Twilio documentation and a code example for sending an SMS, and cite the source pages.
+    permission_disclosure: Sends documentation searches to Twilio and reads only public Twilio documentation. It requires no account and cannot read customer data, send messages, or change a Twilio project.
+    icon_url: https://www.google.com/s2/favicons?domain=twilio.com&sz=64
+    website_url: https://www.twilio.com/docs
+    popularity_rank: 58
+    remote_url: https://mcp.twilio.com/docs
+    transport: streamable-http
+    auth_type: none
+
+  - name: com.docker/dhi-mcp
+    title: Docker Hardened Images
+    category: dev-tools
+    capabilities: [security-scan, code-search]
+    benefit: Inspect Docker Hardened Image catalogs, tags, SBOMs, attestations, and known vulnerabilities before choosing a base image.
+    starter_prompt: Find the Docker Hardened Image that best matches the base image I name and summarise its available tags, SBOM, and known CVEs.
+    permission_disclosure: Public tools read Docker Hardened Images catalog, tag, SBOM, attestation, and CVE information without an account. Docker's three private-mirror management tools require separate Basic credentials and are not enabled by this catalog connection; it cannot create or change mirrors.
+    icon_url: https://www.google.com/s2/favicons?domain=docker.com&sz=64
+    website_url: https://docs.docker.com/dhi/tools/mcp/
+    popularity_rank: 59
+    remote_url: https://dhi.io/mcp
+    transport: streamable-http
+    auth_type: none
+
+  - name: com.attio/mcp
+    title: Attio
+    category: productivity
+    capabilities: [crm, tasks, notes]
+    benefit: Research and update CRM records, notes, tasks, email, and meeting context from the same session doing the work.
+    starter_prompt: Summarise the companies and people I interacted with most recently and list overdue follow-up tasks. Do not change anything.
+    permission_disclosure: Acts as your Attio user and can read and write the CRM data your role can reach, including people, companies, records, notes, tasks, emails, and meetings. Available to workspace members on all Attio plans; actions remain limited by your Attio permissions.
+    icon_url: https://www.google.com/s2/favicons?domain=attio.com&sz=64
+    website_url: https://attio.com/help/reference/how-to-guides/attio-mcp-prompts-and-best-practices
+    popularity_rank: 60
+    remote_url: https://mcp.attio.com/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: dev.expo/mcp
+    title: Expo
+    category: dev-tools
+    capabilities: [docs, deployments, logs]
+    benefit: Investigate Expo projects, builds, submissions, and EAS workflows using current project and documentation context.
+    starter_prompt: Summarise the latest builds and workflow runs for my Expo project and explain any failures. Do not trigger a build.
+    permission_disclosure: Acts as your Expo user and can access projects, builds, submissions, EAS workflows, and related logs allowed by that account. Some capabilities require a current Expo SDK or plan. Local simulator and dev-tools control require additional local setup and are not enabled merely by connecting this hosted endpoint.
+    icon_url: https://www.google.com/s2/favicons?domain=expo.dev&sz=64
+    website_url: https://docs.expo.dev/mcp/
+    popularity_rank: 61
+    remote_url: https://mcp.expo.dev/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: com.launchdarkly/mcp
+    title: LaunchDarkly
+    category: observability
+    capabilities: [feature-flags, metrics, logs, traces]
+    benefit: Correlate feature-flag state with application and observability context, then manage flags when explicitly asked.
+    starter_prompt: List recently changed feature flags and correlate them with recent errors or regressions. Do not change any flags.
+    permission_disclosure: Acts with the permissions of the LaunchDarkly user you authorise and can read or change feature flags, Agent Control, and observability data. It is not available for LaunchDarkly Federal or EU environments.
+    icon_url: https://www.google.com/s2/favicons?domain=launchdarkly.com&sz=64
+    website_url: https://launchdarkly.com/docs/home/getting-started/mcp
+    popularity_rank: 62
+    remote_url: https://mcp.launchdarkly.com/mcp/launchdarkly
+    transport: streamable-http
+    auth_type: oauth
+
+  - name: com.workos/mcp
+    title: WorkOS
+    category: dev-tools
+    capabilities: [projects, logs, security-scan]
+    benefit: Inspect and administer WorkOS environments, organisations, authentication configuration, and audit activity with team controls applied.
+    starter_prompt: Summarise my WorkOS environments, recent audit events, and authentication configuration. Do not change anything.
+    permission_disclosure: Acts within your WorkOS team and environment permissions. It can read and, when team admins allow production or write access, change organisations, authentication and directory configuration, and other WorkOS resources. New connections default to sandbox; WorkOS strips secret values and requires confirmation for irreversible deletes.
+    icon_url: https://www.google.com/s2/favicons?domain=workos.com&sz=64
+    website_url: https://workos.com/blog/install-workos-plugin-claude-chatgpt-codex
+    popularity_rank: 63
+    remote_url: https://mcp.workos.com/mcp
+    transport: streamable-http
+    auth_type: oauth
+
+# OAuth endpoints intentionally not offered after the 2026-09-01 read-only audit:
+# - MongoDB, Box, HubSpot, and Slack publish no DCR endpoint or reviewed public client for Agor.
+# - Google Workspace requires each customer to supply a Cloud OAuth client; Power BI is tenant-admin gated and has no DCR.
+# - GitHub's OAuth route publishes no DCR; the entry above uses its documented PAT route instead.
 # - Prisma and PagerDuty publish authorization-server issuer chains that do not bind safely.
 # - Kagi challenges with Bearer but publishes neither protected-resource nor authorization-server metadata.

@@ -151,6 +151,18 @@ describe('auth_type', () => {
     });
   });
 
+  it('accepts only an explicit true OAuth-challenge bearer exception', () => {
+    const entry = parseCuratedCatalog(
+      `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n      oauth_challenge_compatible: true\n`
+    )[0];
+    expect(entry.credentials?.oauth_challenge_compatible).toBe(true);
+    expect(() =>
+      parseCuratedCatalog(
+        `${VALID_ENTRY}    auth_type: credentials\n    credentials:\n      scheme: bearer\n      acquisition_url: https://example.com/tokens\n      oauth_challenge_compatible: false\n`
+      )
+    ).toThrow(CuratedCatalogError);
+  });
+
   it('refuses a verdict only a live check could produce', () => {
     // `unreachable` describes one moment, so a checked-in file cannot claim it.
     expect(() => withAuth('auth_type: unreachable')).toThrow(CuratedCatalogError);
@@ -549,7 +561,6 @@ describe('the shipped catalog', () => {
   it('does not advertise OAuth endpoints that cannot reach a safely bound client-registration boundary', async () => {
     const entries = await loadCuratedCatalog();
     const unsupported = [
-      'io.github.github/github-mcp-server',
       'io.prisma/mcp',
       'com.mongodb/mcp',
       'com.box/mcp',
@@ -561,6 +572,12 @@ describe('the shipped catalog', () => {
     ];
 
     expect(entries.filter((entry) => unsupported.includes(entry.name))).toEqual([]);
+    expect(
+      entries.find((entry) => entry.name === 'io.github.github/github-mcp-server')
+    ).toMatchObject({
+      auth_type: 'credentials',
+      credentials: { scheme: 'bearer', oauth_challenge_compatible: true },
+    });
   });
 
   it('carries no secret-shaped value anywhere in the file', async () => {

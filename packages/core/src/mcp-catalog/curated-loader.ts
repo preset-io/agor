@@ -85,6 +85,7 @@ const catalogEntryCredentialsSchema = z
     scheme: z.literal('bearer'),
     acquisition_url: httpUrl,
     label: nonEmpty.optional(),
+    oauth_challenge_compatible: z.literal(true).optional(),
   })
   .strict();
 
