@@ -23,6 +23,7 @@ import {
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantID } from '@agor/core/types';
+import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
 import { isAllowedFactProbeUrl, isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
@@ -39,6 +40,7 @@ export interface DistributedHealthMonitorOptions {
   random?: () => number;
   generateClaimToken?: () => string;
   fetchHealth?: typeof fetch;
+  fetchDynamicHealth?: ReturnType<typeof createPinnedFetch>;
   /** Test seam; production always uses capability-scoped PostgreSQL discovery. */
   discover?: (
     after?: EnvironmentHealthRoutingCursor
@@ -88,6 +90,7 @@ export class DistributedHealthMonitor {
   private readonly random: () => number;
   private readonly generateClaimToken: () => string;
   private readonly fetchHealth: typeof fetch;
+  private readonly fetchDynamicHealth: ReturnType<typeof createPinnedFetch>;
   private readonly activeClaims = new Map<
     string,
     { tenantId: TenantID; claim: EnvironmentHealthClaim }
@@ -107,6 +110,13 @@ export class DistributedHealthMonitor {
     this.random = options.random ?? Math.random;
     this.generateClaimToken = options.generateClaimToken ?? generateId;
     this.fetchHealth = options.fetchHealth ?? fetch;
+    this.fetchDynamicHealth =
+      options.fetchDynamicHealth ??
+      createPinnedFetch({
+        timeoutMs: options.httpTimeoutMs,
+        maxBytes: 64 * 1024,
+        isBodyComplete: () => true,
+      });
     for (const [value, label] of [
       [options.scanIntervalMs, 'scan interval'],
       [options.maxIdleIntervalMs, 'maximum idle interval'],
@@ -473,6 +483,7 @@ export class DistributedHealthMonitor {
     const factsHealthUrl =
       rawFactsHealthUrl && isAllowedFactProbeUrl(rawFactsHealthUrl) ? rawFactsHealthUrl : undefined;
     const healthUrl = branch.health_check_url || factsHealthUrl;
+    const isDynamicHealth = !branch.health_check_url && factsHealthUrl !== undefined;
     if (!healthUrl) {
       return {
         status: 'unknown',
@@ -497,13 +508,16 @@ export class DistributedHealthMonitor {
         this.options.httpTimeoutMs
       );
       timeout.unref?.();
-      const response = await this.fetchHealth(healthUrl, {
-        method: 'GET',
-        signal: controller.signal,
-        // Do not follow redirects (see branches.ts): the distributed/managed
-        // path is where a 302 to a link-local metadata endpoint matters most.
-        redirect: 'manual',
-      });
+      const response = await (isDynamicHealth ? this.fetchDynamicHealth : this.fetchHealth)(
+        healthUrl,
+        {
+          method: 'GET',
+          signal: controller.signal,
+          // Do not follow redirects (see branches.ts): the distributed/managed
+          // path is where a 302 to a link-local metadata endpoint matters most.
+          redirect: 'manual',
+        }
+      );
       return {
         status: response.ok ? 'healthy' : 'unhealthy',
         message: response.ok

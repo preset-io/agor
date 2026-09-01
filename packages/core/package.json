@@ -172,6 +172,12 @@
       "import": "./dist/utils/errors.js",
       "require": "./dist/utils/errors.cjs"
     },
+    "./utils/pinned-fetch": {
+      "source": "./src/utils/pinned-fetch.ts",
+      "types": "./dist/utils/pinned-fetch.d.ts",
+      "import": "./dist/utils/pinned-fetch.js",
+      "require": "./dist/utils/pinned-fetch.cjs"
+    },
     "./yaml": {
       "source": "./src/yaml/index.ts",
       "types": "./dist/yaml/index.d.ts",

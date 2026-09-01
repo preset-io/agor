@@ -73,6 +73,7 @@ import {
   TEAMMATE_FRAMEWORK_REPO_URL,
 } from '@agor/core/types';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
+import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
 import { isAllowedFactProbeUrl, isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
@@ -170,6 +171,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private processes = new Map<BranchID, ManagedProcess>();
+  private readonly fetchDynamicEnvironmentHealth = createPinnedFetch({
+    timeoutMs: ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS,
+    maxBytes: 64 * 1024,
+    // Health only needs the status. Stop consuming a streaming response after
+    // its first body chunk; an empty response still completes on `end`.
+    isBodyComplete: () => true,
+  });
   /**
    * Tail of the per-branch sync queue. Syncs mutate one working tree inside the
    * environment, so they must not overlap; see syncEnvironment.
@@ -2628,6 +2636,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const factsHealthUrl =
       rawFactsHealthUrl && isAllowedFactProbeUrl(rawFactsHealthUrl) ? rawFactsHealthUrl : undefined;
     const healthUrl = branch.health_check_url || factsHealthUrl;
+    const isDynamicHealth = !branch.health_check_url && factsHealthUrl !== undefined;
     if (!healthUrl) {
       const managedProcess = this.processes.get(branch.branch_id);
       const isProcessAlive = Boolean(managedProcess?.process && !managedProcess.process.killed);
@@ -2661,15 +2670,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }, ENVIRONMENT.HEALTH_CHECK_TIMEOUT_MS);
     timeout.unref?.();
     try {
-      const response = await fetch(healthUrl, {
-        signal: controller.signal,
-        method: 'GET',
-        // Do not follow redirects: an otherwise-allowed health URL could 302 to
-        // a link-local metadata endpoint (169.254.169.254), bypassing
-        // isAllowedHealthCheckUrl. A 3xx returns not-ok and is reported
-        // unhealthy. Mirrors the managed-env webhook fetch.
-        redirect: 'manual',
-      });
+      const response = await (isDynamicHealth ? this.fetchDynamicEnvironmentHealth : fetch)(
+        healthUrl,
+        {
+          signal: controller.signal,
+          method: 'GET',
+          // Do not follow redirects: an otherwise-allowed health URL could 302 to
+          // a link-local metadata endpoint (169.254.169.254), bypassing
+          // isAllowedHealthCheckUrl. A 3xx returns not-ok and is reported
+          // unhealthy. Mirrors the managed-env webhook fetch.
+          redirect: 'manual',
+        }
+      );
       return {
         status: response.ok ? 'healthy' : 'unhealthy',
         message: response.ok

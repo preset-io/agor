@@ -2931,6 +2931,12 @@ describe('BranchesService remote environment probe resolution', () => {
   const observe = async (environmentInstance: Record<string, unknown>, healthCheckUrl?: string) => {
     const { service } = createServiceHarness();
     const fetchSpy = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response);
+    const dynamicFetchSpy = vi
+      .spyOn(
+        service as unknown as { fetchDynamicEnvironmentHealth: typeof fetch },
+        'fetchDynamicEnvironmentHealth'
+      )
+      .mockResolvedValue(new Response('', { status: 200 }));
     globalThis.fetch = fetchSpy as never;
     const observation = await (
       service as unknown as {
@@ -2942,7 +2948,7 @@ describe('BranchesService remote environment probe resolution', () => {
       ...(healthCheckUrl ? { health_check_url: healthCheckUrl } : {}),
       environment_instance: environmentInstance,
     });
-    return { observation, fetchSpy };
+    return { observation, fetchSpy, dynamicFetchSpy };
   };
 
   const originalFetch = globalThis.fetch;
@@ -2951,41 +2957,45 @@ describe('BranchesService remote environment probe resolution', () => {
   });
 
   it('probes the `health` fact when no health_check_url is configured', async () => {
-    const { observation, fetchSpy } = await observe({
+    const { observation, fetchSpy, dynamicFetchSpy } = await observe({
       status: 'starting',
       facts: { health: CS_HEALTH },
     });
 
-    expect(fetchSpy).toHaveBeenCalledWith(CS_HEALTH, expect.anything());
+    expect(dynamicFetchSpy).toHaveBeenCalledWith(CS_HEALTH, expect.anything());
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(observation).toMatchObject({ status: 'healthy' });
   });
 
   it('prefers an operator-configured health_check_url over the fact', async () => {
-    const { fetchSpy } = await observe(
+    const { fetchSpy, dynamicFetchSpy } = await observe(
       { status: 'running', facts: { health: CS_HEALTH } },
       'http://localhost:8088/health'
     );
 
     expect(fetchSpy).toHaveBeenCalledWith('http://localhost:8088/health', expect.anything());
+    expect(dynamicFetchSpy).not.toHaveBeenCalled();
   });
 
   it('refuses a fact aimed at an internal destination and does not probe it', async () => {
     // Facts are lifecycle-command output — untrusted input, so an SSRF target
     // must not be probed just because a script emitted it.
-    const { observation, fetchSpy } = await observe({
+    const { observation, fetchSpy, dynamicFetchSpy } = await observe({
       status: 'starting',
       facts: { health: 'http://169.254.169.254/latest/meta-data' },
     });
 
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(dynamicFetchSpy).not.toHaveBeenCalled();
     expect(observation).toMatchObject({ status: 'unknown' });
     expect(String((observation as { message: string }).message)).toContain('disallowed');
   });
 
   it('reports unobservable when there is neither a URL nor a fact', async () => {
-    const { observation, fetchSpy } = await observe({ status: 'starting' });
+    const { observation, fetchSpy, dynamicFetchSpy } = await observe({ status: 'starting' });
 
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(dynamicFetchSpy).not.toHaveBeenCalled();
     expect(observation).toMatchObject({ status: 'unknown' });
   });
 });

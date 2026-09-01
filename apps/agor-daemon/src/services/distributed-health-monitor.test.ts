@@ -218,12 +218,16 @@ describe('DistributedHealthMonitor remote environment probe resolution', () => {
    */
   const CS_HEALTH = 'https://cs-abc-8088.app.github.dev/health';
 
-  const observe = async (branch: Record<string, unknown>, fetchHealth: typeof fetch) => {
+  const observe = async (
+    branch: Record<string, unknown>,
+    fetchHealth: typeof fetch,
+    fetchDynamicHealth: typeof fetch
+  ) => {
     const { app } = makeApp();
     const monitor = new DistributedHealthMonitor(
       app as never,
       {} as never,
-      options({ fetchHealth })
+      options({ fetchHealth, fetchDynamicHealth })
     );
     return (
       monitor as unknown as {
@@ -233,16 +237,19 @@ describe('DistributedHealthMonitor remote environment probe resolution', () => {
   };
 
   it('probes the `health` fact when no health_check_url is configured', async () => {
-    const fetchHealth = vi.fn(
+    const fetchHealth = vi.fn();
+    const fetchDynamicHealth = vi.fn(
       async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response
     );
 
     const observation = await observe(
       { environment_instance: { status: 'starting', facts: { health: CS_HEALTH } } },
-      fetchHealth as never
+      fetchHealth as never,
+      fetchDynamicHealth as never
     );
 
-    expect(fetchHealth).toHaveBeenCalledWith(CS_HEALTH, expect.anything());
+    expect(fetchDynamicHealth).toHaveBeenCalledWith(CS_HEALTH, expect.anything());
+    expect(fetchHealth).not.toHaveBeenCalled();
     expect(observation).toMatchObject({ status: 'healthy', message: 'HTTP 200' });
   });
 
@@ -250,47 +257,56 @@ describe('DistributedHealthMonitor remote environment probe resolution', () => {
     const fetchHealth = vi.fn(
       async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response
     );
+    const fetchDynamicHealth = vi.fn();
 
     await observe(
       {
         health_check_url: 'https://configured.example.com/health',
         environment_instance: { facts: { health: CS_HEALTH } },
       },
-      fetchHealth as never
+      fetchHealth as never,
+      fetchDynamicHealth as never
     );
 
     expect(fetchHealth).toHaveBeenCalledWith(
       'https://configured.example.com/health',
       expect.anything()
     );
+    expect(fetchDynamicHealth).not.toHaveBeenCalled();
   });
 
   it('refuses a fact pointing at an internal destination and does not probe it', async () => {
     const fetchHealth = vi.fn(
       async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response
     );
+    const fetchDynamicHealth = vi.fn();
 
     // Facts are command output — untrusted input, so SSRF targets must not be
     // probed just because a lifecycle command emitted them.
     const observation = await observe(
       { environment_instance: { facts: { health: 'http://169.254.169.254/latest/meta-data' } } },
-      fetchHealth as never
+      fetchHealth as never,
+      fetchDynamicHealth as never
     );
 
     expect(fetchHealth).not.toHaveBeenCalled();
+    expect(fetchDynamicHealth).not.toHaveBeenCalled();
     expect(observation).toMatchObject({ status: 'unknown' });
     expect(String((observation as { message: string }).message)).toContain('disallowed');
   });
 
   it('still reports unobservable when there is no URL and no fact', async () => {
     const fetchHealth = vi.fn();
+    const fetchDynamicHealth = vi.fn();
 
     const observation = await observe(
       { environment_instance: { status: 'starting' } },
-      fetchHealth as never
+      fetchHealth as never,
+      fetchDynamicHealth as never
     );
 
     expect(fetchHealth).not.toHaveBeenCalled();
+    expect(fetchDynamicHealth).not.toHaveBeenCalled();
     expect(observation).toMatchObject({ status: 'unknown' });
   });
 });
