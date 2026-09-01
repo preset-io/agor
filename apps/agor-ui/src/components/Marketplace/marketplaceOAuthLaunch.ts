@@ -15,6 +15,16 @@ export class MarketplaceOAuthPopupNavigationError extends Error {
   }
 }
 
+export class MarketplaceOAuthStartError extends Error {
+  constructor(message?: string) {
+    super(
+      message ||
+        'Sign-in could not start automatically. Continue from MCP settings in the new session.'
+    );
+    this.name = 'MarketplaceOAuthStartError';
+  }
+}
+
 /** Start OAuth only for the authoritative saved server returned by Connect. */
 export async function launchMarketplaceOAuth(
   client: AgorClient,
@@ -36,9 +46,13 @@ export async function launchMarketplaceOAuth(
     popup.close();
     return null;
   }
-  if (!started.success || !started.authorizationUrl || !started.attempt_id) {
+  if (!started.success) {
     popup.close();
-    return null;
+    throw new MarketplaceOAuthStartError(started.error || started.recovery?.message);
+  }
+  if (!started.authorizationUrl || !started.attempt_id) {
+    popup.close();
+    throw new MarketplaceOAuthStartError();
   }
   // Record every newer Marketplace attempt, even when this catalog entry has
   // no starter prompt. The attempt marker synchronously fences any suggestion
