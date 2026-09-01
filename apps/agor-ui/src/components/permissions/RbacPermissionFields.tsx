@@ -9,6 +9,7 @@ import {
   toGroupSelectOption,
   toUserSelectOption,
 } from '@/utils/selectSearch';
+import { SectionDivider } from '../SettingsModal/panelPrimitives';
 import { Tag } from '../Tag';
 
 export type FsAccessLevel = 'none' | 'read' | 'write';
@@ -166,6 +167,8 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
         </Form.Item>
       )}
 
+      {isShared && <SectionDivider label="Owners & groups" />}
+
       {isShared && (
         <Form.Item label="Owners" tooltip={ownerHelp}>
           <Select
@@ -313,6 +316,8 @@ export const RbacPermissionFields: React.FC<RbacPermissionFieldsProps> = ({
               />
             </Form.Item>
           )}
+
+          <SectionDivider label="Filesystem & session sharing" />
 
           <Form.Item
             label={othersFsAccessLabel}

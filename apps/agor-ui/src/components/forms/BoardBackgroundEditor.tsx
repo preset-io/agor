@@ -18,7 +18,7 @@ import type { AggregationColor } from 'antd/es/color-picker/color';
 import { useEffect, useRef, useState } from 'react';
 import { hasBoardStyling } from '../../utils/boardBackground';
 import { validateBoardCss } from '../../utils/sanitizeCss';
-import { FIELD_WIDTHS } from '../SettingsModal/panelPrimitives';
+import { FIELD_WIDTHS, SectionDivider } from '../SettingsModal/panelPrimitives';
 import { BoardBackgroundPreview } from './BoardBackgroundPreview';
 import { ANIMATION_PRESETS, BACKGROUND_PRESETS, findPresetByValue } from './boardBackgroundPresets';
 
@@ -168,9 +168,7 @@ export function BoardBackgroundEditor({ form, resetSignal }: BoardBackgroundEdit
       {mode === 'custom' && (
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           <div>
-            <Typography.Text strong style={{ fontSize: 13, display: 'block', marginBottom: 6 }}>
-              Background
-            </Typography.Text>
+            <SectionDivider label="Background" />
             <Form.Item name="background_color" noStyle>
               <Input.TextArea
                 aria-label="Custom background CSS"
@@ -184,9 +182,7 @@ export function BoardBackgroundEditor({ form, resetSignal }: BoardBackgroundEdit
           <GradientHelper onApply={(value) => form.setFieldsValue({ background_color: value })} />
 
           <div>
-            <Typography.Text strong style={{ fontSize: 13, display: 'block', marginBottom: 6 }}>
-              Animation CSS <Typography.Text type="secondary">(optional)</Typography.Text>
-            </Typography.Text>
+            <SectionDivider label="Animation CSS (optional)" />
             <Select
               placeholder="Load an animation preset…"
               // `short` to match the gradient-helper Select/InputNumber below it,
