@@ -135,7 +135,7 @@ You don't have to wait for a long-running prompt to finish before you start writ
 
 ---
 
-## 💬 Autocomplete (`@`)
+## 💬 Autocomplete (`@` and `/`)
 
 **Type `@` to reference files or users.** Path autocomplete inside a branch, user autocomplete for `@mentions` in comments and prompts.
 
@@ -144,6 +144,11 @@ You don't have to wait for a long-running prompt to finish before you start writ
   alt="File autocomplete in prompt input"
   style={{ maxWidth: '400px' }}
 />
+
+**Type `/` at the beginning of a prompt to discover commands and skills.** Claude Code selections
+keep their native `/name` form. In a Codex session, the same picker includes enabled local and
+plugin-provided skills and inserts Codex's native `$skill-name` mention; plugin skills keep their
+qualified `$plugin:skill` name.
 
 ---
 

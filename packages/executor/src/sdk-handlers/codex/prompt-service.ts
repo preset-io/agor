@@ -40,7 +40,7 @@ import {
 import type { CodexOptions, Thread, ThreadItem, TurnCompletedEvent } from '@agor/core/sdk';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer } from '@agor/core/types';
+import type { CodexSandboxMode, ContextUsageSnapshot, MCPServer, Session } from '@agor/core/types';
 import { getDefaultPermissionMode, isGatewaySession } from '@agor/core/types';
 import { mapToCodexPermissionConfig } from '@agor/core/utils/permission-mode-mapper';
 import type * as CodexSdk from '@openai/codex-sdk';
@@ -61,7 +61,7 @@ import type { TokenUsage } from '../../types/token-usage.js';
 import type { PermissionMode, SessionID, TaskID, UserID } from '../../types.js';
 import { resolveContextUserId } from '../base/context-user.js';
 import type { TasksService } from '../base/index.js';
-import { forkCodexThreadViaAppServer } from './app-server-client.js';
+import { forkCodexThreadViaAppServer, listCodexSkillsViaAppServer } from './app-server-client.js';
 import { applyAgorCodexLaunchPolicy } from './launch-policy.js';
 import { extractCodexContextSnapshotFromEvent, extractCodexTokenUsage } from './usage.js';
 
@@ -216,6 +216,37 @@ function codexDebug(...args: unknown[]): void {
   if (process.env.AGOR_DEBUG_CODEX === '1' || process.env.DEBUG?.includes('codex')) {
     console.debug(...args);
   }
+}
+
+/**
+ * Minimum gap between `skills/list` sidecar spawns for one session. Skill
+ * installs are rare relative to prompts, so a short TTL keeps the composer's
+ * autocomplete fresh without paying an app-server spawn on every turn.
+ */
+const SKILLS_DISCOVERY_TTL_MS = 5 * 60 * 1000;
+
+interface CodexSkillsDiscoveryMetadata {
+  session_id: SessionID;
+  cwd: string;
+  refreshed_at_ms: number;
+}
+
+function parseCodexSkillsDiscoveryMetadata(value: unknown): CodexSkillsDiscoveryMetadata | null {
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.session_id !== 'string' ||
+    typeof candidate.cwd !== 'string' ||
+    typeof candidate.refreshed_at_ms !== 'number' ||
+    !Number.isFinite(candidate.refreshed_at_ms)
+  ) {
+    return null;
+  }
+  return {
+    session_id: candidate.session_id as SessionID,
+    cwd: candidate.cwd,
+    refreshed_at_ms: candidate.refreshed_at_ms,
+  };
 }
 
 function applyGatewayMcpStartupGuard(config: CodexConfigObject, requireMcpServers: boolean): void {
@@ -377,6 +408,10 @@ export class CodexPromptService {
   private apiKey: string | undefined;
   private useNativeAuth: boolean;
   private instructionsFilePaths = new Map<SessionID, string>();
+  private skillsDiscovery = new Map<
+    SessionID,
+    { at: number; cwd: string; inFlight?: Promise<void> }
+  >();
 
   /**
    * Resolve the per-user custom OpenAI-compatible base URL.
@@ -1082,16 +1117,8 @@ export class CodexPromptService {
       `🍴 [Codex] Forking from parent thread ${shortId(parentSession.sdk_session_id)} via app-server thread/fork`
     );
 
-    const appServerEnv: NodeJS.ProcessEnv = { ...process.env };
-    if (this.useNativeAuth && !this.apiKey) {
-      delete appServerEnv.OPENAI_API_KEY;
-      delete appServerEnv.CODEX_API_KEY;
-    } else if (this.apiKey) {
-      appServerEnv.CODEX_API_KEY = this.apiKey;
-    }
-
     const forkedThreadId = await forkCodexThreadViaAppServer(parentSession.sdk_session_id, {
-      env: appServerEnv,
+      env: this.buildAppServerEnv(),
     });
     await this.sessionsRepo.update(sessionId, { sdk_session_id: forkedThreadId });
     session.sdk_session_id = forkedThreadId;
@@ -1099,6 +1126,112 @@ export class CodexPromptService {
     console.log(
       `✅ [Codex] Forked thread ${shortId(parentSession.sdk_session_id)} → ${shortId(forkedThreadId)}`
     );
+  }
+
+  /**
+   * Env for `codex app-server` sidecar spawns (`thread/fork`, `skills/list`),
+   * matching the SDK spawn's auth semantics: subscription mode scrubs API-key
+   * vars so the CLI uses `$CODEX_HOME/auth.json`; API-key mode injects
+   * `CODEX_API_KEY`.
+   */
+  private buildAppServerEnv(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (this.useNativeAuth && !this.apiKey) {
+      delete env.OPENAI_API_KEY;
+      delete env.CODEX_API_KEY;
+    } else if (this.apiKey) {
+      env.CODEX_API_KEY = this.apiKey;
+    }
+    return env;
+  }
+
+  /**
+   * Discover the Codex skills installed for this user/branch (standalone
+   * skills plus plugin-shipped ones, already flattened to plugin-qualified
+   * names by Codex) and persist them to `session.custom_context.skills` —
+   * the same slot the Claude executor fills from its SDK init message — so
+   * the prompt composer can offer them in autocomplete.
+   *
+   * Codex's exec/SDK surface never reports installed skills, so this asks the
+   * local `codex app-server` sidecar (`skills/list`) with the branch path as
+   * cwd. Fire-and-forget: runs concurrently with the turn, is throttled per
+   * session so back-to-back prompts don't respawn the sidecar, and never
+   * fails the turn (older Codex CLIs without `skills/list` just log at debug).
+   */
+  private scheduleCodexSkillsDiscovery(
+    sessionId: SessionID,
+    session: Pick<Session, 'custom_context'>,
+    branchPath: string
+  ): void {
+    const now = Date.now();
+    const state = this.skillsDiscovery.get(sessionId);
+    if (
+      state &&
+      state.cwd === branchPath &&
+      (state.inFlight || now - state.at < SKILLS_DISCOVERY_TTL_MS)
+    ) {
+      return;
+    }
+
+    // Executors are intentionally one-task processes, so an in-memory TTL
+    // cannot throttle the next prompt. Persist the last successful refresh on
+    // the Session and require the embedded ID to match so copied/forked custom
+    // context never suppresses discovery for a different Session.
+    const persisted = parseCodexSkillsDiscoveryMetadata(
+      session.custom_context?.codex_skills_discovery
+    );
+    if (
+      persisted?.session_id === sessionId &&
+      persisted.cwd === branchPath &&
+      persisted.refreshed_at_ms <= now &&
+      now - persisted.refreshed_at_ms < SKILLS_DISCOVERY_TTL_MS
+    ) {
+      return;
+    }
+
+    const inFlight = (async () => {
+      const skills = await listCodexSkillsViaAppServer([branchPath], {
+        env: this.buildAppServerEnv(),
+      });
+      const names = skills.map((skill) => skill.name).sort((a, b) => a.localeCompare(b));
+
+      const current = session.custom_context?.skills;
+      const unchanged =
+        Array.isArray(current) &&
+        current.length === names.length &&
+        names.every((name, i) => current[i] === name);
+
+      // Repository deep-merges custom_context objects; arrays replace wholesale.
+      // The success marker is written even when names are unchanged because it
+      // is what makes throttling survive the ephemeral executor process.
+      await this.sessionsRepo.update(sessionId, {
+        custom_context: {
+          ...(!unchanged ? { skills: names } : {}),
+          codex_skills_discovery: {
+            session_id: sessionId,
+            cwd: branchPath,
+            refreshed_at_ms: Date.now(),
+          },
+        },
+      });
+      codexDebug(`✅ [Codex] Refreshed ${names.length} discovered skill(s) for autocomplete`);
+    })();
+
+    this.skillsDiscovery.set(sessionId, { at: now, cwd: branchPath, inFlight });
+
+    void inFlight
+      .catch((error) => {
+        codexDebug(
+          '⚠️ [Codex] Skills discovery failed (autocomplete list not refreshed):',
+          error instanceof Error ? error.message : String(error)
+        );
+      })
+      .finally(() => {
+        const latest = this.skillsDiscovery.get(sessionId);
+        if (latest?.inFlight === inFlight) {
+          this.skillsDiscovery.set(sessionId, { at: Date.now(), cwd: branchPath });
+        }
+      });
   }
 
   /**
@@ -1246,6 +1379,10 @@ export class CodexPromptService {
     }
 
     codexDebug(`   Working directory: ${branch.path}`);
+
+    // Refresh the composer's skill autocomplete in the background; never
+    // blocks or fails the turn.
+    this.scheduleCodexSkillsDiscovery(sessionId, session, branch.path);
 
     await this.ensureForkedCodexThread(sessionId, session);
 

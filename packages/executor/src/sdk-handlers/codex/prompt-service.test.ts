@@ -32,6 +32,7 @@ import type { MessagesService } from '../base/index.js';
 
 const appServerMocks = vi.hoisted(() => ({
   forkCodexThreadViaAppServer: vi.fn(),
+  listCodexSkillsViaAppServer: vi.fn(),
 }));
 
 const mcpScopingMocks = vi.hoisted(() => ({
@@ -72,6 +73,18 @@ async function* streamMockEvents() {
 
 // Mock the Codex SDK to avoid spawning real Codex CLI processes
 vi.mock('./app-server-client.js', () => appServerMocks);
+vi.mock('@agor/core/agentic-integrations', async () => {
+  const actual = await vi.importActual<typeof import('@agor/core/agentic-integrations')>(
+    '@agor/core/agentic-integrations'
+  );
+  return {
+    ...actual,
+    // Keep the managed loader inside Vitest's module graph so its dynamic SDK
+    // import resolves to the mock below rather than the external built Core
+    // module loading a real Codex SDK instance.
+    loadManagedAgenticToolSdk: async () => import('@openai/codex-sdk'),
+  };
+});
 vi.mock('@agor/core/mcp', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
   return {
@@ -2753,5 +2766,227 @@ describe('CodexPromptService - MCP tool_permissions', () => {
     // Guards the other direction: an empty list must not be emitted as a filter
     // Codex could read as "disable everything", and must not appear as noise.
     expect(servers.sentry.disabled_tools).toBeUndefined();
+  });
+});
+
+describe('CodexPromptService - skills discovery for prompt autocomplete', () => {
+  type SkillsDiscoveryHarness = {
+    ensureCodexInstructionsFile: () => Promise<string>;
+    buildMcpServersConfig: () => Promise<{ total: number; servers: Record<string, unknown> }>;
+    scheduleCodexSkillsDiscovery: (
+      sessionId: SessionID,
+      session: { custom_context?: Record<string, unknown> },
+      branchPath: string
+    ) => void;
+  };
+
+  const internals = (service: CodexPromptService): SkillsDiscoveryHarness =>
+    service as unknown as SkillsDiscoveryHarness;
+
+  const makeService = (): CodexPromptService => {
+    const service = new CodexPromptService(
+      mockMessagesRepo,
+      mockSessionsRepo,
+      mockSessionMCPServerRepo,
+      mockBranchesRepo,
+      undefined,
+      'test-api-key',
+      mockDb
+    );
+    const serviceWithPrivates = internals(service);
+    serviceWithPrivates.ensureCodexInstructionsFile = vi
+      .fn()
+      .mockResolvedValue('/tmp/agor-codex-instructions-skills.md');
+    serviceWithPrivates.buildMcpServersConfig = vi.fn().mockResolvedValue({
+      total: 0,
+      servers: {},
+    });
+    return service;
+  };
+
+  const scheduleDiscovery = (
+    service: CodexPromptService,
+    session: Record<string, unknown>,
+    branchPath = '/work/branch-skills'
+  ): void => {
+    internals(service).scheduleCodexSkillsDiscovery(
+      'session-skills' as SessionID,
+      session,
+      branchPath
+    );
+  };
+
+  // Discovery is fire-and-forget; drain its promise chain.
+  const flushDiscovery = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+
+  const sessionFixture = (customContext?: Record<string, unknown>) => ({
+    session_id: 'session-skills',
+    branch_id: 'branch-1',
+    created_at: new Date().toISOString(),
+    sdk_session_id: null,
+    permission_config: { mode: 'auto', codex: {} },
+    mcp_token: 'test-token',
+    ...(customContext ? { custom_context: customContext } : {}),
+  });
+
+  const customContextWrites = () =>
+    mockSessionsRepo.update.mock.calls.filter(
+      ([, update]: [unknown, Record<string, unknown>]) => 'custom_context' in (update ?? {})
+    );
+
+  beforeEach(() => {
+    mockInstanceCount = 0;
+    mockInstanceBaseUrls = [];
+    mockInstanceConfigs = [];
+    mockClosedInstanceIds = [];
+    mockStreamEvents = [];
+    mockStartThreadOptions = [];
+    mockResumeThreadOptions = [];
+    delete process.env.OPENAI_BASE_URL;
+    vi.clearAllMocks();
+    mockSessionsRepo.update.mockResolvedValue(undefined);
+    mockBranchesRepo.findById.mockResolvedValue({
+      branch_id: 'branch-1',
+      path: '/work/branch-skills',
+    });
+    mockSessionMCPServerRepo.listServersWithMetadata.mockResolvedValue([]);
+  });
+
+  it('discovers skills during a prompt turn and persists sorted names to custom_context', async () => {
+    appServerMocks.listCodexSkillsViaAppServer.mockResolvedValue([
+      { name: 'weekly-meeting-plugin:collect-from-jira', enabled: true },
+      { name: 'deep-research', enabled: true },
+    ]);
+    mockSessionsRepo.findById.mockResolvedValue(sessionFixture());
+
+    const service = makeService();
+    mockStreamEvents = [
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 },
+      },
+    ];
+    for await (const _event of service.promptSessionStreaming(
+      'session-skills' as SessionID,
+      'hello'
+    )) {
+      // drain
+    }
+
+    await vi.waitFor(() => {
+      expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenCalledWith(
+        ['/work/branch-skills'],
+        expect.objectContaining({ env: expect.any(Object) })
+      );
+      expect(mockSessionsRepo.update).toHaveBeenCalledWith('session-skills', {
+        custom_context: {
+          skills: ['deep-research', 'weekly-meeting-plugin:collect-from-jira'],
+          codex_skills_discovery: {
+            session_id: 'session-skills',
+            cwd: '/work/branch-skills',
+            refreshed_at_ms: expect.any(Number),
+          },
+        },
+      });
+    });
+  });
+
+  it('only advances the persistent refresh marker when skill names are already current', async () => {
+    appServerMocks.listCodexSkillsViaAppServer.mockResolvedValue([
+      { name: 'deep-research', enabled: true },
+    ]);
+
+    const service = makeService();
+    scheduleDiscovery(service, sessionFixture({ skills: ['deep-research'] }));
+    await flushDiscovery();
+
+    expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenCalledTimes(1);
+    expect(customContextWrites()).toEqual([
+      [
+        'session-skills',
+        {
+          custom_context: {
+            codex_skills_discovery: {
+              session_id: 'session-skills',
+              cwd: '/work/branch-skills',
+              refreshed_at_ms: expect.any(Number),
+            },
+          },
+        },
+      ],
+    ]);
+  });
+
+  it('uses the persisted refresh marker to throttle the next ephemeral executor', async () => {
+    appServerMocks.listCodexSkillsViaAppServer.mockResolvedValue([]);
+
+    const service = makeService();
+    scheduleDiscovery(
+      service,
+      sessionFixture({
+        skills: [],
+        codex_skills_discovery: {
+          session_id: 'session-skills',
+          cwd: '/work/branch-skills',
+          refreshed_at_ms: Date.now(),
+        },
+      })
+    );
+    await flushDiscovery();
+
+    expect(appServerMocks.listCodexSkillsViaAppServer).not.toHaveBeenCalled();
+    expect(customContextWrites()).toEqual([]);
+  });
+
+  it('does not reuse a copied refresh marker from a different session', async () => {
+    appServerMocks.listCodexSkillsViaAppServer.mockResolvedValue([]);
+
+    const service = makeService();
+    scheduleDiscovery(
+      service,
+      sessionFixture({
+        skills: [],
+        codex_skills_discovery: {
+          session_id: 'parent-session',
+          cwd: '/work/branch-skills',
+          refreshed_at_ms: Date.now(),
+        },
+      })
+    );
+    await flushDiscovery();
+
+    expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-discovers when the session branch path changes despite the throttle', async () => {
+    appServerMocks.listCodexSkillsViaAppServer.mockResolvedValue([]);
+
+    const service = makeService();
+    scheduleDiscovery(service, sessionFixture(), '/work/branch-a');
+    await flushDiscovery();
+    scheduleDiscovery(service, sessionFixture(), '/work/branch-b');
+    await flushDiscovery();
+
+    expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenCalledTimes(2);
+    expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenLastCalledWith(
+      ['/work/branch-b'],
+      expect.anything()
+    );
+  });
+
+  it('swallows discovery failures without writing custom_context (older Codex CLI)', async () => {
+    appServerMocks.listCodexSkillsViaAppServer.mockRejectedValue(
+      new Error('unknown method skills/list')
+    );
+
+    const service = makeService();
+    scheduleDiscovery(service, sessionFixture());
+    await flushDiscovery();
+
+    expect(appServerMocks.listCodexSkillsViaAppServer).toHaveBeenCalledTimes(1);
+    expect(customContextWrites()).toEqual([]);
   });
 });

@@ -399,6 +399,16 @@ export interface Session {
    * Access in templates: {{ session.context.teamName }}
    */
   custom_context?: Record<string, unknown> & {
+    /** Provider-reported slash commands shown by the prompt autocomplete. */
+    slash_commands?: string[];
+    /** Provider-reported skills shown by the prompt autocomplete. */
+    skills?: string[];
+    /** Internal freshness marker for Codex's task-time `skills/list` discovery. */
+    codex_skills_discovery?: {
+      session_id: SessionID;
+      cwd: string;
+      refreshed_at_ms: number;
+    };
     /**
      * Scheduled run metadata (populated by scheduler)
      *
