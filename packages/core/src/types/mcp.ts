@@ -22,6 +22,11 @@ export type MCPServerID = UUID & { readonly __brand: 'MCPServerID' };
  */
 export type MCPOAuthAttemptID = UUID & { readonly __brand: 'MCPOAuthAttemptID' };
 
+/** Durable identity for one provider-side Dynamic Client Registration generation. */
+export type MCPOAuthClientRegistrationID = UUID & {
+  readonly __brand: 'MCPOAuthClientRegistrationID';
+};
+
 /** Durable lifecycle of a browser-based MCP OAuth authorization attempt. */
 export type MCPOAuthPendingFlowStatus =
   | 'pending'
@@ -29,6 +34,15 @@ export type MCPOAuthPendingFlowStatus =
   | 'succeeded'
   | 'failed'
   | 'ambiguous'
+  | 'expired';
+
+/** Durable lifecycle of one exact-bound Dynamic Client Registration generation. */
+export type MCPOAuthClientRegistrationStatus =
+  | 'registering'
+  | 'registered'
+  | 'failed'
+  | 'ambiguous'
+  | 'superseded'
   | 'expired';
 
 /** Authenticated durable-attempt read DTO; `not_found` avoids leaking rows. */
@@ -206,6 +220,40 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   /** Whether RFC 9207 says this AS will return `iss` on the callback. */
   authorizationResponseIssuerParameterSupported?: boolean;
   allowLocalhostHttp: boolean;
+}
+
+/**
+ * Exact policy/binding duplicated inside an encrypted durable DCR envelope.
+ *
+ * DCR credentials intentionally outlive one browser attempt, so the authority
+ * is scoped to the tenant and saved MCP-server configuration rather than to a
+ * grant subject. The server config version plus every provider/redirect/policy
+ * input prevents reuse after a relevant edit or against another issuer.
+ */
+export interface MCPOAuthClientRegistrationSealedMaterial {
+  version: 1;
+  tenantId: string;
+  registrationId: MCPOAuthClientRegistrationID;
+  mcpServerId: MCPServerID;
+  registrationGeneration: number;
+  bindingVersion: 1;
+  bindingFingerprint: string;
+  serverConfigVersion: number;
+  registrationEndpoint: string;
+  registrationEndpointSource: 'metadata' | 'legacy_fallback';
+  metadataUrl: string;
+  resourceUri: string;
+  issuer: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  redirectUri: string;
+  scope?: string;
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  dcrMode: MCPOAuthDCRMode;
+  clientId: string;
+  clientSecret?: string;
+  /** Provider epoch seconds. Zero/absent means no advertised expiry. */
+  clientSecretExpiresAt?: number;
 }
 
 /**

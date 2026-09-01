@@ -10,6 +10,7 @@ const IV_LENGTH = 12;
 /** Purpose domains admitted by the durable bound-secret envelope. */
 export type BoundSecretPurpose =
   | 'pending-exchange'
+  | 'dcr-client'
   | 'codex-device-attempt'
   | 'access-token'
   | 'refresh-token'

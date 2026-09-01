@@ -12,6 +12,7 @@ import {
   initializeDatabase,
   isPostgresDatabase,
   MCPServerRepository,
+  type RawDatabase,
   runWithTenantDatabaseScope,
   setMcpMemberPolicy,
   sql,
@@ -24,6 +25,7 @@ import type { AuthenticatedParams, MCPCatalogEntry, MCPServer, User } from '@ago
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { type RegisterHooksContext, registerHooks } from '../register-hooks.js';
 import { createRegisteredMCPCatalogConnectService } from '../register-routes.js';
+import { type RegisterServicesContext, registerMCPServices } from '../register-services.js';
 import { fingerprintMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
 import { createMCPServersService } from './mcp-servers.js';
 
@@ -31,6 +33,85 @@ const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
   probeRemoteAuthType: vi.fn(),
   probeRemoteBearerToken: vi.fn(),
 }));
+
+const oauthProviderFixture = vi.hoisted(() => ({ discoveries: 0, registrations: 0 }));
+
+vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('@agor/core/tools/mcp/oauth-mcp-transport')>();
+  return {
+    ...original,
+    resolveMCPOAuthDiscovery: vi.fn(async () => {
+      oauthProviderFixture.discoveries += 1;
+      return {
+        kind: 'resource-metadata' as const,
+        metadataUrl: 'https://mcp.example.test/.well-known/oauth-protected-resource',
+        source: 'header' as const,
+      };
+    }),
+    startMCPOAuthFlow: vi.fn(
+      async (
+        _wwwAuthenticate: string,
+        clientId: string | undefined,
+        redirectUri: string,
+        options: {
+          resolveDynamicClientRegistration?: (
+            request: Record<string, unknown>,
+            register: () => Promise<Record<string, unknown>>
+          ) => Promise<{ client_id: string; client_secret?: string }>;
+        }
+      ) => {
+        const registration = clientId
+          ? { client_id: clientId }
+          : await options.resolveDynamicClientRegistration?.(
+              {
+                registrationEndpoint: 'https://provider.example.test/register',
+                registrationEndpointSource: 'metadata',
+                metadataUrl: RESOURCE,
+                resourceUri: RESOURCE,
+                issuer: 'https://provider.example.test',
+                authorizationEndpoint: 'https://provider.example.test/authorize',
+                tokenEndpoint: 'https://provider.example.test/token',
+                redirectUri,
+                clientName: 'Agor MCP Client',
+                compatibilityMode: 'strict',
+                dcrMode: 'advertised',
+              },
+              async () => {
+                oauthProviderFixture.registrations += 1;
+                return {
+                  client_id: 'catalog-ha-dcr-client',
+                  client_secret: 'catalog-ha-dcr-secret',
+                  redirect_uris: [redirectUri],
+                  token_endpoint_auth_method: 'client_secret_post',
+                };
+              }
+            );
+        if (!registration) throw new Error('durable DCR resolver was not supplied');
+        const state = `catalog-ha-state-${crypto.randomUUID()}`;
+        const authorizationUrl = new URL('https://provider.example.test/authorize');
+        authorizationUrl.searchParams.set('state', state);
+        authorizationUrl.searchParams.set('redirect_uri', redirectUri);
+        return {
+          metadataUrl: RESOURCE,
+          resourceUri: RESOURCE,
+          issuer: 'https://provider.example.test',
+          authorizationEndpoint: 'https://provider.example.test/authorize',
+          tokenEndpoint: 'https://provider.example.test/token',
+          redirectUri,
+          pkceVerifier: `catalog-ha-verifier-${crypto.randomUUID()}`,
+          clientId: registration.client_id,
+          clientSecret: registration.client_secret,
+          state,
+          authorizationUrl: authorizationUrl.toString(),
+          compatibilityMode: 'strict' as const,
+          authorizationResponseIssuerParameterSupported: true,
+          allowLocalhostHttp: false,
+        };
+      }
+    ),
+  };
+});
 vi.mock('@agor/core/mcp-catalog', () => ({
   loadCatalog: vi.fn().mockResolvedValue([]),
   probeRemoteAuthType,
@@ -400,6 +481,128 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       expect(result.reused_existing_server).toBe(false);
       expect(result.mcp_server.mcp_server_id).not.toBe(peer.mcp_server_id);
       expect(result.mcp_server.auth?.oauth_compatibility_mode).toBe('strict');
+    });
+
+    it('automatically starts durable OAuth for a Catalog install on another HA replica', async () => {
+      const actor = await buildTenant('automatic-ha-oauth');
+      const catalogReplica = connectApp();
+      const connected = await connect(actor.user, actor.tenantId, ENTRY, catalogReplica);
+      expect(connected).toMatchObject({
+        reused_existing_server: false,
+        reuse_kind: 'new_catalog_install',
+        mcp_server: {
+          source: 'catalog',
+          catalog_entry_name: ENTRY.name,
+          owner_user_id: actor.user.user_id,
+          auth: { type: 'oauth', oauth_mode: 'per_user' },
+        },
+      });
+
+      const originalBaseUrl = process.env.AGOR_BASE_URL;
+      const oauthRaw = createDatabase({ dialect: 'postgresql', url: postgresUrl! });
+      if (!isPostgresDatabase(oauthRaw)) throw new Error('PostgreSQL test requires PostgreSQL');
+      const oauthDb = createTenantScopedDatabaseProxy(oauthRaw, {
+        requireScope: true,
+        label: 'catalog OAuth replica B',
+      });
+      const oauthApp = feathers() as ReturnType<typeof feathers> & { io: unknown };
+      oauthApp.io = {
+        local: { to: () => ({ emit() {} }) },
+        to: () => ({ emit() {} }),
+        sockets: { sockets: new Map() },
+      };
+      oauthProviderFixture.discoveries = 0;
+      oauthProviderFixture.registrations = 0;
+      process.env.AGOR_BASE_URL = 'https://public-agor.example.test';
+      try {
+        await registerMCPServices({
+          db: oauthDb,
+          app: oauthApp as RegisterServicesContext['app'],
+          config: {} as RegisterServicesContext['config'],
+          jwtSecret: 'test-jwt',
+          daemonUrl: 'https://public-agor.example.test',
+          bundledUiAvailable: false,
+          DAEMON_PORT: 3030,
+          UI_PORT: 5173,
+          branchRbacEnabled: false,
+          allowSuperadmin: false,
+          requireAuth: async (context) => context,
+          deployment: { mode: 'ha' } as RegisterServicesContext['deployment'],
+          mcpOAuthFetch: async (_input, _init, assertCurrent) => {
+            assertCurrent?.();
+            return new Response('', {
+              status: 401,
+              headers: {
+                'www-authenticate':
+                  'Bearer resource_metadata="https://mcp.example.test/.well-known/oauth-protected-resource"',
+              },
+            });
+          },
+        });
+
+        const started = (await oauthApp
+          .service('mcp-servers/oauth-start')
+          .create(
+            { mcp_server_id: connected.mcp_server.mcp_server_id },
+            params(actor.user, actor.tenantId)
+          )) as {
+          success: boolean;
+          authorizationUrl?: string;
+          attempt_id?: string;
+        };
+        expect(started).toMatchObject({ success: true, attempt_id: expect.any(String) });
+        const authorizationUrl = new URL(started.authorizationUrl!);
+        expect(authorizationUrl.origin).toBe('https://provider.example.test');
+        expect(authorizationUrl.searchParams.get('redirect_uri')).toBe(
+          'https://public-agor.example.test/mcp-servers/oauth-callback'
+        );
+        expect(authorizationUrl.searchParams.get('state')).toBeTruthy();
+        expect(oauthProviderFixture.discoveries).toBe(1);
+        expect(oauthProviderFixture.registrations).toBe(1);
+
+        const durable = await runWithTenantDatabaseScope(oauthDb, actor.tenantId, async (scoped) =>
+          rowsOf(
+            await executeRaw(
+              scoped,
+              sql`SELECT flow.attempt_id, flow.status,
+                         registration.status AS registration_status,
+                         registration.sealed_material AS registration_sealed_material
+                  FROM mcp_oauth_pending_flows flow
+                  JOIN mcp_oauth_client_registrations registration
+                    ON registration.mcp_server_id = flow.mcp_server_id
+                  WHERE flow.attempt_id = ${started.attempt_id}`
+            )
+          )
+        );
+        expect(durable).toEqual([
+          expect.objectContaining({
+            attempt_id: started.attempt_id,
+            status: 'pending',
+            registration_status: 'registered',
+            registration_sealed_material: expect.any(String),
+          }),
+        ]);
+
+        oauthProviderFixture.discoveries = 0;
+        oauthProviderFixture.registrations = 0;
+        process.env.AGOR_BASE_URL = 'http://10.33.92.175:3030';
+        const refused = (await oauthApp
+          .service('mcp-servers/oauth-start')
+          .create(
+            { mcp_server_id: connected.mcp_server.mcp_server_id },
+            params(actor.user, actor.tenantId)
+          )) as { success: boolean; recovery?: { category: string } };
+        expect(refused).toMatchObject({
+          success: false,
+          recovery: { category: 'redirect_configuration_required' },
+        });
+        expect(oauthProviderFixture.discoveries).toBe(0);
+        expect(oauthProviderFixture.registrations).toBe(0);
+      } finally {
+        if (originalBaseUrl === undefined) delete process.env.AGOR_BASE_URL;
+        else process.env.AGOR_BASE_URL = originalBaseUrl;
+        await (oauthRaw as RawDatabase & { $client: { end: () => Promise<void> } }).$client.end();
+      }
     });
 
     it('keeps the newer bearer credential when an older PostgreSQL rotation resumes', async () => {

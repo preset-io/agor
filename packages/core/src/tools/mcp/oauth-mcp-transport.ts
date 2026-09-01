@@ -510,13 +510,15 @@ const MAX_DCR_RESPONSE_BYTES = 16 * 1024;
 const dynamicClientRegistrationSchema = z.object({
   client_id: z.string().trim().min(1),
   client_secret: z.string().optional(),
+  client_id_issued_at: z.number().int().nonnegative().optional(),
+  client_secret_expires_at: z.number().int().nonnegative().optional(),
   redirect_uris: z.array(z.string()).optional(),
   token_endpoint_auth_method: z.string().optional(),
   grant_types: z.array(z.string()).optional(),
   response_types: z.array(z.string()).optional(),
 });
 
-type DynamicClientRegistrationResponse = z.infer<typeof dynamicClientRegistrationSchema>;
+export type DynamicClientRegistrationResponse = z.infer<typeof dynamicClientRegistrationSchema>;
 
 function registrationDiagnostic(
   httpStatus: number,
@@ -563,6 +565,57 @@ function registrationFailure(
     `${failureLead}${status} at stage ${diagnostic.stage}. ${dcrRecoveryGuidance(diagnostic)}`,
     diagnostic
   );
+}
+
+function validateDynamicClientRegistration(
+  responseBody: unknown,
+  redirectUri: string,
+  diagnostic: MCPOAuthDCRDiagnostic
+): DynamicClientRegistrationResponse {
+  const parsed = dynamicClientRegistrationSchema.safeParse(responseBody);
+  if (!parsed.success) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration returned an invalid response'
+    );
+  }
+  const result: DynamicClientRegistrationResponse = parsed.data;
+  if (!result.redirect_uris?.includes(redirectUri)) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration did not bind the required redirect URI'
+    );
+  }
+  // A returned secret is authoritative even when the provider echoes `none`.
+  // The token exchange routes any present secret through HTTP Basic.
+  const authMethod = result.client_secret
+    ? 'client_secret_basic'
+    : (result.token_endpoint_auth_method ?? 'none');
+  if (!['none', 'client_secret_basic'].includes(authMethod)) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration returned an unsupported token auth method'
+    );
+  }
+  if (authMethod === 'client_secret_basic' && !result.client_secret) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration omitted the required client secret'
+    );
+  }
+  if (result.grant_types && !result.grant_types.includes('authorization_code')) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration did not enable the authorization-code grant'
+    );
+  }
+  if (result.response_types && !result.response_types.includes('code')) {
+    throw registrationFailure(
+      diagnostic,
+      'Dynamic Client Registration did not enable the code response type'
+    );
+  }
+  return result;
 }
 
 function missingRegistrationEndpointFailure(): OAuthDCRFailure {
@@ -663,55 +716,7 @@ async function registerDynamicClient(
   const diagnostic = registrationDiagnostic(response.status, registrationEndpointSource);
   const responseBody = await response.json().catch(() => null);
   assertCurrent?.();
-  const parsed = dynamicClientRegistrationSchema.safeParse(responseBody);
-  if (!parsed.success) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration returned an invalid response'
-    );
-  }
-  const result: DynamicClientRegistrationResponse = parsed.data;
-
-  if (!result.redirect_uris?.includes(redirectUri)) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration did not bind the required redirect URI'
-    );
-  }
-  // We request a public client (`token_endpoint_auth_method: 'none'`), but some providers
-  // (e.g. Atlassian) ignore that and register a *confidential* client — returning HTTP 201
-  // with a `client_secret` while either omitting the auth method or echoing 'none'. A returned
-  // secret is the authoritative signal that the client is confidential, so treat it as
-  // client_secret_basic regardless of the advertised method. The token exchange already routes
-  // any present secret through HTTP Basic auth (RFC 6749 §2.3.1), so these credentials are
-  // usable as-is.
-  const authMethod = result.client_secret
-    ? 'client_secret_basic'
-    : (result.token_endpoint_auth_method ?? 'none');
-  if (!['none', 'client_secret_basic'].includes(authMethod)) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration returned an unsupported token auth method'
-    );
-  }
-  if (authMethod === 'client_secret_basic' && !result.client_secret) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration omitted the required client secret'
-    );
-  }
-  if (result.grant_types && !result.grant_types.includes('authorization_code')) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration did not enable the authorization-code grant'
-    );
-  }
-  if (result.response_types && !result.response_types.includes('code')) {
-    throw registrationFailure(
-      diagnostic,
-      'Dynamic Client Registration did not enable the code response type'
-    );
-  }
+  const result = validateDynamicClientRegistration(responseBody, redirectUri, diagnostic);
 
   if (reuseLocalCache) {
     assertCurrent?.();
@@ -1455,6 +1460,31 @@ export interface OAuthFlowContext {
   allowLocalhostHttp: boolean;
 }
 
+/** Exact non-secret inputs that bind a daemon-owned durable DCR credential. */
+export interface MCPOAuthDynamicClientRegistrationRequest {
+  registrationEndpoint: string;
+  registrationEndpointSource: 'metadata' | 'legacy_fallback';
+  metadataUrl: string;
+  resourceUri: string;
+  issuer: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+  redirectUri: string;
+  clientName: string;
+  scope?: string;
+  compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
+  dcrMode: MCPOAuthDCRMode;
+}
+
+/**
+ * Injection boundary used by multi-daemon callers to lease/persist DCR while
+ * the core transport retains provider request/response validation.
+ */
+export type MCPOAuthDynamicClientRegistrationResolver = (
+  request: MCPOAuthDynamicClientRegistrationRequest,
+  register: () => Promise<DynamicClientRegistrationResponse>
+) => Promise<DynamicClientRegistrationResponse>;
+
 /**
  * Bounded RFC 9728 compatibility for reviewed marketplace endpoints.
  *
@@ -1545,6 +1575,8 @@ async function startMCPOAuthFlowWithAS(opts: {
   resourceScopesSupported?: string[];
   /** Daemons disable the process-global DCR cache; legacy local CLI flows may reuse it. */
   reuseDynamicClientRegistration?: boolean;
+  /** PostgreSQL daemons inject a fleet-wide encrypted registration authority. */
+  resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
   resourceUri: string;
   issuer: string;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
@@ -1682,18 +1714,44 @@ async function startMCPOAuthFlowWithAS(opts: {
         ? 'metadata'
         : 'legacy_fallback';
       try {
-        const registration = await registerDynamicClient(
-          registrationEndpoint,
-          actualRedirectUri,
-          'Agor MCP Client',
-          scopeString,
-          opts.reuseDynamicClientRegistration !== false,
-          allowLocalhostHttp,
-          registrationEndpointSource,
-          opts.assertCurrent
-        );
-        actualClientId = registration.client_id;
-        resolvedClientSecret = registration.client_secret;
+        const register = () =>
+          registerDynamicClient(
+            registrationEndpoint,
+            actualRedirectUri,
+            'Agor MCP Client',
+            scopeString,
+            opts.reuseDynamicClientRegistration !== false,
+            allowLocalhostHttp,
+            registrationEndpointSource,
+            opts.assertCurrent
+          );
+        const registration = opts.resolveDynamicClientRegistration
+          ? await opts.resolveDynamicClientRegistration(
+              {
+                registrationEndpoint,
+                registrationEndpointSource,
+                metadataUrl: cacheKey,
+                resourceUri,
+                issuer: authServerMetadata?.issuer ?? issuer,
+                authorizationEndpoint,
+                tokenEndpoint,
+                redirectUri: actualRedirectUri,
+                clientName: 'Agor MCP Client',
+                scope: scopeString,
+                compatibilityMode,
+                dcrMode,
+              },
+              register
+            )
+          : await register();
+        const validatedRegistration = opts.resolveDynamicClientRegistration
+          ? validateDynamicClientRegistration(registration, actualRedirectUri, {
+              stage: 'dcr_registration',
+              registration_endpoint_source: registrationEndpointSource,
+            })
+          : registration;
+        actualClientId = validatedRegistration.client_id;
+        resolvedClientSecret = validatedRegistration.client_secret;
       } catch (error) {
         // An authority/deadline assertion is not a provider DCR diagnostic.
         // Reassert first so it escapes this compatibility wrapper unchanged.
@@ -1793,6 +1851,8 @@ export async function startMCPOAuthFlow(
     cacheKey?: string;
     /** Disable process-global DCR credential reuse in multi-user daemons. */
     reuseDynamicClientRegistration?: boolean;
+    /** Fleet-wide DCR lease/persistence boundary for multi-daemon callers. */
+    resolveDynamicClientRegistration?: MCPOAuthDynamicClientRegistrationResolver;
     /** Exact protected resource identifier sent to authorization/token endpoints. */
     resourceUri?: string;
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
@@ -1863,6 +1923,7 @@ export async function startMCPOAuthFlow(
       clientSecret: options.clientSecret,
       scope: options.scope,
       reuseDynamicClientRegistration: options.reuseDynamicClientRegistration,
+      resolveDynamicClientRegistration: options.resolveDynamicClientRegistration,
       resourceUri,
       issuer: options.prefetchedAuthServerMetadata.issuer,
       compatibilityMode,
@@ -1972,6 +2033,7 @@ export async function startMCPOAuthFlow(
         : undefined,
     resourceScopesSupported: resourceMetadata.scopes_supported,
     reuseDynamicClientRegistration: options?.reuseDynamicClientRegistration,
+    resolveDynamicClientRegistration: options?.resolveDynamicClientRegistration,
     resourceUri,
     issuer: authServerUrl,
     compatibilityMode,

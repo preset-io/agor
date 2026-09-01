@@ -460,6 +460,7 @@ function assertSupportedPolicies(relation: CatalogRelation): void {
   const qualifiedName = `${relation.schemaName}.${relation.tableName}`;
   const expectedTenantPolicyExpression =
     relation.tableName === 'mcp_oauth_pending_flows' ||
+    relation.tableName === 'mcp_oauth_client_registrations' ||
     relation.tableName === 'codex_device_auth_attempts'
       ? MCP_OAUTH_PENDING_TENANT_POLICY_EXPRESSION
       : relation.tableName === 'github_install_states'

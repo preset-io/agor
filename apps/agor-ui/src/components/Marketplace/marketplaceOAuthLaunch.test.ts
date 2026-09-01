@@ -8,6 +8,7 @@ import {
 import {
   launchMarketplaceOAuth,
   MarketplaceOAuthPopupNavigationError,
+  MarketplaceOAuthStartError,
 } from './marketplaceOAuthLaunch';
 
 const result = {
@@ -104,8 +105,11 @@ describe('Marketplace OAuth launch', () => {
     ).toMatchObject({ attemptId: 'attempt-newer', prompt: '' });
   });
 
-  it('closes the pre-opened window when OAuth start is refused', async () => {
-    const { client } = clientWith({ success: false, error: 'not available' });
+  it('closes the pre-opened window and preserves the safe recovery when OAuth start is refused', async () => {
+    const { client } = clientWith({
+      success: false,
+      error: 'The provider does not support automatic client registration.',
+    });
     const close = vi.fn();
     const popup = { operationId: 'popup-2', navigate: vi.fn(), close };
     await expect(
@@ -113,7 +117,9 @@ describe('Marketplace OAuth launch', () => {
         authority: { userId: 'alice', role: 'member', authGeneration: 3 },
         isCurrent: () => true,
       })
-    ).resolves.toBeNull();
+    ).rejects.toEqual(
+      new MarketplaceOAuthStartError('The provider does not support automatic client registration.')
+    );
     expect(close).toHaveBeenCalledOnce();
     expect(sessionStorage.getItem('agor-marketplace-oauth-prompt:session-oauth')).toBeNull();
   });

@@ -4,7 +4,7 @@ environment:
     ha:
       start: >-
         env HA_PORT={{add 3000 branch.unique_id}} HA_DAEMON_A_PORT={{add 13000 branch.unique_id}} HA_DAEMON_B_PORT={{add 14000 branch.unique_id}}
-        AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
+        AGOR_HA_PUBLIC_ORIGIN="${AGOR_HA_PUBLIC_ORIGIN:-http://{{host.ip_address}}:{{add 3000 branch.unique_id}}}"
         AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
         AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
         AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
@@ -12,7 +12,7 @@ environment:
         AGOR_HA_NODE_ENV=development
         docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} up -d --build
       stop: >-
-        env AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
+        env AGOR_HA_PUBLIC_ORIGIN="${AGOR_HA_PUBLIC_ORIGIN:-http://{{host.ip_address}}:{{add 3000 branch.unique_id}}}"
         AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
         AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
         AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
@@ -20,7 +20,7 @@ environment:
         AGOR_HA_NODE_ENV=development
         docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} down
       nuke: >-
-        env AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
+        env AGOR_HA_PUBLIC_ORIGIN="${AGOR_HA_PUBLIC_ORIGIN:-http://{{host.ip_address}}:{{add 3000 branch.unique_id}}}"
         AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
         AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
         AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000
@@ -28,7 +28,7 @@ environment:
         AGOR_HA_NODE_ENV=development
         docker compose -f docker-compose.ha.yml -p agor-ha-{{branch.name}} down -v --remove-orphans
       logs: >-
-        env AGOR_HA_PUBLIC_ORIGIN=http://{{host.ip_address}}:{{add 3000 branch.unique_id}}
+        env AGOR_HA_PUBLIC_ORIGIN="${AGOR_HA_PUBLIC_ORIGIN:-http://{{host.ip_address}}:{{add 3000 branch.unique_id}}}"
         AGOR_REDIS_KEY_PREFIX=agor-ha-{{branch.unique_id}}
         AGOR_JWT_SECRET=agor-ha-dev-jwt-secret-00000000000000000000000000000000
         AGOR_MASTER_SECRET=agor-ha-dev-master-secret-000000000000000000000000000000

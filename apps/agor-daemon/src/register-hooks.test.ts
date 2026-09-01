@@ -701,19 +701,12 @@ describe('tenant-owned service registration', () => {
     );
   });
 
-  it('gates OAuth flow endpoints in HA without blocking ordinary MCP capability discovery', () => {
-    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).not.toContainEqual([
-      'mcp-servers/discover',
-      'mcpOAuth',
-    ]);
-    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
-      'mcp-servers/oauth-start',
-      'mcpOAuth',
-    ]);
-    expect(CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES).toContainEqual([
-      'mcp-servers/oauth-complete',
-      'mcpOAuth',
-    ]);
+  it('admits durable MCP OAuth endpoints in the constrained HA profile', () => {
+    expect(
+      CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES.some(([, feature]) =>
+        String(feature).includes('mcpOAuth')
+      )
+    ).toBe(false);
   });
 
   it('wraps Knowledge policy and indexing admin services in tenant database scope', () => {

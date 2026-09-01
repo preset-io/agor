@@ -2007,6 +2007,61 @@ export const mcpOauthPendingFlows = sqliteTable(
 );
 
 /**
+ * Cross-dialect mirror for the PostgreSQL Dynamic Client Registration
+ * authority. Standalone SQLite deliberately keeps the established in-process
+ * DCR behavior and does not read or write this table.
+ */
+export const mcpOauthClientRegistrations = sqliteTable(
+  'mcp_oauth_client_registrations',
+  {
+    registration_id: text('registration_id', { length: 36 }).primaryKey(),
+    mcp_server_id: text('mcp_server_id', { length: 36 })
+      .notNull()
+      .references(() => mcpServers.mcp_server_id, { onDelete: 'cascade' }),
+    registration_generation: integer('registration_generation').notNull(),
+    binding_version: integer('binding_version').notNull(),
+    binding_fingerprint: text('binding_fingerprint', { length: 64 }).notNull(),
+    server_config_version: integer('server_config_version').notNull(),
+    envelope_version: integer('envelope_version').notNull(),
+    is_current: integer('is_current', { mode: 'boolean' }).notNull().default(true),
+    status: text('status', {
+      enum: ['registering', 'registered', 'failed', 'ambiguous', 'superseded', 'expired'],
+    })
+      .notNull()
+      .default('registering'),
+    sealed_material: text('sealed_material'),
+    claim_id: text('claim_id', { length: 36 }),
+    claim_generation: integer('claim_generation').notNull().default(0),
+    lease_expires_at: t.timestamp('lease_expires_at'),
+    dispatched_at: t.timestamp('dispatched_at'),
+    client_secret_expires_at: t.timestamp('client_secret_expires_at'),
+    failure_code: text('failure_code'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    finished_at: t.timestamp('finished_at'),
+  },
+  (table) => ({
+    currentServerUnique: uniqueIndex('mcp_oauth_client_registrations_current_server_uq')
+      .on(table.mcp_server_id)
+      .where(sql`${table.is_current} = true`),
+    serverIdx: index('mcp_oauth_client_registrations_server_idx').on(
+      table.mcp_server_id,
+      table.registration_generation
+    ),
+    bindingIdx: index('mcp_oauth_client_registrations_binding_idx').on(
+      table.mcp_server_id,
+      table.binding_fingerprint
+    ),
+    maintenanceIdx: index('mcp_oauth_client_registrations_maintenance_idx').on(
+      table.status,
+      table.lease_expires_at,
+      table.client_secret_expires_at,
+      table.finished_at
+    ),
+  })
+);
+
+/**
  * Cross-dialect schema mirror. Standalone SQLite continues to use the simple
  * process-local Codex device flow; durable polling authority is HA/PostgreSQL-only.
  */
@@ -2992,6 +3047,8 @@ export type UserMCPOAuthTokenRow = typeof userMcpOauthTokens.$inferSelect;
 export type UserMCPOAuthTokenInsert = typeof userMcpOauthTokens.$inferInsert;
 export type MCPOAuthPendingFlowRow = typeof mcpOauthPendingFlows.$inferSelect;
 export type MCPOAuthPendingFlowInsert = typeof mcpOauthPendingFlows.$inferInsert;
+export type MCPOAuthClientRegistrationRow = typeof mcpOauthClientRegistrations.$inferSelect;
+export type MCPOAuthClientRegistrationInsert = typeof mcpOauthClientRegistrations.$inferInsert;
 export type CodexDeviceAuthAttemptRow = typeof codexDeviceAuthAttempts.$inferSelect;
 export type CodexDeviceAuthAttemptInsert = typeof codexDeviceAuthAttempts.$inferInsert;
 export type CardTypeRow = typeof cardTypes.$inferSelect;
