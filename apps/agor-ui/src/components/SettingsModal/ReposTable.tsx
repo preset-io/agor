@@ -1,14 +1,15 @@
 import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live/client';
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
-import { Button, Card, Empty, Form, Input, Modal, Space, Typography } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Button, Card, Empty, Form, Input, Modal, Space, Table, Tooltip, Typography } from 'antd';
+import { type Key, useCallback, useEffect, useMemo, useState } from 'react';
 import { mapToArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { RepoFormFields } from '../forms/RepoFormFields';
 import { HighlightMatch } from '../HighlightMatch';
 import { Tag } from '../Tag';
 import { ListPanelHeader } from './panelPrimitives';
+import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
 interface ReposTableProps {
@@ -151,6 +152,103 @@ export const ReposTable: React.FC<ReposTableProps> = ({
       : 'Clone Repository';
   const drillSaveLabel = isEditing ? 'Save' : repoMode === 'local' ? 'Add' : 'Clone';
 
+  const columns = [
+    {
+      title: 'Name',
+      dataIndex: 'name',
+      key: 'name',
+      width: 220,
+      render: (name: string, repo: Repo) => (
+        <Space>
+          <FolderOutlined />
+          <Typography.Link ellipsis title={name} onClick={() => openEdit(repo)}>
+            <HighlightMatch text={name} query={searchTerm} />
+          </Typography.Link>
+        </Space>
+      ),
+    },
+    {
+      title: 'Type',
+      dataIndex: 'repo_type',
+      key: 'repo_type',
+      width: 100,
+      filters: [
+        { text: 'Remote', value: 'remote' },
+        { text: 'Local', value: 'local' },
+      ],
+      onFilter: (value: Key | boolean, repo: Repo) => (repo.repo_type ?? 'remote') === value,
+      render: (_: unknown, repo: Repo) => {
+        const isLocal = repo.repo_type === 'local';
+        return <Tag color={isLocal ? 'green' : 'blue'}>{isLocal ? 'Local' : 'Remote'}</Tag>;
+      },
+    },
+    {
+      title: 'Slug',
+      dataIndex: 'slug',
+      key: 'slug',
+      width: 200,
+      render: (slug: string) => (
+        <Typography.Text code style={{ fontSize: 12 }}>
+          <HighlightMatch text={slug} query={searchTerm} />
+        </Typography.Text>
+      ),
+    },
+    {
+      title: 'Location',
+      key: 'location',
+      render: (_: unknown, repo: Repo) => {
+        const location = repo.remote_url || repo.local_path;
+        return location ? (
+          <Typography.Text code ellipsis style={{ fontSize: 11 }} title={location}>
+            <HighlightMatch text={location} query={searchTerm} />
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        );
+      },
+    },
+    {
+      title: 'Branch',
+      dataIndex: 'default_branch',
+      key: 'default_branch',
+      width: 120,
+      render: (branch?: string) =>
+        branch ? (
+          <Typography.Text code style={{ fontSize: 11 }}>
+            <HighlightMatch text={branch} query={searchTerm} />
+          </Typography.Text>
+        ) : (
+          <Typography.Text type="secondary">—</Typography.Text>
+        ),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 88,
+      render: (_: unknown, repo: Repo) => (
+        <SettingsActionGroup>
+          <Tooltip title="Edit repository">
+            <Button
+              type="text"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => openEdit(repo)}
+            />
+          </Tooltip>
+          <Tooltip title="Delete repository">
+            <Button
+              type="text"
+              size="small"
+              icon={<DeleteOutlined />}
+              danger
+              onClick={() => handleOpenDeleteModal(repo)}
+            />
+          </Tooltip>
+        </SettingsActionGroup>
+      ),
+    },
+  ];
+
   if (editingRepo || isCreating) {
     return (
       <DrillInFrame title={drillTitle} dirty={dirty} saveLabel={drillSaveLabel} onSave={handleSave}>
@@ -221,93 +319,13 @@ export const ReposTable: React.FC<ReposTableProps> = ({
           <Empty description={`No repositories match “${searchTerm}”`} />
         </div>
       ) : (
-        <Space orientation="vertical" size={16} style={{ width: '100%' }}>
-          {filteredRepos.map((repo: Repo) => {
-            const isLocal = repo.repo_type === 'local';
-            const tagColor = isLocal ? 'green' : 'blue';
-            const tagLabel = isLocal ? 'Local' : 'Remote';
-
-            return (
-              <Card
-                key={repo.repo_id}
-                size="small"
-                title={
-                  <Space>
-                    <FolderOutlined />
-                    <Typography.Link ellipsis title={repo.name} onClick={() => openEdit(repo)}>
-                      <HighlightMatch text={repo.name} query={searchTerm} />
-                    </Typography.Link>
-                    <Tag color={tagColor} style={{ marginLeft: 8 }}>
-                      <HighlightMatch text={tagLabel} query={searchTerm} />
-                    </Tag>
-                  </Space>
-                }
-                extra={
-                  <Space>
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<EditOutlined />}
-                      onClick={() => openEdit(repo)}
-                    />
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<DeleteOutlined />}
-                      danger
-                      onClick={() => handleOpenDeleteModal(repo)}
-                    />
-                  </Space>
-                }
-              >
-                {/* Repo metadata */}
-                <Space orientation="vertical" size={8} style={{ width: '100%' }}>
-                  <div>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Slug:{' '}
-                    </Typography.Text>
-                    <Typography.Text code style={{ fontSize: 12 }}>
-                      <HighlightMatch text={repo.slug} query={searchTerm} />
-                    </Typography.Text>
-                  </div>
-
-                  <div>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Type:{' '}
-                    </Typography.Text>
-                    <Typography.Text code style={{ fontSize: 11 }}>
-                      <HighlightMatch text={tagLabel.toLowerCase()} query={searchTerm} />
-                    </Typography.Text>
-                  </div>
-
-                  <div>
-                    <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                      Remote:{' '}
-                    </Typography.Text>
-                    <Typography.Text code style={{ fontSize: 11 }}>
-                      {repo.remote_url ? (
-                        <HighlightMatch text={repo.remote_url} query={searchTerm} />
-                      ) : (
-                        '—'
-                      )}
-                    </Typography.Text>
-                  </div>
-
-                  {repo.local_path && (
-                    <div>
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        Path:{' '}
-                      </Typography.Text>
-                      <Typography.Text code style={{ fontSize: 11 }}>
-                        <HighlightMatch text={repo.local_path} query={searchTerm} />
-                      </Typography.Text>
-                    </div>
-                  )}
-                </Space>
-              </Card>
-            );
-          })}
-        </Space>
+        <Table
+          dataSource={filteredRepos}
+          columns={columns}
+          rowKey="repo_id"
+          pagination={{ pageSize: 10, showSizeChanger: true }}
+          size="small"
+        />
       )}
 
       {/* Delete Repository Modal */}

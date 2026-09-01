@@ -2,6 +2,7 @@ import { extractSlugFromUrl } from '@agor-live/client';
 import type { FormInstance, RadioChangeEvent } from 'antd';
 import { Form, Input, Radio, Typography } from 'antd';
 import { extractSlugFromPath } from '@/utils/repoSlug';
+import { FIELD_WIDTHS } from '../SettingsModal/panelPrimitives';
 
 export interface RepoFormFieldsProps {
   form: FormInstance;
@@ -71,7 +72,8 @@ export const RepoFormFields: React.FC<RepoFormFieldsProps> = ({
               message: 'Please enter a valid git URL',
             },
           ]}
-          extra="HTTPS or SSH URL (e.g., git@github.com:org/repo.git)"
+          tooltip="HTTPS or SSH URL (e.g., git@github.com:org/repo.git)"
+          style={FIELD_WIDTHS.medium}
         >
           <Input
             placeholder="https://github.com/apache/superset.git"
@@ -86,7 +88,8 @@ export const RepoFormFields: React.FC<RepoFormFieldsProps> = ({
           label="Local Repository Path"
           name="path"
           rules={[{ required: true, message: 'Please enter an absolute path' }]}
-          extra="Absolute path on this machine (supports ~/ expansion)"
+          tooltip="Absolute path on this machine (supports ~/ expansion)"
+          style={FIELD_WIDTHS.medium}
         >
           <Input placeholder="~/code/my-app" onChange={handlePathChange} autoFocus />
         </Form.Item>
@@ -102,11 +105,12 @@ export const RepoFormFields: React.FC<RepoFormFieldsProps> = ({
             message: 'Slug must be in org/repo format',
           },
         ]}
-        extra={
+        tooltip={
           isLocal
             ? 'Provide org/repo format (e.g., local/myapp)'
             : 'Auto-detected from URL (editable)'
         }
+        style={FIELD_WIDTHS.short}
       >
         <Input placeholder="apache/superset" disabled={isEditing} />
       </Form.Item>
@@ -116,7 +120,8 @@ export const RepoFormFields: React.FC<RepoFormFieldsProps> = ({
           label="Default Branch"
           name="default_branch"
           rules={[{ required: true, message: 'Please enter the default branch' }]}
-          extra="The main branch to base new branches on"
+          tooltip="The main branch to base new branches on"
+          style={FIELD_WIDTHS.short}
         >
           <Input placeholder="main" />
         </Form.Item>
