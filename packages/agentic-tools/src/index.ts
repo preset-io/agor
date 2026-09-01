@@ -125,6 +125,15 @@ export const AGENTIC_TOOL_INTEGRATIONS = Object.freeze({
       supportsChildSpawn: true,
     },
   }),
+  workload: defineIntegration({
+    name: 'workload',
+    displayName: 'Deterministic workload',
+    authentication: 'built-in',
+    capabilities: {
+      supportsSessionFork: false,
+      supportsChildSpawn: false,
+    },
+  }),
 }) satisfies AgenticToolIntegrationRegistry;
 
 export function getAgenticToolIntegration(tool: AgenticToolName): AgenticToolIntegration {

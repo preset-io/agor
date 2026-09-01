@@ -15,6 +15,7 @@ import {
   RepoRepository,
   SessionRepository,
   TaskRepository,
+  TenantAgenticToolSettingsRepository,
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
@@ -637,4 +638,165 @@ describe('SessionsService direct OpenCode model selection', () => {
       genealogy: { spawn_point_task_id: undefined },
     });
   });
+});
+
+describe('SessionsService built-in workload configuration boundary', () => {
+  async function enableWorkload(db: any): Promise<void> {
+    await new TenantAgenticToolSettingsRepository(db).patch('workload', { enabled: true });
+  }
+
+  dbTest('rejects preset, model, and permission configuration on create', async ({ db }) => {
+    const service = new SessionsService(db, STUB_APP);
+    const branchId = await createBranch(db);
+    const base = {
+      branch_id: branchId,
+      agentic_tool: 'workload' as const,
+      status: SessionStatus.IDLE,
+      created_by: TEST_USER_ID,
+    };
+
+    for (const configured of [
+      { agentic_tool_preset_id: generateId() },
+      { model_config: { mode: 'exact', provider: 'openai', model: 'gpt-test' } },
+      { permission_config: { mode: 'autoEdit' } },
+    ]) {
+      await expect(service.create({ ...base, ...configured } as never)).rejects.toThrow(
+        /does not support presets, models, or permission configuration/i
+      );
+    }
+  });
+
+  dbTest(
+    'rejects built-in configuration on patch, including internal preset application',
+    async ({ db }) => {
+      const service = new SessionsService(db, STUB_APP);
+      const branchId = await createBranch(db);
+      const sessionId = await createSession(db, branchId, { agentic_tool: 'workload' });
+
+      await expect(
+        service.patch(
+          sessionId,
+          { model_config: { mode: 'exact', provider: 'openai', model: 'gpt-test' } } as never,
+          { _applyingAgenticToolPreset: true } as never
+        )
+      ).rejects.toThrow(/does not support presets, models, or permission configuration/i);
+    }
+  );
+
+  dbTest(
+    'atomically clears inline provider configuration when switching a taskless session',
+    async ({ db }) => {
+      await enableWorkload(db);
+      const service = new SessionsService(db, STUB_APP);
+      const branchId = await createBranch(db);
+      const sessionId = await createSession(db, branchId, {
+        agentic_tool: 'codex',
+        agentic_tool_preset_id: null,
+        model_config: {
+          mode: 'exact',
+          model: 'gpt-5-codex',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        },
+        permission_config: {
+          mode: 'autoEdit',
+          codex: {
+            sandboxMode: 'workspace-write',
+            approvalPolicy: 'on-request',
+            networkAccess: true,
+          },
+        },
+      });
+
+      await expect(service.patch(sessionId, { agentic_tool: 'workload' })).resolves.toMatchObject({
+        agentic_tool: 'workload',
+        agentic_tool_preset_id: null,
+        model_config: null,
+        permission_config: null,
+      });
+      const persisted = await new SessionRepository(db).findById(sessionId);
+      expect(persisted?.agentic_tool).toBe('workload');
+      expect(persisted?.agentic_tool_preset_id).toBeUndefined();
+      expect(persisted?.model_config).toBeUndefined();
+      expect(persisted?.permission_config).toBeNull();
+    }
+  );
+
+  dbTest(
+    'clears a taskless preset-backed provider session when switching to workload',
+    async ({ db }) => {
+      await enableWorkload(db);
+      const service = new SessionsService(db, STUB_APP);
+      const branchId = await createBranch(db);
+      const preset = await new AgenticToolPresetRepository(db).create(
+        {
+          tool: 'opencode',
+          name: 'Provider preset to clear',
+          configuration: {
+            permissionMode: 'auto',
+            modelConfig: { mode: 'exact', provider: 'openai', model: 'gpt-provider' },
+          },
+        },
+        TEST_USER_ID
+      );
+      const sessionId = await createSession(db, branchId, {
+        agentic_tool: 'opencode',
+        agentic_tool_preset_id: preset.preset_id,
+        model_config: {
+          mode: 'exact',
+          provider: 'openai',
+          model: 'gpt-provider',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        },
+        permission_config: { mode: 'autoEdit' },
+      });
+
+      await expect(service.patch(sessionId, { agentic_tool: 'workload' })).resolves.toMatchObject({
+        agentic_tool: 'workload',
+        agentic_tool_preset_id: null,
+        model_config: null,
+        permission_config: null,
+      });
+    }
+  );
+
+  dbTest(
+    'does not let the internal preset path preserve provider configuration on a workload switch',
+    async ({ db }) => {
+      await enableWorkload(db);
+      const service = new SessionsService(db, STUB_APP);
+      const branchId = await createBranch(db);
+      const preset = await new AgenticToolPresetRepository(db).create(
+        {
+          tool: 'claude-code',
+          name: 'Internal provider preset to clear',
+          configuration: {
+            permissionMode: 'plan',
+            modelConfig: { mode: 'exact', model: 'claude-provider' },
+          },
+        },
+        TEST_USER_ID
+      );
+      const sessionId = await createSession(db, branchId, {
+        agentic_tool: 'claude-code',
+        agentic_tool_preset_id: preset.preset_id,
+        model_config: {
+          mode: 'exact',
+          model: 'claude-provider',
+          updated_at: '2026-01-01T00:00:00.000Z',
+        },
+        permission_config: { mode: 'plan' },
+      });
+
+      await expect(
+        service.patch(sessionId, { agentic_tool: 'workload' }, {
+          _applyingAgenticToolPreset: true,
+        } as never)
+      ).resolves.toMatchObject({
+        agentic_tool: 'workload',
+        agentic_tool_preset_id: null,
+        model_config: null,
+        permission_config: null,
+      });
+    }
+  );
 });

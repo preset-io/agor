@@ -23,6 +23,8 @@ import {
   enqueueTenantDatabasePostCommitCallback,
   getCurrentTenantId,
   isPostgresDatabaseHandle,
+  type MessageCreateTransactionHook,
+  RepositoryError,
   runWithTenantDatabaseScope,
   SessionRepository,
   shortId,
@@ -55,10 +57,13 @@ import type {
   TaskID,
   TaskPendingDispatchStatus,
   UUID,
+  WorkloadCompletionInput,
+  WorkloadCompletionResult,
 } from '@agor/core/types';
 import {
   AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
   ExecutorPulseKind,
+  isCanonicalFullUuid,
   isTerminalTaskStatus,
   SDK_WATCHDOG_FAILURE_REASONS,
   SessionStatus,
@@ -128,6 +133,7 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
   'reportTerminationComplete',
   'reportRuntimeTelemetry',
   'reportSdkHealthFailure',
+  'completeWorkload',
 ] as const;
 
 export type TaskParams = QueryParams<{
@@ -179,9 +185,10 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     private readonly executorCredentialRevoker?: TaskExecutorCredentialRevoker,
     private readonly runtimeAuthorityOptions: TaskRuntimeAuthorityOptions = {
       branchRbacEnabled: app.get?.('config')?.execution?.branch_rbac === true,
-    }
+    },
+    onWorkloadResultCreateInTransaction?: MessageCreateTransactionHook
   ) {
-    const taskRepo = new TaskRepository(db);
+    const taskRepo = new TaskRepository(db, onWorkloadResultCreateInTransaction);
     super(taskRepo, {
       id: 'task_id',
       resourceType: 'Task',
@@ -782,6 +789,67 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
+   * Publish the built-in workload's canonical result and terminal Task fact in
+   * one repository transaction. A deterministic Message ID makes an exact
+   * response-loss retry idempotent without weakening the task-scoped executor
+   * lease or the Stop fence.
+   */
+  async completeWorkload(
+    data: WorkloadCompletionInput,
+    params?: TaskParams
+  ): Promise<WorkloadCompletionResult> {
+    if (!isCanonicalFullUuid(data.task_id) || !isCanonicalFullUuid(data.result_message_id)) {
+      throw new BadRequest('Workload completion requires canonical Task and Message IDs');
+    }
+    if (
+      !Number.isSafeInteger(data.requested_duration_ms) ||
+      data.requested_duration_ms < 100 ||
+      data.requested_duration_ms > 120_000
+    ) {
+      throw new BadRequest('requested_duration_ms is outside the workload contract');
+    }
+    if (!Number.isSafeInteger(data.observed_elapsed_ms) || data.observed_elapsed_ms < 0) {
+      throw new BadRequest('observed_elapsed_ms must be a non-negative integer');
+    }
+
+    let result: WorkloadCompletionResult;
+    try {
+      result = await this.taskRepo.completeWorkload(data);
+    } catch (error) {
+      if (error instanceof RepositoryError) throw new Conflict(error.message);
+      throw error;
+    }
+
+    // A response may be lost after the atomic commit. Exact retries repair
+    // credential revocation but do not duplicate transcript or lifecycle
+    // events. The durable queue worker repairs post-commit queue hand-off.
+    await this.retireTaskExecutorCredentials(result.task);
+    if (result.outcome === 'idempotent') return result;
+
+    emitServiceEvent(this.app, {
+      path: 'messages',
+      event: 'created',
+      data: result.message,
+      params,
+    });
+    emitServiceEvent(this.app, {
+      path: 'tasks',
+      event: 'patched',
+      data: result.task,
+      id: result.task.task_id,
+      params,
+    });
+    this.trackTaskCompleted(result.task);
+    await this.processCompletionSideEffects(
+      result.task,
+      TaskStatus.COMPLETED,
+      { ...(params ?? {}), provider: undefined } as TaskParams,
+      true
+    );
+    return result;
+  }
+
+  /**
    * Override patch to detect task completion and:
    * 1. Atomically update session status to IDLE when task reaches terminal state
    * 2. Set ready_for_prompt flag
@@ -792,6 +860,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   async patch(id: string, data: Partial<Task>, params?: TaskParams): Promise<Task | Task[]> {
     const nextStatus = data.status;
     const currentTask = nextStatus !== undefined ? await this.get(id, params) : undefined;
+    if (params?.provider && nextStatus === TaskStatus.COMPLETED && currentTask) {
+      const session = await new SessionRepository(this.db).findById(currentTask.session_id);
+      if (session?.agentic_tool === 'workload') {
+        throw new BadRequest('Workload tasks must complete through completeWorkload');
+      }
+    }
     if (
       currentTask?.status === TaskStatus.STOPPING &&
       currentTask.termination_request &&
@@ -1777,7 +1851,14 @@ export function createTasksService(
   db: TenantScopeAwareDatabase,
   app: Application,
   executorCredentialRevoker?: TaskExecutorCredentialRevoker,
-  runtimeAuthorityOptions?: TaskRuntimeAuthorityOptions
+  runtimeAuthorityOptions?: TaskRuntimeAuthorityOptions,
+  onWorkloadResultCreateInTransaction?: MessageCreateTransactionHook
 ): TasksService {
-  return new TasksService(db, app, executorCredentialRevoker, runtimeAuthorityOptions);
+  return new TasksService(
+    db,
+    app,
+    executorCredentialRevoker,
+    runtimeAuthorityOptions,
+    onWorkloadResultCreateInTransaction
+  );
 }

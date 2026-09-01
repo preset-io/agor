@@ -3,12 +3,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  agenticToolUsesBranchSdkHome,
   branchSdkHomeAuthUnsupportedReason,
+  branchSdkHomeUnsupportedReason,
   resolveBranchSdkHomeLaunch,
   resolveNewSessionSdkHomeScope,
   resolveSdkHomeConfig,
   sessionUsesBranchSdkHome,
 } from './branch-sdk-home.js';
+
+describe('built-in tools', () => {
+  it('allow branch-scoped Sessions without manufacturing provider SDK state', () => {
+    expect(branchSdkHomeUnsupportedReason('workload')).toBeUndefined();
+    expect(agenticToolUsesBranchSdkHome('workload')).toBe(false);
+  });
+});
 
 // getBranchHomePath derives from AGOR_DATA_HOME → make the root deterministic.
 const DATA_HOME = mkdtempSync(join(tmpdir(), 'agor-sdk-home-test-'));

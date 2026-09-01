@@ -4,7 +4,14 @@
  * Tests for type-safe CRUD operations on tasks with short ID support.
  */
 
-import type { MessageID, Task, TaskPendingDispatchStatus, UserID, UUID } from '@agor/core/types';
+import type {
+  MessageID,
+  Session,
+  Task,
+  TaskPendingDispatchStatus,
+  UserID,
+  UUID,
+} from '@agor/core/types';
 import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
@@ -51,7 +58,10 @@ let branchCounter = 1;
  * Create a session with required dependencies (repo and branch)
  * Returns the session_id that can be used for tasks
  */
-async function createSessionWithDeps(db: Database): Promise<UUID> {
+async function createSessionWithDeps(
+  db: Database,
+  agenticTool: Session['agentic_tool'] = 'claude-code'
+): Promise<UUID> {
   // Create repo
   const repoRepo = new RepoRepository(db);
   const repo = await repoRepo.create({
@@ -81,12 +91,109 @@ async function createSessionWithDeps(db: Database): Promise<UUID> {
   const session = await sessionRepo.create({
     session_id: generateId(),
     branch_id: branch.branch_id,
-    agentic_tool: 'claude-code',
+    agentic_tool: agenticTool,
     created_by: 'test-user' as UUID,
   });
 
   return session.session_id;
 }
+
+describe('TaskRepository.completeWorkload', () => {
+  dbTest('atomically publishes one result and settles the workload Task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db, 'workload');
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: new Date().toISOString(),
+      })
+    );
+    const resultMessageId = generateId() as MessageID;
+    const input = {
+      task_id: task.task_id,
+      result_message_id: resultMessageId,
+      requested_duration_ms: 1_000,
+      observed_elapsed_ms: 1_012,
+    };
+
+    const first = await taskRepo.completeWorkload(input);
+    const retry = await taskRepo.completeWorkload(input);
+
+    expect(first.outcome).toBe('transitioned');
+    expect(retry.outcome).toBe('idempotent');
+    expect(retry.message.message_id).toBe(resultMessageId);
+    expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.COMPLETED);
+    const messages = await new MessagesRepository(db).findByTaskId(task.task_id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      message_id: resultMessageId,
+      role: MessageRole.ASSISTANT,
+      metadata: { is_meta: true, workload_result: true },
+    });
+    expect(JSON.parse(messages[0]!.content as string)).toMatchObject({
+      outcome: 'completed',
+      taskId: task.task_id,
+    });
+    expect(await new SessionRepository(db).findById(sessionId)).toMatchObject({
+      status: SessionStatus.IDLE,
+      ready_for_prompt: true,
+    });
+  });
+
+  dbTest('does not publish a success result after Stop owns the Task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db, 'workload');
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.STOPPING,
+        executor_connected_at: new Date().toISOString(),
+      })
+    );
+
+    await expect(
+      taskRepo.completeWorkload({
+        task_id: task.task_id,
+        result_message_id: generateId() as MessageID,
+        requested_duration_ms: 1_000,
+        observed_elapsed_ms: 1_001,
+      })
+    ).rejects.toThrow(/active Task fence/);
+
+    expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.STOPPING);
+    expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
+  });
+
+  dbTest(
+    'rolls back result and terminal state when publication side effects fail',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db, async () => {
+        throw new Error('delivery enqueue failed');
+      });
+      const sessionId = await createSessionWithDeps(db, 'workload');
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: new Date().toISOString(),
+        })
+      );
+
+      await expect(
+        taskRepo.completeWorkload({
+          task_id: task.task_id,
+          result_message_id: generateId() as MessageID,
+          requested_duration_ms: 1_000,
+          observed_elapsed_ms: 1_010,
+        })
+      ).rejects.toThrow(/delivery enqueue failed/);
+
+      expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.RUNNING);
+      expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
+    }
+  );
+});
 
 async function bindTestRuntimeAuthority(db: Database, taskRepo: TaskRepository, task: Task) {
   const session = await new SessionRepository(db).findById(task.session_id);

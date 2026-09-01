@@ -13,6 +13,17 @@ describe('TenantAgenticToolSettingsRepository', () => {
     await expect(repository.isEnabled('codex')).resolves.toBe(true);
   });
 
+  dbTest('keeps the built-in workload disabled until the tenant opts in', async ({ db }) => {
+    const repository = new TenantAgenticToolSettingsRepository(db);
+    await expect(repository.find('workload')).resolves.toEqual({});
+    await expect(repository.isEnabled('workload')).resolves.toBe(false);
+
+    await repository.patch('workload', { enabled: true });
+
+    await expect(repository.find('workload')).resolves.toEqual({ revision: 1, enabled: true });
+    await expect(repository.isEnabled('workload')).resolves.toBe(true);
+  });
+
   dbTest('stores enabled and provider connection atomically', async ({ db }) => {
     const repository = new TenantAgenticToolSettingsRepository(db);
     await repository.patch('codex', {

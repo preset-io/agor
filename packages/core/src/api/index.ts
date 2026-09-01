@@ -82,6 +82,8 @@ import type {
   UserAvatarSyncResult,
   UserID,
   UUID,
+  WorkloadCompletionInput,
+  WorkloadCompletionResult,
 } from '@agor/core/types';
 import authentication, { type AuthenticationClient } from '@feathersjs/authentication-client';
 import type { Application, Paginated, Params } from '@feathersjs/feathers';
@@ -521,6 +523,11 @@ export interface TasksService extends AgorService<Task> {
   reportRuntimeTelemetry(data: RuntimeTelemetryInput, params?: Params): Promise<Task>;
   /** Report a daemon-authorized SDK watchdog decision. */
   reportSdkHealthFailure(data: SdkHealthFailureInput, params?: Params): Promise<Task>;
+  /** Atomically publish a built-in workload result and settle its Task. */
+  completeWorkload(
+    data: WorkloadCompletionInput,
+    params?: Params
+  ): Promise<WorkloadCompletionResult>;
   /**
    * Mark a task as completed
    */
@@ -1349,7 +1356,8 @@ function extendTasksService(client: AgorClient): void {
       'connectExecutor',
       'reportTerminationComplete',
       'reportRuntimeTelemetry',
-      'reportSdkHealthFailure'
+      'reportSdkHealthFailure',
+      'completeWorkload'
     );
   }
   tasksService[TASKS_SERVICE_EXTENDED] = true;

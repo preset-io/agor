@@ -44,6 +44,7 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
     opencode: false,
     copilot: false,
     cursor: false,
+    workload: false,
   });
   const [activeTab, setActiveTab] = useState<AgenticToolName>('claude-code');
 
@@ -64,6 +65,8 @@ export const DefaultAgenticSettings: React.FC<DefaultAgenticSettingsProps> = ({
         return copilotForm;
       case 'cursor':
         return cursorForm;
+      case 'workload':
+        throw new Error('Deterministic workload defaults are tenant-managed');
     }
   };
 

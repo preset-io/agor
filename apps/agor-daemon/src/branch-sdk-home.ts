@@ -3,7 +3,12 @@ import path from 'node:path';
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type { AgorConfig, KeyResolutionContext } from '@agor/core/config';
 import { getBranchHomePath, resolveApiKey } from '@agor/core/config';
-import type { AgenticToolName, SessionSdkHomeScope, UserID } from '@agor/core/types';
+import {
+  type AgenticToolName,
+  isBuiltInAgenticToolName,
+  type SessionSdkHomeScope,
+  type UserID,
+} from '@agor/core/types';
 
 /**
  * Per-branch SDK home resolution (design §6/§7/§8/§9).
@@ -118,6 +123,10 @@ const ENV_VAR_SUBDIR: Readonly<Record<string, string>> = Object.freeze({
 
 /** Why a tool must be refused before a branch adopts shared SDK state. */
 export function branchSdkHomeUnsupportedReason(tool: AgenticToolName): string | undefined {
+  // Built-in tools have no provider SDK/config state to relocate. They may run
+  // in a branch-scoped Session, but executor launch must not manufacture or
+  // mount a provider home for them.
+  if (isBuiltInAgenticToolName(tool)) return undefined;
   const integration = getAgenticToolIntegration(tool);
   if (!integration.capabilities.supportsConfigHomeOverride) {
     return 'its SDK cannot relocate its config/state directory';
@@ -126,6 +135,10 @@ export function branchSdkHomeUnsupportedReason(tool: AgenticToolName): string | 
     return 'its current XDG data home combines native credentials with relocatable state';
   }
   return undefined;
+}
+
+export function agenticToolUsesBranchSdkHome(tool: AgenticToolName): boolean {
+  return !isBuiltInAgenticToolName(tool);
 }
 
 /** Local native-auth modes that cannot keep credentials out of branch state. */

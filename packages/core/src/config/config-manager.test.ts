@@ -31,6 +31,7 @@ import {
   getTenantDataRoot,
   initConfig,
   isBranchRbacEnabled,
+  isDeploymentAgenticToolAvailable,
   loadConfig,
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
@@ -934,6 +935,13 @@ describe('loadConfig', () => {
     await expect(loadConfig()).resolves.toMatchObject({
       agentic_tools: { installed: ['claude-code', 'codex'] },
     });
+  });
+
+  it('keeps the built-in workload available under managed package policy', () => {
+    const policy = { managed: true, installed: new Set(['codex'] as const) };
+    expect(isDeploymentAgenticToolAvailable('workload', policy)).toBe(true);
+    expect(isDeploymentAgenticToolAvailable('codex', policy)).toBe(true);
+    expect(isDeploymentAgenticToolAvailable('claude-code', policy)).toBe(false);
   });
 
   it('accepts only a boolean Claude subscription OAuth release flag', async () => {

@@ -96,6 +96,30 @@ describe('AgorExecutor watchdog handoff', () => {
     );
   });
 
+  it('runs the built-in workload without starting provider SDK observation', async () => {
+    const executor = new AgorExecutor({
+      sessionToken: 'token',
+      sessionId: 'session-1',
+      taskId: 'task-1',
+      prompt: '{"schemaVersion":1,"profile":"wait","durationMs":100}',
+      tool: 'workload',
+      daemonUrl: 'http://daemon',
+    }) as unknown as {
+      client: object;
+      executeTask(): Promise<void>;
+    };
+    executor.client = {};
+
+    await executor.executeTask();
+
+    expect(runtime.recordPulse).not.toHaveBeenCalledWith('sdk_started', expect.anything());
+    expect(runtime.initialize).toHaveBeenCalledWith('workload');
+    expect(runtime.execute).toHaveBeenCalledWith(
+      'workload',
+      expect.objectContaining({ prompt: expect.stringContaining('"profile":"wait"') })
+    );
+  });
+
   it('stops liveness and exits for containment when the daemon does not acknowledge', async () => {
     vi.useFakeTimers();
     vi.spyOn(console, 'error').mockImplementation(() => undefined);

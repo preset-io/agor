@@ -134,6 +134,7 @@ export const TOOL_FIELD_CONFIGS: Record<AgenticToolName, AgenticToolFieldConfig[
     },
   ],
   opencode: [],
+  workload: [],
 };
 
 /** Map field name → presence flag (true if the user has a value stored). */

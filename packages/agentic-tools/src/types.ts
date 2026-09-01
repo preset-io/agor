@@ -38,7 +38,7 @@ export interface AgenticToolIntegration {
   name: AgenticToolName;
   displayName: string;
   capabilities: AgenticToolCapabilities;
-  authentication: 'api-key' | 'runtime-managed';
+  authentication: 'api-key' | 'runtime-managed' | 'built-in';
   apiKeyName?: ApiKeyName;
   keyCreationUrl?: string;
   billingUrl?: string;

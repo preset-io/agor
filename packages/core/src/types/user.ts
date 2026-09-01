@@ -184,6 +184,7 @@ export interface DefaultAgenticConfig {
   opencode?: DefaultAgenticToolConfig;
   copilot?: DefaultAgenticToolConfig;
   cursor?: DefaultAgenticToolConfig;
+  workload?: DefaultAgenticToolConfig;
 }
 
 export type UserAgenticDefaultSelections = Partial<
@@ -246,6 +247,7 @@ export interface AgenticToolsConfig {
   copilot?: CopilotConfig;
   cursor?: CursorConfig;
   opencode?: Record<string, never>;
+  workload?: Record<string, never>;
 }
 
 /** Union of all valid env-var-named fields across all tool configs. */
