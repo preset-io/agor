@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { probeRemoteAuthType, probeRemoteBearerToken } from './auth-probe';
+import { probeRemoteAuth, probeRemoteAuthType, probeRemoteBearerToken } from './auth-probe';
 
 // These cover the status-to-verdict rules, so the transport is injected. The
 // outbound destination filter is not exercised here: it lives in
@@ -40,6 +40,17 @@ describe('probeRemoteAuthType', () => {
     mockFetch(async () => jsonResponse(401, { 'www-authenticate': challenge }));
 
     expect(await probeRemoteAuthType('https://example.com/mcp', { fetchImpl })).toBe('oauth');
+  });
+
+  it('returns the challenge to the read-only metadata auditor', async () => {
+    const challenge =
+      'Bearer resource_metadata="https://example.com/.well-known/oauth-protected-resource"';
+    mockFetch(async () => jsonResponse(401, { 'www-authenticate': challenge }));
+
+    await expect(probeRemoteAuth('https://example.com/mcp', { fetchImpl })).resolves.toEqual({
+      authType: 'oauth',
+      wwwAuthenticate: challenge,
+    });
   });
 
   it('issues exactly one request, to the URL it was given', async () => {

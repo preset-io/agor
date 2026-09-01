@@ -7,11 +7,19 @@ export {
   type AuthProbeOptions,
   type MCPApiKeyProbeVerdict,
   probeRemoteApiKey,
+  probeRemoteAuth,
   probeRemoteAuthType,
   probeRemoteBearerToken,
+  type RemoteAuthProbeResult,
 } from './auth-probe';
 export { findCatalogEntry, loadCatalog } from './catalog';
 export { CuratedCatalogError, loadCuratedCatalog } from './curated-loader';
+export {
+  auditCatalogHealth,
+  type CatalogHealthAuditDependencies,
+  type CatalogHealthResult,
+  type CatalogHealthStatus,
+} from './health-audit';
 // Also reachable as `@agor/core/mcp-catalog/query`, which is the import the
 // browser bundle uses: this barrel pulls in the loader, and the loader reads
 // the file off disk.

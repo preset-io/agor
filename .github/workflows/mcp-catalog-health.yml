@@ -1,0 +1,31 @@
+name: MCP catalog health
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mcp-catalog-health
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Reachability and OAuth metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The command records structured warnings and a job summary but exits
+      # successfully for vendor outages/drift. Public internet is deliberately
+      # absent from unit tests and ordinary PR CI.
+      - run: pnpm audit:mcp-catalog -- --summary-file "$GITHUB_STEP_SUMMARY"

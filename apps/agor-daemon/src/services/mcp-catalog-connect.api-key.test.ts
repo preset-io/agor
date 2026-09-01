@@ -670,6 +670,26 @@ describe('the paths an API key does not change', () => {
     expect(probeRemoteBearerToken).not.toHaveBeenCalled();
   });
 
+  it('uses a reviewed bearer route when the endpoint advertises OAuth', async () => {
+    probeRemoteAuthType.mockResolvedValue('oauth');
+    probeRemoteBearerToken.mockResolvedValue('accepted');
+    const daemon = await buildDaemon({
+      ...CURATED,
+      credentials: {
+        scheme: 'bearer',
+        acquisition_url: 'https://example.com/tokens',
+        oauth_challenge_compatible: true,
+      },
+    });
+    const alice = await daemon.addUser('github-pat@agor.live');
+
+    await daemon.connectAs(alice, WORKING_KEY);
+
+    const [row] = await daemon.stored();
+    expect(row?.auth).toEqual({ type: 'bearer', token: WORKING_KEY });
+    expect(probeRemoteBearerToken).toHaveBeenCalledWith(CURATED.remote_url, WORKING_KEY);
+  });
+
   it('still lets two users share one unauthenticated install', async () => {
     // The ownership rule reuse gained is about what a row carries, not about
     // who installed it — so an open server is unaffected. A row here is owned

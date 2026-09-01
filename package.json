@@ -20,6 +20,7 @@
     "docs:dev": "pnpm --filter @agor/docs dev",
     "docs:build": "pnpm --filter @agor/docs build",
     "docs:generate": "pnpm --filter @agor/docs generate",
+    "audit:mcp-catalog": "NODE_OPTIONS=--conditions=source tsx scripts/audit-mcp-catalog.mts",
     "lint": "biome check --diagnostic-level=warn --error-on-warnings . && node scripts/test-frontend-color-plugins.mjs",
     "lint:fix": "biome check --write .",
     "format": "prettier --write .",
