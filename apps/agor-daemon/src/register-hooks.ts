@@ -3186,6 +3186,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
           const session = Array.isArray(context.result) ? context.result[0] : context.result;
 
           if (session && shouldRunSessionPostTurnHooks(session)) {
+            const terminalTaskId = session.tasks?.at(-1);
             // Flush the gateway outbound buffer (fire-and-forget).
             // When a GitHub/Shortcut-connected session finishes its turn, post
             // the last buffered message as a PR/issue/story comment. Must happen
@@ -3197,7 +3198,11 @@ export function registerHooks(ctx: RegisterHooksContext): void {
             deferWithTenantContext(context.params, async () => {
               try {
                 const gatewayService = context.app.service('gateway') as unknown as GatewayService;
-                await gatewayService.flushOutboundBuffer(session.session_id);
+                if (terminalTaskId) {
+                  await gatewayService.flushOutboundBuffer(session.session_id, {
+                    taskId: terminalTaskId,
+                  });
+                }
                 await gatewayService.updateProgress({
                   session_id: session.session_id,
                   state: 'done',
