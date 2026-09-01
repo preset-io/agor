@@ -34,6 +34,7 @@ export * from './mcp-catalog-candidates';
 export * from './mcp-egress-settings';
 export * from './mcp-marketplace';
 export * from './mcp-member-policy';
+export * from './mcp-oauth-client-registrations';
 export * from './mcp-oauth-pending-flows';
 export * from './mcp-servers';
 export * from './messages';

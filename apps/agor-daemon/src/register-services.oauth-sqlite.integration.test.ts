@@ -398,6 +398,9 @@ async function createHarness(
     catalogPeer?: boolean;
     catalogEntry?: MCPCatalogEntry;
     durableAuthority?: NonNullable<RegisterServicesContext['mcpOAuthPendingFlowAuthority']>;
+    durableClientRegistrationAuthority?: NonNullable<
+      RegisterServicesContext['mcpOAuthClientRegistrationAuthority']
+    >;
     lockGrantConfiguration?: NonNullable<RegisterServicesContext['lockMcpOAuthGrantConfiguration']>;
     outboundDnsLookup?: OutboundDnsLookup;
     requireAuth?: RegisterServicesContext['requireAuth'];
@@ -475,6 +478,7 @@ async function createHarness(
     requireAuth: options.requireAuth ?? (async (context) => context),
     deployment: options.deployment ?? ({} as RegisterServicesContext['deployment']),
     mcpOAuthPendingFlowAuthority: options.durableAuthority,
+    mcpOAuthClientRegistrationAuthority: options.durableClientRegistrationAuthority,
     lockMcpOAuthGrantConfiguration: options.lockGrantConfiguration,
     mcpOutboundDnsLookup: options.outboundDnsLookup,
   });
@@ -564,6 +568,7 @@ const constrainedHaDeployment = {
     taskRuntimeReconciliation: true,
     knowledgeEmbeddingIndexer: true,
     statelessMcp: true,
+    mcpOAuth: true,
     completionCallbackDurableAdmission: true,
     completionCallbackPreAdmissionRecovery: false,
     widgetResolutionDurableClaim: true,
@@ -1277,7 +1282,7 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
-  it('discovers an already usable OAuth server through the production HA hook chain', async () => {
+  it('supports explicit OAuth start through the production HA hook chain', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
     const harness = await createHarness(provider, 'per_user', {
@@ -1301,16 +1306,14 @@ describe('SQLite saved-row OAuth authority', () => {
         .service('mcp-servers/discover')
         .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
     ).resolves.toMatchObject({ success: true, tools: [] });
-    await expect(
-      harness.app
-        .service('mcp-servers/oauth-start')
-        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
-    ).rejects.toThrow(
-      'HA support profile constrained-active-active does not support MCP OAuth flows'
-    );
+    const started = await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+    expect(started).toMatchObject({ success: true, attempt_id: expect.any(String) });
+    expect(started).not.toHaveProperty('state');
   });
 
-  it('does not escalate an HA capability probe into OAuth discovery or a browser flow', async () => {
+  it('promotes an HA capability probe into the durable browser flow', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
     const harness = await createHarness(provider, 'per_user', {
@@ -1320,7 +1323,7 @@ describe('SQLite saved-row OAuth authority', () => {
     registerProductionHooksForHarness(harness);
     const browserReservation = await reserveBrowserEvent(harness, 'discover');
 
-    await harness.app.service('mcp-servers/discover').create(
+    const discovery = harness.app.service('mcp-servers/discover').create(
       {
         mcp_server_id: harness.server.mcp_server_id,
         oauth_browser_event: browserReservation,
@@ -1328,8 +1331,13 @@ describe('SQLite saved-row OAuth authority', () => {
       paramsFor(harness)
     );
 
-    expect(provider.requests.map((request) => request.path)).toEqual(['/saved/mcp']);
-    expect(harness.emittedBrowserEvents).toEqual([]);
+    const authorizationUrl = await harness.nextAuthorizationUrl();
+    const state = new URL(authorizationUrl).searchParams.get('state');
+    expect(state).toBeTruthy();
+    expect((await harness.callback(state!)).status).toBe(200);
+    await expect(discovery).resolves.toMatchObject({ success: true, tools: [] });
+    expect(provider.requests.map((request) => request.path)).toContain('/token');
+    expect(harness.emittedBrowserEvents).toHaveLength(1);
   });
 
   it('authenticates REST mutations before the MCP OAuth around hook can read or write', async () => {
@@ -1822,6 +1830,115 @@ describe('SQLite saved-row OAuth authority', () => {
     expect(provider.requests.filter((entry) => entry.path === '/register')).toHaveLength(1);
     expect(provider.requests.filter((entry) => entry.path === '/token')).toEqual([]);
     expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
+  it('rejects an unsafe deployment callback before OAuth discovery or durable DCR', async () => {
+    const provider = await createTestProvider({ rejectDynamicRegistration: true });
+    providers.push(provider);
+    const catalogEntry = {
+      name: 'test/oauth-start-unsafe-callback',
+      title: 'Unsafe callback ordering fixture',
+      category: 'developer-tools',
+      capabilities: ['testing'],
+      benefit: 'Exercises callback validation before provider discovery.',
+      starter_prompt: 'Exercise callback validation ordering.',
+      permission_disclosure: 'Fixture only.',
+      popularity_rank: 999_997,
+      transport: 'streamable-http',
+      remote_url: provider.savedMcpUrl,
+      has_remote: true,
+      has_package: false,
+      auth_type: 'oauth',
+    } as MCPCatalogEntry;
+    vi.mocked(loadCatalog).mockResolvedValueOnce([catalogEntry]);
+    const resolveDynamicClientRegistration = vi.fn();
+    const harness = await createHarness(provider, undefined, {
+      catalogEntry,
+      durableAuthority: durableAuthorityWithCreate(async () => crypto.randomUUID() as never),
+      durableClientRegistrationAuthority: {
+        resolve: resolveDynamicClientRegistration,
+        invalidateForServer: vi.fn(),
+        maintain: vi.fn(),
+      } as unknown as NonNullable<RegisterServicesContext['mcpOAuthClientRegistrationAuthority']>,
+      lockGrantConfiguration: vi.fn(async () => undefined),
+    });
+    databases.push(harness.rawDb);
+    process.env.AGOR_BASE_URL = 'http://10.33.92.175:3030';
+
+    const result = await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+    expect(result).toMatchObject({
+      success: false,
+      recovery: { category: 'redirect_configuration_required' },
+    });
+    expect(provider.requests).toEqual([]);
+    expect(resolveDynamicClientRegistration).not.toHaveBeenCalled();
+    expect(harness.emittedBrowserEvents).toEqual([]);
+  });
+
+  it('routes saved-row DCR through the durable fleet authority before creating a flow', async () => {
+    const provider = await createTestProvider({ rejectDynamicRegistration: true });
+    providers.push(provider);
+    const catalogEntry = {
+      name: 'test/durable-dcr-authority',
+      title: 'Durable DCR authority fixture',
+      category: 'developer-tools',
+      capabilities: ['testing'],
+      benefit: 'Exercises fleet DCR wiring.',
+      starter_prompt: 'Exercise durable DCR.',
+      permission_disclosure: 'Fixture only.',
+      popularity_rank: 999_997,
+      transport: 'streamable-http',
+      remote_url: provider.savedMcpUrl,
+      has_remote: true,
+      has_package: false,
+      auth_type: 'oauth',
+    } as MCPCatalogEntry;
+    vi.mocked(loadCatalog)
+      .mockResolvedValueOnce([catalogEntry])
+      .mockResolvedValueOnce([catalogEntry]);
+    const resolve = vi.fn(async () => ({
+      client_id: 'durably-reused-client',
+      redirect_uris: ['https://agor.example.test/mcp-servers/oauth-callback'],
+      token_endpoint_auth_method: 'none',
+    }));
+    const durableClientRegistrationAuthority = {
+      resolve,
+      invalidateForServer: vi.fn(),
+      maintain: vi.fn(),
+    } as unknown as NonNullable<RegisterServicesContext['mcpOAuthClientRegistrationAuthority']>;
+    const harness = await createHarness(provider, undefined, {
+      catalogEntry,
+      durableAuthority: durableAuthorityWithCreate(async () => crypto.randomUUID() as never),
+      durableClientRegistrationAuthority,
+      lockGrantConfiguration: vi.fn(async () => undefined),
+    });
+    databases.push(harness.rawDb);
+
+    const started = await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+    expect(started).toMatchObject({ success: true, attempt_id: expect.any(String) });
+    expect(resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tenantId: 'default',
+        mcpServerId: harness.server.mcp_server_id,
+        serverConfigVersion: harness.server.config_version,
+        registrationEndpoint: `${provider.baseUrl}/register`,
+        resourceUri: provider.savedMcpUrl,
+        redirectUri: 'https://agor.example.test/mcp-servers/oauth-callback',
+        compatibilityMode: 'marketplace',
+      }),
+      expect.any(Function),
+      expect.objectContaining({
+        assertCurrent: expect.any(Function),
+        assertServerCurrent: expect.any(Function),
+      })
+    );
+    expect(provider.requests.filter((entry) => entry.path === '/register')).toEqual([]);
   });
 
   it('derives Marketplace policy and all advertised scopes at the service DCR boundary', async () => {

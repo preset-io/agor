@@ -1509,6 +1509,27 @@ describe('base URL resolution', () => {
     await expect(requirePublicBaseUrl()).resolves.toBe('https://agor.sandbox.example.com');
   });
 
+  it('keeps the public browser origin separate from an HA internal daemon URL', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    await fs.mkdir(agorDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agorDir, 'config.yaml'),
+      yaml.dump({
+        daemon: {
+          // Production HA charts use this fleet-internal URL for executor callbacks.
+          public_url: 'http://agor-runtime-daemon.runtime.svc.cluster.local:3030',
+          // OAuth callbacks must use this deployment-owned public ingress origin.
+          base_url: 'https://sdx-us1a-v2.dp-sdx-us1a.cloud-sdx.agor.live',
+        },
+      }),
+      'utf-8'
+    );
+
+    await expect(requirePublicBaseUrl()).resolves.toBe(
+      'https://sdx-us1a-v2.dp-sdx-us1a.cloud-sdx.agor.live'
+    );
+  });
+
   it('returns ui.base_url from legacy config when daemon.base_url is unset', async () => {
     const agorDir = path.join(tempDir, '.agor');
     await fs.mkdir(agorDir, { recursive: true });

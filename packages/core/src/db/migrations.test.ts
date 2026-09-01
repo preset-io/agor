@@ -904,6 +904,53 @@ describe('MCP OAuth pending-flow migrations', () => {
   });
 });
 
+describe('MCP OAuth client-registration migrations', () => {
+  it('creates only sealed DCR material in the SQLite compatibility schema', async () => {
+    const client = createClient({ url: ':memory:' });
+    try {
+      await client.execute('PRAGMA foreign_keys = OFF');
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0103_mcp_oauth_client_registrations.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const columns = await client.execute('PRAGMA table_info(mcp_oauth_client_registrations)');
+      const columnNames = columns.rows.map((column) => column.name);
+      expect(columnNames).toContain('sealed_material');
+      expect(columnNames).toContain('binding_fingerprint');
+      expect(columnNames).toContain('claim_generation');
+      expect(columnNames).toContain('lease_expires_at');
+      expect(columnNames).toContain('dispatched_at');
+      expect(columnNames).not.toContain('tenant_id');
+      expect(columnNames).not.toContain('client_id');
+      expect(columnNames).not.toContain('client_secret');
+    } finally {
+      client.close();
+    }
+  });
+
+  it('binds the PostgreSQL authority to tenant/server generation with forced RLS', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0100_mcp_oauth_client_registrations.sql', import.meta.url),
+      'utf8'
+    );
+    expect(migration).toContain('FOREIGN KEY ("tenant_id", "mcp_server_id")');
+    expect(migration).toContain('DEFERRABLE INITIALLY IMMEDIATE');
+    expect(migration).toContain(
+      'ALTER TABLE "mcp_oauth_client_registrations" FORCE ROW LEVEL SECURITY'
+    );
+    expect(migration).toContain("'mcp_oauth_client_registration_maintenance'");
+    expect(migration).toContain('"sealed_material" text');
+    expect(migration).toContain('"claim_generation" bigint');
+    expect(migration).toContain('"lease_expires_at" timestamp with time zone');
+    expect(migration).not.toMatch(/"client_id"\s/);
+    expect(migration).not.toMatch(/"client_secret"\s/);
+  });
+});
+
 describe('GitHub install state migrations', () => {
   it('keeps standalone SQLite schema-compatible without a raw state column', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'agor-github-state-migration-'));

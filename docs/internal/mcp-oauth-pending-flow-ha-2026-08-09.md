@@ -7,14 +7,15 @@ Date: 2026-08-09
 This design covers browser-based MCP OAuth authorization-code flows when Agor
 uses PostgreSQL and requests/callbacks can land on different daemons.
 
-| Resource                                          | Ownership                                      | Authority                                                   | Redis disposition                                                       |
-| ------------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Pending authorization attempt                     | Tenant-owned, user-initiated, MCP-server-bound | PostgreSQL `mcp_oauth_pending_flows`                        | Never stored                                                            |
-| Raw OAuth `state`                                 | Short-lived bearer capability                  | Browser/request only; PostgreSQL stores SHA-256             | Never stored                                                            |
-| PKCE verifier, DCR client ID/secret, endpoints    | Secret-derived pending material                | AES-GCM sealed envelope using `AGOR_MASTER_SECRET`          | Never stored                                                            |
-| Provider authorization code                       | Single-use provider capability                 | Callback request only                                       | Never stored                                                            |
-| Access/refresh token and grant client credentials | Tenant/server/credential-subject grant         | OAuth-specific AES-GCM envelopes in `user_mcp_oauth_tokens` | Never stored                                                            |
-| Completion notification                           | Tenant-qualified UX hint                       | Native Socket.IO room                                       | Fanout is allowed only after tenant room isolation; never authoritative |
+| Resource                                           | Ownership                                      | Authority                                                    | Redis disposition                                                       |
+| -------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------ | ----------------------------------------------------------------------- |
+| Pending authorization attempt                      | Tenant-owned, user-initiated, MCP-server-bound | PostgreSQL `mcp_oauth_pending_flows`                         | Never stored                                                            |
+| Raw OAuth `state`                                  | Short-lived bearer capability                  | Browser/request only; PostgreSQL stores SHA-256              | Never stored                                                            |
+| PKCE verifier, attempt client ID/secret, endpoints | Secret-derived pending material                | AES-GCM sealed envelope using `AGOR_MASTER_SECRET`           | Never stored                                                            |
+| Dynamic client registration and credentials        | Tenant/server/config-generation authority      | PostgreSQL `mcp_oauth_client_registrations`; sealed material | Never stored                                                            |
+| Provider authorization code                        | Single-use provider capability                 | Callback request only                                        | Never stored                                                            |
+| Access/refresh token and grant client credentials  | Tenant/server/credential-subject grant         | OAuth-specific AES-GCM envelopes in `user_mcp_oauth_tokens`  | Never stored                                                            |
+| Completion notification                            | Tenant-qualified UX hint                       | Native Socket.IO room                                        | Fanout is allowed only after tenant room isolation; never authoritative |
 
 The pending and grant tables are **non-portable tenant state**. Tenant deletion
 removes them, but export/import omits them: restoring an in-flight external
@@ -23,9 +24,11 @@ tenant/server/generation and deployment master secret. Re-home and
 cross-deployment imports restore MCP server configuration but require OAuth
 reauthorization.
 
-Standalone/SQLite keeps the process-local Map as its authority. It now consumes
-an attempt before provider exchange and exposes the same non-replayable
-failed/ambiguous UI outcomes; the SQLite table is only a schema-history mirror.
+Standalone/SQLite keeps the process-local attempt Map and performs DCR in the
+initiating daemon. It consumes an attempt before provider exchange and exposes
+the same non-replayable failed/ambiguous UI outcomes; the SQLite pending and
+client-registration tables are schema-history mirrors and are not runtime
+authorities.
 
 ## Persisted contract
 
@@ -53,6 +56,26 @@ before provider exchange. PostgreSQL deployments require a shared
 The table deliberately has no authorization-code, access-token, refresh-token,
 bearer-token, or authorization-URL column. Terminal transitions clear the
 sealed envelope.
+
+PostgreSQL DCR uses a separate durable authority because registration precedes
+creation of a browser attempt. `mcp_oauth_client_registrations` binds the
+tenant, saved MCP server, server config generation, public redirect URI,
+registration endpoint/source, metadata URL, protected resource, issuer,
+authorization/token endpoints, compatibility and DCR policies, requested
+scope, and registration request policy into an HMAC fingerprint. It stores
+client ID/secret only inside an OAuth-purpose AES-GCM envelope whose AAD also
+binds the row ID and monotonic registration generation. A partial unique index
+permits one current registration per tenant/server, and composite foreign keys
+prevent cross-tenant attachment.
+
+One database-time lease owner may dispatch DCR. It marks `dispatched_at` before
+the provider POST and publishes credentials only through an exact claim ID,
+claim generation, registration generation, current-row, and status CAS. An
+expired undispatched lease is reclaimable without provider duplication. An
+expired dispatched lease is `ambiguous`—the provider may have allocated a
+client—and a new generation is created. Configuration changes supersede the
+current generation and clear its ciphertext. A live exact registered generation
+is reused across replicas until its recorded secret expiry.
 
 ## State machine
 
@@ -101,6 +124,13 @@ have consumed the code.
 | Token row + `succeeded` transaction commits, callback response is lost               | `succeeded`; duplicate callback/status read is idempotent                                        | Close provider tab; UI refetch converges        |
 | Database transaction fails after provider returns a token                            | No token row; `ambiguous` when transition succeeds, otherwise stale exchange ages to `ambiguous` | Start a new sign-in                             |
 
+For DCR, death before `dispatched_at` leaves a safely reclaimable lease. Death
+after dispatch produces an `ambiguous` tombstone after lease expiry; a peer
+registers a fresh generation and a late owner cannot publish. A well-formed
+provider HTTP rejection is `failed`. Transport/timeouts or malformed success
+after dispatch are `ambiguous`. Agor does not claim it can revoke an orphan
+registration when the provider offers no safe deletion contract.
+
 There is intentionally no “recover provider code” path. OAuth providers may
 consume authorization codes once, and Agor cannot prove whether an interrupted
 exchange did so. `ambiguous` is a safety state, not an implementation error to
@@ -125,12 +155,12 @@ pins the validated address at socket connection time, and revalidates each
 redirect. Secret-bearing POST requests never follow redirects.
 
 Non-compliant providers require the narrow per-server
-`oauth_compatibility_mode: legacy` opt-in. DCR is disabled by default and
-requires explicit `oauth_dcr_mode: fallback`; pre-registration is preferred.
-DCR responses must contain a nonempty client ID, the exact redirect URI, and a
-compatible token authentication method. A provider-side orphan registration
-can remain after a crash because RFC 7591 has no universal delete/idempotency
-contract.
+`oauth_compatibility_mode: legacy` opt-in. DCR policy remains explicit outside
+reviewed canonical Catalog installs; pre-registration is preferred. DCR
+responses must contain a nonempty client ID, the exact redirect URI, and a
+compatible token authentication method. PostgreSQL never uses the core
+process-global DCR cache: the durable registration authority is the only reuse
+path.
 
 ## Token and UI behavior
 
@@ -186,6 +216,9 @@ Every daemon may run the idempotent PostgreSQL maintenance operation:
 - due `pending` attempts become `expired`;
 - `exchanging` attempts older than two minutes become `ambiguous`;
 - terminal tombstones older than 24 hours are deleted.
+- expired DCR leases become `failed` before dispatch or `ambiguous` after it;
+- expired DCR client secrets become `expired`, and DCR tombstones older than 24
+  hours are deleted.
 
 RLS exposes only eligible inputs (plus expired/ambiguous outputs created at the
 same transaction-local database time) under the `mcp_oauth_maintenance`
@@ -205,8 +238,10 @@ or database error detail.
    `agor db migrate --offline-cutover`. It deletes legacy OAuth grant rows
    because plaintext/unfenced rows are structurally incompatible; users must
    reconnect.
-3. Do not canary or mix old/new cohorts. Start only the new cohort after the
-   acknowledged migration completes.
+3. Apply additive migration `0100_mcp_oauth_client_registrations` before OAuth
+   activation. Do not canary or mix old/new cohorts: old constrained-HA daemons
+   keep OAuth gated and do not implement the DCR authority. Start only the new
+   cohort after migrations complete.
 4. Resume OAuth and verify cross-daemon callback and rotating refresh.
 5. Monitor stable categories/statuses only. Never log state, code, endpoints,
    provider bodies/descriptions, PKCE, client credentials, or tokens.

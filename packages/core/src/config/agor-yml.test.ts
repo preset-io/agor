@@ -273,6 +273,9 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     if (ha === null) throw new Error('ha variant must resolve');
 
     expect(ha.start).toContain('AGOR_EXTERNAL_LAUNCH_SHARED_SECRET=');
+    expect(ha.start).toContain(
+      `AGOR_HA_PUBLIC_ORIGIN="\${AGOR_HA_PUBLIC_ORIGIN:-http://{{host.ip_address}}:`
+    );
     expect(ha.start).not.toContain('AGOR_ADMIN_PASSWORD=');
     expect(ha.app).toMatch(/\/dev-auth\/$/);
     expect(ha.description).toMatch(/auth-resolved tenants/);

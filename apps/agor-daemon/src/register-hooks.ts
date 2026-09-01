@@ -630,13 +630,6 @@ export function suppressKnowledgeCommandRealtimeEvent(context: HookContext): Hoo
  * before provider discovery or flow creation.
  */
 export const CONSTRAINED_HA_PROCESS_AFFINE_SERVICE_GATES = [
-  ['mcp-servers/oauth-auth-headers', 'mcpOAuth'],
-  ['mcp-servers/oauth-complete', 'mcpOAuth'],
-  ['mcp-servers/oauth-disconnect', 'mcpOAuth'],
-  ['mcp-servers/oauth-refresh', 'mcpOAuth'],
-  ['mcp-servers/oauth-start', 'mcpOAuth'],
-  ['mcp-servers/oauth-status', 'mcpOAuth'],
-  ['mcp-servers/test-oauth', 'mcpOAuth'],
   ['codex-auth/device', 'codexDeviceAuth'],
   ['codex-auth/import', 'codexAuth'],
   ['codex-auth/logout', 'codexAuth'],

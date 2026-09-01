@@ -74,6 +74,7 @@ export type ResolvedDeploymentConfig =
         taskRuntimeReconciliation: true;
         knowledgeEmbeddingIndexer: true;
         statelessMcp: true;
+        mcpOAuth: true;
         completionCallbackDurableAdmission: true;
         completionCallbackPreAdmissionRecovery: false;
         widgetResolutionDurableClaim: true;
@@ -476,6 +477,7 @@ export function resolveDeploymentConfig(
       taskRuntimeReconciliation: true,
       knowledgeEmbeddingIndexer: true,
       statelessMcp: true,
+      mcpOAuth: true,
       completionCallbackDurableAdmission: true,
       completionCallbackPreAdmissionRecovery: false,
       widgetResolutionDurableClaim: true,
