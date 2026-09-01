@@ -16,6 +16,7 @@ export {
   type MCPExternalErrorCategory,
   type MCPExternalErrorReason,
   type MCPExternalErrorStage,
+  type MCPExternalErrorType,
   type SanitizedMCPExternalError,
   sanitizeMCPExternalError,
 } from '../tools/mcp/external-error';

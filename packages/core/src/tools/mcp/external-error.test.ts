@@ -39,6 +39,43 @@ describe('MCP external error boundary', () => {
     expect(JSON.stringify({ allowed, rejected })).not.toContain('SENTINEL');
   });
 
+  it.each([
+    [401, 'provider_rejected', 'reauthenticate'],
+    [403, 'provider_rejected', 'reauthenticate'],
+    [429, 'provider_unavailable', 'retry'],
+    [503, 'provider_unavailable', 'retry'],
+    [404, 'configuration_required', 'review_configuration'],
+  ] as const)(
+    'classifies an MCP SDK HTTP status %i without retaining its response body',
+    (status, category, action) => {
+      // StreamableHTTPError uses an own numeric `code`; its message contains
+      // the untrusted response body and must remain outside the safe result.
+      const failure = Object.assign(new Error('SENTINEL_PROVIDER_RESPONSE_BODY'), {
+        code: status,
+      });
+      const safe = sanitizeMCPExternalError(failure, { stage: 'discovery' });
+
+      expect(safe).toMatchObject({
+        category,
+        action,
+        diagnostic: { type: 'HTTPError', status },
+      });
+      expect(safe.diagnostic.code).toBeUndefined();
+      expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+    }
+  );
+
+  it('does not reinterpret JSON-RPC codes as HTTP statuses', () => {
+    const safe = sanitizeMCPExternalError(
+      Object.assign(new Error('SENTINEL_JSON_RPC'), { code: -32603 }),
+      { stage: 'discovery' }
+    );
+
+    expect(safe).toMatchObject({ category: 'unknown', diagnostic: { type: 'Error' } });
+    expect(safe.diagnostic.status).toBeUndefined();
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+  });
+
   it('fails closed when hostile code and name getters throw', () => {
     const failure = new Error('SENTINEL_HOSTILE_ERROR');
     const codeGetter = vi.fn(() => {
@@ -127,6 +164,25 @@ describe('MCP external error boundary', () => {
     });
     expect(rejectedReason.diagnostic.reason).toBeUndefined();
     expect(JSON.stringify(rejectedReason)).not.toContain('SENTINEL');
+  });
+
+  it('accepts only a closed OAuth configuration diagnostic override', () => {
+    const safe = sanitizeMCPExternalError(new Error('SENTINEL_OAUTH_METADATA'), {
+      stage: 'oauth',
+      category: 'configuration_required',
+      type: 'ConfigurationError',
+      reason: 'oauth_metadata_incompatible',
+    });
+
+    expect(safe).toMatchObject({
+      category: 'configuration_required',
+      diagnostic: {
+        stage: 'oauth',
+        type: 'ConfigurationError',
+        reason: 'oauth_metadata_incompatible',
+      },
+    });
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
   });
 
   it('re-closes forged typed errors instead of trusting their public prose or metadata', () => {

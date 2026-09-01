@@ -71,6 +71,7 @@ import {
   type MCPExternalErrorCategory,
   type MCPExternalErrorReason,
   type MCPExternalErrorStage,
+  type MCPExternalErrorType,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import type {
@@ -84,6 +85,7 @@ import type {
   AuthenticatedParams,
   HookContext,
   MCPAuth,
+  MCPAuthRecovery,
   MCPOAuthAttemptID,
   MCPOAuthBrowserEventRequest,
   MCPOAuthBrowserOperation,
@@ -1815,15 +1817,37 @@ export async function registerMCPServices(
     error: unknown,
     options: {
       category?: MCPExternalErrorCategory;
+      type?: MCPExternalErrorType;
       reason?: MCPExternalErrorReason;
     } = {}
   ) => {
     const safe = sanitizeMCPExternalError(error, { stage, ...options });
-    const { type, code, reason } = safe.diagnostic;
+    const { type, code, status, reason } = safe.diagnostic;
     console.error(
-      `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${code ? ` code=${code}` : ''}${reason ? ` reason=${reason}` : ''}`
+      `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${status !== undefined ? ` status=${status}` : ''}${code ? ` code=${code}` : ''}${reason ? ` reason=${reason}` : ''}`
     );
     return safe;
+  };
+  const externalFailureOptionsForRecovery = (
+    recovery: MCPAuthRecovery
+  ): Parameters<typeof externalFailure>[3] => {
+    if (recovery.category === 'metadata_incompatible') {
+      return {
+        category: 'configuration_required',
+        type: 'ConfigurationError',
+        reason: 'oauth_metadata_incompatible',
+      };
+    }
+    if (
+      recovery.category === 'provider_unavailable' ||
+      recovery.category === 'provider_rejected' ||
+      recovery.category === 'invalid_response' ||
+      recovery.category === 'storage_policy_rejected' ||
+      recovery.category === 'configuration_required'
+    ) {
+      return { category: recovery.category };
+    }
+    return {};
   };
   const oauthFetch = async (
     input: string | URL | Request,
@@ -4440,7 +4464,7 @@ export async function registerMCPServices(
           : preliminaryRecovery;
         // This is deliberately the final consumer of the original unknown.
         // Response construction below uses only the closed recovery contract.
-        externalFailure('OAuth Start', 'oauth', error);
+        externalFailure('OAuth Start', 'oauth', error, externalFailureOptionsForRecovery(recovery));
         return {
           success: false,
           error: recovery.message,
@@ -5571,7 +5595,12 @@ export async function registerMCPServices(
             ) {
               throw error;
             }
-            externalFailure('MCP Discovery OAuth token acquisition', 'discovery', error);
+            externalFailure(
+              'MCP Discovery OAuth token acquisition',
+              'discovery',
+              error,
+              externalFailureOptionsForRecovery(recovery)
+            );
             return undefined;
           }
         };
@@ -5854,6 +5883,7 @@ export async function registerMCPServices(
         }
         const persistenceRejected = isMCPServerWriteValidationError(error);
         const safe = externalFailure('MCP Discovery', 'discovery', error, {
+          ...externalFailureOptionsForRecovery(recovery),
           ...(persistenceRejected ? { category: 'storage_policy_rejected' as const } : {}),
           ...(persistenceRejected
             ? { reason: 'capability_persistence_validation_rejected' as const }

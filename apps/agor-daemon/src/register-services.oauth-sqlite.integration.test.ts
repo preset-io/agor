@@ -141,6 +141,7 @@ async function createTestProvider(
     rejectDynamicRegistration?: boolean;
     holdDynamicRegistration?: boolean;
     resourceScopes?: string[];
+    resourcePath?: string;
     holdMcpChallenge?: boolean;
   } = {}
 ): Promise<TestProvider> {
@@ -187,7 +188,7 @@ async function createTestProvider(
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify({
-          resource: `${baseUrl}/saved/mcp`,
+          resource: `${baseUrl}${options.resourcePath ?? '/saved/mcp'}`,
           authorization_servers: [baseUrl],
           ...(options.resourceScopes ? { scopes_supported: options.resourceScopes } : {}),
         })
@@ -926,6 +927,36 @@ afterEach(async () => {
 });
 
 describe('saved-server capability discovery', () => {
+  it('reports an MCP SDK 401 with a redacted HTTP authentication diagnostic', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const sentinel = 'SENTINEL_CONTEXT7_AUTH_RESPONSE';
+    mcpClientTestState.connectError = Object.assign(new Error(sentinel), { code: 401 });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(result).toMatchObject({
+        success: false,
+        category: 'provider_rejected',
+        error:
+          'The provider rejected the MCP authentication request. Review the saved credentials or sign in again.',
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'event=mcp_external_failure stage=discovery category=provider_rejected type=HTTPError status=401'
+        )
+      );
+      expect(JSON.stringify({ result, logs: errorSpy.mock.calls })).not.toContain(sentinel);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('persists protocol-valid multiline tool descriptions', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
@@ -1276,6 +1307,31 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it('logs closed Context7-style OAuth metadata incompatibility diagnostics', async () => {
+    const provider = await createTestProvider({ resourcePath: '/different/mcp' });
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(result).toMatchObject({
+        success: false,
+        recovery: { category: 'metadata_incompatible', action: 'review_compatibility' },
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'event=mcp_external_failure stage=oauth category=configuration_required type=ConfigurationError reason=oauth_metadata_incompatible'
+        )
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('authenticates REST mutations before the MCP OAuth around hook can read or write', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
