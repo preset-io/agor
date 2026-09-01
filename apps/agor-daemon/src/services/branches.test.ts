@@ -398,10 +398,12 @@ describe('BranchesService environment start async behavior', () => {
     vi.spyOn(service, 'get').mockImplementation(async () => {
       return { ...branch, environment_instance: currentEnvironment } as never;
     });
-    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
-      kind: 'shell',
-      command: branch.start_command,
-    } as never);
+    const resolveEnvironmentCommand = vi
+      .spyOn(service as never, 'resolveEnvironmentCommand')
+      .mockResolvedValue({
+        kind: 'shell',
+        command: branch.start_command,
+      } as never);
     vi.spyOn(service as never, 'resolveEnvironmentExecutorContext').mockResolvedValue({
       env: { PATH: '/usr/bin:/bin' },
       delegatedHomeKey: undefined,
@@ -426,7 +428,13 @@ describe('BranchesService environment start async behavior', () => {
       }
     );
 
-    return { service, branch, environmentUpdates, lifecycleOptions };
+    return {
+      service,
+      branch,
+      environmentUpdates,
+      lifecycleOptions,
+      resolveEnvironmentCommand,
+    };
   }
 
   it('returns after dispatching shell start commands to the executor', async () => {
@@ -509,6 +517,101 @@ describe('BranchesService environment start async behavior', () => {
     await expect(
       runInTestTenantScope(() => service.startEnvironment(branch.branch_id))
     ).rejects.toThrow(/already starting/);
+  });
+
+  it('accepts the same bounded typed result from a start webhook', async () => {
+    const { service, branch, environmentUpdates, resolveEnvironmentCommand } = createStartHarness();
+    resolveEnvironmentCommand.mockResolvedValue({
+      kind: 'webhook',
+      url: 'https://launcher.example.test/start',
+    } as never);
+    vi.spyOn(service as never, 'executeEnvironmentWebhook').mockResolvedValue({
+      body: JSON.stringify({
+        version: 1,
+        access_urls: [
+          { name: 'Shell', url: 'https://shell.example.test' },
+          { name: 'Manager', url: 'https://manager.example.test' },
+        ],
+        health_url: 'https://shell.example.test/health',
+        resource: { provider: 'github-codespaces', id: 'cs-123', name: 'space' },
+      }),
+      truncated: false,
+      status: 200,
+      contentType: 'application/json; charset=utf-8',
+    } as never);
+
+    await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
+
+    expect(environmentUpdates.at(-1)).toMatchObject({
+      lifecycle_result: {
+        version: 1,
+        access_urls: [
+          { name: 'Shell', url: 'https://shell.example.test/' },
+          { name: 'Manager', url: 'https://manager.example.test/' },
+        ],
+        health_url: 'https://shell.example.test/health',
+        resource: { provider: 'github-codespaces', id: 'cs-123', name: 'space' },
+      },
+      access_urls: [
+        { name: 'Shell', url: 'https://shell.example.test/' },
+        { name: 'Manager', url: 'https://manager.example.test/' },
+      ],
+      facts: {
+        url: 'https://shell.example.test/',
+        url_manager: 'https://manager.example.test/',
+        health: 'https://shell.example.test/health',
+        name: 'space',
+        resource_id: 'cs-123',
+        resource_provider: 'github-codespaces',
+      },
+    });
+  });
+
+  it('fails closed when a JSON start webhook returns an unsupported field', async () => {
+    const { service, branch, environmentUpdates, resolveEnvironmentCommand } = createStartHarness();
+    resolveEnvironmentCommand.mockResolvedValue({
+      kind: 'webhook',
+      url: 'https://launcher.example.test/start',
+    } as never);
+    vi.spyOn(service as never, 'executeEnvironmentWebhook').mockResolvedValue({
+      body: JSON.stringify({ version: 1, token: 'must-not-be-persisted' }),
+      truncated: false,
+      status: 200,
+      contentType: 'application/json',
+    } as never);
+
+    await expect(
+      runInTestTenantScope(() => service.startEnvironment(branch.branch_id))
+    ).rejects.toThrow('unsupported field');
+    expect(environmentUpdates.at(-1)).toMatchObject({
+      status: 'error',
+      last_health_check: { status: 'unhealthy' },
+    });
+    expect(JSON.stringify(environmentUpdates)).not.toContain('must-not-be-persisted');
+  });
+
+  it('finishes as running with unknown health when a webhook has no health target', async () => {
+    const { service, branch, environmentUpdates, resolveEnvironmentCommand } = createStartHarness();
+    resolveEnvironmentCommand.mockResolvedValue({
+      kind: 'webhook',
+      url: 'https://launcher.example.test/start',
+    } as never);
+    vi.spyOn(service as never, 'executeEnvironmentWebhook').mockResolvedValue({
+      body: 'started',
+      truncated: false,
+      status: 200,
+      contentType: 'text/plain',
+    } as never);
+
+    await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
+
+    expect(environmentUpdates.at(-1)).toMatchObject({
+      status: 'running',
+      last_health_check: {
+        status: 'unknown',
+        message: 'Start webhook completed; health is unavailable',
+      },
+    });
   });
 
   it('preserves daemon stop fallback when restarting a running shell env without stop command', async () => {
@@ -3273,7 +3376,7 @@ describe('BranchesService.renderEnvironment variant-switch fact hygiene', () => 
 
     expect(updateEnvironment).toHaveBeenCalledWith(
       'wt-1',
-      { facts: null, access_urls: null },
+      { facts: null, lifecycle_result: null, access_urls: null },
       undefined
     );
   });
@@ -3522,6 +3625,17 @@ describe('BranchesService remote environment probe resolution', () => {
     expect(dynamicFetchSpy).toHaveBeenCalledWith(CS_HEALTH, expect.anything());
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(observation).toMatchObject({ status: 'healthy' });
+  });
+
+  it('prefers the typed lifecycle health target over a stale legacy fact', async () => {
+    const typedHealth = 'https://typed-8088.app.github.dev/health';
+    const { dynamicFetchSpy } = await observe({
+      status: 'starting',
+      lifecycle_result: { version: 1, health_url: typedHealth },
+      facts: { health: CS_HEALTH },
+    });
+
+    expect(dynamicFetchSpy).toHaveBeenCalledWith(typedHealth, expect.anything());
   });
 
   it('prefers an operator-configured health_check_url over the fact', async () => {

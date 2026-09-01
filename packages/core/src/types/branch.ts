@@ -1,4 +1,5 @@
 // src/types/branch.ts
+import type { EnvironmentLifecycleResult } from '../environment/lifecycle-result';
 import type { BoardID, BranchID, UUID } from './id';
 import type { KnowledgeNamespaceID, KnowledgeVisibility } from './knowledge';
 import type { BranchName } from './repo';
@@ -557,6 +558,13 @@ export interface BranchEnvironmentInstance {
   }>;
 
   /**
+   * Latest bounded, versioned result reported by Start/discovery.
+   * `access_urls` remains the denormalized UI/API shortcut; this object retains
+   * the health target and opaque provider identity needed by later lifecycle commands.
+   */
+  lifecycle_result?: EnvironmentLifecycleResult;
+
+  /**
    * Process logs (last N lines)
    *
    * Captured from stdout/stderr of environment process.
@@ -587,14 +595,14 @@ export interface BranchEnvironmentInstance {
   };
 
   /**
-   * Facts reported back by a lifecycle command's stdout.
+   * Legacy compatibility facts reported by a lifecycle command's stdout.
    *
    * A remote environment's address (and other post-start metadata) does not
    * exist until it starts — a Codespace's hostname, a k8s pod's ingress, a
    * preview deploy's URL are all invented by the backend at creation time.
-   * The `app`/`stop`/`logs`/`health` templates cannot reference something that
-   * does not yet exist, so a lifecycle command emits `AGOR_FACT <key>=<value>`
-   * lines on stdout and the executor parses them into this map.
+   * New adapters emit the bounded `AGOR_ENVIRONMENT_RESULT` protocol. During
+   * migration, the executor accepts only the historical `url`, `health`,
+   * `name`, and `url_manager` facts and converts them into `lifecycle_result`.
    *
    * These become available to Handlebars templates as `{{env.<key>}}` (see
    * `buildBranchContext`). The `url` key is reserved: it populates
@@ -615,6 +623,7 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'last_command',
   'logs',
   'facts',
+  'lifecycle_result',
   // Derived from the reserved `url` fact, so it goes stale in exactly the same
   // situations facts do and has to be clearable alongside them.
   'access_urls',

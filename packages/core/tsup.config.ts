@@ -36,6 +36,7 @@ export default defineConfig({
     'environment/variable-resolver': 'src/environment/variable-resolver.ts', // Environment variable resolution
     'environment/render-snapshot': 'src/environment/render-snapshot.ts', // v2 branch env snapshot rendering
     'environment/health-transition': 'src/environment/health-transition.ts', // shared status rules for both health monitors
+    'environment/lifecycle-result': 'src/environment/lifecycle-result.ts', // bounded managed-environment result protocol
     'environment/webhook': 'src/environment/webhook.ts', // Managed environment webhook execution policy
     'utils/errors': 'src/utils/errors.ts', // Error handling and formatting utilities
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers

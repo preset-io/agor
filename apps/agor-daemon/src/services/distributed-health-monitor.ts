@@ -21,6 +21,7 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { isAllowedDynamicEnvironmentHealthUrl } from '@agor/core/environment/lifecycle-result';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantID } from '@agor/core/types';
 import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
@@ -479,16 +480,23 @@ export class DistributedHealthMonitor {
     // Facts are command output, so the URL is untrusted input and gets the
     // stricter fact guard (blocks loopback/RFC1918/link-local/.internal) rather
     // than the plain health-check guard applied to operator-authored config.
+    const rawResultHealthUrl = branch.environment_instance?.lifecycle_result?.health_url;
     const rawFactsHealthUrl = branch.environment_instance?.facts?.health;
-    const factsHealthUrl =
-      rawFactsHealthUrl && isAllowedFactProbeUrl(rawFactsHealthUrl) ? rawFactsHealthUrl : undefined;
-    const healthUrl = branch.health_check_url || factsHealthUrl;
-    const isDynamicHealth = !branch.health_check_url && factsHealthUrl !== undefined;
+    const rawDynamicHealthUrl = rawResultHealthUrl ?? rawFactsHealthUrl;
+    const dynamicHealthUrl = rawResultHealthUrl
+      ? isAllowedDynamicEnvironmentHealthUrl(rawResultHealthUrl)
+        ? rawResultHealthUrl
+        : undefined
+      : rawFactsHealthUrl && isAllowedFactProbeUrl(rawFactsHealthUrl)
+        ? rawFactsHealthUrl
+        : undefined;
+    const healthUrl = branch.health_check_url || dynamicHealthUrl;
+    const isDynamicHealth = !branch.health_check_url && dynamicHealthUrl !== undefined;
     if (!healthUrl) {
       return {
         status: 'unknown',
-        message: rawFactsHealthUrl
-          ? 'Health fact points at a disallowed destination; environment health is not observable'
+        message: rawDynamicHealthUrl
+          ? 'Lifecycle health URL points at a disallowed destination; environment health is not observable'
           : 'No health check configured; remote environment health is not observable',
         recordWhileStarting: true,
       };

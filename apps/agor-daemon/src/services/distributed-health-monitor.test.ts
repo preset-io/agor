@@ -253,6 +253,26 @@ describe('DistributedHealthMonitor remote environment probe resolution', () => {
     expect(observation).toMatchObject({ status: 'healthy', message: 'HTTP 200' });
   });
 
+  it('prefers the typed lifecycle health target over a stale legacy fact', async () => {
+    const typedHealth = 'https://typed-8088.app.github.dev/health';
+    const fetchDynamicHealth = vi.fn(
+      async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response
+    );
+
+    await observe(
+      {
+        environment_instance: {
+          lifecycle_result: { version: 1, health_url: typedHealth },
+          facts: { health: CS_HEALTH },
+        },
+      },
+      vi.fn() as never,
+      fetchDynamicHealth as never
+    );
+
+    expect(fetchDynamicHealth).toHaveBeenCalledWith(typedHealth, expect.anything());
+  });
+
   it('prefers an operator-configured health_check_url over the fact', async () => {
     const fetchHealth = vi.fn(
       async () => ({ ok: true, status: 200, statusText: 'OK' }) as Response

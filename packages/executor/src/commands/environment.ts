@@ -7,8 +7,8 @@
  * filesystem and potentially long-running build output.
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
-import { ENVIRONMENT } from '@agor/core/config';
+import { spawn } from 'node:child_process';
+import type { EnvironmentLifecycleResult } from '@agor/core/environment/lifecycle-result';
 import { assertEnvCommandAllowed } from '@agor/core/unix';
 import type {
   EnvironmentLifecyclePayload,
@@ -16,65 +16,8 @@ import type {
   ExecutorResult,
 } from '../payload-types.js';
 import { createExecutorClient } from '../services/feathers-client.js';
+import { EnvironmentCommandOutputCapture } from './environment-command-output.js';
 import type { CommandOptions } from './index.js';
-
-const MAX_OUTPUT_LINES = ENVIRONMENT.LOGS_MAX_LINES;
-
-/**
- * Parse `AGOR_FACT <key>=<value>` lines emitted by a lifecycle command.
- *
- * A remote environment's address (and other post-start metadata) only exists
- * after the backend creates it — a Codespace's hostname, a k8s pod's ingress,
- * a preview deploy's URL. The lifecycle command reports these back by printing
- * `AGOR_FACT url=https://…` (etc.) on stdout; we collect them into a map that
- * is persisted onto the environment instance and re-exposed to templates as
- * `{{env.<key>}}`. See `BranchEnvironmentInstance.facts`.
- *
- * - Keys are restricted to [A-Za-z0-9_] so a fact key is always a safe
- *   Handlebars identifier.
- * - The value is the remainder of the line, trimmed.
- * - Later lines override earlier ones (last write wins).
- *
- * Parsed from the FULL output, before line-count truncation, so facts printed
- * ahead of a long build tail are never dropped.
- */
-export function parseAgorFacts(output: string | undefined): Record<string, string> {
-  const facts: Record<string, string> = {};
-  if (!output) return facts;
-  for (const line of output.split('\n')) {
-    const match = line.match(/^\s*AGOR_FACT\s+([A-Za-z0-9_]+)=(.*)$/);
-    if (match) {
-      facts[match[1]] = match[2].trim();
-    }
-  }
-  return facts;
-}
-
-function truncateOutput(outputChunks: string[]): string | undefined {
-  const fullOutput = outputChunks.join('');
-  const lines = fullOutput.split('\n');
-  const truncated =
-    lines.length > MAX_OUTPUT_LINES
-      ? `... (truncated ${lines.length - MAX_OUTPUT_LINES} lines)\n${lines
-          .slice(-MAX_OUTPUT_LINES)
-          .join('\n')}`
-      : fullOutput;
-  const output = truncated.trim();
-  return output || undefined;
-}
-
-function collectOutput(child: ChildProcess, outputChunks: string[]): void {
-  const collect = (stream: NodeJS.ReadableStream | null, target: NodeJS.WriteStream) => {
-    if (!stream) return;
-    stream.on('data', (chunk: Buffer) => {
-      const text = chunk.toString();
-      target.write(text);
-      outputChunks.push(text);
-    });
-  };
-  collect(child.stdout, process.stdout);
-  collect(child.stderr, process.stderr);
-}
 
 function successMessage(action: EnvironmentLifecyclePayload['params']['action']): string {
   switch (action) {
@@ -122,8 +65,14 @@ async function runShellCommand(options: {
   cwd: string;
   env?: Record<string, string>;
   commandType: 'start' | 'stop' | 'nuke' | 'logs';
-}): Promise<{ pid?: number; output?: string; facts: Record<string, string> }> {
-  const { command, cwd, env, commandType } = options;
+  parseLifecycleResult?: boolean;
+}): Promise<{
+  pid?: number;
+  output?: string;
+  lifecycleResult?: EnvironmentLifecycleResult;
+  facts: Record<string, string>;
+}> {
+  const { command, cwd, env, commandType, parseLifecycleResult = false } = options;
   assertEnvCommandAllowed(command, commandType);
 
   const child = spawn(command, {
@@ -133,36 +82,54 @@ async function runShellCommand(options: {
     shell: true,
   });
 
-  const outputChunks: string[] = [];
-  collectOutput(child, outputChunks);
-
-  await new Promise<void>((resolve, reject) => {
-    child.on('exit', (code: number | null) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        const message =
-          code === null
-            ? `${commandType} command exited without a code`
-            : `${commandType} command exited with code ${code}`;
-        const error = new Error(message) as Error & { output?: string; pid?: number };
-        error.output = truncateOutput(outputChunks);
-        error.pid = child.pid;
-        reject(error);
-      }
-    });
-    child.on('error', (error: Error) => {
-      const enriched = error as Error & { output?: string; pid?: number };
-      enriched.output = truncateOutput(outputChunks);
-      enriched.pid = child.pid;
-      reject(enriched);
-    });
+  const capture = new EnvironmentCommandOutputCapture({
+    parseLifecycleResult,
+    stdout: process.stdout,
+    stderr: process.stderr,
   });
+  child.stdout?.on('data', (chunk: Buffer) => capture.writeStdout(chunk.toString()));
+  child.stderr?.on('data', (chunk: Buffer) => capture.writeStderr(chunk.toString()));
 
-  // Parse facts from the FULL (untruncated) output so an AGOR_FACT printed
-  // before a long build tail is not lost to line-count truncation.
-  const facts = parseAgorFacts(outputChunks.join(''));
-  return { pid: child.pid, output: truncateOutput(outputChunks), facts };
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.on('close', (code: number | null) => {
+        if (code === 0) {
+          resolve();
+        } else {
+          const message =
+            code === null
+              ? `${commandType} command exited without a code`
+              : `${commandType} command exited with code ${code}`;
+          const error = new Error(message) as Error & { output?: string; pid?: number };
+          error.output = capture.visibleOutput();
+          error.pid = child.pid;
+          reject(error);
+        }
+      });
+      child.on('error', (error: Error) => {
+        const enriched = error as Error & { output?: string; pid?: number };
+        enriched.output = capture.visibleOutput();
+        enriched.pid = child.pid;
+        reject(enriched);
+      });
+    });
+  } catch (error) {
+    try {
+      capture.finish();
+    } catch {
+      // The command failure remains authoritative; control records stay suppressed.
+    }
+    throw error;
+  }
+
+  try {
+    return { pid: child.pid, ...capture.finish() };
+  } catch (error) {
+    const enriched = error as Error & { output?: string; pid?: number };
+    enriched.output = capture.visibleOutput();
+    enriched.pid = child.pid;
+    throw enriched;
+  }
 }
 
 export async function handleEnvironmentLogs(
@@ -250,6 +217,7 @@ export async function handleEnvironmentLifecycle(
         cwd,
         env: payload.env,
         commandType: 'start',
+        parseLifecycleResult: false,
       });
       await updateBranchEnvironment(client, branchId, {
         last_command: {
@@ -298,26 +266,39 @@ export async function handleEnvironmentLifecycle(
         cwd,
         env: payload.env,
         commandType: 'start',
+        parseLifecycleResult: true,
       });
 
-      // `url` is the reserved fact key for the app's reachable address. Prefer
-      // it over the frozen appUrl: when the app template is `{{env.url}}` the
-      // frozen value is '' (the address did not exist at branch-creation render
-      // time), and the real URL only arrives now, via the start command's facts.
-      const appUrl = result.facts.url ?? payload.params.appUrl;
+      const accessUrls =
+        result.lifecycleResult?.access_urls ??
+        (payload.params.appUrl ? [{ name: 'App', url: payload.params.appUrl }] : undefined);
+      const effectiveHealthUrl =
+        result.lifecycleResult?.health_url ?? payload.params.healthCheckUrl;
+      const completedAt = new Date().toISOString();
 
       await updateBranchEnvironment(client, branchId, {
+        ...(!effectiveHealthUrl
+          ? {
+              status: 'running',
+              last_health_check: {
+                timestamp: completedAt,
+                status: 'unknown',
+                message: 'Start command completed; health is unavailable',
+              },
+            }
+          : {}),
         process: {
           ...(branch.environment_instance?.process ?? {}),
           pid: result.pid,
           started_at: startedAt,
         },
-        ...(appUrl ? { access_urls: [{ name: 'App', url: appUrl }] } : {}),
-        ...(Object.keys(result.facts).length > 0 ? { facts: result.facts } : {}),
+        access_urls: accessUrls ?? null,
+        lifecycle_result: result.lifecycleResult ?? null,
+        facts: Object.keys(result.facts).length > 0 ? result.facts : null,
         last_command: {
           action: payload.params.action,
           status: 'succeeded',
-          timestamp: new Date().toISOString(),
+          timestamp: completedAt,
           message: successMessage(payload.params.action),
           ...(result.output ? { output: result.output } : {}),
         },
@@ -343,7 +324,9 @@ export async function handleEnvironmentLifecycle(
       // Nuke destroys the environment, so any address it reported is now dead —
       // clear facts. Stop only pauses (a Codespace keeps its name and resumes
       // to the same URL), so facts are preserved there.
-      ...(payload.params.action === 'nuke' ? { facts: null } : {}),
+      ...(payload.params.action === 'nuke'
+        ? { facts: null, lifecycle_result: null, access_urls: null }
+        : {}),
       last_health_check: {
         timestamp: new Date().toISOString(),
         status: 'unknown',

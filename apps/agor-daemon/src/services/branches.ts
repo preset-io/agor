@@ -38,6 +38,12 @@ import {
   type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
+import {
+  type EnvironmentLifecycleResult,
+  isAllowedDynamicEnvironmentHealthUrl,
+  lifecycleResultTemplateFacts,
+  validateEnvironmentLifecycleResult,
+} from '@agor/core/environment/lifecycle-result';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
   MANAGED_ENV_EXECUTION_MODE_DEFAULT,
@@ -179,7 +185,9 @@ interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
     startCommand?: string;
     stopCommand?: string;
     nukeCommand?: string;
+    syncCommand?: string;
     appUrl?: string;
+    healthCheckUrl?: string;
   };
 }
 
@@ -371,7 +379,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     commandType: ManagedEnvCommandType;
     triggeredBy?: { user_id?: string; email?: string };
     maxBytes?: number;
-  }): Promise<{ body: string; truncated: boolean; status: number }> {
+  }): Promise<{ body: string; truncated: boolean; status: number; contentType?: string }> {
     const {
       url,
       branch,
@@ -416,7 +424,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         throw new Error(`Environment ${commandType} webhook returned HTTP ${response.status}`);
       }
 
-      return { body, truncated, status: response.status };
+      return {
+        body,
+        truncated,
+        status: response.status,
+        contentType: response.headers.get('content-type') ?? undefined,
+      };
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         throw new Error(
@@ -427,6 +440,25 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private parseEnvironmentWebhookLifecycleResult(response: {
+    body: string;
+    truncated: boolean;
+    contentType?: string;
+  }): EnvironmentLifecycleResult | undefined {
+    const body = response.body.trim();
+    if (!body) return undefined;
+    const mediaType = response.contentType?.split(';', 1)[0]?.trim().toLowerCase();
+    if (mediaType !== 'application/json' && !mediaType?.endsWith('+json')) return undefined;
+    if (response.truncated) throw new Error('Environment webhook result exceeds the size limit');
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(body);
+    } catch {
+      throw new Error('Environment webhook returned invalid result JSON');
+    }
+    return validateEnvironmentLifecycleResult(decoded);
   }
 
   private async readLimitedWebhookBody(
@@ -602,6 +634,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           stopCommand: branch.stop_command,
           nukeCommand: branch.nuke_command,
           appUrl: branch.app_url,
+          healthCheckUrl: branch.health_check_url,
           ...(options.syncCommand ? { syncCommand: options.syncCommand } : {}),
         },
       },
@@ -2403,6 +2436,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           started_at: new Date().toISOString(),
         },
         access_urls,
+        facts: undefined,
+        lifecycle_result: undefined,
         last_health_check: undefined,
         last_error: undefined,
       },
@@ -2420,13 +2455,45 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       );
 
       if (execution.kind === 'webhook') {
-        await this.executeEnvironmentWebhook({
+        const response = await this.executeEnvironmentWebhook({
           url: execution.url,
           branch,
           commandType: 'start',
           triggeredBy: this.extractTriggeredBy(params),
           maxBytes: 16 * 1024,
         });
+        const lifecycleResult = this.parseEnvironmentWebhookLifecycleResult(response);
+        const effectiveHealthUrl = lifecycleResult?.health_url ?? branch.health_check_url;
+        const completedAt = new Date().toISOString();
+        await this.updateEnvironment(
+          id,
+          {
+            ...(!effectiveHealthUrl
+              ? {
+                  status: 'running' as const,
+                  last_health_check: {
+                    timestamp: completedAt,
+                    status: 'unknown' as const,
+                    message: 'Start webhook completed; health is unavailable',
+                  },
+                }
+              : {}),
+            ...(lifecycleResult
+              ? {
+                  lifecycle_result: lifecycleResult,
+                  access_urls: lifecycleResult.access_urls ?? access_urls,
+                  facts: lifecycleResultTemplateFacts(lifecycleResult),
+                }
+              : {}),
+            last_command: {
+              action: 'start',
+              status: 'succeeded',
+              timestamp: completedAt,
+              message: 'Start webhook completed',
+            },
+          },
+          params
+        );
         console.log(`✅ Start webhook completed successfully for ${branch.name}`);
       } else {
         await this.dispatchEnvironmentExecutor({ branch, action: 'start', params });
@@ -2643,6 +2710,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         {
           status: 'stopped',
           process: undefined,
+          facts: undefined,
+          lifecycle_result: undefined,
+          access_urls: undefined,
           last_health_check: {
             timestamp: new Date().toISOString(),
             status: 'unknown',
@@ -2763,7 +2833,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         host_ip_address: hostIpAddress,
         base_ref: branch.base_ref,
         ref_type: branch.ref_type,
-        facts: branch.environment_instance?.facts,
+        facts: {
+          ...(branch.environment_instance?.facts ?? {}),
+          ...lifecycleResultTemplateFacts(branch.environment_instance?.lifecycle_result),
+        },
       },
       branch.environment_variant ?? undefined
     );
@@ -2929,18 +3002,25 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Facts are command output, so the URL is untrusted input and gets the
     // stricter fact guard (loopback / RFC1918 / link-local / .internal) rather
     // than the plain health-check guard applied to operator-authored config.
+    const rawResultHealthUrl = branch.environment_instance?.lifecycle_result?.health_url;
     const rawFactsHealthUrl = branch.environment_instance?.facts?.health;
-    const factsHealthUrl =
-      rawFactsHealthUrl && isAllowedFactProbeUrl(rawFactsHealthUrl) ? rawFactsHealthUrl : undefined;
-    const healthUrl = branch.health_check_url || factsHealthUrl;
-    const isDynamicHealth = !branch.health_check_url && factsHealthUrl !== undefined;
+    const rawDynamicHealthUrl = rawResultHealthUrl ?? rawFactsHealthUrl;
+    const dynamicHealthUrl = rawResultHealthUrl
+      ? isAllowedDynamicEnvironmentHealthUrl(rawResultHealthUrl)
+        ? rawResultHealthUrl
+        : undefined
+      : rawFactsHealthUrl && isAllowedFactProbeUrl(rawFactsHealthUrl)
+        ? rawFactsHealthUrl
+        : undefined;
+    const healthUrl = branch.health_check_url || dynamicHealthUrl;
+    const isDynamicHealth = !branch.health_check_url && dynamicHealthUrl !== undefined;
     if (!healthUrl) {
       const managedProcess = this.processes.get(branch.branch_id);
       const isProcessAlive = Boolean(managedProcess?.process && !managedProcess.process.killed);
       return {
         status: 'unknown',
-        message: rawFactsHealthUrl
-          ? 'Health fact points at a disallowed destination; environment health is not observable'
+        message: rawDynamicHealthUrl
+          ? 'Lifecycle health URL points at a disallowed destination; environment health is not observable'
           : isProcessAlive
             ? 'Process running; no health check configured'
             : 'No health check configured',
@@ -3153,7 +3233,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         // environment, so they must not leak into the new variant's templates —
         // otherwise `app: "{{env.url}}"` on the incoming variant renders the
         // outgoing one's address.
-        facts: variantChanged ? undefined : branch.environment_instance?.facts,
+        facts: variantChanged
+          ? undefined
+          : {
+              ...(branch.environment_instance?.facts ?? {}),
+              ...lifecycleResultTemplateFacts(branch.environment_instance?.lifecycle_result),
+            },
       },
       requestedVariant
     );
@@ -3177,7 +3262,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // environment. Safe to do here: switching variants is already refused
     // while the environment is running or starting.
     if (variantChanged && branch.environment_instance) {
-      await this.updateEnvironment(id, { facts: null, access_urls: null }, params);
+      await this.updateEnvironment(
+        id,
+        { facts: null, lifecycle_result: null, access_urls: null },
+        params
+      );
     }
 
     return await this.withTenantDatabase(params, () =>

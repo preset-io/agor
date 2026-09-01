@@ -184,6 +184,12 @@
       "import": "./dist/environment/health-transition.js",
       "require": "./dist/environment/health-transition.cjs"
     },
+    "./environment/lifecycle-result": {
+      "source": "./src/environment/lifecycle-result.ts",
+      "types": "./dist/environment/lifecycle-result.d.ts",
+      "import": "./dist/environment/lifecycle-result.js",
+      "require": "./dist/environment/lifecycle-result.cjs"
+    },
     "./utils/errors": {
       "source": "./src/utils/errors.ts",
       "types": "./dist/utils/errors.d.ts",

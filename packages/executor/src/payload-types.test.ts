@@ -289,6 +289,7 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         action: 'start',
         startCommand: 'docker compose up -d --build',
         appUrl: 'http://localhost:3000',
+        healthCheckUrl: 'http://localhost:3000/health',
       },
     };
 
@@ -296,6 +297,7 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
     expect(result.command).toBe('environment.lifecycle');
     expect(result.params.action).toBe('start');
     expect(result.params.startCommand).toBe('docker compose up -d --build');
+    expect(result.params.healthCheckUrl).toBe('http://localhost:3000/health');
   });
 
   it('should reject start payloads without startCommand', () => {
