@@ -216,6 +216,7 @@ interface FlushOutboundBufferOptions {
   taskId: TaskID;
 }
 
+const GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS = 5 * 60 * 1000;
 const GATEWAY_FAILED_TURN_REPLY =
   "I couldn't complete this request because the Agor session stopped with an error. Mention me again to retry.";
 const GATEWAY_STOPPED_TURN_REPLY =
@@ -223,7 +224,7 @@ const GATEWAY_STOPPED_TURN_REPLY =
 
 type GatewayFinalReplyState =
   | { status: 'pending' }
-  | { status: 'processing'; claim_token: string }
+  | { status: 'processing'; claim_token: string; claimed_at: string }
   | { status: 'delivered'; delivered_at: string };
 
 function gatewayFinalReplyState(metadata: Message['metadata']): GatewayFinalReplyState | undefined {
@@ -231,8 +232,12 @@ function gatewayFinalReplyState(metadata: Message['metadata']): GatewayFinalRepl
   if (!value || typeof value !== 'object') return undefined;
   const state = value as Record<string, unknown>;
   if (state.status === 'pending') return { status: 'pending' };
-  if (state.status === 'processing' && typeof state.claim_token === 'string') {
-    return { status: 'processing', claim_token: state.claim_token };
+  if (
+    state.status === 'processing' &&
+    typeof state.claim_token === 'string' &&
+    typeof state.claimed_at === 'string'
+  ) {
+    return { status: 'processing', claim_token: state.claim_token, claimed_at: state.claimed_at };
   }
   if (state.status === 'delivered' && typeof state.delivered_at === 'string') {
     return { status: 'delivered', delivered_at: state.delivered_at };
@@ -490,14 +495,18 @@ function previewText(text: string, maxChars = 500): string {
   return `${normalized.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
-function gatewayMessageText(content: Message['content']): string {
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
-    .filter((block) => block.type === 'text')
-    .map((block) => (typeof block.text === 'string' ? block.text : ''))
-    .filter(Boolean)
-    .join('\n');
+function gatewayMessageText(message: Pick<Message, 'content' | 'content_preview'>): string {
+  const { content } = message;
+  if (typeof content === 'string' && content.trim()) return content;
+  if (Array.isArray(content)) {
+    const text = content
+      .filter((block) => block.type === 'text')
+      .map((block) => (typeof block.text === 'string' ? block.text : ''))
+      .filter(Boolean)
+      .join('\n');
+    if (text.trim()) return text;
+  }
+  return message.content_preview || '';
 }
 
 function quoteForPrompt(text: string, maxChars = 2000): string {
@@ -3699,11 +3708,11 @@ export class GatewayService {
     const messages = await this.messagesRepo.findByTaskId(taskId);
     const latestAssistant = [...messages]
       .reverse()
-      .find((message) => message.role === 'assistant' && gatewayMessageText(message.content));
+      .find((message) => message.role === 'assistant' && gatewayMessageText(message));
     const claimMessage = latestAssistant ?? messages.at(-1);
     if (!claimMessage) return;
 
-    let finalMessage = latestAssistant ? gatewayMessageText(latestAssistant.content) : undefined;
+    let finalMessage = latestAssistant ? gatewayMessageText(latestAssistant) : undefined;
     if (terminalTask.status === TaskStatus.FAILED || terminalTask.status === TaskStatus.TIMED_OUT) {
       finalMessage = await this.formatTerminalGatewayReply(
         GATEWAY_FAILED_TURN_REPLY,
@@ -3731,11 +3740,22 @@ export class GatewayService {
     const claim = await this.messagesRepo.mutateMetadataLocked(
       claimMessage.message_id,
       (metadata) => {
+        const claimedAt = new Date();
         const state = gatewayFinalReplyState(metadata);
-        if (state?.status === 'processing' || state?.status === 'delivered') return null;
+        if (state?.status === 'delivered') return null;
+        if (state?.status === 'processing') {
+          const claimAgeMs = claimedAt.getTime() - Date.parse(state.claimed_at);
+          if (Number.isFinite(claimAgeMs) && claimAgeMs < GATEWAY_FINAL_REPLY_CLAIM_TIMEOUT_MS) {
+            return null;
+          }
+        }
         return {
           ...(metadata ?? {}),
-          gateway_final_reply: { status: 'processing', claim_token: claimToken },
+          gateway_final_reply: {
+            status: 'processing',
+            claim_token: claimToken,
+            claimed_at: claimedAt.toISOString(),
+          },
         };
       }
     );

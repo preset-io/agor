@@ -614,6 +614,45 @@ describe('GatewayService GitHub integration', () => {
     );
   });
 
+  it('uses a preview-only assistant row as the exact task final response', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000054';
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: { gateway_reply_metadata: { processing_comment_id: 901 } },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([
+      {
+        message_id: '019fd900-0000-7000-8000-000000000055',
+        session_id: mapping.session_id,
+        task_id: taskId,
+        role: 'assistant',
+        content: '',
+        content_preview: 'Final response retained in the durable preview.',
+        index: 1,
+      } as unknown as Message,
+    ]);
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.sendMessage).toHaveBeenCalledWith({
+      threadId,
+      text: 'Final response retained in the durable preview.',
+      blocks: undefined,
+      metadata: { edit_comment_id: 901 },
+    });
+  });
+
   it('fences concurrent terminal hooks so only one provider edit is sent', async () => {
     const mapping = githubMapping();
     const harness = makeGitHubHarness(mapping);
@@ -650,6 +689,68 @@ describe('GatewayService GitHub integration', () => {
 
     expect(harness.sendMessage).toHaveBeenCalledOnce();
     expect(harness.messagesRepo.mutateMetadataLocked).toHaveBeenCalledTimes(3);
+  });
+
+  it('reclaims a stale processing claim while an active claim remains fenced', async () => {
+    const mapping = githubMapping();
+    const harness = makeGitHubHarness(mapping);
+    const taskId = '019fd900-0000-7000-8000-000000000059';
+    const message = {
+      message_id: '019fd900-0000-7000-8000-00000000005a',
+      session_id: mapping.session_id,
+      task_id: taskId,
+      role: 'assistant',
+      content: 'Recoverable final answer.',
+      content_preview: 'Recoverable final answer.',
+      index: 1,
+      metadata: {
+        gateway_final_reply: {
+          status: 'processing',
+          claim_token: 'active-daemon-claim',
+          claimed_at: new Date().toISOString(),
+        },
+      },
+    } as unknown as Message;
+    harness.setTasks([
+      {
+        task_id: taskId,
+        session_id: mapping.session_id,
+        status: TaskStatus.COMPLETED,
+        created_at: '2026-08-14T00:00:01.000Z',
+        completed_at: '2026-08-14T00:00:03.000Z',
+        metadata: { gateway_reply_metadata: { processing_comment_id: 901 } },
+      } as unknown as Task,
+    ]);
+    harness.setMessages([message]);
+
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+
+    harness.setMessages([
+      {
+        ...message,
+        metadata: {
+          gateway_final_reply: {
+            status: 'processing',
+            claim_token: 'abandoned-daemon-claim',
+            claimed_at: '2000-01-01T00:00:00.000Z',
+          },
+        },
+      } as unknown as Message,
+    ]);
+    await runWithTenantContext(tenantId, () =>
+      harness.service.flushOutboundBuffer(mapping.session_id, { taskId })
+    );
+
+    expect(harness.sendMessage).toHaveBeenCalledOnce();
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Recoverable final answer.',
+        metadata: { edit_comment_id: 901 },
+      })
+    );
   });
 
   it('fails closed instead of using the session acknowledgement when task metadata is missing', async () => {
