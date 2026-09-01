@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
+import { getEnvironmentAccessUrl, getEnvironmentAccessUrls } from '../../utils/environmentUrl';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
 import { EnvironmentStatusIcon } from '../EnvironmentPill';
 import { ENTITY_PILL_COLORS } from '../Pill/Pill';
@@ -94,7 +95,8 @@ export function BranchHeaderPill({
   const hasConfig = effectiveEnv.hasConfig;
   const env = branch.environment_instance;
   const inferredState = getEnvironmentState(env);
-  const environmentUrl = branch.app_url;
+  const environmentUrls = getEnvironmentAccessUrls(branch);
+  const environmentUrl = getEnvironmentAccessUrl(branch);
   // Surface the active environment variant name on the label instead of the
   // generic "env" — only when the repo defines more than one variant to
   // distinguish (single-variant / v1 repos stay quiet as "env"). Mirrors
@@ -307,27 +309,47 @@ export function BranchHeaderPill({
             <>
               {/* Env label — clickable to env URL when running, otherwise opens env tab */}
               {isRunning && environmentUrl ? (
-                <Tooltip title={`${variantPrefix}Open ${environmentUrl}`}>
-                  <a
-                    href={environmentUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 3,
-                      color: 'inherit',
-                      textDecoration: 'none',
-                      padding: '0 2px',
-                    }}
-                  >
-                    <EnvironmentStatusIcon state={inferredState} size={11} />
-                    <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>
-                      {envLabel}
-                    </span>
-                  </a>
-                </Tooltip>
+                <>
+                  <Tooltip title={`${variantPrefix}Open ${environmentUrl}`}>
+                    <a
+                      href={environmentUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label={`Open ${environmentUrls[0]?.name ?? 'environment'}`}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        color: 'inherit',
+                        textDecoration: 'none',
+                        padding: '0 2px',
+                      }}
+                    >
+                      <EnvironmentStatusIcon state={inferredState} size={11} />
+                      <span style={{ fontFamily: token.fontFamilyCode, fontSize: 11 }}>
+                        {envLabel}
+                      </span>
+                    </a>
+                  </Tooltip>
+                  {environmentUrls.slice(1).map((entry) => (
+                    <Tooltip
+                      key={entry.name}
+                      title={`${variantPrefix}Open ${entry.name} - ${entry.url}`}
+                    >
+                      <a
+                        href={entry.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        aria-label={`Open ${entry.name}`}
+                        onClick={(event) => event.stopPropagation()}
+                        style={{ display: 'inline-flex', color: 'inherit', padding: '0 1px' }}
+                      >
+                        <GlobalOutlined style={{ fontSize: 10 }} />
+                      </a>
+                    </Tooltip>
+                  ))}
+                </>
               ) : (
                 <Tooltip title={`${variantPrefix}${getEnvTooltip()}`}>
                   <button

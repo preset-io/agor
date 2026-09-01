@@ -109,6 +109,37 @@ describe('EnvironmentPill', () => {
     expect(screen.getByText('env').parentElement).toHaveStyle({ cursor: 'default' });
   });
 
+  it('uses the first runtime URL as primary and exposes every additional named URL', () => {
+    render(
+      <EnvironmentPill
+        {...defaultProps}
+        branch={
+          {
+            ...branch,
+            app_url: 'https://stale-static.example.test',
+            environment_instance: {
+              status: 'running',
+              access_urls: [
+                { name: 'Shell', url: 'https://shell.example.test' },
+                { name: 'Manager', url: 'https://manager.example.test' },
+              ],
+            },
+          } as Branch
+        }
+      />
+    );
+
+    expect(screen.getByRole('link', { name: 'Open Shell' })).toHaveAttribute(
+      'href',
+      'https://shell.example.test'
+    );
+    expect(screen.getByRole('link', { name: 'Open Manager' })).toHaveAttribute(
+      'href',
+      'https://manager.example.test'
+    );
+    expect(screen.queryByRole('link', { name: /stale-static/ })).not.toBeInTheDocument();
+  });
+
   it('shows a pointer only for an enabled configure control', () => {
     const { rerender } = render(<EnvironmentPill {...defaultProps} />);
 

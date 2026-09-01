@@ -11,6 +11,7 @@ import { Button, Space, Tooltip, theme } from 'antd';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
+import { getEnvironmentAccessUrl, getEnvironmentAccessUrls } from '../../utils/environmentUrl';
 import { Tag } from '../Tag';
 import { EnvironmentStatusIcon } from './EnvironmentStatusIcon';
 
@@ -54,8 +55,8 @@ export function EnvironmentPill({
     ? undefined
     : "Requires branch 'all' permission or admin access";
 
-  // Get static app_url (user-editable, initialized from template)
-  const environmentUrl = branch.app_url;
+  const environmentUrls = getEnvironmentAccessUrls(branch);
+  const environmentUrl = getEnvironmentAccessUrl(branch);
 
   // Surface the active environment variant name on the pill instead of the
   // generic "env" label — but only when the repo actually defines more than one
@@ -198,28 +199,52 @@ export function EnvironmentPill({
       >
         {/* Left section - clickable to open URL (when running) */}
         {env?.status === 'running' && environmentUrl ? (
-          <Tooltip title={`${variantPrefix}Open environment - ${environmentUrl}`}>
-            <a
-              href={environmentUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                color: 'inherit',
-                padding: '0 7px',
-                textDecoration: 'none',
-                height: '22px',
-                cursor: 'pointer',
-              }}
-            >
-              <Space size={4} align="center">
-                <EnvironmentStatusIcon state={inferredState} size={12} />
-                <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>{envLabel}</span>
-              </Space>
-            </a>
-          </Tooltip>
+          <>
+            <Tooltip title={`${variantPrefix}Open environment - ${environmentUrl}`}>
+              <a
+                href={environmentUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Open ${environmentUrls[0]?.name ?? 'environment'}`}
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  color: 'inherit',
+                  padding: '0 7px',
+                  textDecoration: 'none',
+                  height: '22px',
+                  cursor: 'pointer',
+                }}
+              >
+                <Space size={4} align="center">
+                  <EnvironmentStatusIcon state={inferredState} size={12} />
+                  <span style={{ fontFamily: token.fontFamilyCode, lineHeight: 1 }}>
+                    {envLabel}
+                  </span>
+                </Space>
+              </a>
+            </Tooltip>
+            {environmentUrls.slice(1).map((entry) => (
+              <Tooltip key={entry.name} title={`${variantPrefix}Open ${entry.name} - ${entry.url}`}>
+                <a
+                  href={entry.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`Open ${entry.name}`}
+                  onClick={(event) => event.stopPropagation()}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    padding: '0 4px',
+                    color: 'inherit',
+                  }}
+                >
+                  <GlobalOutlined style={{ fontSize: 11 }} />
+                </a>
+              </Tooltip>
+            ))}
+          </>
         ) : (
           <Tooltip title={`${variantPrefix}${getTooltipText()}`}>
             <div
