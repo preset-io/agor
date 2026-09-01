@@ -2,6 +2,7 @@ import type { AgorClient, Group, GroupMembership, User } from '@agor-live/client
 import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { EditOutlined, InboxOutlined, PlusOutlined, TeamOutlined } from '@ant-design/icons';
 import {
+  Avatar,
   Button,
   Empty,
   Form,
@@ -21,8 +22,9 @@ import { searchableSelectProps, toUserSelectOption } from '@/utils/selectSearch'
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { useThemedMessage } from '../../utils/message';
 import { HighlightMatch } from '../HighlightMatch';
+import { UserIdentityAvatar } from '../UserIdentityAvatar';
 import { syncGroupMembersForGroup } from './groupMembershipSync';
-import { FIELD_WIDTHS, ListPanelHeader } from './panelPrimitives';
+import { FIELD_WIDTHS, ListPanelHeader, SectionDivider } from './panelPrimitives';
 import { SettingsActionGroup } from './SettingsActionGroup';
 import { DrillInFrame, useSettingsDrill } from './SettingsDrill';
 
@@ -107,11 +109,6 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
     },
     [client, membershipsByGroup]
   );
-
-  const setGroupMembers = async (group: Group, nextUserIds: string[]) => {
-    await syncGroupMembers(group, nextUserIds);
-    await load();
-  };
 
   // Seed the form whenever the drill-in targets a group (edit) or opens fresh
   // (create). The slug auto-fill flag is reset alongside so name-driven slugs
@@ -218,13 +215,14 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
           style={{ maxWidth: 520 }}
           onValuesChange={handleValuesChange}
         >
+          <SectionDivider label="Details" />
           <Form.Item name="name" label="Name" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
           <Form.Item
             name="slug"
             label="Slug"
-            extra={
+            tooltip={
               editingGroup
                 ? 'Editable stable key used in URLs and APIs.'
                 : 'Auto-filled from name; editable.'
@@ -236,20 +234,23 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             <Input.TextArea rows={3} />
           </Form.Item>
           {editingGroup && (
-            <Form.Item label="Members">
-              <Select
-                mode="multiple"
-                style={{ width: '100%', ...FIELD_WIDTHS.medium }}
-                value={editingMemberIds}
-                options={userOptions}
-                {...searchableSelectProps}
-                onChange={(ids) => {
-                  setEditingMemberIds(ids);
-                  setDirty(true);
-                }}
-                placeholder="Select users..."
-              />
-            </Form.Item>
+            <>
+              <SectionDivider label="Members" />
+              <Form.Item label="Members">
+                <Select
+                  mode="multiple"
+                  style={{ width: '100%', ...FIELD_WIDTHS.medium }}
+                  value={editingMemberIds}
+                  options={userOptions}
+                  {...searchableSelectProps}
+                  onChange={(ids) => {
+                    setEditingMemberIds(ids);
+                    setDirty(true);
+                  }}
+                  placeholder="Select users..."
+                />
+              </Form.Item>
+            </>
           )}
         </Form>
       </DrillInFrame>
@@ -325,16 +326,30 @@ export const GroupsTable: React.FC<GroupsTableProps> = ({ client, currentUser, u
             },
             {
               title: 'Members',
-              render: (_: unknown, group: Group) => (
-                <Select
-                  mode="multiple"
-                  style={{ minWidth: 320, ...FIELD_WIDTHS.medium }}
-                  value={membershipsByGroup.get(group.group_id) || []}
-                  options={userOptions}
-                  {...searchableSelectProps}
-                  onChange={(ids) => setGroupMembers(group, ids)}
-                />
-              ),
+              // Read-only here — membership is edited only in the drill-in, so
+              // there's one editing path instead of a list-cell autosave that
+              // silently differed from the drill-in form.
+              render: (_: unknown, group: Group) => {
+                const memberIds = membershipsByGroup.get(group.group_id) || [];
+                if (memberIds.length === 0) {
+                  return <Typography.Text type="secondary">No members</Typography.Text>;
+                }
+                const members = memberIds
+                  .map((id) => userById.get(id))
+                  .filter((u): u is User => Boolean(u));
+                return (
+                  <Space size={8}>
+                    <Avatar.Group max={{ count: 5 }}>
+                      {members.map((u) => (
+                        <UserIdentityAvatar key={u.user_id} user={u} size={24} fontSize="12px" />
+                      ))}
+                    </Avatar.Group>
+                    <Typography.Text type="secondary">
+                      {memberIds.length} {memberIds.length === 1 ? 'member' : 'members'}
+                    </Typography.Text>
+                  </Space>
+                );
+              },
             },
             {
               title: 'Actions',
