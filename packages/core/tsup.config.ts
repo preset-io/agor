@@ -34,10 +34,12 @@ export default defineConfig({
     'templates/teammate-welcome-note': 'src/templates/teammate-welcome-note.ts', // Teammate board welcome note renderer
     'templates/zone-trigger-context': 'src/templates/zone-trigger-context.ts', // Canonical zone-trigger context builder
     'environment/variable-resolver': 'src/environment/variable-resolver.ts', // Environment variable resolution
+    'environment/lifecycle-result': 'src/environment/lifecycle-result.ts', // Tiny dynamic managed-environment Start result
     'environment/render-snapshot': 'src/environment/render-snapshot.ts', // v2 branch env snapshot rendering
     'environment/webhook': 'src/environment/webhook.ts', // Managed environment webhook execution policy
     'utils/errors': 'src/utils/errors.ts', // Error handling and formatting utilities
     'utils/url': 'src/utils/url.ts', // Shared URL validation helpers
+    'utils/pinned-fetch': 'src/utils/pinned-fetch.ts', // Public-only DNS-pinned managed environment health
     'utils/safe-outbound-fetch': 'src/utils/safe-outbound-fetch.ts', // Pinned SSRF-safe OAuth/JWT egress
     'utils/permission-mode-mapper': 'src/utils/permission-mode-mapper.ts', // Permission mode mapping for cross-agent compatibility
     'utils/cron': 'src/utils/cron.ts', // Cron validation and parsing utilities

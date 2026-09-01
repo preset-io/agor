@@ -21,8 +21,10 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
+import { isAllowedDynamicEnvironmentHealthUrl } from '@agor/core/environment/lifecycle-result';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantID } from '@agor/core/types';
+import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
@@ -39,6 +41,8 @@ export interface DistributedHealthMonitorOptions {
   random?: () => number;
   generateClaimToken?: () => string;
   fetchHealth?: typeof fetch;
+  /** Test seam for command/provider-reported public health URLs. */
+  fetchDynamicHealth?: ReturnType<typeof createPinnedFetch>;
   /** Test seam; production always uses capability-scoped PostgreSQL discovery. */
   discover?: (
     after?: EnvironmentHealthRoutingCursor
@@ -88,6 +92,7 @@ export class DistributedHealthMonitor {
   private readonly random: () => number;
   private readonly generateClaimToken: () => string;
   private readonly fetchHealth: typeof fetch;
+  private readonly fetchDynamicHealth: ReturnType<typeof createPinnedFetch>;
   private readonly activeClaims = new Map<
     string,
     { tenantId: TenantID; claim: EnvironmentHealthClaim }
@@ -107,6 +112,13 @@ export class DistributedHealthMonitor {
     this.random = options.random ?? Math.random;
     this.generateClaimToken = options.generateClaimToken ?? generateId;
     this.fetchHealth = options.fetchHealth ?? fetch;
+    this.fetchDynamicHealth =
+      options.fetchDynamicHealth ??
+      createPinnedFetch({
+        timeoutMs: options.httpTimeoutMs,
+        maxBytes: 64 * 1024,
+        isBodyComplete: () => true,
+      });
     for (const [value, label] of [
       [options.scanIntervalMs, 'scan interval'],
       [options.maxIdleIntervalMs, 'maximum idle interval'],
@@ -457,7 +469,8 @@ export class DistributedHealthMonitor {
     branch: Branch,
     controller: AbortController
   ): Promise<EnvironmentHealthObservation | null> {
-    const healthUrl = branch.health_check_url;
+    const dynamicHealthUrl = branch.environment_instance?.health_url;
+    const healthUrl = dynamicHealthUrl ?? branch.health_check_url;
     if (!healthUrl) {
       return {
         status: 'unknown',
@@ -465,7 +478,12 @@ export class DistributedHealthMonitor {
         recordWhileStarting: true,
       };
     }
-    if (!isAllowedHealthCheckUrl(healthUrl)) {
+    const isDynamicHealth = dynamicHealthUrl !== undefined;
+    if (
+      isDynamicHealth
+        ? !isAllowedDynamicEnvironmentHealthUrl(healthUrl)
+        : !isAllowedHealthCheckUrl(healthUrl)
+    ) {
       return {
         status: 'unhealthy',
         message: 'Health check URL blocked by security policy',
@@ -480,13 +498,16 @@ export class DistributedHealthMonitor {
         this.options.httpTimeoutMs
       );
       timeout.unref?.();
-      const response = await this.fetchHealth(healthUrl, {
-        method: 'GET',
-        signal: controller.signal,
-        // Do not follow redirects (see branches.ts): the distributed/managed
-        // path is where a 302 to a link-local metadata endpoint matters most.
-        redirect: 'manual',
-      });
+      const response = await (isDynamicHealth ? this.fetchDynamicHealth : this.fetchHealth)(
+        healthUrl,
+        {
+          method: 'GET',
+          signal: controller.signal,
+          // Do not follow redirects (see branches.ts): the distributed/managed
+          // path is where a 302 to a link-local metadata endpoint matters most.
+          redirect: 'manual',
+        }
+      );
       return {
         status: response.ok ? 'healthy' : 'unhealthy',
         message: response.ok

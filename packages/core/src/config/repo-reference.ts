@@ -102,6 +102,58 @@ export function extractSlugFromUrl(url: string): RepoSlug {
 }
 
 /**
+ * Derive a GitHub `owner/repository` identity from a github.com git remote.
+ *
+ * Unlike {@link extractSlugFromUrl}, this deliberately validates the remote
+ * host before returning anything. Provider integrations must not accidentally
+ * treat a GitLab/Bitbucket path as a same-named GitHub repository. The return
+ * value contains only path components, so HTTP userinfo or other credentials
+ * from a legacy remote URL can never enter rendered commands.
+ *
+ * Supported forms include HTTPS, `ssh://`, `git://`, and scp-style SSH:
+ *
+ * @example
+ * extractGitHubSlugFromUrl('https://github.com/preset-io/agor.git')
+ * // => 'preset-io/agor'
+ *
+ * @example
+ * extractGitHubSlugFromUrl('git@github.com:preset-io/agor.git')
+ * // => 'preset-io/agor'
+ */
+export function extractGitHubSlugFromUrl(url: string): RepoSlug | undefined {
+  const value = url.trim();
+  if (!value) return undefined;
+
+  let remotePath: string | undefined;
+
+  // Git's scp-style syntax is not understood by the WHATWG URL parser.
+  const scpMatch = value.match(/^(?:[^@\s/:]+@)?github\.com:([^?#]+)$/i);
+  if (scpMatch) {
+    remotePath = scpMatch[1];
+  } else {
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch {
+      return undefined;
+    }
+
+    if (
+      parsed.hostname.toLowerCase() !== 'github.com' ||
+      !['http:', 'https:', 'ssh:', 'git:'].includes(parsed.protocol) ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      return undefined;
+    }
+    remotePath = parsed.pathname;
+  }
+
+  const slug = remotePath.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
+  return isValidSlug(slug) ? (slug as RepoSlug) : undefined;
+}
+
+/**
  * Validate slug format (org/name)
  *
  * @param slug - Repository slug to validate

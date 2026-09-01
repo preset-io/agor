@@ -11,6 +11,7 @@ import { Button, Space, Tooltip, theme } from 'antd';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
+import { getEnvironmentAccessUrl } from '../../utils/environmentUrl';
 import { Tag } from '../Tag';
 import { EnvironmentStatusIcon } from './EnvironmentStatusIcon';
 
@@ -54,8 +55,7 @@ export function EnvironmentPill({
     ? undefined
     : "Requires branch 'all' permission or admin access";
 
-  // Get static app_url (user-editable, initialized from template)
-  const environmentUrl = branch.app_url;
+  const environmentUrl = getEnvironmentAccessUrl(branch);
 
   // Surface the active environment variant name on the pill instead of the
   // generic "env" label — but only when the repo actually defines more than one
@@ -111,6 +111,7 @@ export function EnvironmentPill({
   const isStarting = status === 'starting';
   const isStopping = status === 'stopping';
   const canStop = status === 'running' || status === 'starting';
+  const canOpenEnvironment = (isRunning || isStarting) && Boolean(environmentUrl);
   const startDisabled =
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
@@ -147,8 +148,8 @@ export function EnvironmentPill({
           : `Unhealthy - check failed${healthMessage}`;
       case 'running':
         return environmentUrl
-          ? `Running - ${environmentUrl} (health check not configured)`
-          : 'Running (health check not configured)';
+          ? `Started - ${environmentUrl} (health unavailable${healthMessage})`
+          : `Started (health unavailable${healthMessage})`;
       case 'starting':
         return environmentUrl ? `Starting... - ${environmentUrl}` : 'Starting...';
       case 'stopping':
@@ -196,8 +197,8 @@ export function EnvironmentPill({
         style={{ width: '100%', display: 'inline-flex', alignItems: 'center' }}
         orientation="horizontal"
       >
-        {/* Left section - clickable to open URL (when running) */}
-        {env?.status === 'running' && environmentUrl ? (
+        {/* The static fallback remains useful while Start discovers a runtime URL. */}
+        {canOpenEnvironment && environmentUrl ? (
           <Tooltip title={`${variantPrefix}Open environment - ${environmentUrl}`}>
             <a
               href={environmentUrl}

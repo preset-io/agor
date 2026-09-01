@@ -9,6 +9,11 @@
 
 import { type ChildProcess, spawn } from 'node:child_process';
 import { ENVIRONMENT } from '@agor/core/config';
+import {
+  type EnvironmentLifecycleResult,
+  validateEnvironmentLifecycleResult,
+} from '@agor/core/environment/lifecycle-result';
+import type { Branch } from '@agor/core/types';
 import { assertEnvCommandAllowed } from '@agor/core/unix';
 import type {
   EnvironmentLifecyclePayload,
@@ -19,6 +24,73 @@ import { createExecutorClient } from '../services/feathers-client.js';
 import type { CommandOptions } from './index.js';
 
 const MAX_OUTPUT_LINES = ENVIRONMENT.LOGS_MAX_LINES;
+const ENVIRONMENT_RESULT_PREFIX = 'AGOR_ENVIRONMENT_RESULT=';
+const MAX_ENVIRONMENT_RESULT_BYTES = 8 * 1024;
+
+function stripEnvironmentResultLines(output: string): string {
+  return output
+    .split('\n')
+    .filter((line) => !line.startsWith(ENVIRONMENT_RESULT_PREFIX))
+    .join('\n');
+}
+
+/**
+ * Extract the deliberately tiny, non-secret result protocol emitted by a
+ * repository lifecycle command. The line is removed from persisted command
+ * output; it may contain public/private app locations, never credentials.
+ */
+export function parseEnvironmentCommandOutput(output: string): {
+  output: string;
+  environmentResult?: EnvironmentLifecycleResult;
+} {
+  const resultLines: string[] = [];
+  const visibleLines: string[] = [];
+
+  for (const line of output.split('\n')) {
+    if (line.startsWith(ENVIRONMENT_RESULT_PREFIX)) {
+      resultLines.push(line.slice(ENVIRONMENT_RESULT_PREFIX.length));
+    } else {
+      visibleLines.push(line);
+    }
+  }
+
+  if (resultLines.length === 0) return { output };
+  if (resultLines.length !== 1) {
+    throw new Error('environment command emitted more than one result line');
+  }
+
+  const encoded = resultLines[0];
+  if (Buffer.byteLength(encoded, 'utf8') > MAX_ENVIRONMENT_RESULT_BYTES) {
+    throw new Error('environment command result exceeds the size limit');
+  }
+
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(encoded);
+  } catch {
+    throw new Error('environment command emitted invalid result JSON');
+  }
+
+  return {
+    output: visibleLines.join('\n'),
+    environmentResult: validateEnvironmentLifecycleResult(decoded),
+  };
+}
+
+export function startCompletionWithoutContinuousHealth(
+  healthCheckUrl: string | undefined,
+  timestamp: string
+): Record<string, unknown> {
+  if (healthCheckUrl) return {};
+  return {
+    status: 'running',
+    last_health_check: {
+      timestamp,
+      status: 'unknown',
+      message: 'Start command completed; health is unavailable',
+    },
+  };
+}
 
 function truncateOutput(outputChunks: string[]): string | undefined {
   const fullOutput = outputChunks.join('');
@@ -33,13 +105,32 @@ function truncateOutput(outputChunks: string[]): string | undefined {
   return output || undefined;
 }
 
-function collectOutput(child: ChildProcess, outputChunks: string[]): void {
+function collectOutput(
+  child: ChildProcess,
+  outputChunks: string[],
+  suppressEnvironmentResult: boolean
+): void {
   const collect = (stream: NodeJS.ReadableStream | null, target: NodeJS.WriteStream) => {
     if (!stream) return;
+    let visibleBuffer = '';
     stream.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
-      target.write(text);
       outputChunks.push(text);
+      if (!suppressEnvironmentResult) {
+        target.write(text);
+        return;
+      }
+      visibleBuffer += text;
+      const lines = visibleBuffer.split('\n');
+      visibleBuffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith(ENVIRONMENT_RESULT_PREFIX)) target.write(`${line}\n`);
+      }
+    });
+    stream.on('end', () => {
+      if (visibleBuffer && !visibleBuffer.startsWith(ENVIRONMENT_RESULT_PREFIX)) {
+        target.write(visibleBuffer);
+      }
     });
   };
   collect(child.stdout, process.stdout);
@@ -57,6 +148,18 @@ function successMessage(action: EnvironmentLifecyclePayload['params']['action'])
     case 'nuke':
       return 'Nuke command completed';
   }
+}
+
+function isCurrentStartAttempt(
+  branch: Pick<Branch, 'environment_instance'>,
+  attemptId: string | undefined
+): boolean {
+  const status = branch.environment_instance?.status;
+  return (
+    Boolean(attemptId) &&
+    branch.environment_instance?.process?.attempt_id === attemptId &&
+    (status === 'starting' || status === 'running')
+  );
 }
 
 function commandForAction(payload: EnvironmentLifecyclePayload): string {
@@ -88,7 +191,7 @@ async function runShellCommand(options: {
   cwd: string;
   env?: Record<string, string>;
   commandType: 'start' | 'stop' | 'nuke' | 'logs';
-}): Promise<{ pid?: number; output?: string }> {
+}): Promise<{ pid?: number; output?: string; environmentResult?: EnvironmentLifecycleResult }> {
   const { command, cwd, env, commandType } = options;
   assertEnvCommandAllowed(command, commandType);
 
@@ -100,7 +203,7 @@ async function runShellCommand(options: {
   });
 
   const outputChunks: string[] = [];
-  collectOutput(child, outputChunks);
+  collectOutput(child, outputChunks, commandType === 'start');
 
   await new Promise<void>((resolve, reject) => {
     child.on('exit', (code: number | null) => {
@@ -112,20 +215,35 @@ async function runShellCommand(options: {
             ? `${commandType} command exited without a code`
             : `${commandType} command exited with code ${code}`;
         const error = new Error(message) as Error & { output?: string; pid?: number };
-        error.output = truncateOutput(outputChunks);
+        const rawOutput = outputChunks.join('');
+        error.output = truncateOutput([
+          commandType === 'start' ? stripEnvironmentResultLines(rawOutput) : rawOutput,
+        ]);
         error.pid = child.pid;
         reject(error);
       }
     });
     child.on('error', (error: Error) => {
       const enriched = error as Error & { output?: string; pid?: number };
-      enriched.output = truncateOutput(outputChunks);
+      const rawOutput = outputChunks.join('');
+      enriched.output = truncateOutput([
+        commandType === 'start' ? stripEnvironmentResultLines(rawOutput) : rawOutput,
+      ]);
       enriched.pid = child.pid;
       reject(enriched);
     });
   });
 
-  return { pid: child.pid, output: truncateOutput(outputChunks) };
+  const rawOutput = outputChunks.join('');
+  const parsed =
+    commandType === 'start'
+      ? parseEnvironmentCommandOutput(rawOutput)
+      : { output: rawOutput, environmentResult: undefined };
+  return {
+    pid: child.pid,
+    output: truncateOutput([parsed.output]),
+    environmentResult: parsed.environmentResult,
+  };
 }
 
 export async function handleEnvironmentLogs(
@@ -215,22 +333,32 @@ export async function handleEnvironmentLifecycle(
     }
 
     if (payload.params.action === 'start' || payload.params.action === 'restart') {
-      const startedAt = new Date().toISOString();
-      await updateBranchEnvironment(client, branchId, {
-        status: 'starting',
-        process: {
-          ...(branch.environment_instance?.process ?? {}),
-          started_at: startedAt,
-        },
-        // This update crosses the Feathers/WebSocket JSON boundary; use null
-        // as an explicit clear sentinel because JSON drops undefined values.
-        last_health_check: null,
-        last_error: null,
-        last_command: null,
-        ...(payload.params.appUrl
-          ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
-          : {}),
-      });
+      const isStart = payload.params.action === 'start';
+      if (isStart && !isCurrentStartAttempt(branch, payload.params.lifecycleAttemptId)) {
+        return {
+          success: true,
+          data: { branchId, action: payload.params.action, stale: true },
+        };
+      }
+      const startedAt =
+        (isStart ? branch.environment_instance?.process?.started_at : undefined) ??
+        new Date().toISOString();
+      if (!isStart) {
+        await updateBranchEnvironment(client, branchId, {
+          status: 'starting',
+          process: {
+            ...(branch.environment_instance?.process ?? {}),
+            started_at: startedAt,
+          },
+          // This update crosses the Feathers/WebSocket JSON boundary; use null
+          // as an explicit clear sentinel because JSON drops undefined values.
+          last_health_check: null,
+          last_error: null,
+          last_command: null,
+          health_url: null,
+          access_urls: payload.params.appUrl ? [{ name: 'App', url: payload.params.appUrl }] : null,
+        });
+      }
 
       const result = await runShellCommand({
         command: payload.params.startCommand!,
@@ -239,19 +367,35 @@ export async function handleEnvironmentLifecycle(
         commandType: 'start',
       });
 
+      const accessUrls = result.environmentResult?.app
+        ? [{ name: 'App', url: result.environmentResult.app }]
+        : payload.params.appUrl
+          ? [{ name: 'App', url: payload.params.appUrl }]
+          : undefined;
+      const effectiveHealthUrl = result.environmentResult?.health ?? payload.params.healthCheckUrl;
+      const commandCompletedAt = new Date().toISOString();
+
+      const current = await client.service('branches').get(branchId);
+      if (isStart && !isCurrentStartAttempt(current, payload.params.lifecycleAttemptId)) {
+        return {
+          success: true,
+          data: { branchId, action: payload.params.action, stale: true },
+        };
+      }
+
       await updateBranchEnvironment(client, branchId, {
+        ...startCompletionWithoutContinuousHealth(effectiveHealthUrl, commandCompletedAt),
         process: {
-          ...(branch.environment_instance?.process ?? {}),
+          ...(current.environment_instance?.process ?? {}),
           pid: result.pid,
           started_at: startedAt,
         },
-        ...(payload.params.appUrl
-          ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
-          : {}),
+        health_url: result.environmentResult?.health ?? null,
+        access_urls: accessUrls ?? null,
         last_command: {
           action: payload.params.action,
           status: 'succeeded',
-          timestamp: new Date().toISOString(),
+          timestamp: commandCompletedAt,
           message: successMessage(payload.params.action),
           ...(result.output ? { output: result.output } : {}),
         },
@@ -274,6 +418,8 @@ export async function handleEnvironmentLifecycle(
       // This update crosses the Feathers/WebSocket JSON boundary; use null
       // as an explicit clear sentinel because JSON drops undefined values.
       process: null,
+      health_url: null,
+      access_urls: payload.params.appUrl ? [{ name: 'App', url: payload.params.appUrl }] : null,
       last_health_check: {
         timestamp: new Date().toISOString(),
         status: 'unknown',
@@ -300,10 +446,9 @@ export async function handleEnvironmentLifecycle(
 
     try {
       const current = await client.service('branches').get(branchId);
-      const currentStatus = current.environment_instance?.status;
       const staleStartFailure =
         payload.params.action === 'start' &&
-        (currentStatus === 'stopping' || currentStatus === 'stopped');
+        !isCurrentStartAttempt(current, payload.params.lifecycleAttemptId);
       if (!staleStartFailure) {
         await updateBranchEnvironment(client, branchId, {
           status: 'error',

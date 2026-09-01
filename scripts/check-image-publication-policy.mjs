@@ -141,11 +141,50 @@ assert.deepEqual(
 const managedEnvironments = await readFile(path.join(root, '.agor.yml'), 'utf8');
 assert.doesNotMatch(managedEnvironments, imageReference);
 assert.doesNotMatch(managedEnvironments, /docker (?:compose )?pull\b/);
+const explicitStarts = [...managedEnvironments.matchAll(/^\s+start:\s*>-/gm)].length;
+const localWorktreeBuildStarts = [
+  ...managedEnvironments.matchAll(/\bup -d(?:\s+--build|[\s\S]{0,120}?\s+--build)\b/g),
+].length;
+const codespacesWorktreeBuildStarts = [
+  ...managedEnvironments.matchAll(/agor-codespace-launcher\.mjs start\b/g),
+].length;
 assert.equal(
-  [...managedEnvironments.matchAll(/^\s+start:\s*>-/gm)].length,
-  [...managedEnvironments.matchAll(/\bup -d(?:\s+--build|[\s\S]{0,120}?\s+--build)\b/g)].length,
+  explicitStarts,
+  localWorktreeBuildStarts + codespacesWorktreeBuildStarts,
   'every explicit managed-environment start must build from its checked-out worktree'
 );
+
+if (codespacesWorktreeBuildStarts > 0) {
+  assert.equal(
+    codespacesWorktreeBuildStarts,
+    1,
+    'the reviewed remote-worktree build exception is limited to one Codespaces variant'
+  );
+  assert.match(
+    managedEnvironments,
+    /--devcontainer-path \.devcontainer\/agor-managed\/devcontainer\.json/,
+    'the Codespaces variant must select the reviewed managed devcontainer'
+  );
+  const codespacesDevcontainer = JSON.parse(
+    await readFile(path.join(root, '.devcontainer/agor-managed/devcontainer.json'), 'utf8')
+  );
+  assert.deepEqual(
+    codespacesDevcontainer.features?.['ghcr.io/devcontainers/features/sshd:1'],
+    { version: 'latest' },
+    'the managed devcontainer must install SSH for gh codespace health/log commands'
+  );
+  const codespacesBootstrap = await readFile(
+    path.join(root, '.devcontainer/agor-managed/start-agor-sqlite.sh'),
+    'utf8'
+  );
+  assert.match(
+    codespacesBootstrap,
+    /docker compose -p agor-codespaces-sqlite up -d --build\b/,
+    'the Codespaces bootstrap must build from the cloned remote worktree'
+  );
+  assert.doesNotMatch(codespacesBootstrap, imageReference);
+  assert.doesNotMatch(codespacesBootstrap, /docker (?:compose )?pull\b/);
+}
 
 console.log(
   'Image publication policy valid: PRs build+smoke locally, publish no image/cache, and checked-in consumers do not pull preset/agor.'

@@ -456,6 +456,7 @@ describe('BranchesService environment start async behavior', () => {
           principalBranchAccess: 'write',
           startCommand: branch.start_command,
           appUrl: branch.app_url,
+          lifecycleAttemptId: expect.any(String),
         }),
       }),
       expect.objectContaining({
@@ -477,6 +478,10 @@ describe('BranchesService environment start async behavior', () => {
         }),
       ])
     );
+    expect(
+      (mockedSpawnExecutor.mock.calls[0]![0] as { params: { lifecycleAttemptId: string } }).params
+        .lifecycleAttemptId
+    ).toBe((environmentUpdates[0]?.process as { attempt_id?: string } | undefined)?.attempt_id);
     expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
   });
 
@@ -490,6 +495,49 @@ describe('BranchesService environment start async behavior', () => {
     await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
 
     expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
+  });
+
+  it('accepts the same tiny app/health result from a JSON Start webhook', async () => {
+    const { service, branch, environmentUpdates } = createStartHarness();
+    vi.mocked(
+      (
+        service as unknown as {
+          resolveEnvironmentCommand: () => Promise<{ kind: 'webhook'; url: string }>;
+        }
+      ).resolveEnvironmentCommand
+    ).mockResolvedValue({ kind: 'webhook', url: 'https://controller.example.test/start' });
+    vi.spyOn(
+      service as unknown as {
+        executeEnvironmentWebhook: () => Promise<{
+          body: string;
+          truncated: boolean;
+          status: number;
+          contentType: string;
+        }>;
+      },
+      'executeEnvironmentWebhook'
+    ).mockResolvedValue({
+      body: JSON.stringify({
+        app: 'https://space-5000.app.github.dev',
+        health: 'https://space-3000.app.github.dev/health',
+      }),
+      truncated: false,
+      status: 200,
+      contentType: 'application/json; charset=utf-8',
+    });
+
+    const result = await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
+
+    expect(result.environment_instance).toMatchObject({
+      status: 'starting',
+      access_urls: [{ name: 'App', url: 'https://space-5000.app.github.dev/' }],
+      health_url: 'https://space-3000.app.github.dev/health',
+      last_command: { action: 'start', status: 'succeeded' },
+    });
+    expect(environmentUpdates.at(-1)).toMatchObject({
+      access_urls: [{ name: 'App', url: 'https://space-5000.app.github.dev/' }],
+      health_url: 'https://space-3000.app.github.dev/health',
+    });
   });
 
   it('preserves daemon stop fallback when restarting a running shell env without stop command', async () => {
@@ -982,6 +1030,8 @@ describe('BranchesService environment start async behavior', () => {
       environment_instance: {
         status: 'stopping',
         process: { pid: 123 },
+        access_urls: [{ name: 'App', url: 'https://old.example.test' }],
+        health_url: 'https://old.example.test/health',
         last_health_check: {
           timestamp: '2026-01-01T00:00:00.000Z',
           status: 'healthy',
@@ -1002,6 +1052,8 @@ describe('BranchesService environment start async behavior', () => {
         // the explicit clear sentinel.
         process: null,
         last_health_check: null,
+        access_urls: null,
+        health_url: null,
       },
     });
 
@@ -1011,6 +1063,8 @@ describe('BranchesService environment start async behavior', () => {
     expect(patchedEnvironment).toMatchObject({ status: 'stopped' });
     expect(patchedEnvironment).not.toHaveProperty('process');
     expect(patchedEnvironment).not.toHaveProperty('last_health_check');
+    expect(patchedEnvironment).not.toHaveProperty('access_urls');
+    expect(patchedEnvironment).not.toHaveProperty('health_url');
     expect(patchSpy).toHaveBeenCalledWith(
       branch.branch_id,
       expect.objectContaining({
@@ -2818,6 +2872,87 @@ describe('BranchesService environment health requests', () => {
     expect(result.environment_instance).toMatchObject({
       status: 'error',
       last_health_check: { status: 'healthy', message: 'HTTP 200' },
+    });
+  });
+
+  it('uses the pinned public-only fetch path for a runtime health URL', async () => {
+    const branch = {
+      branch_id: 'wt-health-runtime' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-runtime',
+      path: '/tmp/wt-health-runtime',
+      branch_unique_id: 11,
+      health_check_url: 'http://localhost:3030/old-health',
+      environment_instance: {
+        status: 'error',
+        health_url: 'https://space-3000.app.github.dev/health',
+      },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const dynamicFetch = vi
+      .spyOn(
+        service as unknown as { fetchDynamicEnvironmentHealth: typeof fetch },
+        'fetchDynamicEnvironmentHealth'
+      )
+      .mockResolvedValue(new Response('', { status: 200 }));
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(dynamicFetch).toHaveBeenCalledWith(
+      branch.environment_instance.health_url,
+      expect.objectContaining({ method: 'GET', redirect: 'manual' })
+    );
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.environment_instance?.last_health_check).toMatchObject({
+      status: 'healthy',
+      message: 'HTTP 200',
+    });
+  });
+
+  it('blocks a private runtime health URL without falling back to static health', async () => {
+    const branch = {
+      branch_id: 'wt-health-runtime-private' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-health-runtime-private',
+      path: '/tmp/wt-health-runtime-private',
+      branch_unique_id: 12,
+      health_check_url: 'http://localhost:3030/old-health',
+      environment_instance: {
+        status: 'error',
+        health_url: 'http://127.0.0.1:3000/health',
+      },
+    };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'repos') return { get: vi.fn(async () => ({ repo_id: 'repo-1' })) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(createTenantScopeTestDb() as never, app);
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const dynamicFetch = vi.spyOn(
+      service as unknown as { fetchDynamicEnvironmentHealth: typeof fetch },
+      'fetchDynamicEnvironmentHealth'
+    );
+    globalThis.fetch = vi.fn();
+
+    const result = await service.checkHealth(branch.branch_id);
+
+    expect(dynamicFetch).not.toHaveBeenCalled();
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(result.environment_instance?.last_health_check).toMatchObject({
+      status: 'unhealthy',
+      message: 'Health check URL blocked by security policy',
     });
   });
 

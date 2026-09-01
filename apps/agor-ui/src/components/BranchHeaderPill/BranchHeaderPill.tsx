@@ -17,6 +17,7 @@ import { Link } from 'react-router-dom';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
+import { getEnvironmentAccessUrl } from '../../utils/environmentUrl';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
 import { EnvironmentStatusIcon } from '../EnvironmentPill';
 import { ENTITY_PILL_COLORS } from '../Pill/Pill';
@@ -94,7 +95,7 @@ export function BranchHeaderPill({
   const hasConfig = effectiveEnv.hasConfig;
   const env = branch.environment_instance;
   const inferredState = getEnvironmentState(env);
-  const environmentUrl = branch.app_url;
+  const environmentUrl = getEnvironmentAccessUrl(branch);
   // Surface the active environment variant name on the label instead of the
   // generic "env" — only when the repo defines more than one variant to
   // distinguish (single-variant / v1 repos stay quiet as "env"). Mirrors
@@ -119,6 +120,7 @@ export function BranchHeaderPill({
   const isStarting = status === 'starting';
   const isStopping = status === 'stopping';
   const canStop = status === 'running' || status === 'starting';
+  const canOpenEnvironment = (isRunning || isStarting) && Boolean(environmentUrl);
   const startDisabled =
     connectionDisabled ||
     !resolvedCanControlEnvironment ||
@@ -202,7 +204,9 @@ export function BranchHeaderPill({
           ? `Unhealthy - ${environmentUrl}${healthMessage}`
           : `Unhealthy${healthMessage}`;
       case 'running':
-        return environmentUrl ? `Running - ${environmentUrl}` : 'Running (no health check)';
+        return environmentUrl
+          ? `Started - ${environmentUrl} (health unavailable${healthMessage})`
+          : `Started (health unavailable${healthMessage})`;
       case 'starting':
         return 'Starting...';
       case 'stopping':
@@ -305,8 +309,8 @@ export function BranchHeaderPill({
         >
           {hasConfig ? (
             <>
-              {/* Env label — clickable to env URL when running, otherwise opens env tab */}
-              {isRunning && environmentUrl ? (
+              {/* Keep a static provider fallback clickable while Start discovers the runtime URL. */}
+              {canOpenEnvironment && environmentUrl ? (
                 <Tooltip title={`${variantPrefix}Open ${environmentUrl}`}>
                   <a
                     href={environmentUrl}

@@ -57,7 +57,7 @@ export function getEnvironmentStateDescription(state: EnvironmentInferredState):
     case 'unhealthy':
       return 'Unhealthy';
     case 'running':
-      return 'Running';
+      return 'Started; health unavailable';
     case 'stopping':
       return 'Stopping...';
     case 'error':

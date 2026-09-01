@@ -146,6 +146,11 @@ export function createPinnedFetch(
         reject(refuse(`Refusing to fetch non-public URL: ${input}`));
         return;
       }
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        reject(signal.reason instanceof Error ? signal.reason : new Error('Request aborted'));
+        return;
+      }
       const url = new URL(input);
       const body = init?.body;
       if (body !== undefined && body !== null && typeof body !== 'string') {
@@ -155,14 +160,23 @@ export function createPinnedFetch(
 
       const transport = url.protocol === 'https:' ? https : http;
       let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      let request: http.ClientRequest | undefined;
+      const abort = () => {
+        request?.destroy(
+          signal?.reason instanceof Error ? signal.reason : new Error('Request aborted')
+        );
+      };
+      signal?.addEventListener('abort', abort, { once: true });
       const finish = (run: () => void): void => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
+        signal?.removeEventListener('abort', abort);
         run();
       };
 
-      const request = transport.request(
+      request = transport.request(
         url,
         {
           method: init?.method ?? 'GET',
@@ -222,8 +236,8 @@ export function createPinnedFetch(
 
       // `request.setTimeout` is an idle-socket timer, which a host trickling one
       // byte at a time never trips. This bounds the whole exchange.
-      const timer = setTimeout(() => {
-        request.destroy(new Error(`Timed out after ${options.timeoutMs}ms: ${input}`));
+      timer = setTimeout(() => {
+        request?.destroy(new Error(`Timed out after ${options.timeoutMs}ms: ${input}`));
       }, options.timeoutMs);
 
       request.on('error', (error) => finish(() => reject(error)));

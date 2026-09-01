@@ -62,6 +62,41 @@ describe('DistributedHealthMonitor loop contract', () => {
     ).not.toThrow();
   });
 
+  it('routes runtime health through the public-only fetch boundary', async () => {
+    const { app } = makeApp();
+    const fetchHealth = vi.fn();
+    const fetchDynamicHealth = vi.fn(async () => new Response('', { status: 200 }));
+    const monitor = new DistributedHealthMonitor(
+      app as never,
+      {} as never,
+      options({ fetchHealth, fetchDynamicHealth })
+    );
+    const branch = {
+      branch_id: 'branch-runtime-health',
+      health_check_url: 'http://localhost:3030/old-health',
+      environment_instance: {
+        status: 'starting',
+        health_url: 'https://space-3000.app.github.dev/health',
+      },
+    };
+
+    const observation = await (
+      monitor as unknown as {
+        fetchObservation: (
+          branch: typeof branch,
+          controller: AbortController
+        ) => Promise<{ status: string; message: string }>;
+      }
+    ).fetchObservation(branch, new AbortController());
+
+    expect(fetchDynamicHealth).toHaveBeenCalledWith(
+      branch.environment_instance.health_url,
+      expect.objectContaining({ method: 'GET', redirect: 'manual' })
+    );
+    expect(fetchHealth).not.toHaveBeenCalled();
+    expect(observation).toMatchObject({ status: 'healthy', message: 'HTTP 200' });
+  });
+
   it('treats branch events as wake hints and removes listeners/timers on shutdown', async () => {
     const { app, branches } = makeApp();
     const discover = vi.fn(async () => []);

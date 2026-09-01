@@ -109,9 +109,11 @@ services:
       # Daemon configuration
       - NODE_ENV=development
       # Exact triple gate for the deliberately fixed development-only admin.
-      # Production Compose files do not carry these defaults.
-      - AGOR_ADMIN_PASSWORD=admin
-      - AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=true
+      # Production Compose files do not carry these defaults. Remote/public
+      # development substrates can override both values with a generated
+      # bootstrap password and a disabled fixed-default gate.
+      - AGOR_ADMIN_PASSWORD=${AGOR_ADMIN_PASSWORD:-admin}
+      - AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=${AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN:-true}
       - DAEMON_PORT=${DAEMON_PORT:-3030}
       - DAEMON_HOST=${DAEMON_HOST:-0.0.0.0}
       - CORS_ORIGIN=${CORS_ORIGIN:-*}

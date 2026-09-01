@@ -309,6 +309,53 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
     });
   });
 
+  dbTest(
+    'invalidates an in-flight result when a Start publishes a new health URL',
+    async ({ db }) => {
+      const branch = await seedStartingBranch(db);
+      const branches = new BranchRepository(db);
+      const health = new EnvironmentHealthRepository(db);
+      const old = await health.claim({
+        branchId: branch.branch_id,
+        claimToken: 'before-runtime-health-url',
+        leaseDurationMs: 30_000,
+        identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+      });
+      if (old.outcome !== 'claimed') throw new Error('Expected initial claim');
+
+      await branches.update(branch.branch_id, {
+        environment_instance: {
+          status: 'starting',
+          health_url: 'https://space-3000.app.github.dev/health',
+        },
+      });
+
+      await expect(
+        health.commit({
+          branchId: branch.branch_id,
+          claimToken: old.claim.claim_token,
+          environmentGeneration: old.claim.environment_generation,
+          observation: {
+            status: 'healthy',
+            message: 'late old HTTP 200',
+            recordWhileStarting: true,
+          },
+        })
+      ).resolves.toEqual({ outcome: 'stale' });
+      await expect(
+        health.claim({
+          branchId: branch.branch_id,
+          claimToken: 'after-runtime-health-url',
+          leaseDurationMs: 30_000,
+          identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
+        })
+      ).resolves.toMatchObject({
+        outcome: 'claimed',
+        claim: { environment_generation: old.claim.environment_generation + 1 },
+      });
+    }
+  );
+
   dbTest('invalidates an in-flight result when the branch is archived', async ({ db }) => {
     const branch = await seedStartingBranch(db, 'running');
     const branches = new BranchRepository(db);
