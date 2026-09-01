@@ -101,6 +101,7 @@ export class ConfigService {
     // user/API-key auth must not resolve raw configured keys. The former
     // general-purpose /config read endpoint no longer exists.
     const executorScope = authenticatedTaskExecutorRuntimeScope(params);
+    const executorPrincipalUserId = (params as AuthenticatedParams | undefined)?.user?.user_id;
     if (params?.provider) {
       const caller = (params as AuthenticatedParams | undefined)?.user;
       const isServiceAccount = caller?._isServiceAccount === true;
@@ -141,6 +142,7 @@ export class ConfigService {
       executorScope &&
       (!userId ||
         !sessionId ||
+        executorPrincipalUserId !== userId ||
         !matchesTaskExecutorRuntimeScope(executorScope, {
           task_id: taskId,
           session_id: sessionId,
@@ -238,8 +240,15 @@ export class ConfigService {
     const sessionsService = this.app?.service('sessions');
     if (!sessionsService) return;
     const session = (await sessionsService.get(sessionId, internalParams)) as
-      | { created_by?: string }
+      | { created_by?: string; sdk_home_scope?: 'execution_home' | 'branch' }
       | undefined;
+    // A branch-scoped Session deliberately selects the immutable prompt actor's
+    // per-user home and overlays that actor's pinned Codex auth inode. The
+    // executor principal was already proven equal to Task.created_by above, so
+    // comparing it with the Session owner would reject the intended
+    // collaborator path. Execution-home Sessions retain the historical owner
+    // home and therefore still require the comparison below.
+    if (tool === 'codex' && session?.sdk_home_scope === 'branch') return;
     const ownerUserId = session?.created_by;
     if (!ownerUserId || ownerUserId === promptingUserId) return;
 

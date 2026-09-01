@@ -9,6 +9,21 @@ import { agorStore } from '@/store/agorStore';
 
 export type { MCPOAuthAttemptResult, MCPOAuthAttemptStatus, MCPOAuthRefreshResult };
 
+/** Run an OAuth-status read with latest-request-wins application semantics. */
+export async function runLatestMCPOAuthStatusRequest<T>(
+  generationRef: { current: number },
+  fetch: () => Promise<T>,
+  shouldApply: () => boolean,
+  apply: (value: T) => void
+): Promise<boolean> {
+  if (!shouldApply()) return false;
+  const generation = ++generationRef.current;
+  const value = await fetch();
+  if (!shouldApply() || generationRef.current !== generation) return false;
+  apply(value);
+  return true;
+}
+
 const sleep = (milliseconds: number, signal?: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     if (signal?.aborted) {
@@ -61,12 +76,19 @@ export function oauthAttemptFailureMessage(status: MCPOAuthAttemptStatus): strin
 /** Refetch and atomically apply both durable OAuth UI authorities. */
 export async function refetchMCPOAuthDurableState(
   client: AgorClient,
-  mcpServerId: string
+  mcpServerId: string,
+  shouldApply: () => boolean
 ): Promise<void> {
+  // Avoid starting caller-private reads when the initiating authority already
+  // disappeared. The second check is still the security boundary: identity,
+  // role, connection, or auth generation can change while either request is in
+  // flight.
+  if (!shouldApply()) return;
   const [status, fresh] = await Promise.all([
     client.service('mcp-servers/oauth-status').find(),
     client.service('mcp-servers').get(mcpServerId),
   ]);
+  if (!shouldApply()) return;
   const ids = (status as Partial<MCPOAuthStatusResult>)?.authenticated_server_ids ?? [];
   const server = fresh as MCPServer;
   agorStore.getState().applyMaps((prev) => {
@@ -87,7 +109,8 @@ export async function refetchMCPOAuthDurableState(
  */
 export async function refreshAndRefetchMCPOAuthGrant(
   client: AgorClient,
-  mcpServerId: string
+  mcpServerId: string,
+  shouldApply: () => boolean
 ): Promise<MCPOAuthRefreshResult> {
   let result: MCPOAuthRefreshResult | undefined;
   let refreshError: unknown;
@@ -100,7 +123,7 @@ export async function refreshAndRefetchMCPOAuthGrant(
   }
 
   try {
-    await refetchMCPOAuthDurableState(client, mcpServerId);
+    await refetchMCPOAuthDurableState(client, mcpServerId, shouldApply);
   } catch (refetchError) {
     if (!refreshError) throw refetchError;
   }

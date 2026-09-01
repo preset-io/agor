@@ -184,6 +184,11 @@ describe('agor_boards_get', () => {
     branchesFind?: ReturnType<typeof vi.fn>;
   }) {
     const boardsGet = vi.fn(async () => board);
+    const permissionsFind = vi.fn(async () => ({
+      primary_owner_user_id: '00000000-0000-7000-8000-000000000001',
+      board_access_revision: 1,
+      branch_template_revision: 1,
+    }));
     const boardObjectsFind =
       options?.boardObjectsFind ??
       vi.fn(async () => ({
@@ -205,6 +210,7 @@ describe('agor_boards_get', () => {
       app: {
         service(name: string) {
           if (name === 'boards') return { get: boardsGet };
+          if (name === 'boards/:id/permissions') return { find: permissionsFind };
           if (name === 'board-objects') return { find: boardObjectsFind };
           if (name === 'branches') return { find: branchesFind };
           throw new Error(`Unexpected service call: ${name}`);
@@ -534,23 +540,46 @@ describe('agor_boards_create schema', () => {
 });
 
 describe('agor_boards_update realtime events', () => {
-  it('persists None as the default for aligned branches', async () => {
-    const patch = vi.fn(async (_id, data) => ({ board_id: 'board-1', ...data }));
-    const get = vi.fn(async () => ({ board_id: 'board-1', default_others_can: 'none' }));
+  it('replaces the normalized board access and branch-default package', async () => {
+    const permissions = {
+      primary_owner_user_id: '00000000-0000-7000-8000-000000000001',
+      board_access_revision: 1,
+      branch_template_revision: 1,
+      board_access: {
+        schema_version: 1,
+        policy_kind: 'board_access',
+        sharing_mode: 'private',
+        entries: [],
+        others: { preset: 'none', capabilities: [], fs_access: 'none' },
+      },
+      branch_template: {
+        access: {
+          schema_version: 1,
+          policy_kind: 'branch_access',
+          sharing_mode: 'private',
+          entries: [],
+          others: { preset: 'none', capabilities: [], fs_access: 'none' },
+        },
+        allow_shared_session_prompts: false,
+      },
+    };
+    const patch = vi.fn(async (_id, data) => data);
     const app = {
       service(name: string) {
-        if (name === 'boards') return { patch, get, emit: vi.fn() };
+        if (name === 'boards/:id/permissions') return { patch };
         throw new Error(`Unexpected service call: ${name}`);
       },
     };
-    const updateBoard = registerAndCaptureHandler('agor_boards_update', {
+    const updateBoard = registerAndCaptureHandler('agor_boards_permissions_update', {
       app,
       userId: 'user-1',
       baseServiceParams: {},
     });
 
-    await updateBoard({ boardId: 'board-1', defaultOthersCan: 'none' });
-    expect(patch).toHaveBeenCalledWith('board-1', { default_others_can: 'none' }, {});
+    await updateBoard({ boardId: 'board-1', permissions });
+    expect(patch).toHaveBeenCalledWith(null, permissions, {
+      route: { id: 'board-1' },
+    });
   });
 
   it('emits custom object mutations with a correctly-shaped HookContext', async () => {

@@ -14,6 +14,7 @@ import {
   type ResolvedEnvironmentHealthMonitorSettings,
   resolveDeploymentAgenticToolPolicy,
   resolveDispatchConnectTimeoutMs,
+  resolveExecutionSecurityMode,
   resolveExecutorHeartbeatConfig,
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
@@ -28,10 +29,12 @@ import {
 } from '@agor/core/db';
 import type { Id, Paginated, Session, SessionID, Task, TenantContext } from '@agor/core/types';
 import { isTerminalTaskStatus, SessionStatus } from '@agor/core/types';
+import { hasSecureLocalCredentialOverlay, resolveSdkHomeConfig } from './branch-sdk-home.js';
 import type { Application, SessionsServiceImpl, TasksServiceImpl } from './declarations.js';
 import { beginExecutorResponseDrain } from './executor-response-channel.js';
 import { clearTrackedExecutorGauge, containAllTrackedExecutors } from './executor-tracking.js';
 import { type DaemonMetrics, getDaemonMetrics, NOOP_METRICS } from './metrics/index.js';
+import { DiscordMessageDeliveryWorker } from './services/discord-message-delivery-worker.js';
 import { DistributedHealthMonitor } from './services/distributed-health-monitor.js';
 import type { GatewayService } from './services/gateway.js';
 import { HealthMonitor } from './services/health-monitor.js';
@@ -821,9 +824,12 @@ export async function startup(ctx: StartupContext): Promise<void> {
   const schedulerMultiTenancy = resolveMultiTenancyConfig(config);
   const schedulerService = new SchedulerService(db, app, {
     deploymentPolicy: resolveDeploymentAgenticToolPolicy(config),
+    appRbacEnabled: resolveExecutionSecurityMode(config).appRbacEnabled,
     tickInterval: 30000, // 30 seconds
     gracePeriod: 120000, // 2 minutes
     unixUserMode: config.execution?.unix_user_mode ?? 'simple',
+    sdkHomeMode: resolveSdkHomeConfig(config).mode,
+    secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
     // Static mode keeps the historical single-tenant scope. Auth-resolved
     // multi-tenant mode leaves this undefined so the scheduler discovers due
     // schedule tenant metadata at the DB boundary on each tick.
@@ -861,7 +867,18 @@ export async function startup(ctx: StartupContext): Promise<void> {
     });
   }
 
-  // 10. Graceful shutdown handler
+  // 10. Start final Discord delivery independently from listener ownership and
+  // inbound Task processing. Claims and provider effects are recoverable across
+  // daemon replicas; this loop is deliberately a separate lifecycle.
+  const discordMessageDeliveryWorker = new DiscordMessageDeliveryWorker(db, {
+    tenantId:
+      startupMultiTenancy.mode === 'static' ? startupMultiTenancy.static_tenant_id : undefined,
+  });
+  app.set('discordMessageDeliveryWorker', discordMessageDeliveryWorker);
+  discordMessageDeliveryWorker.start();
+  console.log('📨 Discord message delivery worker started');
+
+  // 11. Graceful shutdown handler
   let shutdownStarted = false;
   const shutdown = async (signal: string) => {
     if (shutdownStarted) return;
@@ -916,6 +933,9 @@ export async function startup(ctx: StartupContext): Promise<void> {
       }
 
       // Stop gateway listeners
+      console.log('📨 Stopping discord message delivery worker...');
+      await discordMessageDeliveryWorker.stop();
+
       if (gatewayService) {
         console.log('🌐 Stopping gateway listeners...');
         await gatewayService.stopListeners();

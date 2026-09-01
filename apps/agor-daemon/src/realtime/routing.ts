@@ -1,10 +1,13 @@
-import type {
-  BoardID,
-  CursorMovedEvent,
-  MCPOAuthAttemptID,
-  MCPServerID,
-  PresenceUpdatedEvent,
-  RepoCloneError,
+import {
+  type CursorLeftEvent,
+  type CursorMovedEvent,
+  type MCPOAuthAttemptID,
+  type MCPServerID,
+  PRESENCE_HA_SOCKET_EVENTS,
+  PRESENCE_SOCKET_EVENTS,
+  type PresenceLeftEvent,
+  type PresenceUpdatedEvent,
+  type RepoCloneError,
 } from '@agor/core/types';
 
 /**
@@ -83,6 +86,17 @@ export function boardPresenceRoomName(tenantId: string, boardId: string): string
   return `${tenantChannelName(tenantId)}:board:${encodeRealtimeRoomComponent(boardId)}:presence`;
 }
 
+/**
+ * Low-frequency board association room for navbar presence.
+ *
+ * This is deliberately distinct from the high-frequency cursor room: navbar
+ * consumers subscribe to every currently visible board without receiving
+ * cursor coordinates from boards they are not rendering.
+ */
+export function boardPresenceAssociationRoomName(tenantId: string, boardId: string): string {
+  return `${tenantChannelName(tenantId)}:board:${encodeRealtimeRoomComponent(boardId)}:presence-association`;
+}
+
 export function sessionStreamRoomName(tenantId: string, sessionId: string): string {
   return `${tenantChannelName(tenantId)}:session-stream:${encodeRealtimeRoomComponent(sessionId)}`;
 }
@@ -121,9 +135,10 @@ export function isExecutorTaskRoomName(name: string): boolean {
 }
 
 interface HaNativeSocketPayloads {
-  'cursor-moved': CursorMovedEvent;
-  'cursor-left': { userId: string; boardId: BoardID; timestamp: number };
-  'presence-updated': PresenceUpdatedEvent;
+  [PRESENCE_SOCKET_EVENTS.cursorMoved]: CursorMovedEvent;
+  [PRESENCE_SOCKET_EVENTS.cursorLeft]: CursorLeftEvent;
+  [PRESENCE_SOCKET_EVENTS.updated]: PresenceUpdatedEvent;
+  [PRESENCE_SOCKET_EVENTS.left]: PresenceLeftEvent;
   'repo:cloneError': {
     slug: string;
     url: string;
@@ -138,16 +153,21 @@ interface HaNativeSocketPayloads {
     oauth_mode: 'per_user' | 'shared';
   };
   'oauth:disconnected': { mcp_server_id: MCPServerID };
+  /**
+   * Caller-private Marketplace cache revocation. The empty payload is
+   * intentional: recipients re-read the authoritative projection, and the
+   * signal must not disclose which branch/server/credential changed.
+   */
+  'marketplace:invalidated': Record<string, never>;
 }
 
 /** Native Socket.IO packets intentionally permitted to cross the HA Redis adapter. */
 export const HA_NATIVE_SOCKET_EVENT_INVENTORY = [
-  'cursor-moved',
-  'cursor-left',
-  'presence-updated',
+  ...PRESENCE_HA_SOCKET_EVENTS,
   'repo:cloneError',
   'oauth:completed',
   'oauth:disconnected',
+  'marketplace:invalidated',
 ] as const satisfies readonly (keyof HaNativeSocketPayloads)[];
 
 type NativeSocketTarget = {

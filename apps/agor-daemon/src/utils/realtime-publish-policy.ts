@@ -1,3 +1,5 @@
+import type { UserRole } from '@agor/core/types';
+
 /**
  * The allowlist that decides which services may fan out over the socket at all.
  *
@@ -65,6 +67,15 @@ export type RealtimePublishAudience =
 export type RealtimePublishPolicy = {
   audience: RealtimePublishAudience;
   /**
+   * Minimum authenticated browser role admitted to this event stream.
+   *
+   * This mirrors the service read floor at the publication boundary. Omitting
+   * a listener in the official UI is not authorization: an adversarial client
+   * can subscribe to any Feathers service event. Service-account connections
+   * remain admitted independently for internal runtime plumbing.
+   */
+  minimumRole?: UserRole;
+  /**
    * Why this audience. For a fan-out audience, name the consumer that breaks
    * without it; for `'none'`, say what makes silence correct. Reviewers read
    * this column, so "no consumer" is a real answer and "unknown" is not.
@@ -103,8 +114,8 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'useAgorData tracks per-session MCP attachment.',
   },
   'session-env-selections': {
-    audience: 'branch-or-session',
-    why: 'No browser subscriber today, but the row is session-scoped and was already scoped here; kept so a consumer can be added without a security decision.',
+    audience: 'none',
+    why: 'Selection names are credential metadata; there is no subscriber, and any future consumer needs an owner-aware disclosure decision.',
   },
 
   // ---------------------------------------------------------------------------
@@ -118,13 +129,17 @@ export const REALTIME_PUBLISH_POLICY = {
     audience: 'branch',
     why: 'BranchModal ScheduleTab lists schedules live.',
   },
-  'branches/:id/owners': {
-    audience: 'branch-route',
-    why: 'BoardTeammatePanel refetches owners on created/removed — owner edits never patch the branch row, so this is its only signal.',
+  'branches/:id/permissions': {
+    audience: 'none',
+    why: 'Permission mutations invalidate authorization caches; editors use the mutation response.',
   },
-  'branches/:id/group-grants': {
-    audience: 'branch-route',
-    why: 'Grant rows carry no secret and were already branch-scoped; kept so the permissions UI can subscribe without re-deciding the audience.',
+  'boards/:id/permissions': {
+    audience: 'none',
+    why: 'Permission mutations invalidate authorization caches; editors use the mutation response.',
+  },
+  'workspace-preferences': {
+    audience: 'none',
+    why: 'Workspace settings are fetched by the settings and permissions forms.',
   },
 
   // ---------------------------------------------------------------------------
@@ -132,6 +147,7 @@ export const REALTIME_PUBLISH_POLICY = {
   // ---------------------------------------------------------------------------
   'board-objects': {
     audience: 'board-resource',
+    minimumRole: 'member',
     why: 'useAgorData and BoardBranchList track card/zone placement live.',
   },
   'board-comments': {
@@ -156,11 +172,12 @@ export const REALTIME_PUBLISH_POLICY = {
   repos: { audience: 'tenant', why: 'useAgorData and App.tsx track repo rows and clone progress.' },
   users: {
     audience: 'tenant',
+    minimumRole: 'member',
     why: 'useAgorData keeps the user directory current for attribution. rowToUser computes agentic_tools_public_values PER REQUESTER (decrypted plaintext, owner only), so redactUserOwnerOnlyFieldsForBroadcast strips it from context.dispatch — the audience is tenant-wide, so the payload must carry nothing the row owner alone may see.',
   },
   'mcp-servers': {
     audience: 'tenant',
-    why: 'useAgorData tracks server rows. Secrets are stripped from context.dispatch unconditionally by redactMCPServerSecretFields — the audience is tenant-wide, so the payload must never carry credentials.',
+    why: 'useAgorData tracks server rows, and useMcpMemberPolicy refetches its caller-specific capability on the empty member-policy invalidation. Secrets are stripped from context.dispatch unconditionally by redactMCPServerSecretFields — the audience is tenant-wide, so row payloads must never carry credentials.',
   },
   'gateway-channels': {
     audience: 'tenant',
@@ -226,6 +243,10 @@ export const REALTIME_PUBLISH_POLICY = {
   'auth/launch': { audience: 'none', why: 'Exchanges a launch token for a session.' },
   'check-auth': { audience: 'none', why: 'Echoes back the API key it was asked to validate.' },
   'config/resolve-api-key': { audience: 'none', why: 'Returns a provider API key.' },
+  'executor-git-environment': {
+    audience: 'none',
+    why: 'Returns a command-scoped Git credential DTO to one executor.',
+  },
   'api/v1/user/api-keys': { audience: 'none', why: 'Returns a freshly minted user API key.' },
   terminals: {
     audience: 'none',
@@ -238,6 +259,10 @@ export const REALTIME_PUBLISH_POLICY = {
   },
   'codex-auth/logout': { audience: 'none', why: 'Credential control plane.' },
   'mcp-servers/oauth-start': { audience: 'none', why: 'OAuth control plane.' },
+  'mcp-servers/oauth-browser-reservations': {
+    audience: 'none',
+    why: 'Returns a caller/socket-bound one-shot browser capability.',
+  },
   'mcp-servers/oauth-callback': {
     audience: 'none',
     why: 'OAuth redirect handler (Express middleware, listed defensively).',
@@ -268,7 +293,27 @@ export const REALTIME_PUBLISH_POLICY = {
     why: 'Returns { mcp_server, session } where an api-key entry carries a credential belonging to the caller. This is the leak that motivated the allowlist.',
   },
   'mcp-catalog': { audience: 'none', why: 'find/get only — a static curated catalog, no events.' },
+  'mcp-catalog/readiness': {
+    audience: 'none',
+    why: 'Caller-scoped advisory read with no mutations or events.',
+  },
+  'mcp-marketplace': {
+    audience: 'none',
+    why: 'Caller-private overview returned only to the requesting connection.',
+  },
+  'mcp-marketplace/remove-unattached': {
+    audience: 'none',
+    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every owner device.',
+  },
+  'mcp-marketplace/tool-permission': {
+    audience: 'none',
+    why: 'Caller-private acknowledgement; an explicit empty user-room invalidation refreshes every affected owner/admin device.',
+  },
   'mcp-member-policy': { audience: 'none', why: 'Policy read for the caller.' },
+  'mcp-egress/status': {
+    audience: 'none',
+    why: 'Tenant-scoped rollout and health status; Settings refetches explicitly.',
+  },
 
   // ---------------------------------------------------------------------------
   // Silent: CRUD services with no realtime consumer. Denying costs nothing
@@ -287,15 +332,8 @@ export const REALTIME_PUBLISH_POLICY = {
   'copilot-models': { audience: 'none', why: 'Per-caller model list.' },
   'cursor-models': { audience: 'none', why: 'Per-caller model list.' },
   health: { audience: 'none', why: 'Liveness probe.' },
-  'boards/:id/owners': {
-    audience: 'none',
-    why: 'Board owner edits; the panel refetches, no subscriber.',
-  },
-  'boards/:id/group-grants': {
-    audience: 'none',
-    why: 'Board grant edits; the panel refetches, no subscriber.',
-  },
   'boards/:id/aligned-branches': { audience: 'none', why: 'Query route.' },
+  'boards/:id/effective-access': { audience: 'none', why: 'Query route.' },
   'branches/:id/effective-access': { audience: 'none', why: 'Query route.' },
   'branches/:id/fs-access-users': { audience: 'none', why: 'Query route.' },
   'me/artifact-trust-grants': { audience: 'none', why: 'Trust grants belonging to the caller.' },

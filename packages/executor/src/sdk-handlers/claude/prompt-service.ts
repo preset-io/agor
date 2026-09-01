@@ -5,7 +5,9 @@
  * Automatically loads CLAUDE.md and uses preset system prompts matching Claude Code CLI.
  */
 
+import { projectClaudeResultResponse, projectContextUsageSnapshot } from '@agor/core';
 import { shortId } from '@agor/core/db';
+import { isMCPAbortError, sanitizeMCPExternalError } from '@agor/core/mcp';
 import type { PermissionMode, SDKResultMessage } from '@agor/core/sdk';
 import type {
   BranchRepository,
@@ -190,7 +192,7 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     }
 
-    const { query: result, getStderr } = await setupQuery(
+    const { query: result, getStderrMetadata } = await setupQuery(
       sessionId,
       prompt,
       {
@@ -288,6 +290,27 @@ If you continue to see authentication errors, please contact your Agor administr
           // stdin.  We must release it afterward regardless of success/failure.
           if (event.type === 'result') {
             sdkResults.push(event.raw_sdk_message);
+            // The normal path masks any error result (notably a zero-turn
+            // `error_during_execution`) with a generic "provider ended the
+            // request" message. Emit a BOUNDED, sanitized breadcrumb so the
+            // failure is visible in logs — subtype, error flag, turn count, and
+            // the stderr byte length only. The raw result and raw CLI stderr are
+            // deliberately NOT logged here: they can carry MCP URLs/headers,
+            // credentials, or reflected provider payloads (the catch-path below
+            // documents the same policy).
+            {
+              const safeResult = projectClaudeResultResponse(event.raw_sdk_message);
+              if (!safeResult || safeResult.is_error === true || safeResult.subtype !== 'success') {
+                const stderr = getStderrMetadata();
+                console.error(
+                  `❌ [claude-code] error result for session ${shortId(sessionId)} ` +
+                    `subtype=${safeResult?.subtype ?? 'unknown'} ` +
+                    `is_error=${safeResult?.is_error ?? 'unknown'} ` +
+                    `num_turns=${safeResult?.num_turns ?? 'unknown'} ` +
+                    `stderr_bytes=${stderr.byteLength}`
+                );
+              }
+            }
             if (resultDisposition === 'await-background-tasks') {
               console.log(
                 `⏳ Parent turn ended with ${backgroundTasks.activeTaskCount} background task(s) still active; keeping SDK query alive`
@@ -306,11 +329,19 @@ If you continue to see authentication errors, please contact your Agor administr
                     `⚠️  getContextUsage() did not respond within ${ClaudePromptService.CONTEXT_USAGE_TIMEOUT_MS}ms; settling turn without a context snapshot`
                   );
                 } else {
-                  yield { type: 'context_usage', contextUsage } as ProcessedEvent;
+                  const snapshot = projectContextUsageSnapshot(contextUsage);
+                  if (snapshot) {
+                    yield { type: 'context_usage', contextUsage: snapshot } as ProcessedEvent;
+                  } else {
+                    console.warn(
+                      '⚠️  getContextUsage() returned an invalid context snapshot; settling turn without it'
+                    );
+                  }
                 }
               } catch (error) {
+                const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
                 console.warn(
-                  `⚠️  getContextUsage() unavailable (subprocess may have exited): ${error instanceof Error ? error.message : String(error)}`
+                  `⚠️  getContextUsage() unavailable category=${safe.category} type=${safe.diagnostic.type}`
                 );
               } finally {
                 // Release the held input iterable so the SDK can close stdin
@@ -349,10 +380,7 @@ If you continue to see authentication errors, please contact your Agor administr
 
       // Check if this is an AbortError from AbortController.abort()
       // This is EXPECTED during stop - the SDK throws AbortError when cancelled
-      if (
-        error instanceof Error &&
-        (error.name === 'AbortError' || error.message.includes('abort'))
-      ) {
+      if (isMCPAbortError(error)) {
         console.log(`🛑 [Stop] Query aborted for session ${shortId(sessionId)} - this is expected`);
         // Yield stopped event to signal execution was halted
         yield { type: 'stopped' } as ProcessedEvent;
@@ -360,25 +388,18 @@ If you continue to see authentication errors, please contact your Agor administr
         return;
       }
 
-      // Get actual error message from stderr if available
-      const stderrOutput = getStderr();
-      const errorContext = stderrOutput ? `\n\nClaude Code stderr output:\n${stderrOutput}` : '';
-
-      // Enhance error with context
-      const enhancedError = new Error(
-        `Claude SDK error after ${state.messageCount} messages: ${error instanceof Error ? error.message : String(error)}${errorContext}`
-      );
-      // Preserve original stack
-      if (error instanceof Error && error.stack) {
-        enhancedError.stack = error.stack;
-      }
+      // stderr and SDK exceptions can contain MCP URLs, headers, or reflected
+      // provider payloads. Retain only presence + closed failure metadata.
+      const stderr = getStderrMetadata();
+      const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
       console.error(`❌ SDK iteration failed:`, {
         sessionId: shortId(sessionId),
         messageCount: state.messageCount,
-        error: error instanceof Error ? error.message : String(error),
-        stderr: stderrOutput || '(no stderr output)',
+        category: safe.category,
+        type: safe.diagnostic.type,
+        hasStderr: stderr.hasStderr,
       });
-      throw enhancedError;
+      throw new Error(safe.message);
     }
   }
 
@@ -487,10 +508,7 @@ If you continue to see authentication errors, please contact your Agor administr
       }
     } catch (error) {
       // Check if this is an AbortError from interrupt() - this is EXPECTED during stop
-      if (
-        error instanceof Error &&
-        (error.name === 'AbortError' || error.message.includes('abort'))
-      ) {
+      if (isMCPAbortError(error)) {
         console.log(
           `🛑 [Stop] Query aborted via interrupt() for session ${shortId(sessionId)} (non-streaming) - this is expected`
         );
@@ -502,8 +520,7 @@ If you continue to see authentication errors, please contact your Agor administr
           outputTokens: tokenUsage?.output_tokens || 0,
         };
       }
-      // Re-throw other errors
-      throw error;
+      throw new Error(sanitizeMCPExternalError(error, { stage: 'runtime' }).message);
     }
 
     // Extract token counts from SDK result metadata

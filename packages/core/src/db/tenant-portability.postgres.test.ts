@@ -28,6 +28,7 @@ import { BranchRepository } from './repositories/branches';
 import { RepoRepository } from './repositories/repos';
 import { SessionRepository } from './repositories/sessions';
 import { UserMCPOAuthTokenRepository } from './repositories/user-mcp-oauth-tokens';
+import { UsersRepository } from './repositories/users';
 import * as pg from './schema.postgres';
 import {
   canonicalJson,
@@ -83,6 +84,12 @@ function sqlstateOf(error: unknown): string | undefined {
 
 async function seedTenant(db: Database, tenantId: string): Promise<void> {
   await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const ownerId = generateId() as UUID;
+    await new UsersRepository(scoped).create({
+      user_id: ownerId,
+      email: `tenant-portability-${tenantId}-${generateId()}@example.invalid`,
+      role: 'member',
+    });
     const repoId = generateId();
     await new RepoRepository(scoped).create({
       repo_id: repoId,
@@ -101,13 +108,13 @@ async function seedTenant(db: Database, tenantId: string): Promise<void> {
       ref: 'main',
       branch_unique_id: branchUniqueSeq++,
       path: `/tmp/${branchId}`,
-      created_by: 'tenant-portability-test-user' as UUID,
+      created_by: ownerId,
     });
     await new SessionRepository(scoped).create({
       session_id: generateId(),
       branch_id: branchId,
       agentic_tool: 'claude-code',
-      created_by: 'tenant-portability-test-user',
+      created_by: ownerId,
     });
   });
 }
@@ -117,11 +124,13 @@ async function addSession(db: Database, tenantId: string): Promise<void> {
     const branch = await new BranchRepository(scoped).findAll();
     const branchId = branch[0]?.branch_id;
     if (!branchId) throw new Error('expected a seeded branch');
+    const ownerId = branch[0]?.primary_owner_user_id;
+    if (!ownerId) throw new Error('expected a seeded branch owner');
     await new SessionRepository(scoped).create({
       session_id: generateId(),
       branch_id: branchId,
       agentic_tool: 'claude-code',
-      created_by: 'tenant-portability-test-user',
+      created_by: ownerId,
     });
   });
 }
@@ -136,7 +145,7 @@ async function seedNonPortableExecutorAuthority(db: Database, tenantId: string):
         token_type: 'executor-session',
         purpose: 'executor-task',
         session_id: 'tenant-portability-non-portable-authority',
-        user_id: 'tenant-portability-test-user',
+        user_id: generateId(),
         created_at: new Date(),
         expires_at: new Date(Date.now() + 60_000),
         max_uses: -1,
@@ -162,9 +171,11 @@ async function seedNonPortableOAuthGrant(
         scope: 'global',
         enabled: true,
         source: 'catalog',
+        catalog_entry_name: 'com.example/portable-oauth',
         data: {
           url: 'https://mcp.example.test',
           catalog_entry_name: 'com.example/portable-oauth',
+          config_version: 42,
           auth: { type: 'oauth' },
         },
         created_at: new Date(),
@@ -203,7 +214,7 @@ async function seedNonPortableGitHubInstallState(db: Database, tenantId: string)
       .values({
         tenant_id: tenantId,
         state_hash: stateHash,
-        user_id: 'tenant-portability-test-user',
+        user_id: generateId(),
         intent: 'github-app-install',
         created_at: new Date(),
         expires_at: new Date(Date.now() + 60_000),
@@ -217,6 +228,12 @@ async function seedBoardBranchCycle(
   tenantId: string
 ): Promise<{ boardId: string; branchId: string }> {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+    const ownerId = generateId() as UUID;
+    await new UsersRepository(scoped).create({
+      user_id: ownerId,
+      email: `tenant-portability-cycle-${tenantId}-${generateId()}@example.invalid`,
+      role: 'member',
+    });
     const repoId = generateId();
     await new RepoRepository(scoped).create({
       repo_id: repoId,
@@ -232,7 +249,7 @@ async function seedBoardBranchCycle(
     await new BoardRepository(scoped).create({
       board_id: boardId,
       name: `cycle board ${tenantId}`,
-      created_by: 'tenant-portability-test-user' as UUID,
+      created_by: ownerId,
     });
     const branchId = generateId();
     await new BranchRepository(scoped).create({
@@ -243,7 +260,7 @@ async function seedBoardBranchCycle(
       ref: 'main',
       branch_unique_id: branchUniqueSeq++,
       path: `/tmp/${branchId}`,
-      created_by: 'tenant-portability-test-user' as UUID,
+      created_by: ownerId,
     });
     await update(scoped, pg.boards)
       .set({ primary_teammate_id: branchId })
@@ -402,6 +419,43 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
     // Exact equality makes a newly added, removed, or action-changed movable FK
     // fail until the schema-derived migration contract is updated deliberately.
     expect(actual).toEqual(expected);
+  });
+
+  it('keeps the migrated capability-policy checks named and structurally aligned', async () => {
+    const result = await executeRaw(
+      db,
+      sql`
+        SELECT constraint_row.conname AS name,
+               pg_get_constraintdef(constraint_row.oid, true) AS definition
+        FROM pg_constraint constraint_row
+        JOIN pg_class table_row ON table_row.oid = constraint_row.conrelid
+        JOIN pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
+        WHERE constraint_row.contype = 'c'
+          AND namespace_row.nspname = 'public'
+          AND table_row.relname IN (
+            'branches','board_access_policies','board_access_entries','branch_permission_configs',
+            'branch_permission_entries'
+          )
+      `
+    );
+    const checks = new Map(rowsOf(result).map((row) => [String(row.name), String(row.definition)]));
+    const expected = [
+      ['branches_permission_binding_check', /inherit.*override/i],
+      ['board_access_policies_sharing_mode_check', /private.*shared/i],
+      ['board_access_policies_others_role_check', /none.*viewer.*editor.*manager/i],
+      ['board_access_entries_role_check', /none.*viewer.*editor.*manager/i],
+      ['board_access_entries_principal_check', /user_id.*group_id/i],
+      ['branch_permission_configs_sharing_mode_check', /private.*shared/i],
+      ['branch_permission_configs_others_role_check', /none.*viewer.*collaborator.*manager/i],
+      ['branch_permission_configs_others_fs_access_check', /none.*read.*write/i],
+      ['branch_permission_configs_target_check', /board_id.*branch_id/i],
+      ['branch_permission_entries_role_check', /none.*viewer.*collaborator.*manager/i],
+      ['branch_permission_entries_fs_access_check', /none.*read.*write/i],
+      ['branch_permission_entries_principal_check', /user_id.*group_id/i],
+    ] as const;
+    for (const [name, expression] of expected) {
+      expect(checks.get(name), name).toMatch(expression);
+    }
   });
 
   it('inspect reports only the target tenant', async () => {
@@ -787,9 +841,11 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)('tenant portability (Postgr
         .all();
       expect(servers).toHaveLength(1);
       expect(servers[0]?.source).toBe('imported');
+      expect(servers[0]?.catalog_entry_name).toBeNull();
       expect(
         (servers[0]?.data as { catalog_entry_name?: string } | undefined)?.catalog_entry_name
       ).toBeUndefined();
+      expect((servers[0]?.data as { config_version?: number } | undefined)?.config_version).toBe(1);
       await expect(
         new UserMCPOAuthTokenRepository(
           scoped,

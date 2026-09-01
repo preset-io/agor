@@ -377,6 +377,13 @@ describe('executeToolTask provider-failure settlement', () => {
         hadError: true,
         errorDetails: undefined,
         rawSdkResponse: safeRawResponse,
+        rawContextUsage: {
+          totalTokens: 14,
+          maxTokens: 200_000,
+          percentage: 0.007,
+          memoryFiles: [{ path: secret }],
+          providerExtension: { secret },
+        },
       }),
     }));
 
@@ -403,7 +410,14 @@ describe('executeToolTask provider-failure settlement', () => {
         tokenUsage: { inputTokens: 10, outputTokens: 4 },
         durationMs: 42,
         costUsd: 0.12,
+        contextWindowLimit: 200_000,
+        contextUsageSnapshot: {
+          totalTokens: 14,
+          maxTokens: 200_000,
+          percentage: 0.007,
+        },
       },
+      computed_context_window: 14,
     });
     expect(JSON.stringify(patch)).not.toContain(secret);
   });

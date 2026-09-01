@@ -14,6 +14,7 @@ import type {
   CreateUserInput,
   GatewayChannelCreateData,
   GatewayChannelPatchData,
+  OnboardingState,
   PermissionMode,
   Repo,
   Session,
@@ -64,12 +65,19 @@ import {
   useAuth,
   useAuthConfig,
   useBoardActions,
+  useForcedPasswordChangeHandler,
   useInitialLoaderPhase,
   useServerVersion,
   useSessionActions,
 } from './hooks';
+import { useAuthorityOperationGuard } from './hooks/useAuthorityOperationGuard';
 import { useEnsureFrameworkRepo } from './hooks/useEnsureFrameworkRepo';
 import { findFrameworkRepo } from './hooks/useFrameworkRepo';
+import { useMarketplaceOAuthAuthorityOwner } from './hooks/useMarketplaceOAuthAuthorityOwner';
+import {
+  type OnboardingOperationOwner,
+  useOnboardingLifecycle,
+} from './hooks/useOnboardingLifecycle';
 import { useSurfaceBranding } from './hooks/useSurfaceBranding';
 import { sessionCreated } from './store/agorRealtimeActions';
 import { agorStore, useAgorStore } from './store/agorStore';
@@ -79,21 +87,34 @@ import {
   ARTIFACT_FULLSCREEN_ROUTE_PATHS,
   KNOWLEDGE_ROUTE_PATHS,
   MARKETPLACE_ROUTE_PATHS,
+  RBAC_POLICY_PROTOTYPE_ROUTE_PATH,
   routeUsesDeviceRouter,
 } from './surfaces/surfaceRegistry';
 import { useWorkspaceSurfaceLifecycle } from './surfaces/useWorkspaceSurfaceLifecycle';
 import type { CreateRepoOptions } from './types';
 import { cloneErrorHint } from './utils/cloneErrorHint';
-import { isMobileDevice } from './utils/deviceDetection';
 import {
-  completeForcedPasswordChange,
-  completeLocalPasswordChange,
-} from './utils/forcePasswordChange';
+  enrichAuthenticatedUser,
+  hasObservedOnboardingCompletion,
+} from './utils/currentUserAuthority';
+import { isMobileDevice } from './utils/deviceDetection';
+import { completeLocalPasswordChange } from './utils/forcePasswordChange';
 import { useThemedMessage } from './utils/message';
 import { buildCompletedOnboardingPreferences } from './utils/onboardingGoals';
+import {
+  buildDeferredOnboardingPreferences,
+  buildRestartedOnboardingPreferences,
+  buildResumedOnboardingPreferences,
+  isOnboardingDeferred,
+  type OnboardingReopenMode,
+} from './utils/onboardingLifecycle';
 import { savePromptDraft } from './utils/promptDrafts';
 import { seedOnboardingTeammate } from './utils/seedOnboardingTeammate';
 import { updateSessionMcpServers } from './utils/sessionMcpServers';
+import {
+  type LatestSessionUpdateRequests,
+  runSessionUpdateWithLatestNotification,
+} from './utils/sessionUpdateNotifications';
 import { getRouterBasename, responsiveRoutePath } from './utils/uiRoutes';
 
 type RouteModuleKey = RouteSurfaceId | 'mobile';
@@ -104,26 +125,6 @@ interface PendingEnvironmentToast {
   action: EnvironmentAction;
   key: string;
   requestedAt: number;
-}
-
-interface OnboardingOperationOwner {
-  userId: UUID;
-  authenticationGeneration: number;
-  activationGeneration: number;
-}
-
-function isSameOnboardingOwner(
-  left: OnboardingOperationOwner | null,
-  right: OnboardingOperationOwner | null
-): boolean {
-  return (
-    left === right ||
-    (!!left &&
-      !!right &&
-      left.userId === right.userId &&
-      left.authenticationGeneration === right.authenticationGeneration &&
-      left.activationGeneration === right.activationGeneration)
-  );
 }
 
 // Stable reference — an inline object here re-processes the modal on every App
@@ -233,6 +234,13 @@ const MarketingVideoPage = lazy(() =>
     default: module.MarketingVideoPage,
   }))
 );
+const RbacPolicyPrototypePage = import.meta.env.DEV
+  ? lazy(() =>
+      import('./pages/RbacPolicyPrototypePage').then((module) => ({
+        default: module.RbacPolicyPrototypePage,
+      }))
+    )
+  : null;
 
 const AgorApp = lazy(loadAgorApp);
 const KnowledgePage = lazy(loadKnowledgePage);
@@ -384,9 +392,13 @@ function AppContent() {
     isAuthenticationGenerationCurrent,
     isAuthenticationOwnerCurrent,
     login,
+    captureAuthorityCycle,
+    loginForAuthorityCycle,
     logout,
-    reAuthenticate,
+    logoutForAuthorityCycle,
+    refreshCurrentUserForAuthorityCycle,
   } = useAuth();
+  const marketplaceOAuthAuthorityOwner = useMarketplaceOAuthAuthorityOwner(user);
 
   // Call ALL hooks unconditionally BEFORE any conditional returns.
   // Connect to daemon with authentication token (auth is always required —
@@ -396,13 +408,39 @@ function AppContent() {
     client,
     connected,
     connecting,
+    authGeneration,
     error: connectionError,
     retryConnection,
   } = useAgorClient({
     accessToken: authenticated ? accessToken : null,
     authorityGeneration: authenticationGeneration,
+    onBeforeAuthGenerationChange: marketplaceOAuthAuthorityOwner.beforeAuthGenerationChange,
+  });
+  // Ref-only observation keeps the central owner aligned across identity and
+  // role renders without performing cleanup during React render.
+  marketplaceOAuthAuthorityOwner.observeRenderedGeneration(authGeneration);
+  const appAuthorityGuard = useAuthorityOperationGuard(
+    user?.user_id && user.role && client && connected && !connecting
+      ? [user.user_id, user.role, client, authGeneration]
+      : null
+  );
+  const handleForcePasswordChange = useForcedPasswordChangeHandler({
+    client,
+    user,
+    appAuthorityGuard,
+    captureAuthorityCycle,
+    reauthenticate: loginForAuthorityCycle,
+    logout: logoutForAuthorityCycle,
+    onCompleted: (signedIn) => {
+      showSuccess(
+        signedIn
+          ? 'Password changed successfully!'
+          : 'Password changed successfully. Please sign in again.'
+      );
+    },
   });
   const pendingEnvironmentToastsRef = useRef<Map<string, PendingEnvironmentToast>>(new Map());
+  const latestSessionUpdateRequestsRef = useRef<LatestSessionUpdateRequests>(new Map());
 
   useEffect(() => {
     if (!client) return;
@@ -447,12 +485,13 @@ function AppContent() {
   // Referentially stable context value: without the memo, every App render
   // hands consumers a fresh object and defeats their own memoization.
   const connectionContextValue = useMemo(
-    () => ({ connected, connecting, outOfSync, capturedSha, currentSha }),
-    [connected, connecting, outOfSync, capturedSha, currentSha]
+    () => ({ connected, connecting, authGeneration, outOfSync, capturedSha, currentSha }),
+    [connected, connecting, authGeneration, outOfSync, capturedSha, currentSha]
   );
 
   const directSessionIdFromPath =
     location.pathname.match(/^\/(?:s|m\/session)\/([^/]+)\/?$/)?.[1] ?? null;
+  const authenticatedUserCanListUsers = hasMinimumRole(user?.role, ROLES.MEMBER);
 
   // Pass the stable client lifetime, not `connected ? client : null`:
   // useAgorData owns reconnect refetches and `null` is reserved for logout /
@@ -468,6 +507,10 @@ function AppContent() {
   } = useAgorData(client, {
     enabled: workspaceSurfaceShouldRun && !(user?.must_change_password && passwordWriteAvailable),
     directSessionId: directSessionIdFromPath,
+    authenticatedUserId: user?.user_id,
+    authenticatedUserRole: user?.role,
+    authGeneration,
+    connectionReady: connected && !connecting,
   });
 
   // Entity maps are NOT subscribed here. Each surface that needs a whole map
@@ -551,7 +594,19 @@ function AppContent() {
   const storedCurrentUser = useAgorStore((s) =>
     user ? (s.userById.get(user.user_id) ?? null) : null
   );
-  const currentUser = user ? storedCurrentUser || user : null;
+  // A viewer cannot refresh the directory, so never let a row retained from a
+  // prior member identity/role override the current authentication response.
+  const currentUser = enrichAuthenticatedUser(
+    user,
+    authenticatedUserCanListUsers ? storedCurrentUser : null
+  );
+  // Authentication owns the open gate, but a same-user realtime directory
+  // `true` is safe as a close-only terminal signal from another tab. Directory
+  // `false` can never undo an authenticated completion or open the wizard.
+  const onboardingCompletionObserved = hasObservedOnboardingCompletion(
+    user,
+    authenticatedUserCanListUsers ? storedCurrentUser : null
+  );
   const mcpServerCount = useAgorStore((s) => s.mcpServerById.size);
   // Slack/GitHub connections are gateway channels, a separate store map from MCP
   // servers. Narrow size selector so unrelated channel writes don't re-render the shell.
@@ -582,57 +637,44 @@ function AppContent() {
     });
   }, [capturedSha, currentUser?.email]);
 
-  // Onboarding wizard state
-  const [onboardingWizardOwner, setOnboardingWizardOwnerState] =
-    useState<OnboardingOperationOwner | null>(null);
-  const onboardingWizardOwnerRef = useRef<OnboardingOperationOwner | null>(null);
-  const onboardingActivationSequenceRef = useRef(0);
-  const setOnboardingWizardOwner = useCallback((owner: OnboardingOperationOwner | null) => {
-    if (isSameOnboardingOwner(onboardingWizardOwnerRef.current, owner)) return;
-    // Invalidate retained callbacks synchronously; waiting for React to commit
-    // the replacement wizard leaves a promise-continuation race.
-    onboardingWizardOwnerRef.current = owner;
-    setOnboardingWizardOwnerState(owner);
-  }, []);
-  const activateOnboardingWizard = useCallback(
-    (userId: UUID, ownerAuthenticationGeneration: number, replaceActive = false) => {
-      const activeOwner = onboardingWizardOwnerRef.current;
-      if (
-        !replaceActive &&
-        activeOwner?.userId === userId &&
-        activeOwner.authenticationGeneration === ownerAuthenticationGeneration
-      ) {
-        return activeOwner;
-      }
-
-      // Allocate a new opaque generation for every activation from an
-      // invalidated state. Never reconstruct a prior owner tuple: promises
-      // retained by an unmounted wizard must not become current again if the
-      // same user/authentication generation later becomes eligible to reopen.
-      onboardingActivationSequenceRef.current += 1;
-      const owner: OnboardingOperationOwner = {
-        userId,
-        authenticationGeneration: ownerAuthenticationGeneration,
-        activationGeneration: onboardingActivationSequenceRef.current,
-      };
-      setOnboardingWizardOwner(owner);
-      return owner;
-    },
-    [setOnboardingWizardOwner]
-  );
-  const isOnboardingOwnerCurrent = useCallback(
-    (owner: OnboardingOperationOwner) =>
-      isSameOnboardingOwner(onboardingWizardOwnerRef.current, owner) &&
-      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration),
-    [isAuthenticationOwnerCurrent]
-  );
-  const onboardingWizardOpen =
+  // Onboarding visibility has one owner. Explicit deferred/completed terminal
+  // states prevent loading, route, realtime, or stale-auth churn from turning a
+  // close into an immediate reopen.
+  const onboardingDeferred = isOnboardingDeferred(currentUser?.preferences);
+  const onboardingReady =
     !!currentUser &&
-    onboardingWizardOwner?.userId === currentUser.user_id &&
-    isOnboardingOwnerCurrent(onboardingWizardOwner);
+    !(currentUser.must_change_password && passwordWriteAvailable) &&
+    connected &&
+    workspaceSurfaceShouldRun &&
+    currentSurface.startsWorkspaceRuntime &&
+    !loading;
+  const {
+    activeOwner: onboardingWizardOwner,
+    open: onboardingWizardOpen,
+    activate: activateOnboardingWizard,
+    isOwnerCurrent: isOnboardingOwnerCurrent,
+    defer: deferOnboardingWizard,
+    complete: completeOnboardingWizard,
+  } = useOnboardingLifecycle({
+    userId: currentUser?.user_id,
+    authenticationGeneration,
+    eligible: canRunOnboarding,
+    ready: onboardingReady,
+    completed: onboardingCompletionObserved,
+    deferred: onboardingDeferred,
+    isAuthenticationOwnerCurrent,
+  });
   const onboardingSeedResultRef = useRef(
     new Map<string, { branchId?: string; sessionId?: string }>()
   );
+  const onboardingCompletionWriteRef = useRef<{
+    owner: OnboardingOperationOwner;
+    promise: Promise<unknown>;
+  } | null>(null);
+  const onboardingWizardWriteRef = useRef<{
+    owner: OnboardingOperationOwner;
+    promise: Promise<unknown>;
+  } | null>(null);
   const onboardingSeedOwnerRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -650,6 +692,7 @@ function AppContent() {
   // that could race the hook's one-shot clone effect.
   const handleCreateRepo = useCallback(
     async (data: CreateRepoRequest, options: CreateRepoOptions = {}) => {
+      if (options.shouldApply && !options.shouldApply()) return;
       if (!client) {
         showError('Not connected to daemon — cannot clone repository');
         return;
@@ -677,6 +720,11 @@ function AppContent() {
       };
       const handleCreated = (repo: Repo) => {
         if (settled || repo.slug !== data.slug) return;
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
         // Skip the `'cloning'` placeholder — `handlePatched` will declare the
         // outcome once the executor finishes. `undefined` covers legacy rows
         // and any direct executor-path that bypasses the placeholder.
@@ -687,6 +735,11 @@ function AppContent() {
       };
       const handlePatched = (repo: Repo) => {
         if (settled || repo.slug !== data.slug) return;
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
         if (repo.clone_status === 'ready') {
           settled = true;
           if (!options.silent) showSuccess(`Cloned ${data.slug}`, { key: toastKey });
@@ -713,6 +766,11 @@ function AppContent() {
         clone_error?: Repo['clone_error'];
       }) => {
         if (settled) return;
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
         if (payload.slug !== data.slug && payload.url !== data.url) return;
         settled = true;
         const hint = cloneErrorHint(payload.clone_error);
@@ -726,6 +784,11 @@ function AppContent() {
       };
       const timeoutHandle = setTimeout(() => {
         if (settled) return;
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
         settled = true;
         if (!options.silent || options.showErrors) {
           showError(`Clone of ${data.slug} timed out after 2 minutes. Check daemon logs.`, {
@@ -745,6 +808,11 @@ function AppContent() {
           slug: data.slug,
           default_branch: data.default_branch,
         });
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
 
         // Daemon short-circuits with `status: 'exists'` when a repo with this
         // slug is already registered — no `repos.created` event will fire, so
@@ -758,6 +826,11 @@ function AppContent() {
         }
         return result;
       } catch (error) {
+        if (options.shouldApply && !options.shouldApply()) {
+          settled = true;
+          cleanup();
+          return;
+        }
         if (!settled) {
           settled = true;
           if (!options.silent || options.showErrors) {
@@ -799,50 +872,20 @@ function AppContent() {
     enabled: onboardingWizardOpen && canRunOnboarding,
   });
 
-  // Trigger wizard when user is loaded and hasn't completed onboarding
-  useEffect(() => {
-    if (currentUser && !canRunOnboarding) {
-      setOnboardingWizardOwner(null);
-      return;
-    }
-    if (
-      currentUser &&
-      canRunOnboarding &&
-      currentUser.onboarding_completed === false &&
-      !(currentUser.must_change_password && passwordWriteAvailable) &&
-      connected &&
-      workspaceSurfaceShouldRun &&
-      currentSurface.startsWorkspaceRuntime &&
-      !loading
-    ) {
-      activateOnboardingWizard(currentUser.user_id, authenticationGeneration);
-    }
-  }, [
-    currentUser,
-    canRunOnboarding,
-    connected,
-    workspaceSurfaceShouldRun,
-    currentSurface.startsWorkspaceRuntime,
-    loading,
-    authenticationGeneration,
-    passwordWriteAvailable,
-    activateOnboardingWizard,
-    setOnboardingWizardOwner,
-  ]);
-
   // Handle wizard completion
   const handleOnboardingComplete = async (
     owner: OnboardingOperationOwner,
-    result: OnboardingCompletionResult
+    result: OnboardingCompletionResult,
+    isAttemptCurrent: () => boolean
   ) => {
-    // The wizard awaits this and stays open in a loading state until it
-    // resolves, so we do the teammate creation + navigation FIRST and only
-    // close the modal at the very end — otherwise the user stares at a blank
-    // homepage while the async work runs.
+    // The wizard awaits this and stays open while resource creation and
+    // navigation run. The durable completion write then closes it before the
+    // best-effort auth refresh, so refresh failure cannot turn success into a
+    // trapped final screen.
     if (!currentUser || !isOnboardingOwnerCurrent(owner)) return;
     if (!client) throw new Error('Not connected - try again when Agor reconnects.');
     const operationUserId = owner.userId;
-    const isCurrentUser = () => isOnboardingOwnerCurrent(owner);
+    const isCurrentUser = () => isAttemptCurrent() && isOnboardingOwnerCurrent(owner);
 
     // Completing onboarding is an explicit tool choice. Seed it only while the
     // preference is unset; a Settings selection made concurrently always wins.
@@ -947,7 +990,7 @@ function AppContent() {
     const latestUser = (await client.service('users').get(currentUser.user_id)) as User;
     if (!isCurrentUser()) return;
     const completionResult = { ...result, branchId, sessionId };
-    await handleUpdateUser(
+    const completionWrite = handleUpdateUser(
       currentUser.user_id,
       {
         onboarding_completed: true,
@@ -955,7 +998,24 @@ function AppContent() {
       },
       { silent: true }
     );
-    if (!isCurrentUser()) return;
+    onboardingCompletionWriteRef.current = { owner, promise: completionWrite };
+    try {
+      await completionWrite;
+    } finally {
+      if (onboardingCompletionWriteRef.current?.promise === completionWrite) {
+        onboardingCompletionWriteRef.current = null;
+      }
+    }
+
+    // The successful preference write is the commit point. Its realtime user
+    // event may have already moved this lifecycle to `completed`, retiring the
+    // active wizard owner before the PATCH promise resolves. Completion is an
+    // idempotent terminal acknowledgement for this exact activation, so that
+    // expected ordering still proceeds to navigation without revalidating an
+    // older activation after a restart. An
+    // explicit X/Escape dismissal transitions to `deferred` instead and keeps
+    // this false, preserving the user's decision not to navigate.
+    if (!completeOnboardingWizard(owner)) return;
 
     // Always land the user on a board — never the homepage. Prefer the seeded
     // session, then the board the wizard created, then the user's main board,
@@ -975,9 +1035,79 @@ function AppContent() {
       navigate(boardPath(targetBoardId as BoardID, boardById.get(targetBoardId)?.slug));
     }
 
-    // Close the wizard only now that creation + navigation are done, so the
-    // loading affordance stayed visible for the whole operation.
-    setOnboardingWizardOwner(null);
+    // `currentUser` keeps login gates from the authenticated principal rather
+    // than accepting a possibly-stale directory row. Synchronize it after the
+    // modal is safely terminal. A refresh failure must not trap a user whose
+    // completion is already durable; the next token refresh/reload will read it.
+    const refreshedCurrentUser = await refreshCurrentUserForAuthorityCycle(() =>
+      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)
+    );
+    if (
+      !refreshedCurrentUser &&
+      isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)
+    ) {
+      showWarning('Setup is saved. Reload if your account does not refresh automatically.', {
+        key: 'onboarding-auth-refresh',
+        duration: 8,
+      });
+    }
+  };
+
+  const handleOnboardingDismiss = (
+    owner: OnboardingOperationOwner,
+    progress: Partial<OnboardingState>
+  ) => {
+    // Close synchronously first. Persistence is a defer marker, never a fake
+    // completion, and a transport error cannot make the modal spring open in
+    // this authority generation.
+    if (!deferOnboardingWizard(owner)) return;
+    if (!client) {
+      showError('Onboarding is closed, but “finish later” could not be saved while offline.');
+      return;
+    }
+
+    void (async () => {
+      try {
+        const wizardWrite = onboardingWizardWriteRef.current;
+        if (wizardWrite?.owner === owner) {
+          try {
+            await wizardWrite.promise;
+          } catch {
+            // Deferral still has to be recorded after a failed wizard write.
+          }
+        }
+        // Dismiss may race the narrow completion-commit window. Close remains
+        // immediate, but wait for that authoritative write before reading
+        // preferences so a stale deferral patch cannot erase completion data.
+        const completionWrite = onboardingCompletionWriteRef.current;
+        if (completionWrite?.owner === owner) {
+          try {
+            await completionWrite.promise;
+          } catch {
+            // A failed completion is exactly when the deferral should persist.
+          }
+        }
+        if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
+        const latestUser = (await client.service('users').get(owner.userId)) as User;
+        if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
+        if (latestUser.onboarding_completed) return;
+        await client.service('users').patch(owner.userId, {
+          preferences: buildDeferredOnboardingPreferences(
+            latestUser.preferences,
+            new Date().toISOString(),
+            progress
+          ),
+        });
+      } catch (error) {
+        if (!isAuthenticationOwnerCurrent(owner.userId, owner.authenticationGeneration)) return;
+        showError(
+          `Onboarding is closed, but “finish later” could not be saved: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          { key: 'onboarding-defer', duration: 8 }
+        );
+      }
+    })();
   };
 
   const handleCheckAuth = useCallback(
@@ -1292,12 +1422,16 @@ function AppContent() {
 
   // Handle update session
   const handleUpdateSession = async (sessionId: string, updates: Partial<Session>) => {
-    const session = await updateSession(sessionId as SessionID, updates);
-    if (session) {
-      showSuccess('Session updated successfully!');
-    } else {
-      showError('Failed to update session');
-    }
+    const authority = appAuthorityGuard.begin();
+    await runSessionUpdateWithLatestNotification({
+      sessionId: sessionId as SessionID,
+      updates,
+      latestRequests: latestSessionUpdateRequestsRef.current,
+      authority,
+      updateSession,
+      showSuccess,
+      showError,
+    });
   };
 
   // Handle delete session
@@ -1311,12 +1445,14 @@ function AppContent() {
   };
 
   // Handle create user
-  const handleCreateUser = async (data: CreateUserInput) => {
-    if (!client) return;
+  const handleCreateUser = async (data: CreateUserInput, shouldApply?: () => boolean) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('users').create(data);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('User created successfully!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(`Failed to create user: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
     }
@@ -1325,9 +1461,10 @@ function AppContent() {
   const handleUpdateUser = async (
     userId: string,
     updates: UpdateUserInput,
-    options: { silent?: boolean } = {}
+    options: { silent?: boolean; shouldApply?: () => boolean } = {}
   ) => {
-    if (!client) return;
+    if (!client || (options.shouldApply && !options.shouldApply())) return;
+    const authorityOperation = appAuthorityGuard.begin();
     try {
       const newPassword =
         typeof updates.password === 'string' && updates.password.length > 0
@@ -1336,19 +1473,26 @@ function AppContent() {
       const changesCurrentPassword = userId === currentUser?.user_id && !!newPassword;
       let signedIn = true;
       if (changesCurrentPassword && currentUser && newPassword) {
-        signedIn = await completeLocalPasswordChange({
+        const authorityCycle = captureAuthorityCycle(authorityOperation);
+        if (!authorityCycle) return;
+        const completion = await completeLocalPasswordChange({
           client,
           userId,
           emailAfterChange: updates.email ?? currentUser.email,
           newPassword,
           updates: updates as UpdateUserInput & { password: string },
-          login,
-          logout,
+          authorityCycle,
+          reauthenticate: loginForAuthorityCycle,
+          logout: logoutForAuthorityCycle,
         });
+        if (!completion) return;
+        signedIn = completion.status === 'signed-in' && completion.authority.isCurrent();
       } else {
         // Cast UpdateUserInput to Partial<User> - backend handles encryption/conversion
         await client.service('users').patch(userId, updates as Partial<User>);
+        if (options.shouldApply && !options.shouldApply()) return;
       }
+
       if (updates.agentic_tools || updates.env_vars) {
         setCredentialVersion((v) => v + 1);
       }
@@ -1360,6 +1504,7 @@ function AppContent() {
         );
       }
     } catch (error) {
+      if (options.shouldApply && !options.shouldApply()) return;
       if (!options.silent) {
         showError(
           `Failed to update user: ${error instanceof Error ? error.message : String(error)}`
@@ -1369,61 +1514,68 @@ function AppContent() {
     }
   };
 
-  const handleRestartOnboarding = async () => {
-    if (!currentUser || !canRunOnboarding) return;
+  const handleReopenOnboarding = async (
+    mode: OnboardingReopenMode,
+    childShouldApply?: () => boolean
+  ) => {
+    const operation = appAuthorityGuard.begin();
+    if (!currentUser || !client || !canRunOnboarding) return;
     const operationUserId = currentUser.user_id;
     const operationAuthenticationGeneration = authenticationGeneration;
-
-    const preferences = { ...(currentUser.preferences ?? {}) } as NonNullable<User['preferences']>;
-    delete preferences.onboarding;
+    const shouldApply = () =>
+      operation.isCurrent() &&
+      isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration) &&
+      (childShouldApply ? childShouldApply() : true);
+    if (!shouldApply()) return;
 
     try {
-      await handleUpdateUser(currentUser.user_id, { preferences }, { silent: true });
+      // Resume is distinct from restart: a deferred incomplete run retains its
+      // durable candidate/resource IDs. Completed or non-deferred users who
+      // explicitly choose Restart still get a clean wizard.
+      const latestUser = (await client.service('users').get(currentUser.user_id)) as User;
+      if (!shouldApply()) return;
+      const resumable =
+        latestUser.onboarding_completed !== true && isOnboardingDeferred(latestUser.preferences);
+      if (mode === 'resume' && !resumable) {
+        throw new Error('Saved onboarding progress is no longer available. Reopen Settings.');
+      }
+      const preferences =
+        mode === 'resume'
+          ? buildResumedOnboardingPreferences(latestUser.preferences)
+          : buildRestartedOnboardingPreferences(latestUser.preferences);
+      await handleUpdateUser(
+        currentUser.user_id,
+        { preferences },
+        {
+          silent: true,
+          shouldApply,
+        }
+      );
     } catch (error) {
+      if (!shouldApply()) return;
       showError(
-        `Failed to restart onboarding: ${error instanceof Error ? error.message : String(error)}`
+        `Failed to reopen onboarding: ${error instanceof Error ? error.message : String(error)}`
       );
       return;
     }
 
-    if (!isAuthenticationOwnerCurrent(operationUserId, operationAuthenticationGeneration)) {
-      return;
-    }
+    if (!shouldApply()) return;
 
     setOpenUserSettings(false);
     activateOnboardingWizard(operationUserId, operationAuthenticationGeneration, true);
   };
 
   // Handle delete user
-  const handleDeleteUser = async (userId: string) => {
-    if (!client) return;
+  const handleDeleteUser = async (userId: string, shouldApply?: () => boolean) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('users').remove(userId);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('User deleted successfully!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(`Failed to delete user: ${error instanceof Error ? error.message : String(error)}`);
     }
-  };
-
-  // Handle forced password change (from ForcePasswordChangeModal)
-  const handleForcePasswordChange = async (userId: string, newPassword: string) => {
-    if (!client) throw new Error('Not connected');
-    if (!currentUser?.email) throw new Error('Current user is unavailable');
-
-    const signedIn = await completeForcedPasswordChange({
-      client,
-      userId,
-      email: currentUser.email,
-      newPassword,
-      login,
-      logout,
-    });
-
-    showSuccess(
-      signedIn
-        ? 'Password changed successfully!'
-        : 'Password changed successfully. Please sign in again.'
-    );
   };
 
   // Handle board CRUD
@@ -1470,7 +1622,11 @@ function AppContent() {
     }
   };
 
-  const handleCreateLocalRepo = async (data: CreateLocalRepoRequest) => {
+  const handleCreateLocalRepo = async (
+    data: CreateLocalRepoRequest,
+    shouldApply?: () => boolean
+  ) => {
+    if (shouldApply && !shouldApply()) return;
     if (!client) {
       showError('Not connected to daemon — cannot add local repository');
       return;
@@ -1483,8 +1639,11 @@ function AppContent() {
         slug: data.slug,
       });
 
+      if (shouldApply && !shouldApply()) return;
+
       showSuccess('Local repository added successfully!', { key: 'add-local-repo' });
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to add local repository: ${error instanceof Error ? error.message : String(error)}`,
         { key: 'add-local-repo' }
@@ -1493,30 +1652,42 @@ function AppContent() {
     }
   };
 
-  const handleUpdateRepo = async (repoId: string, updates: Partial<Repo>) => {
-    if (!client) return;
+  const handleUpdateRepo = async (
+    repoId: string,
+    updates: Partial<Repo>,
+    shouldApply?: () => boolean
+  ) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('repos').patch(repoId, updates);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('Repository updated successfully!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to update repository: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
 
-  const handleDeleteRepo = async (repoId: string, cleanup: boolean) => {
-    if (!client) return;
+  const handleDeleteRepo = async (
+    repoId: string,
+    cleanup: boolean,
+    shouldApply?: () => boolean
+  ) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('repos').remove(repoId, {
         query: { cleanup },
       });
+      if (shouldApply && !shouldApply()) return;
       if (cleanup) {
         showSuccess('Repository and files deleted successfully!');
       } else {
         showSuccess('Repository removed from Agor (files preserved)');
       }
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       const errorMessage = error instanceof Error ? error.message : String(error);
 
       // Check for partial deletion (some files deleted, some failed)
@@ -1729,24 +1900,28 @@ function AppContent() {
   };
 
   // Handle MCP server CRUD
-  const handleCreateMCPServer = async (data: CreateMCPServerInput) => {
-    if (!client) return;
+  const handleCreateMCPServer = async (data: CreateMCPServerInput, shouldApply?: () => boolean) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('mcp-servers').create(data);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('MCP server added successfully!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to add MCP server: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
 
-  const handleDeleteMCPServer = async (serverId: string) => {
-    if (!client) return;
+  const handleDeleteMCPServer = async (serverId: string, shouldApply?: () => boolean) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('mcp-servers').remove(serverId);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('MCP server deleted successfully!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to delete MCP server: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -1768,25 +1943,30 @@ function AppContent() {
 
   const handleUpdateGatewayChannel = async (
     channelId: string,
-    updates: GatewayChannelPatchData
+    updates: GatewayChannelPatchData,
+    shouldApply?: () => boolean
   ) => {
-    if (!client) return;
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('gateway-channels').patch(channelId, updates);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('Gateway channel updated!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to update gateway channel: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   };
 
-  const handleDeleteGatewayChannel = async (channelId: string) => {
-    if (!client) return;
+  const handleDeleteGatewayChannel = async (channelId: string, shouldApply?: () => boolean) => {
+    if (!client || (shouldApply && !shouldApply())) return;
     try {
       await client.service('gateway-channels').remove(channelId);
+      if (shouldApply && !shouldApply()) return;
       showSuccess('Gateway channel deleted!');
     } catch (error) {
+      if (shouldApply && !shouldApply()) return;
       showError(
         `Failed to delete gateway channel: ${error instanceof Error ? error.message : String(error)}`
       );
@@ -1947,6 +2127,8 @@ function AppContent() {
     <MarketplacePage
       client={client}
       connected={connected}
+      connecting={connecting}
+      authGeneration={authGeneration}
       currentUser={currentUser}
       onUserSettingsClick={() => setOpenUserSettings(true)}
       onLogout={logout}
@@ -1998,6 +2180,7 @@ function AppContent() {
           onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
           onCheckAuth={handleCheckAuth}
           credentialVersion={credentialVersion}
+          connectionReady={connected && !connecting}
         />
       }
       onCreateSession={handleCreateSession}
@@ -2025,7 +2208,9 @@ function AppContent() {
       onNukeEnvironment={handleNukeEnvironment}
       onExecuteScheduleNow={handleExecuteScheduleNow}
       onCreateUser={handleCreateUser}
-      onUpdateUser={handleUpdateUser}
+      onUpdateUser={(userId, updates, shouldApply) =>
+        handleUpdateUser(userId, updates, { shouldApply })
+      }
       onDeleteUser={handleDeleteUser}
       onCreateMCPServer={handleCreateMCPServer}
       onDeleteMCPServer={handleDeleteMCPServer}
@@ -2048,7 +2233,7 @@ function AppContent() {
       webTerminalEnabled={featuresConfig?.webTerminal === true}
       branchStorageConfig={featuresConfig?.branchStorage}
       uploadPolicy={featuresConfig?.uploadPolicy}
-      onRestartOnboarding={canRunOnboarding ? handleRestartOnboarding : undefined}
+      onReopenOnboarding={canRunOnboarding ? handleReopenOnboarding : undefined}
     />
   );
 
@@ -2075,9 +2260,11 @@ function AppContent() {
           }}
           user={currentUser}
           client={client}
-          onUpdateUser={handleUpdateUser}
-          onRefreshCurrentUser={reAuthenticate}
-          onRestartOnboarding={canRunOnboarding ? handleRestartOnboarding : undefined}
+          onUpdateUser={(userId, updates, shouldApply) =>
+            handleUpdateUser(userId, updates, { shouldApply })
+          }
+          onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
+          onReopenOnboarding={canRunOnboarding ? handleReopenOnboarding : undefined}
           initialTab={userSettingsInitialTab}
         />
       )}
@@ -2095,7 +2282,7 @@ function AppContent() {
           onDeleteBoard={handleDeleteBoard}
           onArchiveBoard={handleArchiveBoard}
           onUnarchiveBoard={handleUnarchiveBoard}
-          onCreateRepo={handleCreateRepo}
+          onCreateRepo={(data, shouldApply) => handleCreateRepo(data, { shouldApply })}
           onCreateLocalRepo={handleCreateLocalRepo}
           onUpdateRepo={handleUpdateRepo}
           onDeleteRepo={handleDeleteRepo}
@@ -2106,7 +2293,9 @@ function AppContent() {
           onStartEnvironment={handleStartEnvironment}
           onStopEnvironment={handleStopEnvironment}
           onCreateUser={handleCreateUser}
-          onUpdateUser={handleUpdateUser}
+          onUpdateUser={(userId, updates, shouldApply) =>
+            handleUpdateUser(userId, updates, { shouldApply })
+          }
           onDeleteUser={handleDeleteUser}
           onCreateMCPServer={handleCreateMCPServer}
           onDeleteMCPServer={handleDeleteMCPServer}
@@ -2130,9 +2319,13 @@ function AppContent() {
           isCurrent={() =>
             !!onboardingWizardOwner && isOnboardingOwnerCurrent(onboardingWizardOwner)
           }
-          onComplete={(result) => {
+          onComplete={(result, attempt) => {
             if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) return;
-            return handleOnboardingComplete(onboardingWizardOwner, result);
+            return handleOnboardingComplete(onboardingWizardOwner, result, attempt.isCurrent);
+          }}
+          onDismiss={(progress) => {
+            if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) return;
+            handleOnboardingDismiss(onboardingWizardOwner, progress);
           }}
           user={currentUser}
           client={client}
@@ -2144,7 +2337,18 @@ function AppContent() {
             ) {
               return;
             }
-            await handleUpdateUser(userId, updates, { silent: true });
+            const wizardWrite = handleUpdateUser(userId, updates, { silent: true });
+            onboardingWizardWriteRef.current = {
+              owner: onboardingWizardOwner,
+              promise: wizardWrite,
+            };
+            try {
+              await wizardWrite;
+            } finally {
+              if (onboardingWizardWriteRef.current?.promise === wizardWrite) {
+                onboardingWizardWriteRef.current = null;
+              }
+            }
           }}
           onCheckAuth={async (tool, apiKey) => {
             if (!onboardingWizardOwner || !isOnboardingOwnerCurrent(onboardingWizardOwner)) {
@@ -2172,8 +2376,8 @@ function AppContent() {
           ))}
 
           {/* MCP marketplace: browse the catalog and connect a server. Its own
-                surface because it reads the global catalog table, not the
-                tenant's board/session store. */}
+                surface because it reads the checked-in curated catalog, not
+                the tenant's board/session store. */}
           {MARKETPLACE_ROUTE_PATHS.map((path) => (
             <Route key={path} path={path} element={marketplacePageElement} />
           ))}
@@ -2244,6 +2448,8 @@ function AppWrapper() {
   const location = useLocation();
   const isMarketingScreenshotRoute = location.pathname === '/demo/marketing-screenshots';
   const isMarketingVideoRoute = location.pathname === '/demo/marketing-video';
+  const isRbacPolicyPrototypeRoute =
+    import.meta.env.DEV && location.pathname === RBAC_POLICY_PROTOTYPE_ROUTE_PATH;
 
   return (
     <ConfigProvider theme={getCurrentThemeConfig()}>
@@ -2261,6 +2467,10 @@ function AppWrapper() {
             ) : isMarketingVideoRoute ? (
               <Suspense fallback={<InitialLoadingScreen message="Loading demo fixture…" />}>
                 <MarketingVideoPage />
+              </Suspense>
+            ) : isRbacPolicyPrototypeRoute && RbacPolicyPrototypePage ? (
+              <Suspense fallback={<InitialLoadingScreen message="Loading RBAC prototype…" />}>
+                <RbacPolicyPrototypePage />
               </Suspense>
             ) : (
               <AppContent />

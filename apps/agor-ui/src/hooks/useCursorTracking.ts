@@ -4,7 +4,12 @@
  * Throttles cursor movement events and broadcasts to other users via WebSocket
  */
 
-import type { AgorClient, BoardID, CursorMoveEvent } from '@agor-live/client';
+import {
+  type AgorClient,
+  type BoardID,
+  type CursorMoveEvent,
+  PRESENCE_SOCKET_EVENTS,
+} from '@agor-live/client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReactFlowInstance } from 'reactflow';
 import { PRESENCE_CONFIG } from '../config/presence';
@@ -71,9 +76,8 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
                 boardId,
                 x: latest.x,
                 y: latest.y,
-                timestamp: Date.now(),
               };
-              client.io.volatile.emit('cursor-move', event);
+              client.io.volatile.emit(PRESENCE_SOCKET_EVENTS.cursorMove, event);
               lastEmitRef.current = Date.now();
             }
           }, PRESENCE_CONFIG.CURSOR_EMIT_THROTTLE_MS - timeSinceLastEmit);
@@ -86,10 +90,9 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
         boardId,
         x,
         y,
-        timestamp: now,
       };
 
-      client.io.volatile.emit('cursor-move', event);
+      client.io.volatile.emit(PRESENCE_SOCKET_EVENTS.cursorMove, event);
       lastEmitRef.current = now;
     },
     [client, boardId, enabled]
@@ -112,7 +115,7 @@ export function useCursorTracking(options: UseCursorTrackingOptions) {
     // Emit cursor-leave when component unmounts or board changes
     const handleCursorLeave = () => {
       if (client?.io && boardId) {
-        client.io.volatile.emit('cursor-leave', { boardId });
+        client.io.volatile.emit(PRESENCE_SOCKET_EVENTS.cursorLeave, { boardId });
       }
     };
 

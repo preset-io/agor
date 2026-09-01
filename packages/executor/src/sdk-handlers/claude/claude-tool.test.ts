@@ -1,4 +1,4 @@
-import { generateId } from '@agor/core';
+import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import type { Message, SessionID, TaskID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,9 +27,7 @@ type Harness = {
   persisted: Message[];
 };
 
-function createHarness(
-  classifiedKind?: 'missing_credential' | 'provider_credit_exhausted'
-): Harness {
+function createHarness(classifiedKind?: 'missing_credential'): Harness {
   const sessionId = generateId() as SessionID;
   const outgoing: Partial<Message>[] = [];
   const persisted: Message[] = [];
@@ -49,9 +47,8 @@ function createHarness(
           : {}),
         ...(classifiedKind && data.metadata?.is_provider_failure_result
           ? {
-              content: 'This session needs available provider credit before it can respond.',
-              content_preview:
-                'This session needs available provider credit before it can respond.',
+              content: 'This session needs to be connected before it can run.',
+              content_preview: 'This session needs to be connected before it can run.',
               metadata: { ...data.metadata, error_kind: classifiedKind },
             }
           : {}),
@@ -159,6 +156,9 @@ describe('ClaudeTool provider-failure settlement', () => {
       const contextUsage = {
         totalTokens: 123,
         maxTokens: 200_000,
+        percentage: 0.0615,
+        memoryFiles: [{ path: 'SENTINEL_CLAUDE_MEMORY_PATH' }],
+        providerExtension: 'SENTINEL_CLAUDE_CONTEXT_EXTENSION',
       } as unknown as import('@agor/core/sdk').SDKControlGetContextUsageResponse;
       promptState.events = [
         synthesizedAssistantEvent(),
@@ -178,21 +178,29 @@ describe('ClaudeTool provider-failure settlement', () => {
       expect(result.rawSdkResponse).toMatchObject({
         subtype: 'success',
         usage: raw.usage,
-        modelUsage: raw.modelUsage,
         duration_ms: raw.duration_ms,
         total_cost_usd: raw.total_cost_usd,
       });
+      expect(result.rawSdkResponse).not.toHaveProperty('modelUsage');
       expect(result.errorDetails).toBeUndefined();
-      expect(result.rawContextUsage).toEqual(contextUsage);
+      expect(result.rawContextUsage).toEqual({
+        totalTokens: 123,
+        maxTokens: 200_000,
+        percentage: 0.0615,
+      });
+      expect(JSON.stringify(result)).not.toContain('SENTINEL_CLAUDE');
+      expect(
+        JSON.stringify({ outgoing: harness.outgoing, persisted: harness.persisted, result })
+      ).not.toContain(RAW_PROVIDER_BODY);
     }
   );
 
   it.each(['streaming', 'non-streaming'] as const)(
-    'keeps classified non-success %s results safe while preserving accounting',
+    'keeps daemon-classified non-success %s results safe while preserving accounting',
     async (mode) => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       try {
-        const harness = createHarness('provider_credit_exhausted');
+        const harness = createHarness('missing_credential');
         const raw = rawResult('error_during_execution');
         promptState.events = [resultEvent(raw)];
 
@@ -200,27 +208,30 @@ describe('ClaudeTool provider-failure settlement', () => {
 
         const persistedFailure = harness.persisted.at(-1);
         expect(persistedFailure).toMatchObject({
-          content: 'This session needs available provider credit before it can respond.',
-          metadata: { error_kind: 'provider_credit_exhausted' },
+          content: 'This session needs to be connected before it can run.',
+          metadata: { error_kind: 'missing_credential' },
         });
         expect(harness.outgoing.at(-1)?.content).toEqual([
-          { type: 'text', text: 'Agent SDK error (error_during_execution): ' },
-          { type: 'text', text: RAW_PROVIDER_BODY },
-          { type: 'text', text: '\n' },
-          { type: 'text', text: 'Credit balance is too low' },
+          {
+            type: 'text',
+            text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
+          },
         ]);
         expect(result.rawSdkResponse).not.toHaveProperty('errors');
         expect(result.rawSdkResponse).toMatchObject({
           subtype: 'error_during_execution',
           usage: raw.usage,
-          modelUsage: raw.modelUsage,
           duration_ms: raw.duration_ms,
           num_turns: raw.num_turns,
           total_cost_usd: raw.total_cost_usd,
         });
-        expect(result.errorDetails).toBeUndefined();
+        expect(result.rawSdkResponse).not.toHaveProperty('modelUsage');
+        expect(result.errorDetails).toEqual([SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE]);
+        expect(
+          JSON.stringify({ outgoing: harness.outgoing, persisted: harness.persisted, result })
+        ).not.toContain(RAW_PROVIDER_BODY);
         expect(errorSpy.mock.calls.flat().join(' ')).not.toContain(RAW_PROVIDER_BODY);
-        expect(errorSpy.mock.calls.flat().join(' ')).toContain('provider_credit_exhausted');
+        expect(errorSpy.mock.calls.flat().join(' ')).toContain('missing_credential');
       } finally {
         errorSpy.mockRestore();
       }
@@ -228,7 +239,7 @@ describe('ClaudeTool provider-failure settlement', () => {
   );
 
   it.each(['streaming', 'non-streaming'] as const)(
-    'keeps raw diagnostics when the daemon does not classify an executor marker in %s turns',
+    'withholds raw diagnostics when the daemon does not classify an executor marker in %s turns',
     async (mode) => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       try {
@@ -238,9 +249,20 @@ describe('ClaudeTool provider-failure settlement', () => {
 
         const result = await execute(harness.tool, mode, generateId() as TaskID);
 
-        expect(result.rawSdkResponse).toEqual(raw);
-        expect(result.errorDetails).toEqual(raw.errors);
-        expect(errorSpy.mock.calls.flat().join(' ')).toContain(RAW_PROVIDER_BODY);
+        expect(result.rawSdkResponse).not.toHaveProperty('errors');
+        expect(result.rawSdkResponse).toMatchObject({
+          subtype: 'error_during_execution',
+          usage: raw.usage,
+          duration_ms: raw.duration_ms,
+          num_turns: raw.num_turns,
+          total_cost_usd: raw.total_cost_usd,
+        });
+        expect(result.rawSdkResponse).not.toHaveProperty('modelUsage');
+        expect(result.errorDetails).toEqual([SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE]);
+        expect(
+          JSON.stringify({ outgoing: harness.outgoing, persisted: harness.persisted, result })
+        ).not.toContain(RAW_PROVIDER_BODY);
+        expect(errorSpy.mock.calls.flat().join(' ')).not.toContain(RAW_PROVIDER_BODY);
       } finally {
         errorSpy.mockRestore();
       }

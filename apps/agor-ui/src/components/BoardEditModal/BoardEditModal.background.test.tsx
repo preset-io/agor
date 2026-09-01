@@ -25,16 +25,39 @@ const listedBoard = {
 } as Board;
 
 function makeClient(board: Board) {
-  const notFound = () => {
-    const err = new Error('not found') as Error & { code?: number };
-    err.code = 404;
-    return Promise.reject(err);
+  const policy = {
+    primary_owner_user_id: 'owner-1',
+    board_access_revision: 1,
+    branch_template_revision: 1,
+    board_access: {
+      schema_version: 1,
+      policy_kind: 'board_access',
+      sharing_mode: 'private',
+      entries: [],
+      others: { preset: 'none', capabilities: [], fs_access: 'none' },
+    },
+    branch_template: {
+      access: {
+        schema_version: 1,
+        policy_kind: 'branch_access',
+        sharing_mode: 'private',
+        entries: [],
+        others: { preset: 'none', capabilities: [], fs_access: 'none' },
+      },
+      allow_shared_session_prompts: false,
+    },
   };
   return {
     service: (name: string) => {
       if (name === 'boards') return { get: vi.fn().mockResolvedValue(board) };
-      if (name === 'boards/:id/owners' || name === 'boards/:id/group-grants') {
-        return { find: vi.fn(notFound) };
+      if (name === 'boards/:id/permissions') {
+        return {
+          find: vi.fn().mockResolvedValue(policy),
+          patch: vi.fn(async (_id: unknown, value: unknown) => value),
+        };
+      }
+      if (name === 'workspace-preferences') {
+        return { find: vi.fn().mockResolvedValue({ session_sharing_enabled: false }) };
       }
       return { findAll: vi.fn().mockResolvedValue([]) };
     },

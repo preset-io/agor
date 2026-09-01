@@ -1,4 +1,4 @@
-import { type Message, MessageRole, type UUID } from '@agor/core/types';
+import { type Message, MessageRole, type UserID, type UUID } from '@agor/core/types';
 import { eq, sql } from 'drizzle-orm';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { generateId } from '../../lib/ids';
@@ -9,6 +9,7 @@ import { initializeDatabase } from '../migrate';
 import { sanitizeDbError } from '../sanitize-error';
 import { messages as messagesTable } from '../schema';
 import { runWithTenantDatabaseScope } from '../tenant-scope';
+import { setTestBranchUserRole } from '../test-helpers';
 import { BranchRepository } from './branches';
 import {
   MESSAGE_CONTENT_OMITTED,
@@ -52,6 +53,10 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
     const loneHighSurrogate = String.fromCharCode(0xd800);
     const loneLowSurrogate = String.fromCharCode(0xdc00);
     await runWithTenantDatabaseScope(db, 'default', async (scoped) => {
+      const owner = await new UsersRepository(scoped).create({
+        email: `messages-owner-${generateId()}@example.invalid`,
+        role: 'member',
+      });
       const repos = new RepoRepository(scoped);
       const repo = await repos.create({
         slug: `nul-${generateId()}`,
@@ -67,12 +72,12 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         path: '/tmp/test',
         ref: 'main',
         branch_unique_id: Math.floor(Math.random() * 1_000_000),
-        created_by: generateId() as UUID,
+        created_by: owner.user_id as UUID,
       });
       const session = await new SessionRepository(scoped).create({
         branch_id: branch.branch_id,
         title: 'test',
-        created_by: generateId() as UUID,
+        created_by: owner.user_id as UUID,
       });
       const repository = new MessagesRepository(scoped);
       const message = (index: number, content: string): Message => ({
@@ -157,10 +162,15 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
     let visibleSessionId: Message['session_id'] | undefined;
 
     await runWithTenantDatabaseScope(db, tenantA, async (scoped) => {
-      await new UsersRepository(scoped).create({
+      const users = new UsersRepository(scoped);
+      await users.create({
         user_id: viewerId,
         email: `${tenantA}@example.invalid`,
         name: 'Messages page viewer',
+      });
+      const owner = await users.create({
+        email: `messages-page-owner-${generateId()}@example.invalid`,
+        role: 'member',
       });
       const repo = await new RepoRepository(scoped).create({
         slug: `messages-page-${generateId()}`,
@@ -177,7 +187,7 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         path: `/tmp/messages-page-visible-${generateId()}`,
         ref: 'main',
         branch_unique_id: Math.floor(Math.random() * 1_000_000),
-        created_by: generateId() as UUID,
+        created_by: owner.user_id as UUID,
         permission_source: 'override',
         others_can: 'none',
       });
@@ -187,21 +197,21 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         path: `/tmp/messages-page-hidden-${generateId()}`,
         ref: 'main',
         branch_unique_id: Math.floor(Math.random() * 1_000_000),
-        created_by: generateId() as UUID,
+        created_by: owner.user_id as UUID,
         permission_source: 'override',
         others_can: 'none',
       });
-      await branches.addOwner(visibleBranch.branch_id, viewerId);
+      await setTestBranchUserRole(scoped, visibleBranch.branch_id, viewerId as UserID, 'manager');
       const sessions = new SessionRepository(scoped);
       const visibleSession = await sessions.create({
         branch_id: visibleBranch.branch_id,
         title: 'visible',
-        created_by: generateId() as UUID,
+        created_by: owner.user_id as UUID,
       });
       const hiddenSession = await sessions.create({
         branch_id: hiddenBranch.branch_id,
         title: 'hidden',
-        created_by: generateId() as UUID,
+        created_by: owner.user_id as UUID,
       });
       const messages = new MessagesRepository(scoped);
       const createMessage = (sessionId: Message['session_id'], index: number): Message => ({
@@ -239,6 +249,10 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
     let tenantBSessionId!: Message['session_id'];
 
     await runWithTenantDatabaseScope(db, tenantB, async (scoped) => {
+      const owner = await new UsersRepository(scoped).create({
+        email: `messages-parent-owner-${generateId()}@example.invalid`,
+        role: 'member',
+      });
       const repo = await new RepoRepository(scoped).create({
         slug: `messages-parent-${generateId()}`,
         name: 'Messages parent',
@@ -253,13 +267,13 @@ describePostgres('MessagesRepository PostgreSQL Unicode persistence', () => {
         path: `/tmp/messages-parent-${generateId()}`,
         ref: 'main',
         branch_unique_id: Math.floor(Math.random() * 1_000_000),
-        created_by: generateId() as UUID,
+        created_by: owner.user_id as UUID,
       });
       tenantBSessionId = (
         await new SessionRepository(scoped).create({
           branch_id: branch.branch_id,
           title: 'tenant-b',
-          created_by: generateId() as UUID,
+          created_by: owner.user_id as UUID,
         })
       ).session_id;
     });

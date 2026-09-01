@@ -302,32 +302,40 @@ export class HealthMonitor {
       }
 
       const runCheck = async () => {
-        // Get current branch state
+        // Perform health check via the service method. `checkHealth` begins by
+        // loading and revalidating the current branch itself, so a separate
+        // `branches.get` here duplicated the same tenant-scoped point read (and
+        // its zone enrichment) on every five-second poll. Besides the database
+        // work, that preflight appeared as a top-level `branches.get` APM span
+        // because timer work has no enclosing Feathers request. The automatic
+        // check also uses the service's unwrapped canonical loader; explicit
+        // user/MCP status requests retain the normal authorization hooks.
+        //
+        // This direct custom service call bypasses Feathers around hooks, so
+        // when the monitor has a db handle and tenant params, enter the same
+        // tenant DB/ALS scope the scheduler uses before mutating branch
+        // environment state and emitting realtime patches.
         const branch =
           this.db && params?.tenant?.tenant_id
             ? await runWithTenantDatabaseScope(this.db, params.tenant.tenant_id, () =>
-                branchesService.get(branchId, params as never)
+                branchesService.checkHealth(branchId, params as never, {
+                  signal: controller.signal,
+                  intent: 'automatic',
+                })
               )
-            : await branchesService.get(branchId, params as never);
+            : await branchesService.checkHealth(branchId, params as never, {
+                signal: controller.signal,
+                intent: 'automatic',
+              });
 
-        // Only check if still running or starting
+        // Keep the monitor's self-cleanup contract: a lifecycle change can
+        // commit without its realtime hint reaching this replica. The canonical
+        // result returned by checkHealth is the same live fact the removed
+        // preflight inspected, so stop locally when it is no longer eligible.
         const status = branch.environment_instance?.status;
         if (branch.archived || !isMonitorableStatus(status)) {
-          // Silently stop monitoring (not an error - expected when env stops)
-          // Start/stop logs are already handled in handleBranchUpdate()
           this.stopMonitoring(branchId);
-          return;
         }
-
-        // Perform health check via the service method. This direct custom
-        // service call bypasses Feathers around hooks, so when the monitor has
-        // a db handle and tenant params, enter the same tenant DB/ALS scope the
-        // scheduler uses before mutating branch environment state and emitting
-        // realtime patches.
-        await branchesService.checkHealth(branchId, params as never, {
-          signal: controller.signal,
-          intent: 'automatic',
-        });
       };
 
       const tenantId = params?.tenant?.tenant_id;

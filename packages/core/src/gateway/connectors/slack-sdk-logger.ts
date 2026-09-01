@@ -6,6 +6,13 @@ const HEARTBEAT_WARNING_WINDOW_MS = 10_000;
 const MAX_WARNINGS_PER_WINDOW = 1_000;
 const MAX_CLIENTS_PER_WINDOW = 100;
 
+export type SlackSocketLifecycleState = 'starting' | 'active' | 'stopping' | 'stopped';
+
+export interface SlackSdkLoggerController {
+  logger: Logger;
+  setLifecycleState(state: SlackSocketLifecycleState): void;
+}
+
 const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
   [LogLevel.DEBUG]: 100,
   [LogLevel.INFO]: 200,
@@ -56,6 +63,11 @@ const sharedHeartbeatWarnings = new SlackHeartbeatWarningAggregator();
 class SlackSdkLogger implements Logger {
   private level = LogLevel.INFO;
   private readonly clientToken = {};
+  private lifecycleState: SlackSocketLifecycleState = 'starting';
+
+  setLifecycleState(state: SlackSocketLifecycleState): void {
+    this.lifecycleState = state;
+  }
 
   debug(..._messages: unknown[]): void {}
 
@@ -70,9 +82,21 @@ class SlackSdkLogger implements Logger {
     console.warn('[slack.socket_mode] sdk_warning category=sdk_warning');
   }
 
-  error(..._messages: unknown[]): void {
+  error(...messages: unknown[]): void {
     if (!this.shouldLog(LogLevel.ERROR)) return;
-    console.error('[slack.socket_mode] sdk_error category=sdk_error');
+    const category = classifySlackSdkError(messages[0]);
+    const lifecycle = this.lifecycleState;
+    const output = `[slack.socket_mode] sdk_error category=${category} lifecycle=${lifecycle}`;
+
+    // The SDK can report a transport attempt while start() is still deciding
+    // whether to reconnect or reject. The listener owner records the eventual
+    // started/retry/blocked outcome, so this is degraded startup context, not
+    // yet an outage. Once active, the same SDK error is an outage signal.
+    if (lifecycle === 'starting' || lifecycle === 'stopping' || lifecycle === 'stopped') {
+      console.warn(output);
+    } else {
+      console.error(output);
+    }
   }
 
   setLevel(level: LogLevel): void {
@@ -90,7 +114,48 @@ class SlackSdkLogger implements Logger {
   }
 }
 
+function classifySlackSdkError(value: unknown): string {
+  const code =
+    typeof value === 'object' &&
+    value !== null &&
+    'code' in value &&
+    typeof (value as { code?: unknown }).code === 'string'
+      ? (value as { code: string }).code.toLowerCase()
+      : undefined;
+  if (
+    code &&
+    ['invalid_auth', 'not_authed', 'token_revoked', 'account_inactive', 'token_expired'].includes(
+      code
+    )
+  ) {
+    return 'authentication';
+  }
+  if (code && ['ratelimited', 'rate_limited'].includes(code)) return 'rate_limited';
+  if (code && ['slack_websocket_error', 'request_error'].includes(code)) return 'transport';
+
+  const message = typeof value === 'string' ? value : value instanceof Error ? value.message : '';
+  if (/invalid_auth|not_authed|token_revoked|account_inactive/i.test(message)) {
+    return 'authentication';
+  }
+  if (/rate.?limit|too many requests|status(?: code)? 429/i.test(message)) {
+    return 'rate_limited';
+  }
+  if (/websocket|socket|wss|connection|disconnect|connect|network|timeout/i.test(message)) {
+    return 'transport';
+  }
+  return 'unclassified';
+}
+
 /** Create one safe logger for a Slack Socket Mode client. */
 export function createSlackSdkLogger(): Logger {
   return new SlackSdkLogger();
+}
+
+/** Create a safe logger plus the lifecycle correlation controlled by its owner. */
+export function createSlackSdkLoggerController(): SlackSdkLoggerController {
+  const logger = new SlackSdkLogger();
+  return {
+    logger,
+    setLifecycleState: (state) => logger.setLifecycleState(state),
+  };
 }

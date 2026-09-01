@@ -60,7 +60,7 @@ describe('handlebars-helpers', () => {
       const template = Handlebars.compile('{{add a b}}');
       expect(template({ a: 'foo', b: 5 })).toBe('0');
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('add helper received non-numeric values: foo, 5')
+        '[templates] helper_invalid_argument helper=add reason=non_numeric'
       );
     });
 
@@ -68,7 +68,7 @@ describe('handlebars-helpers', () => {
       const template = Handlebars.compile('{{add a b}}');
       expect(template({ a: 5, b: 'bar' })).toBe('0');
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('add helper received non-numeric values: 5, bar')
+        '[templates] helper_invalid_argument helper=add reason=non_numeric'
       );
     });
 
@@ -76,7 +76,7 @@ describe('handlebars-helpers', () => {
       const template = Handlebars.compile('{{add a b}}');
       expect(template({ a: 'foo', b: 'bar' })).toBe('0');
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('add helper received non-numeric values: foo, bar')
+        '[templates] helper_invalid_argument helper=add reason=non_numeric'
       );
     });
 
@@ -132,7 +132,7 @@ describe('handlebars-helpers', () => {
       const template = Handlebars.compile('{{sub a b}}');
       expect(template({ a: 'foo', b: 5 })).toBe('0');
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('sub helper received non-numeric values: foo, 5')
+        '[templates] helper_invalid_argument helper=sub reason=non_numeric'
       );
     });
 
@@ -183,7 +183,7 @@ describe('handlebars-helpers', () => {
       const template = Handlebars.compile('{{mul a b}}');
       expect(template({ a: 'foo', b: 5 })).toBe('0');
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('mul helper received non-numeric values: foo, 5')
+        '[templates] helper_invalid_argument helper=mul reason=non_numeric'
       );
     });
 
@@ -240,7 +240,7 @@ describe('handlebars-helpers', () => {
       const template = Handlebars.compile('{{div 10 0}}');
       expect(template({})).toBe('0');
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('div helper received zero divisor')
+        '[templates] helper_invalid_argument helper=div reason=zero_divisor'
       );
     });
 
@@ -248,7 +248,7 @@ describe('handlebars-helpers', () => {
       const template = Handlebars.compile('{{div a b}}');
       expect(template({ a: 'foo', b: 5 })).toBe('0');
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('div helper received non-numeric values: foo, 5')
+        '[templates] helper_invalid_argument helper=div reason=non_numeric'
       );
     });
 
@@ -267,7 +267,7 @@ describe('handlebars-helpers', () => {
       const template = Handlebars.compile('{{div 1 0}}');
       expect(template({})).toBe('0');
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('div helper received zero divisor')
+        '[templates] helper_invalid_argument helper=div reason=zero_divisor'
       );
     });
   });
@@ -307,7 +307,7 @@ describe('handlebars-helpers', () => {
       const template = Handlebars.compile('{{mod 10 0}}');
       expect(template({})).toBe('0');
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('mod helper received zero divisor')
+        '[templates] helper_invalid_argument helper=mod reason=zero_divisor'
       );
     });
 
@@ -315,7 +315,7 @@ describe('handlebars-helpers', () => {
       const template = Handlebars.compile('{{mod a b}}');
       expect(template({ a: 'foo', b: 5 })).toBe('0');
       expect(consoleWarnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('mod helper received non-numeric values: foo, 5')
+        '[templates] helper_invalid_argument helper=mod reason=non_numeric'
       );
     });
 
@@ -1015,9 +1015,21 @@ NAME={{replace (uppercase branch.name) "-" "_"}}
       // surfaces opt into raw-template fallback via { onError: 'raw' }.
       const result = renderTemplate('{{#if unclosed', {});
       expect(result).toBe('');
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Handlebars template error'),
-        expect.anything()
+      expect(consoleErrorSpy).toHaveBeenCalledWith('[templates] render_failed error_type=Error');
+    });
+
+    it('never logs template or context secrets on parse and helper failures', () => {
+      const sentinel = 'SENTINEL_TEMPLATE_SECRET_7ee84d';
+
+      expect(renderTemplate(`{{#if ${sentinel}`, { [sentinel]: sentinel })).toBe('');
+      expect(renderTemplate('{{add secret 1}}', { secret: sentinel })).toBe('0');
+
+      const logged = JSON.stringify([...consoleErrorSpy.mock.calls, ...consoleWarnSpy.mock.calls]);
+      expect(logged).not.toContain(sentinel);
+      expect(logged).not.toContain('{{#if');
+      expect(consoleErrorSpy).toHaveBeenCalledWith('[templates] render_failed error_type=Error');
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        '[templates] helper_invalid_argument helper=add reason=non_numeric'
       );
     });
 

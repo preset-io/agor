@@ -15,6 +15,7 @@ import type {
   MCPOAuthRuntimeCompatibilityMode,
 } from '../../types/mcp.js';
 import { assertSafeOAuthUrl, safeOutboundFetch } from '../../utils/safe-outbound-fetch';
+import { asMCPExternalError } from './external-error.js';
 import type { OAuthTokenResponse } from './oauth-auth.js';
 import { resolveTokenExpiry } from './oauth-token-expiry.js';
 
@@ -133,6 +134,23 @@ export class OAuthDCRFailure extends Error {
   }
 }
 
+/** Stable classification for OAuth discovery/configuration policy failures. */
+export class OAuthConfigurationError extends Error {
+  constructor(
+    readonly failureCode:
+      | 'metadata_unavailable'
+      | 'metadata_incompatible'
+      | 'endpoint_override_mismatch'
+      | 'issuer_mismatch'
+      | 'pkce_required'
+      | 'client_registration_required',
+    message = `OAuth configuration failed (${failureCode})`
+  ) {
+    super(message);
+    this.name = 'OAuthConfigurationError';
+  }
+}
+
 // Buffer before expiry to avoid using soon-to-expire tokens
 const EXPIRY_BUFFER_SECONDS = 60;
 
@@ -184,8 +202,9 @@ function parseWWWAuthenticate(header: string): string | null {
  */
 export async function discoverResourceMetadataUrl(
   mcpUrl: string,
-  options: { allowLocalhostHttp?: boolean } = {}
+  options: { allowLocalhostHttp?: boolean; assertCurrent?: () => void } = {}
 ): Promise<string | null> {
+  options.assertCurrent?.();
   const url = new URL(mcpUrl);
   const origin = url.origin;
   const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
@@ -199,25 +218,42 @@ export async function discoverResourceMetadataUrl(
   candidates.push(`${origin}/.well-known/oauth-protected-resource`);
 
   for (const candidate of candidates) {
+    options.assertCurrent?.();
+    let response: Response;
     try {
-      const response = await safeOutboundFetch(candidate, {
+      response = await safeOutboundFetch(candidate, {
         redirect: 'follow',
         timeoutMs: 10_000,
         allowLocalhostHttp: options.allowLocalhostHttp,
+        assertCurrent: options.assertCurrent,
       });
-      if (response.ok) {
-        // Validate it looks like proper metadata
-        const data = (await response.json()) as Record<string, unknown>;
-        if (data.authorization_servers && Array.isArray(data.authorization_servers)) {
-          console.log('[MCP OAuth] Resource metadata discovered');
-          return candidate;
-        }
-      }
     } catch {
+      // Keep the authority/deadline check outside the provider-error catch:
+      // an expired daemon reservation is terminal, never another discovery
+      // candidate to try.
+      options.assertCurrent?.();
       console.log('[MCP OAuth] Resource metadata discovery candidate failed');
+      continue;
+    }
+    options.assertCurrent?.();
+    if (response.ok) {
+      let data: Record<string, unknown>;
+      try {
+        data = (await response.json()) as Record<string, unknown>;
+      } catch {
+        options.assertCurrent?.();
+        console.log('[MCP OAuth] Resource metadata discovery candidate failed');
+        continue;
+      }
+      options.assertCurrent?.();
+      if (data.authorization_servers && Array.isArray(data.authorization_servers)) {
+        console.log('[MCP OAuth] Resource metadata discovered');
+        return candidate;
+      }
     }
   }
 
+  options.assertCurrent?.();
   return null;
 }
 
@@ -235,8 +271,9 @@ export async function discoverResourceMetadataUrl(
 export async function resolveResourceMetadataUrl(
   wwwAuthenticateHeader: string | null,
   mcpUrl: string,
-  options: { allowLocalhostHttp?: boolean } = {}
+  options: { allowLocalhostHttp?: boolean; assertCurrent?: () => void } = {}
 ): Promise<{ metadataUrl: string; source: 'header' | 'well-known' } | null> {
+  options.assertCurrent?.();
   // Strategy 1: Parse from WWW-Authenticate header
   if (wwwAuthenticateHeader) {
     const parsed = parseWWWAuthenticate(wwwAuthenticateHeader);
@@ -247,6 +284,7 @@ export async function resolveResourceMetadataUrl(
 
   // Strategy 2: Auto-discover via .well-known endpoint
   const discovered = await discoverResourceMetadataUrl(mcpUrl, options);
+  options.assertCurrent?.();
   if (discovered) {
     return { metadataUrl: discovered, source: 'well-known' };
   }
@@ -281,8 +319,9 @@ export async function resolveResourceMetadataUrl(
  */
 export async function discoverAuthorizationServerFromMcpOrigin(
   mcpUrl: string,
-  options: { allowLocalhostHttp?: boolean } = {}
+  options: { allowLocalhostHttp?: boolean; assertCurrent?: () => void } = {}
 ): Promise<{ metadata: AuthorizationServerMetadata; discoveredAt: string } | null> {
+  options.assertCurrent?.();
   const url = new URL(mcpUrl);
   const origin = url.origin;
   const path = url.pathname === '/' ? '' : url.pathname.replace(/\/$/, '');
@@ -303,30 +342,45 @@ export async function discoverAuthorizationServerFromMcpOrigin(
   const unique = Array.from(new Set(candidates));
 
   for (const candidate of unique) {
+    options.assertCurrent?.();
+    let response: Response;
     try {
-      const response = await safeOutboundFetch(candidate, {
+      response = await safeOutboundFetch(candidate, {
         redirect: 'follow',
         timeoutMs: 10_000,
         allowLocalhostHttp: options.allowLocalhostHttp,
+        assertCurrent: options.assertCurrent,
       });
-      if (!response.ok) continue;
-      const data = (await response.json()) as Partial<AuthorizationServerMetadata>;
-      // Minimal validation: must have authorization_endpoint + token_endpoint
-      if (
-        typeof data.authorization_endpoint === 'string' &&
-        typeof data.token_endpoint === 'string'
-      ) {
-        console.log('[MCP OAuth] Authorization-server metadata discovered');
-        return {
-          metadata: data as AuthorizationServerMetadata,
-          discoveredAt: candidate,
-        };
-      }
     } catch {
+      options.assertCurrent?.();
       console.log('[MCP OAuth] Authorization-server discovery candidate failed');
+      continue;
+    }
+    options.assertCurrent?.();
+    if (!response.ok) continue;
+    let data: Partial<AuthorizationServerMetadata>;
+    try {
+      data = (await response.json()) as Partial<AuthorizationServerMetadata>;
+    } catch {
+      options.assertCurrent?.();
+      console.log('[MCP OAuth] Authorization-server discovery candidate failed');
+      continue;
+    }
+    options.assertCurrent?.();
+    // Minimal validation: must have authorization_endpoint + token_endpoint
+    if (
+      typeof data.authorization_endpoint === 'string' &&
+      typeof data.token_endpoint === 'string'
+    ) {
+      console.log('[MCP OAuth] Authorization-server metadata discovered');
+      return {
+        metadata: data as AuthorizationServerMetadata,
+        discoveredAt: candidate,
+      };
     }
   }
 
+  options.assertCurrent?.();
   return null;
 }
 
@@ -375,10 +429,14 @@ export async function resolveMCPOAuthDiscovery(
   options: {
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     allowLocalhostHttp?: boolean;
+    /** Daemon-owned authority/deadline assertion between discovery requests. */
+    assertCurrent?: () => void;
   } = {}
 ): Promise<MCPOAuthDiscoveryResult | null> {
+  options.assertCurrent?.();
   // Strategies 1 + 2: RFC 9728 (header hint, then well-known fallback)
   const rfc9728 = await resolveResourceMetadataUrl(wwwAuthenticateHeader, mcpUrl, options);
+  options.assertCurrent?.();
   if (rfc9728) {
     return { kind: 'resource-metadata', ...rfc9728 };
   }
@@ -386,6 +444,7 @@ export async function resolveMCPOAuthDiscovery(
   // Strategies 3 + 4: AS metadata directly at MCP origin (RFC 8414 / OIDC)
   if ((options.compatibilityMode ?? 'strict') === 'strict') return null;
   const asDirect = await discoverAuthorizationServerFromMcpOrigin(mcpUrl, options);
+  options.assertCurrent?.();
   if (asDirect) {
     return {
       kind: 'authorization-server',
@@ -402,21 +461,42 @@ export async function resolveMCPOAuthDiscovery(
  */
 async function fetchResourceMetadata(
   metadataUrl: string,
-  options: { allowLocalhostHttp?: boolean } = {}
+  options: { allowLocalhostHttp?: boolean; assertCurrent?: () => void } = {}
 ): Promise<OAuthMetadata> {
-  const response = await safeOutboundFetch(metadataUrl, {
-    redirect: 'follow',
-    timeoutMs: 15_000,
-    allowLocalhostHttp: options.allowLocalhostHttp,
-  });
+  options.assertCurrent?.();
+  let response: Response;
+  try {
+    response = await safeOutboundFetch(metadataUrl, {
+      redirect: 'follow',
+      timeoutMs: 15_000,
+      allowLocalhostHttp: options.allowLocalhostHttp,
+      assertCurrent: options.assertCurrent,
+    });
+  } catch (error) {
+    options.assertCurrent?.();
+    throw asMCPExternalError(error, { stage: 'oauth_metadata' });
+  }
+  options.assertCurrent?.();
   if (!response.ok) {
-    throw new Error(
-      `Failed to fetch OAuth resource metadata from ${metadataUrl} (${response.status}). ` +
-        `The MCP server advertised OAuth support but the metadata endpoint is not available. ` +
+    throw new OAuthConfigurationError(
+      'metadata_unavailable',
+      `The OAuth resource metadata endpoint returned status ${response.status}. ` +
+        `The MCP server advertised OAuth support but its metadata is not available. ` +
         `This indicates an incomplete OAuth implementation on the server side.`
     );
   }
-  return (await response.json()) as OAuthMetadata;
+  let metadata: OAuthMetadata;
+  try {
+    metadata = (await response.json()) as OAuthMetadata;
+  } catch (error) {
+    options.assertCurrent?.();
+    throw asMCPExternalError(error, {
+      stage: 'oauth_metadata',
+      category: 'invalid_response',
+    });
+  }
+  options.assertCurrent?.();
+  return metadata;
 }
 
 // Cache for dynamically registered clients (per authorization server)
@@ -526,8 +606,10 @@ async function registerDynamicClient(
   scope?: string,
   reuseLocalCache = true,
   allowLocalhostHttp = false,
-  registrationEndpointSource: 'metadata' | 'legacy_fallback' = 'metadata'
+  registrationEndpointSource: 'metadata' | 'legacy_fallback' = 'metadata',
+  assertCurrent?: () => void
 ): Promise<DynamicClientRegistrationResponse> {
+  assertCurrent?.();
   // Check cache first
   const cacheKey = registrationEndpoint;
   const cached = reuseLocalCache ? dynamicClientCache.get(cacheKey) : undefined;
@@ -553,25 +635,35 @@ async function registerDynamicClient(
     registrationRequest.scope = scope;
   }
 
-  const response = await safeOutboundFetch(registrationEndpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify(registrationRequest),
-    redirect: 'error',
-    timeoutMs: 15_000,
-    maxResponseBytes: MAX_DCR_RESPONSE_BYTES,
-    allowLocalhostHttp,
-  });
+  let response: Response;
+  try {
+    response = await safeOutboundFetch(registrationEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify(registrationRequest),
+      redirect: 'error',
+      timeoutMs: 15_000,
+      maxResponseBytes: MAX_DCR_RESPONSE_BYTES,
+      allowLocalhostHttp,
+      assertCurrent,
+    });
+  } catch (error) {
+    assertCurrent?.();
+    throw error;
+  }
+  assertCurrent?.();
 
   if (!response.ok) {
     throw registrationFailure(registrationDiagnostic(response.status, registrationEndpointSource));
   }
 
   const diagnostic = registrationDiagnostic(response.status, registrationEndpointSource);
-  const parsed = dynamicClientRegistrationSchema.safeParse(await response.json().catch(() => null));
+  const responseBody = await response.json().catch(() => null);
+  assertCurrent?.();
+  const parsed = dynamicClientRegistrationSchema.safeParse(responseBody);
   if (!parsed.success) {
     throw registrationFailure(
       diagnostic,
@@ -622,6 +714,7 @@ async function registerDynamicClient(
   }
 
   if (reuseLocalCache) {
+    assertCurrent?.();
     dynamicClientCache.set(cacheKey, {
       client_id: result.client_id,
       client_secret: result.client_secret,
@@ -696,8 +789,11 @@ export async function fetchAuthorizationServerMetadata(
   options: {
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     allowLocalhostHttp?: boolean;
+    /** Daemon-owned authority/deadline assertion between discovery requests. */
+    assertCurrent?: () => void;
   } = {}
 ): Promise<AuthorizationServerMetadata> {
+  options.assertCurrent?.();
   const cleanUrl = authServerUrl.replace(/\/$/, '');
   const urlsToTry: { url: string; label: string }[] = [];
 
@@ -725,34 +821,50 @@ export async function fetchAuthorizationServerMetadata(
 
   const errors: string[] = [];
   for (const { url, label } of urlsToTry) {
+    options.assertCurrent?.();
+    let response: Response;
     try {
-      const response = await safeOutboundFetch(url, {
+      response = await safeOutboundFetch(url, {
         redirect: 'follow',
         timeoutMs: 15_000,
         allowLocalhostHttp: options.allowLocalhostHttp,
+        assertCurrent: options.assertCurrent,
       });
-      if (response.ok) {
-        console.log(`[MCP OAuth] ✓ Fetched metadata via ${label}`);
-        const metadata = (await response.json()) as AuthorizationServerMetadata;
-        if (
-          compatibilityMode === 'strict'
-            ? metadata.issuer !== authServerUrl
-            : compatibilityMode === 'marketplace' &&
-              !oauthIssuerIdentifiersMatch(metadata.issuer, authServerUrl)
-        ) {
-          throw new Error(
-            'Authorization server metadata issuer does not match the advertised issuer'
-          );
-        }
-        return metadata;
-      }
-      errors.push(`${label}: HTTP ${response.status}`);
     } catch {
+      options.assertCurrent?.();
       errors.push(`${label}: request failed`);
+      continue;
     }
+    options.assertCurrent?.();
+    if (!response.ok) {
+      errors.push(`${label}: HTTP ${response.status}`);
+      continue;
+    }
+    let metadata: AuthorizationServerMetadata;
+    try {
+      metadata = (await response.json()) as AuthorizationServerMetadata;
+    } catch {
+      options.assertCurrent?.();
+      errors.push(`${label}: request failed`);
+      continue;
+    }
+    options.assertCurrent?.();
+    if (
+      compatibilityMode === 'strict'
+        ? metadata.issuer !== authServerUrl
+        : compatibilityMode === 'marketplace' &&
+          !oauthIssuerIdentifiersMatch(metadata.issuer, authServerUrl)
+    ) {
+      errors.push(`${label}: request failed`);
+      continue;
+    }
+    console.log(`[MCP OAuth] ✓ Fetched metadata via ${label}`);
+    return metadata;
   }
 
-  throw new Error(
+  options.assertCurrent?.();
+  throw new OAuthConfigurationError(
+    'metadata_unavailable',
     'Failed to fetch authorization server metadata.\n' +
       `Tried:\n${errors.map((e) => `  - ${e}`).join('\n')}\n\n` +
       'The authorization server may not support RFC 8414 or OIDC metadata discovery.\n' +
@@ -763,10 +875,28 @@ export async function fetchAuthorizationServerMetadata(
 // Timeout for waiting for the OAuth callback (2 minutes)
 const OAUTH_CALLBACK_TIMEOUT_MS = 120_000;
 
+const OAUTH_CALLBACK_HTML_HEADERS = {
+  'Content-Type': 'text/html; charset=utf-8',
+  'Content-Security-Policy':
+    "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  'X-Content-Type-Options': 'nosniff',
+  'Cache-Control': 'no-store',
+} as const;
+
+const OAUTH_CALLBACK_SUCCESS_HTML =
+  '<!doctype html><html><body><h1>Authentication Successful</h1><p>You can close this window.</p></body></html>';
+const OAUTH_CALLBACK_FAILURE_HTML =
+  '<!doctype html><html><body><h1>Authentication Failed</h1><p>The provider did not complete authentication. Return to Agor and try again.</p></body></html>';
+const OAUTH_CALLBACK_INVALID_HTML =
+  '<!doctype html><html><body><h1>Invalid Callback</h1><p>The authentication callback could not be validated. Return to Agor and try again.</p></body></html>';
+
 /**
  * Start local HTTP server to receive OAuth callback
  */
-function startCallbackServer(port: number = 0): Promise<{
+function startCallbackServer(
+  expectedState: string,
+  port: number = 0
+): Promise<{
   server: http.Server;
   port: number;
   url: string;
@@ -784,29 +914,40 @@ function startCallbackServer(port: number = 0): Promise<{
       if (url.pathname === '/oauth/callback') {
         const code = url.searchParams.get('code');
         const state = url.searchParams.get('state');
-        const error = url.searchParams.get('error');
+        const hasProviderError = url.searchParams.has('error');
 
-        if (error) {
-          res.writeHead(400, { 'Content-Type': 'text/html' });
-          res.end(`<html><body><h1>Authentication Failed</h1><p>Error: ${error}</p></body></html>`);
-          callbackResolve({ code: '', state: '' });
+        // Validate the CSRF capability before interpreting any provider-controlled
+        // callback parameter. Error values are never reflected into HTML or the
+        // promise result, even when state is valid.
+        if (state !== expectedState) {
+          res.writeHead(400, OAUTH_CALLBACK_HTML_HEADERS);
+          res.end(OAUTH_CALLBACK_INVALID_HTML);
+          callbackResolve({ code: '', state: state ?? '' });
           return;
         }
 
-        if (code && state) {
-          res.writeHead(200, { 'Content-Type': 'text/html' });
-          res.end(
-            '<html><body><h1>Authentication Successful</h1><p>You can close this window.</p></body></html>'
-          );
-          callbackResolve({ code, state });
+        if (hasProviderError) {
+          res.writeHead(400, OAUTH_CALLBACK_HTML_HEADERS);
+          res.end(OAUTH_CALLBACK_FAILURE_HTML);
+          callbackResolve({ code: '', state: expectedState });
+          return;
+        }
+
+        if (code) {
+          res.writeHead(200, OAUTH_CALLBACK_HTML_HEADERS);
+          res.end(OAUTH_CALLBACK_SUCCESS_HTML);
+          callbackResolve({ code, state: expectedState });
         } else {
-          res.writeHead(400, { 'Content-Type': 'text/html' });
-          res.end(
-            '<html><body><h1>Invalid Callback</h1><p>Missing code or state parameter.</p></body></html>'
-          );
+          res.writeHead(400, OAUTH_CALLBACK_HTML_HEADERS);
+          res.end(OAUTH_CALLBACK_INVALID_HTML);
+          callbackResolve({ code: '', state: expectedState });
         }
       } else {
-        res.writeHead(404);
+        res.writeHead(404, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'X-Content-Type-Options': 'nosniff',
+          'Cache-Control': 'no-store',
+        });
         res.end('Not Found');
       }
     });
@@ -857,11 +998,9 @@ async function openBrowser(url: string): Promise<void> {
     const openModule = (await import('open')) as { default: (url: string) => Promise<unknown> };
     await openModule.default(url);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Failed to open browser automatically: ${errorMessage}\n\n` +
-        `Please open this URL manually in your browser:\n${url}`
-    );
+    // The browser launcher can include the full authorization URL (including
+    // state) in its exception. Do not reflect either value.
+    throw asMCPExternalError(error, { stage: 'oauth_callback' });
   }
 }
 
@@ -1045,7 +1184,8 @@ export async function performMCPOAuthFlow(
   // Step 1: Parse WWW-Authenticate header, fall back to pre-discovered URL
   const metadataUrl = parseWWWAuthenticate(wwwAuthenticateHeader) || resourceMetadataUrl;
   if (!metadataUrl) {
-    throw new Error(
+    throw new OAuthConfigurationError(
+      'metadata_unavailable',
       'Could not determine OAuth resource metadata URL. ' +
         'The WWW-Authenticate header does not contain resource_metadata, ' +
         'and no pre-discovered metadata URL was provided.'
@@ -1072,7 +1212,10 @@ export async function performMCPOAuthFlow(
     !resourceMetadata.authorization_servers ||
     resourceMetadata.authorization_servers.length === 0
   ) {
-    throw new Error('No authorization servers found in resource metadata');
+    throw new OAuthConfigurationError(
+      'metadata_unavailable',
+      'No authorization servers found in resource metadata'
+    );
   }
 
   // Use first authorization server
@@ -1083,8 +1226,12 @@ export async function performMCPOAuthFlow(
   });
   console.log('[MCP OAuth] Authorization server metadata resolved');
 
+  // Generate the CSRF capability before starting the listener so every
+  // callback response validates state before considering provider parameters.
+  const state = crypto.randomUUID();
+
   // Step 4: Start local callback server
-  const callback = await startCallbackServer();
+  const callback = await startCallbackServer(state);
   console.log('[MCP OAuth] Local callback server ready');
 
   try {
@@ -1127,9 +1274,6 @@ export async function performMCPOAuthFlow(
         );
       }
     }
-
-    // Generate state for CSRF protection
-    const state = crypto.randomUUID();
 
     // Step 6: Build authorization URL
     const authUrl = new URL(authServerMetadata.authorization_endpoint);
@@ -1406,6 +1550,8 @@ async function startMCPOAuthFlowWithAS(opts: {
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   dcrMode: MCPOAuthDCRMode;
   allowLocalhostHttp: boolean;
+  /** Daemon-owned authority/deadline assertion around provider side effects. */
+  assertCurrent?: () => void;
 }): Promise<OAuthFlowContext> {
   const {
     authServerMetadata,
@@ -1424,6 +1570,7 @@ async function startMCPOAuthFlowWithAS(opts: {
   } = opts;
 
   const hasFullOverrides = !!(authorizationUrlOverride && tokenUrlOverride);
+  opts.assertCurrent?.();
 
   // PKCE
   const pkce = generatePKCE();
@@ -1449,7 +1596,8 @@ async function startMCPOAuthFlowWithAS(opts: {
   // registration behind.
   const tokenEndpoint = tokenUrlOverride || authServerMetadata?.token_endpoint;
   if (!tokenEndpoint) {
-    throw new Error(
+    throw new OAuthConfigurationError(
+      'metadata_unavailable',
       'No token endpoint available. Either provide oauth_token_url in the MCP server config, ' +
         'or ensure the authorization server supports RFC 8414 metadata discovery.'
     );
@@ -1457,7 +1605,8 @@ async function startMCPOAuthFlowWithAS(opts: {
   const authorizationEndpoint =
     authorizationUrlOverride || authServerMetadata?.authorization_endpoint;
   if (!authorizationEndpoint) {
-    throw new Error(
+    throw new OAuthConfigurationError(
+      'metadata_unavailable',
       'No authorization endpoint available. Either provide oauth_authorization_url in the MCP server config, ' +
         'or ensure the authorization server supports RFC 8414 metadata discovery.'
     );
@@ -1468,7 +1617,10 @@ async function startMCPOAuthFlowWithAS(opts: {
   assertSafeOAuthUrl(authorizationEndpoint, { allowLocalhostHttp });
   if (compatibilityMode !== 'legacy') {
     if (!authServerMetadata) {
-      throw new Error('MCP OAuth issuer validation requires authorization-server metadata');
+      throw new OAuthConfigurationError(
+        'metadata_unavailable',
+        'MCP OAuth issuer validation requires authorization-server metadata'
+      );
     }
     assertSafeOAuthUrl(authServerMetadata.issuer, { allowLocalhostHttp });
     const issuerMatches =
@@ -1476,7 +1628,7 @@ async function startMCPOAuthFlowWithAS(opts: {
         ? authServerMetadata.issuer === issuer
         : oauthIssuerIdentifiersMatch(authServerMetadata.issuer, issuer);
     if (!issuerMatches) {
-      throw new Error('Authorization server issuer mismatch');
+      throw new OAuthConfigurationError('issuer_mismatch', 'Authorization server issuer mismatch');
     }
     const advertisedPKCEMethods = authServerMetadata.code_challenge_methods_supported;
     if (
@@ -1484,13 +1636,17 @@ async function startMCPOAuthFlowWithAS(opts: {
         ? !advertisedPKCEMethods?.includes('S256')
         : advertisedPKCEMethods !== undefined && !advertisedPKCEMethods.includes('S256')
     ) {
-      throw new Error('Authorization server does not advertise required PKCE S256 support');
+      throw new OAuthConfigurationError(
+        'pkce_required',
+        'Authorization server does not advertise required PKCE S256 support'
+      );
     }
     if (
       compatibilityMode === 'strict' &&
       authServerMetadata.authorization_response_iss_parameter_supported !== true
     ) {
-      throw new Error(
+      throw new OAuthConfigurationError(
+        'metadata_incompatible',
         'Authorization server does not advertise the required callback issuer parameter'
       );
     }
@@ -1498,10 +1654,16 @@ async function startMCPOAuthFlowWithAS(opts: {
       authorizationUrlOverride &&
       authorizationUrlOverride !== authServerMetadata.authorization_endpoint
     ) {
-      throw new Error('MCP OAuth authorization endpoint override does not match metadata');
+      throw new OAuthConfigurationError(
+        'endpoint_override_mismatch',
+        'MCP OAuth authorization endpoint override does not match metadata'
+      );
     }
     if (tokenUrlOverride && tokenUrlOverride !== authServerMetadata.token_endpoint) {
-      throw new Error('MCP OAuth token endpoint override does not match metadata');
+      throw new OAuthConfigurationError(
+        'endpoint_override_mismatch',
+        'MCP OAuth token endpoint override does not match metadata'
+      );
     }
   }
 
@@ -1514,6 +1676,7 @@ async function startMCPOAuthFlowWithAS(opts: {
       authServerMetadata?.registration_endpoint ||
       (dcrMode === 'fallback' ? fallbackRegistrationEndpoint : undefined);
     if (registrationEndpoint) {
+      opts.assertCurrent?.();
       console.log('[MCP OAuth] Using Dynamic Client Registration');
       const registrationEndpointSource = authServerMetadata?.registration_endpoint
         ? 'metadata'
@@ -1526,19 +1689,26 @@ async function startMCPOAuthFlowWithAS(opts: {
           scopeString,
           opts.reuseDynamicClientRegistration !== false,
           allowLocalhostHttp,
-          registrationEndpointSource
+          registrationEndpointSource,
+          opts.assertCurrent
         );
         actualClientId = registration.client_id;
         resolvedClientSecret = registration.client_secret;
       } catch (error) {
+        // An authority/deadline assertion is not a provider DCR diagnostic.
+        // Reassert first so it escapes this compatibility wrapper unchanged.
+        opts.assertCurrent?.();
         if (error instanceof OAuthDCRFailure) throw error;
         throw registrationFailure({
           stage: 'dcr_registration',
           registration_endpoint_source: registrationEndpointSource,
         });
       }
+      // Keep authority/deadline failures out of the DCR diagnostic wrapper.
+      opts.assertCurrent?.();
     } else if (hasFullOverrides) {
-      throw new Error(
+      throw new OAuthConfigurationError(
+        'client_registration_required',
         'OAuth client_id is required when using manual OAuth URL overrides.\n\n' +
           'Please provide a client_id in the MCP server configuration.'
       );
@@ -1546,7 +1716,8 @@ async function startMCPOAuthFlowWithAS(opts: {
       throw missingRegistrationEndpointFailure();
     }
   } else if (!actualClientId) {
-    throw new Error(
+    throw new OAuthConfigurationError(
+      'client_registration_required',
       'OAuth client_id is required because Dynamic Client Registration is disabled for this server.'
     );
   }
@@ -1566,6 +1737,7 @@ async function startMCPOAuthFlowWithAS(opts: {
     authUrl.searchParams.set('scope', scopeString);
   }
 
+  opts.assertCurrent?.();
   return {
     metadataUrl: cacheKey,
     resourceUri,
@@ -1627,6 +1799,11 @@ export async function startMCPOAuthFlow(
     dcrMode?: MCPOAuthDCRMode;
     /** Exact loopback HTTP exception for standalone development only. */
     allowLocalhostHttp?: boolean;
+    /**
+     * Optional daemon authority/deadline assertion. Called before and after
+     * discovery and DCR boundaries; standalone/CLI callers omit it.
+     */
+    assertCurrent?: () => void;
   }
 ): Promise<OAuthFlowContext> {
   console.log('[MCP OAuth] Starting two-phase OAuth 2.1 flow');
@@ -1634,7 +1811,13 @@ export async function startMCPOAuthFlow(
   const dcrMode = options?.dcrMode ?? 'advertised';
   const allowLocalhostHttp = options?.allowLocalhostHttp === true;
   const resourceUri = options?.resourceUri;
-  if (!resourceUri) throw new Error('MCP OAuth requires an exact protected resource URI');
+  options?.assertCurrent?.();
+  if (!resourceUri) {
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'MCP OAuth requires an exact protected resource URI'
+    );
+  }
   assertSafeOAuthUrl(resourceUri, { allowLocalhostHttp });
 
   // When AS metadata is prefetched (Reo.Dev-style discovery), there's no RFC
@@ -1642,7 +1825,8 @@ export async function startMCPOAuthFlow(
   // PKCE / DCR / auth-URL construction.
   if (options?.prefetchedAuthServerMetadata) {
     if (compatibilityMode === 'strict') {
-      throw new Error(
+      throw new OAuthConfigurationError(
+        'metadata_incompatible',
         'Authorization-server-direct discovery requires explicit marketplace or legacy mode'
       );
     }
@@ -1663,7 +1847,8 @@ export async function startMCPOAuthFlow(
       compatibilityMode === 'marketplace' &&
       !oauthIssuerOriginMatchesResource(options.prefetchedAuthServerMetadata.issuer, resourceUri)
     ) {
-      throw new Error(
+      throw new OAuthConfigurationError(
+        'issuer_mismatch',
         'Authorization-server-direct discovery issuer does not match the MCP resource origin'
       );
     }
@@ -1683,13 +1868,15 @@ export async function startMCPOAuthFlow(
       compatibilityMode,
       dcrMode,
       allowLocalhostHttp,
+      assertCurrent: options.assertCurrent,
     });
   }
 
   // Step 1: Parse WWW-Authenticate header, fall back to pre-discovered URL
   const metadataUrl = parseWWWAuthenticate(wwwAuthenticateHeader) || options?.resourceMetadataUrl;
   if (!metadataUrl) {
-    throw new Error(
+    throw new OAuthConfigurationError(
+      'metadata_unavailable',
       'Could not determine OAuth resource metadata URL. ' +
         'The WWW-Authenticate header does not contain resource_metadata, ' +
         'and no pre-discovered metadata URL was provided.'
@@ -1698,7 +1885,12 @@ export async function startMCPOAuthFlow(
   console.log('[MCP OAuth] Resource metadata resolved');
 
   // Step 2: Fetch Protected Resource Metadata (RFC 9728)
-  const resourceMetadata = await fetchResourceMetadata(metadataUrl, { allowLocalhostHttp });
+  options?.assertCurrent?.();
+  const resourceMetadata = await fetchResourceMetadata(metadataUrl, {
+    allowLocalhostHttp,
+    assertCurrent: options?.assertCurrent,
+  });
+  options?.assertCurrent?.();
 
   if (
     compatibilityMode === 'strict'
@@ -1706,14 +1898,20 @@ export async function startMCPOAuthFlow(
       : compatibilityMode === 'marketplace' &&
         !marketplaceResourceMetadataMatches(metadataUrl, resourceMetadata.resource, resourceUri)
   ) {
-    throw new Error('Protected resource metadata does not match the MCP resource URI');
+    throw new OAuthConfigurationError(
+      'metadata_incompatible',
+      'Protected resource metadata does not match the MCP resource URI'
+    );
   }
 
   if (
     !resourceMetadata.authorization_servers ||
     resourceMetadata.authorization_servers.length === 0
   ) {
-    throw new Error('No authorization servers found in resource metadata');
+    throw new OAuthConfigurationError(
+      'metadata_unavailable',
+      'No authorization servers found in resource metadata'
+    );
   }
 
   // Use first authorization server
@@ -1731,9 +1929,11 @@ export async function startMCPOAuthFlow(
     console.log('[MCP OAuth] Skipping auth server metadata fetch — manual overrides provided');
   } else {
     try {
+      options?.assertCurrent?.();
       authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl, {
         compatibilityMode,
         allowLocalhostHttp,
+        assertCurrent: options?.assertCurrent,
       });
       console.log('[MCP OAuth] Authorization server metadata resolved');
     } catch (metadataError) {
@@ -1747,6 +1947,10 @@ export async function startMCPOAuthFlow(
         throw metadataError;
       }
     }
+    // This is deliberately outside the metadata fallback catch: authority or
+    // reservation expiry must never be treated as a recoverable legacy
+    // discovery failure.
+    options?.assertCurrent?.();
   }
 
   // Steps 4-7: Delegate PKCE / DCR / endpoint resolution / auth URL build to
@@ -1773,6 +1977,7 @@ export async function startMCPOAuthFlow(
     compatibilityMode,
     dcrMode,
     allowLocalhostHttp,
+    assertCurrent: options?.assertCurrent,
   });
 }
 

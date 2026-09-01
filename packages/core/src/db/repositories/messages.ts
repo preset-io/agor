@@ -6,7 +6,7 @@
  */
 
 import type { Message, MessageCreate, MessageID, SessionID, TaskID, UUID } from '@agor/core/types';
-import { and, asc, desc, eq, gt, inArray, lte, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, lte, type SQL, sql } from 'drizzle-orm';
 import { generateId } from '../../lib/ids';
 import { isCanonicalFullUuid } from '../../types/id';
 import { JsonSanitizationError, sanitizeJsonValue } from '../../utils/sanitize-json';
@@ -42,6 +42,9 @@ export type MessageFindPageOptions = {
   skip?: number;
 };
 
+/** Optional hook executed after a Message insert and before its transaction commits. */
+export type MessageCreateTransactionHook = (db: Database, message: Message) => Promise<void>;
+
 export class MessageParentIntegrityError extends Error {
   constructor(
     readonly reason: 'session_tenant_mismatch' | 'task_session_mismatch',
@@ -67,7 +70,10 @@ function omittedMessageData(reason: JsonSanitizationError['category']): MessageI
 }
 
 export class MessagesRepository {
-  constructor(private db: Database) {}
+  constructor(
+    private db: Database,
+    private readonly onCreateInTransaction?: MessageCreateTransactionHook
+  ) {}
 
   /** Retry a whole locked metadata mutation so SQLite re-reads after contention. */
   private async runMetadataMutation<T>(mutation: () => Promise<T>, attempt = 0): Promise<T> {
@@ -265,7 +271,9 @@ export class MessagesRepository {
             await this.assertTaskBelongsToSession(tx, message.task_id, message.session_id);
           }
           const inserted = await insert(tx, messages).values(row).returning().one();
-          return this.rowToMessage(inserted);
+          const created = this.rowToMessage(inserted);
+          if (this.onCreateInTransaction) await this.onCreateInTransaction(tx, created);
+          return created;
         },
         { sqliteImmediate: true }
       )
@@ -508,14 +516,17 @@ export class MessagesRepository {
   ): Promise<Message[]> {
     const rows = await select(this.db)
       .from(messages)
-      .where(eq(messages.session_id, sessionId))
+      .where(
+        and(
+          eq(messages.session_id, sessionId),
+          gte(messages.index, startIndex),
+          lte(messages.index, endIndex)
+        )
+      )
       .orderBy(messages.index)
       .all();
 
-    // Filter by range in memory (simpler than complex SQL)
-    return rows
-      .filter((r: MessageRow) => r.index >= startIndex && r.index <= endIndex)
-      .map((r: MessageRow) => this.rowToMessage(r));
+    return rows.map((r: MessageRow) => this.rowToMessage(r));
   }
 
   /**

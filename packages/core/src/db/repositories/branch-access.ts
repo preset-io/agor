@@ -1,338 +1,542 @@
-/**
- * Shared SQL predicates for branch RBAC list scoping.
- *
- * Repository find/list paths for branches, sessions, schedules, and boards
- * must stay in lock-step with the central per-branch evaluator:
- *
- *   direct owner → highest non-none group grant → others_can fallback
- *
- * The owner check still relies on the caller joining branch_owners scoped to
- * the current user. Group access is intentionally modeled as an EXISTS
- * predicate so public/fallback-visible branches do not multiply by every group
- * membership a user has.
- */
+/** Shared SQL predicates for normalized board/branch capability policies. */
 
-import { BRANCH_PERMISSION_LEVELS, type UUID } from '@agor/core/types';
-import { and, eq, exists, inArray, isNotNull, or, type SQL, sql } from 'drizzle-orm';
-import type { Database } from '../client';
-import { jsonExtract } from '../database-wrapper';
+import type { CapabilityPolicyFsAccess, SessionID, UserID, UUID } from '@agor/core/types';
+import { and, eq, exists, inArray, or, type SQL, type SQLWrapper, sql } from 'drizzle-orm';
 import {
-  boardGroupGrants,
-  boardOwners,
+  CAPABILITY_POLICY_SESSION_SHARING_KEY,
+  CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE,
+} from '../../types/capability-policy';
+import type { Database } from '../client';
+import { select } from '../database-wrapper';
+import {
+  appVariables,
+  boardAccessEntries,
+  boardAccessPolicies,
   boards,
   branches,
-  branchGroupGrants,
-  branchOwners,
+  branchPermissionConfigs,
+  branchPermissionEntries,
   groupMemberships,
   groups,
   messages,
   sessions,
   tasks,
+  users,
 } from '../schema';
 
-export const VISIBLE_BRANCH_PERMISSION_LEVELS = BRANCH_PERMISSION_LEVELS.filter(
-  (level) => level !== 'none'
-);
-export const SESSION_BRANCH_PERMISSION_LEVELS = BRANCH_PERMISSION_LEVELS.filter(
-  (level) => level === 'session' || level === 'prompt' || level === 'all'
-);
+type UserIdExpression = UUID | SQLWrapper;
 
-/** Permission-threshold implementation shared by visibility and session admission. */
-function activeBranchGroupGrantAccessExists(
-  db: Database,
-  userId: UUID,
-  permissionLevels: readonly (typeof BRANCH_PERMISSION_LEVELS)[number][]
-) {
-  return exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
-      .from(branchGroupGrants)
-      .innerJoin(
-        groupMemberships,
-        and(
-          eq(groupMemberships.group_id, branchGroupGrants.group_id),
-          eq(groupMemberships.user_id, userId)
-        )
+const BOARD_ROLES_BY_CAPABILITY = {
+  'board.view': ['viewer', 'editor', 'manager'],
+  'board.edit': ['editor', 'manager'],
+  'board.attach_branch': ['editor', 'manager'],
+  'board.policy.manage': ['manager'],
+} as const;
+
+const BRANCH_ROLES_BY_CAPABILITY = {
+  'branch.view': ['viewer', 'collaborator', 'manager'],
+  'sessions.create': ['collaborator', 'manager'],
+  'sessions.prompt_own': ['collaborator', 'manager'],
+  'sessions.manage_others': ['manager'],
+  'branch.manage': ['manager'],
+  'environment.control': ['manager'],
+  'terminal.open': ['collaborator', 'manager'],
+  'branch.policy.manage': ['manager'],
+} as const;
+
+function roleGrantsCapability(
+  column: SQLWrapper,
+  kind: 'board' | 'branch',
+  capability: string
+): SQL {
+  const roles =
+    kind === 'board'
+      ? BOARD_ROLES_BY_CAPABILITY[capability as keyof typeof BOARD_ROLES_BY_CAPABILITY]
+      : BRANCH_ROLES_BY_CAPABILITY[capability as keyof typeof BRANCH_ROLES_BY_CAPABILITY];
+  if (!roles) return sql`false`;
+  return inArray(column, [...roles]);
+}
+
+function branchRoleGrantsCapability(
+  roleColumn: SQLWrapper,
+  fsAccessColumn: SQLWrapper,
+  capability: string
+): SQL {
+  const roleCondition = roleGrantsCapability(roleColumn, 'branch', capability);
+  return capability === 'terminal.open'
+    ? (and(roleCondition, inArray(fsAccessColumn, ['read', 'write'])) ?? sql`false`)
+    : roleCondition;
+}
+
+function effectiveConfigCondition(): SQL {
+  return (
+    or(
+      and(
+        eq(branches.permission_binding, 'override'),
+        eq(branchPermissionConfigs.branch_id, branches.branch_id)
+      ),
+      and(
+        eq(branches.permission_binding, 'inherit'),
+        eq(branchPermissionConfigs.board_id, branches.board_id)
       )
+    ) ?? sql`false`
+  );
+}
+
+/**
+ * Closed point projection used by Task launch and heartbeat revalidation.
+ *
+ * It deliberately returns only the facts those consumers use. The richer
+ * policy read model still owns permission-editor explanations and group IDs.
+ */
+export interface SessionRuntimeBranchAccess {
+  branch_id: string;
+  principal_available: boolean;
+  can_prompt_session: boolean;
+  fs_access: CapabilityPolicyFsAccess;
+  /** Database time in PostgreSQL; callers may override it in deterministic tests. */
+  observed_at: Date;
+}
+
+function numericValue(value: unknown, fallback = -1): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function fsAccessFromRank(rank: number): CapabilityPolicyFsAccess {
+  return rank >= 2 ? 'write' : rank >= 1 ? 'read' : 'none';
+}
+
+function roleGrantsSessionPrompt(role: unknown): boolean {
+  return role === 'collaborator' || role === 'manager';
+}
+
+/**
+ * Resolve one principal's current right to prompt one exact Session and its
+ * effective Branch filesystem access in one bounded SQL statement.
+ *
+ * The scalar subqueries mirror the normalized-policy precedence exactly:
+ * primary owner -> direct-user shadow -> additive active groups -> unmatched
+ * Others. Fixed cumulative roles let group capability be represented by the
+ * greatest role rank, while filesystem access is ranked independently.
+ * Global superadmin bypass is intentionally excluded: administration does not
+ * grant prompt authority or widen one principal's projected Branch mounts.
+ */
+export async function resolveSessionRuntimeBranchAccess(
+  db: Database,
+  input: {
+    sessionId: SessionID | string;
+    principalUserId: UserID | string;
+    branchRbacEnabled: boolean;
+  }
+): Promise<SessionRuntimeBranchAccess | null> {
+  const principal = input.principalUserId;
+  const directRole = sql<string | null>`(
+    SELECT ${branchPermissionEntries.role}
+    FROM ${branchPermissionEntries}
+    WHERE ${branchPermissionEntries.config_id} = ${branchPermissionConfigs.config_id}
+      AND ${branchPermissionEntries.user_id} = ${principal}
+    LIMIT 1
+  )`;
+  const directFsAccess = sql<string | null>`(
+    SELECT ${branchPermissionEntries.fs_access}
+    FROM ${branchPermissionEntries}
+    WHERE ${branchPermissionEntries.config_id} = ${branchPermissionConfigs.config_id}
+      AND ${branchPermissionEntries.user_id} = ${principal}
+    LIMIT 1
+  )`;
+  const activeGroupRoleRank = sql<number>`COALESCE((
+    SELECT MAX(CASE ${branchPermissionEntries.role}
+      WHEN 'manager' THEN 3
+      WHEN 'collaborator' THEN 2
+      WHEN 'viewer' THEN 1
+      ELSE 0 END)
+    FROM ${branchPermissionEntries}
+    INNER JOIN ${groupMemberships}
+      ON ${groupMemberships.group_id} = ${branchPermissionEntries.group_id}
+     AND ${groupMemberships.user_id} = ${principal}
+    INNER JOIN ${groups}
+      ON ${groups.group_id} = ${branchPermissionEntries.group_id}
+     AND ${groups.archived} = false
+    WHERE ${branchPermissionEntries.config_id} = ${branchPermissionConfigs.config_id}
+  ), -1)`;
+  const activeGroupFsRank = sql<number>`COALESCE((
+    SELECT MAX(CASE ${branchPermissionEntries.fs_access}
+      WHEN 'write' THEN 2
+      WHEN 'read' THEN 1
+      ELSE 0 END)
+    FROM ${branchPermissionEntries}
+    INNER JOIN ${groupMemberships}
+      ON ${groupMemberships.group_id} = ${branchPermissionEntries.group_id}
+     AND ${groupMemberships.user_id} = ${principal}
+    INNER JOIN ${groups}
+      ON ${groups.group_id} = ${branchPermissionEntries.group_id}
+     AND ${groups.archived} = false
+    WHERE ${branchPermissionEntries.config_id} = ${branchPermissionConfigs.config_id}
+  ), -1)`;
+  const row = await select(db, {
+    branch_id: branches.branch_id,
+    session_owner_user_id: sessions.created_by,
+    session_sdk_home_scope: sessions.sdk_home_scope,
+    principal_user_id: users.user_id,
+    branch_primary_owner_user_id: branches.primary_owner_user_id,
+    sharing_mode: branchPermissionConfigs.sharing_mode,
+    others_role: branchPermissionConfigs.others_role,
+    others_fs_access: branchPermissionConfigs.others_fs_access,
+    allow_shared_session_prompts: branchPermissionConfigs.allow_shared_session_prompts,
+    direct_role: directRole,
+    direct_fs_access: directFsAccess,
+    active_group_role_rank: activeGroupRoleRank,
+    active_group_fs_rank: activeGroupFsRank,
+    workspace_sharing_enabled: exists(
+      selectRaw(db)
+        .from(appVariables)
+        .where(
+          and(
+            eq(appVariables.namespace, CAPABILITY_POLICY_WORKSPACE_PREFERENCES_NAMESPACE),
+            eq(appVariables.key, CAPABILITY_POLICY_SESSION_SHARING_KEY),
+            eq(appVariables.value_text, 'true')
+          )
+        )
+    ),
+    observed_at: sql<Date>`CURRENT_TIMESTAMP`,
+  })
+    .from(sessions)
+    .innerJoin(branches, eq(branches.branch_id, sessions.branch_id))
+    .innerJoin(branchPermissionConfigs, effectiveConfigCondition())
+    .leftJoin(users, eq(users.user_id, principal))
+    .where(eq(sessions.session_id, input.sessionId))
+    .limit(1)
+    .one();
+  if (!row) return null;
+
+  const principalUserId =
+    typeof row.principal_user_id === 'string' ? row.principal_user_id : undefined;
+  const isPrimaryOwner =
+    principalUserId !== undefined && row.branch_primary_owner_user_id === principalUserId;
+  const directMatched = typeof row.direct_role === 'string';
+  const groupRoleRank = numericValue(row.active_group_role_rank);
+  const groupFsRank = numericValue(row.active_group_fs_rank);
+
+  let canPromptOwn = false;
+  let fsAccess: CapabilityPolicyFsAccess = 'none';
+  if (principalUserId && (!input.branchRbacEnabled || isPrimaryOwner)) {
+    canPromptOwn = true;
+    fsAccess = 'write';
+  } else if (principalUserId && row.sharing_mode === 'shared') {
+    if (directMatched) {
+      canPromptOwn = roleGrantsSessionPrompt(row.direct_role);
+      fsAccess =
+        row.direct_fs_access === 'write'
+          ? 'write'
+          : row.direct_fs_access === 'read'
+            ? 'read'
+            : 'none';
+    } else if (groupRoleRank >= 0) {
+      canPromptOwn = groupRoleRank >= 2;
+      fsAccess = fsAccessFromRank(groupFsRank);
+    } else {
+      canPromptOwn = roleGrantsSessionPrompt(row.others_role);
+      fsAccess =
+        row.others_fs_access === 'write'
+          ? 'write'
+          : row.others_fs_access === 'read'
+            ? 'read'
+            : 'none';
+    }
+  }
+
+  const ownsSession =
+    principalUserId !== undefined && principalUserId === row.session_owner_user_id;
+  const sharedSessionAllowed =
+    row.session_sdk_home_scope === 'branch' &&
+    Boolean(row.workspace_sharing_enabled) &&
+    Boolean(row.allow_shared_session_prompts);
+  const observedAt =
+    row.observed_at instanceof Date ? row.observed_at : new Date(String(row.observed_at));
+  return {
+    branch_id: String(row.branch_id),
+    principal_available: principalUserId !== undefined,
+    can_prompt_session: Boolean(
+      principalUserId &&
+        // RBAC-disabled admission intentionally permits any existing member to
+        // prompt the Session; its legacy filesystem projection remains write.
+        (!input.branchRbacEnabled || (canPromptOwn && (ownsSession || sharedSessionAllowed)))
+    ),
+    fs_access: principalUserId ? fsAccess : 'none',
+    observed_at: observedAt,
+  };
+}
+
+function directBranchEntryExists(db: Database, userId: UserIdExpression, capability?: string): SQL {
+  return exists(
+    selectRaw(db)
+      .from(branchPermissionConfigs)
       .innerJoin(
-        groups,
-        and(eq(groups.group_id, branchGroupGrants.group_id), eq(groups.archived, false))
+        branchPermissionEntries,
+        eq(branchPermissionEntries.config_id, branchPermissionConfigs.config_id)
       )
       .where(
         and(
-          eq(branchGroupGrants.branch_id, branches.branch_id),
-          inArray(branchGroupGrants.can, permissionLevels)
+          effectiveConfigCondition(),
+          eq(branchPermissionConfigs.sharing_mode, 'shared'),
+          eq(branchPermissionEntries.user_id, userId),
+          ...(capability
+            ? [
+                branchRoleGrantsCapability(
+                  branchPermissionEntries.role,
+                  branchPermissionEntries.fs_access,
+                  capability
+                ),
+              ]
+            : [])
         )
       )
   );
 }
 
-function activeBoardGroupGrantAccessExistsAtLevel(
+function activeBranchGroupEntryExists(
   db: Database,
-  userId: UUID,
-  permissionLevels: readonly (typeof BRANCH_PERMISSION_LEVELS)[number][]
-) {
-  return exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
-      .from(boardGroupGrants)
-      .innerJoin(
-        groupMemberships,
-        and(
-          eq(groupMemberships.group_id, boardGroupGrants.group_id),
-          eq(groupMemberships.user_id, userId)
+  userId: UserIdExpression,
+  capability?: string
+): SQL {
+  const matchingGroupEntryExists = (entryCondition?: SQL): SQL =>
+    exists(
+      selectRaw(db)
+        .from(branchPermissionConfigs)
+        .innerJoin(
+          branchPermissionEntries,
+          eq(branchPermissionEntries.config_id, branchPermissionConfigs.config_id)
         )
-      )
-      .innerJoin(
-        groups,
-        and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
-      )
-      .innerJoin(
-        boards,
-        and(
-          eq(boards.board_id, boardGroupGrants.board_id),
-          eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared')
+        .innerJoin(
+          groupMemberships,
+          and(
+            eq(groupMemberships.group_id, branchPermissionEntries.group_id),
+            eq(groupMemberships.user_id, userId)
+          )
         )
-      )
-      .where(
-        and(
-          eq(boardGroupGrants.board_id, branches.board_id),
-          inArray(boardGroupGrants.can, permissionLevels)
+        .innerJoin(
+          groups,
+          and(eq(groups.group_id, branchPermissionEntries.group_id), eq(groups.archived, false))
         )
-      )
+        .where(
+          and(
+            effectiveConfigCondition(),
+            eq(branchPermissionConfigs.sharing_mode, 'shared'),
+            ...(entryCondition ? [entryCondition] : [])
+          )
+        )
+    );
+  if (!capability) return matchingGroupEntryExists();
+  if (capability === 'terminal.open') {
+    return (
+      and(
+        matchingGroupEntryExists(
+          roleGrantsCapability(branchPermissionEntries.role, 'branch', capability)
+        ),
+        matchingGroupEntryExists(inArray(branchPermissionEntries.fs_access, ['read', 'write']))
+      ) ?? sql`false`
+    );
+  }
+  return matchingGroupEntryExists(
+    branchRoleGrantsCapability(
+      branchPermissionEntries.role,
+      branchPermissionEntries.fs_access,
+      capability
+    )
   );
 }
 
-export function activeBoardOwnerAccessExists(db: Database, userId: UUID) {
+function branchOthersHasCapability(db: Database, capability: string): SQL {
   return exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
-      .from(boardOwners)
-      .where(and(eq(boardOwners.board_id, branches.board_id), eq(boardOwners.user_id, userId)))
-  );
-}
-
-function alignedBoardDefaultAtLevel(
-  db: Database,
-  permissionLevels: readonly (typeof BRANCH_PERMISSION_LEVELS)[number][]
-) {
-  return exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
-      .from(boards)
+    selectRaw(db)
+      .from(branchPermissionConfigs)
       .where(
         and(
-          eq(boards.board_id, branches.board_id),
-          eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared'),
-          inArray(
-            sql`coalesce(${jsonExtract(db, boards.data, 'default_others_can')}, 'session')`,
-            permissionLevels
+          effectiveConfigCondition(),
+          eq(branchPermissionConfigs.sharing_mode, 'shared'),
+          branchRoleGrantsCapability(
+            branchPermissionConfigs.others_role,
+            branchPermissionConfigs.others_fs_access,
+            capability
           )
         )
       )
   );
 }
 
-function branchAccessCondition(
+// Drizzle's cross-dialect select overload is intentionally contained here.
+// biome-ignore lint/suspicious/noExplicitAny: SQLite/PostgreSQL query builders have incompatible generic overloads.
+function selectRaw(db: Database): any {
+  // biome-ignore lint/suspicious/noExplicitAny: See the cross-dialect boundary above.
+  return (db as any).select({ _: sql`1` });
+}
+
+function branchCapabilityCondition(
   db: Database,
-  userId: UUID,
-  permissionLevels: readonly (typeof BRANCH_PERMISSION_LEVELS)[number][]
+  userId: UserIdExpression,
+  capability: string
 ): SQL {
+  const directMatch = directBranchEntryExists(db, userId);
+  const groupMatch = activeBranchGroupEntryExists(db, userId);
   return (
     or(
-      isNotNull(branchOwners.user_id),
-      activeBranchGroupGrantAccessExists(db, userId, permissionLevels),
-      and(eq(branches.permission_source, 'board'), activeBoardOwnerAccessExists(db, userId)),
+      eq(branches.primary_owner_user_id, userId),
+      directBranchEntryExists(db, userId, capability),
+      and(sql`NOT ${directMatch}`, activeBranchGroupEntryExists(db, userId, capability)),
       and(
-        eq(branches.permission_source, 'board'),
-        activeBoardGroupGrantAccessExistsAtLevel(db, userId, permissionLevels)
-      ),
-      and(
-        eq(branches.permission_source, 'board'),
-        alignedBoardDefaultAtLevel(db, permissionLevels)
-      ),
-      and(
-        eq(branches.permission_source, 'override'),
-        inArray(branches.others_can, permissionLevels)
+        sql`NOT ${directMatch}`,
+        sql`NOT ${groupMatch}`,
+        branchOthersHasCapability(db, capability)
       )
     ) ?? sql`false`
   );
 }
 
-/** Backward-compatible visible-level helpers used by existing repository callers. */
-export function activeGroupGrantAccessExists(db: Database, userId: UUID) {
-  return activeBranchGroupGrantAccessExists(db, userId, VISIBLE_BRANCH_PERMISSION_LEVELS);
+export function visibleBranchAccessCondition(db: Database, userId: UserIdExpression): SQL {
+  return branchCapabilityCondition(db, userId, 'branch.view');
 }
 
-export function activeBoardGroupGrantAccessExists(db: Database, userId: UUID) {
-  return activeBoardGroupGrantAccessExistsAtLevel(db, userId, VISIBLE_BRANCH_PERMISSION_LEVELS);
+export function sessionBranchAccessCondition(db: Database, userId: UserIdExpression): SQL {
+  return branchCapabilityCondition(db, userId, 'sessions.create');
 }
 
-export function alignedBoardDefaultVisible(db: Database) {
-  return alignedBoardDefaultAtLevel(db, VISIBLE_BRANCH_PERMISSION_LEVELS);
-}
-
-/** Branch access at view-or-higher. */
-export function visibleBranchAccessCondition(db: Database, userId: UUID): SQL {
-  return branchAccessCondition(db, userId, VISIBLE_BRANCH_PERMISSION_LEVELS);
-}
-
-/** Set-based counterpart to resolveUserPermission(..., minimum=session). */
-export function sessionBranchAccessCondition(db: Database, userId: UUID): SQL {
-  return branchAccessCondition(db, userId, SESSION_BRANCH_PERMISSION_LEVELS);
-}
-
-/**
- * Branch access at an arbitrary minimum application permission.
- *
- * Point lookups use this predicate while resolving caller-supplied short IDs,
- * so inaccessible rows cannot make an otherwise-visible prefix ambiguous or
- * disclose their existence through a different authorization response.
- */
 export function minimumBranchAccessCondition(
   db: Database,
-  userId: UUID,
-  minimumPermission: (typeof BRANCH_PERMISSION_LEVELS)[number]
+  userId: UserIdExpression,
+  minimumPermission: 'none' | 'view' | 'session' | 'prompt' | 'all'
 ): SQL {
-  const minimumIndex = BRANCH_PERMISSION_LEVELS.indexOf(minimumPermission);
-  if (minimumIndex <= 0) return sql`true`;
-  return branchAccessCondition(db, userId, BRANCH_PERMISSION_LEVELS.slice(minimumIndex));
+  if (minimumPermission === 'none') return sql`true`;
+  const capability =
+    minimumPermission === 'view'
+      ? 'branch.view'
+      : minimumPermission === 'all'
+        ? 'branch.manage'
+        : 'sessions.create';
+  return branchCapabilityCondition(db, userId, capability);
 }
 
-/**
- * Board visibility predicate correlated against the `boards` table in scope.
- *
- * A board is visible if the user owns it, is an explicit board owner, the board
- * is shared, or at least one of its branches / primary teammate branch is
- * visible through the branch RBAC predicate. All branch-derived checks are
- * EXISTS-based so the outer row is never multiplied and no DISTINCT is needed.
- * Keep the two ways a branch can reference a board inside one EXISTS. Besides
- * being logically equivalent to two EXISTS clauses, this lets PostgreSQL plan
- * the full branch RBAC predicate once instead of duplicating all of its grant
- * and board-inheritance subplans.
- */
-export function visibleBoardAccessCondition(db: Database, userId: UUID): SQL {
-  const accessibleBoardReferenceExists = exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
-      .from(branches)
-      .leftJoin(
-        branchOwners,
-        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
+function directBoardEntryExists(db: Database, userId: UserIdExpression, capability?: string): SQL {
+  return exists(
+    selectRaw(db)
+      .from(boardAccessEntries)
+      .innerJoin(boardAccessPolicies, eq(boardAccessPolicies.board_id, boardAccessEntries.board_id))
       .where(
         and(
-          or(
-            eq(branches.board_id, boards.board_id),
-            eq(branches.branch_id, boards.primary_teammate_id)
-          ),
-          visibleBranchAccessCondition(db, userId)
+          eq(boardAccessEntries.board_id, boards.board_id),
+          eq(boardAccessPolicies.sharing_mode, 'shared'),
+          eq(boardAccessEntries.user_id, userId),
+          ...(capability
+            ? [roleGrantsCapability(boardAccessEntries.role, 'board', capability)]
+            : [])
         )
       )
   );
+}
 
+function activeBoardGroupEntryExists(
+  db: Database,
+  userId: UserIdExpression,
+  capability?: string
+): SQL {
+  return exists(
+    selectRaw(db)
+      .from(boardAccessEntries)
+      .innerJoin(boardAccessPolicies, eq(boardAccessPolicies.board_id, boardAccessEntries.board_id))
+      .innerJoin(
+        groupMemberships,
+        and(
+          eq(groupMemberships.group_id, boardAccessEntries.group_id),
+          eq(groupMemberships.user_id, userId)
+        )
+      )
+      .innerJoin(
+        groups,
+        and(eq(groups.group_id, boardAccessEntries.group_id), eq(groups.archived, false))
+      )
+      .where(
+        and(
+          eq(boardAccessEntries.board_id, boards.board_id),
+          eq(boardAccessPolicies.sharing_mode, 'shared'),
+          ...(capability
+            ? [roleGrantsCapability(boardAccessEntries.role, 'board', capability)]
+            : [])
+        )
+      )
+  );
+}
+
+export function visibleBoardAccessCondition(db: Database, userId: UserIdExpression): SQL {
+  const directMatch = directBoardEntryExists(db, userId);
+  const groupMatch = activeBoardGroupEntryExists(db, userId);
   return (
     or(
-      eq(boards.created_by, userId),
-      exists(
-        // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-        (db as any)
-          .select({ _: sql`1` })
-          .from(boardOwners)
-          .where(and(eq(boardOwners.board_id, boards.board_id), eq(boardOwners.user_id, userId)))
-      ),
-      eq(sql`coalesce(${jsonExtract(db, boards.data, 'access_mode')}, 'shared')`, 'shared'),
-      accessibleBoardReferenceExists
+      eq(boards.primary_owner_user_id, userId),
+      directBoardEntryExists(db, userId, 'board.view'),
+      and(sql`NOT ${directMatch}`, activeBoardGroupEntryExists(db, userId, 'board.view')),
+      and(
+        sql`NOT ${directMatch}`,
+        sql`NOT ${groupMatch}`,
+        exists(
+          selectRaw(db)
+            .from(boardAccessPolicies)
+            .where(
+              and(
+                eq(boardAccessPolicies.board_id, boards.board_id),
+                eq(boardAccessPolicies.sharing_mode, 'shared'),
+                roleGrantsCapability(boardAccessPolicies.others_role, 'board', 'board.view')
+              )
+            )
+        )
+      )
     ) ?? sql`false`
   );
 }
 
-/** Correlated board-visibility predicate for tables that carry a board_id. */
 export function visibleBoardReferenceAccessExists(
   db: Database,
-  userId: UUID,
-  // biome-ignore lint/suspicious/noExplicitAny: Drizzle's eq accepts columns/SQL wrappers across dialects
-  boardId: any
+  userId: UserIdExpression,
+  boardId: SQLWrapper
 ): SQL {
   return exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
+    selectRaw(db)
       .from(boards)
       .where(and(eq(boards.board_id, boardId), visibleBoardAccessCondition(db, userId)))
   );
 }
 
-/**
- * Correlated branch-visibility predicate for tables that carry a branch_id.
- *
- * This is the SQL-pushdown equivalent of resolving all accessible branch ids
- * first and applying `branch_id IN (...)`, but it avoids hydrating branch rows
- * and avoids very large parameter lists. The `branchId` expression is normally
- * a column from the outer query (for example `artifacts.branch_id`).
- */
 export function visibleBranchReferenceAccessExists(
   db: Database,
-  userId: UUID,
-  // biome-ignore lint/suspicious/noExplicitAny: Drizzle's eq accepts columns/SQL wrappers across dialects
-  branchId: any
+  userId: UserIdExpression,
+  branchId: SQLWrapper
 ): SQL {
   return exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
+    selectRaw(db)
       .from(branches)
-      .leftJoin(
-        branchOwners,
-        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
       .where(and(eq(branches.branch_id, branchId), visibleBranchAccessCondition(db, userId)))
   );
 }
 
-/**
- * Correlated visibility predicate for tables that carry a session_id.
- *
- * The referenced session is visible when its branch is visible to the user.
- * This avoids resolving all accessible sessions into `session_id IN (...)` and
- * works for high-cardinality child tables such as messages and tasks.
- */
 export function visibleSessionReferenceAccessExists(
   db: Database,
-  userId: UUID,
-  // biome-ignore lint/suspicious/noExplicitAny: Drizzle's eq accepts columns/SQL wrappers across dialects
-  sessionId: any
+  userId: UserIdExpression,
+  sessionId: SQLWrapper
 ): SQL {
   return exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
+    selectRaw(db)
       .from(sessions)
       .innerJoin(branches, eq(sessions.branch_id, branches.branch_id))
-      .leftJoin(
-        branchOwners,
-        and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-      )
       .where(and(eq(sessions.session_id, sessionId), visibleBranchAccessCondition(db, userId)))
   );
 }
 
-/** Correlated visibility predicate for tables that carry a task_id. */
 export function visibleTaskReferenceAccessExists(
   db: Database,
-  userId: UUID,
-  // biome-ignore lint/suspicious/noExplicitAny: Drizzle's eq accepts columns/SQL wrappers across dialects
-  taskId: any
+  userId: UserIdExpression,
+  taskId: SQLWrapper
 ): SQL {
   return exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
+    selectRaw(db)
       .from(tasks)
       .where(
         and(
@@ -343,17 +547,13 @@ export function visibleTaskReferenceAccessExists(
   );
 }
 
-/** Correlated visibility predicate for tables that carry a message_id. */
 export function visibleMessageReferenceAccessExists(
   db: Database,
-  userId: UUID,
-  // biome-ignore lint/suspicious/noExplicitAny: Drizzle's eq accepts columns/SQL wrappers across dialects
-  messageId: any
+  userId: UserIdExpression,
+  messageId: SQLWrapper
 ): SQL {
   return exists(
-    // biome-ignore lint/suspicious/noExplicitAny: Drizzle select has complex cross-dialect overloads
-    (db as any)
-      .select({ _: sql`1` })
+    selectRaw(db)
       .from(messages)
       .where(
         and(

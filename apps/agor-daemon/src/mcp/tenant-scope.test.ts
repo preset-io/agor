@@ -1,9 +1,17 @@
 import { getCurrentTenantId } from '@agor/core/db';
 import { describe, expect, it, vi } from 'vitest';
 import type { McpContext } from './server';
-import { tenantScopedToolProxy } from './tenant-scope';
+import { runWithMcpTenantDatabaseUnit, tenantScopedToolProxy } from './tenant-scope';
 
 describe('tenantScopedToolProxy', () => {
+  it('refuses to open a typed tenant database unit without trusted tenant identity', async () => {
+    const work = vi.fn();
+    await expect(
+      runWithMcpTenantDatabaseUnit({ db: {}, baseServiceParams: {} } as unknown as McpContext, work)
+    ).rejects.toThrow('requires tenant identity');
+    expect(work).not.toHaveBeenCalled();
+  });
+
   it('runs the complete tool handler with tenant identity but no DB transaction', async () => {
     let registeredHandler: ((args: unknown, extra?: unknown) => unknown) | undefined;
     const server = {

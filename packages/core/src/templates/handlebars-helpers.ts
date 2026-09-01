@@ -50,7 +50,7 @@ export function registerHandlebarsHelpers(): void {
     const numA = Number(a);
     const numB = Number(b);
     if (Number.isNaN(numA) || Number.isNaN(numB)) {
-      console.warn(`⚠️  add helper received non-numeric values: ${a}, ${b}`);
+      console.warn('[templates] helper_invalid_argument helper=add reason=non_numeric');
       return 0;
     }
     return numA + numB;
@@ -64,7 +64,7 @@ export function registerHandlebarsHelpers(): void {
     const numA = Number(a);
     const numB = Number(b);
     if (Number.isNaN(numA) || Number.isNaN(numB)) {
-      console.warn(`⚠️  sub helper received non-numeric values: ${a}, ${b}`);
+      console.warn('[templates] helper_invalid_argument helper=sub reason=non_numeric');
       return 0;
     }
     return numA - numB;
@@ -78,7 +78,7 @@ export function registerHandlebarsHelpers(): void {
     const numA = Number(a);
     const numB = Number(b);
     if (Number.isNaN(numA) || Number.isNaN(numB)) {
-      console.warn(`⚠️  mul helper received non-numeric values: ${a}, ${b}`);
+      console.warn('[templates] helper_invalid_argument helper=mul reason=non_numeric');
       return 0;
     }
     return numA * numB;
@@ -92,11 +92,11 @@ export function registerHandlebarsHelpers(): void {
     const numA = Number(a);
     const numB = Number(b);
     if (Number.isNaN(numA) || Number.isNaN(numB)) {
-      console.warn(`⚠️  div helper received non-numeric values: ${a}, ${b}`);
+      console.warn('[templates] helper_invalid_argument helper=div reason=non_numeric');
       return 0;
     }
     if (numB === 0) {
-      console.warn(`⚠️  div helper received zero divisor`);
+      console.warn('[templates] helper_invalid_argument helper=div reason=zero_divisor');
       return 0;
     }
     return numA / numB;
@@ -110,11 +110,11 @@ export function registerHandlebarsHelpers(): void {
     const numA = Number(a);
     const numB = Number(b);
     if (Number.isNaN(numA) || Number.isNaN(numB)) {
-      console.warn(`⚠️  mod helper received non-numeric values: ${a}, ${b}`);
+      console.warn('[templates] helper_invalid_argument helper=mod reason=non_numeric');
       return 0;
     }
     if (numB === 0) {
-      console.warn(`⚠️  mod helper received zero divisor`);
+      console.warn('[templates] helper_invalid_argument helper=mod reason=zero_divisor');
       return 0;
     }
     return numA % numB;
@@ -243,6 +243,8 @@ export type { RenderTemplateOnError } from '../types/template';
 export interface RenderTemplateOptions {
   /** Behavior when rendering throws. Default: `'empty'`. */
   onError?: RenderTemplateOnError;
+  /** Internal value-free failure signal for callers that must fail closed. */
+  onFailure?: (errorType: 'SyntaxError' | 'TypeError' | 'Error' | 'UnknownError') => void;
 }
 
 /**
@@ -277,9 +279,22 @@ export function renderTemplate(
     const template = Handlebars.compile(templateString);
     return template(context);
   } catch (error) {
-    console.error('❌ Handlebars template error:', error);
-    console.error('Template:', templateString);
-    console.error('Context keys:', Object.keys(context));
+    // Handlebars exceptions can quote the source line, helper arguments, or a
+    // rendered value. Templates and contexts are used for MCP credentials,
+    // environment commands, prompts, and UI previews, so neither the raw
+    // exception nor any input-derived metadata is safe to log. Keep the error
+    // type allowlisted and value-free while retaining enough signal to tell a
+    // syntax/runtime failure from an unknown thrown value.
+    const errorType =
+      error instanceof SyntaxError
+        ? 'SyntaxError'
+        : error instanceof TypeError
+          ? 'TypeError'
+          : error instanceof Error
+            ? 'Error'
+            : 'UnknownError';
+    console.error(`[templates] render_failed error_type=${errorType}`);
+    options.onFailure?.(errorType);
     if (options.onError === 'raw') {
       // Return the raw template so the user sees *something* (the unrendered
       // placeholders) rather than a silently-blank result. Used by UI

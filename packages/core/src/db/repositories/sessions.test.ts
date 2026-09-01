@@ -6,13 +6,14 @@
  */
 
 import type { Session, UUID } from '@agor/core/types';
-import { SessionStatus, TaskStatus } from '@agor/core/types';
-import { describe, expect, it } from 'vitest';
+import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
+import { describe, expect, it, vi } from 'vitest';
 import { generateId, shortId, toShortId } from '../../lib/ids';
 import type { SessionRow } from '../schema';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
 import { AmbiguousIdError, EntityNotFoundError, getHiddenTenantId, RepositoryError } from './base';
 import { BranchRepository } from './branches';
+import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { ScheduleRepository } from './schedules';
 import { SessionRepository } from './sessions';
@@ -85,6 +86,7 @@ function createPostgresStyleSessionRow(overrides?: Partial<SessionRow> & { tenan
     updated_at: now,
     created_by: generateId(),
     unix_username: null,
+    sdk_home_scope: 'execution_home',
     status: SessionStatus.IDLE,
     agentic_tool: 'claude-code',
     agentic_tool_preset_id: null,
@@ -172,6 +174,18 @@ describe('SessionRepository.create', () => {
     expect(created.description).toBe('Test description');
     expect(created.created_at).toBeDefined();
     expect(created.last_updated).toBeDefined();
+    expect(created.sdk_home_scope).toBe('execution_home');
+  });
+
+  dbTest('persists an explicitly admitted branch SDK-home scope', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+
+    const created = await repo.create(
+      createSessionData({ branch_id: branch.branch_id, sdk_home_scope: 'branch' })
+    );
+
+    expect(created.sdk_home_scope).toBe('branch');
   });
 
   dbTest('should generate session_id if not provided', async ({ db }) => {
@@ -525,6 +539,11 @@ describe('SessionRepository.findAll', () => {
       const repoRepo = new RepoRepository(db);
       const branchRepo = new BranchRepository(db);
       const userId = generateId() as UUID;
+      await new UsersRepository(db).create({
+        user_id: userId,
+        email: `session-rbac-viewer-${userId}@example.invalid`,
+        role: 'member',
+      });
 
       const gitRepo = await repoRepo.create({
         repo_id: generateId(),
@@ -544,7 +563,7 @@ describe('SessionRepository.findAll', () => {
         path: '/tmp/session-rbac-visible',
         base_ref: 'main',
         new_branch: false,
-        created_by: generateId() as UUID,
+        created_by: 'test-user' as UUID,
         permission_source: 'override',
         others_can: 'view',
       });
@@ -557,7 +576,7 @@ describe('SessionRepository.findAll', () => {
         path: '/tmp/session-rbac-hidden',
         base_ref: 'main',
         new_branch: false,
-        created_by: generateId() as UUID,
+        created_by: 'test-user' as UUID,
         permission_source: 'override',
         others_can: 'none',
       });
@@ -577,6 +596,106 @@ describe('SessionRepository.findAll', () => {
       expect(page.data.map((session) => session.session_id)).toEqual([visibleSession.session_id]);
     }
   );
+});
+
+describe('SessionRepository.findPage ordering', () => {
+  dbTest('keeps offset pages deterministic when timestamps tie', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const createdAt = '2026-01-01T00:00:00.000Z';
+    const created = await Promise.all(
+      ['a', 'b', 'c'].map((suffix) =>
+        repo.create(
+          createSessionData({
+            session_id:
+              `00000000-0000-7000-8000-00000000000${suffix === 'a' ? '1' : suffix === 'b' ? '2' : '3'}` as UUID,
+            branch_id: branch.branch_id,
+            created_at: createdAt,
+            last_updated: createdAt,
+          })
+        )
+      )
+    );
+
+    const first = await repo.findPage({
+      branchId: branch.branch_id,
+      sortCreatedAt: 1,
+      limit: 2,
+      skip: 0,
+    });
+    const second = await repo.findPage({
+      branchId: branch.branch_id,
+      sortCreatedAt: 1,
+      limit: 2,
+      skip: 2,
+    });
+
+    expect(first.total).toBe(3);
+    expect(first.data.map((session) => session.session_id)).toEqual(
+      created.slice(0, 2).map((session) => session.session_id)
+    );
+    expect(second.data.map((session) => session.session_id)).toEqual([created[2].session_id]);
+    expect(new Set([...first.data, ...second.data].map((session) => session.session_id)).size).toBe(
+      3
+    );
+  });
+});
+
+describe('SessionRepository.enrichManyWithLastMessage', () => {
+  dbTest('loads the latest assistant message for every session in one query', async ({ db }) => {
+    const sessions = new SessionRepository(db);
+    const messageRepo = new MessagesRepository(db);
+    const branch = await createTestBranch(db);
+    const first = await sessions.create(createSessionData({ branch_id: branch.branch_id }));
+    const second = await sessions.create(createSessionData({ branch_id: branch.branch_id }));
+
+    const message = (sessionId: UUID, index: number, text: string) => ({
+      message_id: generateId(),
+      session_id: sessionId,
+      type: 'assistant' as const,
+      role: MessageRole.ASSISTANT,
+      index,
+      timestamp: new Date().toISOString(),
+      content_preview: text,
+      content: [{ type: 'text' as const, text }],
+    });
+    await messageRepo.create(message(first.session_id as UUID, 1, 'old'));
+    await messageRepo.create(message(first.session_id as UUID, 2, 'new'));
+    await messageRepo.create(message(second.session_id as UUID, 1, 'other'));
+
+    const client = (
+      db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const enriched = await sessions.enrichManyWithLastMessage([first, second]);
+
+    expect(enriched.map((session) => session.last_message)).toEqual(['new', 'other']);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  dbTest('uses message_id as a deterministic tie-breaker for duplicate indexes', async ({ db }) => {
+    const sessions = new SessionRepository(db);
+    const messageRepo = new MessagesRepository(db);
+    const branch = await createTestBranch(db);
+    const session = await sessions.create(createSessionData({ branch_id: branch.branch_id }));
+
+    const add = async (messageId: UUID, text: string) =>
+      messageRepo.create({
+        message_id: messageId,
+        session_id: session.session_id,
+        type: 'assistant',
+        role: MessageRole.ASSISTANT,
+        index: 4,
+        timestamp: new Date().toISOString(),
+        content_preview: text,
+        content: [{ type: 'text', text }],
+      });
+    await add('00000000-0000-7000-8000-000000000001' as UUID, 'first');
+    await add('00000000-0000-7000-8000-000000000002' as UUID, 'second');
+
+    const [enriched] = await sessions.enrichManyWithLastMessage([session]);
+    expect(enriched.last_message).toBe('second');
+  });
 });
 
 // ============================================================================
@@ -918,6 +1037,16 @@ describe('SessionRepository.findAncestors', () => {
 // ============================================================================
 
 describe('SessionRepository.update', () => {
+  dbTest('rejects attempts to mutate the immutable SDK-home scope', async ({ db }) => {
+    const repo = new SessionRepository(db);
+    const branch = await createTestBranch(db);
+    const created = await repo.create(createSessionData({ branch_id: branch.branch_id }));
+
+    await expect(
+      repo.update(created.session_id, { sdk_home_scope: 'branch' } as never)
+    ).rejects.toThrow(/sdk_home_scope is immutable/);
+  });
+
   dbTest('should update session by full UUID', async ({ db }) => {
     const repo = new SessionRepository(db);
     const branch = await createTestBranch(db);

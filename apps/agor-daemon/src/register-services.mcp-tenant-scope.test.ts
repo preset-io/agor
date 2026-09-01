@@ -50,12 +50,13 @@ describe('register-services MCP tenant unit of work', () => {
     // and need no scope of their own, so they are not the subject here.
     expect(identityOnly.length).toBeGreaterThan(0);
 
-    // A scope opened for this read is the innermost thing wrapping it, so the
-    // opener sits within a short window before the call. Matching on the
-    // opener rather than on its arguments keeps this from breaking when a
-    // local is renamed.
+    // A scope opened for this read still directly wraps it, although an outer
+    // reservation/deadline fence may now add one nesting level. Matching on
+    // the opener rather than on its arguments keeps this from breaking when a
+    // local is renamed; the semicolon bound prevents an earlier unrelated
+    // scope from satisfying the check.
     const unscoped = identityOnly.filter((match) => {
-      const preceding = codeOnly.slice(Math.max(0, match.index - 160), match.index);
+      const preceding = codeOnly.slice(Math.max(0, match.index - 320), match.index);
       return !/runInOAuthTenantScope\s*\([^;]*$/.test(preceding);
     });
 

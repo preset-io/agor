@@ -515,12 +515,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   ): Promise<Artifact> {
     const branch = await this.branchRepo.findById(data.branch_id);
     if (!branch) throw new Error(`Branch not found: ${data.branch_id}`);
-    await ensureBranchWorkspaceAccess(
+    const branchFsAccess = await ensureBranchWorkspaceAccess(
       this.branchRepo,
       branch,
       params.user?.user_id,
       params.user?.role as UserRole | undefined,
-      'session'
+      'session',
+      'read',
+      this.app.get('config').execution?.allow_superadmin === true
     );
 
     const userId = params.user?.user_id;
@@ -540,6 +542,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           branchId: branch.branch_id,
           subpath: data.subpath,
           publishData: data,
+          cwd: branch.path,
+          principalBranchAccess: branchFsAccess,
         },
       },
       {
@@ -549,6 +553,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           userId,
           this.app.get('config')
         ),
+        templateVariables: {
+          branch_id: branch.branch_id,
+          user_id: userId,
+          branch_fs_access: branchFsAccess,
+        },
       }
     );
     if (!result.success) {
@@ -992,12 +1001,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   ): Promise<{ subpath: string; fileCount: number; bytesWritten: number }> {
     const branch = await this.branchRepo.findById(branchId);
     if (!branch) throw new Error(`Branch not found: ${branchId}`);
-    await ensureBranchWorkspaceAccess(
+    const branchFsAccess = await ensureBranchWorkspaceAccess(
       this.branchRepo,
       branch,
       params.user?.user_id,
       params.user?.role as UserRole | undefined,
-      'session'
+      'session',
+      'write',
+      this.app.get('config').execution?.allow_superadmin === true
     );
     const userId = params.user?.user_id;
     if (!userId) throw new NotAuthenticated('Authentication required');
@@ -1017,6 +1028,8 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           artifactId,
           subpath: options.subpath,
           overwrite: options.overwrite,
+          cwd: branch.path,
+          principalBranchAccess: branchFsAccess,
         },
       },
       {
@@ -1026,6 +1039,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           userId,
           this.app.get('config')
         ),
+        templateVariables: {
+          branch_id: branch.branch_id,
+          user_id: userId,
+          branch_fs_access: branchFsAccess,
+        },
       }
     );
     if (!result.success) {
@@ -1722,12 +1740,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
   ): Promise<ArtifactValidationResult> {
     const branch = await this.branchRepo.findById(input.branch_id);
     if (!branch) throw new Error(`Branch not found: ${input.branch_id}`);
-    await ensureBranchWorkspaceAccess(
+    const branchFsAccess = await ensureBranchWorkspaceAccess(
       this.branchRepo,
       branch,
       params.user?.user_id,
       params.user?.role as UserRole | undefined,
-      'session'
+      'session',
+      'read',
+      this.app.get('config').execution?.allow_superadmin === true
     );
     const userId = params.user?.user_id;
     if (!userId) throw new NotAuthenticated('Authentication required');
@@ -1741,7 +1761,12 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           branch.branch_id
         ),
         daemonUrl: getDaemonUrl(),
-        params: { branchId: branch.branch_id, subpath: input.subpath },
+        params: {
+          branchId: branch.branch_id,
+          subpath: input.subpath,
+          cwd: branch.path,
+          principalBranchAccess: branchFsAccess,
+        },
       },
       {
         logPrefix: `[ArtifactsService.validate ${branch.branch_id}]`,
@@ -1750,6 +1775,11 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
           userId,
           this.app.get('config')
         ),
+        templateVariables: {
+          branch_id: branch.branch_id,
+          user_id: userId,
+          branch_fs_access: branchFsAccess,
+        },
       }
     );
     if (!result.success) {
@@ -2509,10 +2539,16 @@ function grantsAreSubset(needs: AgorGrants, has: AgorGrants): boolean {
 }
 
 /** Escape a `.env` value: quote, escape backslashes/quotes/newlines. */
-function escapeEnvValue(value: string): string {
+export function escapeEnvValue(value: string): string {
   if (!value) return '';
-  // Always quote — covers spaces, `#`, `=` in the value, etc.
-  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+  // Always quote — covers spaces, `#`, `=` in the value, etc. Escape CR as
+  // well as LF: some dotenv readers treat a bare CR as a record boundary,
+  // which would let one managed value synthesize an attacker-selected key.
+  return `"${value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, '\\r')
+    .replace(/\n/g, '\\n')}"`;
 }
 
 export function createArtifactsService(

@@ -1,6 +1,6 @@
 ---
 title: FAQ
-description: Frequently asked questions about branches, multi-repo workflows, session forking, spawning, and Agor's multiplayer workflow
+description: Frequently asked questions about branches, multi-repo workflows, session forking, spawning, session sharing security, and Agor's multiplayer workflow
 ---
 
 import { FaqSection } from '../components/FaqSection';
@@ -533,6 +533,41 @@ If a linked session is pinging its parent too often, hover it and click the **li
 ### Why not just use a zone trigger?
 
 Zone triggers act on the branch you drop into the zone: the prompt runs against _that branch's_ files, so it can only target a session that already lives on that branch. You can't point a zone trigger at an orchestrator watching from somewhere else — to be notified about another branch's work, a callback is the right tool.
+
+---
+
+</FaqSection>
+
+<FaqSection>
+
+<a id="session-sharing-home-access" />
+
+## What should I know before sharing my sessions?
+
+Session sharing applies only to **branch-home Sessions**. A workspace admin
+first enables it in **Settings → Workspace → Preferences**; a Board or Branch
+Manager then enables **Allow shared session prompting** in branch defaults or
+an individual branch override. Collaborators and Managers may then continue
+another person's Session.
+
+The shared boundary is the conversation and branch SDK state—not the creator's
+home or identity. Every prompt records and executes as its actual caller, using
+that person's execution home, managed variables, provider and connector
+credentials, and private MCP visibility.
+
+People who can prompt a Session can read its conversation and influence its
+future context. That can be useful for handoffs and collaborative debugging,
+but it also means prompts and tool results become part of context that later
+participants and agents may rely on.
+
+**Execution-home Sessions are never shareable.** This includes historical
+Sessions created before a branch adopted branch SDK homes and new Sessions
+created while the deployment opts out. Start a new independent branch-home
+Session when collaborators need to continue the work.
+
+Both switches default off. Disabling the workspace preference also clears all
+board and branch opt-ins, so turning it back on cannot silently reopen old
+sharing choices.
 
 ---
 

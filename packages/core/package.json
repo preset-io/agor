@@ -82,6 +82,12 @@
       "import": "./dist/telemetry/index.js",
       "require": "./dist/telemetry/index.cjs"
     },
+    "./tracing/datadog": {
+      "source": "./src/tracing/datadog.ts",
+      "types": "./dist/tracing/datadog.d.ts",
+      "import": "./dist/tracing/datadog.js",
+      "require": "./dist/tracing/datadog.cjs"
+    },
     "./config": {
       "source": "./src/config/index.ts",
       "types": "./dist/config/index.d.ts",
@@ -123,6 +129,18 @@
       "types": "./dist/lib/validation.d.ts",
       "import": "./dist/lib/validation.js",
       "require": "./dist/lib/validation.cjs"
+    },
+    "./ids": {
+      "source": "./src/lib/ids.ts",
+      "types": "./dist/lib/ids.d.ts",
+      "import": "./dist/ids/index.js",
+      "require": "./dist/ids/index.cjs"
+    },
+    "./ids/browser": {
+      "source": "./src/lib/ids.browser.ts",
+      "types": "./dist/lib/ids.browser.d.ts",
+      "import": "./dist/ids/browser.js",
+      "require": "./dist/ids/browser.cjs"
     },
     "./templates/handlebars-helpers": {
       "source": "./src/templates/handlebars-helpers.ts",
@@ -418,6 +436,12 @@
       "import": "./dist/gateway/connectors/slack-manifest.js",
       "require": "./dist/gateway/connectors/slack-manifest.cjs"
     },
+    "./gateway/discord-setup": {
+      "source": "./src/gateway/connectors/discord-setup.ts",
+      "types": "./dist/gateway/connectors/discord-setup.d.ts",
+      "import": "./dist/gateway/connectors/discord-setup.js",
+      "require": "./dist/gateway/connectors/discord-setup.cjs"
+    },
     "./git/pure": {
       "source": "./src/git/pure.ts",
       "types": "./dist/git/pure.d.ts",
@@ -488,6 +512,8 @@
   "dependencies": {
     "@agor/git": "workspace:*",
     "@anthropic-ai/sdk": "^0.109.0",
+    "@discordjs/rest": "^2.6.3",
+    "@discordjs/ws": "^2.0.4",
     "@feathersjs/authentication": "^5.0.46",
     "@feathersjs/authentication-client": "^5.0.46",
     "@feathersjs/authentication-local": "^5.0.46",
@@ -506,6 +532,7 @@
     "bcryptjs": "^2.4.3",
     "cron-parser": "^5.7.0",
     "cronstrue": "^3.24.0",
+    "discord-api-types": "^0.38.53",
     "drizzle-orm": "^0.45.2",
     "emojibase-data": "^17.0.0",
     "js-yaml": "^5.2.3",

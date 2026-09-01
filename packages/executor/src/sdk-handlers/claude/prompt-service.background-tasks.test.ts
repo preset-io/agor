@@ -43,6 +43,8 @@ function fakeQuery(messages: SDKMessage[] | (() => AsyncGenerator<SDKMessage>)) 
     totalTokens: 15,
     maxTokens: 200_000,
     percentage: 0.0075,
+    memoryFiles: [{ path: 'SENTINEL_CONTEXT_MEMORY', type: 'project', tokens: 2 }],
+    providerExtension: 'SENTINEL_CONTEXT_EXTENSION',
   });
   const generator =
     typeof messages === 'function'
@@ -72,6 +74,37 @@ function service() {
 describe('ClaudePromptService background task query lifetime', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('logs only projected result and stderr metadata for a hostile error result', async () => {
+    const sentinel = 'SENTINEL_HOSTILE_RESULT_AND_STDERR_8f31';
+    const query = fakeQuery([
+      {
+        ...sdkResult('hostile-result'),
+        subtype: sentinel,
+        is_error: true,
+        result: sentinel,
+      } as unknown as SDKMessage,
+    ]);
+    vi.mocked(setupQuery).mockResolvedValue({
+      query: query as never,
+      resolvedModel: 'claude-sonnet-4-6',
+      getStderrMetadata: () => ({ hasStderr: true, byteLength: 37 }),
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      for await (const _event of service().promptSessionStreaming(sessionId, 'prompt')) {
+        // Drain the real prompt-service result boundary.
+      }
+
+      const logged = JSON.stringify(error.mock.calls);
+      expect(logged).toContain('subtype=unknown');
+      expect(logged).toContain('stderr_bytes=37');
+      expect(logged).not.toContain(sentinel);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('retains the parent result and releases input only after the continuation result', async () => {
     const query = fakeQuery([
       {
@@ -98,7 +131,7 @@ describe('ClaudePromptService background task query lifetime', () => {
     vi.mocked(setupQuery).mockResolvedValue({
       query: query as never,
       resolvedModel: 'claude-sonnet-4-6',
-      getStderr: () => '',
+      getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
     });
     const activity = vi.fn();
 
@@ -121,6 +154,11 @@ describe('ClaudePromptService background task query lifetime', () => {
     // `end` is an internal processor sentinel and is never yielded upstream.
     expect(events.filter((event) => event.type === 'end')).toHaveLength(0);
     expect(events.filter((event) => event.type === 'context_usage')).toHaveLength(1);
+    expect(events.find((event) => event.type === 'context_usage')).toEqual({
+      type: 'context_usage',
+      contextUsage: { totalTokens: 15, maxTokens: 200_000, percentage: 0.0075 },
+    });
+    expect(JSON.stringify(events)).not.toContain('SENTINEL_CONTEXT');
     expect(query.getContextUsage).toHaveBeenCalledTimes(1);
     expect(query.releaseInput).toHaveBeenCalledTimes(1);
     const terminalResult = events.filter((event) => event.type === 'result').at(-1);
@@ -156,7 +194,7 @@ describe('ClaudePromptService background task query lifetime', () => {
     vi.mocked(setupQuery).mockResolvedValue({
       query: query as never,
       resolvedModel: 'claude-sonnet-4-6',
-      getStderr: () => '',
+      getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
     });
     const activity = vi.fn();
 
@@ -189,7 +227,7 @@ describe('ClaudePromptService background task query lifetime', () => {
       vi.mocked(setupQuery).mockResolvedValue({
         query: query as never,
         resolvedModel: 'claude-sonnet-4-6',
-        getStderr: () => '',
+        getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
       });
 
       const events: Array<{ type: string }> = [];
@@ -231,7 +269,7 @@ describe('ClaudePromptService background task query lifetime', () => {
     vi.mocked(setupQuery).mockResolvedValue({
       query: query as never,
       resolvedModel: 'claude-sonnet-4-6',
-      getStderr: () => '',
+      getStderrMetadata: () => ({ hasStderr: false, byteLength: 0 }),
     });
     const activity = vi.fn();
 

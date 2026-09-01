@@ -41,10 +41,27 @@ With filesystem isolation enabled, Agor creates directories lazily:
     <tenant-id>/
       repos/
       worktrees/
+      branch-homes/
       uploads/
   agor.db
   config.yaml
 ```
+
+`branch-homes/<branch-id>/` holds a branch's optional **per-branch SDK home**
+(the relocated `.claude`/`.codex`/… config and state) when
+`execution.sandbox.sdk_home_mode: per_branch` is enabled. A fresh independent
+Session adopts the branch and records its own immutable branch-home scope; the
+directory is created lazily on that Session's first prompt. Existing
+execution-home Sessions keep their historical home even after adoption, and
+forked/spawned children inherit their parent's scope. The directory is keyed by
+the immutable branch id, removed when the branch is deleted (archive retains
+it), and — being under the tenant root — is included in tenant export/backup
+and cross-replica shared storage the same way `worktrees/` is. Agor does not
+copy managed credentials here: supported API keys are injected per caller at
+prompt time, Codex subscription auth is mounted from the exact caller's pinned
+credential inode for one sandboxed executor, and tools whose native auth cannot
+be separated from writable config state are refused. Interactive terminals
+never mount the branch home.
 
 `uploads.location` is a **base storage location**, not the final upload folder.
 Agor owns and appends the tenant and `uploads/` namespaces beneath it. Local
@@ -104,6 +121,7 @@ In the default single-tenant mode, paths remain unchanged:
 ~/.agor/
   repos/
   worktrees/
+  branch-homes/
   uploads/
   agor.db
   config.yaml

@@ -5,6 +5,8 @@ import {
   __streamSubscriptionCountForTest,
   attachReactiveSessionApi,
   ReactiveSessionHandle,
+  releaseReactiveSession,
+  retainReactiveSession,
   type TaskHydrationMode,
 } from './reactive-session';
 
@@ -176,6 +178,34 @@ async function bootstrapHandle(opts: MockClientOptions, taskHydration: TaskHydra
   await handle.ready();
   return { handle, messageFindAll };
 }
+
+describe('shared ReactiveSessionHandle call counts', () => {
+  it('uses one lazy bootstrap and one reconnect resync for two open-session consumers', async () => {
+    const mock = createMockClient({ tasks: [], messagesByTask: {} });
+    const sessionGet = mock.client.service('sessions').get as ReturnType<typeof vi.fn>;
+
+    // SessionPanel and ConversationView now retain this exact same tuple.
+    const panel = retainReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    const conversation = retainReactiveSession(mock.client, SESSION_ID, {
+      taskHydration: 'lazy',
+    });
+    expect(conversation).toBe(panel);
+    await panel.ready();
+
+    expect(sessionGet).toHaveBeenCalledTimes(1);
+    expect(mock.sessionStreams.create).toHaveBeenCalledTimes(1);
+
+    mock.fireIo('disconnect');
+    mock.fireIo('connect');
+    await vi.waitFor(() => expect(sessionGet).toHaveBeenCalledTimes(2));
+    expect(mock.sessionStreams.create).toHaveBeenCalledTimes(2);
+
+    releaseReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    expect(mock.sessionStreams.remove).not.toHaveBeenCalled();
+    releaseReactiveSession(mock.client, SESSION_ID, { taskHydration: 'lazy' });
+    await vi.waitFor(() => expect(mock.sessionStreams.remove).toHaveBeenCalledTimes(1));
+  });
+});
 
 describe('ReactiveSessionHandle prompt contract', () => {
   it('returns the admitted Task from the shared sessions helper', async () => {

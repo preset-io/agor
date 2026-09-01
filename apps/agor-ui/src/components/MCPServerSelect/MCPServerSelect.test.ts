@@ -51,9 +51,7 @@ describe('buildMcpServerOptions', () => {
     expect(option?.label).not.toContain('Not signed in');
   });
 
-  it('leaves an OAuth server holding a live token unmarked without the durable set', () => {
-    // The daemon injects the token on every read, so a caller with no store —
-    // the marketplace is one — still gets the right answer.
+  it('does not trust an OAuth token projected onto a generic server read', () => {
     const oauth = server({
       auth: {
         type: 'oauth',
@@ -61,17 +59,17 @@ describe('buildMcpServerOptions', () => {
         oauth_token_expires_at: 4102444800000,
       },
     } as Partial<MCPServer>);
-    expect(buildMcpServerOptions([oauth])[0]?.label).not.toContain('Not signed in');
+    expect(buildMcpServerOptions([oauth])[0]?.label).toContain('Not signed in');
   });
 
   it('leaves a non-OAuth server unmarked', () => {
     expect(buildMcpServerOptions([server({})])[0]?.label).not.toContain('Not signed in');
   });
 
-  it('shows a clear short fallback for a selected server missing from hydration', () => {
+  it('keeps a selected server missing from hydration labelled and removable', () => {
     const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
     expect(buildMcpServerOptions([], [id])).toEqual([
-      { label: 'Unavailable MCP server (aaaaaaaabbbbccccddddeeee)', value: id, disabled: true },
+      { label: 'Unavailable MCP server (aaaaaaaabbbbccccddddeeee)', value: id, disabled: false },
     ]);
   });
 });

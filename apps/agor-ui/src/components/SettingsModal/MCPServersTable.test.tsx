@@ -1,14 +1,23 @@
 import { canConfigureMCPServers } from '@agor/core/mcp/member-policy';
 import type { AgorClient, MCPMemberPolicy, MCPServer, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { agorStore } from '../../store/agorStore';
 import { MCPServersTable } from './MCPServersTable';
 
 const ADMIN: User = {
   user_id: 'user-admin',
   email: 'admin@agor.live',
   name: 'Ada Admin',
+  role: 'admin',
+} as User;
+
+const ADMIN_B: User = {
+  user_id: 'user-admin-b',
+  email: 'admin-b@agor.live',
+  name: 'Bea Admin',
   role: 'admin',
 } as User;
 
@@ -28,6 +37,7 @@ const VIEWER: User = {
 
 const USER_BY_ID = new Map<string, User>([
   [ADMIN.user_id, ADMIN],
+  [ADMIN_B.user_id, ADMIN_B],
   [MEMBER.user_id, MEMBER],
 ]);
 
@@ -75,6 +85,7 @@ function makeClient(
     io: { on: vi.fn(), off: vi.fn() },
     service: (path: string) => {
       if (path === 'mcp-member-policy') return { find, patch };
+      if (path === 'mcp-servers') return { on: vi.fn(), removeListener: vi.fn() };
       return {};
     },
   } as unknown as AgorClient;
@@ -103,12 +114,23 @@ function renderTable(options: {
   );
   render(
     <AntdApp>
-      <MCPServersTable
-        mcpServerById={mcpServerById}
-        client={client}
-        userById={USER_BY_ID}
-        currentUser={options.currentUser}
-      />
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          authGeneration: 1,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <MCPServersTable
+          mcpServerById={mcpServerById}
+          client={client}
+          userById={USER_BY_ID}
+          currentUser={options.currentUser}
+        />
+      </ConnectionProvider>
     </AntdApp>
   );
   return { find, patch };
@@ -120,12 +142,26 @@ function renderTable(options: {
 const POLICY_LOADING_HINT = /Checking what this workspace's MCP policy allows/i;
 const POLICY_UNREADABLE_HINT = /MCP policy could not be read/i;
 
+// These remain state/event assertions rather than elapsed-time assertions, but
+// a cold antd Form/Select mount makes jsdom parse a large generated stylesheet.
+// The focused file completes in ~90 seconds; under the full 240-file UI run,
+// worker contention can make an individual cold mount exceed the global 15s
+// limit without changing the result. Keep the allowance local to these real
+// form integration suites rather than weakening the workspace-wide timeout.
+const ANT_FORM_INTEGRATION_TIMEOUT = 60_000;
+const AUTHORITY_TRANSITION_TIMEOUT = 120_000;
+
+beforeEach(() => {
+  agorStore.getState().reset();
+});
+
 const policyRadio = (name: RegExp) => screen.getByRole('radio', { name });
 
 async function openCreateForm(): Promise<void> {
   const addButton = screen.getByRole('button', { name: /New MCP Server/i });
   await waitFor(() => expect(addButton).toBeEnabled());
   fireEvent.click(addButton);
+  await screen.findByRole('dialog', { name: 'Add MCP Server' });
 }
 
 /**
@@ -137,7 +173,7 @@ async function openCreateForm(): Promise<void> {
  */
 const openPolicyPane = () => fireEvent.click(screen.getByRole('tab', { name: 'Member policy' }));
 
-describe('MCPServersTable member policy', () => {
+describe('MCPServersTable member policy', { timeout: ANT_FORM_INTEGRATION_TIMEOUT }, () => {
   it('opens on the servers, with the policy a pane away', async () => {
     const { find } = renderTable({ policy: 'use_existing_only', currentUser: ADMIN });
 
@@ -418,6 +454,373 @@ describe('MCPServersTable member policy', () => {
   });
 });
 
+function renderTransitionTable(initial: {
+  currentUser: User;
+  policy: MCPMemberPolicy;
+  servers?: MCPServer[];
+  onCreate?: (
+    data: Parameters<NonNullable<React.ComponentProps<typeof MCPServersTable>['onCreate']>>[0],
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+}) {
+  let policy = initial.policy;
+  let role = initial.currentUser.role;
+  const policyListeners: Array<() => void> = [];
+  const find = vi.fn(async () => ({
+    policy,
+    can_configure: canConfigureMCPServers(role, policy),
+  }));
+  const serverCreate = vi.fn();
+  const serverPatch = vi.fn();
+  const mcpServersService = {
+    on: vi.fn((event: string, listener: () => void) => {
+      if (event === 'member-policy:changed') policyListeners.push(listener);
+    }),
+    removeListener: vi.fn(),
+    create: serverCreate,
+    patch: serverPatch,
+  };
+  const client = {
+    io: { on: vi.fn(), off: vi.fn() },
+    service: (path: string) => {
+      if (path === 'mcp-member-policy') return { find, patch: vi.fn() };
+      if (path === 'mcp-servers') return mcpServersService;
+      return { create: vi.fn() };
+    },
+  } as unknown as AgorClient;
+  const onCreate = vi.fn(initial.onCreate ?? (() => undefined));
+  let servers = new Map((initial.servers ?? []).map((server) => [server.mcp_server_id, server]));
+
+  const view = (currentUser: User, connected: boolean, connecting: boolean, generation: number) => (
+    <AntdApp>
+      <ConnectionProvider
+        value={{
+          connected,
+          connecting,
+          authGeneration: generation,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <MCPServersTable
+          mcpServerById={servers}
+          client={client}
+          userById={USER_BY_ID}
+          currentUser={currentUser}
+          onCreate={onCreate}
+        />
+      </ConnectionProvider>
+    </AntdApp>
+  );
+  const rendered = render(view(initial.currentUser, true, false, 1));
+
+  return {
+    find,
+    onCreate,
+    serverCreate,
+    serverPatch,
+    disconnect: () => rendered.rerender(view(initial.currentUser, false, true, 1)),
+    replaceRole: (currentUser: User, generation = 2) => {
+      role = currentUser.role;
+      rendered.rerender(
+        view(
+          { ...currentUser, user_id: initial.currentUser.user_id } as User,
+          true,
+          false,
+          generation
+        )
+      );
+    },
+    replaceIdentity: (currentUser: User, nextServers: MCPServer[] = [], generation = 2) => {
+      role = currentUser.role;
+      servers = new Map(nextServers.map((server) => [server.mcp_server_id, server]));
+      rendered.rerender(view(currentUser, true, false, generation));
+    },
+    setServers: (nextServers: MCPServer[]) => {
+      servers = new Map(nextServers.map((server) => [server.mcp_server_id, server]));
+      rendered.rerender(view(initial.currentUser, true, false, 1));
+    },
+    setPolicy: async (next: MCPMemberPolicy) => {
+      policy = next;
+      await act(async () => {
+        for (const listener of policyListeners) listener();
+      });
+    },
+  };
+}
+
+async function fillCreateRequirements(): Promise<void> {
+  fireEvent.change(await screen.findByLabelText('Name (Internal ID)'), {
+    target: { value: 'transition-server' },
+  });
+  const command = screen.queryByLabelText('Command');
+  if (command) {
+    fireEvent.change(command, { target: { value: 'npx transition-server' } });
+  } else {
+    fireEvent.change(screen.getByLabelText('URL'), {
+      target: { value: 'https://transition.example/mcp' },
+    });
+  }
+}
+
+async function chooseSelect(label: string, option: string): Promise<void> {
+  const select = screen.getByLabelText(label);
+  fireEvent.mouseDown(select);
+  const optionContent = await screen.findByText(option, {
+    selector: '.ant-select-item-option-content',
+  });
+  fireEvent.click(optionContent);
+}
+
+describe('MCPServersTable transport form state', { timeout: ANT_FORM_INTEGRATION_TIMEOUT }, () => {
+  it('does not submit preserved remote fields after switching the create form to stdio', async () => {
+    const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+
+    fireEvent.change(screen.getByLabelText('Name (Internal ID)'), {
+      target: { value: 'transport-switch-server' },
+    });
+    await chooseSelect('Transport', 'HTTP');
+    fireEvent.change(await screen.findByLabelText('URL'), {
+      target: { value: 'https://stale-remote.example/mcp' },
+    });
+    await chooseSelect('Auth Type', 'Bearer Token');
+    fireEvent.change(await screen.findByLabelText('Token'), {
+      target: { value: 'stale-remote-token' },
+    });
+    fireEvent.click(screen.getByText('Advanced Configuration'));
+    fireEvent.change(await screen.findByLabelText('Custom HTTP Headers'), {
+      target: { value: '{"X-Stale":"remote"}' },
+    });
+
+    await chooseSelect('Transport', 'stdio (Local process)');
+    fireEvent.change(await screen.findByLabelText('Command'), {
+      target: { value: 'mcp-server-shortcut' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(seam.onCreate).toHaveBeenCalledOnce());
+    const submitted = seam.onCreate.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(submitted).toMatchObject({
+      name: 'transport-switch-server',
+      transport: 'stdio',
+      command: 'mcp-server-shortcut',
+      args: [],
+    });
+    expect(submitted).not.toHaveProperty('url');
+    expect(submitted).not.toHaveProperty('headers');
+    expect(submitted).not.toHaveProperty('auth');
+  });
+});
+
+describe('MCPServersTable open-dialog authority transitions', {
+  timeout: AUTHORITY_TRANSITION_TIMEOUT,
+}, () => {
+  it('destroys an admin-A create form and raw credential before admin B can use it', async () => {
+    const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    fireEvent.change(screen.getByLabelText('Name (Internal ID)'), {
+      target: { value: 'admin-a-private-server' },
+    });
+    await chooseSelect('Transport', 'HTTP');
+    fireEvent.change(await screen.findByLabelText('URL'), {
+      target: { value: 'https://admin-a.example/mcp' },
+    });
+    await chooseSelect('Auth Type', 'Bearer Token');
+    fireEvent.change(await screen.findByLabelText('Token'), {
+      target: { value: 'admin-a-raw-bearer-token' },
+    });
+    const staleCreate = screen.getByRole('button', { name: 'Create' });
+    await waitFor(() => expect(staleCreate).toBeEnabled());
+
+    // Validation settles asynchronously. Replace the principal in the same
+    // turn so this proves the old continuation cannot submit A's secret as B.
+    fireEvent.click(staleCreate);
+    seam.replaceIdentity(ADMIN_B);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Add MCP Server' })).not.toBeInTheDocument()
+    );
+    expect(seam.onCreate).not.toHaveBeenCalled();
+    expect(seam.serverCreate).not.toHaveBeenCalled();
+
+    await openCreateForm();
+    expect(screen.getByLabelText('Name (Internal ID)')).toHaveValue('');
+    await chooseSelect('Transport', 'HTTP');
+    await chooseSelect('Auth Type', 'Bearer Token');
+    expect(await screen.findByLabelText('Token')).toHaveValue('');
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+  });
+
+  it('does not close or continue an A create after its parent save crosses auth generation', async () => {
+    let resolveSave!: () => void;
+    const save = new Promise<void>((resolve) => {
+      resolveSave = resolve;
+    });
+    let parentGuard: (() => boolean) | undefined;
+    const seam = renderTransitionTable({
+      currentUser: ADMIN,
+      policy: 'allow_crud',
+      onCreate: async (_data, shouldApply) => {
+        parentGuard = shouldApply;
+        await save;
+      },
+    });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    await fillCreateRequirements();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    await waitFor(() => expect(seam.onCreate).toHaveBeenCalledOnce());
+    expect(parentGuard?.()).toBe(true);
+
+    seam.replaceRole(ADMIN, 2);
+    expect(parentGuard?.()).toBe(false);
+    await act(async () => {
+      resolveSave();
+      await save;
+    });
+    expect(screen.getByRole('dialog', { name: 'Add MCP Server' })).toBeInTheDocument();
+  });
+
+  it('closes an admin-A view and erases its unredacted environment on admin B', async () => {
+    const privateServer = makeServer({
+      name: 'admin-a-private-view',
+      display_name: 'Admin A Private View',
+      env: { PRIVATE_TOKEN: 'admin-a-env-secret' },
+    });
+    const replacementServer = makeServer({
+      mcp_server_id: 'server-b-view',
+      name: 'admin-b-view-server',
+      display_name: 'Admin B View Server',
+    });
+    const seam = renderTransitionTable({
+      currentUser: ADMIN,
+      policy: 'allow_crud',
+      servers: [privateServer],
+    });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    const [view] = Array.from(rowFor('Admin A Private View').querySelectorAll('button'));
+    fireEvent.click(view as HTMLButtonElement);
+    expect(await screen.findByText(/admin-a-env-secret/)).toBeInTheDocument();
+
+    seam.replaceIdentity(ADMIN_B, [replacementServer]);
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'MCP Server Details' })).not.toBeInTheDocument()
+    );
+    expect(screen.queryByText(/admin-a-env-secret/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Admin A Private View')).not.toBeInTheDocument();
+    expect(screen.getByText('Admin B View Server')).toBeInTheDocument();
+  });
+
+  it('closes admin-A edit state when admin B receives a replacement map', async () => {
+    const privateServer = makeServer({
+      name: 'admin-a-private',
+      display_name: 'Admin A Private',
+      auth: { type: 'bearer', token: 'admin-a-bearer-secret' },
+    });
+    const replacementServer = makeServer({
+      mcp_server_id: 'server-b',
+      name: 'admin-b-server',
+      display_name: 'Admin B Server',
+    });
+    const seam = renderTransitionTable({
+      currentUser: ADMIN,
+      policy: 'allow_crud',
+      servers: [privateServer],
+    });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+
+    const edit = rowFor('Admin A Private').querySelector(
+      'button[title="Edit"]'
+    ) as HTMLButtonElement;
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit as HTMLButtonElement);
+    const token = await screen.findByLabelText('Token');
+    fireEvent.change(token, { target: { value: 'admin-a-edited-bearer-secret' } });
+    const staleSave = screen.getByRole('button', { name: 'Save' });
+
+    seam.replaceIdentity(ADMIN_B, [replacementServer]);
+
+    await waitFor(() => expect(screen.queryByText('Edit MCP Server')).not.toBeInTheDocument());
+    fireEvent.click(staleSave);
+    expect(seam.serverPatch).not.toHaveBeenCalled();
+    expect(screen.queryByText('Admin A Private')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('admin-a-edited-bearer-secret')).not.toBeInTheDocument();
+    expect(screen.getByText('Admin B Server')).toBeInTheDocument();
+  });
+
+  it('closes an editor when realtime replacement removes its selected server', async () => {
+    const privateServer = makeServer({ name: 'realtime-private' });
+    const seam = renderTransitionTable({
+      currentUser: ADMIN,
+      policy: 'allow_crud',
+      servers: [privateServer],
+    });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    const edit = rowFor('realtime-private').querySelector(
+      'button[title="Edit"]'
+    ) as HTMLButtonElement;
+    await waitFor(() => expect(edit).toBeEnabled());
+    fireEvent.click(edit as HTMLButtonElement);
+    await screen.findByLabelText('URL');
+
+    seam.setServers([]);
+
+    await waitFor(() => expect(screen.queryByText('Edit MCP Server')).not.toBeInTheDocument());
+    expect(screen.queryByText('realtime-private')).not.toBeInTheDocument();
+  });
+
+  it('blocks an already-open create dialog immediately on disconnect', async () => {
+    const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    await fillCreateRequirements();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+
+    seam.disconnect();
+
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    expect(screen.getByText(/MCP server changes are unavailable/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(seam.onCreate).not.toHaveBeenCalled();
+    expect(seam.serverCreate).not.toHaveBeenCalled();
+  });
+
+  it('blocks an already-open create dialog immediately on demotion', async () => {
+    const seam = renderTransitionTable({ currentUser: ADMIN, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    await fillCreateRequirements();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+
+    seam.replaceRole(VIEWER);
+
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(seam.onCreate).not.toHaveBeenCalled();
+    expect(seam.serverCreate).not.toHaveBeenCalled();
+  });
+
+  it('blocks an already-open member create dialog on a live policy downgrade', async () => {
+    const seam = renderTransitionTable({ currentUser: MEMBER, policy: 'allow_crud' });
+    await waitFor(() => expect(seam.find).toHaveBeenCalledTimes(1));
+    await openCreateForm();
+    await fillCreateRequirements();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled());
+
+    await seam.setPolicy('use_existing_only');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+    expect(seam.onCreate).not.toHaveBeenCalled();
+    expect(seam.serverCreate).not.toHaveBeenCalled();
+  });
+});
+
 // Ant Design's table styles defeat jsdom's CSS parser, so rows are asserted on
 // presence and attributes rather than through computed visibility.
 const rowFor = (cellText: string): HTMLElement => {
@@ -523,19 +926,17 @@ describe('MCPServersTable unfinished installs', () => {
     expect(screen.queryByText('Not tested')).not.toBeInTheDocument();
   });
 
-  it('reports health normally once a live token is present', async () => {
+  it('reports health normally once oauth-status confirms authentication', async () => {
+    act(() => {
+      agorStore.getState().applyMaps((prev) => ({
+        ...prev,
+        userAuthenticatedMcpServerIds: new Set(['server-1']),
+      }));
+    });
     renderTable({
       policy: 'allow_crud',
       currentUser: ADMIN,
-      servers: [
-        oauthServer({
-          auth: {
-            type: 'oauth',
-            oauth_access_token: '••••••••',
-            oauth_token_expires_at: 4102444800000,
-          },
-        } as Partial<MCPServer>),
-      ],
+      servers: [oauthServer()],
     });
 
     expect(await screen.findByText('Not tested')).toBeVisible();

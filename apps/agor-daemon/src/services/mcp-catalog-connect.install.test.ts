@@ -16,6 +16,7 @@
 
 import {
   createDatabaseAsync,
+  MCPCatalogCandidateRepository,
   MCPServerRepository,
   runMigrations,
   setMcpMemberPolicy,
@@ -30,6 +31,7 @@ import type {
   MCPMemberPolicy,
   MCPServer,
   User,
+  UserID,
   UserRole,
 } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -39,6 +41,7 @@ import {
   type McpServerWriteHookContext,
 } from '../utils/mcp-server-authorization.js';
 import { createMCPCatalogConnectService } from './mcp-catalog-connect.js';
+import { isMCPOAuthGrantAuthorizedForServer } from './mcp-oauth-grant-authority.js';
 import { createMCPServersService } from './mcp-servers.js';
 
 const { probeRemoteAuthType } = vi.hoisted(() => ({ probeRemoteAuthType: vi.fn() }));
@@ -61,8 +64,6 @@ const CURATED = {
  * A caller who holds no OAuth grant anywhere, for the tests about installing
  * rather than about reuse. Reuse asks this first and stops when it says so.
  */
-const NO_GRANTS = { readGrantResourceUri: async () => undefined };
-
 const CONNECT_REQUEST = {
   catalog_key: DEEPWIKI,
   branch_id: 'branch-1',
@@ -79,7 +80,11 @@ const CONNECT_REQUEST = {
  * puts it there. That second claim is asserted separately at the bottom of
  * this file, against the production registration itself.
  */
-async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
+async function buildDaemon(
+  policy: MCPMemberPolicy,
+  role: UserRole = 'member',
+  catalogEntry: MCPCatalogEntry = CURATED
+) {
   const rawDb = await createDatabaseAsync({ dialect: 'sqlite', url: ':memory:' });
   const db = rawDb as unknown as TenantScopeAwareDatabase;
   await runMigrations(rawDb);
@@ -97,7 +102,7 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
   } as never);
   app.use('mcp-catalog', {
     async get() {
-      return CURATED;
+      return catalogEntry;
     },
   } as never);
   app.use('sessions', {
@@ -120,17 +125,28 @@ async function buildDaemon(policy: MCPMemberPolicy, role: UserRole = 'member') {
       user: { user_id: caller.user_id, role: callerRole },
     }) as unknown as AuthenticatedParams;
 
+  const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
+  const connectDeps = {
+    listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
+    getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
+      candidateRepo.getForUser(userId, serverId),
+    isGrantAuthorized: async () => false,
+  };
+
   const connectAs = (caller: User, callerRole: UserRole) =>
-    createMCPCatalogConnectService(app, NO_GRANTS).create(
+    createMCPCatalogConnectService(app, connectDeps).create(
       CONNECT_REQUEST,
       paramsFor(caller, callerRole)
     );
   const connect = () => connectAs(user, role);
-  const installedServers = () => new MCPServerRepository(rawDb).findAll({});
-  const addUser = (email: string, addedRole: UserRole) =>
-    users.create({ email, name: email, role: addedRole }) as Promise<User>;
+  const serverRepository = new MCPServerRepository(rawDb);
+  const installedServers = () => serverRepository.findAll({});
+  const seedServer = (server: Parameters<MCPServerRepository['create']>[0]) =>
+    serverRepository.create(server);
+  const addUser = (email: string, addedRole: UserRole, user_id?: UserID) =>
+    users.create({ email, name: email, role: addedRole, user_id }) as Promise<User>;
 
-  return { user, connect, connectAs, addUser, installedServers };
+  return { user, connect, connectAs, addUser, installedServers, seedServer };
 }
 
 describe('marketplace install, as it lands in the database', () => {
@@ -151,6 +167,21 @@ describe('marketplace install, as it lands in the database', () => {
       scope: 'session',
       catalog_entry_name: DEEPWIKI,
       owner_user_id: user.user_id,
+    });
+  });
+
+  it('accepts the authentication-hydrated legacy UUID user ID deployed in production', async () => {
+    const { connectAs, addUser, installedServers } = await buildDaemon('allow_crud');
+    const legacyUserId = '707bae66-dda5-4c01-9136-a5cda16e048e' as UserID;
+    const legacy = await addUser('legacy-production-shape@agor.live', 'member', legacyUserId);
+
+    await connectAs(legacy, 'member');
+
+    expect(
+      (await installedServers()).find((row) => row.owner_user_id === legacyUserId)
+    ).toMatchObject({
+      owner_user_id: legacyUserId,
+      catalog_entry_name: DEEPWIKI,
     });
   });
 
@@ -231,6 +262,52 @@ describe('marketplace install, as it lands in the database', () => {
     const servers = await installedServers();
     expect(servers).toHaveLength(1);
     expect(servers[0]?.owner_user_id).toBe(user.user_id);
+  });
+
+  it('authoritatively replaces stale same-type OAuth fields on a reused catalog install', async () => {
+    const oauthEntry = { ...CURATED, auth_type: 'oauth' } as MCPCatalogEntry;
+    const { user, connect, installedServers, seedServer } = await buildDaemon(
+      'allow_crud',
+      'member',
+      oauthEntry
+    );
+    await seedServer({
+      name: 'deepwiki',
+      display_name: 'DeepWiki',
+      transport: 'http',
+      url: CURATED.remote_url,
+      auth: {
+        type: 'oauth',
+        oauth_mode: 'per_user',
+        oauth_authorization_url: 'https://stale.example/authorize',
+        oauth_token_url: 'https://stale.example/token',
+        oauth_client_secret: 'stale-client-secret',
+        oauth_scope: 'stale:read stale:write',
+        // This is the one catalog reconciliation override the operator chose
+        // explicitly and is allowed to retain.
+        oauth_compatibility_mode: 'legacy',
+      },
+      scope: 'session',
+      source: 'catalog',
+      catalog_entry_name: DEEPWIKI,
+      owner_user_id: user.user_id as UserID,
+      enabled: true,
+    });
+    probeRemoteAuthType.mockResolvedValueOnce('oauth');
+
+    const result = (await connect()) as {
+      reused_existing_server: boolean;
+      mcp_server: MCPServer;
+    };
+
+    expect(result.reused_existing_server).toBe(true);
+    const [stored] = await installedServers();
+    expect(stored?.auth).toEqual({
+      type: 'oauth',
+      oauth_mode: 'per_user',
+      oauth_compatibility_mode: 'legacy',
+    });
+    expect(JSON.stringify(stored)).not.toContain('stale-client-secret');
   });
 });
 
@@ -327,12 +404,27 @@ describe('the write hook this seam depends on', () => {
       name: 'Mallory',
       role: 'member',
     })) as User;
+    const patchTarget = await new MCPServerRepository(rawDb).create({
+      name: 'registered-hook-patch-target',
+      transport: 'http',
+      url: 'https://mcp.example.test',
+      scope: 'global',
+      owner_user_id: bob.user_id as UserID,
+      source: 'user',
+    });
 
     const registeredHooks = captureRegisteredMcpServerCreateHooks(db);
     const createAs = async (caller: User, data: Record<string, unknown>) => {
       const context = {
         method: 'create',
-        data,
+        data: {
+          name: 'registered-hook-test',
+          transport: 'http',
+          url: 'https://mcp.example.test',
+          scope: 'global',
+          enabled: true,
+          ...data,
+        },
         params: {
           provider: 'rest',
           user: { user_id: caller.user_id, role: 'member' },
@@ -345,7 +437,7 @@ describe('the write hook this seam depends on', () => {
     const patchAs = async (caller: User, data: Record<string, unknown>) => {
       const context = {
         method: 'patch',
-        id: '01900000-0000-7000-8000-000000000099',
+        id: patchTarget.mcp_server_id,
         data,
         params: {
           provider: 'rest',
@@ -359,12 +451,15 @@ describe('the write hook this seam depends on', () => {
     return { bob, mallory, createAs, patchAs };
   };
 
-  it('is registered on mcp-servers create by registerHooks, not just constructible', async () => {
+  it('trusts the authentication-hydrated owner, not a request-supplied owner', async () => {
     const { bob, mallory, createAs } = await standUpDaemonHooks();
 
     await expect(
       createAs(mallory, { transport: 'http', owner_user_id: bob.user_id })
     ).rejects.toThrow(/only create MCP servers owned by yourself/);
+
+    const context = await createAs(mallory, { transport: 'http' });
+    expect((context.data as { owner_user_id?: string }).owner_user_id).toBe(mallory.user_id);
   });
 
   it('runs as the registered chain, not as a blanket denier', async () => {
@@ -380,7 +475,7 @@ describe('the write hook this seam depends on', () => {
   });
 
   it.each(['marketplace', 'future-mode'])(
-    'rejects public create and patch compatibility mode %s before authorization',
+    'rejects public create and patch compatibility mode %s at the authorized write boundary',
     async (mode) => {
       const { bob, createAs, patchAs } = await standUpDaemonHooks();
       const data = {
@@ -554,14 +649,22 @@ describe('credential reuse, against real grants', () => {
 
     // The real read the daemon injects, against the real table — so "whose
     // grant" is decided by the same key the production wiring uses.
+    const candidateRepo = new MCPCatalogCandidateRepository(rawDb);
     const deps = {
-      async readGrantResourceUri(
-        serverId: MCPServer['mcp_server_id'],
+      listCandidates: (userId: User['user_id']) => candidateRepo.listForUser(userId),
+      getCandidate: (userId: User['user_id'], serverId: MCPServer['mcp_server_id']) =>
+        candidateRepo.getForUser(userId, serverId),
+      async isGrantAuthorized(
+        candidate: import('@agor/core/types').MCPCatalogServerCandidate,
         params: AuthenticatedParams
       ) {
         const userId = params.user?.user_id as User['user_id'] | undefined;
-        if (!userId) return undefined;
-        return (await tokens.getToken(userId, serverId))?.oauth_resource_uri ?? undefined;
+        if (!userId) return false;
+        const grant = await tokens.getCatalogGrantAuthority(userId, candidate.server.mcp_server_id);
+        return Boolean(
+          grant?.has_access_token &&
+            (await isMCPOAuthGrantAuthorizedForServer(db, candidate.server, grant))
+        );
       },
     };
 

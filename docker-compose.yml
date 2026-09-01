@@ -137,6 +137,14 @@ services:
       - AGOR_DB_DIALECT=${AGOR_DB_DIALECT:-sqlite}
       - DATABASE_URL=${DATABASE_URL:-}
 
+      # Explicit operator acknowledgement for protocol-breaking migrations.
+      # New Agor-managed isolated dev variants set the dedicated variable in
+      # .agor.yml. SEED is the compatibility signal for already-rendered
+      # managed commands: it is development-only and those Compose projects
+      # own isolated database volumes. Unseeded/ad-hoc/shared invocations stay
+      # fail-closed unless the operator sets the dedicated variable.
+      - AGOR_MIGRATION_OFFLINE_CUTOVER=${AGOR_MIGRATION_OFFLINE_CUTOVER:-${SEED:-false}}
+
       # Seed development fixtures (optional, set SEED=true to populate test data)
       # Creates: Agor repo (https://github.com/preset-io/agor.git) + test-branch
       - SEED=${SEED:-false}
@@ -167,6 +175,10 @@ services:
       # persistent private home inside the sandbox. Default (unset/shared) uses
       # the daemon user's home.
       - AGOR_SANDBOX_HOME_MODE=${AGOR_SANDBOX_HOME_MODE:-}
+      # Optional branch-owned SDK state. Empty preserves the deployment-safe
+      # `inherit` default; the rich/full PostgreSQL overlay opts into
+      # `per_branch` so its RBAC fixtures exercise the complete sharing model.
+      - AGOR_SANDBOX_SDK_HOME_MODE=${AGOR_SANDBOX_SDK_HOME_MODE:-}
       # Optional PostgreSQL/RBAC development fixtures. This must be forwarded
       # explicitly: --env-file supplies Compose interpolation values but does
       # not inject arbitrary variables into the container by itself.

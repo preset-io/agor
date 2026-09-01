@@ -13,11 +13,18 @@ describe('register-hooks MCP server secret redaction', () => {
     expect(source).toContain('redactMCPServerSecretFields');
     expect(source).toContain('redactMCPServerSecrets');
     expect(utilSource).toContain('redactMCPAuthSecrets(server.auth)');
-    expect(source).toMatch(/find:\s*\[injectPerUserOAuthTokens,\s*redactMCPServerSecretFields\]/);
-    // Ownership hooks may run ahead of these; redaction must still be last.
     expect(source).toMatch(
-      /get:\s*\[[\s\S]*?injectPerUserOAuthTokens,\s*redactMCPServerSecretFields[\s\S]*?\]/
+      /find:\s*\[presentMcpOAuthPolicies,\s*redactMCPServerSecretFieldsForGatewayMode\]/
     );
+    // Ownership hooks may run ahead of these; redaction must still be last.
+    expect(source).toMatch(/get:\s*\[[\s\S]*?redactMCPServerSecretFieldsForGatewayMode[\s\S]*?\]/);
+  });
+
+  it('keeps ordinary MCP server reads free of OAuth grant lookups', () => {
+    const block = source.slice(source.indexOf("safeService('mcp-servers')?.hooks({"));
+    const readHooks = block.slice(0, block.indexOf("safeService('mcp-catalog')"));
+    expect(readHooks).not.toContain('UserMCPOAuthTokenRepository');
+    expect(readHooks).not.toContain('injectPerUserOAuthTokens');
   });
 
   it('redacts every mcp-servers method that returns a row, remove included', () => {
@@ -40,7 +47,7 @@ describe('register-hooks MCP server secret redaction', () => {
     // check: `authorizeMcpServerWriteHook` decides on `mcp_member_policy` plus
     // ownership, which is what lets a member hold a server of their own at all.
     expect(source).toMatch(
-      /update:\s*\[validateMcpServerOAuthCompatibility,\s*authorizeMcpServerWriteHook\]/
+      /update:\s*\[\s*authorizeMcpServerWriteHook,[\s\S]*?validateMcpServerOAuthCompatibility,?\s*\]/
     );
   });
 
@@ -49,7 +56,9 @@ describe('register-hooks MCP server secret redaction', () => {
     expect(routesSource).toContain('redactMCPServerSecrets');
     expect(routesSource).toContain('servers.map(redactMCPServerSecrets)');
     expect(routesSource).toContain('authorizeAndLoadSessionForMcpConfig(id, params)');
-    expect(routesSource).toContain('isMCPServerUsableInSession');
+    expect(routesSource).toContain('isMCPServerUsableBy');
+    expect(routesSource).toContain('const credentialUserId = userId ?? session.created_by');
+    expect(routesSource).toContain('usableByUserId: credentialUserId');
     expect(routesSource).toContain('includeGlobal');
     expect(routesSource).toContain("scope: 'global'");
     expect(routesSource).toContain('forUserId');

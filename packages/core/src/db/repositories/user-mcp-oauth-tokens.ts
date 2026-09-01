@@ -14,7 +14,14 @@ import { randomUUID } from 'node:crypto';
 import type { MCPOAuthGrantBindingVersion, MCPServerID, UserID } from '@agor/core/types';
 import { and, eq, isNotNull, isNull, lt, sql } from 'drizzle-orm';
 import type { Database } from '../client';
-import { deleteFrom, executeRaw, insert, select, update } from '../database-wrapper';
+import {
+  deleteFrom,
+  executeRaw,
+  insert,
+  lockRowForUpdate,
+  select,
+  update,
+} from '../database-wrapper';
 import { openBoundSecret, sealBoundSecret } from '../oauth-secret-envelope';
 import {
   type UserMCPOAuthTokenInsert,
@@ -126,6 +133,10 @@ function rowsOf(result: unknown): Array<Record<string, unknown>> {
   if (Array.isArray(result)) return result as Array<Record<string, unknown>>;
   const rows = (result as { rows?: unknown[] } | undefined)?.rows;
   return Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function grantSecretBinding(
@@ -256,6 +267,140 @@ export class UserMCPOAuthTokenRepository {
     } catch (error) {
       throw new RepositoryError(
         `Failed to get OAuth token: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Lock and read the exact grant inside an existing authority transaction.
+   * Discovery uses this only at its final persistence boundary so a refresh,
+   * replacement, or disconnect cannot commit between comparison and the
+   * capability write.
+   */
+  async getTokenForUpdate(
+    userId: UserID | null,
+    serverId: MCPServerID
+  ): Promise<UserMCPOAuthToken | null> {
+    await lockRowForUpdate(this.db, this.db, userMcpOauthTokens, matchKey(userId, serverId)!);
+    return this.getToken(userId, serverId);
+  }
+
+  /**
+   * Read only the protected-resource binding used for catalog credential
+   * matching. Unlike `getToken`, this projection never loads or decrypts token
+   * or client material into the caller's process.
+   */
+  async getResourceUri(userId: UserID, serverId: MCPServerID): Promise<string | undefined> {
+    try {
+      const row = await select(this.db, {
+        oauth_resource_uri: userMcpOauthTokens.oauth_resource_uri,
+      })
+        .from(userMcpOauthTokens)
+        .where(matchKey(userId, serverId))
+        .one();
+      return row?.oauth_resource_uri ? String(row.oauth_resource_uri) : undefined;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to read OAuth resource: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Full grant authority used only by authoritative Marketplace Connect.
+   *
+   * Advisory readiness must use MCPCatalogCandidateRepository's secret-free
+   * `binding_ready` projection instead. Connect calls this only at the final
+   * reuse boundary, where access and refresh token columns are still reduced
+   * to presence but the registered client identity/secret may be opened to
+   * recompute the binding HMAC. Nothing returned crosses an API boundary.
+   */
+  async getCatalogGrantAuthority(
+    userId: UserID,
+    serverId: MCPServerID
+  ): Promise<(UserMCPOAuthToken & { has_access_token: boolean }) | null> {
+    try {
+      const row = (await select(this.db, {
+        user_id: userMcpOauthTokens.user_id,
+        mcp_server_id: userMcpOauthTokens.mcp_server_id,
+        has_access_token: sql<boolean>`${userMcpOauthTokens.oauth_access_token} is not null`,
+        oauth_token_expires_at: userMcpOauthTokens.oauth_token_expires_at,
+        oauth_client_id: userMcpOauthTokens.oauth_client_id,
+        oauth_client_secret: userMcpOauthTokens.oauth_client_secret,
+        grant_generation: userMcpOauthTokens.grant_generation,
+        grant_binding_version: userMcpOauthTokens.grant_binding_version,
+        grant_binding_fingerprint: userMcpOauthTokens.grant_binding_fingerprint,
+        oauth_metadata_uri: userMcpOauthTokens.oauth_metadata_uri,
+        oauth_resource_uri: userMcpOauthTokens.oauth_resource_uri,
+        oauth_issuer: userMcpOauthTokens.oauth_issuer,
+        oauth_authorization_endpoint: userMcpOauthTokens.oauth_authorization_endpoint,
+        oauth_token_endpoint: userMcpOauthTokens.oauth_token_endpoint,
+        oauth_redirect_uri: userMcpOauthTokens.oauth_redirect_uri,
+        refresh_status: userMcpOauthTokens.refresh_status,
+        refresh_generation: userMcpOauthTokens.refresh_generation,
+        refresh_success_generation: userMcpOauthTokens.refresh_success_generation,
+        created_at: userMcpOauthTokens.created_at,
+        updated_at: userMcpOauthTokens.updated_at,
+      })
+        .from(userMcpOauthTokens)
+        .where(matchKey(userId, serverId))
+        .one()) as Record<string, unknown> | undefined;
+      if (!row) return null;
+      const generation = Number(row.grant_generation ?? 0);
+      const openClient = (
+        value: unknown,
+        purpose: 'client-id' | 'client-secret',
+        field: string
+      ): string | undefined => {
+        if (value == null || value === '') return undefined;
+        if (!this.postgres) return String(value);
+        const tenantId = this.tenantId();
+        if (!tenantId || !this.masterSecret) {
+          throw new RepositoryError('PostgreSQL MCP OAuth client decryption is not configured');
+        }
+        return openBoundSecret(
+          String(value),
+          this.masterSecret,
+          purpose,
+          grantSecretBinding(tenantId, userId, serverId, generation, field)
+        );
+      };
+      return {
+        user_id: userId,
+        mcp_server_id: serverId,
+        // Deliberate nonsecret stand-in: binding verification never reads the
+        // access value, and this object never leaves the daemon.
+        oauth_access_token: row.has_access_token ? '<present>' : '',
+        has_access_token: Boolean(row.has_access_token),
+        oauth_token_expires_at: row.oauth_token_expires_at
+          ? new Date(row.oauth_token_expires_at as Date | string | number)
+          : undefined,
+        oauth_client_id: openClient(row.oauth_client_id, 'client-id', 'client-id'),
+        oauth_client_secret: openClient(row.oauth_client_secret, 'client-secret', 'client-secret'),
+        grant_generation: generation,
+        grant_binding_version:
+          row.grant_binding_version == null ? undefined : Number(row.grant_binding_version),
+        grant_binding_fingerprint: stringValue(row.grant_binding_fingerprint),
+        oauth_metadata_uri: stringValue(row.oauth_metadata_uri),
+        oauth_resource_uri: stringValue(row.oauth_resource_uri),
+        oauth_issuer: stringValue(row.oauth_issuer),
+        oauth_authorization_endpoint: stringValue(row.oauth_authorization_endpoint),
+        oauth_token_endpoint: stringValue(row.oauth_token_endpoint),
+        oauth_redirect_uri: stringValue(row.oauth_redirect_uri),
+        refresh_status:
+          row.refresh_status === 'refreshing' || row.refresh_status === 'ambiguous'
+            ? row.refresh_status
+            : 'idle',
+        refresh_generation: Number(row.refresh_generation ?? 0),
+        refresh_success_generation: Number(row.refresh_success_generation ?? 0),
+        created_at: new Date(row.created_at as Date | string | number),
+        updated_at: row.updated_at ? new Date(row.updated_at as Date | string | number) : undefined,
+      };
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to read OAuth grant authority: ${error instanceof Error ? error.message : String(error)}`,
         error
       );
     }

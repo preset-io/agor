@@ -1,30 +1,17 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { performance } from 'node:perf_hooks';
 import type { HookContext } from '@agor/core/types';
+import {
+  type FeathersInstrumentationOptions,
+  normalizeFeathersMethod as normalizeMethod,
+  normalizeFeathersService as normalizeService,
+  normalizeFeathersTransport as normalizeTransport,
+} from '../utils/feathers-instrumentation.js';
 import type { DaemonMetrics } from './types.js';
 
 type AroundNext = () => Promise<void>;
 
-interface FeathersMetricsOptions {
-  excludedServicePaths?: readonly string[];
-  isInternalCall?: (context: HookContext) => boolean;
-}
-
-function normalizeTransport(provider: unknown): 'rest' | 'socketio' | 'mcp' | 'other' | undefined {
-  if (provider === undefined || provider === null) return undefined;
-  if (provider === 'rest' || provider === 'socketio' || provider === 'mcp') return provider;
-  return 'other';
-}
-
-function normalizeMethod(method: string): string {
-  return ['create', 'find', 'get', 'patch', 'remove', 'update'].includes(method)
-    ? method
-    : 'custom';
-}
-
-function normalizeService(path: string): string {
-  return /^[a-zA-Z0-9_/-]{1,100}$/.test(path) ? path : 'other';
-}
+type FeathersMetricsOptions = FeathersInstrumentationOptions;
 
 function errorStatus(error: unknown): string | number {
   if (!error || typeof error !== 'object') return 'error';

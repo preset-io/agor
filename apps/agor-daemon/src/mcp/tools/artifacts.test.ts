@@ -10,6 +10,7 @@ vi.mock('@agor/core/db', () => ({
 
 vi.mock('../../utils/branch-authorization.js', () => ({
   hasBranchPermission: () => true,
+  isSuperAdmin: () => false,
 }));
 
 vi.mock('../server.js', () => ({

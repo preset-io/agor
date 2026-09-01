@@ -10,9 +10,20 @@
  */
 
 import type { Branch, MCPCatalogCredentialRequirement, MCPCatalogEntry } from '@agor/core/types';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { type MCPServerCapabilityContext, POLICY_LOADING_HINT } from '../MCPServer/memberPolicy';
 import { CatalogDetailDrawer } from './CatalogDetailDrawer';
+import { getLastConnectBranchId, rememberConnectBranchId } from './useConnectTargets';
+
+const ALLOWED: MCPServerCapabilityContext = {
+  connectionReady: true,
+  role: 'admin',
+  isAdmin: true,
+  policy: 'allow_crud',
+  userId: 'user-admin',
+  canConfigure: true,
+};
 
 const DEEPWIKI = {
   name: 'com.deepwiki/mcp',
@@ -34,11 +45,18 @@ const LINEAR = {
   permission_disclosure: 'Reads and writes issues in the Linear workspaces you authorise.',
 } as unknown as MCPCatalogEntry;
 
+const OAUTH_LINEAR = { ...LINEAR, auth_type: 'oauth' } as MCPCatalogEntry;
+
 const BRANCHES = [{ branch_id: 'branch-1', name: 'mkt-slice' }] as unknown as Branch[];
 
-function renderDrawer(entry: MCPCatalogEntry) {
+function renderDrawer(
+  entry: MCPCatalogEntry,
+  options: { capability?: MCPServerCapabilityContext; policyPending?: boolean } = {}
+) {
+  const { capability = ALLOWED, policyPending = false } = options;
   const view = render(
     <CatalogDetailDrawer
+      identityKey={capability.userId ?? null}
       entry={entry}
       open
       onClose={vi.fn()}
@@ -48,12 +66,16 @@ function renderDrawer(entry: MCPCatalogEntry) {
       defaultBranchId="branch-1"
       connecting={false}
       connectError={null}
+      connectCapability={capability}
+      policyPending={policyPending}
+      policyPendingHint={POLICY_LOADING_HINT}
       onConnect={vi.fn()}
     />
   );
   const show = (next: MCPCatalogEntry) =>
     view.rerender(
       <CatalogDetailDrawer
+        identityKey={capability.userId ?? null}
         entry={next}
         open
         onClose={vi.fn()}
@@ -63,16 +85,124 @@ function renderDrawer(entry: MCPCatalogEntry) {
         defaultBranchId="branch-1"
         connecting={false}
         connectError={null}
+        connectCapability={capability}
+        policyPending={policyPending}
+        policyPendingHint={POLICY_LOADING_HINT}
         onConnect={vi.fn()}
       />
     );
   return { show };
 }
 
-const connectButton = () =>
-  screen
-    .getByText(/^(Connect, then sign in|Verify token & connect|Check & connect|Connect & try it)$/i)
-    .closest('button')!;
+const connectButton = () => {
+  const match = screen
+    .getAllByText(/^(Connect with .+|Verify key & connect|Check & connect|Connect & try it)$/i)
+    .find((node) => node.closest('button'));
+  if (!match) throw new Error('Connect button not found');
+  return match.closest('button')!;
+};
+
+function branchCombobox(): HTMLElement {
+  const item = screen.getByText('Branch').closest('.ant-form-item');
+  const input = item?.querySelector('[role="combobox"]');
+  if (!(input instanceof HTMLElement)) throw new Error('Branch selector not found');
+  return input;
+}
+
+function renderBranchDrawer({
+  branches,
+  defaultBranchId,
+  loading = false,
+}: {
+  branches: Branch[];
+  defaultBranchId: string | null;
+  loading?: boolean;
+}) {
+  return render(
+    <CatalogDetailDrawer
+      identityKey="user-admin"
+      entry={DEEPWIKI}
+      open
+      onClose={vi.fn()}
+      branches={branches}
+      branchesLoading={loading}
+      branchesError={null}
+      defaultBranchId={defaultBranchId}
+      connecting={false}
+      connectError={null}
+      connectCapability={ALLOWED}
+      policyPending={false}
+      policyPendingHint={POLICY_LOADING_HINT}
+      onConnect={vi.fn()}
+    />
+  );
+}
+
+describe('CatalogDetailDrawer branch destination', () => {
+  const TWO_BRANCHES = [
+    { branch_id: 'branch-1', name: 'First branch' },
+    { branch_id: 'branch-2', name: 'Remembered branch' },
+  ] as unknown as Branch[];
+
+  it('selects the caller-persisted branch by default', async () => {
+    localStorage.clear();
+    rememberConnectBranchId('user-admin', 'branch-2');
+    renderBranchDrawer({
+      branches: TWO_BRANCHES,
+      defaultBranchId: getLastConnectBranchId('user-admin'),
+    });
+
+    await waitFor(() =>
+      expect(branchCombobox().parentElement).toHaveTextContent('Remembered branch')
+    );
+  });
+
+  it('falls back to the first accessible branch when the preference is stale', async () => {
+    renderBranchDrawer({ branches: TWO_BRANCHES, defaultBranchId: 'no-longer-visible' });
+
+    await waitFor(() => expect(branchCombobox().parentElement).toHaveTextContent('First branch'));
+    expect(branchCombobox().parentElement).not.toHaveTextContent('Remembered branch');
+  });
+
+  it('distinguishes a loading branch list from no accessible branches', async () => {
+    const view = renderBranchDrawer({ branches: [], defaultBranchId: null, loading: true });
+    expect(screen.getAllByText('Loading branches…').length).toBeGreaterThan(0);
+    expect(connectButton()).toBeDisabled();
+
+    view.rerender(
+      <CatalogDetailDrawer
+        identityKey="user-admin"
+        entry={DEEPWIKI}
+        open
+        onClose={vi.fn()}
+        branches={[]}
+        branchesLoading={false}
+        branchesError={null}
+        defaultBranchId={null}
+        connecting={false}
+        connectError={null}
+        connectCapability={ALLOWED}
+        policyPending={false}
+        policyPendingHint={POLICY_LOADING_HINT}
+        onConnect={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText('Select a branch')).toBeVisible();
+    fireEvent.mouseDown(branchCombobox());
+    expect(await screen.findByText('No branches yet')).toBeInTheDocument();
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('uses a fixed desktop target width that Ant Drawer can constrain to the viewport', () => {
+    renderBranchDrawer({
+      branches: TWO_BRANCHES,
+      defaultBranchId: 'branch-1',
+    });
+
+    expect(document.querySelector('.ant-drawer-content-wrapper')).toHaveStyle({ width: '480px' });
+  });
+});
 
 describe('CatalogDetailDrawer consent', () => {
   it('gates connect on the disclosure being acknowledged', () => {
@@ -117,6 +247,168 @@ describe('CatalogDetailDrawer consent', () => {
   });
 });
 
+describe('CatalogDetailDrawer OAuth activation', () => {
+  const renderOAuth = (
+    onConnect = vi.fn(),
+    options: { entry?: MCPCatalogEntry; readinessLoading?: boolean } = {}
+  ) =>
+    render(
+      <CatalogDetailDrawer
+        identityKey="user-admin"
+        entry={options.entry ?? OAUTH_LINEAR}
+        open
+        onClose={vi.fn()}
+        branches={BRANCHES}
+        branchesLoading={false}
+        branchesError={null}
+        defaultBranchId="branch-1"
+        connecting={false}
+        connectError={null}
+        readiness={
+          options.readinessLoading
+            ? null
+            : { catalog_key: OAUTH_LINEAR.name, state: 'oauth_required' }
+        }
+        readinessLoading={options.readinessLoading}
+        connectCapability={ALLOWED}
+        policyPending={false}
+        policyPendingHint={POLICY_LOADING_HINT}
+        onConnect={onConnect}
+      />
+    );
+
+  it('pre-opens a blank window in the click before handing control to Connect', () => {
+    const popup = {
+      opener: window,
+      closed: false,
+      close: vi.fn(),
+      location: { replace: vi.fn() },
+      document: { title: '', body: { textContent: '' } },
+    } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup);
+    const onConnect = vi.fn();
+    renderOAuth(onConnect);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(connectButton());
+    expect(open).toHaveBeenCalledWith(
+      'about:blank',
+      expect.stringMatching(/^agor-mcp-oauth-/),
+      'popup=yes,width=720,height=760'
+    );
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oauthPopup: expect.objectContaining({ close: expect.any(Function) }),
+      })
+    );
+    open.mockRestore();
+  });
+
+  it('conservatively pre-opens on a fast click while readiness is still unknown', () => {
+    const popup = {
+      opener: window,
+      closed: false,
+      close: vi.fn(),
+      location: { replace: vi.fn() },
+      document: { title: '', body: { textContent: '' } },
+    } as unknown as Window;
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup);
+    const onConnect = vi.fn();
+    renderOAuth(onConnect, { entry: DEEPWIKI, readinessLoading: true });
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(connectButton()).toBeEnabled();
+    fireEvent.click(connectButton());
+
+    expect(open).toHaveBeenCalledOnce();
+    expect(onConnect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oauthPopup: expect.objectContaining({ operationId: expect.any(String) }),
+      })
+    );
+    open.mockRestore();
+  });
+
+  it('does not call Connect when the browser blocks the popup', () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const onConnect = vi.fn();
+    renderOAuth(onConnect);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(connectButton());
+    expect(onConnect).not.toHaveBeenCalled();
+    expect(
+      screen.getByText('Nothing was connected because the sign-in window could not be opened.')
+    ).toBeVisible();
+    open.mockRestore();
+  });
+});
+
+describe('CatalogDetailDrawer connect capability', () => {
+  const VIEWER: MCPServerCapabilityContext = {
+    connectionReady: true,
+    role: 'viewer',
+    isAdmin: false,
+    policy: 'allow_crud',
+    userId: 'user-viewer',
+    canConfigure: false,
+  };
+  const RESTRICTED_MEMBER: MCPServerCapabilityContext = {
+    connectionReady: true,
+    role: 'member',
+    isAdmin: false,
+    policy: 'use_existing_only',
+    userId: 'user-member',
+    canConfigure: false,
+  };
+
+  it('refuses a viewer at the action and explains the role restriction', () => {
+    renderDrawer(DEEPWIKI, { capability: VIEWER });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeDisabled();
+    expect(screen.getByText(/read-only access/i)).toBeInTheDocument();
+  });
+
+  it('refuses a member when the workspace policy forbids new servers', () => {
+    renderDrawer(DEEPWIKI, { capability: RESTRICTED_MEMBER });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeDisabled();
+    expect(screen.getByText(/Use existing servers only/)).toBeInTheDocument();
+  });
+
+  it('enables the action for a member with server-provided capability', () => {
+    renderDrawer(DEEPWIKI, {
+      capability: { ...RESTRICTED_MEMBER, policy: 'allow_crud', canConfigure: true },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeEnabled();
+  });
+
+  it('fails closed during disconnect grace even with a previously granted capability', () => {
+    renderDrawer(DEEPWIKI, {
+      capability: {
+        ...RESTRICTED_MEMBER,
+        connectionReady: false,
+        policy: 'allow_crud',
+        canConfigure: true,
+      },
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeDisabled();
+  });
+
+  it('fails closed without inventing a workspace policy while the read is pending', () => {
+    renderDrawer(DEEPWIKI, { policyPending: true });
+    fireEvent.click(screen.getByRole('checkbox'));
+
+    expect(connectButton()).toBeDisabled();
+    expect(screen.getByText(POLICY_LOADING_HINT)).toBeInTheDocument();
+    expect(screen.queryByText(/does not let you add/i)).not.toBeInTheDocument();
+  });
+});
+
 /**
  * The API-key field.
  *
@@ -155,8 +447,10 @@ function renderWithConnect(entry: MCPCatalogEntry) {
   const props = (
     shown: MCPCatalogEntry,
     open = true,
-    credentialRequirement: MCPCatalogCredentialRequirement | null = null
+    credentialRequirement: MCPCatalogCredentialRequirement | null = null,
+    identityKey = ALLOWED.userId ?? null
   ) => ({
+    identityKey,
     entry: shown,
     open,
     onClose: vi.fn(),
@@ -167,6 +461,14 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     connecting: false,
     connectError: null,
     credentialRequirement,
+    connectCapability: { ...ALLOWED, userId: identityKey ?? undefined },
+    policyPending: false,
+    policyPendingHint: POLICY_LOADING_HINT,
+    readiness: {
+      catalog_key: shown.name,
+      state:
+        shown.auth_type === 'credentials' ? ('bearer_required' as const) : ('no_auth' as const),
+    },
     onConnect,
   });
   const view = render(<CatalogDetailDrawer {...props(entry)} />);
@@ -180,12 +482,29 @@ function renderWithConnect(entry: MCPCatalogEntry) {
     /** What `CatalogTab` does after a refusal that named a requirement. */
     answerFromEndpoint: (requirement: MCPCatalogCredentialRequirement) =>
       view.rerender(<CatalogDetailDrawer {...props(entry, true, requirement)} />),
+    replaceIdentity: (identityKey: string) =>
+      view.rerender(<CatalogDetailDrawer {...props(entry, true, null, identityKey)} />),
   };
 }
 
 const keyField = () => screen.queryByPlaceholderText(/Paste your .* bearer access token/);
 
 describe('CatalogDetailDrawer API key', () => {
+  it('erases same-entry consent and the pasted key on same-role identity replacement', () => {
+    const { onConnect, replaceIdentity } = renderWithConnect(DATADOG);
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.change(keyField() as HTMLElement, { target: { value: 'admin-a-private-key' } });
+    expect(connectButton()).toBeEnabled();
+
+    replaceIdentity('user-admin-b');
+
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(keyField()).toHaveValue('');
+    expect(connectButton()).toBeDisabled();
+    fireEvent.click(connectButton());
+    expect(onConnect).not.toHaveBeenCalled();
+  });
+
   it('offers a key field for an entry that needs one, and gates connect on it', () => {
     renderWithConnect(DATADOG);
     fireEvent.click(screen.getByRole('checkbox'));

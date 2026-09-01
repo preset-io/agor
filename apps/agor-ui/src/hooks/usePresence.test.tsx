@@ -1,6 +1,13 @@
-import type { BoardID, CursorMovedEvent, PresenceUpdatedEvent, User } from '@agor-live/client';
+import type {
+  BoardID,
+  CursorLeftEvent,
+  CursorMovedEvent,
+  PresenceLeftEvent,
+  PresenceUpdatedEvent,
+  User,
+} from '@agor-live/client';
 import { act, renderHook } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { usePresence } from './usePresence';
 
 type Listener = (payload: unknown) => void;
@@ -47,6 +54,8 @@ function boardId(value: string): BoardID {
 }
 
 describe('usePresence', () => {
+  afterEach(() => vi.useRealTimers());
+
   it('ignores cursor events for other boards without re-rendering board-scoped consumers', () => {
     const { client, emit } = makeMockClient();
     const users = [makeUser()];
@@ -67,6 +76,7 @@ describe('usePresence', () => {
     act(() => {
       emit('cursor-moved', {
         userId: 'user-1',
+        presenceId: 'presence-1',
         boardId: boardId('board-b'),
         x: 120,
         y: 80,
@@ -97,6 +107,7 @@ describe('usePresence', () => {
     act(() => {
       emit('presence-updated', {
         userId: 'user-1',
+        presenceId: 'presence-1',
         boardId: boardId('board-b'),
         timestamp: 1_000,
       } satisfies PresenceUpdatedEvent);
@@ -107,6 +118,7 @@ describe('usePresence', () => {
     act(() => {
       emit('presence-updated', {
         userId: 'user-1',
+        presenceId: 'presence-1',
         boardId: boardId('board-b'),
         timestamp: 5_000,
       } satisfies PresenceUpdatedEvent);
@@ -122,6 +134,7 @@ describe('usePresence', () => {
     act(() => {
       emit('presence-updated', {
         userId: 'user-1',
+        presenceId: 'presence-1',
         boardId: boardId('board-b'),
         timestamp: 12_000,
       } satisfies PresenceUpdatedEvent);
@@ -155,6 +168,7 @@ describe('usePresence', () => {
     act(() => {
       emit('presence-updated', {
         userId: 'user-1',
+        presenceId: 'presence-1',
         boardId: boardId('board-b'),
         timestamp: 1_000,
       } satisfies PresenceUpdatedEvent);
@@ -177,6 +191,7 @@ describe('usePresence', () => {
     act(() => {
       emit('presence-updated', {
         userId: 'user-1',
+        presenceId: 'presence-1',
         boardId: boardId('board-c'),
         timestamp: 20_000,
       } satisfies PresenceUpdatedEvent);
@@ -198,6 +213,7 @@ describe('usePresence', () => {
     act(() => {
       emit('presence-updated', {
         userId: 'user-1',
+        presenceId: 'presence-1',
         timestamp: 1_000,
       } satisfies PresenceUpdatedEvent);
     });
@@ -205,5 +221,149 @@ describe('usePresence', () => {
     expect(result.current.activeUsers).toHaveLength(1);
     expect(result.current.activeUsers[0]).toMatchObject({ lastSeen: 1_000 });
     expect(result.current.activeUsers[0]?.boardId).toBeUndefined();
+  });
+
+  it('keeps boardless post-2520 packets usable during a rolling deployment', () => {
+    const { client, emit } = makeMockClient();
+    const users = [makeUser()];
+    const { result } = renderHook(() =>
+      usePresence({ client, boardId: null, users, globalPresence: true })
+    );
+
+    act(() => {
+      emit('presence-updated', {
+        userId: 'user-1',
+        timestamp: 1_000,
+      } as PresenceUpdatedEvent);
+    });
+
+    expect(result.current.activeUsers).toHaveLength(1);
+    expect(result.current.activeUsers[0]?.boardId).toBeUndefined();
+  });
+
+  it('keeps another tab active when one presence instance leaves', () => {
+    const { client, emit } = makeMockClient();
+    const users = [makeUser()];
+    const { result } = renderHook(() =>
+      usePresence({ client, boardId: boardId('board-a'), users, globalPresence: true })
+    );
+
+    act(() => {
+      emit('presence-updated', {
+        userId: 'user-1',
+        presenceId: 'tab-1',
+        boardId: boardId('board-a'),
+        timestamp: 1_000,
+      } satisfies PresenceUpdatedEvent);
+      emit('presence-updated', {
+        userId: 'user-1',
+        presenceId: 'tab-2',
+        boardId: boardId('board-a'),
+        timestamp: 2_000,
+      } satisfies PresenceUpdatedEvent);
+      emit('presence-left', {
+        userId: 'user-1',
+        presenceId: 'tab-1',
+        boardId: boardId('board-a'),
+        timestamp: 3_000,
+      } satisfies PresenceLeftEvent);
+      emit('presence-left', {
+        userId: 'user-1',
+        presenceId: 'tab-1',
+        timestamp: 3_001,
+      } satisfies PresenceLeftEvent);
+    });
+
+    expect(result.current.activeUsers).toHaveLength(1);
+    expect(result.current.activeUsers[0]).toMatchObject({
+      boardId: boardId('board-a'),
+      lastSeen: 2_000,
+    });
+  });
+
+  it('keeps the newest cursor from another tab after one tab leaves', () => {
+    const { client, emit } = makeMockClient();
+    const users = [makeUser()];
+    const { result } = renderHook(() =>
+      usePresence({ client, boardId: boardId('board-a'), users })
+    );
+
+    act(() => {
+      emit('cursor-moved', {
+        userId: 'user-1',
+        presenceId: 'tab-1',
+        boardId: boardId('board-a'),
+        x: 10,
+        y: 20,
+        timestamp: 1_000,
+      } satisfies CursorMovedEvent);
+      emit('cursor-moved', {
+        userId: 'user-1',
+        presenceId: 'tab-2',
+        boardId: boardId('board-a'),
+        x: 30,
+        y: 40,
+        timestamp: 2_000,
+      } satisfies CursorMovedEvent);
+      emit('cursor-left', {
+        userId: 'user-1',
+        presenceId: 'tab-1',
+        boardId: boardId('board-a'),
+        timestamp: 3_000,
+      } satisfies CursorLeftEvent);
+      emit('cursor-left', {
+        userId: 'user-1',
+        presenceId: 'tab-2',
+        boardId: boardId('board-a'),
+        timestamp: 1_500,
+      } satisfies CursorLeftEvent);
+    });
+
+    expect(result.current.remoteCursors.get('user-1')).toMatchObject({ x: 30, y: 40 });
+  });
+
+  it('clears passive cursor and facepile state on transport disconnect', () => {
+    const { client, emit } = makeMockClient();
+    const users = [makeUser()];
+    const { result } = renderHook(() =>
+      usePresence({ client, boardId: null, users, globalPresence: true })
+    );
+
+    act(() => {
+      emit('presence-updated', {
+        userId: 'user-1',
+        presenceId: 'presence-1',
+        timestamp: 1_000,
+      } satisfies PresenceUpdatedEvent);
+    });
+    expect(result.current.activeUsers).toHaveLength(1);
+
+    act(() => emit('disconnect', undefined));
+    expect(result.current.activeUsers).toEqual([]);
+  });
+
+  it('expires a stale cursor instance at the configured bound', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const { client, emit } = makeMockClient();
+    const users = [makeUser()];
+    const { result } = renderHook(() =>
+      usePresence({ client, boardId: boardId('board-a'), users })
+    );
+
+    act(() => {
+      emit('cursor-moved', {
+        userId: 'user-1',
+        presenceId: 'tab-1',
+        boardId: boardId('board-a'),
+        x: 10,
+        y: 20,
+        timestamp: Date.now(),
+      } satisfies CursorMovedEvent);
+    });
+    expect(result.current.remoteCursors.size).toBe(1);
+
+    act(() => vi.advanceTimersByTime(5_000));
+    expect(result.current.remoteCursors.size).toBe(0);
   });
 });

@@ -70,15 +70,21 @@ export const KNOWLEDGE_SURFACE = defineSurface({
   branding: surfaceTitle('Knowledge'),
 });
 
-export const MARKETPLACE_ROUTE_PATHS = ['/marketplace'] as const;
+export const MARKETPLACE_ROUTE_PATHS = [
+  '/marketplace',
+  '/marketplace/catalog',
+  '/marketplace/servers',
+  '/marketplace/sessions',
+  '/marketplace/credentials',
+] as const;
 
 export const MARKETPLACE_SURFACE = defineSurface({
   id: 'marketplace',
   label: 'Marketplace',
   routePaths: MARKETPLACE_ROUTE_PATHS,
-  // Browsing the catalog reads a paginated global table, not the tenant's
-  // boards and sessions, so the workspace store stays cold until connect
-  // navigates into a session.
+  // Browsing the catalog reads the checked-in curated file the daemon serves
+  // whole, not the tenant's boards and sessions, so the workspace store stays
+  // cold until connect navigates into a session.
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: true,
@@ -97,10 +103,26 @@ export const ARTIFACT_FULLSCREEN_SURFACE = defineSurface({
   branding: surfaceTitle('Artifact'),
 });
 
+export const RBAC_POLICY_PROTOTYPE_ROUTE_PATH = '/demo/rbac-policy' as const;
+
+/**
+ * Development prototypes must never become production surfaces by accident.
+ * Keeping route construction pure also lets tests prove the production path
+ * list excludes the prototype even though Vitest itself runs in DEV mode.
+ */
+export function getDemoRoutePaths(includeDevelopmentPrototypes = import.meta.env.DEV): string[] {
+  return [
+    '/demo/streamdown',
+    '/demo/marketing-screenshots',
+    '/demo/marketing-video',
+    ...(includeDevelopmentPrototypes ? [RBAC_POLICY_PROTOTYPE_ROUTE_PATH] : []),
+  ];
+}
+
 export const DEMO_SURFACE = defineSurface({
   id: 'demo',
   label: 'Demo',
-  routePaths: ['/demo/streamdown', '/demo/marketing-screenshots', '/demo/marketing-video'],
+  routePaths: getDemoRoutePaths(),
   startsWorkspaceRuntime: false,
   usesDeviceRouter: false,
   usesSharedUserSettings: false,

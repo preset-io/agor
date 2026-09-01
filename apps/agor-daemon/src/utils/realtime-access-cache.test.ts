@@ -24,7 +24,7 @@ describe('RealtimeAccessCache', () => {
     let now = 1_000;
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(),
-      findExplicitViewUserIds: vi.fn(),
+      findRealtimeViewUserIds: vi.fn(),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
       findBranchIdBySessionId: vi.fn(async () => 'b1'),
@@ -50,7 +50,7 @@ describe('RealtimeAccessCache', () => {
     let now = 1_000;
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(),
-      findExplicitViewUserIds: vi.fn(),
+      findRealtimeViewUserIds: vi.fn(),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
       findBranchIdBySessionId: vi.fn(async () => 'b1'),
@@ -82,7 +82,7 @@ describe('RealtimeAccessCache', () => {
     let now = 1_000;
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'session')),
-      findExplicitViewUserIds: vi.fn(),
+      findRealtimeViewUserIds: vi.fn(async () => []),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
       findBranchIdBySessionId: vi.fn(async () => 'b1'),
@@ -110,7 +110,7 @@ describe('RealtimeAccessCache', () => {
     let now = 1_000;
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'none')),
-      findExplicitViewUserIds: vi.fn(async () => ['u1']),
+      findRealtimeViewUserIds: vi.fn(async () => ['u1']),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
       findBranchIdBySessionId: vi.fn(),
@@ -128,25 +128,25 @@ describe('RealtimeAccessCache', () => {
     expect(first).toEqual({ mode: 'explicitUsers', userIds: new Set(['u1']) });
     expect(second).toEqual({ mode: 'explicitUsers', userIds: new Set(['u1']) });
     expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(1);
-    expect(branchRepository.findExplicitViewUserIds).toHaveBeenCalledTimes(1);
+    expect(branchRepository.findRealtimeViewUserIds).toHaveBeenCalledTimes(1);
 
     cache.invalidateBranch('b1');
 
     await cache.getBranchVisibility('b1');
     expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(2);
-    expect(branchRepository.findExplicitViewUserIds).toHaveBeenCalledTimes(2);
+    expect(branchRepository.findRealtimeViewUserIds).toHaveBeenCalledTimes(2);
 
     now += 60_001;
 
     await cache.getBranchVisibility('b1');
     expect(branchRepository.findRealtimeVisibilityBranch).toHaveBeenCalledTimes(3);
-    expect(branchRepository.findExplicitViewUserIds).toHaveBeenCalledTimes(3);
+    expect(branchRepository.findRealtimeViewUserIds).toHaveBeenCalledTimes(3);
   });
 
-  it('represents broadly visible branches without expanding user ids', async () => {
+  it('materializes exact viewers even when Others grants broad access', async () => {
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'session')),
-      findExplicitViewUserIds: vi.fn(async () => ['u1']),
+      findRealtimeViewUserIds: vi.fn(async () => ['u1']),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
       findBranchIdBySessionId: vi.fn(),
@@ -157,15 +157,16 @@ describe('RealtimeAccessCache', () => {
     });
 
     await expect(cache.getBranchVisibility('b1')).resolves.toEqual({
-      mode: 'allAuthenticated',
+      mode: 'explicitUsers',
+      userIds: new Set(['u1']),
     });
-    expect(branchRepository.findExplicitViewUserIds).not.toHaveBeenCalled();
+    expect(branchRepository.findRealtimeViewUserIds).toHaveBeenCalledOnce();
   });
 
   it('clears warmed ACL and session mappings before a replica reconnect can reuse them', async () => {
     const branchRepository = {
       findRealtimeVisibilityBranch: vi.fn(async () => branch('b1', 'none')),
-      findExplicitViewUserIds: vi.fn(async () => ['u1']),
+      findRealtimeViewUserIds: vi.fn(async () => ['u1']),
     } as unknown as RealtimeAccessBranchRepository;
     const sessionsRepository = {
       findBranchIdBySessionId: vi.fn(async () => 'b1'),
@@ -202,7 +203,7 @@ describe('RealtimeAccessCache', () => {
         .fn()
         .mockImplementationOnce(() => oldRead.promise)
         .mockResolvedValueOnce(branch('b1', 'none')),
-      findExplicitViewUserIds: vi.fn().mockResolvedValue([]),
+      findRealtimeViewUserIds: vi.fn().mockResolvedValue([]),
     } as unknown as RealtimeAccessBranchRepository;
     const cache = new RealtimeAccessCache({
       branchRepository,
@@ -235,7 +236,7 @@ describe('RealtimeAccessCache', () => {
     const cache = new RealtimeAccessCache({
       branchRepository: {
         findRealtimeVisibilityBranch: vi.fn(),
-        findExplicitViewUserIds: vi.fn(),
+        findRealtimeViewUserIds: vi.fn(),
       },
       sessionsRepository,
     });

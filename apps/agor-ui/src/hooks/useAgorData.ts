@@ -31,9 +31,14 @@ import {
   ARTIFACT_METADATA_LIST_FIELDS,
   ENTITY_PATH_SEGMENTS,
   findByShortIdPrefix,
+  hasMinimumRole,
   PAGINATION,
+  ROLES,
 } from '@agor-live/client';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+
+const MCP_OAUTH_STATUS_POLL_INTERVAL_MS = 60_000;
+
 import {
   bumpFirstPaintMergeRevisions,
   bumpRevision,
@@ -54,11 +59,12 @@ import {
   discardRealtimeNow,
   enqueueSessionPatch,
   flushRealtimeNow,
+  setRealtimeAuthorityScope,
   tombstoneSession,
   untombstoneSession,
 } from '../store/realtimeBatch';
 import { createInitialLoadDebugTimer, isInitialLoadDebugEnabled } from '../utils/initialLoadDebug';
-import { refetchMCPOAuthDurableState } from '../utils/mcpOAuthAttempt';
+import { runLatestMCPOAuthStatusRequest } from '../utils/mcpOAuthAttempt';
 import { TOKENS_REFRESHED_EVENT } from '../utils/singleFlightRefresh';
 import {
   resolveBoardFromUrlPure,
@@ -247,10 +253,108 @@ function hasIdMatchingPrefix<T>(
  */
 export function useAgorData(
   client: AgorClient | null,
-  options?: { enabled?: boolean; directSessionId?: string | null }
+  options?: {
+    enabled?: boolean;
+    directSessionId?: string | null;
+    /** Authenticated identity, independent from the privileged users directory. */
+    authenticatedUserId?: string;
+    /**
+     * Role from the authenticated user response, not from the optional users
+     * directory. Viewer bootstrap must decide whether member-only workspace
+     * requests exist before attempting them; otherwise one expected 403 hides
+     * the authenticated header and viewer-safe routes such as Marketplace.
+     */
+    authenticatedUserRole?: string;
+    /** Successful socket authentication generation from useAgorClient. */
+    authGeneration?: number;
+    /** Socket is connected, authenticated, and outside a reauth transition. */
+    connectionReady?: boolean;
+  }
 ): UseAgorDataResult {
   const enabled = options?.enabled ?? true;
   const directSessionId = options?.directSessionId ?? null;
+  // Preserve the hook's historical standalone-test/default behavior when the
+  // caller does not provide role context. App always provides the property,
+  // including `undefined` before auth resolves, and therefore fails closed.
+  const hasAuthenticatedRoleContext = Object.hasOwn(options ?? {}, 'authenticatedUserRole');
+  const canUseMemberWorkspaceServices =
+    !hasAuthenticatedRoleContext || hasMinimumRole(options?.authenticatedUserRole, ROLES.MEMBER);
+  const canListUsers = canUseMemberWorkspaceServices;
+  const hasAuthorityContext =
+    Object.hasOwn(options ?? {}, 'authenticatedUserId') ||
+    Object.hasOwn(options ?? {}, 'authGeneration') ||
+    Object.hasOwn(options ?? {}, 'connectionReady');
+  const authenticatedUserId = options?.authenticatedUserId;
+  const authGeneration = options?.authGeneration ?? 0;
+  const connectionReady = options?.connectionReady ?? true;
+  const identityRoleKey =
+    authenticatedUserId && options?.authenticatedUserRole
+      ? `${authenticatedUserId}:${options.authenticatedUserRole}`
+      : null;
+  // A role/identity value can render before the socket has authenticated the
+  // replacement token. Remember the last pair proven by a ready connection;
+  // changing that pair requires a strictly newer auth generation. Demotions
+  // therefore fail closed immediately, while promotions cannot issue a
+  // viewer-era request merely because React observed the refreshed user first.
+  const establishedAuthorityRef = useRef<{
+    client: AgorClient;
+    identityRoleKey: string;
+    authGeneration: number;
+  } | null>(null);
+  const establishedAuthority = establishedAuthorityRef.current;
+  const authorityMatchesEstablished =
+    !!establishedAuthority &&
+    establishedAuthority.client === client &&
+    establishedAuthority.identityRoleKey === identityRoleKey &&
+    authGeneration >= establishedAuthority.authGeneration;
+  const authorityHasNewAuthentication =
+    !establishedAuthority || authGeneration > establishedAuthority.authGeneration;
+  const authorityIsEstablished =
+    !hasAuthorityContext ||
+    (!!client &&
+      connectionReady &&
+      !!identityRoleKey &&
+      (authorityMatchesEstablished || authorityHasNewAuthentication));
+  const authorityScopeKey =
+    client &&
+    enabled &&
+    authorityIsEstablished &&
+    (!hasAuthorityContext || (authenticatedUserId && options?.authenticatedUserRole))
+      ? `${authenticatedUserId ?? '__standalone__'}:${options?.authenticatedUserRole ?? '__standalone__'}:${authGeneration}`
+      : null;
+  // Render-time update closes the window before transition effects run: every
+  // asynchronous apply below compares its captured scope against this value.
+  const authorityScopeKeyRef = useRef(authorityScopeKey);
+  authorityScopeKeyRef.current = authorityScopeKey;
+
+  // Advance the singleton realtime queue in the layout phase. React runs this
+  // before the authority-transition map reset below and before the previous
+  // subscription's passive cleanup, so that cleanup cannot flush a queued row
+  // from the previous identity/role/auth generation into the replacement
+  // authority's store. Socket callbacks also consult this scope synchronously,
+  // closing the short layout→passive-cleanup listener overlap.
+  useLayoutEffect(() => {
+    setRealtimeAuthorityScope(authorityScopeKey);
+  }, [authorityScopeKey]);
+
+  // On a true owner unmount, discard rather than preserve a final frame. The
+  // subscription cleanup cannot distinguish unmount from a same-authority
+  // resubscribe, while layout cleanup ordering can: it runs first and makes the
+  // later scoped flush a no-op.
+  useLayoutEffect(() => () => setRealtimeAuthorityScope(null), []);
+
+  useLayoutEffect(() => {
+    if (!hasAuthorityContext || !client || !connectionReady || !identityRoleKey) return;
+    if (!authorityIsEstablished) return;
+    establishedAuthorityRef.current = { client, identityRoleKey, authGeneration };
+  }, [
+    authGeneration,
+    authorityIsEstablished,
+    client,
+    connectionReady,
+    hasAuthorityContext,
+    identityRoleKey,
+  ]);
 
   // Reset the shared singleton store once per hook (re)mount, synchronously
   // BEFORE the first store-subscription read below. This mirrors the old per-mount
@@ -297,9 +401,9 @@ export function useAgorData(
   const [hasInitiallyFetched, setHasInitiallyFetched] = useState(false);
 
   // Single-flight guard for reconnect-triggered refetches. Prevents stampedes
-  // when the socket flaps (e.g. waking from sleep on a flaky network). We also
-  // don't want to issue 14 parallel service calls multiple times in a row.
-  const refetchInflightRef = useRef(false);
+  // when the socket flaps (e.g. waking from sleep on a flaky network). The
+  // authority key prevents an older identity's flight from blocking the next.
+  const refetchInflightRef = useRef<string | null>(null);
 
   // Tracks whether the most recent silent refetch failed. Set by the silent
   // catch branch in `fetchData`, cleared on success. Read by the
@@ -309,6 +413,44 @@ export function useAgorData(
   // physical reconnect or page refresh. We use a ref rather than state since
   // we only consume it in event handlers, never in render.
   const lastSilentFetchFailedRef = useRef(false);
+  const oauthStatusRequestGenerationRef = useRef(0);
+
+  /**
+   * One latest-request-wins coordinator for initial hydration, polling, and
+   * realtime OAuth hints. A later request invalidates every earlier response,
+   * preventing an old poll from overwriting a newer disconnect/re-auth result.
+   */
+  const refetchOAuthDurableState = useCallback(
+    async (requestAuthorityScope: string, mcpServerId?: string): Promise<boolean> => {
+      if (!client) return false;
+      return runLatestMCPOAuthStatusRequest(
+        oauthStatusRequestGenerationRef,
+        async () => {
+          const [status, freshServer] = await Promise.all([
+            client.service('mcp-servers/oauth-status').find(),
+            mcpServerId
+              ? client.service('mcp-servers').get(mcpServerId)
+              : Promise.resolve(undefined),
+          ]);
+          return { status, freshServer };
+        },
+        () => authorityScopeKeyRef.current === requestAuthorityScope,
+        ({ status, freshServer }) => {
+          const ids =
+            (status as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
+          agorStore.getState().applyMaps((prev) => {
+            if (!freshServer) {
+              return { ...prev, userAuthenticatedMcpServerIds: new Set(ids) };
+            }
+            const mcpServerById = new Map(prev.mcpServerById);
+            mcpServerById.set(freshServer.mcp_server_id, freshServer);
+            return { ...prev, userAuthenticatedMcpServerIds: new Set(ids), mcpServerById };
+          });
+        }
+      );
+    },
+    [client]
+  );
 
   // Fetch all data
   //
@@ -322,9 +464,20 @@ export function useAgorData(
   // reconnect or token replacement gets another shot.
   const fetchData = useCallback(
     async ({ silent = false }: { silent?: boolean } = {}) => {
-      if (!client || !enabled) {
-        return;
+      const fetchAuthorityScope = authorityScopeKey;
+      if (!client || !enabled || !fetchAuthorityScope) {
+        return false;
       }
+      const authorityIsCurrent = () => authorityScopeKeyRef.current === fetchAuthorityScope;
+      const runAuthorityHydration = (
+        name: string,
+        revisions: Parameters<typeof runHydration>[1],
+        fetcher: () => Promise<unknown>,
+        apply: (value: unknown) => void
+      ) =>
+        runHydration(name, revisions, fetcher, (value) => {
+          if (authorityIsCurrent()) apply(value);
+        });
 
       const debugTimer =
         !silent && isInitialLoadDebugEnabled()
@@ -351,7 +504,7 @@ export function useAgorData(
         ): Promise<T> => {
           const timedPromise = debugTimer?.track(key, p) ?? p;
           return timedPromise.then((r) => {
-            if (!silent)
+            if (!silent && authorityIsCurrent())
               agorStore.getState().setItemCounts((prev) => ({ ...prev, [key]: r.length }));
             return r;
           });
@@ -374,14 +527,14 @@ export function useAgorData(
         // clobber a newer realtime upsert, and a fetch resolving after logout is
         // dropped instead of repopulating the previous tenant. The apply sets the
         // hydration gate, so it only flips once a quiet, current snapshot lands.
-        void runHydration(
+        void runAuthorityHydration(
           'agentic-tool-settings',
           ['agenticToolSettings'],
           () => client.service('agentic-tool-settings').findAll(),
           (settings) => agorStore.getState().setAgenticToolSettings(settings)
         );
 
-        void runHydration(
+        void runAuthorityHydration(
           'mcp-servers',
           ['mcpServers'],
           () =>
@@ -394,7 +547,7 @@ export function useAgorData(
             agorStore.getState().markHydrated('mcpServersHydrated');
           }
         );
-        void runHydration(
+        void runAuthorityHydration(
           'session-mcp-servers',
           ['sessionMcp'],
           () =>
@@ -406,7 +559,7 @@ export function useAgorData(
               .getState()
               .applyMaps((prev) => ({ ...prev, sessionMcpServerIds: buildSessionMcpMap(list) }))
         );
-        void runHydration(
+        void runAuthorityHydration(
           'gateway-channels',
           ['gatewayChannels'],
           () =>
@@ -421,7 +574,7 @@ export function useAgorData(
             agorStore.getState().markHydrated('gatewayChannelsHydrated');
           }
         );
-        void runHydration(
+        void runAuthorityHydration(
           'artifacts',
           ['artifacts'],
           () =>
@@ -437,18 +590,7 @@ export function useAgorData(
               artifactById: buildById(list, 'artifact_id', prev.artifactById),
             }))
         );
-        void runHydration(
-          'oauth-status',
-          ['oauth'],
-          () => client.service('mcp-servers/oauth-status').find(),
-          (res) => {
-            const ids =
-              (res as { authenticated_server_ids?: string[] })?.authenticated_server_ids ?? [];
-            agorStore
-              .getState()
-              .applyMaps((prev) => ({ ...prev, userAuthenticatedMcpServerIds: new Set(ids) }));
-          }
-        );
+        void refetchOAuthDurableState(fetchAuthorityScope);
 
         // ── Essential gated fetches — LIGHT batch ───────────────────────
         // Tiny global collections (boards / users / repos / card-types stay
@@ -513,9 +655,12 @@ export function useAgorData(
           ),
           track(
             'users',
-            client.service('users').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+            canListUsers
+              ? client.service('users').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } })
+              : Promise.resolve([])
           ),
         ]);
+        if (!authorityIsCurrent()) return false;
 
         // Branches healed into first paint by a direct deep link — the URL
         // session's branch, or a `/w/<id>` branch link. They seed `branchById`
@@ -664,12 +809,19 @@ export function useAgorData(
             : Promise.resolve([] as Session[]),
           track(
             'board-objects',
-            client.service('board-objects').findAll({
-              query: {
-                $limit: PAGINATION.DEFAULT_LIMIT,
-                ...(boardScope ? { board_id: boardScope } : {}),
-              },
-            })
+            // The daemon intentionally keeps the whole board-objects service at
+            // the MEMBER floor (the rows carry editable canvas layout). A global
+            // viewer can still read the workspace shell and Marketplace, so an
+            // expected authorization failure here is not an essential bootstrap
+            // failure. Keep the collection empty and don't subscribe below.
+            canUseMemberWorkspaceServices
+              ? client.service('board-objects').findAll({
+                  query: {
+                    $limit: PAGINATION.DEFAULT_LIMIT,
+                    ...(boardScope ? { board_id: boardScope } : {}),
+                  },
+                })
+              : Promise.resolve([])
           ),
           track(
             'board-comments',
@@ -702,6 +854,7 @@ export function useAgorData(
               (client.service('boards').get(boardScope) as Promise<Board>).catch(() => null)
             : Promise.resolve(null),
         ]);
+        if (!authorityIsCurrent()) return false;
         debugTimer?.endFetchPhase();
 
         if (!silent) {
@@ -722,6 +875,7 @@ export function useAgorData(
             window.requestAnimationFrame(() => resolve());
           });
         }
+        if (!authorityIsCurrent()) return false;
 
         // Build board object Maps for efficient lookups (shared with the
         // background full-hydration pass so the two index builds stay identical)
@@ -840,7 +994,7 @@ export function useAgorData(
         // branches apply on their own quiet window (almost immediately)
         // regardless of session churn.
         if (!silent) {
-          void runHydration(
+          void runAuthorityHydration(
             'sessions',
             ['sessions'],
             () =>
@@ -876,7 +1030,7 @@ export function useAgorData(
                 return { ...prev, sessionById, sessionsByBranch };
               })
           );
-          void runHydration(
+          void runAuthorityHydration(
             'branches',
             ['branches'],
             () =>
@@ -904,26 +1058,28 @@ export function useAgorData(
         // global snapshot is a superset of its board-scoped first-paint slice, so
         // no overlay is needed; the quiet-window guard prevents clobber/resurrect.
         if (boardScope) {
-          void runHydration(
-            'board-objects',
-            ['boardObjects'],
-            () =>
-              client
-                .service('board-objects')
-                .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
-            (allBoardObjects) =>
-              agorStore.getState().applyMaps((prev) => {
-                const base = buildBoardObjectMaps(allBoardObjects);
-                return {
-                  ...prev,
-                  boardObjectById: base.boardObjectById,
-                  boardObjectsByBoardId: base.boardObjectsByBoardId,
-                  boardObjectByBranchId: base.boardObjectByBranchId,
-                  boardObjectByCardId: base.boardObjectByCardId,
-                };
-              })
-          );
-          void runHydration(
+          if (canUseMemberWorkspaceServices) {
+            void runAuthorityHydration(
+              'board-objects',
+              ['boardObjects'],
+              () =>
+                client
+                  .service('board-objects')
+                  .findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
+              (allBoardObjects) =>
+                agorStore.getState().applyMaps((prev) => {
+                  const base = buildBoardObjectMaps(allBoardObjects);
+                  return {
+                    ...prev,
+                    boardObjectById: base.boardObjectById,
+                    boardObjectsByBoardId: base.boardObjectsByBoardId,
+                    boardObjectByBranchId: base.boardObjectByBranchId,
+                    boardObjectByCardId: base.boardObjectByCardId,
+                  };
+                })
+            );
+          }
+          void runAuthorityHydration(
             'cards',
             ['cards'],
             () => client.service('cards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
@@ -933,7 +1089,7 @@ export function useAgorData(
                 cardById: buildById(allCards, 'card_id', prev.cardById),
               }))
           );
-          void runHydration(
+          void runAuthorityHydration(
             'board-comments',
             ['comments'],
             () =>
@@ -955,7 +1111,7 @@ export function useAgorData(
         // above. The displayed board already carries its objects from the
         // targeted get; the full set is a superset of it.
         if (!silent) {
-          void runHydration(
+          void runAuthorityHydration(
             'boards',
             ['boards'],
             () => client.service('boards').findAll({ query: { $limit: PAGINATION.DEFAULT_LIMIT } }),
@@ -972,7 +1128,9 @@ export function useAgorData(
         if (silent) {
           lastSilentFetchFailedRef.current = false;
         }
+        return true;
       } catch (err) {
+        if (!authorityIsCurrent()) return false;
         if (silent) {
           // Background refetch failed (e.g. transient 401 racing an authenticated
           // reconnect, or a 5xx). Don't escalate to the fullscreen error overlay —
@@ -987,8 +1145,9 @@ export function useAgorData(
             .getState()
             .setError(err instanceof Error ? err.message : 'Failed to fetch data');
         }
+        return true;
       } finally {
-        if (!silent) {
+        if (!silent && authorityIsCurrent()) {
           agorStore.getState().setLoading(false);
           agorStore.getState().setLoadingStage('idle');
           debugTimer?.markStage('idle');
@@ -998,8 +1157,73 @@ export function useAgorData(
         }
       }
     },
-    [client, directSessionId, enabled]
+    [
+      authorityScopeKey,
+      canListUsers,
+      canUseMemberWorkspaceServices,
+      client,
+      directSessionId,
+      enabled,
+      refetchOAuthDurableState,
+    ]
   );
+
+  // The long-lived client survives role, token, identity, and reconnect
+  // transitions. Invalidate every older fetch/hydration at commit time before
+  // it can apply under the replacement authority. A promotion deliberately
+  // does NOT refetch while connectionReady is false; the new authGeneration
+  // produces a non-null scope only after socket reauthentication succeeds.
+  const previousAuthorityTransitionRef = useRef({
+    scopeKey: authorityScopeKey,
+    userId: authenticatedUserId,
+    canUseMemberWorkspaceServices,
+  });
+  useLayoutEffect(() => {
+    const previous = previousAuthorityTransitionRef.current;
+    const identityChanged = previous.userId !== authenticatedUserId;
+    const privilegeChanged =
+      previous.canUseMemberWorkspaceServices !== canUseMemberWorkspaceServices;
+    const scopeChanged = previous.scopeKey !== authorityScopeKey;
+    previousAuthorityTransitionRef.current = {
+      scopeKey: authorityScopeKey,
+      userId: authenticatedUserId,
+      canUseMemberWorkspaceServices,
+    };
+    if (!identityChanged && !privilegeChanged && !scopeChanged) return;
+
+    cancelAllHydrations();
+    refetchInflightRef.current = null;
+    lastSilentFetchFailedRef.current = false;
+
+    if (identityChanged) {
+      // All normalized rows may contain caller-scoped/private data (MCP rows,
+      // OAuth state, credential presence), so an in-place identity replacement
+      // gets the same map boundary as logout before the new authority resyncs.
+      agorStore.getState().resetMaps();
+    } else if (!canUseMemberWorkspaceServices) {
+      bumpRevision('boardObjects');
+      agorStore.getState().applyMaps((previousMaps) => ({
+        ...previousMaps,
+        userById: new Map(),
+        boardObjectById: new Map(),
+        boardObjectsByBoardId: new Map(),
+        boardObjectByBranchId: new Map(),
+        boardObjectByCardId: new Map(),
+      }));
+    }
+
+    if (authorityScopeKey && client && enabled && hasInitiallyFetched) {
+      void fetchData({ silent: true });
+    }
+  }, [
+    authenticatedUserId,
+    authorityScopeKey,
+    canUseMemberWorkspaceServices,
+    client,
+    enabled,
+    fetchData,
+    hasInitiallyFetched,
+  ]);
 
   // Clear all data when client goes away (logout / token revocation).
   //
@@ -1034,11 +1258,29 @@ export function useAgorData(
   // after teardown. Generation bump = cancellation; see `runHydration`.
   useEffect(() => () => cancelAllHydrations(), []);
 
+  // OAuth status is intentionally separate from generic MCP server reads so
+  // listing servers never loads credentials. Poll the non-secret status path
+  // as well as reacting to OAuth events; otherwise a grant that expires while
+  // a tab is idle could remain displayed as authenticated indefinitely.
+  useEffect(() => {
+    if (!client || !enabled || !authorityScopeKey) return;
+    const pollAuthorityScope = authorityScopeKey;
+    const interval = window.setInterval(() => {
+      void refetchOAuthDurableState(pollAuthorityScope).catch(() => {
+        // Transient disconnects are handled by the next poll/realtime refetch.
+      });
+    }, MCP_OAUTH_STATUS_POLL_INTERVAL_MS);
+    return () => window.clearInterval(interval);
+  }, [authorityScopeKey, client, enabled, refetchOAuthDurableState]);
+
   // If the user navigates to /s/<id>/ after the initial active-session fetch,
   // load that one session by ID as well. This keeps direct links to archived
   // sessions openable without changing the default list query.
   useEffect(() => {
-    if (!client || !enabled || !hasInitiallyFetched || !directSessionId) return;
+    if (!client || !enabled || !authorityScopeKey || !hasInitiallyFetched || !directSessionId)
+      return;
+    const directFetchAuthorityScope = authorityScopeKey;
+    const authorityIsCurrent = () => authorityScopeKeyRef.current === directFetchAuthorityScope;
     const { sessionById } = agorStore.getState();
     if (sessionById.has(directSessionId)) return;
     if (hasIdMatchingPrefix(directSessionId, sessionById.values(), (s) => s.session_id)) {
@@ -1049,7 +1291,7 @@ export function useAgorData(
     (async () => {
       try {
         const directSession = (await client.service('sessions').get(directSessionId)) as Session;
-        if (cancelled) return;
+        if (cancelled || !authorityIsCurrent()) return;
 
         // This is a live write to the sessions maps — bump so a sessions
         // hydration in flight discards its (session-missing) snapshot rather
@@ -1080,7 +1322,7 @@ export function useAgorData(
             const directBranch = (await client
               .service('branches')
               .get(directSession.branch_id)) as Branch;
-            if (cancelled) return;
+            if (cancelled || !authorityIsCurrent()) return;
             bumpRevision('branches');
             agorStore.getState().setMap('branchById', (prev) => {
               if (directBranch.archived) return prev;
@@ -1102,23 +1344,38 @@ export function useAgorData(
     return () => {
       cancelled = true;
     };
-  }, [client, directSessionId, enabled, hasInitiallyFetched]);
+  }, [authorityScopeKey, client, directSessionId, enabled, hasInitiallyFetched]);
 
   // Subscribe to real-time updates
   //
-  // Every socket event is wired straight to the matching store action in
-  // `agorRealtimeActions` (module singletons → stable references, so cleanup
-  // `removeListener` matches). The store action does the
+  // Every socket event is wired through an authority-scoped stable wrapper to
+  // the matching store action in `agorRealtimeActions` (the wrappers live for
+  // this effect, so cleanup `removeListener` matches). The store action does the
   // `replaceIfChanged` / cascade / index-rebuild + per-collection `bumpRevision`.
   // OAuth + agor-query handlers stay local: they need `client` (async refetch)
   // or are pure window side-effects.
   useEffect(() => {
-    if (!client || !enabled) {
+    if (!client || !enabled || !authorityScopeKey) {
       // No client or disabled = not ready for data fetch, set loading to false
       agorStore.getState().setLoading(false);
       agorStore.getState().setLoadingStage('idle');
       return;
     }
+
+    const subscriptionAuthorityScope = authorityScopeKey;
+    const subscriptionIsCurrent = () => authorityScopeKeyRef.current === subscriptionAuthorityScope;
+    // All direct store handlers are authority-scoped too. Although only
+    // sessions are frame-batched, an old Feathers listener remains live until
+    // passive cleanup and must not write during the layout→cleanup overlap.
+    const scopedRealtime = Object.fromEntries(
+      Object.entries(realtime).map(([name, handler]) => [
+        name,
+        (...args: unknown[]) => {
+          if (!subscriptionIsCurrent()) return;
+          (handler as (...values: unknown[]) => void)(...args);
+        },
+      ])
+    ) as typeof realtime;
 
     // Subscribe to session events. `patched`/`updated` are the streaming hot
     // path (a patch per token batch), so they're coalesced into one keyed store
@@ -1131,19 +1388,22 @@ export function useAgorData(
     // hydration's quiet-window guard, and the queue's own stale-drop stamp, both
     // depend on the bump landing the instant the event does, not a frame later.
     const sessionPatchedBatched = (session: Session) => {
+      if (!subscriptionIsCurrent()) return;
       bumpRevision('sessions');
-      enqueueSessionPatch(session);
+      enqueueSessionPatch(subscriptionAuthorityScope, session);
     };
     // `created` clears any tombstone (remove-then-recreate in one frame) and
     // `removed` sets one + drops the id's queued patch, before the synchronous
     // store write.
     const sessionCreatedSync = (session: Session) => {
-      untombstoneSession(session.session_id);
-      realtime.sessionCreated(session);
+      if (!subscriptionIsCurrent()) return;
+      untombstoneSession(subscriptionAuthorityScope, session.session_id);
+      scopedRealtime.sessionCreated(session);
     };
     const sessionRemovedSync = (session: Session) => {
-      tombstoneSession(session.session_id);
-      realtime.sessionRemoved(session);
+      if (!subscriptionIsCurrent()) return;
+      tombstoneSession(subscriptionAuthorityScope, session.session_id);
+      scopedRealtime.sessionRemoved(session);
     };
     sessionsService.on('created', sessionCreatedSync);
     sessionsService.on('patched', sessionPatchedBatched);
@@ -1152,29 +1412,32 @@ export function useAgorData(
 
     // Subscribe to board events
     const boardsService = client.service('boards');
-    boardsService.on('created', realtime.boardCreated);
-    boardsService.on('patched', realtime.boardPatched);
-    boardsService.on('updated', realtime.boardPatched);
-    boardsService.on('removed', realtime.boardRemoved);
+    boardsService.on('created', scopedRealtime.boardCreated);
+    boardsService.on('patched', scopedRealtime.boardPatched);
+    boardsService.on('updated', scopedRealtime.boardPatched);
+    boardsService.on('removed', scopedRealtime.boardRemoved);
 
     // Subscribe to board object events
-    const boardObjectsService = client.service('board-objects');
-    boardObjectsService.on('created', realtime.boardObjectCreated);
-    boardObjectsService.on('patched', realtime.boardObjectPatched);
-    boardObjectsService.on('updated', realtime.boardObjectPatched);
-    boardObjectsService.on('removed', realtime.boardObjectRemoved);
+    const boardObjectsService = canUseMemberWorkspaceServices
+      ? client.service('board-objects')
+      : null;
+    boardObjectsService?.on('created', scopedRealtime.boardObjectCreated);
+    boardObjectsService?.on('patched', scopedRealtime.boardObjectPatched);
+    boardObjectsService?.on('updated', scopedRealtime.boardObjectPatched);
+    boardObjectsService?.on('removed', scopedRealtime.boardObjectRemoved);
 
     // Subscribe to repo events
     const reposService = client.service('repos');
-    reposService.on('created', realtime.repoCreated);
-    reposService.on('patched', realtime.repoPatched);
-    reposService.on('updated', realtime.repoPatched);
-    reposService.on('removed', realtime.repoRemoved);
+    reposService.on('created', scopedRealtime.repoCreated);
+    reposService.on('patched', scopedRealtime.repoPatched);
+    reposService.on('updated', scopedRealtime.repoPatched);
+    reposService.on('removed', scopedRealtime.repoRemoved);
 
     // Subscribe to branch events
     const branchesService = client.service('branches');
     const branchRemovedSync = (branch: Branch) => {
-      realtime.branchRemoved(branch);
+      if (!subscriptionIsCurrent()) return;
+      scopedRealtime.branchRemoved(branch);
       // Branch deletion cascades tasks/messages without child Feathers events.
       // Comments survive those cascades with task_id/message_id SET NULL, but
       // the branch tombstone does not contain the deleted descendant IDs.
@@ -1192,17 +1455,17 @@ export function useAgorData(
           }))
       );
     };
-    branchesService.on('created', realtime.branchCreated);
-    branchesService.on('patched', realtime.branchPatched);
-    branchesService.on('updated', realtime.branchPatched);
+    branchesService.on('created', scopedRealtime.branchCreated);
+    branchesService.on('patched', scopedRealtime.branchPatched);
+    branchesService.on('updated', scopedRealtime.branchPatched);
     branchesService.on('removed', branchRemovedSync);
 
     // Subscribe to user events
-    const usersService = client.service('users');
-    usersService.on('created', realtime.userCreated);
-    usersService.on('patched', realtime.userPatched);
-    usersService.on('updated', realtime.userPatched);
-    usersService.on('removed', realtime.userRemoved);
+    const usersService = canListUsers ? client.service('users') : null;
+    usersService?.on('created', scopedRealtime.userCreated);
+    usersService?.on('patched', scopedRealtime.userPatched);
+    usersService?.on('updated', scopedRealtime.userPatched);
+    usersService?.on('removed', scopedRealtime.userRemoved);
 
     const agenticToolSettingsService = client.service('agentic-tool-settings');
     // A single-row realtime event is an INCREMENTAL upsert, not a complete
@@ -1211,6 +1474,7 @@ export function useAgorData(
     const agenticToolSettingsPatched = (
       updated: import('@agor-live/client').TenantAgenticToolSettings
     ) => {
+      if (!subscriptionIsCurrent()) return;
       // Bump the live-write revision so a background full-fetch that raced this
       // upsert discards its (now-stale) snapshot instead of overwriting it.
       bumpRevision('agenticToolSettings');
@@ -1221,38 +1485,38 @@ export function useAgorData(
 
     // Subscribe to MCP server events
     const mcpServersService = client.service('mcp-servers');
-    mcpServersService.on('created', realtime.mcpServerCreated);
-    mcpServersService.on('patched', realtime.mcpServerPatched);
-    mcpServersService.on('updated', realtime.mcpServerPatched);
-    mcpServersService.on('removed', realtime.mcpServerRemoved);
+    mcpServersService.on('created', scopedRealtime.mcpServerCreated);
+    mcpServersService.on('patched', scopedRealtime.mcpServerPatched);
+    mcpServersService.on('updated', scopedRealtime.mcpServerPatched);
+    mcpServersService.on('removed', scopedRealtime.mcpServerRemoved);
 
     // Subscribe to gateway channel events
     const gatewayChannelsService = client.service('gateway-channels');
-    gatewayChannelsService.on('created', realtime.gatewayChannelCreated);
-    gatewayChannelsService.on('patched', realtime.gatewayChannelPatched);
-    gatewayChannelsService.on('updated', realtime.gatewayChannelPatched);
-    gatewayChannelsService.on('removed', realtime.gatewayChannelRemoved);
+    gatewayChannelsService.on('created', scopedRealtime.gatewayChannelCreated);
+    gatewayChannelsService.on('patched', scopedRealtime.gatewayChannelPatched);
+    gatewayChannelsService.on('updated', scopedRealtime.gatewayChannelPatched);
+    gatewayChannelsService.on('removed', scopedRealtime.gatewayChannelRemoved);
 
     // Subscribe to card events
     const cardsService = client.service('cards');
-    cardsService.on('created', realtime.cardCreated);
-    cardsService.on('patched', realtime.cardPatched);
-    cardsService.on('updated', realtime.cardPatched);
-    cardsService.on('removed', realtime.cardRemoved);
+    cardsService.on('created', scopedRealtime.cardCreated);
+    cardsService.on('patched', scopedRealtime.cardPatched);
+    cardsService.on('updated', scopedRealtime.cardPatched);
+    cardsService.on('removed', scopedRealtime.cardRemoved);
 
     // Subscribe to card type events
     const cardTypesService = client.service('card-types');
-    cardTypesService.on('created', realtime.cardTypeCreated);
-    cardTypesService.on('patched', realtime.cardTypePatched);
-    cardTypesService.on('updated', realtime.cardTypePatched);
-    cardTypesService.on('removed', realtime.cardTypeRemoved);
+    cardTypesService.on('created', scopedRealtime.cardTypeCreated);
+    cardTypesService.on('patched', scopedRealtime.cardTypePatched);
+    cardTypesService.on('updated', scopedRealtime.cardTypePatched);
+    cardTypesService.on('removed', scopedRealtime.cardTypeRemoved);
 
     // Subscribe to artifact events
     const artifactsService = client.service('artifacts');
-    artifactsService.on('created', realtime.artifactCreated);
-    artifactsService.on('patched', realtime.artifactPatched);
-    artifactsService.on('updated', realtime.artifactPatched);
-    artifactsService.on('removed', realtime.artifactRemoved);
+    artifactsService.on('created', scopedRealtime.artifactCreated);
+    artifactsService.on('patched', scopedRealtime.artifactPatched);
+    artifactsService.on('updated', scopedRealtime.artifactPatched);
+    artifactsService.on('removed', scopedRealtime.artifactRemoved);
 
     // Agent-driven runtime queries: daemon emits when an MCP tool wants to
     // introspect the iframe DOM. ArtifactNode components listen for the
@@ -1265,21 +1529,22 @@ export function useAgorData(
       kind: string;
       args: Record<string, unknown>;
     }) => {
+      if (!subscriptionIsCurrent()) return;
       window.dispatchEvent(new CustomEvent('agor:artifact-runtime-query', { detail: event }));
     };
     artifactsService.on('agor-query', handleAgorQuery);
 
     // Subscribe to session-MCP server relationship events
     const sessionMcpService = client.service('session-mcp-servers');
-    sessionMcpService.on('created', realtime.sessionMcpCreated);
-    sessionMcpService.on('removed', realtime.sessionMcpRemoved);
+    sessionMcpService.on('created', scopedRealtime.sessionMcpCreated);
+    sessionMcpService.on('removed', scopedRealtime.sessionMcpRemoved);
 
     // Subscribe to board comment events
     const commentsService = client.service('board-comments');
-    commentsService.on('created', realtime.commentCreated);
-    commentsService.on('patched', realtime.commentPatched);
-    commentsService.on('updated', realtime.commentPatched);
-    commentsService.on('removed', realtime.commentRemoved);
+    commentsService.on('created', scopedRealtime.commentCreated);
+    commentsService.on('patched', scopedRealtime.commentPatched);
+    commentsService.on('updated', scopedRealtime.commentPatched);
+    commentsService.on('removed', scopedRealtime.commentRemoved);
 
     // Realtime OAuth events are latency hints only. Correctness comes from
     // refetching the durable, authenticated token status and server record;
@@ -1292,7 +1557,9 @@ export function useAgorData(
     }) => {
       if (!event.success || !event.mcp_server_id) return;
       try {
-        await refetchMCPOAuthDurableState(client, event.mcp_server_id);
+        const applied = await refetchOAuthDurableState(authorityScopeKey, event.mcp_server_id);
+        if (!applied) return;
+        if (authorityScopeKeyRef.current !== authorityScopeKey) return;
         bumpRevision('oauth');
         bumpRevision('mcpServers');
       } catch (err) {
@@ -1306,7 +1573,9 @@ export function useAgorData(
     const handleOAuthDisconnected = async (event: { mcp_server_id: string }) => {
       if (!event.mcp_server_id) return;
       try {
-        await refetchMCPOAuthDurableState(client, event.mcp_server_id);
+        const applied = await refetchOAuthDurableState(authorityScopeKey, event.mcp_server_id);
+        if (!applied) return;
+        if (authorityScopeKeyRef.current !== authorityScopeKey) return;
         bumpRevision('oauth');
         bumpRevision('mcpServers');
       } catch (err) {
@@ -1330,13 +1599,16 @@ export function useAgorData(
     // doesn't blank the whole app via App.tsx's `dataError`
     // path — see the silent branch in `fetchData`.
     const refetchSilently = async () => {
-      if (!hasInitiallyFetched) return;
-      if (refetchInflightRef.current) return;
-      refetchInflightRef.current = true;
+      const refetchScope = authorityScopeKey;
+      if (!hasInitiallyFetched || !refetchScope) return;
+      if (refetchInflightRef.current === refetchScope) return;
+      refetchInflightRef.current = refetchScope;
       try {
         await fetchData({ silent: true });
       } finally {
-        refetchInflightRef.current = false;
+        if (refetchInflightRef.current === refetchScope) {
+          refetchInflightRef.current = null;
+        }
       }
     };
     client.io.on('connect', refetchSilently);
@@ -1357,17 +1629,19 @@ export function useAgorData(
     // created/patched/removed events that fire while fetchData's requests are
     // in flight are captured (and bump the per-collection revision counters)
     // instead of being dropped in the gap between fetch-start and listener-attach.
-    if (!hasInitiallyFetched) {
-      fetchData().then(() => setHasInitiallyFetched(true));
+    if (!hasInitiallyFetched && authorityScopeKey) {
+      fetchData().then((completedForAuthority) => {
+        if (completedForAuthority) setHasInitiallyFetched(true);
+      });
     }
 
     // Cleanup listeners on unmount
     return () => {
-      // APPLY (not discard) any frame-batched session patches here: this cleanup
-      // also runs when the effect merely re-subscribes (a dep changes), so
-      // dropping would lose live updates mid-session. The logout path discards
-      // explicitly instead (see the `client`-null effect above).
-      flushRealtimeNow();
+      // APPLY only when this is a same-authority resubscribe. The layout-phase
+      // scope transition has already discarded an identity/role/auth/connection
+      // queue, and makes this old passive cleanup a no-op. This preserves live
+      // updates on ordinary effect churn without crossing an authority boundary.
+      flushRealtimeNow(subscriptionAuthorityScope);
       client.io.off('oauth:completed', handleOAuthCompleted);
       client.io.off('oauth:disconnected', handleOAuthDisconnected);
       client.io.off('connect', refetchSilently);
@@ -1377,69 +1651,78 @@ export function useAgorData(
       sessionsService.removeListener('updated', sessionPatchedBatched);
       sessionsService.removeListener('removed', sessionRemovedSync);
 
-      boardsService.removeListener('created', realtime.boardCreated);
-      boardsService.removeListener('patched', realtime.boardPatched);
-      boardsService.removeListener('updated', realtime.boardPatched);
-      boardsService.removeListener('removed', realtime.boardRemoved);
+      boardsService.removeListener('created', scopedRealtime.boardCreated);
+      boardsService.removeListener('patched', scopedRealtime.boardPatched);
+      boardsService.removeListener('updated', scopedRealtime.boardPatched);
+      boardsService.removeListener('removed', scopedRealtime.boardRemoved);
 
-      boardObjectsService.removeListener('created', realtime.boardObjectCreated);
-      boardObjectsService.removeListener('patched', realtime.boardObjectPatched);
-      boardObjectsService.removeListener('updated', realtime.boardObjectPatched);
-      boardObjectsService.removeListener('removed', realtime.boardObjectRemoved);
+      boardObjectsService?.removeListener('created', scopedRealtime.boardObjectCreated);
+      boardObjectsService?.removeListener('patched', scopedRealtime.boardObjectPatched);
+      boardObjectsService?.removeListener('updated', scopedRealtime.boardObjectPatched);
+      boardObjectsService?.removeListener('removed', scopedRealtime.boardObjectRemoved);
 
-      reposService.removeListener('created', realtime.repoCreated);
-      reposService.removeListener('patched', realtime.repoPatched);
-      reposService.removeListener('updated', realtime.repoPatched);
-      reposService.removeListener('removed', realtime.repoRemoved);
+      reposService.removeListener('created', scopedRealtime.repoCreated);
+      reposService.removeListener('patched', scopedRealtime.repoPatched);
+      reposService.removeListener('updated', scopedRealtime.repoPatched);
+      reposService.removeListener('removed', scopedRealtime.repoRemoved);
 
-      branchesService.removeListener('created', realtime.branchCreated);
-      branchesService.removeListener('patched', realtime.branchPatched);
-      branchesService.removeListener('updated', realtime.branchPatched);
+      branchesService.removeListener('created', scopedRealtime.branchCreated);
+      branchesService.removeListener('patched', scopedRealtime.branchPatched);
+      branchesService.removeListener('updated', scopedRealtime.branchPatched);
       branchesService.removeListener('removed', branchRemovedSync);
 
-      usersService.removeListener('created', realtime.userCreated);
-      usersService.removeListener('patched', realtime.userPatched);
-      usersService.removeListener('updated', realtime.userPatched);
-      usersService.removeListener('removed', realtime.userRemoved);
+      usersService?.removeListener('created', scopedRealtime.userCreated);
+      usersService?.removeListener('patched', scopedRealtime.userPatched);
+      usersService?.removeListener('updated', scopedRealtime.userPatched);
+      usersService?.removeListener('removed', scopedRealtime.userRemoved);
 
       agenticToolSettingsService.removeListener('patched', agenticToolSettingsPatched);
       agenticToolSettingsService.removeListener('created', agenticToolSettingsPatched);
 
-      mcpServersService.removeListener('created', realtime.mcpServerCreated);
-      mcpServersService.removeListener('patched', realtime.mcpServerPatched);
-      mcpServersService.removeListener('updated', realtime.mcpServerPatched);
-      mcpServersService.removeListener('removed', realtime.mcpServerRemoved);
+      mcpServersService.removeListener('created', scopedRealtime.mcpServerCreated);
+      mcpServersService.removeListener('patched', scopedRealtime.mcpServerPatched);
+      mcpServersService.removeListener('updated', scopedRealtime.mcpServerPatched);
+      mcpServersService.removeListener('removed', scopedRealtime.mcpServerRemoved);
 
-      sessionMcpService.removeListener('created', realtime.sessionMcpCreated);
-      sessionMcpService.removeListener('removed', realtime.sessionMcpRemoved);
+      sessionMcpService.removeListener('created', scopedRealtime.sessionMcpCreated);
+      sessionMcpService.removeListener('removed', scopedRealtime.sessionMcpRemoved);
 
-      commentsService.removeListener('created', realtime.commentCreated);
-      commentsService.removeListener('patched', realtime.commentPatched);
-      commentsService.removeListener('updated', realtime.commentPatched);
-      commentsService.removeListener('removed', realtime.commentRemoved);
+      commentsService.removeListener('created', scopedRealtime.commentCreated);
+      commentsService.removeListener('patched', scopedRealtime.commentPatched);
+      commentsService.removeListener('updated', scopedRealtime.commentPatched);
+      commentsService.removeListener('removed', scopedRealtime.commentRemoved);
 
-      gatewayChannelsService.removeListener('created', realtime.gatewayChannelCreated);
-      gatewayChannelsService.removeListener('patched', realtime.gatewayChannelPatched);
-      gatewayChannelsService.removeListener('updated', realtime.gatewayChannelPatched);
-      gatewayChannelsService.removeListener('removed', realtime.gatewayChannelRemoved);
+      gatewayChannelsService.removeListener('created', scopedRealtime.gatewayChannelCreated);
+      gatewayChannelsService.removeListener('patched', scopedRealtime.gatewayChannelPatched);
+      gatewayChannelsService.removeListener('updated', scopedRealtime.gatewayChannelPatched);
+      gatewayChannelsService.removeListener('removed', scopedRealtime.gatewayChannelRemoved);
 
-      cardsService.removeListener('created', realtime.cardCreated);
-      cardsService.removeListener('patched', realtime.cardPatched);
-      cardsService.removeListener('updated', realtime.cardPatched);
-      cardsService.removeListener('removed', realtime.cardRemoved);
+      cardsService.removeListener('created', scopedRealtime.cardCreated);
+      cardsService.removeListener('patched', scopedRealtime.cardPatched);
+      cardsService.removeListener('updated', scopedRealtime.cardPatched);
+      cardsService.removeListener('removed', scopedRealtime.cardRemoved);
 
-      cardTypesService.removeListener('created', realtime.cardTypeCreated);
-      cardTypesService.removeListener('patched', realtime.cardTypePatched);
-      cardTypesService.removeListener('updated', realtime.cardTypePatched);
-      cardTypesService.removeListener('removed', realtime.cardTypeRemoved);
+      cardTypesService.removeListener('created', scopedRealtime.cardTypeCreated);
+      cardTypesService.removeListener('patched', scopedRealtime.cardTypePatched);
+      cardTypesService.removeListener('updated', scopedRealtime.cardTypePatched);
+      cardTypesService.removeListener('removed', scopedRealtime.cardTypeRemoved);
 
-      artifactsService.removeListener('created', realtime.artifactCreated);
-      artifactsService.removeListener('patched', realtime.artifactPatched);
-      artifactsService.removeListener('updated', realtime.artifactPatched);
-      artifactsService.removeListener('removed', realtime.artifactRemoved);
+      artifactsService.removeListener('created', scopedRealtime.artifactCreated);
+      artifactsService.removeListener('patched', scopedRealtime.artifactPatched);
+      artifactsService.removeListener('updated', scopedRealtime.artifactPatched);
+      artifactsService.removeListener('removed', scopedRealtime.artifactRemoved);
       artifactsService.removeListener('agor-query', handleAgorQuery);
     };
-  }, [client, enabled, fetchData, hasInitiallyFetched]);
+  }, [
+    canListUsers,
+    canUseMemberWorkspaceServices,
+    authorityScopeKey,
+    client,
+    enabled,
+    fetchData,
+    hasInitiallyFetched,
+    refetchOAuthDurableState,
+  ]);
 
   // Derived render model for the loading checklist. Memoized so the array
   // identity is stable across renders where no per-item count changed.

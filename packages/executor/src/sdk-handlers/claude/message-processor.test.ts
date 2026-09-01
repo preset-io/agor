@@ -1,4 +1,4 @@
-import { generateId } from '@agor/core';
+import { generateId, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import type { Message, MessageID, SessionID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessagesService } from '../base/index.js';
@@ -20,7 +20,7 @@ function systemMsg(payload: Record<string, unknown>) {
 }
 
 describe('SDKMessageProcessor result logging', () => {
-  it('is silent by default while preserving synthesized and raw result events', async () => {
+  it('is silent and replaces synthesized provider text before emitting a message', async () => {
     const resultMessage = {
       type: 'result',
       subtype: 'success',
@@ -56,7 +56,7 @@ describe('SDKMessageProcessor result logging', () => {
         {
           type: 'complete',
           role: 'assistant',
-          content: [{ type: 'text', text: 'final response' }],
+          content: [{ type: 'text', text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE }],
           toolUses: undefined,
           parent_tool_use_id: null,
           agentSessionId: undefined,
@@ -75,7 +75,7 @@ describe('SDKMessageProcessor result logging', () => {
     }
   });
 
-  it('carries the exact #2288 zero-turn result into executor-owned message metadata', async () => {
+  it('withholds the #2288 zero-turn provider body from persistence metadata', async () => {
     const processor = createProcessor();
     const events = await processor.process({
       type: 'result',
@@ -115,7 +115,10 @@ describe('SDKMessageProcessor result logging', () => {
       complete?.isSynthesizedResult
     );
 
-    expect(message.content).toEqual([{ type: 'text', text: 'Credit balance is too low' }]);
+    expect(message.content).toEqual([
+      { type: 'text', text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE },
+    ]);
+    expect(JSON.stringify(message)).not.toContain('Credit balance is too low');
     expect(message.metadata?.is_zero_turn_result).toBe(true);
   });
 });

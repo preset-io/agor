@@ -8,15 +8,39 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { MockOutboundPreDispatchAuthorityError } = vi.hoisted(() => ({
+  MockOutboundPreDispatchAuthorityError: class OutboundPreDispatchAuthorityError extends Error {
+    readonly code = 'outbound_pre_dispatch_authority_rejected';
+    readonly authorityCause: unknown;
+    constructor(cause: unknown) {
+      super('Outbound request authority changed before dispatch');
+      this.authorityCause = cause;
+    }
+  },
+}));
+
 vi.mock('../../utils/safe-outbound-fetch', () => ({
-  safeOutboundFetch: (input: string | URL, options: Record<string, unknown> = {}) => {
+  OutboundPreDispatchAuthorityError: MockOutboundPreDispatchAuthorityError,
+  safeOutboundFetch: async (input: string | URL, options: Record<string, unknown> = {}) => {
     const {
       timeoutMs: _timeout,
       maxRedirects: _max,
       maxResponseBytes: _bytes,
       allowLocalhostHttp: _local,
+      assertCurrent,
+      resolveDns,
       ...init
     } = options;
+    if (typeof resolveDns === 'function') {
+      await resolveDns(new URL(input).hostname, { all: true, verbatim: true });
+    }
+    if (typeof assertCurrent === 'function') {
+      try {
+        await assertCurrent();
+      } catch (error) {
+        throw new MockOutboundPreDispatchAuthorityError(error);
+      }
+    }
     return globalThis.fetch(input, init as RequestInit);
   },
 }));
@@ -31,6 +55,7 @@ import {
   MissingRefreshTokenError,
   MissingTokenEndpointError,
   needsRefresh,
+  OAuthRefreshAuthorityCancelledError,
   REFRESH_BUFFER_MS,
   refreshAndPersistToken,
   refreshMCPToken,
@@ -252,6 +277,40 @@ describe('refreshMCPToken', () => {
     });
 
     expect(result.expires_in).toBe(3600);
+  });
+
+  it('rechecks task authority after token-endpoint DNS and before credential dispatch', async () => {
+    let releaseDns!: () => void;
+    let dnsStarted!: () => void;
+    const dnsGate = new Promise<void>((resolve) => (releaseDns = resolve));
+    const dnsObserved = new Promise<void>((resolve) => (dnsStarted = resolve));
+    let current = true;
+    globalThis.fetch = vi.fn() as typeof globalThis.fetch;
+
+    const pending = refreshMCPToken({
+      tokenEndpoint: 'https://auth.example.com/token',
+      refreshToken: 'refresh-secret',
+      clientId: 'client-id',
+      resolveDns: async () => {
+        dnsStarted();
+        await dnsGate;
+        return [{ address: '203.0.113.10', family: 4 }];
+      },
+      assertCurrent: () => {
+        if (!current) throw new Error('task authority changed');
+      },
+    });
+    await dnsObserved;
+    current = false;
+    releaseDns();
+
+    const error = await pending.catch((reason: unknown) => reason);
+    expect(error).toBeInstanceOf(OAuthRefreshAuthorityCancelledError);
+    expect(error).toMatchObject({
+      code: 'oauth_refresh_authority_cancelled',
+      authorityCause: { message: 'task authority changed' },
+    });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });
 

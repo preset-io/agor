@@ -37,6 +37,7 @@ import {
   getTrustedSessionTenantId,
   isPromptFlowPatchOnly,
   PROMPT_FLOW_PATCH_FIELDS,
+  projectExecutorTaskSdkResponse,
   protectExternalTaskCreate,
   protectFilesystemHomeWrite,
   protectServerManagedTaskWrites,
@@ -84,28 +85,24 @@ describe('classifyRealtimeAuthorizationInvalidation', () => {
     expect(classify(path, 'create', data)).toBe('none');
   });
 
-  it.each(['branches/:id/owners', 'boards/:id/owners', 'group-memberships'])(
-    'distributes cache-only invalidation for additive grants through %s',
-    (path) => {
-      expect(classify(path, 'create')).toBe('cache');
-    }
-  );
+  it('evicts when group membership suppresses a potentially broader Others fallback', () => {
+    expect(classify('group-memberships', 'create')).toBe('evict');
+  });
 
   it.each([
-    ['branches', 'patch', { others_can: 'none' }],
-    ['branches', 'patch', { others_fs_access: 'none' }],
     ['branches', 'patch', { board_id: 'board-2' }],
+    ['branches', 'patch', { permission_binding: 'inherit' }],
     ['branches', 'remove', {}],
     ['boards', 'patch', { access_mode: 'private' }],
+    ['boards', 'patch', { archived: true }],
     ['boards', 'patch', { default_others_fs_access: 'read' }],
     ['boards', 'remove', {}],
     ['users', 'patch', { role: 'suspended' }],
     ['users', 'patch', { must_change_password: true }],
     ['users', 'update', { must_change_password: false }],
     ['users', 'remove', {}],
-    ['branches/:id/owners', 'remove', {}],
-    ['branches/:id/group-grants', 'create', { group_id: 'group-1', can: 'none' }],
-    ['boards/:id/group-grants', 'create', { group_id: 'group-1', can: 'none' }],
+    ['branches/:id/permissions', 'patch', {}],
+    ['boards/:id/permissions', 'patch', {}],
     ['group-memberships', 'remove', {}],
     ['groups', 'patch', { archived: true }],
   ] as const)('evicts stale sockets for revoking %s.%s', (path, method, data) => {
@@ -476,6 +473,118 @@ describe('protectServerManagedTaskWrites', () => {
     context.params.provider = undefined;
 
     await expect(protectServerManagedTaskWrites(context)).resolves.toBe(context);
+  });
+});
+
+describe('projectExecutorTaskSdkResponse', () => {
+  it('closes a normalized-only executor patch without touching extension getters', async () => {
+    const sentinel = 'SENTINEL_NORMALIZED_ONLY_DAEMON_41a8';
+    const getter = vi.fn(() => {
+      throw new Error(sentinel);
+    });
+    const tokenUsage = Object.create({ provider_secret: sentinel }) as Record<string, unknown>;
+    Object.assign(tokenUsage, { inputTokens: 4, outputTokens: 2, totalTokens: 6 });
+    Object.defineProperty(tokenUsage, 'futureProviderField', { get: getter });
+    const context = {
+      path: 'tasks',
+      method: 'patch',
+      id: 'task-1',
+      data: {
+        normalized_sdk_response: {
+          tokenUsage,
+          contextWindowLimit: 100,
+          contextUsageSnapshot: {
+            totalTokens: 6,
+            maxTokens: 100,
+            percentage: 6,
+            memoryFiles: [{ path: sentinel }],
+          },
+          extension: { secret: sentinel },
+        },
+      },
+      params: { provider: 'socketio' },
+    } as unknown as HookContext;
+    const tasks = { findById: vi.fn() };
+    const sessions = { findById: vi.fn() };
+
+    await expect(projectExecutorTaskSdkResponse(tasks, sessions)(context)).resolves.toBe(context);
+
+    expect(context.data).toEqual({
+      normalized_sdk_response: {
+        tokenUsage: { inputTokens: 4, outputTokens: 2, totalTokens: 6 },
+        contextWindowLimit: 100,
+        contextUsageSnapshot: { totalTokens: 6, maxTokens: 100, percentage: 6 },
+      },
+    });
+    expect(getter).not.toHaveBeenCalled();
+    expect(JSON.stringify(context.data)).not.toContain(sentinel);
+    expect(tasks.findById).not.toHaveBeenCalled();
+    expect(sessions.findById).not.toHaveBeenCalled();
+  });
+
+  it('re-closes Claude result data before persistence and realtime publication', async () => {
+    const sentinel = 'SENTINEL_DAEMON_RAW_CLAUDE_RESULT_6d31';
+    const context = {
+      path: 'tasks',
+      method: 'patch',
+      id: 'task-1',
+      data: {
+        raw_sdk_response: {
+          type: 'result',
+          subtype: 'success',
+          result: sentinel,
+          errors: [sentinel],
+          duration_ms: 7,
+          duration_api_ms: Number.POSITIVE_INFINITY,
+          num_turns: 0,
+          is_error: false,
+          usage: { input_tokens: 3, provider_secret: sentinel },
+          modelUsage: { [sentinel]: { inputTokens: 3 } },
+        },
+      },
+      params: { provider: 'rest' },
+    } as unknown as HookContext;
+    const hook = projectExecutorTaskSdkResponse(
+      { findById: vi.fn().mockResolvedValue({ task_id: 'task-1', session_id: 'session-1' }) },
+      {
+        findById: vi
+          .fn()
+          .mockResolvedValue({ session_id: 'session-1', agentic_tool: 'claude-code' }),
+      }
+    );
+
+    await expect(hook(context)).resolves.toBe(context);
+    expect(context.data).toEqual({
+      raw_sdk_response: {
+        type: 'result',
+        subtype: 'success',
+        duration_ms: 7,
+        is_error: false,
+        num_turns: 0,
+        usage: {
+          input_tokens: 3,
+        },
+      },
+    });
+    expect(JSON.stringify(context.data)).not.toContain(sentinel);
+  });
+
+  it('does not alter another agentic tool raw response', async () => {
+    const raw = { type: 'turn.completed', usage: { input_tokens: 1 } };
+    const context = {
+      id: 'task-1',
+      data: { raw_sdk_response: raw },
+      params: { provider: 'socketio' },
+    } as unknown as HookContext;
+    const hook = projectExecutorTaskSdkResponse(
+      { findById: vi.fn().mockResolvedValue({ task_id: 'task-1', session_id: 'session-1' }) },
+      {
+        findById: vi.fn().mockResolvedValue({ session_id: 'session-1', agentic_tool: 'codex' }),
+      }
+    );
+
+    await hook(context);
+    expect((context.data as { raw_sdk_response: unknown }).raw_sdk_response).toBe(raw);
   });
 });
 
@@ -872,7 +981,7 @@ describe('registered external board-comment mutation boundary', () => {
 describe('registered board admin authority', () => {
   type RegisteredHook = (context: HookContext) => HookContext | Promise<HookContext>;
   type RegisteredHooks = {
-    before?: Partial<Record<'patch', RegisteredHook[]>>;
+    before?: Partial<Record<'find' | 'patch', RegisteredHook[]>>;
   };
 
   const captureBoardHooks = (allowSuperadmin: boolean): RegisteredHooks[] => {
@@ -933,6 +1042,55 @@ describe('registered board admin authority', () => {
     }
 
     expect(context).toBeDefined();
+  });
+
+  it.each([
+    ['member', false],
+    ['admin', false],
+    ['superadmin', false],
+  ] as const)(
+    'scopes registered boards.find for %s when allowSuperadmin=%s',
+    async (role, allowSuperadmin) => {
+      const context = {
+        path: 'boards',
+        method: 'find',
+        params: {
+          provider: 'socketio',
+          user: { user_id: `${role}-1`, role },
+          query: { board_id: { $in: ['visible', 'private'] } },
+        },
+      } as HookContext;
+
+      for (const registration of captureBoardHooks(allowSuperadmin)) {
+        for (const hook of registration.before?.find ?? []) await hook(context);
+      }
+
+      expect(
+        (context.params as HookContext['params'] & { _agorSqlBoardAccessUserId?: string })
+          ._agorSqlBoardAccessUserId
+      ).toBe(`${role}-1`);
+    }
+  );
+
+  it('allows only the explicitly configured superadmin boards.find bypass', async () => {
+    const context = {
+      path: 'boards',
+      method: 'find',
+      params: {
+        provider: 'socketio',
+        user: { user_id: 'super-1', role: 'superadmin' },
+        query: {},
+      },
+    } as HookContext;
+
+    for (const registration of captureBoardHooks(true)) {
+      for (const hook of registration.before?.find ?? []) await hook(context);
+    }
+
+    expect(
+      (context.params as HookContext['params'] & { _agorSqlBoardAccessUserId?: string })
+        ._agorSqlBoardAccessUserId
+    ).toBeUndefined();
   });
 });
 
@@ -1326,6 +1484,11 @@ describe('TENANT_IDENTITY_ONLY_SERVICE_PATHS', () => {
     expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain(path);
     expect(TENANT_OWNED_SERVICE_PATHS).not.toContain(path);
   });
+
+  it('keeps gateway channel provider probes outside the request transaction', () => {
+    expect(TENANT_IDENTITY_ONLY_SERVICE_PATHS).toContain('gateway-channels');
+    expect(TENANT_OWNED_SERVICE_PATHS).not.toContain('gateway-channels');
+  });
 });
 
 describe('registered file service RBAC database preload', () => {
@@ -1359,6 +1522,12 @@ describe('registered file service RBAC database preload', () => {
           return { session_id: 'session-1', branch_id: 'branch-1' };
         }),
       };
+      const sessionsRepository = {
+        findById: vi.fn(async () => {
+          assertTenantScope();
+          return { session_id: 'session-1', branch_id: 'branch-1' };
+        }),
+      };
       const app = {
         service(servicePath: string) {
           return {
@@ -1388,7 +1557,8 @@ describe('registered file service RBAC database preload', () => {
         boardsService: undefined,
         branchRepository: branchRepository as RegisterHooksContext['branchRepository'],
         usersRepository: {} as RegisterHooksContext['usersRepository'],
-        sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+        sessionsRepository:
+          sessionsRepository as unknown as RegisterHooksContext['sessionsRepository'],
         deployment: { mode: 'standalone' },
       });
 
@@ -1411,8 +1581,10 @@ describe('registered file service RBAC database preload', () => {
 
       expect(context.params.branch?.branch_id).toBe('branch-1');
       expect(getCurrentTenantDatabaseScope()).toBeUndefined();
-      if (path === 'files') expect(sessionsService.get).toHaveBeenCalledOnce();
-      else expect(branchRepository.findById).toHaveBeenCalledOnce();
+      if (path === 'files') {
+        expect(sessionsRepository.findById).toHaveBeenCalledOnce();
+        expect(sessionsService.get).not.toHaveBeenCalled();
+      } else expect(branchRepository.findById).toHaveBeenCalledOnce();
     }
   );
 });

@@ -2,7 +2,8 @@ import type { CreateLocalRepoRequest, CreateRepoRequest, Repo } from '@agor-live
 import { DeleteOutlined, EditOutlined, FolderOutlined, PlusOutlined } from '@ant-design/icons';
 import type { RadioChangeEvent } from 'antd';
 import { Button, Card, Empty, Form, Input, Space, Typography } from 'antd';
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useState } from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { mapToArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { RepoFormFields } from '../forms/RepoFormFields';
@@ -13,14 +14,29 @@ import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 
 interface ReposTableProps {
   repoById: Map<string, Repo>;
-  onCreate?: (data: CreateRepoRequest) => void;
-  onCreateLocal?: (data: CreateLocalRepoRequest) => void;
-  onUpdate?: (repoId: string, updates: Partial<Repo>) => void;
-  onDelete?: (repoId: string, cleanup: boolean) => void;
+  identityKey: string | null;
+  operationScope: readonly unknown[] | null;
+  onCreate?: (data: CreateRepoRequest, shouldApply?: () => boolean) => unknown;
+  onCreateLocal?: (
+    data: CreateLocalRepoRequest,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onUpdate?: (
+    repoId: string,
+    updates: Partial<Repo>,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDelete?: (
+    repoId: string,
+    cleanup: boolean,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
 }
 
 export const ReposTable: React.FC<ReposTableProps> = ({
   repoById,
+  identityKey,
+  operationScope,
   onCreate,
   onCreateLocal,
   onUpdate,
@@ -37,6 +53,17 @@ export const ReposTable: React.FC<ReposTableProps> = ({
   const [repoForm] = Form.useForm();
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [repoToDelete, setRepoToDelete] = useState<Repo | null>(null);
+  const operationGuard = useAuthorityOperationGuard(operationScope);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authorityKey intentionally erases the selected caller-private row
+  useLayoutEffect(() => {
+    repoForm.resetFields();
+    setRepoModalOpen(false);
+    setEditingRepo(null);
+    setRepoMode('remote');
+    setDeleteModalOpen(false);
+    setRepoToDelete(null);
+  }, [identityKey, repoForm]);
 
   const isEditing = !!editingRepo;
   const filteredRepos = useMemo(
@@ -57,9 +84,11 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     setDeleteModalOpen(true);
   };
 
-  const handleConfirmDelete = (cleanup: boolean) => {
-    if (repoToDelete) {
-      onDelete?.(repoToDelete.repo_id, cleanup);
+  const handleConfirmDelete = async (cleanup: boolean) => {
+    const operation = operationGuard.begin();
+    if (repoToDelete && operation.isCurrent()) {
+      await onDelete?.(repoToDelete.repo_id, cleanup, operation.isCurrent);
+      if (!operation.isCurrent()) return;
       setDeleteModalOpen(false);
       setRepoToDelete(null);
     }
@@ -85,8 +114,12 @@ export const ReposTable: React.FC<ReposTableProps> = ({
     setRepoModalOpen(true);
   };
 
-  const handleSaveRepo = () => {
-    repoForm.validateFields().then((values) => {
+  const handleSaveRepo = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    try {
+      const values = await repoForm.validateFields();
+      if (!operation.isCurrent()) return;
       if (isEditing && editingRepo) {
         const updates: Partial<Repo> = {
           slug: values.slug,
@@ -94,25 +127,33 @@ export const ReposTable: React.FC<ReposTableProps> = ({
         if (values.default_branch) {
           updates.default_branch = values.default_branch;
         }
-        onUpdate?.(editingRepo.repo_id, updates);
+        await onUpdate?.(editingRepo.repo_id, updates, operation.isCurrent);
       } else {
         if (repoMode === 'local') {
-          onCreateLocal?.({
-            path: values.path,
-            slug: values.slug || undefined,
-          });
+          await onCreateLocal?.(
+            { path: values.path, slug: values.slug || undefined },
+            operation.isCurrent
+          );
         } else {
-          onCreate?.({
-            url: values.url,
-            slug: values.slug,
-            default_branch: values.default_branch,
-          });
+          await onCreate?.(
+            {
+              url: values.url,
+              slug: values.slug,
+              default_branch: values.default_branch,
+            },
+            operation.isCurrent
+          );
         }
       }
+      if (!operation.isCurrent()) return;
       repoForm.resetFields();
       setEditingRepo(null);
       setRepoModalOpen(false);
-    });
+    } catch {
+      // Ant Design displays validation errors. Parent mutation errors already
+      // own their user-facing message; either way stale continuations do not
+      // close or clear a reconnect-preserved draft.
+    }
   };
 
   const handleCancelModal = () => {

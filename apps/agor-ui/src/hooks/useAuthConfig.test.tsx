@@ -165,6 +165,24 @@ describe('useAuthConfig', () => {
     expect(result.current[0].identityContractState).toBe(IdentityContractState.SUPPORTED);
   });
 
+  it('exposes the branch RBAC feature gate from public health', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          auth: { requireAuth: true },
+          features: { branchRbac: false },
+        }),
+      }))
+    );
+
+    const { result } = renderHook(() => useAuthConfig());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.featuresConfig?.branchRbac).toBe(false);
+  });
+
   it('permits a legacy health response only when the identity contract is absent', async () => {
     vi.stubGlobal(
       'fetch',

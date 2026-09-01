@@ -12,7 +12,7 @@ import { feathers } from '@agor/core/feathers';
 import type { Session, SessionID } from '@agor/core/types';
 import jwt from 'jsonwebtoken';
 import { afterEach, describe, expect } from 'vitest';
-import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { ownedDbTest as dbTest } from '../../../../packages/core/src/db/test-helpers';
 import { initMcpTokens, shutdownMcpTokens } from '../mcp/tokens.js';
 import { createSessionMcpTokenAfterHooks } from './session-mcp-token-hook.js';
 
@@ -60,6 +60,7 @@ async function seedSession(db: Database): Promise<Session> {
       repo_id: repo.repo_id,
       created_at: new Date(),
       created_by: 'test-user',
+      primary_owner_user_id: 'test-user',
       name: 'main',
       ref: 'main',
       branch_unique_id: 1,

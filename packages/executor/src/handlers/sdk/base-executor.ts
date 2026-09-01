@@ -5,6 +5,7 @@
  * Claude, Codex, Gemini, and OpenCode executors.
  */
 
+import { projectContextUsageSnapshot, projectNormalizedSdkResponse } from '@agor/core';
 import {
   AGOR_USER_ENV_KEYS_VAR,
   type ApiKeyName,
@@ -133,7 +134,7 @@ export interface BaseTool {
     /** Raw SDK response for token accounting - stored and normalized */
     rawSdkResponse?: unknown;
     /**
-     * Authoritative context-window snapshot captured during the turn.
+     * Closed authoritative context-window snapshot captured during the turn.
      * - Claude: from the Agent SDK's `getContextUsage()` response.
      * - Codex: from the CLI's `event_msg/token_count.last_token_usage` payload.
      * When present, base-executor uses it as the source of truth for
@@ -312,28 +313,42 @@ type CapturedGitState = {
 async function captureGitStateForSession(
   client: AgorClient,
   sessionId: SessionID,
+  taskId: TaskID,
   phase: 'start' | 'end'
 ): Promise<CapturedGitState | undefined> {
   try {
     const session = await client.service('sessions').get(sessionId);
     if (!session.branch_id) {
-      console.warn(`[Git SHA Capture] Session has no branch_id at task ${phase}`);
+      console.warn(
+        `[Git SHA Capture] Session has no branch_id phase=${phase} ` +
+          `session=${shortId(sessionId)} task=${shortId(taskId)}`
+      );
       return undefined;
     }
 
     const branch = await client.service('branches').get(session.branch_id);
+    const branchContext =
+      `phase=${phase} session=${shortId(sessionId)} task=${shortId(taskId)} ` +
+      `branch=${shortId(branch.branch_id)} storage_mode=${branch.storage_mode ?? 'worktree'} ` +
+      `archived=${branch.archived ? 'true' : 'false'} ` +
+      `filesystem_status=${branch.filesystem_status ?? 'ready'}`;
     if (!branch.path) {
-      console.warn(`[Git SHA Capture] Branch has no path at task ${phase}`);
+      console.warn(`[Git SHA Capture] Branch has no path ${branchContext}`);
       return undefined;
     }
 
     const sha = await getGitState(branch.path);
+    if (sha === 'unknown') {
+      console.warn(`[Git SHA Capture] Git state unknown ${branchContext}`);
+      return { sha, ref: 'unknown' };
+    }
+
     let ref = 'unknown';
     try {
       ref = await getCurrentBranch(branch.path);
     } catch (error) {
       console.warn(
-        `[Git SHA Capture] Failed to capture git ref at task ${phase}:`,
+        `[Git SHA Capture] Failed to capture git ref ${branchContext}:`,
         error instanceof Error ? error.message : String(error)
       );
     }
@@ -344,16 +359,21 @@ async function captureGitStateForSession(
 
     return { sha, ref };
   } catch (error) {
-    console.warn(`[Git SHA Capture] Failed to capture git state at task ${phase}:`, error);
+    console.warn(
+      `[Git SHA Capture] Failed to capture git state phase=${phase} ` +
+        `session=${shortId(sessionId)} task=${shortId(taskId)}:`,
+      error
+    );
     return undefined;
   }
 }
 
 export async function captureGitStateAtTaskEnd(
   client: AgorClient,
-  sessionId: SessionID
+  sessionId: SessionID,
+  taskId: TaskID
 ): Promise<CapturedGitState | undefined> {
-  return captureGitStateForSession(client, sessionId, 'end');
+  return captureGitStateForSession(client, sessionId, taskId, 'end');
 }
 
 export async function stampGitStateAtTaskStart(
@@ -361,7 +381,7 @@ export async function stampGitStateAtTaskStart(
   sessionId: SessionID,
   taskId: TaskID
 ): Promise<void> {
-  const gitState = await captureGitStateForSession(client, sessionId, 'start');
+  const gitState = await captureGitStateForSession(client, sessionId, taskId, 'start');
   if (!gitState) return;
 
   try {
@@ -372,7 +392,11 @@ export async function stampGitStateAtTaskStart(
       },
     });
   } catch (error) {
-    console.warn('[Git SHA Capture] Failed to stamp task start git state:', error);
+    console.warn(
+      `[Git SHA Capture] Failed to stamp task start git state session=${shortId(sessionId)} ` +
+        `task=${shortId(taskId)}:`,
+      error
+    );
   }
 }
 
@@ -574,7 +598,7 @@ export async function executeToolTask(params: {
     );
 
     // Capture git SHA at task end
-    const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
+    const gitStateAtEnd = await captureGitStateForSession(client, sessionId, taskId, 'end');
 
     // Determine task status based on SDK result
     // - wasStopped: user explicitly stopped the task
@@ -609,9 +633,11 @@ export async function executeToolTask(params: {
       patchData.raw_sdk_response = result.rawSdkResponse;
       // `modelHint` refines context-window lookup for tools whose SDK
       // event omits the model; never used as primaryModel.
-      const normalized = normalizeRawSdkResponse(toolName, result.rawSdkResponse, {
-        modelHint: result.model,
-      });
+      const normalized = projectNormalizedSdkResponse(
+        normalizeRawSdkResponse(toolName, result.rawSdkResponse, {
+          modelHint: result.model,
+        })
+      );
       if (normalized) {
         patchData.normalized_sdk_response = normalized;
       }
@@ -631,16 +657,17 @@ export async function executeToolTask(params: {
     // The `maxTokens > 0` guard (vs `totalTokens > 0`) preserves the snapshot
     // even at the moment of auto-compaction, when `totalTokens` can legitimately
     // be near zero.
-    if (result.rawContextUsage && result.rawContextUsage.maxTokens > 0) {
-      patchData.computed_context_window = result.rawContextUsage.totalTokens;
+    const contextUsageSnapshot = projectContextUsageSnapshot(result.rawContextUsage);
+    if (contextUsageSnapshot && contextUsageSnapshot.maxTokens > 0) {
+      patchData.computed_context_window = contextUsageSnapshot.totalTokens;
 
       // Override contextWindowLimit in the normalized response with the
       // authoritative maxTokens so the UI computes percentage against the
       // model's actual reported window, and attach the snapshot itself so
       // UI consumers can prefer the agent's own displayed percentage.
       if (patchData.normalized_sdk_response) {
-        patchData.normalized_sdk_response.contextWindowLimit = result.rawContextUsage.maxTokens;
-        patchData.normalized_sdk_response.contextUsageSnapshot = result.rawContextUsage;
+        patchData.normalized_sdk_response.contextWindowLimit = contextUsageSnapshot.maxTokens;
+        patchData.normalized_sdk_response.contextUsageSnapshot = contextUsageSnapshot;
       }
     } else {
       // No authoritative event_msg/token_count snapshot was captured during the
@@ -666,6 +693,15 @@ export async function executeToolTask(params: {
       }
     }
 
+    // Final executor-side close after every derived override. The daemon
+    // repeats this projection because old/compromised executors can bypass
+    // this process and patch normalized data directly.
+    if (patchData.normalized_sdk_response) {
+      patchData.normalized_sdk_response = projectNormalizedSdkResponse(
+        patchData.normalized_sdk_response
+      );
+    }
+
     // Update task status to completed/stopped with git SHA and SDK responses
     // Note: The stop endpoint may have already patched task to STOPPED via process kill.
     // The tasks.ts patch hook guards against double-updates (wasAlreadyTerminal check).
@@ -676,7 +712,7 @@ export async function executeToolTask(params: {
     console.error(`[${toolName}] execution failed category=task_execution`);
 
     // Capture git SHA at task end (even for failed tasks)
-    const gitStateAtEnd = await captureGitStateForSession(client, sessionId, 'end');
+    const gitStateAtEnd = await captureGitStateForSession(client, sessionId, taskId, 'end');
 
     // Build patch data
     const patchData: Partial<Task> = {

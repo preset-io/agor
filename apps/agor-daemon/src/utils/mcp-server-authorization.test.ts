@@ -97,6 +97,19 @@ describe('authorizeMcpServerWrite', () => {
     expect(resolveMcpMemberPolicy).not.toHaveBeenCalled();
   });
 
+  it.each(['000000000000700080000000', 'not-a-user-id'])(
+    'rejects non-canonical authentication-hydrated identity %s without resolving it',
+    async (userId) => {
+      await expect(
+        authorizeMcpServerWrite(db, paramsFor(userId as UserID, 'member'), {
+          method: 'create',
+          data: remoteCreate,
+        })
+      ).rejects.toThrow(/canonical full UUID/);
+      expect(resolveMcpMemberPolicy).not.toHaveBeenCalled();
+    }
+  );
+
   it('stamps the creator as owner and the session reach under allow_private_only', async () => {
     resolveMcpMemberPolicy.mockResolvedValue('allow_private_only');
 

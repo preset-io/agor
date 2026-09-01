@@ -9,7 +9,7 @@
  * (or, in hosted deployments, silently shares an identity).
  */
 import type { Application } from '@agor/core/feathers';
-import type { Session, UUID } from '@agor/core/types';
+import type { Branch, Session, UUID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
@@ -46,6 +46,7 @@ function makeParent(unixUsername: string | null): Session {
     branch_id: 'branch-1' as Session['branch_id'],
     created_by: 'parent-owner' as UUID,
     unix_username: unixUsername,
+    sdk_home_scope: 'execution_home',
   } as Session;
 }
 
@@ -64,6 +65,24 @@ async function resolveInternalChildIdentity(
       ) => Promise<{ created_by: Session['created_by']; unix_username: Session['unix_username'] }>;
     }
   ).resolveChildIdentity(parent, undefined);
+}
+
+async function resolveExternalChildIdentity(
+  service: SessionsService,
+  parent: Session,
+  userId: UUID
+): Promise<{ created_by: Session['created_by']; unix_username: Session['unix_username'] }> {
+  return (
+    service as unknown as {
+      resolveChildIdentity: (
+        parent: Session,
+        params?: unknown
+      ) => Promise<{ created_by: Session['created_by']; unix_username: Session['unix_username'] }>;
+    }
+  ).resolveChildIdentity(parent, {
+    provider: 'rest',
+    user: { user_id: userId, role: 'member' },
+  });
 }
 
 describe('resolveChildIdentity — internal (provider-less) calls', () => {
@@ -86,6 +105,80 @@ describe('resolveChildIdentity — internal (provider-less) calls', () => {
     await expect(resolveInternalChildIdentity(makeService(), makeParent(null))).resolves.toEqual({
       created_by: 'parent-owner',
       unix_username: null,
+    });
+  });
+
+  it('does not require the old owner stamp for a branch-scoped child', async () => {
+    mockMode('delegated');
+    const parent = { ...makeParent(null), sdk_home_scope: 'branch' as const };
+    await expect(resolveInternalChildIdentity(makeService(), parent)).resolves.toEqual({
+      created_by: 'parent-owner',
+      unix_username: null,
+    });
+  });
+});
+
+describe('resolveChildIdentity — external calls', () => {
+  it('rejects an own-session fork when the creator no longer has Collaborator access', async () => {
+    mockMode('simple');
+    const ownerId = 'parent-owner' as UUID;
+    const service = makeService();
+    const resolveSessionPromptAuthority = vi.fn(async () => ({
+      allowed: false,
+      source: 'denied' as const,
+      denial_reason: 'branch_access_required' as const,
+    }));
+    Object.assign(service as unknown as Record<string, unknown>, {
+      app: {
+        service: (name: string) => {
+          if (name === 'branches') {
+            return { get: vi.fn(async () => ({ branch_id: 'branch-1' }) as Branch) };
+          }
+          throw new Error(`Unexpected service: ${name}`);
+        },
+      },
+      branchRepo: { resolveSessionPromptAuthority },
+    });
+
+    await expect(
+      resolveExternalChildIdentity(service, makeParent('alice'), ownerId)
+    ).rejects.toThrow(/Only Collaborators and Managers/);
+    expect(resolveSessionPromptAuthority).toHaveBeenCalledWith(
+      'branch-1',
+      ownerId,
+      ownerId,
+      'execution_home'
+    );
+  });
+
+  it('attributes a branch-scoped cross-user child to the caller', async () => {
+    mockMode('delegated');
+    const callerId = 'branch-collaborator' as UUID;
+    const service = makeService();
+    const parent = { ...makeParent(null), sdk_home_scope: 'branch' as const };
+    const resolveSessionPromptAuthority = vi.fn(async () => ({
+      allowed: true,
+      execution_user_id: callerId,
+      source: 'branch_session' as const,
+    }));
+    Object.assign(service as unknown as Record<string, unknown>, {
+      app: {
+        service: (name: string) => {
+          if (name === 'branches') {
+            return { get: vi.fn(async () => ({ branch_id: 'branch-1' }) as Branch) };
+          }
+          throw new Error(`Unexpected service: ${name}`);
+        },
+      },
+      branchRepo: { resolveSessionPromptAuthority },
+      usersRepo: {
+        findById: vi.fn(async () => ({ user_id: callerId, unix_username: 'caller-home' })),
+      },
+    });
+
+    await expect(resolveExternalChildIdentity(service, parent, callerId)).resolves.toEqual({
+      created_by: callerId,
+      unix_username: 'caller-home',
     });
   });
 });

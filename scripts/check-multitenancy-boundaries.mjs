@@ -49,6 +49,10 @@ const checks = [
       'apps/agor-daemon/src/services/artifacts.ts': 1,
       'apps/agor-daemon/src/services/boards.ts': 2,
       'apps/agor-daemon/src/services/repos.ts': 1,
+      // Real REST + Socket.IO contract harness: the one authenticated test
+      // connection is joined to a local-only channel so transport-level
+      // response and realtime secret redaction can be asserted end to end.
+      'apps/agor-daemon/src/services/mcp-servers.write-transport.integration.test.ts': 2,
       // Socket/browser integration harness explicitly joins one authenticated
       // connection to its verified tenant before asserting hard-delete
       // publication containment.
@@ -66,17 +70,24 @@ const checks = [
       // derived from trusted tenant/user/terminal identity before executor
       // startup. Same-room operations are serialized and re-check immutable
       // authority so retirement cannot leave stale membership; clients cannot
-      // supply that room or capability.
-      'apps/agor-daemon/src/setup/socketio.ts': 11,
+      // supply that room or capability. The navbar board-association protocol
+      // adds one join and one leave at this same audited boundary; each room is
+      // constructed from immutable tenant authority plus a boards.find-
+      // authorized canonical board ID.
+      'apps/agor-daemon/src/setup/socketio.ts': 13,
       // Adversarial integration harnesses intentionally exercise the raw
       // Socket.IO boundary: the PostgreSQL test probes a guessed foreign room
-      // and inspects passive delivery, while the Redis test emits one cursor
-      // packet across two real adapter-backed replicas. Production room names
-      // and authorization still come from the centralized routing/config code.
-      'apps/agor-daemon/src/setup/socketio-tenant-isolation.postgres.test.ts': 3,
-      // The second cursor packet is deliberately sent after revoke/reconnect
-      // denial to prove a stale client cannot publish through its former room.
-      'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 2,
+      // and inspects passive delivery, including authorized/private/forged
+      // board-association heartbeats for member/admin/superadmin roles, while
+      // the Redis test emits one cursor packet across two real adapter-backed
+      // replicas. Production room names and authorization still come from the
+      // centralized routing/config code.
+      'apps/agor-daemon/src/setup/socketio-tenant-isolation.postgres.test.ts': 6,
+      // The cursor packets are deliberately sent before and after revoke/
+      // reconnect denial, and the board heartbeat independently verifies the
+      // authorized association relay. These three test-only raw client emits
+      // exercise the real Redis adapter boundary through shared event names.
+      'apps/agor-daemon/src/setup/socketio-ha-tenant-isolation.integration.test.ts': 3,
       // Real immutable-handshake coverage deliberately inspects the private
       // Feathers task channel through one test helper and injects both executor
       // control event names into its current connections. Pre-disconnect
@@ -191,6 +202,11 @@ const checks = [
       // capabilities use a second transaction path so their RLS GUC is local
       // to one pooled connection checkout and cannot leak after discovery.
       'packages/core/src/db/tenant-scope.ts': 2,
+      // Test-only security harness deliberately invokes every direct libsql
+      // and Drizzle transaction surface to prove the literal-memory client
+      // coordinator cannot be bypassed. No application database access lives
+      // in this file.
+      'packages/core/src/db/in-memory-sqlite-coordinator.test.ts': 10,
       'packages/core/src/db/repositories/branches.ts': 1,
       'packages/core/src/db/repositories/knowledge.ts': 7,
       'packages/core/src/db/repositories/repos.ts': 3,

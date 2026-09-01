@@ -211,6 +211,7 @@ A session has more knobs than a CLI invocation:
 - **Effort**: Explicit reasoning depth for Claude and Codex sessions. Unset Codex sessions inherit the runtime's project, user, or model default.
 - **Permissions**: How tool calls are gated (auto-approve, supervised, manual)
 - **MCP servers**: Which tool sets are attached
+- **Environment variables**: Select name-only grants for variables you marked `Session` in Profile → Env Vars. Global variables are eligible automatically for tasks executing as you. Selections take effect on the next task; they do not mutate a running process.
 - **Effort and context capacity**: Supported Claude Code models expose separate 200k and `[1m]` choices; availability still depends on the connected account and provider
 
 All of this is changeable at any point. You don't have to start a new session to dial things up or down.
@@ -222,6 +223,12 @@ All of this is changeable at any point. You don't have to start a new session to
 />
 
 _Session Settings modal: model, effort, permissions, MCP, env vars, callbacks, all editable mid-session for supported runtimes._
+
+Forks and spawned children copy selection names for continuity, never stored values. Each child
+resolves the copied names against its attributed owner. When a collaborator forks or spawns from a
+shared branch-scoped session, the child is attributed to that collaborator, so a copied name cannot
+borrow the parent's secret. Execution-home sessions cannot be continued across users. Callbacks
+carry message content, not an environment grant.
 
 ### Historical Claude CLI sessions
 

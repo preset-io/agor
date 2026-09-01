@@ -1,6 +1,6 @@
 import { LogLevel } from '@slack/socket-mode';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createSlackSdkLogger } from './slack-sdk-logger';
+import { createSlackSdkLogger, createSlackSdkLoggerController } from './slack-sdk-logger';
 
 const HEARTBEAT_WARNING = "A pong wasn't received from the server before the timeout of 5000ms!";
 
@@ -89,17 +89,42 @@ describe('Slack SDK logger', () => {
     expect(logger.getLevel()).toBe(LogLevel.DEBUG);
     expect(debugSpy).not.toHaveBeenCalled();
     expect(infoSpy).not.toHaveBeenCalled();
-    expect(warnSpy.mock.calls).toEqual([['[slack.socket_mode] sdk_warning category=sdk_warning']]);
-    expect(errorSpy.mock.calls).toEqual([['[slack.socket_mode] sdk_error category=sdk_error']]);
+    expect(warnSpy.mock.calls).toEqual([
+      ['[slack.socket_mode] sdk_warning category=sdk_warning'],
+      ['[slack.socket_mode] sdk_error category=unclassified lifecycle=starting'],
+    ]);
+    expect(errorSpy).not.toHaveBeenCalled();
     const output = [warnSpy, errorSpy].flatMap((spy) => spy.mock.calls.flat()).join(' ');
     for (const sentinel of sentinels) expect(output).not.toContain(sentinel);
 
     logger.setLevel(LogLevel.ERROR);
     logger.warn(HEARTBEAT_WARNING, 'suppressed-sensitive-value');
     logger.error('another-sensitive-value');
-    expect(warnSpy).toHaveBeenCalledOnce();
-    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalledTimes(3);
+    expect(errorSpy).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('classifies safe categories and correlates active errors without retaining raw details', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const controller = createSlackSdkLoggerController();
+
+    controller.logger.error('WebSocket connection timeout token-sensitive');
+    controller.setLifecycleState('active');
+    controller.logger.error(new Error('rate limited by provider payload-sensitive'));
+    controller.logger.error({ code: 'invalid_auth', token: 'xapp-sensitive' });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[slack.socket_mode] sdk_error category=transport lifecycle=starting'
+    );
+    expect(errorSpy.mock.calls).toEqual([
+      ['[slack.socket_mode] sdk_error category=rate_limited lifecycle=active'],
+      ['[slack.socket_mode] sdk_error category=authentication lifecycle=active'],
+    ]);
+    const output = [...warnSpy.mock.calls, ...errorSpy.mock.calls].flat().join(' ');
+    expect(output).not.toContain('sensitive');
+    expect(output).not.toContain('invalid_auth');
   });
 
   it('caps retained state, uses one unref timer, and resets for the next window', () => {

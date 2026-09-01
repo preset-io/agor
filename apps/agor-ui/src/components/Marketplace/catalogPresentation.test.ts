@@ -69,7 +69,7 @@ describe('connectBlockedReason', () => {
     ).toMatch(/cannot be installed/i);
   });
 
-  it('allows oauth: connecting sets it up and the user signs in afterwards', () => {
+  it('allows oauth: connecting opens the provider popup automatically', () => {
     expect(connectBlockedReason(entry({ auth_type: 'oauth' }))).toBeUndefined();
   });
 
@@ -129,7 +129,7 @@ describe('connectStatus', () => {
     expect(keyed.detail).toMatch(/never shows it again|never shown again|for you alone/i);
   });
 
-  it('separates "sign in afterwards" from "no account needed"', () => {
+  it('separates automatic account connection from "no account needed"', () => {
     // Both connect, so both must not be `blocked` — but a card promising "no
     // account needed" over a server that wants the user's Notion login is the
     // thing this vocabulary exists to prevent.
@@ -137,6 +137,7 @@ describe('connectStatus', () => {
     expect(oauth.readiness).toBe('sign-in');
     expect(oauth.readiness).not.toBe(connectStatus(entry()).readiness);
     expect(oauth.detail).toMatch(/your own account/i);
+    expect(oauth.detail).toMatch(/popup/i);
   });
 });
 
@@ -157,7 +158,7 @@ describe('isConnectable', () => {
     expect(isConnectable(entry({ auth_type: 'credentials' }))).toBe(true);
   });
 
-  it('keeps oauth, which connects and then asks the user to sign in', () => {
+  it('keeps oauth, which connects through the automatic popup', () => {
     expect(isConnectable(entry({ auth_type: 'oauth' }))).toBe(true);
   });
 

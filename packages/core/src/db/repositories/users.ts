@@ -13,6 +13,7 @@ import type {
   InternalUser,
   StoredAgenticTools,
   User,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import { toAgenticToolsStatus } from '@agor/core/types';
@@ -21,7 +22,7 @@ import { normalizeStoredEnvMap, type RawStoredEnvVar } from '../../config/env-va
 import { generateId, shortId } from '../../lib/ids';
 import { isValidExecutionHomeKey } from '../../types/user';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
+import { deleteFrom, insert, lockRowForUpdate, select, update } from '../database-wrapper';
 import { decryptApiKey, encryptApiKey } from '../encryption';
 import { type UserInsert as SchemaUserInsert, type UserRow, users } from '../schema';
 import { isExecutionHomeKeyAvailable } from '../user-execution-home';
@@ -79,6 +80,101 @@ export class UsersRepository
   implements BaseRepository<InternalUser, UsersRepositoryCreate, UsersRepositoryUpdate>
 {
   constructor(private db: Database) {}
+
+  private async readDiscoveryAuthorityProjection(
+    userId: UserID | string,
+    lock: boolean
+  ): Promise<{ user_id: UserID; role: string; updated_at: Date } | null> {
+    const where = eq(users.user_id, userId);
+    if (lock) await lockRowForUpdate(this.db, this.db, users, where);
+    const row = await select(this.db, {
+      user_id: users.user_id,
+      role: users.role,
+      updated_at: users.updated_at,
+      created_at: users.created_at,
+    })
+      .from(users)
+      .where(where)
+      .one();
+    return row
+      ? {
+          user_id: row.user_id as UserID,
+          role: row.role,
+          updated_at: new Date(row.updated_at ?? row.created_at),
+        }
+      : null;
+  }
+
+  /** Nonsecret role/version snapshot captured before an outbound MCP probe. */
+  async getDiscoveryAuthorityProjection(
+    userId: UserID | string
+  ): Promise<{ user_id: UserID; role: string; updated_at: Date } | null> {
+    try {
+      return await this.readDiscoveryAuthorityProjection(userId, false);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to read user discovery authority: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /** Transactional counterpart used immediately before capability persistence. */
+  async getDiscoveryAuthorityProjectionForUpdate(
+    userId: UserID | string
+  ): Promise<{ user_id: UserID; role: string; updated_at: Date } | null> {
+    try {
+      return await this.readDiscoveryAuthorityProjection(userId, true);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to lock user discovery authority: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Explicit nonsecret principal projection for user-targeted invalidations.
+   * Tenant scoping is supplied by the repository's current database unit of
+   * work; callers never need to hydrate user preferences or credentials merely
+   * to name a realtime room.
+   */
+  async listUserIds(): Promise<UserID[]> {
+    try {
+      const rows = await select(this.db, { user_id: users.user_id }).from(users).all();
+      return rows.map((row: { user_id: string }) => row.user_id as UserID);
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to list user IDs: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
+
+  /**
+   * Lock and reload only the caller identity fields used by a write
+   * authorizer. Role changes use the same users row, so a concurrent demotion
+   * is ordered either before this read (and is observed) or after the guarded
+   * mutation commits.
+   */
+  async getWriteAuthorityProjectionForUpdate(
+    userId: UserID | string
+  ): Promise<{ user_id: UserID; role: string } | null> {
+    try {
+      const where = eq(users.user_id, userId);
+      await lockRowForUpdate(this.db, this.db, users, where);
+      const row = await select(this.db, { user_id: users.user_id, role: users.role })
+        .from(users)
+        .where(where)
+        .one();
+      return row ? { user_id: row.user_id as UserID, role: row.role } : null;
+    } catch (error) {
+      throw new RepositoryError(
+        `Failed to read user write authority: ${error instanceof Error ? error.message : String(error)}`,
+        error
+      );
+    }
+  }
 
   /**
    * Convert database row to User type.
@@ -209,7 +305,7 @@ export class UsersRepository
    */
   private async resolveId(id: string): Promise<string> {
     return resolveByShortIdPrefix(id, 'User', async (pattern) => {
-      const rows = await select(this.db)
+      const rows = await select(this.db, { user_id: users.user_id })
         .from(users)
         .where(like(users.user_id, pattern))
         .limit(RESOLVE_SHORT_ID_FETCH_LIMIT)

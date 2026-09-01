@@ -12,10 +12,12 @@ import type {
   BoardObject,
   Branch,
   BranchPermissionLevel,
+  EffectiveCapabilityPolicyAccess,
+  UserID,
   UUID,
 } from '@agor/core/types';
 import { isTeammate } from '@agor/core/types';
-import { and, eq, inArray, isNull, like, ne, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, like, ne, type SQL, sql } from 'drizzle-orm';
 import * as yaml from 'js-yaml';
 import { getBaseUrl } from '../../config/config-manager';
 import { generateId } from '../../lib/ids';
@@ -23,16 +25,8 @@ import { generateSlug } from '../../lib/slugs';
 import { normalizeExactEmojiShortcode } from '../../utils/emoji-shortcodes';
 import { getBoardUrl } from '../../utils/url';
 import type { Database } from '../client';
-import { deleteFrom, insert, select, update } from '../database-wrapper';
-import {
-  type BoardInsert,
-  type BoardRow,
-  boardGroupGrants,
-  boardOwners,
-  boards,
-  groupMemberships,
-  groups,
-} from '../schema';
+import { deleteFrom, insert, runDatabaseTransaction, select, update } from '../database-wrapper';
+import { type BoardInsert, type BoardRow, boards, users } from '../schema';
 import {
   AmbiguousIdError,
   attachHiddenTenant,
@@ -42,8 +36,9 @@ import {
   RepositoryError,
   resolveByShortIdPrefix,
 } from './base';
-import { visibleBoardAccessCondition } from './branch-access';
+import { visibleBoardAccessCondition, visibleBoardReferenceAccessExists } from './branch-access';
 import { BranchRepository } from './branches';
+import { CapabilityPolicyRepository } from './capability-policies';
 
 const BOARD_ACCESS_MODES = ['private', 'shared'] as const;
 const BOARD_DEFAULT_FS_ACCESS = ['none', 'read', 'write'] as const;
@@ -67,6 +62,30 @@ function validateBoardPermissionDefaults(board: Partial<Board>): void {
       `Invalid board default_others_fs_access: ${board.default_others_fs_access}`
     );
   }
+}
+
+/** Canonical portable Board template → create payload mapping. */
+export function mapBoardExportBlobToCreateData(
+  blob: BoardExportBlob,
+  userId: string,
+  nameOverride?: string
+): Partial<Board> {
+  const name = nameOverride ?? blob.name;
+  return {
+    name,
+    slug: nameOverride ? nameOverride : (blob.slug ?? blob.name),
+    description: blob.description,
+    icon: blob.icon,
+    color: blob.color,
+    background_color: blob.background_color,
+    custom_css: blob.custom_css,
+    objects: blob.objects,
+    custom_context: blob.custom_context,
+    access_mode: blob.access_mode,
+    default_others_can: blob.default_others_can,
+    default_others_fs_access: blob.default_others_fs_access,
+    created_by: userId,
+  };
 }
 
 /**
@@ -95,7 +114,6 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       access_mode?: BoardAccessMode;
       default_others_can?: BranchPermissionLevel;
       default_others_fs_access?: 'none' | 'read' | 'write';
-      default_dangerously_allow_session_sharing?: boolean;
     };
 
     const boardId = row.board_id as UUID;
@@ -121,17 +139,18 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
           ? new Date(row.updated_at).toISOString()
           : new Date(row.created_at).toISOString(),
         created_by: row.created_by,
+        primary_owner_user_id: row.primary_owner_user_id,
         url,
         archived: Boolean(row.archived),
         archived_at: row.archived_at ? new Date(row.archived_at).toISOString() : undefined,
         archived_by: row.archived_by ?? undefined,
         ...effectiveData,
         icon: normalizeExactEmojiShortcode(data.icon),
-        access_mode: data.access_mode ?? 'shared',
-        default_others_can: data.default_others_can ?? 'session',
-        default_others_fs_access: data.default_others_fs_access ?? 'read',
-        default_dangerously_allow_session_sharing:
-          data.default_dangerously_allow_session_sharing ?? false,
+        // Legacy fields are a fail-closed compatibility view. Callers that
+        // need current permissions use boards/:id/permissions.
+        access_mode: data.access_mode ?? 'private',
+        default_others_can: data.default_others_can ?? 'none',
+        default_others_fs_access: data.default_others_fs_access ?? 'none',
       },
       row
     );
@@ -156,13 +175,9 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       created_at: new Date(board.created_at ?? now),
       updated_at: board.last_updated ? new Date(board.last_updated) : new Date(now),
       created_by: board.created_by,
+      primary_owner_user_id: board.primary_owner_user_id ?? board.created_by,
       data: {
         description: board.description,
-        access_mode: board.access_mode ?? 'shared',
-        default_others_can: board.default_others_can ?? 'session',
-        default_others_fs_access: board.default_others_fs_access ?? 'read',
-        default_dangerously_allow_session_sharing:
-          board.default_dangerously_allow_session_sharing ?? false,
         color: board.color,
         icon: normalizeExactEmojiShortcode(board.icon),
         // No default is persisted: an unset background_color means "use the
@@ -268,7 +283,32 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         slug: finalSlug,
       });
 
-      await insert(this.db, boards).values(insertData).run();
+      await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          const owner = await select(tx, { user_id: users.user_id })
+            .from(users)
+            .where(eq(users.user_id, insertData.primary_owner_user_id))
+            .one();
+          if (!owner) {
+            throw new RepositoryError(
+              `Cannot create Board: primary owner ${insertData.primary_owner_user_id} does not exist in this tenant`
+            );
+          }
+          await insert(tx, boards).values(insertData).run();
+          await new CapabilityPolicyRepository(tx).initializeBoardInTransaction(
+            tx,
+            boardId as BoardID,
+            insertData.primary_owner_user_id as UserID,
+            {
+              shared: (data.access_mode ?? 'shared') === 'shared',
+              defaultOthersCan: data.default_others_can,
+              defaultOthersFsAccess: data.default_others_fs_access,
+            }
+          );
+        },
+        { sqliteImmediate: true }
+      );
 
       const row = await select(this.db)
         .from(boards)
@@ -360,7 +400,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    * @param filter.boardIds - Restrict to a set of board IDs (empty set yields no
    *   rows, matching an `{ $in: [] }` filter)
    * @param filter.visibleToUserId - Restrict to boards visible to this user
-   *   under branch RBAC.
+   *   under the board's own normalized policy.
    * @param filter.lean - Omit each board's heavy `objects` / `custom_css`
    *   annotations from the result. The displayed board's full record is fetched
    *   separately via `findById`, so the list path never needs them. RBAC and
@@ -404,20 +444,77 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   }
 
   /**
-   * Find the ids of boards visible to a user under branch RBAC.
-   *
-   * A board is visible if either:
-   * - The user created it (self-created boards are always visible, even when
-   *   they carry no branches yet), OR
-   * - At least one branch on the board is accessible to the user, OR
-   * - The board's primary teammate branch is accessible to the user, even if
-   *   that teammate branch currently lives on another board.
-   *
-   * Implemented as a single correlated `EXISTS` subquery against `boards` so
-   * each board row is emitted at most once — no `DISTINCT` or `UNION` needed.
-   * Portable SQL: `EXISTS`, `LEFT JOIN`, `IN`, `OR`, `IS NOT NULL` behave
-   * identically on SQLite and Postgres, and both planners short-circuit the
-   * semi-join on the first qualifying branch per board.
+   * Count and fetch a board page in SQL. The generic Feathers adapter keeps
+   * pagination in memory, which is unnecessarily expensive once a tenant has
+   * many archived boards. Callers only use this for simple list shapes; richer
+   * operator queries continue through `findAll` and the adapter's compatibility
+   * pipeline.
+   */
+  async findPage(opts: {
+    archived?: boolean;
+    boardIds?: BoardID[];
+    visibleToUserId?: UUID;
+    lean?: boolean;
+    limit?: number;
+    offset?: number;
+    sort?: Record<string, 1 | -1>;
+  }): Promise<{ data: Board[]; total: number }> {
+    if (opts.boardIds?.length === 0) return { data: [], total: 0 };
+
+    const conditions: SQL[] = [];
+    if (opts.archived !== undefined) conditions.push(eq(boards.archived, opts.archived));
+    if (opts.boardIds) conditions.push(inArray(boards.board_id, opts.boardIds));
+    if (opts.visibleToUserId) conditions.push(this.visibleBoardCondition(opts.visibleToUserId));
+    const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+    let countQuery = select(this.db, { count: sql<number>`count(*)` }).from(boards);
+    if (whereClause) countQuery = countQuery.where(whereClause);
+    const countRow = await countQuery.one();
+    const total = Number(countRow?.count ?? 0);
+
+    const sortColumns = {
+      board_id: boards.board_id,
+      name: boards.name,
+      slug: boards.slug,
+      created_at: boards.created_at,
+    } as const;
+    const orderBy: SQL[] = [];
+    for (const [field, direction] of Object.entries(opts.sort ?? {})) {
+      if (field === 'updated_at') {
+        const logicalUpdatedAt = sql`COALESCE(${boards.updated_at}, ${boards.created_at})`;
+        orderBy.push(direction === -1 ? desc(logicalUpdatedAt) : asc(logicalUpdatedAt));
+        continue;
+      }
+      const column = sortColumns[field as keyof typeof sortColumns];
+      if (!column) continue;
+      // PostgreSQL sorts NULL first for ASC while SQLite sorts NULL first as
+      // well but differs for DESC. Explicitly put nullable slugs last on both
+      // dialects before applying the requested value direction.
+      if (field === 'slug') {
+        orderBy.push(asc(sql`CASE WHEN ${column} IS NULL THEN 1 ELSE 0 END`));
+      }
+      orderBy.push(direction === -1 ? desc(column) : asc(column));
+    }
+    if (orderBy.length === 0) orderBy.push(asc(boards.created_at));
+    if (!Object.hasOwn(opts.sort ?? {}, 'board_id')) orderBy.push(asc(boards.board_id));
+
+    let dataQuery = select(this.db).from(boards);
+    if (whereClause) dataQuery = dataQuery.where(whereClause);
+    dataQuery = dataQuery.orderBy(...orderBy);
+    if (opts.limit !== undefined) dataQuery = dataQuery.limit(opts.limit);
+    if (opts.offset) dataQuery = dataQuery.offset(opts.offset);
+
+    const baseUrl = await getBaseUrl();
+    const rows = await dataQuery.all();
+    return {
+      data: (rows as BoardRow[]).map((row) => this.rowToBoard(row, baseUrl, { lean: opts.lean })),
+      total,
+    };
+  }
+
+  /**
+   * Find board ids visible through the board's own normalized policy. Branch
+   * visibility never makes a board visible implicitly.
    *
    * Should only be called when branch RBAC is enabled.
    *
@@ -432,45 +529,75 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     return rows.map((r: { board_id: string }) => r.board_id);
   }
 
+  /** Materialize the exact current board audience in one set-based query. */
+  async findRealtimeViewUserIds(boardId: BoardID): Promise<UUID[]> {
+    const rows = await select(this.db, { user_id: users.user_id })
+      .from(users)
+      .where(visibleBoardReferenceAccessExists(this.db, users.user_id, sql`${boardId}`))
+      .all();
+    return rows.map((row: { user_id: string }) => row.user_id as UUID);
+  }
+
   async isOwner(boardId: string, userId: UUID): Promise<boolean> {
-    const row = await select(this.db)
-      .from(boardOwners)
-      .where(and(eq(boardOwners.board_id, boardId), eq(boardOwners.user_id, userId)))
+    const row = await select(this.db, { owner: boards.primary_owner_user_id })
+      .from(boards)
+      .where(eq(boards.board_id, boardId))
       .one();
-    return row != null;
+    return row?.owner === userId;
   }
 
   async canMutate(boardId: string, userId: UUID): Promise<boolean> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);
-    if (board.created_by === userId) return true;
-    if (await this.isOwner(board.board_id, userId)) return true;
-    if (board.access_mode === 'private') return false;
+    return this.canMutateResolved(board, userId);
+  }
 
-    const row = await select(this.db)
-      .from(boardGroupGrants)
-      .innerJoin(
-        groupMemberships,
-        and(
-          eq(groupMemberships.group_id, boardGroupGrants.group_id),
-          eq(groupMemberships.user_id, userId)
-        )
-      )
-      .innerJoin(
-        groups,
-        and(eq(groups.group_id, boardGroupGrants.group_id), eq(groups.archived, false))
-      )
-      .where(and(eq(boardGroupGrants.board_id, board.board_id), eq(boardGroupGrants.can, 'all')))
-      .one();
+  /** Resolve current edit authority for a canonical board loaded by this request. */
+  async canMutateResolved(board: Pick<Board, 'board_id'>, userId: UUID): Promise<boolean> {
+    const access = await new CapabilityPolicyRepository(this.db).resolveBoardAccess(
+      board.board_id,
+      userId as UserID
+    );
+    return access.capabilities.includes('board.edit');
+  }
 
-    return row != null;
+  async canAttachBranch(boardId: string, userId: UUID): Promise<boolean> {
+    const board = await this.findById(boardId);
+    if (!board) throw new EntityNotFoundError('Board', boardId);
+    const access = await new CapabilityPolicyRepository(this.db).resolveBoardAccess(
+      board.board_id,
+      userId as UserID
+    );
+    return access.capabilities.includes('board.attach_branch');
   }
 
   async canView(boardId: string, userId: UUID): Promise<boolean> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);
-    if (board.access_mode === 'shared') return true;
-    return (await this.findVisibleBoardIds(userId)).includes(board.board_id);
+    return this.canViewResolved(board, userId);
+  }
+
+  /** Resolve current view authority for a canonical board loaded by this request. */
+  async canViewResolved(board: Pick<Board, 'board_id'>, userId: UUID): Promise<boolean> {
+    const access = await new CapabilityPolicyRepository(this.db).resolveBoardAccess(
+      board.board_id,
+      userId as UserID
+    );
+    return access.capabilities.includes('board.view');
+  }
+
+  /**
+   * Resolve a user's effective capability-policy access to a board.
+   *
+   * Mirrors `BranchRepository.resolveUserAccess` — the central app-layer
+   * resolver for point checks. Callers that need the full effective-access
+   * payload (not just a single boolean like `canMutate`/`canView`) use this.
+   */
+  async resolveUserAccess(board: Board, userId: UUID): Promise<EffectiveCapabilityPolicyAccess> {
+    return new CapabilityPolicyRepository(this.db).resolveBoardAccess(
+      board.board_id,
+      userId as UserID
+    );
   }
 
   /** Resolve a board only when the caller can currently view it. */
@@ -498,32 +625,26 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async getOwners(boardId: string): Promise<UUID[]> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);
-    const rows = await select(this.db)
-      .from(boardOwners)
-      .where(eq(boardOwners.board_id, board.board_id))
-      .all();
-    return rows.map((row: { user_id: string }) => row.user_id as UUID);
+    return [board.primary_owner_user_id as UUID];
   }
 
   async addOwner(boardId: string, userId: UUID): Promise<void> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);
     if (await this.isOwner(board.board_id, userId)) return;
-    await insert(this.db, boardOwners)
-      .values({
-        board_id: board.board_id,
-        user_id: userId,
-        created_at: new Date(),
-      })
-      .run();
+    throw new RepositoryError(
+      'Primary ownership is immutable; grant Manager access through the board permission policy'
+    );
   }
 
   async removeOwner(boardId: string, userId: UUID): Promise<void> {
     const board = await this.findById(boardId);
     if (!board) throw new EntityNotFoundError('Board', boardId);
-    await deleteFrom(this.db, boardOwners)
-      .where(and(eq(boardOwners.board_id, board.board_id), eq(boardOwners.user_id, userId)))
-      .run();
+    throw new RepositoryError(
+      userId === board.primary_owner_user_id
+        ? 'Primary ownership is immutable'
+        : 'This user is not a board owner; remove their permission entry instead'
+    );
   }
 
   /**
@@ -532,6 +653,18 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async update(id: string, updates: Partial<Board>): Promise<Board> {
     try {
       this.rejectGenericPrimaryTeammateWrite(updates, 'set');
+      if (Object.hasOwn(updates, 'primary_owner_user_id')) {
+        throw new RepositoryError('Primary ownership is immutable');
+      }
+      if (
+        ['access_mode', 'default_others_can', 'default_others_fs_access'].some((field) =>
+          Object.hasOwn(updates, field)
+        )
+      ) {
+        throw new RepositoryError(
+          'Board permissions must be changed through the board permission policy service'
+        );
+      }
       const fullId = await this.resolveId(id);
 
       // Get current board to merge updates
@@ -601,12 +734,17 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async delete(id: string): Promise<void> {
     try {
       const fullId = await this.resolveId(id);
-
-      const result = await deleteFrom(this.db, boards).where(eq(boards.board_id, fullId)).run();
-
-      if (result.rowsAffected === 0) {
-        throw new EntityNotFoundError('Board', id);
-      }
+      await runDatabaseTransaction(
+        this.db,
+        async (tx) => {
+          await new CapabilityPolicyRepository(
+            tx
+          ).materializeInheritedBranchesBeforeBoardDeleteInTransaction(tx, fullId as BoardID);
+          const result = await deleteFrom(tx, boards).where(eq(boards.board_id, fullId)).run();
+          if (result.rowsAffected === 0) throw new EntityNotFoundError('Board', id);
+        },
+        { sqliteImmediate: true }
+      );
     } catch (error) {
       if (error instanceof EntityNotFoundError) throw error;
       throw new RepositoryError(
@@ -807,7 +945,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   /**
    * Get default board (or create if doesn't exist)
    */
-  async getDefault(): Promise<Board> {
+  async getDefault(createdBy?: UserID | string): Promise<Board> {
     try {
       const defaultBoard = await this.findBySlug('default');
 
@@ -815,16 +953,16 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
         return defaultBoard;
       }
 
-      // Create default board with the legacy sentinel; the first-run admin
-      // bootstrap re-attributes it to the bootstrapped admin on next start.
-      const { LEGACY_ANONYMOUS_OWNER_ID } = await import('../first-run-bootstrap');
+      if (!createdBy) {
+        throw new RepositoryError('Cannot create the default Board without a real primary owner');
+      }
       return this.create({
         name: 'Main Board',
         slug: 'default',
         description: 'Main board for all sessions',
         color: '#1677ff',
         icon: '⭐',
-        created_by: LEGACY_ANONYMOUS_OWNER_ID,
+        created_by: createdBy as UserID,
       });
     } catch (error) {
       throw new RepositoryError(
@@ -1023,6 +1161,19 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       throw new EntityNotFoundError('Board', boardId);
     }
 
+    const permissions = await new CapabilityPolicyRepository(this.db).getBoardPolicies(
+      board.board_id as BoardID
+    );
+    const templateOthers = permissions.branch_template.access.others;
+    const defaultOthersCan: BranchPermissionLevel =
+      templateOthers.preset === 'manager'
+        ? 'all'
+        : templateOthers.preset === 'collaborator'
+          ? 'session'
+          : templateOthers.preset === 'viewer'
+            ? 'view'
+            : 'none';
+
     return {
       name: board.name,
       slug: board.slug,
@@ -1031,10 +1182,13 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
       color: board.color,
       background_color: board.background_color,
       custom_css: board.custom_css,
-      access_mode: board.access_mode,
-      default_others_can: board.default_others_can,
-      default_others_fs_access: board.default_others_fs_access,
-      default_dangerously_allow_session_sharing: board.default_dangerously_allow_session_sharing,
+      // Portable exports preserve only fallback/template behavior. Named
+      // users, groups, and primary ownership are
+      // intentionally tenant-local security state and never leave with a
+      // board template.
+      access_mode: permissions.board_access.sharing_mode,
+      default_others_can: defaultOthersCan,
+      default_others_fs_access: templateOthers.fs_access,
       objects: board.objects,
       custom_context: board.custom_context,
     };
@@ -1050,21 +1204,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     // Validate blob structure
     this.validateBoardBlob(blob);
 
-    return this.create({
-      name: blob.name,
-      slug: blob.slug ?? blob.name,
-      description: blob.description,
-      icon: blob.icon,
-      color: blob.color,
-      background_color: blob.background_color,
-      objects: blob.objects,
-      custom_context: blob.custom_context,
-      access_mode: blob.access_mode,
-      default_others_can: blob.default_others_can,
-      default_others_fs_access: blob.default_others_fs_access,
-      default_dangerously_allow_session_sharing: blob.default_dangerously_allow_session_sharing,
-      created_by: userId,
-    });
+    return this.create(mapBoardExportBlobToCreateData(blob, userId));
   }
 
   /**
@@ -1120,21 +1260,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
    */
   async clone(boardId: string, newName: string, userId: string): Promise<Board> {
     const blob = await this.toBlob(boardId);
-    return this.create({
-      name: newName,
-      slug: newName,
-      description: blob.description,
-      icon: blob.icon,
-      color: blob.color,
-      background_color: blob.background_color,
-      objects: blob.objects,
-      custom_context: blob.custom_context,
-      access_mode: blob.access_mode,
-      default_others_can: blob.default_others_can,
-      default_others_fs_access: blob.default_others_fs_access,
-      default_dangerously_allow_session_sharing: blob.default_dangerously_allow_session_sharing,
-      created_by: userId,
-    });
+    return this.create(mapBoardExportBlobToCreateData(blob, userId, newName));
   }
 
   /**

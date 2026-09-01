@@ -98,7 +98,7 @@ export interface SessionFooterProps {
   modelLabel?: string;
   modelConfig?: ModelConfig;
   // Handlers
-  onModelConfigChange: (config: ModelConfig) => void;
+  onModelConfigCommit: (config: ModelConfig) => void;
   onOpenSessionSettings?: (sessionId: string) => void;
   onSendPrompt: () => void;
   onStop: () => void;
@@ -146,7 +146,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
   client,
   modelLabel,
   modelConfig,
-  onModelConfigChange,
+  onModelConfigCommit,
   onOpenSessionSettings,
   onSendPrompt,
   onStop,
@@ -334,8 +334,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
           }
         >
           <ModelSelector
+            key={session.session_id}
             value={modelConfig}
-            onChange={onModelConfigChange}
+            onCommit={onModelConfigCommit}
             agentic_tool={session.agentic_tool}
             client={client}
             branchId={session.branch_id}
@@ -1301,11 +1302,13 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
     </fieldset>
   );
 
-  const stopTooltip = stopRequestInFlight
-    ? 'Stopping...'
-    : isStopping
-      ? 'Stopping... (Click again to retry if stuck)'
-      : 'Stop Execution';
+  const stopTooltip = connectionDisabled
+    ? 'Disconnected from daemon'
+    : stopRequestInFlight
+      ? 'Stopping...'
+      : isStopping
+        ? 'Stopping... (Click again to retry if stuck)'
+        : 'Stop Execution';
 
   const showStop = isRunning || stopRequestInFlight;
 
@@ -1388,6 +1391,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
             {showMcpControl && (
               <SessionMcpFooterControl
                 client={client}
+                currentUserId={currentUserId}
                 sessionId={session.session_id}
                 sessionMcpServerIds={sessionMcpServerIds}
                 mcpServerById={mcpServerById}
@@ -1411,8 +1415,9 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                       </Typography.Text>
                     ) : (
                       <ModelSelector
+                        key={session.session_id}
                         value={modelConfig}
-                        onChange={onModelConfigChange}
+                        onCommit={onModelConfigCommit}
                         agentic_tool={session.agentic_tool}
                         client={client}
                         branchId={session.branch_id}
@@ -1714,7 +1719,7 @@ const SessionFooterInner: React.FC<SessionFooterProps> = ({
                     stopRequestInFlight || isStopping ? <Spin size="small" /> : <StopOutlined />
                   }
                   onClick={onStop}
-                  disabled={!isRunning || stopRequestInFlight}
+                  disabled={connectionDisabled || !isRunning || stopRequestInFlight}
                 >
                   Stop
                 </Button>

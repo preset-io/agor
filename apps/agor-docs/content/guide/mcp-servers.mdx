@@ -13,11 +13,21 @@ Marketplace checks the live endpoint before installing it. An entry may be:
 
 For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers support services such as Datadog API/application-key pairs; Marketplace's Datadog entry instead asks for the bearer PAT/SAT described in Datadog's MCP setup guide.
 
-## Storage, reconnecting, and removal
+### Local stdio servers
 
-Bearer tokens are stored in the installed MCP server's auth configuration. Catalog installs are private to their owner, access controls restrict the row, and API and UI reads redact the token. Do not assume application-level encryption from those protections; encryption at rest applies only when the deployment's documented database or storage configuration guarantees it. OAuth access and refresh tokens use Agor's per-user OAuth token store.
+An stdio configuration uses only its command, arguments, and environment. HTTP/SSE authentication, URL, and custom-header fields do not apply. Agor does not download the command: it must already be available in the actual executor environment, which may differ from the daemon host. Store a per-user token in **Settings → Environment Variables**, then reference it from the server environment, for example `{"SHORTCUT_API_TOKEN":"{{ user.env.SHORTCUT_API_TOKEN }}"}`. The managed value is encrypted and resolved only for the authenticated user whose task is running; do not paste the token directly into the MCP server definition.
 
-Connecting an entry again opens a new session but reuses the same owner-specific install. Supplying a new bearer token verifies and atomically rotates that install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token. Also revoke the token or OAuth grant at the provider when access should end immediately.
+Upgrading Agor removes obsolete remote-auth, URL, and header fields from existing stdio rows while preserving their command, arguments, environment, ownership, and session attachments. It also deletes OAuth grants and pending OAuth attempts that cannot apply to an stdio process; credentials for remote servers are unchanged. Editing an stdio server performs the same repair. This keeps strict transport validation in place rather than allowing mixed local/remote configurations at runtime. If you later switch that server to remote OAuth, sign in again.
+
+## Safe edits, storage, and removal
+
+Bearer tokens and other MCP auth/header/env secrets are stored in MCP server JSON according to the deployment's storage security. Catalog installs are private to their owner, access controls restrict the row, and API, realtime, and UI projections redact secrets. Redaction is an output-boundary control, not application-level encryption; encryption at rest applies only when the deployment's documented database or storage configuration guarantees it. OAuth access and refresh tokens use Agor's per-user OAuth token store.
+
+Editing authentication is patch-safe: leaving a saved secret blank preserves it, while **Clear saved secret** explicitly removes it. Other omitted authentication fields are preserved; switching authentication type replaces the old mode. The edit form uses a configuration revision to detect another device's concurrent save. If that happens, **Reload latest** fetches the authoritative row and deliberately discards the local unsaved form before another save. OAuth shared/per-user mode changes remove credentials and grants that belong to the previous subject mode.
+
+Connecting an entry again opens a new session but reuses the same owner-specific install. Supplying a new bearer token verifies and atomically rotates that stored install; the previous token is not retained in another catalog row. Remove the MCP server in **Settings → MCP Servers** to delete Agor's stored configuration and token.
+
+> **Revocation depends on gateway mode:** In `off` and `observe`, an active SDK may own a direct provider connection, so an edit is not a synchronous revocation boundary. In `compatibility` and `enforced`, eligible bounded Streamable HTTP servers use task-scoped daemon capabilities; all stdio, legacy SSE endpoint handoff, WebSocket, unbounded streaming, and servers requiring `ask` approval are omitted or fail closed. No new request hop is admitted after a relevant mutation commits, but a request admitted before that commit may complete. See [MCP egress operations](/guide/mcp-egress-gateway).
 
 ## Catalog curation for operators
 

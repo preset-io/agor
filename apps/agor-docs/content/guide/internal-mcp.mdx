@@ -87,6 +87,22 @@ This self-awareness is what lets agents behave like team members instead of deta
 
 ## Automation Examples
 
+Branch materialization is asynchronous by default. For the most discoverable one-call flow, an
+orchestrator can pass `waitForReady: true` (and optionally `waitTimeoutMs`) to
+`agor_branches_create`, then create a session only when `_readiness.outcome` is `"ready"`.
+
+For a retry-safe flow—particularly when a non-idempotent create request might be replayed—use:
+
+1. `agor_branches_create` and retain the returned branch ID.
+2. `agor_branches_wait_for_ready`; repeat after a structured timeout when necessary.
+3. Call `agor_sessions_create` only when `_readiness.outcome` is `"ready"`.
+
+Both wait paths check immediately and then once per second. The default wait is 45 seconds and a
+single call is capped at 5 minutes. Values longer than the MCP client's request deadline require a
+matching client or host timeout. After a timeout, keep the returned branch ID and safely call the
+read-only wait tool again. Losing a waited create response does not cancel the already-created branch,
+so do not blindly replay branch creation.
+
 - **Repository bootstrap:** "Clone this GitHub repo, create a branch off `main`, and start the dev environment automatically."
 - **Zone-based workflows:** "Create a 'Human PR Review' zone on the board, positioned based on existing zones, with a trigger that prompts for review feedback."
 - **Mass subsession fan-out:** "Read `context/js-to-ts-refactor`, split the file list, create a subsession per chunk, and report back when done."

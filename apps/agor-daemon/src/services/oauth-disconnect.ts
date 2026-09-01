@@ -5,6 +5,7 @@
  */
 
 import { shortId } from '@agor/core/db';
+import { sanitizeMCPExternalError } from '@agor/core/mcp';
 import type { MCPAuth } from '@agor/core/types';
 
 export interface OAuthDisconnectDeps {
@@ -71,8 +72,9 @@ export async function performOAuthDisconnect(
       oauthMode: server?.auth?.oauth_mode ?? 'per_user',
     };
   } catch (error) {
+    const safe = sanitizeMCPExternalError(error, { stage: 'oauth' });
     console.error(
-      `[OAuth Disconnect] Failed category=${error instanceof Error ? error.name : 'unknown'}`
+      `[OAuth Disconnect] event=mcp_external_failure category=${safe.category} type=${safe.diagnostic.type}`
     );
     return {
       success: false,

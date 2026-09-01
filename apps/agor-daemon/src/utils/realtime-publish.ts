@@ -228,12 +228,20 @@ type ConnectionLike = {
   authentication?: { user?: (Partial<User> & { _isServiceAccount?: boolean }) | undefined };
 };
 
+/**
+ * Structural seam kept beside the realtime path while the daemon typecheck can
+ * consume an older watched @agor/core declaration snapshot.
+ */
+export type RealtimeAccessBoardRepository = Pick<BoardRepository, 'findById'> & {
+  findRealtimeViewUserIds(boardId: BoardID): Promise<import('@agor/core/types').UUID[]>;
+};
+
 type RealtimePublishOptions = {
   app: Application;
   db?: TenantScopeAwareDatabase;
   branchRbacEnabled: boolean;
   branchRepository: BranchRepository;
-  boardRepository?: BoardRepository;
+  boardRepository?: RealtimeAccessBoardRepository;
   sessionsRepository: SessionRepository;
   accessCache?: RealtimeAccessCache;
   allowSuperadmin?: boolean;
@@ -265,6 +273,26 @@ function audienceFor(path: string | null | undefined): RealtimePublishAudience |
   return realtimePublishPolicyFor(path)?.audience;
 }
 
+/**
+ * Apply a service's read-role floor to realtime delivery.
+ *
+ * Channel membership proves authentication/tenant admission, not permission
+ * to read every service in that channel. Keeping this in the global publisher
+ * makes local and Redis-relayed events obey the same floor and prevents a raw
+ * Feathers listener from bypassing the service hook.
+ */
+function applyRealtimeRoleFloor(
+  channel: PublishChannel,
+  path: string | null | undefined
+): PublishChannel {
+  const minimumRole = realtimePublishPolicyFor(path)?.minimumRole;
+  if (!minimumRole) return channel;
+  return channel.filter((connection: unknown) => {
+    if (isServiceConnection(connection)) return true;
+    return hasMinimumRole(userFromConnection(connection)?.role, minimumRole);
+  });
+}
+
 // Authentication and credential control-plane results must never enter shared
 // Redis, even if a future service accidentally enables publication for them.
 export const REDIS_FEATHERS_DENIED_PATHS = new Set([
@@ -275,6 +303,7 @@ export const REDIS_FEATHERS_DENIED_PATHS = new Set([
   'user-api-keys',
   'external-launch',
   'config/resolve-api-key',
+  'executor-git-environment',
   'mcp-servers/oauth-start',
   'mcp-servers/oauth-callback',
   'mcp-servers/oauth-complete',
@@ -934,6 +963,12 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
       }
     }
 
+    // Authentication/tenant channels are deliberately broad. Narrow them to
+    // the declared service read floor before ANY audience resolution so the
+    // global, branch, knowledge, streaming, and Redis-relay paths cannot
+    // accidentally widen the result again.
+    tenantScoped = applyRealtimeRoleFloor(tenantScoped, context.path);
+
     const isExecutorControlEvent =
       (context.path === 'tasks' && context.event === 'termination_requested') ||
       (context.path === 'messages' && context.event === 'permission_resolved');
@@ -1012,24 +1047,20 @@ export function configureRealtimePublish(options: RealtimePublishOptions): void 
         }
         if (!loadedBoard) return filterToServiceConnections(tenantScoped);
         const currentBoard = loadedBoard;
-        if (currentBoard.access_mode === 'shared') return tenantScoped;
 
-        // For a current private board, evaluate the same repository predicate
-        // as boards.get for each connected user at publication time; a room
-        // join, payload field, or stale client cache is never authorization.
-        const visibleUserIds = new Set<string>();
-        await Promise.all(
-          uniqueUserIds(tenantScoped).map(async (userId) => {
-            try {
-              if (await boardRepository.canView(currentBoard.board_id, userId as UserID)) {
-                visibleUserIds.add(userId);
-              }
-            } catch {
-              // Concurrent deletion or ACL lookup failure fails narrow for
-              // this principal. Deleted boards require the snapshot above.
-            }
-          })
-        );
+        // Materialize the exact normalized audience in one query. A branch,
+        // payload field, or legacy access_mode is never board authority, and a
+        // direct deny must still suppress permissive Others for one user.
+        let visibleUserIds: Set<string>;
+        try {
+          visibleUserIds = new Set(
+            await boardRepository.findRealtimeViewUserIds(currentBoard.board_id)
+          );
+        } catch {
+          // Concurrent policy/deletion failure fails narrow. Deleted boards
+          // require and use the pre-delete snapshot handled above.
+          return filterToServiceConnections(tenantScoped);
+        }
         return filterToUserIdsOrAdmins(tenantScoped, visibleUserIds, allowSuperadmin);
       }
       if (scope.kind === 'branches') {

@@ -31,7 +31,11 @@ const { probeRemoteAuthType, probeRemoteBearerToken } = vi.hoisted(() => ({
   probeRemoteAuthType: vi.fn(),
   probeRemoteBearerToken: vi.fn(),
 }));
-vi.mock('@agor/core/mcp-catalog', () => ({ probeRemoteAuthType, probeRemoteBearerToken }));
+vi.mock('@agor/core/mcp-catalog', () => ({
+  loadCatalog: vi.fn().mockResolvedValue([]),
+  probeRemoteAuthType,
+  probeRemoteBearerToken,
+}));
 
 const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';

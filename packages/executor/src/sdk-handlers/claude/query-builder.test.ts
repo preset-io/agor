@@ -1,6 +1,9 @@
 import type { BranchID, SessionID, TaskID } from '@agor/core/types';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const mcpAuthMocks = vi.hoisted(() => ({ resolveMCPAuthHeaders: vi.fn() }));
+const claudeSdkMocks = vi.hoisted(() => ({ query: vi.fn() }));
+
 // Mock minimal dependencies
 vi.mock('@agor/core/lib/validation', () => ({
   validateDirectory: vi.fn().mockResolvedValue(undefined),
@@ -9,22 +12,29 @@ vi.mock('@agor/core/db', () => ({
   // shortId is used in log lines inside query-builder; passthrough mock.
   shortId: vi.fn((id: string) => id),
 }));
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: vi.fn() }));
+vi.mock('@anthropic-ai/claude-agent-sdk', () => claudeSdkMocks);
+vi.mock('@agor/core/agentic-integrations', () => ({
+  loadManagedAgenticToolSdk: vi.fn(async () => claudeSdkMocks),
+}));
 vi.mock('@agor/core/templates/session-context', () => ({
   renderAgorSystemPrompt: vi.fn().mockResolvedValue('prompt'),
 }));
 vi.mock('@agor/core/tools/mcp/http-headers', () => ({
   mergeMCPRemoteHeaders: vi.fn(({ custom, auth }) => ({ ...(custom || {}), ...(auth || {}) })),
 }));
-vi.mock('@agor/core/tools/mcp/jwt-auth', () => ({
-  resolveMCPAuthHeaders: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('@agor/core/tools/mcp/jwt-auth', () => mcpAuthMocks);
 vi.mock('../../config.js', () => ({
   getDaemonUrl: vi.fn().mockResolvedValue('http://localhost:3030'),
 }));
 vi.mock('@agor/core/mcp', async () => {
   const actual = await vi.importActual<typeof import('@agor/core/mcp')>('@agor/core/mcp');
-  return { ...actual, getMcpServersForSession: vi.fn().mockResolvedValue([]) };
+  return {
+    ...actual,
+    getMcpServersForSession: vi.fn().mockResolvedValue([]),
+    resolveScopedMCPAuthHeaders: vi.fn(({ server }) =>
+      mcpAuthMocks.resolveMCPAuthHeaders(server.auth, server.url)
+    ),
+  };
 });
 vi.mock('./models.js', () => ({
   DEFAULT_CLAUDE_MODEL: 'claude-sonnet-4-6',
@@ -125,6 +135,23 @@ describe('setupQuery - Local Settings Support', () => {
     } finally {
       logSpy.mockRestore();
     }
+  });
+
+  it('retains only UTF-8 byte metadata from provider stderr', async () => {
+    const deps = createMockDeps();
+    const setup = await setupQuery('test-session' as SessionID, 'test prompt', deps);
+    const callArgs = vi.mocked(Claude.query).mock.calls[0][0];
+    const captureStderr = callArgs.options.stderr as (data: unknown) => void;
+    const sentinel = 'SENTINEL_CLAUDE_STDERR_SECRET_🔐';
+
+    captureStderr(sentinel);
+    captureStderr({ reflected: sentinel });
+
+    expect(setup.getStderrMetadata()).toEqual({
+      hasStderr: true,
+      byteLength: Buffer.byteLength(sentinel),
+    });
+    expect(JSON.stringify(setup.getStderrMetadata())).not.toContain(sentinel);
   });
 
   // Pin the literal disallow list so a stray edit to the constant
@@ -237,6 +264,38 @@ describe('setupQuery - Local Settings Support', () => {
       headers: { Authorization: 'Bearer oauth-token' },
       alwaysLoad: true,
     });
+  });
+
+  it('does not log or dispatch secret-bearing MCP auth exceptions', async () => {
+    const sentinel = 'SENTINEL_CLAUDE_AUTH_EXCEPTION_7f1a';
+    const deps = createMockDeps();
+    deps.sessionMCPRepo = {} as any;
+    deps.mcpServerRepo = {} as any;
+    vi.mocked(getMcpServersForSession).mockResolvedValue([
+      {
+        server: {
+          mcp_server_id: 'server-secret',
+          name: 'remote',
+          transport: 'http',
+          url: 'https://example.test/mcp',
+          auth: { type: 'jwt' },
+        },
+      } as any,
+    ]);
+    vi.mocked(resolveMCPAuthHeaders).mockRejectedValue(
+      new Error(`TLS provider reflected ${sentinel}`)
+    );
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await setupQuery('test-session' as SessionID, 'test prompt', deps);
+      const calls = vi.mocked(Claude.query).mock.calls;
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(sentinel);
+      expect(JSON.stringify(calls)).not.toContain(sentinel);
+      const mcpServers = calls[0][0].options.mcpServers as Record<string, Record<string, unknown>>;
+      expect(mcpServers.remote.headers).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('does not block gateway startup on unauthenticated OAuth servers with custom headers', async () => {

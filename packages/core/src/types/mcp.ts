@@ -39,6 +39,7 @@ export interface MCPOAuthAttemptResult {
   mcp_server_id?: MCPServerID;
   oauth_mode?: MCPOAuthMode;
   failure_code?: string;
+  recovery?: MCPAuthRecovery;
 }
 
 export interface MCPOAuthStatusResult {
@@ -117,8 +118,49 @@ export interface MCPOAuthDCRDiagnostic {
 
 export interface MCPOAuthStartFailure {
   success: false;
+  /** Stable, secret-free message retained for older clients. */
   error: string;
-  diagnostic?: MCPOAuthDCRDiagnostic;
+  /** Structured recovery contract for UI, agents, and future gateway actions. */
+  recovery?: MCPAuthRecovery;
+  redirect_uri?: string;
+}
+
+export const MCP_AUTH_RECOVERY_CATEGORIES = [
+  'authentication_required',
+  'client_registration_required',
+  'client_registration_failed',
+  'metadata_incompatible',
+  'metadata_unavailable',
+  'redirect_configuration_required',
+  'authorization_denied',
+  'configuration_changed',
+  'permission_changed',
+  'provider_unavailable',
+  'provider_rejected',
+  'invalid_response',
+  'configuration_required',
+  'unknown',
+] as const;
+export type MCPAuthRecoveryCategory = (typeof MCP_AUTH_RECOVERY_CATEGORIES)[number];
+
+export const MCP_AUTH_RECOVERY_ACTIONS = [
+  'reauthenticate',
+  'configure_client',
+  'review_compatibility',
+  'configure_redirect',
+  'save_and_retry',
+  'retry',
+  'review_configuration',
+  'contact_admin',
+] as const;
+export type MCPAuthRecoveryAction = (typeof MCP_AUTH_RECOVERY_ACTIONS)[number];
+
+/** Secret-free, provider-agnostic recovery state. */
+export interface MCPAuthRecovery {
+  category: MCPAuthRecoveryCategory;
+  action: MCPAuthRecoveryAction;
+  message: string;
+  mcp_server_id?: MCPServerID;
   redirect_uri?: string;
 }
 
@@ -200,7 +242,48 @@ export const MCP_MEMBER_POLICIES = [
 
 export type MCPMemberPolicy = (typeof MCP_MEMBER_POLICIES)[number];
 
+export const MCP_OAUTH_BROWSER_OPERATIONS = ['discover', 'test-oauth'] as const;
+export type MCPOAuthBrowserOperation = (typeof MCP_OAUTH_BROWSER_OPERATIONS)[number];
+
+/**
+ * Request/response contract for a short-lived browser-event reservation.
+ *
+ * The request names only what the caller intends to do. The opaque token in
+ * the response is minted by the daemon and bound there to the authenticated
+ * tenant, caller, socket, operation and saved server (when present).
+ */
+export interface MCPOAuthBrowserReservationRequest {
+  operation: MCPOAuthBrowserOperation;
+  mcp_server_id?: MCPServerID;
+}
+
+export interface MCPOAuthBrowserReservation {
+  reservation_token: string;
+  expires_at: number;
+}
+
+/** One-shot reservation presented to blocking discovery/test. */
+export interface MCPOAuthBrowserEventRequest {
+  reservation_token: string;
+}
+
+export interface MCPOAuthOpenBrowserEvent extends MCPOAuthBrowserEventRequest {
+  authUrl: string;
+  attempt_id: MCPOAuthAttemptID;
+  caller_user_id: UserID;
+}
+
 export const DEFAULT_MCP_MEMBER_POLICY: MCPMemberPolicy = 'use_existing_only';
+
+/**
+ * Realtime invalidation emitted on the tenant-scoped `mcp-servers` service
+ * after an administrator changes the member policy.
+ *
+ * The event deliberately carries no policy value: `can_configure` is derived
+ * for the authenticated caller, so every browser must refetch its own answer
+ * from `mcp-member-policy` rather than accepting another caller's payload.
+ */
+export const MCP_MEMBER_POLICY_CHANGED_EVENT = 'member-policy:changed' as const;
 
 /**
  * The payload of the `mcp-member-policy` endpoint, read and written.
@@ -292,6 +375,17 @@ export interface MCPAuth {
 }
 
 /**
+ * Public PATCH contract for auth configuration.
+ *
+ * Omitted/undefined fields are preserved, null clears one field, and a type
+ * change replaces the object. Secret fields may carry the public redaction
+ * sentinel to explicitly preserve the stored value without exposing it.
+ */
+export type MCPAuthPatch = {
+  [Field in keyof MCPAuth]?: MCPAuth[Field] | null;
+};
+
+/**
  * JSON Schema type for tool input schemas
  */
 export type JSONSchema = Record<string, unknown>;
@@ -302,7 +396,7 @@ export type JSONSchema = Record<string, unknown>;
  */
 export interface MCPTool {
   name: string; // e.g., "mcp__filesystem__list_files"
-  description: string;
+  description?: string;
   input_schema?: JSONSchema; // Optional - not all MCP servers provide schemas
 }
 
@@ -313,6 +407,7 @@ export interface MCPTool {
 export interface MCPResource {
   uri: string; // e.g., "file:///path/to/file"
   name: string;
+  description?: string;
   mimeType?: string;
 }
 
@@ -322,13 +417,13 @@ export interface MCPResource {
  */
 export interface MCPPrompt {
   name: string; // Becomes slash command
-  description: string;
+  description?: string;
   arguments?: PromptArgument[];
 }
 
 export interface PromptArgument {
   name: string;
-  description: string;
+  description?: string;
   required?: boolean;
 }
 
@@ -380,6 +475,9 @@ export interface MCPServer {
 
   // Authentication (for HTTP/SSE transports)
   auth?: MCPAuth;
+
+  /** Daemon-owned monotonic revision of editor-controlled configuration. */
+  config_version?: number;
 
   /**
    * Read-only effective policy resolved by the daemon for Settings and other
@@ -456,7 +554,23 @@ export interface MCPServerFilters {
   ownerless?: boolean;
   /** Exact materialized catalog identity; never a substring search. */
   catalogEntryName?: string;
+  /** Bounded diagnostic/list reads; callers should request one extra row for truncation. */
+  limit?: number;
+  offset?: number;
+  /** Validated Feathers sort pushed into the repository query. */
+  sort?: Partial<Record<MCPServerSortField, 1 | -1>>;
 }
+
+/** Persisted columns that repository-backed MCP server lists can sort by. */
+export type MCPServerSortField =
+  | 'mcp_server_id'
+  | 'name'
+  | 'transport'
+  | 'scope'
+  | 'enabled'
+  | 'source'
+  | 'created_at'
+  | 'updated_at';
 
 /**
  * Create MCP Server input
@@ -471,7 +585,8 @@ export interface CreateMCPServerInput {
   url?: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
-  auth?: MCPAuth;
+  /** null explicitly creates a server with no authentication configuration. */
+  auth?: MCPAuth | null;
   scope: MCPScope;
   owner_user_id?: UserID; // Private to this user; omit for a shared server
   source?: MCPSource;
@@ -491,7 +606,12 @@ export interface UpdateMCPServerInput {
   url?: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
-  auth?: MCPAuth;
+  /** null clears all authentication; otherwise applies MCPAuthPatch semantics. */
+  auth?: MCPAuthPatch | null;
+  /** Explicitly replace same-mode auth instead of merging it. PUT sets this by default. */
+  replace_auth?: boolean;
+  /** Optional compare-and-swap guard for concurrent editors. */
+  expected_config_version?: number;
   scope?: MCPScope;
   enabled?: boolean;
   transport?: 'stdio' | 'http' | 'sse';
@@ -542,6 +662,41 @@ export type MCPServersConfig = Record<
     env?: Record<string, string>;
   }
 >;
+
+// ============================================================================
+// Authoritative MCP egress gateway
+// ============================================================================
+
+/** Tenant rollout for the daemon-owned, HTTP-only MCP proxy. */
+export const MCP_EGRESS_GATEWAY_MODES = ['off', 'observe', 'compatibility', 'enforced'] as const;
+export type MCPEgressGatewayMode = (typeof MCP_EGRESS_GATEWAY_MODES)[number];
+
+export interface MCPEgressGatewayStatus {
+  mode: MCPEgressGatewayMode;
+  supported_transports: Array<'streamable-http-buffered'>;
+  unsupported_transports: string[];
+  /** Total local work consuming gateway capacity, including credential/admission reservations. */
+  in_flight_requests: number;
+  /** Requests whose provider transport has started. */
+  provider_in_flight_requests: number;
+  /** Requests still resolving credentials or awaiting final provider admission. */
+  reserved_requests: number;
+  oldest_request_ms: number;
+  excluded_servers: Array<{
+    mcp_server_id: MCPServerID;
+    name: string;
+    reason:
+      | 'transport_not_mediated'
+      | 'approval_not_mediated'
+      | 'template_configuration'
+      | 'oauth_reauth_required';
+    recovery: string;
+  }>;
+  excluded_servers_truncated: boolean;
+  admission_available: boolean | null;
+  operator: boolean;
+  guarantee: string;
+}
 
 // ============================================================================
 // MCP Session Tokens (daemon ↔ MCP server channel)

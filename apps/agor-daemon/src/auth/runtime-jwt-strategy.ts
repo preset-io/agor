@@ -214,7 +214,7 @@ export class RuntimeJWTStrategy extends JWTStrategy {
       // web-terminal executor's socket for its OWN user's terminal channel
       // only. It must NOT be a full service account — `_isServiceAccount` and
       // `role: 'service'` bypass RBAC across REST/Feathers paths (see
-      // register-hooks / board-owners / branch-owners / sessions /
+      // register-hooks / capability-policies / sessions /
       // mcp-token-authorization), and the terminal executor makes no such
       // calls. So we mint a low-privilege identity that carries no bypass
       // anywhere; the socket terminal handlers enforce it via terminal_user_id.

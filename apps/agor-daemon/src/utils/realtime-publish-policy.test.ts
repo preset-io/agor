@@ -32,6 +32,12 @@ describe('realtimePublishPolicyFor', () => {
     expect(realtimePublishPolicyFor('/kb/documents')?.audience).toBe('knowledge');
   });
 
+  it('declares the service read-role floors for privileged realtime rows', () => {
+    expect(realtimePublishPolicyFor('users')?.minimumRole).toBe('member');
+    expect(realtimePublishPolicyFor('board-objects')?.minimumRole).toBe('member');
+    expect(realtimePublishPolicyFor('boards')?.minimumRole).toBeUndefined();
+  });
+
   it('treats an explicit none declaration as not allowed', () => {
     expect(realtimePublishPolicyFor('mcp-catalog/connect')?.audience).toBe('none');
     expect(isRealtimePublishAllowed('mcp-catalog/connect')).toBe(false);

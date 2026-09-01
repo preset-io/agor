@@ -18,17 +18,10 @@ import { generateId } from '../../lib/ids';
 import { toAbsolutePosition } from '../../utils/board-placement.js';
 import type { Database } from '../client';
 import { deleteFrom, insert, jsonExtract, select, update } from '../database-wrapper';
-import {
-  type BoardObjectInsert,
-  type BoardObjectRow,
-  boardObjects,
-  branches,
-  branchOwners,
-} from '../schema';
+import { type BoardObjectInsert, type BoardObjectRow, boardObjects, branches } from '../schema';
 import { EntityNotFoundError, RepositoryError } from './base';
 import {
   visibleBoardReferenceAccessExists,
-  visibleBranchAccessCondition,
   visibleBranchReferenceAccessExists,
 } from './branch-access';
 
@@ -79,11 +72,16 @@ export class BoardObjectRepository {
 
   private buildVisibleToUserCondition(userId: UUID): SQL {
     return (
-      or(
-        and(isNotNull(boardObjects.branch_id), visibleBranchAccessCondition(this.db, userId)),
-        and(
+      and(
+        // Board visibility is authoritative for the canvas itself. Access to a
+        // branch on a private board must not leak that board's object/position.
+        visibleBoardReferenceAccessExists(this.db, userId, boardObjects.board_id),
+        or(
           isNull(boardObjects.branch_id),
-          visibleBoardReferenceAccessExists(this.db, userId, boardObjects.board_id)
+          and(
+            isNotNull(boardObjects.branch_id),
+            visibleBranchReferenceAccessExists(this.db, userId, boardObjects.branch_id)
+          )
         )
       ) ?? sql`false`
     );
@@ -159,11 +157,6 @@ export class BoardObjectRepository {
       ];
       let query = select(this.db, getTableColumns(boardObjects))
         .from(boardObjects)
-        .leftJoin(branches, eq(branches.branch_id, boardObjects.branch_id))
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
         .where(and(...conditions));
 
       query = query.orderBy(asc(boardObjects.created_at), asc(boardObjects.object_id));
@@ -195,11 +188,6 @@ export class BoardObjectRepository {
       ];
       const row = await select(this.db, { count: sql<number>`count(*)` })
         .from(boardObjects)
-        .leftJoin(branches, eq(branches.branch_id, boardObjects.branch_id))
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
         .where(and(...conditions))
         .one();
 
@@ -246,11 +234,6 @@ export class BoardObjectRepository {
     try {
       const row = await select(this.db, getTableColumns(boardObjects))
         .from(boardObjects)
-        .leftJoin(branches, eq(branches.branch_id, boardObjects.branch_id))
-        .leftJoin(
-          branchOwners,
-          and(eq(branchOwners.branch_id, branches.branch_id), eq(branchOwners.user_id, userId))
-        )
         .where(and(eq(boardObjects.object_id, objectId), this.buildVisibleToUserCondition(userId)))
         .one();
 

@@ -94,10 +94,11 @@ export const EmojiPickerInput: React.FC<EmojiPickerInputProps> = ({
 export const FormEmojiPickerInput: React.FC<{
   fieldName: string;
   defaultEmoji?: string;
-}> = ({ fieldName, defaultEmoji }) => {
+  disabled?: boolean;
+}> = ({ fieldName, defaultEmoji, disabled }) => {
   return (
     <Form.Item name={fieldName} noStyle initialValue={defaultEmoji}>
-      <EmojiPickerInput defaultEmoji={defaultEmoji} />
+      <EmojiPickerInput defaultEmoji={defaultEmoji} disabled={disabled} />
     </Form.Item>
   );
 };

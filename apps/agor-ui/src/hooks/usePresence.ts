@@ -1,35 +1,33 @@
 /**
- * React hook for tracking active users and their cursor positions
+ * React hook for authorized multiplayer presence and cursor state.
  *
- * Maintains two separate maps with different timeouts:
- * - presenceMap: 5 minute timeout for facepile (shows users even when multitasking)
- * - cursorMap: 5 second timeout for cursor rendering (hides stale cursors quickly)
- *
- * Subscribes to cursor-moved events and maintains active user state for Facepile
+ * State is keyed by the server-generated connection `presenceId`, then folded
+ * to one facepile/cursor entry per user. This is what makes leave/disconnect
+ * safe with multiple tabs or devices: retiring one connection never erases a
+ * still-active sibling connection.
  */
 
-import type {
-  ActiveUser,
-  AgorClient,
-  BoardID,
-  CursorMovedEvent,
-  PresenceUpdatedEvent,
-  User,
+import {
+  type ActiveUser,
+  type AgorClient,
+  type BoardID,
+  type CursorLeftEvent,
+  type CursorMovedEvent,
+  PRESENCE_SOCKET_EVENTS,
+  type PresenceLeftEvent,
+  type PresenceUpdatedEvent,
+  type User,
 } from '@agor-live/client';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { PRESENCE_CONFIG } from '../config/presence';
 
 interface UsePresenceOptions {
   client: AgorClient | null;
   boardId: BoardID | null;
-  users: User[]; // All users (for looking up user details by ID)
+  users: User[];
   enabled?: boolean;
-  globalPresence?: boolean; // If true, track users across all boards (for navbar facepile)
-  /**
-   * Optional coalescing window for facepile presence updates. When set, repeated
-   * board-scoped `cursor-moved` or global `presence-updated` events for the
-   * same user on the same board within this window are treated as no-ops.
-   */
+  globalPresence?: boolean;
+  /** Coalesce unchanged facepile updates inside this window. */
   presenceMinUpdateIntervalMs?: number;
 }
 
@@ -38,12 +36,54 @@ interface UsePresenceResult {
   remoteCursors: Map<string, { x: number; y: number; user: User; timestamp: number }>;
 }
 
-/**
- * Track active users and remote cursor positions
- *
- * @param options - Client, boardId, users list, and enabled flag
- * @returns Active users for facepile and remote cursors for rendering
- */
+interface CursorInstance {
+  userId: string;
+  x: number;
+  y: number;
+  timestamp: number;
+}
+
+interface PresenceInstance {
+  userId: string;
+  timestamp: number;
+  boardId?: BoardID;
+  boardTimestamp?: number;
+  x?: number;
+  y?: number;
+}
+
+function instanceKey(event: { userId: string; presenceId?: string }): string {
+  // Compatibility for the short rolling window where an already-loaded old
+  // server can still emit the pre-instance event shape. It remains tenant/room
+  // scoped; only multi-tab precision is unavailable until reconnect.
+  return event.presenceId || `legacy:${event.userId}`;
+}
+
+function eventTimestamp(value: unknown): number {
+  const now = Date.now();
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(value, now + 5_000) : now;
+}
+
+function rememberBounded<T extends { timestamp: number }>(
+  map: Map<string, T>,
+  key: string,
+  value: T,
+  limit: number
+): void {
+  if (!map.has(key) && map.size >= limit) {
+    let oldestKey: string | undefined;
+    let oldestTimestamp = Number.POSITIVE_INFINITY;
+    for (const [candidateKey, candidate] of map) {
+      if (candidate.timestamp < oldestTimestamp) {
+        oldestKey = candidateKey;
+        oldestTimestamp = candidate.timestamp;
+      }
+    }
+    if (oldestKey) map.delete(oldestKey);
+  }
+  map.set(key, value);
+}
+
 export function usePresence(options: UsePresenceOptions): UsePresenceResult {
   const {
     client,
@@ -54,296 +94,268 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
     presenceMinUpdateIntervalMs = 0,
   } = options;
 
-  // Use ref for users to avoid triggering useMemo recalculation
-  const usersRef = useRef(users);
-  usersRef.current = users;
-
-  // Separate maps for different timeouts:
-  // - cursorMap: for rendering cursors (5 second timeout) - board-scoped
-  // - presenceMap: for facepile (5 minute timeout) - can be global or board-scoped
-  const [cursorMap, setCursorMap] = useState<
-    Map<string, { x: number; y: number; timestamp: number }>
-  >(new Map());
-
-  const [presenceMap, setPresenceMap] = useState<
-    Map<string, { boardId?: BoardID; x?: number; y?: number; timestamp: number }>
-  >(new Map());
+  const [cursorMap, setCursorMap] = useState<Map<string, CursorInstance>>(new Map());
+  const [presenceMap, setPresenceMap] = useState<Map<string, PresenceInstance>>(new Map());
 
   useEffect(() => {
-    if (!enabled || !client?.io) {
+    if (!enabled || !client?.io || (!globalPresence && !boardId)) {
       setCursorMap(new Map());
       setPresenceMap(new Map());
       return;
     }
 
-    if (!globalPresence && !boardId) {
-      setCursorMap(new Map());
-      setPresenceMap(new Map());
-      return;
-    }
-
-    // Handle cursor-moved events
     const handleCursorMoved = (event: CursorMovedEvent) => {
-      // For cursor rendering, only track cursors for the current board
+      if (
+        !event ||
+        typeof event.userId !== 'string' ||
+        !Number.isFinite(event.x) ||
+        !Number.isFinite(event.y)
+      ) {
+        return;
+      }
+      const timestamp = eventTimestamp(event.timestamp);
+      const key = instanceKey(event);
+
       if (boardId && event.boardId === boardId) {
-        const updateData = {
+        const updateData: CursorInstance = {
+          userId: event.userId,
           x: event.x,
           y: event.y,
-          timestamp: event.timestamp,
+          timestamp,
         };
-
-        // Update cursor map (for rendering cursors) - board-scoped only
-        setCursorMap((prev) => {
-          const existing = prev.get(event.userId);
-
-          // Only update if this event is newer than the existing one (prevent out-of-order updates)
-          if (existing && event.timestamp < existing.timestamp) {
-            return prev; // Reject stale update
-          }
-
-          // Duplicate payload (same coordinates + timestamp) is a no-op.
+        setCursorMap((previous) => {
+          const existing = previous.get(key);
+          if (existing && timestamp < existing.timestamp) return previous;
           if (
             existing &&
             existing.x === updateData.x &&
             existing.y === updateData.y &&
             existing.timestamp === updateData.timestamp
           ) {
-            return prev;
+            return previous;
           }
-
-          // Only create new Map after confirming we need to update
-          const next = new Map(prev);
-          next.set(event.userId, updateData);
+          const next = new Map(previous);
+          rememberBounded(next, key, updateData, PRESENCE_CONFIG.MAX_TRACKED_CURSOR_INSTANCES);
           return next;
         });
       }
 
-      // Board-scoped presence consumers can derive active users directly from
-      // cursor traffic. Global presence uses the lightweight server-side
-      // `presence-updated` channel below instead.
       if (!globalPresence && event.boardId === boardId) {
-        const presenceData = {
+        const updateData: PresenceInstance = {
+          userId: event.userId,
           boardId: event.boardId,
+          boardTimestamp: timestamp,
           x: event.x,
           y: event.y,
-          timestamp: event.timestamp,
+          timestamp,
         };
-
-        // Update presence map (for facepile)
-        setPresenceMap((prev) => {
-          const existing = prev.get(event.userId);
-
-          // Only update if this event is newer than the existing one
-          if (existing && event.timestamp < existing.timestamp) {
-            return prev; // Reject stale update
-          }
-
-          // Facepile doesn't need every 100ms cursor sample when the user is
-          // still on the same board; keep the existing reference stable unless
-          // enough time has passed or the board actually changed.
+        setPresenceMap((previous) => {
+          const existing = previous.get(key);
+          if (existing && timestamp < existing.timestamp) return previous;
           if (
             existing &&
-            existing.boardId === presenceData.boardId &&
+            existing.boardId === updateData.boardId &&
             presenceMinUpdateIntervalMs > 0 &&
-            event.timestamp - existing.timestamp < presenceMinUpdateIntervalMs
+            timestamp - existing.timestamp < presenceMinUpdateIntervalMs
           ) {
-            return prev;
+            return previous;
           }
-
-          // Duplicate payload (same board/position/timestamp) is a no-op.
-          if (
-            existing &&
-            existing.boardId === presenceData.boardId &&
-            existing.x === presenceData.x &&
-            existing.y === presenceData.y &&
-            existing.timestamp === presenceData.timestamp
-          ) {
-            return prev;
-          }
-
-          // Only create new Map after confirming we need to update
-          const next = new Map(prev);
-          next.set(event.userId, presenceData);
+          const next = new Map(previous);
+          rememberBounded(next, key, updateData, PRESENCE_CONFIG.MAX_TRACKED_PRESENCE_INSTANCES);
           return next;
         });
       }
     };
 
     const handlePresenceUpdated = (event: PresenceUpdatedEvent) => {
-      if (!globalPresence) return;
+      if (!globalPresence || !event || typeof event.userId !== 'string') return;
+      const timestamp = eventTimestamp(event.timestamp);
+      const key = instanceKey(event);
+      setPresenceMap((previous) => {
+        const existing = previous.get(key);
+        if (existing && timestamp < existing.timestamp) return previous;
 
-      const presenceData = {
-        boardId: event.boardId,
-        timestamp: event.timestamp,
-      };
-
-      setPresenceMap((prev) => {
-        const existing = prev.get(event.userId);
-
-        if (existing && event.timestamp < existing.timestamp) {
-          return prev;
-        }
-
+        const unchangedBoard = !event.boardId || existing?.boardId === event.boardId;
         if (
           existing &&
-          existing.boardId === presenceData.boardId &&
+          unchangedBoard &&
           presenceMinUpdateIntervalMs > 0 &&
-          event.timestamp - existing.timestamp < presenceMinUpdateIntervalMs
+          timestamp - existing.timestamp < presenceMinUpdateIntervalMs
         ) {
-          return prev;
+          return previous;
         }
 
+        const update: PresenceInstance = {
+          ...existing,
+          userId: event.userId,
+          timestamp,
+          ...(event.boardId ? { boardId: event.boardId, boardTimestamp: timestamp } : {}),
+        };
+        const next = new Map(previous);
+        rememberBounded(next, key, update, PRESENCE_CONFIG.MAX_TRACKED_PRESENCE_INSTANCES);
+        return next;
+      });
+    };
+
+    const handlePresenceLeft = (event: PresenceLeftEvent) => {
+      if (!globalPresence || !event || typeof event.userId !== 'string') return;
+      const timestamp = eventTimestamp(event.timestamp);
+      const key = instanceKey(event);
+      setPresenceMap((previous) => {
+        const existing = previous.get(key);
+        if (!existing) return previous;
+        if (!event.boardId) {
+          if (timestamp < existing.timestamp) return previous;
+          const next = new Map(previous);
+          next.delete(key);
+          return next;
+        }
         if (
-          existing &&
-          existing.boardId === presenceData.boardId &&
-          existing.timestamp === presenceData.timestamp
+          existing.boardId !== event.boardId ||
+          (existing.boardTimestamp !== undefined && timestamp < existing.boardTimestamp)
         ) {
-          return prev;
+          return previous;
         }
-
-        const next = new Map(prev);
-        next.set(event.userId, presenceData);
+        const next = new Map(previous);
+        next.set(key, {
+          userId: existing.userId,
+          timestamp: Math.max(existing.timestamp, timestamp),
+        });
         return next;
       });
     };
 
-    // Handle cursor-left events (user navigated away)
-    const handleCursorLeft = (event: { userId: string; boardId: BoardID }) => {
-      // For cursor rendering, only handle current board
-      if (boardId && event.boardId === boardId) {
-        setCursorMap((prev) => {
-          if (!prev.has(event.userId)) return prev; // No-op if user not tracked
-          const next = new Map(prev);
-          next.delete(event.userId);
-          return next;
-        });
-      }
-
-      // Only board-scoped presence consumers delete on cursor-left. Global
-      // presence relies on the longer timeout + explicit presence-updated
-      // heartbeats so board switches don't cause facepile flicker.
-      if (!globalPresence && event.boardId === boardId) {
-        setPresenceMap((prev) => {
-          if (!prev.has(event.userId)) return prev; // No-op if user not tracked
-          const next = new Map(prev);
-          next.delete(event.userId);
+    const handleCursorLeft = (event: CursorLeftEvent) => {
+      if (!event || event.boardId !== boardId || typeof event.userId !== 'string') return;
+      const key = instanceKey(event);
+      const timestamp = eventTimestamp(event.timestamp);
+      setCursorMap((previous) => {
+        const existing = previous.get(key);
+        if (!existing || timestamp < existing.timestamp) return previous;
+        const next = new Map(previous);
+        next.delete(key);
+        return next;
+      });
+      if (!globalPresence) {
+        setPresenceMap((previous) => {
+          const existing = previous.get(key);
+          if (!existing || timestamp < existing.timestamp) return previous;
+          const next = new Map(previous);
+          next.delete(key);
           return next;
         });
       }
     };
 
-    // Subscribe to WebSocket events
-    client.io.on('cursor-moved', handleCursorMoved);
-    client.io.on('presence-updated', handlePresenceUpdated);
-    client.io.on('cursor-left', handleCursorLeft);
+    const clearTransportState = () => {
+      setCursorMap(new Map());
+      setPresenceMap(new Map());
+    };
 
-    // Cleanup stale cursors every 5 seconds (for cursor rendering)
-    // Uses functional setState to avoid triggering re-renders when nothing changed
+    client.io.on(PRESENCE_SOCKET_EVENTS.cursorMoved, handleCursorMoved);
+    client.io.on(PRESENCE_SOCKET_EVENTS.updated, handlePresenceUpdated);
+    client.io.on(PRESENCE_SOCKET_EVENTS.left, handlePresenceLeft);
+    client.io.on(PRESENCE_SOCKET_EVENTS.cursorLeft, handleCursorLeft);
+    client.io.on('disconnect', clearTransportState);
+
     const cursorCleanupInterval = setInterval(() => {
-      setCursorMap((prev) => {
-        if (prev.size === 0) return prev; // Nothing to clean up
-
+      setCursorMap((previous) => {
         const now = Date.now();
-        let hasChanges = false;
-
-        // First pass: check if any cursors are stale
-        for (const [_userId, cursor] of prev.entries()) {
-          if (now - cursor.timestamp > PRESENCE_CONFIG.CURSOR_HIDE_AFTER_MS) {
-            hasChanges = true;
-            break;
-          }
+        if (
+          ![...previous.values()].some(
+            (cursor) => now - cursor.timestamp >= PRESENCE_CONFIG.CURSOR_HIDE_AFTER_MS
+          )
+        ) {
+          return previous;
         }
-
-        if (!hasChanges) {
-          return prev; // Return same reference to prevent state update
+        const next = new Map(previous);
+        for (const [key, cursor] of previous) {
+          if (now - cursor.timestamp >= PRESENCE_CONFIG.CURSOR_HIDE_AFTER_MS) next.delete(key);
         }
-
-        // Second pass: create new map with stale cursors removed
-        const next = new Map(prev);
-        for (const [userId, cursor] of prev.entries()) {
-          if (now - cursor.timestamp > PRESENCE_CONFIG.CURSOR_HIDE_AFTER_MS) {
-            next.delete(userId);
-          }
-        }
-
         return next;
       });
-    }, 5000);
+    }, PRESENCE_CONFIG.CURSOR_HIDE_AFTER_MS);
 
-    // Cleanup stale presence every 30 seconds (for facepile)
     const presenceCleanupInterval = setInterval(() => {
-      setPresenceMap((prev) => {
-        if (prev.size === 0) return prev; // Nothing to clean up
-
+      setPresenceMap((previous) => {
         const now = Date.now();
-        let hasChanges = false;
-
-        // First pass: check if any entries are stale
-        for (const [_userId, cursor] of prev.entries()) {
-          if (now - cursor.timestamp > PRESENCE_CONFIG.ACTIVE_USER_TIMEOUT_MS) {
-            hasChanges = true;
-            break;
-          }
+        if (
+          ![...previous.values()].some(
+            (entry) => now - entry.timestamp > PRESENCE_CONFIG.ACTIVE_USER_TIMEOUT_MS
+          )
+        ) {
+          return previous;
         }
-
-        if (!hasChanges) return prev;
-
-        // Second pass: create new map without stale entries
-        const next = new Map(prev);
-        for (const [userId, cursor] of prev.entries()) {
-          if (now - cursor.timestamp > PRESENCE_CONFIG.ACTIVE_USER_TIMEOUT_MS) {
-            next.delete(userId);
-          }
+        const next = new Map(previous);
+        for (const [key, entry] of previous) {
+          if (now - entry.timestamp > PRESENCE_CONFIG.ACTIVE_USER_TIMEOUT_MS) next.delete(key);
         }
         return next;
       });
-    }, 30000);
+    }, 30_000);
 
-    // Cleanup
     return () => {
-      client.io.off('cursor-moved', handleCursorMoved);
-      client.io.off('presence-updated', handlePresenceUpdated);
-      client.io.off('cursor-left', handleCursorLeft);
+      client.io.off(PRESENCE_SOCKET_EVENTS.cursorMoved, handleCursorMoved);
+      client.io.off(PRESENCE_SOCKET_EVENTS.updated, handlePresenceUpdated);
+      client.io.off(PRESENCE_SOCKET_EVENTS.left, handlePresenceLeft);
+      client.io.off(PRESENCE_SOCKET_EVENTS.cursorLeft, handleCursorLeft);
+      client.io.off('disconnect', clearTransportState);
       clearInterval(cursorCleanupInterval);
       clearInterval(presenceCleanupInterval);
     };
   }, [client, boardId, enabled, globalPresence, presenceMinUpdateIntervalMs]);
 
-  // Derive active users and remote cursors from separate maps
-  // - activeUsers from presenceMap (5 minute timeout for facepile)
-  // - remoteCursors from cursorMap (5 second timeout for cursor rendering)
-  // Memoized to prevent unnecessary re-renders
-  const { activeUsers, remoteCursors } = useMemo(() => {
+  return useMemo(() => {
+    const userById = new Map<string, User>(users.map((user) => [user.user_id, user]));
+    const activeByUser = new Map<
+      string,
+      { lastSeen: number; boardId?: BoardID; boardTimestamp?: number; x?: number; y?: number }
+    >();
+    for (const instance of presenceMap.values()) {
+      const existing = activeByUser.get(instance.userId);
+      const next = existing ?? { lastSeen: instance.timestamp };
+      next.lastSeen = Math.max(next.lastSeen, instance.timestamp);
+      if (
+        instance.boardId &&
+        (next.boardTimestamp === undefined ||
+          (instance.boardTimestamp ?? instance.timestamp) >= next.boardTimestamp)
+      ) {
+        next.boardId = instance.boardId;
+        next.boardTimestamp = instance.boardTimestamp ?? instance.timestamp;
+        next.x = instance.x;
+        next.y = instance.y;
+      }
+      activeByUser.set(instance.userId, next);
+    }
+
     const activeUsers: ActiveUser[] = [];
+    for (const [userId, presence] of activeByUser) {
+      const user = userById.get(userId);
+      if (!user) continue;
+      activeUsers.push({
+        user,
+        lastSeen: presence.lastSeen,
+        ...(presence.boardId ? { boardId: presence.boardId } : {}),
+        ...(typeof presence.x === 'number' && typeof presence.y === 'number'
+          ? { cursor: { x: presence.x, y: presence.y } }
+          : {}),
+      });
+    }
+
+    const latestCursorByUser = new Map<string, CursorInstance>();
+    for (const cursor of cursorMap.values()) {
+      const existing = latestCursorByUser.get(cursor.userId);
+      if (!existing || cursor.timestamp >= existing.timestamp) {
+        latestCursorByUser.set(cursor.userId, cursor);
+      }
+    }
     const remoteCursors = new Map<
       string,
       { x: number; y: number; user: User; timestamp: number }
     >();
-
-    // Build active users from presenceMap (longer timeout for facepile)
-    for (const [userId, presence] of presenceMap.entries()) {
-      const user = usersRef.current.find((u) => u.user_id === userId);
+    for (const [userId, cursor] of latestCursorByUser) {
+      const user = userById.get(userId);
       if (!user) continue;
-
-      activeUsers.push({
-        user,
-        lastSeen: presence.timestamp,
-        boardId: presence.boardId,
-        cursor:
-          typeof presence.x === 'number' && typeof presence.y === 'number'
-            ? {
-                x: presence.x,
-                y: presence.y,
-              }
-            : undefined,
-      });
-    }
-
-    // Build remote cursors from cursorMap (shorter timeout for cursor rendering)
-    for (const [userId, cursor] of cursorMap.entries()) {
-      const user = usersRef.current.find((u) => u.user_id === userId);
-      if (!user) continue;
-
       remoteCursors.set(userId, {
         x: cursor.x,
         y: cursor.y,
@@ -352,14 +364,6 @@ export function usePresence(options: UsePresenceOptions): UsePresenceResult {
       });
     }
 
-    return {
-      activeUsers,
-      remoteCursors,
-    };
-  }, [presenceMap, cursorMap]);
-
-  return {
-    activeUsers,
-    remoteCursors,
-  };
+    return { activeUsers, remoteCursors };
+  }, [cursorMap, presenceMap, users]);
 }

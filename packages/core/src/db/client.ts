@@ -16,12 +16,39 @@ import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import { loadConfigSync } from '../config/config-manager';
 import type { AgorConfig } from '../config/types';
+import type { DatadogTracer } from '../tracing/datadog';
+import {
+  coordinateInMemorySQLiteClient,
+  coordinateInMemorySQLiteDatabase,
+} from './in-memory-sqlite-coordinator';
+import { instrumentDrizzlePostgresForTracing } from './postgres-tracing';
 import { sanitizeDbError } from './sanitize-error';
 import * as postgresSchema from './schema.postgres';
-
 // Import both schemas explicitly
 import * as sqliteSchema from './schema.sqlite';
 import { detectDialectFromUrl, getDatabaseDialect } from './schema-factory';
+
+/**
+ * Marks the one SQLite configuration whose connection lifetime is part of the
+ * database's identity. The local libsql client detaches its current native
+ * connection when the client starts a transaction; reopening `:memory:` after
+ * commit would otherwise produce a brand-new empty database.
+ */
+export const IN_MEMORY_SQLITE_DATABASE = Symbol.for('agor.db.sqlite.in-memory');
+
+function isInMemorySQLiteUrl(url: string): boolean {
+  return (
+    url === ':memory:' || url.startsWith('file::memory:') || /[?&]mode=memory(?:&|$)/.test(url)
+  );
+}
+
+function markInMemorySQLiteDatabase<T extends object>(db: T, url: string, client: Client): T {
+  if (isInMemorySQLiteUrl(url)) {
+    Object.defineProperty(db, IN_MEMORY_SQLITE_DATABASE, { value: true });
+    return coordinateInMemorySQLiteDatabase(db, client);
+  }
+  return db;
+}
 
 /**
  * Database configuration options
@@ -120,7 +147,8 @@ function createLibSQLClient(config: DbConfig): Client {
       clientConfig.syncInterval = config.syncInterval ?? 60;
     }
 
-    return createClient(clientConfig);
+    const client = createClient(clientConfig);
+    return isInMemorySQLiteUrl(config.url) ? coordinateInMemorySQLiteClient(client) : client;
   } catch (error) {
     throw new DatabaseConnectionError(
       `Failed to create LibSQL client: ${error instanceof Error ? error.message : String(error)}`,
@@ -177,7 +205,16 @@ async function configureSQLitePragmas(client: Client): Promise<void> {
  * });
  * ```
  */
-export function createDatabase(config: DbConfig): RawDatabase {
+/**
+ * Optional runtime hooks for database creation. `tracer` is the resolved
+ * dd-trace tracer, injected by the daemon so Postgres queries emit APM spans;
+ * `@agor/core` never resolves dd-trace itself (see postgres-tracing.ts).
+ */
+export interface CreateDatabaseOptions {
+  tracer?: DatadogTracer | null;
+}
+
+export function createDatabase(config: DbConfig, options: CreateDatabaseOptions = {}): RawDatabase {
   // Auto-detect dialect from URL if not explicitly set
   let dialect = config.dialect;
 
@@ -196,7 +233,7 @@ export function createDatabase(config: DbConfig): RawDatabase {
   }
 
   if (dialect === 'postgresql') {
-    return createPostgresDatabase(config) as unknown as RawDatabase;
+    return createPostgresDatabase(config, options.tracer) as unknown as RawDatabase;
   }
 
   return createSQLiteDatabase(config) as unknown as RawDatabase;
@@ -205,7 +242,10 @@ export function createDatabase(config: DbConfig): RawDatabase {
 /**
  * Create PostgreSQL database client
  */
-function createPostgresDatabase(config: DbConfig): PostgresJsDatabase<typeof postgresSchema> {
+function createPostgresDatabase(
+  config: DbConfig,
+  tracer?: DatadogTracer | null
+): PostgresJsDatabase<typeof postgresSchema> {
   try {
     // Build options without ssl key by default — postgres.js treats an explicitly-present
     // `ssl: undefined` differently from an absent key. When the key is absent, postgres.js
@@ -247,7 +287,13 @@ function createPostgresDatabase(config: DbConfig): PostgresJsDatabase<typeof pos
     }
     const sql = postgres(config.url, options);
 
-    return drizzlePostgres(sql, { schema: postgresSchema });
+    const db = drizzlePostgres(sql, { schema: postgresSchema });
+    // Emit `postgres.query` APM spans for every query. dd-trace has no
+    // postgres.js plugin, so without this the daemon's DB layer is invisible in
+    // Datadog. Best-effort and additive — a no-op unless the daemon injected a
+    // tracer, and it can never break a query (see postgres-tracing.ts).
+    instrumentDrizzlePostgresForTracing(db, { tracer });
+    return db;
   } catch (error) {
     throw new DatabaseConnectionError(
       `Failed to create PostgreSQL client: ${error instanceof Error ? error.message : String(error)}`,
@@ -261,7 +307,11 @@ function createPostgresDatabase(config: DbConfig): PostgresJsDatabase<typeof pos
  */
 function createSQLiteDatabase(config: DbConfig): LibSQLDatabase<typeof sqliteSchema> {
   const client = createLibSQLClient(config);
-  const db = drizzleSQLite(client, { schema: sqliteSchema });
+  const db = markInMemorySQLiteDatabase(
+    drizzleSQLite(client, { schema: sqliteSchema }),
+    config.url,
+    client
+  );
 
   // Configure SQLite pragmas asynchronously (fire-and-forget)
   // This doesn't block database creation but pragmas will be set shortly after
@@ -279,7 +329,10 @@ function createSQLiteDatabase(config: DbConfig): LibSQLDatabase<typeof sqliteSch
  * @param config Database configuration
  * @returns Promise resolving to Drizzle database instance
  */
-export async function createDatabaseAsync(config: DbConfig): Promise<RawDatabase> {
+export async function createDatabaseAsync(
+  config: DbConfig,
+  options: CreateDatabaseOptions = {}
+): Promise<RawDatabase> {
   // Determine dialect: use config.dialect, then auto-detect from URL, then fallback to env/default
   let dialect = config.dialect;
   if (!dialect && config.url) {
@@ -291,12 +344,16 @@ export async function createDatabaseAsync(config: DbConfig): Promise<RawDatabase
 
   if (dialect === 'postgresql') {
     // PostgreSQL doesn't need pragma configuration
-    return createPostgresDatabase(config) as unknown as RawDatabase;
+    return createPostgresDatabase(config, options.tracer) as unknown as RawDatabase;
   }
 
   // SQLite: Wait for pragmas to be configured
   const client = createLibSQLClient(config);
-  const db = drizzleSQLite(client, { schema: sqliteSchema });
+  const db = markInMemorySQLiteDatabase(
+    drizzleSQLite(client, { schema: sqliteSchema }),
+    config.url,
+    client
+  );
   await configureSQLitePragmas(client);
   return db as unknown as RawDatabase;
 }

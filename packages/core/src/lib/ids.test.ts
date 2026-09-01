@@ -79,6 +79,7 @@ describe('isValidUUID', () => {
 describe('isCanonicalFullUuid', () => {
   it('accepts the lowercase full UUID representation used by storage and queries', () => {
     expect(isCanonicalFullUuid('01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f')).toBe(true);
+    expect(isCanonicalFullUuid('707bae66-dda5-4c01-9136-a5cda16e048e')).toBe(true);
     expect(isCanonicalFullUuid('00000000-0000-0000-0000-000000000000')).toBe(true);
   });
 

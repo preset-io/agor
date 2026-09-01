@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { MCP_CAPABILITY_ISSUING_SERVICE_PATHS } from './utils/mcp-server-authorization.js';
 
 /**
  * Regression tests for the daemon-side MCP OAuth callback URL.
@@ -128,13 +129,89 @@ describe('register-services OAuth callback URL regression', () => {
     expect(testOauth).toMatch(/effectiveClientId\s*=\s*authoritativeServer/);
   });
 
+  it('enumerates an authority owner for every public MCP capability-issuing socket service', () => {
+    type CapabilityServicePath = (typeof MCP_CAPABILITY_ISSUING_SERVICE_PATHS)[number];
+    const requiredAuthorityContracts = {
+      // Reservation creation synchronously compares request and live socket
+      // authority before minting the one-shot server nonce.
+      'mcp-servers/oauth-browser-reservations': [/liveSocketAuthority\s*\(/],
+      // Standalone OAuth start and JWT test requests carry a live, immutable
+      // socket caller assertion through provider and database continuations.
+      'mcp-servers/oauth-start': [
+        /requestAuthorityAssertion\s*\(\s*params\s*\)/,
+        /requestAuthority:\s*assertRequestAuthority/,
+      ],
+      'mcp-servers/test-jwt': [
+        /requestAuthorityAssertion\s*\(\s*params\s*\)/,
+        /assertCurrent:\s*assertRequestAuthority/,
+      ],
+      // Callback completion is owned by the claimed, tenant/user-bound
+      // pending attempt rather than by a browser reservation.
+      'mcp-servers/oauth-complete': [/assertPendingFlowStillAuthorized\s*\(\s*pendingFlow\s*\)/],
+      // Refresh issuance is fenced by the exact durable grant generation and
+      // rechecks the grant subject at its persistence choke point.
+      'mcp-servers/oauth-refresh': [/observedRefreshVersion/, /refreshAndPersistToken\s*\(/],
+      'mcp-servers/test-oauth': [/assertInitialRequestAuthority/, /runWithinOAuthAuthority\s*\(/],
+      'mcp-servers/discover': [
+        /assertCurrentRequestAuthority/,
+        /createAuthorityGuardedMCPFetch\s*\(/,
+      ],
+    } satisfies Record<CapabilityServicePath, RegExp[]>;
+
+    for (const path of MCP_CAPABILITY_ISSUING_SERVICE_PATHS) {
+      const start = codeOnly.indexOf(`app.use('/${path}'`);
+      const end = codeOnly.indexOf(`app.service('${path}').hooks`, start);
+      expect(start, `${path} registration`).toBeGreaterThanOrEqual(0);
+      expect(end, `${path} hook registration`).toBeGreaterThan(start);
+      const serviceBody = codeOnly.slice(start, end);
+      for (const contract of requiredAuthorityContracts[path]) {
+        expect(serviceBody, `${path} authority contract ${contract}`).toMatch(contract);
+      }
+    }
+
+    // The only bearer-returning service is not public: it independently
+    // requires a trusted internal/service or session-executor capability.
+    const authHeadersBody = codeOnly.slice(
+      codeOnly.indexOf("app.use('/mcp-servers/oauth-auth-headers'"),
+      codeOnly.indexOf("app.service('mcp-servers/oauth-auth-headers').hooks")
+    );
+    expect(authHeadersBody).toMatch(/shouldExposeMCPServerSecrets\s*\(\s*params\s*\)/);
+    expect(authHeadersBody).toMatch(/shouldExposeMCPServerSecretsForSessionToken\s*\(/);
+
+    // Keep the audit closed over the registered surface, not just today's
+    // issuing list. Any newly registered OAuth/test/discovery service must be
+    // classified here (and, when it issues capability, in the canonical role
+    // floor list above) before this contract can pass.
+    const nonIssuingOrInternal = [
+      'mcp-servers/oauth-disconnect',
+      'mcp-servers/oauth-status',
+      'mcp-servers/oauth-attempt-status',
+      'mcp-servers/oauth-auth-headers',
+    ] as const;
+    const registeredAuthServices = new Set(
+      Array.from(
+        codeOnly.matchAll(
+          /app\.use\('\/(mcp-servers\/(?:oauth-[^']+|test-(?:jwt|oauth)|discover))'/g
+        ),
+        (match) => match[1]
+      )
+    );
+    expect(registeredAuthServices).toEqual(
+      new Set([...MCP_CAPABILITY_ISSUING_SERVICE_PATHS, ...nonIssuingOrInternal])
+    );
+  });
+
   it('uses durable hashed state claims on PostgreSQL and never broadcasts raw flow state', () => {
     expect(codeOnly).toMatch(/durableOAuthFlows\.claimForCallback\s*\(\s*state\s*\)/);
     expect(codeOnly).toMatch(/cacheToken:\s*false/);
     expect(codeOnly).toMatch(/attempt_id:\s*pendingFlow\.attemptId/);
+    expect(codeOnly).toMatch(/reservation_token:\s*opts\.browserReservation\.reservationToken/);
+    expect(codeOnly).toMatch(/caller_user_id:\s*opts\.browserReservation\.userId/);
+    expect(codeOnly).toMatch(/awaitToken\s*&&\s*opts\.browserReservation\s*&&\s*app\.io/);
     expect(codeOnly).toMatch(
-      /app\.io\.local\.to\s*\(\s*opts\.socketId\s*\)\.emit\s*\(\s*['"]oauth:open_browser['"]/
+      /app\.io\.local\.to\s*\(\s*opts\.browserReservation\.socketId\s*\)\.emit\s*\(\s*['"]oauth:open_browser['"]/
     );
+    expect(codeOnly).toMatch(/assertOAuthBrowserReservationStillCurrent/);
     expect(codeOnly).not.toMatch(/app\.io\.emit\s*\(\s*['"]oauth:open_browser['"]/);
     expect(codeOnly).not.toMatch(/emit\s*\(\s*['"]oauth:completed['"][\s\S]{0,300}\bstate\b/);
   });

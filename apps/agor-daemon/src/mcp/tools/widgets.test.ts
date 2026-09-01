@@ -81,6 +81,13 @@ interface FakeTask {
 
 function makeApp(opts: {
   sessionCreator: string;
+  gatewayChannel?: {
+    id: string;
+    name: string;
+    channel_type: string;
+    target_branch_id: string;
+    config: Record<string, unknown>;
+  };
   creatorEnvVars?: Record<string, { set: true; scope: 'global' | 'session' }>;
   /**
    * The session's tasks. The fake below applies the same exact status, sort,
@@ -113,7 +120,7 @@ function makeApp(opts: {
       get: async (...args: unknown[]) => {
         calls.push({ service: 'users', method: 'get', args });
         return {
-          user_id: opts.sessionCreator,
+          user_id: args[0],
           env_vars: opts.creatorEnvVars ?? {},
         };
       },
@@ -169,6 +176,14 @@ function makeApp(opts: {
       },
     },
   };
+  if (opts.gatewayChannel) {
+    services['gateway-channels'] = {
+      get: async (...args: unknown[]) => {
+        calls.push({ service: 'gateway-channels', method: 'get', args });
+        return opts.gatewayChannel;
+      },
+    };
+  }
   return {
     app: {
       service(name: string) {
@@ -522,6 +537,28 @@ describe('agor_widgets_request_env_vars', () => {
     expect(promptData.idempotencyTaskId).not.toBe(widgetId);
   });
 
+  it('reads the prompt actor env vars rather than the shared Session owner', async () => {
+    const { app, calls } = makeApp({
+      sessionCreator: 'session-owner',
+      creatorEnvVars: { HUBSPOT_API_KEY: { set: true, scope: 'global' } },
+    });
+    const captured = registerAndCapture({
+      app,
+      userId: 'prompt-actor',
+      sessionId: 'sess-1',
+    });
+
+    const result = await captured.agor_widgets_request_env_vars.cb({
+      names: ['HUBSPOT_API_KEY'],
+      reason: 'call hubspot',
+      auto_resume: true,
+    });
+
+    expect(JSON.parse(result.content[0].text).status).toBe('already_present');
+    const userLookup = calls.find((call) => call.service === 'users' && call.method === 'get');
+    expect(userLookup?.args[0]).toBe('prompt-actor');
+  });
+
   it('does NOT short-circuit when even one requested name is missing', async () => {
     const { app, calls } = makeApp({
       sessionCreator: 'user-creator',
@@ -657,6 +694,58 @@ describe('agor_widgets_request_gateway_token', () => {
 
   beforeEach(() => {
     appendStub.mockReset();
+  });
+
+  it('preflights the session target branch before rendering a Discord secret widget', async () => {
+    const { app } = makeApp({
+      sessionCreator: 'user-creator',
+      gatewayChannel: {
+        id: 'channel-1',
+        name: 'Discord',
+        channel_type: 'discord',
+        target_branch_id: 'different-branch',
+        config: {},
+      },
+    });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-admin',
+      sessionId: 'sess-1',
+      role: 'admin',
+    });
+    await expect(
+      captured.agor_widgets_request_gateway_token.cb({ gatewayChannelId: 'channel-1' })
+    ).rejects.toThrow(/target branch/i);
+    expect(appendStub).not.toHaveBeenCalled();
+  });
+
+  it('renders a provider-aware Discord widget only after branch preflight', async () => {
+    const { app } = makeApp({
+      sessionCreator: 'user-creator',
+      gatewayChannel: {
+        id: 'channel-1',
+        name: 'Discord',
+        channel_type: 'discord',
+        target_branch_id: 'wt-1',
+        config: {},
+      },
+    });
+    appendStub.mockResolvedValue({ index: 5 });
+    const captured = registerAndCapture({
+      app,
+      userId: 'user-admin',
+      sessionId: 'sess-1',
+      role: 'admin',
+    });
+    const result = await captured.agor_widgets_request_gateway_token.cb({
+      gatewayChannelId: 'channel-1',
+    });
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.status).toBe('requested');
+    const params = appendStub.mock.calls[0][0].metadata.widget.params;
+    expect(params.channelType).toBe('discord');
+    expect(params.fields).toEqual(['bot_token']);
+    expect(JSON.stringify(params)).not.toContain('xoxb');
   });
 
   it('rejects a non-admin caller before creating any widget (admin-only)', async () => {

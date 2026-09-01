@@ -3,10 +3,15 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
+// Guard against a step-change in package size (accidentally bundling
+// node_modules, an SDK, a fixtures dir, etc.) — not gradual feature growth.
+// Ceilings are kept generous (~25% over actuals) so legit additions don't
+// block a deploy; a real bloat accident overshoots by an order of magnitude
+// and still trips these.
 const limits = {
-  files: 2600,
-  unpackedBytes: 95 * 1024 * 1024,
-  packedBytes: 23 * 1024 * 1024,
+  files: 3250,
+  unpackedBytes: 120 * 1024 * 1024,
+  packedBytes: 30 * 1024 * 1024,
 };
 
 function measureDirectory(directory) {

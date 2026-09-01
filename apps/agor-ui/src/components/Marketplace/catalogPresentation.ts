@@ -99,7 +99,7 @@ export function capabilityLabel(capability: string): string {
  * the default and is labelled for what it actually is.
  */
 export const SORT_OPTIONS: Array<{ label: string; value: MCPCatalogSort }> = [
-  { label: 'Sort: Recommended', value: 'popularity' },
+  { label: 'Sort: Curated', value: 'popularity' },
   { label: 'Sort: A–Z', value: 'name' },
 ];
 
@@ -124,7 +124,7 @@ export const entryTitle = catalogDisplayName;
  * wherever nobody has established one.
  *
  * `sign-in` is separate from `ready` for the same reason: both connect, but one
- * of them lands the user on a server they still have to sign into, and a card
+ * of them opens the provider's sign-in popup, and a card
  * promising "no account needed" for a server that needs their Notion account is
  * the promise this vocabulary exists to keep. It is not `blocked` — the sign-in
  * happens, it just happens after connecting rather than instead of it.
@@ -175,9 +175,9 @@ const CONNECT_STATUSES = {
   },
   signIn: {
     readiness: 'sign-in',
-    label: 'Sign in after connecting',
+    label: 'Connect with your account',
     detail:
-      'This server uses your own account. Connecting sets it up, then you sign in from the session — nobody signs in on your behalf.',
+      'This server uses your own account. Connecting opens the provider sign-in in a secure popup and creates the new session; the starter prompt appears only after sign-in succeeds.',
   },
   needsKey: {
     readiness: 'api-key',
@@ -202,7 +202,7 @@ const CONNECT_STATUSES = {
  * Auth types that are not a refusal.
  *
  * The same rule the cards state: `none` is stated open, `oauth` signs the user
- * in with their own account after connecting, `credentials` takes a reviewed bearer token the
+ * in with their own account in the automatic popup, `credentials` takes a reviewed bearer token the
  * user pastes into the drawer, and `unknown` is simply unstated — connecting
  * checks the endpoint. An entry that says nothing is worth offering, so a
  * filter demanding `none` would hide entries the card beside it called

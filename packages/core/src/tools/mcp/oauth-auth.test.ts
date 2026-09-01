@@ -13,7 +13,7 @@ describe('OAuth client-credentials egress and cache isolation', () => {
         client_id: 'client',
         client_secret: 'secret',
       })
-    ).rejects.toThrow('OAuth endpoints require HTTPS');
+    ).rejects.toThrow('The MCP operation failed');
   });
 
   it('namespaces cached bearers and allows PostgreSQL callers to bypass the cache', async () => {
@@ -80,7 +80,7 @@ describe('OAuth client-credentials egress and cache isolation', () => {
         cache: false,
       }).catch((caught: unknown) => caught);
       expect(String(error)).not.toContain(marker);
-      expect(String(error)).toContain('OAuth token fetch failed (400');
+      expect(String(error)).toContain('provider rejected');
     } finally {
       await new Promise<void>((resolve, reject) =>
         server.close((closeError) => (closeError ? reject(closeError) : resolve()))

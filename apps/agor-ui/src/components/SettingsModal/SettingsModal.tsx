@@ -21,6 +21,7 @@ import {
   AppstoreOutlined,
   BranchesOutlined,
   CloseOutlined,
+  ControlOutlined,
   CreditCardOutlined,
   ExperimentOutlined,
   FolderOutlined,
@@ -32,7 +33,8 @@ import {
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { Button, Drawer, Flex, Grid, Layout, Menu, Modal, Select, Typography, theme } from 'antd';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useAuthenticatedAuthorityScope } from '@/hooks/useAuthorityOperationGuard';
 import type { BranchStorageConfig } from '@/utils/branchStorage';
 import { mapToArray } from '@/utils/mapHelpers';
 import { SETTINGS_SECTIONS, type SettingsSection } from '../../hooks/useSettingsRoute';
@@ -64,6 +66,7 @@ import { MCPServersTable } from './MCPServersTable';
 import { ReposTable } from './ReposTable';
 import { TeammatesTable } from './TeammatesTable';
 import { UsersTable } from './UsersTable';
+import { WorkspacePreferencesTab } from './WorkspacePreferencesTab';
 
 const { Sider, Content } = Layout;
 
@@ -79,10 +82,13 @@ export interface SettingsModalProps {
   onDeleteBoard?: (boardId: string) => void;
   onArchiveBoard?: (boardId: string) => void;
   onUnarchiveBoard?: (boardId: string) => void;
-  onCreateRepo?: (data: CreateRepoRequest) => unknown;
-  onCreateLocalRepo?: (data: CreateLocalRepoRequest) => void | Promise<void>;
-  onUpdateRepo?: (repoId: string, updates: Partial<Repo>) => void;
-  onDeleteRepo?: (repoId: string, cleanup: boolean) => void;
+  onCreateRepo?: (data: CreateRepoRequest, shouldApply?: () => boolean) => unknown;
+  onCreateLocalRepo?: (
+    data: CreateLocalRepoRequest,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onUpdateRepo?: (repoId: string, updates: Partial<Repo>, shouldApply?: () => boolean) => void;
+  onDeleteRepo?: (repoId: string, cleanup: boolean, shouldApply?: () => boolean) => void;
   onArchiveOrDeleteBranch?: (branchId: string, options: BranchArchiveOrDeleteOptions) => void;
   onUnarchiveBranch?: (branchId: string, options?: { boardId?: string }) => void;
   onUpdateBranch?: (branchId: string, updates: BranchUpdate) => void;
@@ -102,14 +108,25 @@ export interface SettingsModalProps {
   ) => Promise<Branch | null>;
   onStartEnvironment?: (branchId: string) => void;
   onStopEnvironment?: (branchId: string) => void;
-  onCreateUser?: (data: CreateUserInput) => Promise<void>;
-  onUpdateUser?: (userId: string, updates: UpdateUserInput) => Promise<void>;
-  onDeleteUser?: (userId: string) => void;
-  onCreateMCPServer?: (data: CreateMCPServerInput) => void;
-  onDeleteMCPServer?: (serverId: string) => void;
+  onCreateUser?: (data: CreateUserInput, shouldApply?: () => boolean) => void | Promise<void>;
+  onUpdateUser?: (
+    userId: string,
+    updates: UpdateUserInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDeleteUser?: (userId: string, shouldApply?: () => boolean) => void | Promise<void>;
+  onCreateMCPServer?: (
+    data: CreateMCPServerInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDeleteMCPServer?: (serverId: string, shouldApply?: () => boolean) => void | Promise<void>;
   onCreateGatewayChannel?: (data: GatewayChannelCreateData) => void;
-  onUpdateGatewayChannel?: (channelId: string, updates: GatewayChannelPatchData) => void;
-  onDeleteGatewayChannel?: (channelId: string) => void;
+  onUpdateGatewayChannel?: (
+    channelId: string,
+    updates: GatewayChannelPatchData,
+    shouldApply?: () => boolean
+  ) => void;
+  onDeleteGatewayChannel?: (channelId: string, shouldApply?: () => boolean) => void;
   onUpdateArtifact?: (artifactId: string, updates: Partial<Artifact>) => void;
   onDeleteArtifact?: (artifactId: string) => void;
   onCreateTeammate?: () => void;
@@ -167,6 +184,10 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   const gatewayChannelById = useAgorStore(selectGatewayChannelById);
   const artifactById = useAgorStore(selectArtifactById);
   const boardObjects = useMemo(() => mapToArray(boardObjectById), [boardObjectById]);
+  const settingsAuthority = useAuthenticatedAuthorityScope(
+    client,
+    currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
+  );
 
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [selectedRepo, setSelectedRepo] = useState<Repo | null>(null);
@@ -214,6 +235,38 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
   // refusal is legible to the person it refuses; the tab shows them that
   // policy and the servers they can already use.
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+
+  // The Users tab follows the MCP Servers pattern rather than the Agentic Tools
+  // one: the daemon deliberately serves the roster to members
+  // (`ensureMinimumRole(params, ROLES.MEMBER, 'list users')`), so seeing who is
+  // on the team is not something to take away. UsersTable separately exposes
+  // only the mutations the current role has authority to perform.
+  //
+  // Viewers rank below MEMBER, so the listing itself would 403 for them; they
+  // get no entry at all.
+  const canListUsers = hasMinimumRole(currentUser?.role, ROLES.MEMBER);
+
+  // One answer for "may this role open this section", read by both the menu and
+  // the content below. Every gated section is routable via useSettingsRoute, so
+  // gating only the menu leaves the pane reachable by URL with nothing selected
+  // in the sidebar — which is what `groups`, `gateway` and `agentic-tools`
+  // already did. Deriving both from this set is what stops the two from
+  // drifting apart again the next time a section is gated.
+  const canSeeSection = useCallback(
+    (section: string): boolean => {
+      switch (section) {
+        case 'agentic-tools':
+        case 'gateway':
+        case 'groups':
+          return isAdmin;
+        case 'users':
+          return canListUsers;
+        default:
+          return true;
+      }
+    },
+    [isAdmin, canListUsers]
+  );
 
   // Menu items for left sidebar navigation
   const menuItems: MenuProps['items'] = useMemo(
@@ -271,6 +324,15 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             label: 'Artifacts',
             icon: <ExperimentOutlined />,
           },
+          ...(isAdmin
+            ? [
+                {
+                  key: 'workspace-preferences',
+                  label: 'Preferences',
+                  icon: <ControlOutlined />,
+                },
+              ]
+            : []),
         ],
       },
       {
@@ -278,7 +340,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         label: 'Integrations',
         type: 'group' as const,
         children: [
-          ...(isAdmin
+          ...(canSeeSection('agentic-tools')
             ? [
                 {
                   key: 'agentic-tools',
@@ -292,7 +354,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             label: 'MCP Servers',
             icon: <ApiOutlined />,
           },
-          ...(isAdmin
+          ...(canSeeSection('gateway')
             ? [
                 {
                   key: 'gateway',
@@ -303,27 +365,37 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             : []),
         ],
       },
-      {
-        key: 'admin',
-        label: 'Admin',
-        type: 'group' as const,
-        children: [
-          ...(isAdmin
-            ? [
-                {
-                  key: 'groups',
-                  label: 'Groups',
-                  icon: <TeamOutlined />,
-                },
-              ]
-            : []),
-          {
-            key: 'users',
-            label: 'Users',
-            icon: <TeamOutlined />,
-          },
-        ],
-      },
+      // Rendered only when it has something under it — an "Admin" heading with
+      // an empty body is what a viewer would otherwise get.
+      ...(canSeeSection('groups') || canSeeSection('users')
+        ? [
+            {
+              key: 'admin',
+              label: 'Admin',
+              type: 'group' as const,
+              children: [
+                ...(canSeeSection('groups')
+                  ? [
+                      {
+                        key: 'groups',
+                        label: 'Groups',
+                        icon: <TeamOutlined />,
+                      },
+                    ]
+                  : []),
+                ...(canSeeSection('users')
+                  ? [
+                      {
+                        key: 'users',
+                        label: 'Users',
+                        icon: <TeamOutlined />,
+                      },
+                    ]
+                  : []),
+              ],
+            },
+          ]
+        : []),
       {
         key: 'system',
         label: 'System',
@@ -337,7 +409,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         ],
       },
     ],
-    [isAdmin, token]
+    [canSeeSection, isAdmin, token]
   );
 
   const mobileSectionOptions = useMemo(
@@ -348,22 +420,27 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
       { label: 'Workspace · Teammates', value: 'teammates' },
       { label: 'Workspace · Cards (Beta)', value: 'cards' },
       { label: 'Workspace · Artifacts', value: 'artifacts' },
+      ...(isAdmin ? [{ label: 'Workspace · Preferences', value: 'workspace-preferences' }] : []),
       { label: 'Integrations · MCP Servers', value: 'mcp' },
-      ...(isAdmin
-        ? [
-            { label: 'Integrations · Agentic Tools', value: 'agentic-tools' },
-            { label: 'Integrations · Gateway Channels', value: 'gateway' },
-            { label: 'Admin · Groups', value: 'groups' },
-          ]
+      ...(canSeeSection('agentic-tools')
+        ? [{ label: 'Integrations · Agentic Tools', value: 'agentic-tools' }]
         : []),
-      { label: 'Admin · Users', value: 'users' },
+      ...(canSeeSection('gateway')
+        ? [{ label: 'Integrations · Gateway Channels', value: 'gateway' }]
+        : []),
+      ...(canSeeSection('groups') ? [{ label: 'Admin · Groups', value: 'groups' }] : []),
+      ...(canSeeSection('users') ? [{ label: 'Admin · Users', value: 'users' }] : []),
       { label: 'System · About', value: 'about' },
     ],
-    [isAdmin]
+    [canSeeSection, isAdmin]
   );
 
   // Render content based on active section
   const renderContent = () => {
+    // A gated section is routable, so this is reachable by URL even with no
+    // menu entry to click. Same answer in both places.
+    if (!canSeeSection(activeTab)) return null;
+
     switch (activeTab) {
       case 'boards':
         return (
@@ -372,6 +449,7 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             boardById={boardById}
             sessionsByBranch={sessionsByBranch}
             branchById={branchById}
+            currentUser={currentUser}
             onCreate={onCreateBoard}
             onUpdate={onUpdateBoard}
             onDelete={onDeleteBoard}
@@ -383,6 +461,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
         return (
           <ReposTable
             repoById={repoById}
+            identityKey={settingsAuthority.identityKey}
+            operationScope={settingsAuthority.operationScope}
             onCreate={onCreateRepo}
             onCreateLocal={onCreateLocalRepo}
             onUpdate={onUpdateRepo}
@@ -442,6 +522,8 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             onClose={onClose}
           />
         );
+      case 'workspace-preferences':
+        return <WorkspacePreferencesTab client={client} currentUser={currentUser} />;
       case 'mcp':
         return (
           <MCPServersTable
@@ -454,7 +536,13 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
           />
         );
       case 'agentic-tools':
-        return <AgenticToolsSection client={client} />;
+        return (
+          <AgenticToolsSection
+            client={client}
+            identityKey={settingsAuthority.identityKey}
+            operationScope={settingsAuthority.operationScope}
+          />
+        );
       case 'gateway':
         return (
           <GatewayChannelsTable
@@ -680,5 +768,14 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
 
 export const SettingsModal: React.FC<SettingsModalProps> = (props) => {
   if (!props.open) return null;
-  return <SettingsModalContent {...props} />;
+  // Settings contains other caller-private editors (gateway credentials,
+  // environment values, selected records) besides MCP. Destroy the whole
+  // modal state tree on an in-place identity replacement. Connection and
+  // token churn for the same user deliberately retain the tree.
+  return (
+    <SettingsModalContent
+      key={props.currentUser?.user_id ?? '__no-authenticated-user__'}
+      {...props}
+    />
+  );
 };

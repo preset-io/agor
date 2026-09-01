@@ -13,6 +13,7 @@ import type {
   Branch,
   MCPCatalogCredentialRequirement,
   MCPCatalogEntry,
+  MCPCatalogReadiness,
 } from '@agor/core/types';
 import { ThunderboltOutlined } from '@ant-design/icons';
 import {
@@ -32,7 +33,13 @@ import {
 } from 'antd';
 import { useEffect, useMemo, useState } from 'react';
 import { AVAILABLE_AGENTS } from '../AgentSelectionGrid/availableAgents';
+import {
+  canAddMcpServer,
+  explainAddRestriction,
+  type MCPServerCapabilityContext,
+} from '../MCPServer/memberPolicy';
 import { capabilityLabel, connectStatus, entryTitle } from './catalogPresentation';
+import { type MarketplaceOAuthPopup, openMarketplaceOAuthPopup } from './marketplaceOAuthPopup';
 
 const { Title, Paragraph, Text, Link } = Typography;
 
@@ -47,9 +54,13 @@ const FALLBACK_DISCLOSURE =
   'This server has published no access statement. Anything it exposes becomes available to the agent in the session you connect it to.';
 
 export interface CatalogDetailDrawerProps {
+  /** Authenticated identity that owns consent, selections, and pasted credentials. */
+  identityKey: string | null;
   entry: MCPCatalogEntry | null;
   open: boolean;
   onClose: () => void;
+  /** Restore focus to the catalog trigger after the drawer has actually closed. */
+  onAfterOpenChange?: (open: boolean) => void;
   branches: Branch[];
   branchesLoading: boolean;
   branchesError: string | null;
@@ -69,6 +80,18 @@ export interface CatalogDetailDrawerProps {
    */
   credentialRequirement?: MCPCatalogCredentialRequirement | null;
   /**
+   * Connecting installs an MCP server, so the same server-provided capability
+   * that gates Settings must gate this action too. Catalog browsing itself
+   * remains available to every authenticated role.
+   */
+  connectCapability: MCPServerCapabilityContext;
+  /** The policy read has not landed; fail closed without claiming a policy value. */
+  policyPending: boolean;
+  policyPendingHint: string;
+  readiness?: MCPCatalogReadiness | null;
+  readinessLoading?: boolean;
+  readinessError?: string | null;
+  /**
    * `acknowledgedDisclosure` is the exact text this drawer put on screen, so
    * what the connect request claims was shown cannot drift from what was.
    *
@@ -82,13 +105,16 @@ export interface CatalogDetailDrawerProps {
     agenticTool: AgenticToolName;
     acknowledgedDisclosure: string;
     bearerToken?: string;
+    oauthPopup?: MarketplaceOAuthPopup;
   }) => void;
 }
 
-export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
+const CatalogDetailDrawerForIdentity: React.FC<CatalogDetailDrawerProps> = ({
+  identityKey: _identityKey,
   entry,
   open,
   onClose,
+  onAfterOpenChange,
   branches,
   branchesLoading,
   branchesError,
@@ -96,6 +122,12 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   connecting,
   connectError,
   credentialRequirement,
+  connectCapability,
+  policyPending,
+  policyPendingHint,
+  readiness,
+  readinessLoading = false,
+  readinessError = null,
   onConnect,
 }) => {
   const { token } = theme.useToken();
@@ -122,37 +154,78 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
     setBranchId(preferred);
   }, [branchOptions, defaultBranchId, branchId]);
 
+  const title = entry ? entryTitle(entry) : '';
   const connect = entry ? connectStatus(entry) : undefined;
-  const runtimeStatus =
-    credentialRequirement === 'required'
-      ? {
+  const readinessPresentation = (() => {
+    switch (readiness?.state) {
+      case 'no_auth':
+        return {
+          readiness: 'ready' as const,
+          label: 'No account needed',
+          detail: 'Connect in one step and try the starter prompt.',
+        };
+      case 'bearer_required':
+        return {
+          readiness: 'api-key' as const,
+          label: 'Use your API key',
+          detail: 'Verify a key from your own account before a session is created.',
+        };
+      case 'oauth_required':
+        return {
+          readiness: 'sign-in' as const,
+          label: `Connect with ${title || 'provider'}`,
+          detail: 'Sign in with your own account in a separate secure window.',
+        };
+      case 'installed_ready':
+        return {
+          readiness: 'ready' as const,
+          label: 'Ready to use',
+          detail: 'Your existing connection can be used in a new session.',
+        };
+      case 'reusable_oauth':
+        return {
+          readiness: 'ready' as const,
+          label: 'Existing sign-in available',
+          detail: 'Reuse your existing connection in a new session without signing in again.',
+        };
+      default:
+        return connect;
+    }
+  })();
+  const advisoryStatus = connect?.readiness === 'blocked' ? connect : readinessPresentation;
+  const runtimeStatus = (() => {
+    switch (credentialRequirement) {
+      case 'required':
+        return {
           readiness: 'api-key',
           label: 'Needs a bearer access token',
           detail: 'This endpoint requires the reviewed bearer-token scheme.',
-        }
-      : credentialRequirement === 'oauth'
-        ? {
-            readiness: 'sign-in',
-            label: 'Sign in after connecting',
-            detail:
-              'The endpoint now requires OAuth. Connecting sets it up, then you sign in from the session.',
-          }
-        : credentialRequirement === 'not_accepted'
-          ? {
-              readiness: 'ready',
-              label: 'No account needed',
-              detail: 'The endpoint is currently open and will not accept a pasted token.',
-            }
-          : credentialRequirement === 'unsupported'
-            ? {
-                readiness: 'blocked',
-                label: 'Credential scheme not supported',
-                detail:
-                  'This endpoint requires credentials, but Marketplace has no reviewed prescription for how to send them.',
-              }
-            : connect;
+        } as const;
+      case 'oauth':
+        return {
+          readiness: 'sign-in',
+          label: `Connect with ${title || 'provider'}`,
+          detail:
+            'The endpoint now requires OAuth. Connecting opens the provider sign-in automatically in a secure popup.',
+        } as const;
+      case 'not_accepted':
+        return {
+          readiness: 'ready',
+          label: 'No account needed',
+          detail: 'The endpoint is currently open and will not accept a pasted token.',
+        } as const;
+      case 'unsupported':
+        return {
+          readiness: 'blocked',
+          label: 'Credential scheme not supported',
+          detail:
+            'This endpoint requires credentials, but Marketplace has no reviewed prescription for how to send them.',
+        } as const;
+      default:
+        return advisoryStatus;
+    }
+  })();
   const blockedReason = runtimeStatus?.readiness === 'blocked' ? runtimeStatus.detail : undefined;
-  const title = entry ? entryTitle(entry) : '';
   const disclosure = entry?.permission_disclosure ?? FALLBACK_DISCLOSURE;
 
   // Consent records the server *and* the words it was given for, rather than a
@@ -171,6 +244,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
   // endpoint. Pairing it with the entry it was typed for means the field is
   // empty for any entry it was not.
   const [pastedKey, setPastedKey] = useState<{ entryId: string; value: string } | null>(null);
+  const [popupBlocked, setPopupBlocked] = useState(false);
 
   // The endpoint's answer beats the catalog file's claim. `auth_type` decides
   // what the card promises before anything is dialled, which is all it can do;
@@ -205,15 +279,28 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
       open && needsApiKey && held !== null && held.entryId === entryId ? held : null
     );
   }, [open, entryId, needsApiKey]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: both interaction boundaries clear a prior popup refusal
+  useEffect(() => setPopupBlocked(false), [open, entryId]);
 
+  const policyRefusal = policyPending
+    ? policyPendingHint
+    : canAddMcpServer(connectCapability)
+      ? undefined
+      : explainAddRestriction(connectCapability);
   const canConnect = Boolean(
-    !blockedReason && acknowledged && branchId && !connecting && (!needsApiKey || bearerToken)
+    !blockedReason &&
+      !policyRefusal &&
+      acknowledged &&
+      branchId &&
+      !connecting &&
+      (!needsApiKey || bearerToken)
   );
 
   return (
     <Drawer
       open={open}
       onClose={onClose}
+      afterOpenChange={onAfterOpenChange}
       size={480}
       destroyOnHidden
       title={
@@ -272,6 +359,14 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
               showIcon
               message={runtimeStatus.label}
               description={runtimeStatus.detail}
+            />
+          )}
+          {readinessError && (
+            <Alert
+              type="warning"
+              showIcon
+              message="Saved connection status is unavailable"
+              description="Connect will recheck safely before it uses or creates anything."
             />
           )}
 
@@ -340,7 +435,7 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                     extra={
                       <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                         Your own {title} bearer access token. It is stored for you alone and never
-                        shown again — reconnect with a new one to rotate it.
+                        shown again.
                         {entry.credentials?.acquisition_url && (
                           <>
                             {' '}
@@ -376,6 +471,15 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
 
               {branchesError && <Alert type="error" showIcon message={branchesError} />}
               {connectError && <Alert type="error" showIcon message={connectError} />}
+              {popupBlocked && (
+                <Alert
+                  type="error"
+                  showIcon
+                  message="Allow popups to connect this account"
+                  description="Nothing was connected because the sign-in window could not be opened."
+                />
+              )}
+              {policyRefusal && <Alert type="info" showIcon message={policyRefusal} />}
 
               <Button
                 type="primary"
@@ -383,8 +487,26 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                 icon={<ThunderboltOutlined />}
                 loading={connecting}
                 disabled={!canConnect}
-                onClick={() =>
-                  branchId &&
+                onClick={() => {
+                  if (!branchId) return;
+                  let oauthPopup: MarketplaceOAuthPopup | undefined;
+                  const needsOAuthWindow =
+                    readinessLoading ||
+                    !readiness ||
+                    Boolean(readinessError) ||
+                    entry.auth_type === 'oauth' ||
+                    credentialRequirement === 'oauth' ||
+                    readiness?.state === 'oauth_required' ||
+                    readiness?.state === 'reusable_oauth';
+                  if (needsOAuthWindow) {
+                    const opened = openMarketplaceOAuthPopup();
+                    if (!opened) {
+                      setPopupBlocked(true);
+                      return;
+                    }
+                    oauthPopup = opened;
+                  }
+                  setPopupBlocked(false);
                   onConnect({
                     branchId,
                     agenticTool,
@@ -393,20 +515,23 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
                     // that never wanted one is refused by the daemon, and the
                     // field it would have come from is not rendered anyway.
                     ...(needsApiKey ? { bearerToken } : {}),
-                  })
-                }
+                    ...(oauthPopup ? { oauthPopup } : {}),
+                  });
+                }}
               >
-                {runtimeStatus?.readiness === 'sign-in'
-                  ? 'Connect, then sign in'
-                  : runtimeStatus?.readiness === 'api-key'
-                    ? 'Verify token & connect'
-                    : runtimeStatus?.readiness === 'unchecked'
-                      ? 'Check & connect'
-                      : 'Connect & try it'}
+                {readiness?.state === 'installed_ready' || readiness?.state === 'reusable_oauth'
+                  ? 'Use in a new session'
+                  : runtimeStatus?.readiness === 'sign-in'
+                    ? `Connect with ${title}`
+                    : runtimeStatus?.readiness === 'api-key'
+                      ? 'Verify key & connect'
+                      : runtimeStatus?.readiness === 'unchecked'
+                        ? 'Check & connect'
+                        : 'Connect & try it'}
               </Button>
               <Text type="secondary" style={{ fontSize: token.fontSizeSM }}>
                 {runtimeStatus?.readiness === 'sign-in'
-                  ? `Opens a new session with ${title} attached; sign in there before using its tools.`
+                  ? `Opens ${title}'s sign-in popup and a recoverable new session; its starter prompt appears after sign-in succeeds.`
                   : runtimeStatus?.readiness === 'unchecked'
                     ? `Checks ${title}'s live authentication requirement before opening a session.`
                     : `Opens a new session on that branch with ${title} attached and a starter prompt ready to send.`}
@@ -418,3 +543,16 @@ export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = ({
     </Drawer>
   );
 };
+
+/**
+ * Consent, branch/agent selections, and bearer credentials are caller-entered
+ * authority. A keyed state owner destroys all of them during the A -> B render,
+ * including the same-role/same-entry case that entry-keying alone cannot see.
+ * Connection/auth-generation churn for one identity deliberately keeps them.
+ */
+export const CatalogDetailDrawer: React.FC<CatalogDetailDrawerProps> = (props) => (
+  <CatalogDetailDrawerForIdentity
+    key={props.identityKey ?? '__no-authenticated-user__'}
+    {...props}
+  />
+);

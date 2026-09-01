@@ -18,6 +18,7 @@ import {
   UserOutlined,
 } from '@ant-design/icons';
 import {
+  Alert,
   Badge,
   Button,
   Descriptions,
@@ -31,7 +32,9 @@ import {
   Tooltip,
   Typography,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useConnectionState } from '@/contexts/ConnectionContext';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
 import { useMcpMemberPolicy } from '@/hooks/useMcpMemberPolicy';
 import { useAgorStore } from '@/store/agorStore';
 import { selectUserAuthenticatedMcpServerIds } from '@/store/selectors';
@@ -58,8 +61,11 @@ import {
   explainAddRestriction,
   explainManageRestriction,
   type MCPServerCapabilityContext,
+  policyPendingState,
 } from '../MCPServer/memberPolicy';
+import { useOAuthBrowserEventAttempt } from '../MCPServer/useOAuthBrowserEventAttempt';
 import { AdaptiveSettingsModal } from './AdaptiveSettingsModal';
+import { MCPEgressGatewayStatus } from './MCPEgressGatewayStatus';
 import { MCPMemberPolicySetting } from './MCPMemberPolicySetting';
 import { ResponsiveSettingsHeader } from './ResponsiveSettingsHeader';
 import { SettingsActionGroup } from './SettingsActionGroup';
@@ -70,17 +76,13 @@ interface MCPServersTableProps {
   /** Resolves `owner_user_id` to a person; unowned servers name no user. */
   userById: Map<string, User>;
   currentUser?: User | null;
-  onCreate?: (data: CreateMCPServerInput) => void;
-  onDelete?: (serverId: string) => void;
+  onCreate?: (data: CreateMCPServerInput, shouldApply?: () => boolean) => void | Promise<void>;
+  onDelete?: (serverId: string, shouldApply?: () => boolean) => void | Promise<void>;
 }
 
 /** How an unowned server reads: it is the workspace's, not nobody's. */
 const SHARED_OWNER_LABEL = 'Shared with workspace';
 const SHARED_OWNER_HINT = 'No owner — everyone in this workspace can use this server.';
-
-const POLICY_LOADING_HINT = "Checking what this workspace's MCP policy allows…";
-const POLICY_UNREADABLE_HINT =
-  "This workspace's MCP policy could not be read, so nothing is offered here.";
 
 const getServerHealth = (
   server: MCPServer,
@@ -132,7 +134,7 @@ interface TestResult {
   prompts?: Array<{ name: string; description: string }>;
 }
 
-export const MCPServersTable: React.FC<MCPServersTableProps> = ({
+const MCPServersTableForIdentity: React.FC<MCPServersTableProps> = ({
   mcpServerById,
   client,
   userById,
@@ -144,8 +146,58 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   // Same set the session panel and the picker read, so an install is
   // "unfinished" in exactly one sense across all three.
   const userAuthenticatedMcpServerIds = useAgorStore(selectUserAuthenticatedMcpServerIds);
-  const memberPolicy = useMcpMemberPolicy(client);
+  const { connected, connecting, authGeneration } = useConnectionState();
+  const connectionReady = connected && !connecting;
+  const memberPolicy = useMcpMemberPolicy(client, {
+    connectionReady,
+    currentUser,
+    authGeneration,
+  });
   const isAdmin = hasMinimumRole(currentUser?.role, ROLES.ADMIN);
+  const { pending: policyPending, hint: policyPendingHint } = policyPendingState(memberPolicy);
+  const durableAuthorityKey =
+    client && connectionReady && !policyPending && currentUser?.user_id && currentUser.role
+      ? `${currentUser.user_id}:${currentUser.role}:${authGeneration}`
+      : null;
+  const capability = useMemo<MCPServerCapabilityContext>(
+    () => ({
+      role: currentUser?.role,
+      isAdmin,
+      connectionReady,
+      policy: memberPolicy.policy,
+      userId: currentUser?.user_id,
+      canConfigure: memberPolicy.canConfigure,
+    }),
+    [
+      isAdmin,
+      connectionReady,
+      currentUser?.role,
+      currentUser?.user_id,
+      memberPolicy.policy,
+      memberPolicy.canConfigure,
+    ]
+  );
+  const canAdd = !policyPending && canAddMcpServer(capability);
+  const addRestriction = policyPending ? policyPendingHint : explainAddRestriction(capability);
+  const operationGuard = useAuthorityOperationGuard(
+    durableAuthorityKey
+      ? [durableAuthorityKey, client, memberPolicy.policy, memberPolicy.canConfigure]
+      : null
+  );
+  const oauthBrowserEvents = useOAuthBrowserEventAttempt({
+    client,
+    currentUserId: currentUser?.user_id ?? null,
+    authGeneration,
+    authorityGuard: operationGuard,
+  });
+  const capabilityRef = useRef({ capability, policyPending, addRestriction });
+  capabilityRef.current = { capability, policyPending, addRestriction };
+  const addIsCurrentlyAllowed = () => {
+    const current = capabilityRef.current;
+    return (
+      operationGuard.isCurrent() && !current.policyPending && canAddMcpServer(current.capability)
+    );
+  };
   // Which transports a user may configure turns on role alone, so this is known
   // before the policy fetch settles. The first entry is the default the create
   // form starts from — `MCP_TRANSPORTS` is ordered for that.
@@ -184,18 +236,33 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     : [];
   // Once the row exists the button only dismisses the modal, so nothing about
   // the form should be able to trap the user behind it.
-  const createBlocked = !createdServerId && missingRequiredFields.length > 0;
+  const createBlocked = !createdServerId && (!canAdd || missingRequiredFields.length > 0);
 
-  // Sync editing server when mcpServerById updates (real-time WebSocket updates).
-  // Also keeps the open edit modal in sync if the underlying record changes.
+  // Sync modal records when mcpServerById updates (real-time WebSocket
+  // updates). An absent row is authoritative too: retaining the previous
+  // object would expose caller A's private server after caller B's replacement
+  // map has correctly omitted it.
   useEffect(() => {
-    if (editingServer && mcpServerById.has(editingServer.mcp_server_id)) {
-      const updatedServer = mcpServerById.get(editingServer.mcp_server_id);
-      if (updatedServer && updatedServer !== editingServer) {
-        setEditingServer(updatedServer);
-      }
+    if (!editingServer) return;
+    const updatedServer = mcpServerById.get(editingServer.mcp_server_id);
+    if (!updatedServer) {
+      setEditModalOpen(false);
+      setEditingServer(null);
+    } else if (updatedServer !== editingServer) {
+      setEditingServer(updatedServer);
     }
   }, [mcpServerById, editingServer]);
+
+  useEffect(() => {
+    if (!viewingServer) return;
+    const updatedServer = mcpServerById.get(viewingServer.mcp_server_id);
+    if (!updatedServer) {
+      setViewModalOpen(false);
+      setViewingServer(null);
+    } else if (updatedServer !== viewingServer) {
+      setViewingServer(updatedServer);
+    }
+  }, [mcpServerById, viewingServer]);
 
   const buildCreateData = (values: Record<string, unknown>): CreateMCPServerInput => {
     const data: CreateMCPServerInput = {
@@ -205,7 +272,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       transport: values.transport as 'stdio' | 'http' | 'sse',
       scope: (values.scope as MCPScope | undefined) ?? offeredScopes[0],
       enabled: (values.enabled as boolean | undefined) ?? true,
-      source: 'user',
     };
 
     if (values.transport === 'stdio') {
@@ -229,22 +295,37 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
   // Persist the current form before every OAuth start. The saved row is the
   // daemon's tenant-scoped authority for provider URL and client credentials.
   const prepareOAuthStartForCreate = async (): Promise<string | null> => {
-    if (!client) return null;
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent()) return null;
+    if (!addIsCurrentlyAllowed()) {
+      showError(capabilityRef.current.addRestriction);
+      return null;
+    }
     try {
       await createForm.validateFields();
+      if (!operation.isCurrent()) return null;
+      if (!addIsCurrentlyAllowed()) {
+        showError(capabilityRef.current.addRestriction);
+        return null;
+      }
       const data = buildCreateData(createForm.getFieldsValue(true));
 
       if (!createdServerId) {
+        if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
         const result = await client.service('mcp-servers').create(data);
+        if (!operation.isCurrent()) return null;
         const newServerId = (result as MCPServer).mcp_server_id || null;
         setCreatedServerId(newServerId);
         return newServerId;
       }
 
-      const { name: _name, source: _source, ...updates } = data;
+      const { name: _name, ...updates } = data;
+      if (!operation.isCurrent() || !addIsCurrentlyAllowed()) return null;
       await client.service('mcp-servers').patch(createdServerId, updates as UpdateMCPServerInput);
+      if (!operation.isCurrent()) return null;
       return createdServerId;
     } catch (error) {
+      if (!operation.isCurrent()) return null;
       // Say which field. Swallowing a validation rejection here left the OAuth
       // button doing nothing at all, with nothing on screen to explain it.
       showError(
@@ -264,27 +345,41 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     setCreatedServerId(null);
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (createdServerId) {
       resetCreateModal();
       return;
     }
 
-    createForm
-      .validateFields()
-      .then(() => {
-        const data = buildCreateData(createForm.getFieldsValue(true));
-        onCreate?.(data);
-        resetCreateModal();
-      })
-      .catch((error) => {
-        console.error('Form validation failed:', error);
-        showError(firstFormErrorMessage(error) || 'Please fill in required fields');
-      });
+    if (!addIsCurrentlyAllowed()) {
+      showError(capabilityRef.current.addRestriction);
+      return;
+    }
+
+    const operation = operationGuard.begin();
+    try {
+      await createForm.validateFields();
+      if (!operation.isCurrent()) return;
+      if (!addIsCurrentlyAllowed()) {
+        showError(capabilityRef.current.addRestriction);
+        return;
+      }
+      const data = buildCreateData(createForm.getFieldsValue(true));
+      if (!operation.isCurrent()) return;
+      await onCreate?.(data, operation.isCurrent);
+      if (!operation.isCurrent()) return;
+      resetCreateModal();
+    } catch (error) {
+      if (!operation.isCurrent()) return;
+      console.error('Form validation failed:', error);
+      showError(firstFormErrorMessage(error) || 'Please fill in required fields');
+    }
   };
 
   // Test connection from create modal (always inline config, no persistence).
   const handleCreateTestConnection = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (!client) {
       showError('Client not available');
       return;
@@ -303,19 +398,24 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     try {
       await createForm.validateFields(['headers']);
     } catch {
+      if (!operation.isCurrent()) return;
       showError('Please fix custom HTTP headers before testing');
       return;
     }
+    if (!operation.isCurrent()) return;
 
-    setTesting(true);
-    setTestResult(null);
-
+    let browserAttempt: Awaited<ReturnType<typeof oauthBrowserEvents.begin>> = null;
     try {
+      setTesting(true);
+      setTestResult(null);
+      browserAttempt = await oauthBrowserEvents.begin({ operation: 'discover' });
+      if (!operation.isCurrent()) return;
       const data = (await client.service('mcp-servers/discover').create({
         url: values.url,
         transport: values.transport || 'http',
         auth: buildAuthFromValues(values),
         headers: parseHeadersJSON(values.headers),
+        ...(browserAttempt ? { oauth_browser_event: browserAttempt.request } : {}),
       })) as {
         success: boolean;
         error?: string;
@@ -324,6 +424,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         resources?: Array<{ name: string; uri: string; mimeType?: string }>;
         prompts?: Array<{ name: string; description: string }>;
       };
+
+      if (!operation.isCurrent()) return;
 
       if (data.success && data.capabilities) {
         setTestResult({
@@ -345,6 +447,7 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         });
       }
     } catch (error) {
+      if (!operation.isCurrent()) return;
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       setTestResult({
         success: false,
@@ -354,7 +457,8 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         error: errorMessage,
       });
     } finally {
-      setTesting(false);
+      browserAttempt?.cleanup();
+      if (operation.isCurrent()) setTesting(false);
     }
   };
 
@@ -373,35 +477,18 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     setViewModalOpen(true);
   }, []);
 
+  const resetViewModal = () => {
+    setViewModalOpen(false);
+    setViewingServer(null);
+  };
+
   const handleDelete = useCallback(
     (serverId: string) => {
-      onDelete?.(serverId);
+      const operation = operationGuard.begin();
+      if (!operation.isCurrent()) return;
+      void onDelete?.(serverId, operation.isCurrent);
     },
-    [onDelete]
-  );
-
-  // Until the policy is known the table offers nothing and says only that. The
-  // restrictive value it falls back to — while loading, or when the read failed
-  // — is a safe assumption to act on, not a fact about this workspace to quote
-  // back as the reason.
-  const policyPending = memberPolicy.loading || memberPolicy.error !== null;
-  const policyPendingHint = memberPolicy.error ? POLICY_UNREADABLE_HINT : POLICY_LOADING_HINT;
-
-  const capability = useMemo<MCPServerCapabilityContext>(
-    () => ({
-      role: currentUser?.role,
-      isAdmin,
-      policy: memberPolicy.policy,
-      userId: currentUser?.user_id,
-      canConfigure: memberPolicy.canConfigure,
-    }),
-    [
-      isAdmin,
-      currentUser?.role,
-      currentUser?.user_id,
-      memberPolicy.policy,
-      memberPolicy.canConfigure,
-    ]
+    [onDelete, operationGuard]
   );
 
   // An editor must be able to show the scope a row already carries, including
@@ -633,8 +720,6 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     ]);
   }, [mcpServerById, searchTerm, describeOwner]);
 
-  const canAdd = !policyPending && canAddMcpServer(capability);
-
   const serversPane = (
     <>
       <ResponsiveSettingsHeader
@@ -692,7 +777,13 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             <Button onClick={resetCreateModal}>Cancel</Button>
             {/* A disabled button can't host a tooltip of its own — hence the span. */}
             <Tooltip
-              title={createBlocked ? describeMissingForSave(missingRequiredFields) : undefined}
+              title={
+                !createdServerId && !canAdd
+                  ? addRestriction
+                  : createBlocked
+                    ? describeMissingForSave(missingRequiredFields)
+                    : undefined
+              }
             >
               <span>
                 <Button type="primary" disabled={createBlocked} onClick={handleCreate}>
@@ -703,6 +794,15 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
           </Space>
         }
       >
+        {!canAdd && (
+          <Alert
+            type="warning"
+            showIcon
+            title="MCP server changes are unavailable"
+            description={addRestriction}
+            style={{ marginBottom: 16 }}
+          />
+        )}
         <Form
           form={createForm}
           layout="vertical"
@@ -719,11 +819,14 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
             onAuthTypeChange={setAuthType}
             form={createForm}
             client={client}
+            authorityKey={durableAuthorityKey}
             serverId={createdServerId ?? undefined}
             onTestConnection={handleCreateTestConnection}
             testing={testing}
             testResult={testResult}
             onPrepareOAuthStart={prepareOAuthStartForCreate}
+            mutationAllowed={canAdd}
+            mutationBlockedReason={addRestriction}
             formRevision={formRevision}
           />
         </Form>
@@ -734,8 +837,17 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
         server={editingServer}
         open={editModalOpen}
         client={client}
+        identityKey={currentUser?.user_id ?? null}
+        authGeneration={authGeneration}
+        authorityKey={durableAuthorityKey}
         offeredTransports={offeredTransports}
         offeredScopes={editableScopes}
+        mutationAllowed={
+          !!editingServer && !policyPending && canEditMcpServer(editingServer, capability)
+        }
+        mutationBlockedReason={
+          policyPending ? policyPendingHint : explainManageRestriction(capability)
+        }
         onClose={handleEditClose}
       />
 
@@ -743,12 +855,9 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       <AdaptiveSettingsModal
         title="MCP Server Details"
         open={viewModalOpen}
-        onCancel={() => {
-          setViewModalOpen(false);
-          setViewingServer(null);
-        }}
+        onCancel={resetViewModal}
         footer={[
-          <Button key="close" onClick={() => setViewModalOpen(false)}>
+          <Button key="close" onClick={resetViewModal}>
             Close
           </Button>,
         ]}
@@ -866,7 +975,20 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
       // is a pane away rather than a band above them.
       defaultActiveKey="servers"
       items={[
-        { key: 'servers', label: 'Servers', children: serversPane },
+        {
+          key: 'servers',
+          label: 'Servers',
+          children: (
+            <>
+              <MCPEgressGatewayStatus
+                key={durableAuthorityKey ?? '__mcp-egress-status__'}
+                client={client}
+                connectionReady={connectionReady}
+              />
+              {serversPane}
+            </>
+          ),
+        },
         {
           key: 'policy',
           // Ungated on purpose: this is the answer to "why is New MCP Server
@@ -888,3 +1010,18 @@ export const MCPServersTable: React.FC<MCPServersTableProps> = ({
     />
   );
 };
+
+/**
+ * Ant Form instances and modal state are caller-private: they can contain raw
+ * bearer/JWT/OAuth credentials and unredacted environment values. Key the
+ * complete state owner by authenticated identity so React destroys caller A's
+ * form and overlays in the same reconciliation that renders caller B. Socket
+ * reconnects and token rotations for the same user keep the key and therefore
+ * preserve ordinary in-progress work.
+ */
+export const MCPServersTable: React.FC<MCPServersTableProps> = (props) => (
+  <MCPServersTableForIdentity
+    key={props.currentUser?.user_id ?? '__no-authenticated-user__'}
+    {...props}
+  />
+);

@@ -24,6 +24,7 @@ import {
   type AnyPgColumn,
   bigint,
   boolean,
+  check,
   customType,
   foreignKey,
   index,
@@ -75,6 +76,15 @@ export const sessions = pgTable(
     // NEVER changes, even if user's unix_username changes later
     // This ensures SDK session data remains accessible in the original home directory
     unix_username: text('unix_username'),
+
+    // Immutable SDK-state boundary. Existing sessions keep using their
+    // historical execution home; only newly admitted sessions may use the
+    // branch-owned SDK home.
+    sdk_home_scope: text('sdk_home_scope', {
+      enum: ['execution_home', 'branch'],
+    })
+      .notNull()
+      .default('execution_home'),
 
     // Materialized for filtering/joins (cross-DB compatible)
     status: text('status', {
@@ -388,6 +398,12 @@ export const tasks = pgTable(
         sdk_failure?: Task['sdk_failure'];
         termination_request?: Task['termination_request'];
         sdk_watchdog_mode?: Task['sdk_watchdog_mode'];
+        /**
+         * Immutable filesystem authority projected when this executor was
+         * launched. Internal repository fact; deliberately omitted from the
+         * public Task DTO and never accepted from executor writes.
+         */
+        executor_launch_fs_access_floor?: import('@agor/core/types').CapabilityPolicyFsAccess;
       }>()
       .notNull(),
   },
@@ -584,6 +600,9 @@ export const boards = pgTable(
 
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
+    // Deletion guards are handled by the dedicated user lifecycle flow. This
+    // owner pointer is immutable and is never cascaded or re-attributed.
+    primary_owner_user_id: varchar('primary_owner_user_id', { length: 36 }).notNull(),
 
     // Materialized for lookups
     name: text('name').notNull(),
@@ -603,7 +622,6 @@ export const boards = pgTable(
         access_mode?: 'private' | 'shared';
         default_others_can?: import('@agor/core/types').BranchPermissionLevel;
         default_others_fs_access?: 'none' | 'read' | 'write';
-        default_dangerously_allow_session_sharing?: boolean;
         color?: string;
         icon?: string;
         background_color?: string; // Background color for the board canvas
@@ -620,9 +638,18 @@ export const boards = pgTable(
   },
   (table) => ({
     tenantIdx: index('boards_tenant_id_idx').on(table.tenant_id),
+    tenantIdentityUnique: uniqueIndex('boards_tenant_board_id_unique').on(
+      table.tenant_id,
+      table.board_id
+    ),
     nameIdx: index('boards_name_idx').on(table.name),
     slugIdx: index('boards_slug_idx').on(table.slug),
     slugTenantUnique: uniqueIndex('boards_tenant_slug_unique').on(table.tenant_id, table.slug),
+    primaryOwnerFk: foreignKey({
+      columns: [table.tenant_id, table.primary_owner_user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+      name: 'boards_tenant_primary_owner_fk',
+    }).onDelete('restrict'),
   })
 );
 
@@ -731,6 +758,7 @@ export const branches = pgTable(
 
     // User attribution
     created_by: varchar('created_by', { length: 36 }).notNull(),
+    primary_owner_user_id: varchar('primary_owner_user_id', { length: 36 }).notNull(),
 
     // Materialized for queries
     name: text('name').notNull(), // "feat-auth", "main"
@@ -780,6 +808,10 @@ export const branches = pgTable(
     }),
 
     // RBAC: App-layer permissions (rbac.md)
+    permission_binding: text('permission_binding', { enum: ['inherit', 'override'] })
+      .$type<'inherit' | 'override'>()
+      .notNull()
+      .default('override'),
     permission_source: text('permission_source', { enum: ['board', 'override'] })
       .$type<'board' | 'override'>()
       .notNull()
@@ -810,6 +842,15 @@ export const branches = pgTable(
     // integer = `git clone --depth N` (shallow). The service layer rejects
     // a non-null clone_depth on worktree-mode rows.
     clone_depth: integer('clone_depth'),
+
+    // Per-branch SDK home intent (design §9.2). NULL = inherit today's behavior
+    // (no branch SDK home). 'per_branch' = this branch has its own relocated SDK
+    // home under `branch-homes/<branchId>`. Stored as an intent enum, NOT a path
+    // — the path is derived from branch_id by a single resolver (getBranchHomePath)
+    // so it cannot drift or be injected. Sticky once set: the value here — not
+    // the live `execution.sandbox.sdk_home_mode` flag — governs whether an
+    // existing branch keeps its home (design §8B.3). Validated at the app layer.
+    sdk_home: text('sdk_home', { enum: ['per_branch'] }).$type<'per_branch'>(),
 
     // JSON blob for everything else
     data: t
@@ -861,15 +902,15 @@ export const branches = pgTable(
         mcp_server_ids?: string[];
 
         // DANGEROUS: opt-in to legacy session-spawn identity borrowing.
-        // When true, agor_sessions_spawn / agor_sessions_prompt(mode:"fork"|"subsession")
-        // attribute the new child session to the parent owner instead of the
-        // MCP-authenticated caller. See packages/core/src/types/branch.ts.
-        dangerously_allow_session_sharing?: boolean;
       }>()
       .notNull(),
   },
   (table) => ({
     tenantIdx: index('branches_tenant_id_idx').on(table.tenant_id),
+    tenantIdentityUnique: uniqueIndex('branches_tenant_branch_id_unique').on(
+      table.tenant_id,
+      table.branch_id
+    ),
     repoIdx: index('branches_repo_idx').on(table.repo_id),
     nameIdx: index('branches_name_idx').on(table.name),
     refIdx: index('branches_ref_idx').on(table.ref),
@@ -883,6 +924,15 @@ export const branches = pgTable(
       ),
     // Composite unique constraint (repo + name)
     uniqueRepoName: index('branches_repo_name_unique').on(table.repo_id, table.name),
+    primaryOwnerFk: foreignKey({
+      columns: [table.tenant_id, table.primary_owner_user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+      name: 'branches_tenant_primary_owner_fk',
+    }).onDelete('restrict'),
+    permissionBindingCheck: check(
+      'branches_permission_binding_check',
+      sql`${table.permission_binding} IN ('inherit','override')`
+    ),
   })
 );
 
@@ -1168,6 +1218,10 @@ export const users = pgTable(
   },
   (table) => ({
     tenantIdx: index('users_tenant_id_idx').on(table.tenant_id),
+    tenantIdentityUnique: uniqueIndex('users_tenant_user_id_unique').on(
+      table.tenant_id,
+      table.user_id
+    ),
     emailIdx: index('users_email_idx').on(table.email),
     emailTenantUnique: uniqueIndex('users_tenant_email_unique').on(table.tenant_id, table.email),
     executionHomeTenantUnique: uniqueIndex('users_tenant_unix_username_unique').on(
@@ -1234,6 +1288,10 @@ export const groups = pgTable(
   },
   (table) => ({
     tenantIdx: index('groups_tenant_id_idx').on(table.tenant_id),
+    tenantIdentityUnique: uniqueIndex('groups_tenant_group_id_unique').on(
+      table.tenant_id,
+      table.group_id
+    ),
     slugIdx: uniqueIndex('groups_tenant_slug_unique').on(table.tenant_id, table.slug),
     archivedIdx: index('groups_archived_idx').on(table.archived),
   })
@@ -1261,6 +1319,248 @@ export const groupMemberships = pgTable(
     tenantIdx: index('group_memberships_tenant_id_idx').on(table.tenant_id),
     pk: primaryKey({ columns: [table.group_id, table.user_id] }),
     userIdx: index('group_memberships_user_idx').on(table.user_id),
+  })
+);
+
+/** Board visibility/management policy. Branch defaults are stored separately. */
+export const boardAccessPolicies = pgTable(
+  'board_access_policies',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    board_id: varchar('board_id', { length: 36 }).primaryKey(),
+    schema_version: integer('schema_version').notNull().default(1),
+    sharing_mode: text('sharing_mode', { enum: ['private', 'shared'] }).notNull(),
+    others_role: text('others_role', { enum: ['none', 'viewer', 'editor', 'manager'] })
+      .notNull()
+      .default('none'),
+    revision: integer('revision').notNull().default(1),
+    updated_by: varchar('updated_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    boardFk: foreignKey({
+      columns: [table.tenant_id, table.board_id],
+      foreignColumns: [boards.tenant_id, boards.board_id],
+      name: 'board_access_policies_tenant_board_fk',
+    }).onDelete('cascade'),
+    tenantBoardUnique: uniqueIndex('board_access_policies_tenant_board_unique').on(
+      table.tenant_id,
+      table.board_id
+    ),
+    tenantIdx: index('board_access_policies_tenant_id_idx').on(table.tenant_id),
+    updatedIdx: index('board_access_policies_updated_idx').on(table.updated_at),
+    sharingModeCheck: check(
+      'board_access_policies_sharing_mode_check',
+      sql`${table.sharing_mode} IN ('private','shared')`
+    ),
+    othersRoleCheck: check(
+      'board_access_policies_others_role_check',
+      sql`${table.others_role} IN ('none','viewer','editor','manager')`
+    ),
+  })
+);
+
+/** One normalized user or group entry in a board policy. */
+export const boardAccessEntries = pgTable(
+  'board_access_entries',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    entry_id: varchar('entry_id', { length: 36 }).primaryKey(),
+    board_id: varchar('board_id', { length: 36 }).notNull(),
+    user_id: varchar('user_id', { length: 36 }),
+    group_id: varchar('group_id', { length: 36 }),
+    role: text('role', { enum: ['none', 'viewer', 'editor', 'manager'] }).notNull(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    boardFk: foreignKey({
+      columns: [table.tenant_id, table.board_id],
+      foreignColumns: [boardAccessPolicies.tenant_id, boardAccessPolicies.board_id],
+      name: 'board_access_entries_tenant_board_fk',
+    }).onDelete('cascade'),
+    userFk: foreignKey({
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+      name: 'board_access_entries_tenant_user_fk',
+    }).onDelete('cascade'),
+    groupFk: foreignKey({
+      columns: [table.tenant_id, table.group_id],
+      foreignColumns: [groups.tenant_id, groups.group_id],
+      name: 'board_access_entries_tenant_group_fk',
+    }).onDelete('cascade'),
+    tenantIdx: index('board_access_entries_tenant_id_idx').on(table.tenant_id),
+    boardIdx: index('board_access_entries_board_idx').on(table.board_id),
+    userIdx: index('board_access_entries_user_idx').on(
+      table.tenant_id,
+      table.user_id,
+      table.board_id
+    ),
+    groupIdx: index('board_access_entries_group_idx').on(
+      table.tenant_id,
+      table.group_id,
+      table.board_id
+    ),
+    boardUserUnique: uniqueIndex('board_access_entries_board_user_unique').on(
+      table.tenant_id,
+      table.board_id,
+      table.user_id
+    ),
+    boardGroupUnique: uniqueIndex('board_access_entries_board_group_unique').on(
+      table.tenant_id,
+      table.board_id,
+      table.group_id
+    ),
+    roleCheck: check(
+      'board_access_entries_role_check',
+      sql`${table.role} IN ('none','viewer','editor','manager')`
+    ),
+    principalCheck: check(
+      'board_access_entries_principal_check',
+      sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
+    ),
+  })
+);
+
+/** Complete board branch-template or branch-override permission package. */
+export const branchPermissionConfigs = pgTable(
+  'branch_permission_configs',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    config_id: varchar('config_id', { length: 36 }).primaryKey(),
+    board_id: varchar('board_id', { length: 36 }),
+    branch_id: varchar('branch_id', { length: 36 }),
+    schema_version: integer('schema_version').notNull().default(1),
+    sharing_mode: text('sharing_mode', { enum: ['private', 'shared'] }).notNull(),
+    others_role: text('others_role', {
+      enum: ['none', 'viewer', 'collaborator', 'manager'],
+    })
+      .notNull()
+      .default('none'),
+    others_fs_access: text('others_fs_access', { enum: ['none', 'read', 'write'] })
+      .notNull()
+      .default('none'),
+    allow_shared_session_prompts: t.bool('allow_shared_session_prompts').notNull().default(false),
+    revision: integer('revision').notNull().default(1),
+    updated_by: varchar('updated_by', { length: 36 }).references(() => users.user_id, {
+      onDelete: 'set null',
+    }),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    boardFk: foreignKey({
+      columns: [table.tenant_id, table.board_id],
+      foreignColumns: [boards.tenant_id, boards.board_id],
+      name: 'branch_permission_configs_tenant_board_fk',
+    }).onDelete('cascade'),
+    branchFk: foreignKey({
+      columns: [table.tenant_id, table.branch_id],
+      foreignColumns: [branches.tenant_id, branches.branch_id],
+      name: 'branch_permission_configs_tenant_branch_fk',
+    }).onDelete('cascade'),
+    tenantConfigUnique: uniqueIndex('branch_permission_configs_tenant_config_unique').on(
+      table.tenant_id,
+      table.config_id
+    ),
+    tenantIdx: index('branch_permission_configs_tenant_id_idx').on(table.tenant_id),
+    boardUnique: uniqueIndex('branch_permission_configs_board_unique').on(
+      table.tenant_id,
+      table.board_id
+    ),
+    branchUnique: uniqueIndex('branch_permission_configs_branch_unique').on(
+      table.tenant_id,
+      table.branch_id
+    ),
+    updatedIdx: index('branch_permission_configs_updated_idx').on(table.updated_at),
+    sharingModeCheck: check(
+      'branch_permission_configs_sharing_mode_check',
+      sql`${table.sharing_mode} IN ('private','shared')`
+    ),
+    othersFsAccessCheck: check(
+      'branch_permission_configs_others_fs_access_check',
+      sql`${table.others_fs_access} IN ('none','read','write')`
+    ),
+    othersRoleCheck: check(
+      'branch_permission_configs_others_role_check',
+      sql`${table.others_role} IN ('none','viewer','collaborator','manager')`
+    ),
+    targetCheck: check(
+      'branch_permission_configs_target_check',
+      sql`(${table.board_id} IS NOT NULL) <> (${table.branch_id} IS NOT NULL)`
+    ),
+  })
+);
+
+/** One normalized user or group entry in a branch permission package. */
+export const branchPermissionEntries = pgTable(
+  'branch_permission_entries',
+  {
+    tenant_id: text('tenant_id').notNull().default('default'),
+    entry_id: varchar('entry_id', { length: 36 }).primaryKey(),
+    config_id: varchar('config_id', { length: 36 }).notNull(),
+    user_id: varchar('user_id', { length: 36 }),
+    group_id: varchar('group_id', { length: 36 }),
+    role: text('role', { enum: ['none', 'viewer', 'collaborator', 'manager'] }).notNull(),
+    fs_access: text('fs_access', { enum: ['none', 'read', 'write'] })
+      .notNull()
+      .default('none'),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+  },
+  (table) => ({
+    configFk: foreignKey({
+      columns: [table.tenant_id, table.config_id],
+      foreignColumns: [branchPermissionConfigs.tenant_id, branchPermissionConfigs.config_id],
+      name: 'branch_permission_entries_tenant_config_fk',
+    }).onDelete('cascade'),
+    userFk: foreignKey({
+      columns: [table.tenant_id, table.user_id],
+      foreignColumns: [users.tenant_id, users.user_id],
+      name: 'branch_permission_entries_tenant_user_fk',
+    }).onDelete('cascade'),
+    groupFk: foreignKey({
+      columns: [table.tenant_id, table.group_id],
+      foreignColumns: [groups.tenant_id, groups.group_id],
+      name: 'branch_permission_entries_tenant_group_fk',
+    }).onDelete('cascade'),
+    tenantIdx: index('branch_permission_entries_tenant_id_idx').on(table.tenant_id),
+    configIdx: index('branch_permission_entries_config_idx').on(table.config_id),
+    userIdx: index('branch_permission_entries_user_idx').on(
+      table.tenant_id,
+      table.user_id,
+      table.config_id
+    ),
+    groupIdx: index('branch_permission_entries_group_idx').on(
+      table.tenant_id,
+      table.group_id,
+      table.config_id
+    ),
+    configUserUnique: uniqueIndex('branch_permission_entries_config_user_unique').on(
+      table.tenant_id,
+      table.config_id,
+      table.user_id
+    ),
+    configGroupUnique: uniqueIndex('branch_permission_entries_config_group_unique').on(
+      table.tenant_id,
+      table.config_id,
+      table.group_id
+    ),
+    fsAccessCheck: check(
+      'branch_permission_entries_fs_access_check',
+      sql`${table.fs_access} IN ('none','read','write')`
+    ),
+    roleCheck: check(
+      'branch_permission_entries_role_check',
+      sql`${table.role} IN ('none','viewer','collaborator','manager')`
+    ),
+    principalCheck: check(
+      'branch_permission_entries_principal_check',
+      sql`(${table.user_id} IS NOT NULL) <> (${table.group_id} IS NOT NULL)`
+    ),
   })
 );
 
@@ -1472,6 +1772,9 @@ export const mcpServers = pgTable(
         // that outlives the entry row.
         catalog_entry_name?: string;
 
+        // Daemon-owned optimistic-concurrency revision for public edits.
+        config_version?: number;
+
         // Transport config
         command?: string;
         args?: string[];
@@ -1507,20 +1810,21 @@ export const mcpServers = pgTable(
         // Discovered capabilities
         tools?: Array<{
           name: string;
-          description: string;
-          input_schema: Record<string, unknown>;
+          description?: string;
+          input_schema?: Record<string, unknown>;
         }>;
         resources?: Array<{
           uri: string;
           name: string;
+          description?: string;
           mimeType?: string;
         }>;
         prompts?: Array<{
           name: string;
-          description: string;
+          description?: string;
           arguments?: Array<{
             name: string;
-            description: string;
+            description?: string;
             required?: boolean;
           }>;
         }>;
@@ -2152,7 +2456,11 @@ export const gatewayChannels = pgTable(
     target_branch_id: varchar('target_branch_id', { length: 36 })
       .notNull()
       .references(() => branches.branch_id, { onDelete: 'cascade' }),
-    agor_user_id: varchar('agor_user_id', { length: 36 }).notNull(),
+    agor_user_id: varchar('agor_user_id', { length: 36 }),
+    // Discord installation identity is verified from the token-owned
+    // application and is globally unique only while a channel is enabled.
+    provider_installation_id: text('provider_installation_id'),
+    provider_config_generation: integer('provider_config_generation').notNull().default(1),
     channel_key: text('channel_key').notNull(),
     enabled: t.bool('enabled').notNull().default(true),
     last_message_at: t.timestamp('last_message_at'),
@@ -2189,6 +2497,11 @@ export const gatewayChannels = pgTable(
       table.tenant_id,
       table.channel_key
     ),
+    discordInstallationUnique: uniqueIndex('gateway_channels_discord_installation_unique')
+      .on(table.channel_type, table.provider_installation_id)
+      .where(
+        sql`${table.channel_type} = 'discord' AND ${table.enabled} = true AND ${table.provider_installation_id} IS NOT NULL`
+      ),
     enabledTypeIdx: index('idx_gateway_enabled_type').on(table.enabled, table.channel_type),
     listenerLeaseIdx: index('gateway_channels_listener_lease_idx').on(
       table.tenant_id,
@@ -2280,6 +2593,9 @@ export const threadSessionMap = pgTable(
 
     // JSON blob for extra metadata
     metadata: t.json<Record<string, unknown>>('metadata'),
+
+    // Durable Discord catch-up cursor. Provider history itself is never stored.
+    discord_last_admitted_message_id: text('discord_last_admitted_message_id'),
   },
   (table) => ({
     tenantIdx: index('thread_session_map_tenant_id_idx').on(table.tenant_id),
@@ -2291,6 +2607,69 @@ export const threadSessionMap = pgTable(
     sessionIdx: index('idx_thread_map_session_id').on(table.session_id),
     threadIdx: index('idx_thread_map_thread_id').on(table.thread_id),
     channelStatusIdx: index('idx_thread_map_channel_status').on(table.channel_id, table.status),
+  })
+);
+
+/**
+ * Narrow durable final-delivery intent for mapped Discord assistant messages.
+ * The message body is intentionally absent: workers reload canonical Messages
+ * and checkpoint only bounded provider receipts and aliases.
+ */
+export const discordMessageDeliveries = pgTable(
+  'discord_message_deliveries',
+  {
+    tenant_id: text('tenant_id').notNull(),
+    delivery_id: varchar('delivery_id', { length: 36 }).primaryKey(),
+    created_at: t.timestamp('created_at').notNull(),
+    updated_at: t.timestamp('updated_at').notNull(),
+    message_id: varchar('message_id', { length: 36 })
+      .notNull()
+      .references(() => messages.message_id, { onDelete: 'cascade' }),
+    gateway_channel_id: varchar('gateway_channel_id', { length: 36 })
+      .notNull()
+      .references(() => gatewayChannels.id, { onDelete: 'cascade' }),
+    thread_session_map_id: varchar('thread_session_map_id', { length: 36 })
+      .notNull()
+      .references(() => threadSessionMap.id, { onDelete: 'cascade' }),
+    provider_installation_id: text('provider_installation_id').notNull(),
+    provider_config_generation: integer('provider_config_generation').notNull(),
+    status: text('status', {
+      enum: ['pending', 'processing', 'completed', 'canceled', 'dead_letter'],
+    })
+      .notNull()
+      .default('pending'),
+    attempt_count: integer('attempt_count').notNull().default(0),
+    next_attempt_at: t.timestamp('next_attempt_at').notNull(),
+    claim_token: text('claim_token'),
+    claim_expires_at: t.timestamp('claim_expires_at'),
+    claim_generation: integer('claim_generation').notNull().default(0),
+    ambiguous_chunk_index: integer('ambiguous_chunk_index'),
+    effect_started_at: t.timestamp('effect_started_at'),
+    effect_recovery_grace_until: t.timestamp('effect_recovery_grace_until'),
+    chunk_receipts: t
+      .json<import('../types/gateway').DiscordMessageDeliveryChunkReceipt[]>('chunk_receipts')
+      .notNull(),
+    reply_aliases: t.json<string[]>('reply_aliases').notNull(),
+    last_error_code: text('last_error_code'),
+    completed_at: t.timestamp('completed_at'),
+    canceled_at: t.timestamp('canceled_at'),
+    dead_lettered_at: t.timestamp('dead_lettered_at'),
+  },
+  (table) => ({
+    tenantIdx: index('discord_message_deliveries_tenant_id_idx').on(table.tenant_id),
+    messageUnique: uniqueIndex('discord_message_deliveries_message_unique').on(table.message_id),
+    dueIdx: index('discord_message_deliveries_due_idx').on(
+      table.tenant_id,
+      table.status,
+      table.next_attempt_at,
+      table.delivery_id
+    ),
+    claimIdx: index('discord_message_deliveries_claim_idx').on(
+      table.tenant_id,
+      table.status,
+      table.claim_expires_at,
+      table.delivery_id
+    ),
   })
 );
 
@@ -2885,6 +3264,10 @@ export type GroupRow = typeof groups.$inferSelect;
 export type GroupInsert = typeof groups.$inferInsert;
 export type GroupMembershipRow = typeof groupMemberships.$inferSelect;
 export type GroupMembershipInsert = typeof groupMemberships.$inferInsert;
+export type BoardAccessPolicyRow = typeof boardAccessPolicies.$inferSelect;
+export type BoardAccessEntryRow = typeof boardAccessEntries.$inferSelect;
+export type BranchPermissionConfigRow = typeof branchPermissionConfigs.$inferSelect;
+export type BranchPermissionEntryRow = typeof branchPermissionEntries.$inferSelect;
 export type BranchGroupGrantRow = typeof branchGroupGrants.$inferSelect;
 export type BoardGroupGrantRow = typeof boardGroupGrants.$inferSelect;
 export type BoardOwnerRow = typeof boardOwners.$inferSelect;
@@ -2913,6 +3296,8 @@ export type GatewayChannelRow = typeof gatewayChannels.$inferSelect;
 export type GatewayChannelInsert = typeof gatewayChannels.$inferInsert;
 export type ThreadSessionMapRow = typeof threadSessionMap.$inferSelect;
 export type ThreadSessionMapInsert = typeof threadSessionMap.$inferInsert;
+export type DiscordMessageDeliveryRow = typeof discordMessageDeliveries.$inferSelect;
+export type DiscordMessageDeliveryInsert = typeof discordMessageDeliveries.$inferInsert;
 export type GatewayOutboundMessageRow = typeof gatewayOutboundMessages.$inferSelect;
 export type GatewayOutboundMessageInsert = typeof gatewayOutboundMessages.$inferInsert;
 export type GatewayInboundEventRow = typeof gatewayInboundEvents.$inferSelect;

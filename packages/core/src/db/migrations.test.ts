@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createClient } from '@libsql/client';
 import { describe, expect, it } from 'vitest';
-import { pendingOfflineCutoverMigrations } from './migrate';
+import { createDatabase } from './client';
+import { pendingOfflineCutoverMigrations, preflightSQLiteCapabilityPolicyOwners } from './migrate';
 
 interface JournalEntry {
   idx: number;
@@ -21,6 +22,37 @@ const readJournals = () =>
   );
 
 describe('Postgres migrations', () => {
+  it('starts the Discord hybrid migration with its transaction-local lock timeout', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0094_discord_gateway_hybrid.sql', import.meta.url),
+      'utf8'
+    );
+    const statements = migration
+      .split('--> statement-breakpoint')
+      .map((statement) => statement.trim())
+      .filter(Boolean);
+    expect(statements[0]).toBe("SET LOCAL lock_timeout = '3s';");
+    expect(
+      statements.filter((statement) => /^ALTER TABLE /i.test(statement)).length
+    ).toBeGreaterThan(0);
+    expect(migration.match(/SET LOCAL lock_timeout = '3s'/g)).toHaveLength(1);
+  });
+
+  it('treats the board/branch RBAC replacement as an offline incompatible cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0094_discord_gateway_hybrid'],
+        pending: ['0095_board_branch_capability_policies'],
+      })
+    ).toEqual(['0095_board_branch_capability_policies']);
+    expect(
+      pendingOfflineCutoverMigrations('sqlite', {
+        applied: ['0097_discord_gateway_hybrid'],
+        pending: ['0098_board_branch_capability_policies'],
+      })
+    ).toEqual(['0098_board_branch_capability_policies']);
+  });
+
   it('requires the Knowledge claim protocol migration to be an offline existing-db cutover', () => {
     expect(
       pendingOfflineCutoverMigrations('postgresql', {
@@ -261,6 +293,506 @@ describe('Postgres migrations', () => {
     );
     expect(migration).not.toMatch(/["`]state["`]\s/);
     expect(migration).not.toContain('raw_state');
+  });
+});
+
+describe('Board and branch capability-policy migration', () => {
+  const createLegacyTables = async (client: ReturnType<typeof createClient>) => {
+    await client.executeMultiple(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE users (user_id text PRIMARY KEY NOT NULL);
+      CREATE TABLE groups (group_id text PRIMARY KEY NOT NULL);
+      CREATE TABLE boards (
+        board_id text PRIMARY KEY NOT NULL, created_at integer NOT NULL, updated_at integer,
+        created_by text NOT NULL, data text NOT NULL
+      );
+      CREATE TABLE branches (
+        branch_id text PRIMARY KEY NOT NULL, board_id text, created_at integer NOT NULL,
+        updated_at integer, created_by text NOT NULL, permission_source text NOT NULL,
+        others_can text, others_fs_access text, data text NOT NULL
+      );
+      CREATE TABLE board_owners (
+        board_id text NOT NULL, user_id text NOT NULL, created_at integer,
+        PRIMARY KEY (board_id,user_id)
+      );
+      CREATE TABLE branch_owners (
+        branch_id text NOT NULL, user_id text NOT NULL, created_at integer,
+        PRIMARY KEY (branch_id,user_id)
+      );
+      CREATE TABLE board_group_grants (
+        board_id text NOT NULL, group_id text NOT NULL, can text NOT NULL,
+        fs_access text, created_at integer NOT NULL, updated_at integer,
+        PRIMARY KEY (board_id,group_id)
+      );
+      CREATE TABLE branch_group_grants (
+        branch_id text NOT NULL, group_id text NOT NULL, can text NOT NULL,
+        fs_access text, created_at integer NOT NULL, updated_at integer,
+        PRIMARY KEY (branch_id,group_id)
+      );
+    `);
+  };
+
+  it('backfills equal-or-less access, attributes owners, and retires legacy authority in SQLite', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-rbac-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+    try {
+      await createLegacyTables(client);
+      await client.executeMultiple(`
+        INSERT INTO users VALUES ('owner'),('manager'),('member');
+        INSERT INTO groups VALUES ('design');
+        INSERT INTO boards VALUES (
+          'board-1',1,2,'owner',
+          '{"access_mode":"shared","default_others_can":"prompt","default_others_fs_access":"write","default_dangerously_allow_session_sharing":true}'
+        );
+        INSERT INTO board_owners VALUES ('board-1','owner',1),('board-1','manager',2);
+        INSERT INTO board_group_grants VALUES ('board-1','design','all','write',1,2);
+        INSERT INTO branches VALUES (
+          'branch-1','board-1',1,2,'deleted-creator','override','prompt','write',
+          '{"dangerously_allow_session_sharing":true}'
+        );
+        INSERT INTO branch_owners VALUES ('branch-1','owner',1),('branch-1','manager',2);
+        INSERT INTO branch_group_grants VALUES ('branch-1','design','prompt','write',1,2);
+        INSERT INTO branches VALUES (
+          'branch-2','board-1',1,2,'member','board','none','none','{}'
+        );
+        INSERT INTO branch_owners VALUES ('branch-2','member',1),('branch-2','manager',2);
+        INSERT INTO branch_group_grants VALUES ('branch-2','design','prompt','read',1,2);
+        INSERT INTO branches VALUES (
+          'branch-3','board-1',1,2,'owner','board','none','none','{}'
+        );
+        INSERT INTO branch_owners VALUES ('branch-3','owner',1);
+      `);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0098_board_branch_capability_policies.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const owners = await client.execute(
+        `SELECT 'board:'||board_id AS resource,primary_owner_user_id FROM boards
+         UNION ALL SELECT 'branch:'||branch_id,primary_owner_user_id FROM branches`
+      );
+      expect(
+        Object.fromEntries(owners.rows.map((row) => [row.resource, row.primary_owner_user_id]))
+      ).toEqual({
+        'board:board-1': 'owner',
+        'branch:branch-1': 'owner',
+        'branch:branch-2': 'member',
+        'branch:branch-3': 'owner',
+      });
+
+      const boardGroup = await client.execute(
+        `SELECT role FROM board_access_entries WHERE board_id='board-1' AND group_id='design'`
+      );
+      expect(boardGroup.rows[0]).toMatchObject({ role: 'manager' });
+
+      const template = await client.execute(
+        `SELECT sharing_mode,others_role,others_fs_access
+         FROM branch_permission_configs WHERE board_id='board-1'`
+      );
+      expect(template.rows[0]).toMatchObject({
+        sharing_mode: 'shared',
+        others_role: 'collaborator',
+        others_fs_access: 'write',
+      });
+
+      const migratedGroup = await client.execute(
+        `SELECT role,fs_access FROM branch_permission_entries
+         WHERE group_id='design' AND config_id IN (
+           SELECT config_id FROM branch_permission_configs WHERE branch_id='branch-1'
+         )`
+      );
+      expect(migratedGroup.rows[0]).toMatchObject({ role: 'collaborator', fs_access: 'write' });
+      const bindings = await client.execute(
+        `SELECT branch_id,permission_binding FROM branches WHERE branch_id IN ('branch-2','branch-3') ORDER BY branch_id`
+      );
+      expect(bindings.rows).toEqual([
+        { branch_id: 'branch-2', permission_binding: 'override' },
+        { branch_id: 'branch-3', permission_binding: 'inherit' },
+      ]);
+      const inheritedMaterialization = await client.execute(
+        `SELECT role,fs_access,user_id,group_id FROM branch_permission_entries
+         WHERE config_id IN (SELECT config_id FROM branch_permission_configs WHERE branch_id='branch-2')
+         ORDER BY COALESCE(user_id,group_id)`
+      );
+      expect(inheritedMaterialization.rows).toEqual([
+        { role: 'manager', fs_access: 'write', user_id: null, group_id: 'design' },
+        { role: 'manager', fs_access: 'write', user_id: 'manager', group_id: null },
+        { role: 'manager', fs_access: 'write', user_id: 'owner', group_id: null },
+      ]);
+      const untouchedInheritedConfig = await client.execute(
+        `SELECT count(*) AS count FROM branch_permission_configs WHERE branch_id='branch-3'`
+      );
+      expect(Number(untouchedInheritedConfig.rows[0]?.count)).toBe(0);
+      const branchEntryColumns = await client.execute(
+        "SELECT name FROM pragma_table_info('branch_permission_entries')"
+      );
+      expect(branchEntryColumns.rows.map((row) => row.name)).toContain('role');
+      expect(branchEntryColumns.rows.map((row) => row.name)).not.toContain('capabilities');
+      const configColumns = await client.execute(
+        "SELECT name FROM pragma_table_info('branch_permission_configs')"
+      );
+      expect(configColumns.rows.map((row) => row.name)).toContain('others_role');
+      expect(configColumns.rows.map((row) => row.name)).not.toContain('others_capabilities');
+      const boardEntryColumns = await client.execute(
+        "SELECT name FROM pragma_table_info('board_access_entries')"
+      );
+      expect(boardEntryColumns.rows.map((row) => row.name)).toContain('role');
+      expect(boardEntryColumns.rows.map((row) => row.name)).not.toContain('capabilities');
+      const boardPolicyColumns = await client.execute(
+        "SELECT name FROM pragma_table_info('board_access_policies')"
+      );
+      expect(boardPolicyColumns.rows.map((row) => row.name)).toContain('others_role');
+      expect(boardPolicyColumns.rows.map((row) => row.name)).not.toContain('others_capabilities');
+      await expect(
+        client.execute("UPDATE branch_permission_entries SET role='editor' WHERE group_id='design'")
+      ).rejects.toThrow(/CHECK constraint failed/);
+      await expect(
+        client.execute("UPDATE board_access_entries SET role='collaborator'")
+      ).rejects.toThrow(/CHECK constraint failed/);
+      const migratedSchema = await client.execute(
+        `SELECT sql FROM sqlite_master
+         WHERE type='table' AND name IN (
+           'branches','board_access_policies','board_access_entries','branch_permission_configs',
+           'branch_permission_entries','branch_session_sharing_grants'
+         )`
+      );
+      const migratedSchemaSql = migratedSchema.rows.map((row) => String(row.sql)).join('\n');
+      for (const constraintName of [
+        'branches_permission_binding_check',
+        'board_access_policies_sharing_mode_check',
+        'board_access_policies_others_role_check',
+        'board_access_entries_role_check',
+        'board_access_entries_principal_check',
+        'branch_permission_configs_sharing_mode_check',
+        'branch_permission_configs_others_role_check',
+        'branch_permission_configs_others_fs_access_check',
+        'branch_permission_configs_target_check',
+        'branch_permission_entries_role_check',
+        'branch_permission_entries_fs_access_check',
+        'branch_permission_entries_principal_check',
+        'branch_session_sharing_grants_principal_check',
+      ]) {
+        expect(migratedSchemaSql).toMatch(
+          new RegExp(`CONSTRAINT ["\x60]?${constraintName}["\x60]? CHECK`)
+        );
+      }
+      await expect(
+        client.execute(
+          `INSERT INTO boards
+           (board_id,created_at,created_by,data,primary_owner_user_id)
+           VALUES ('orphan-board',3,'missing','{}','missing')`
+        )
+      ).rejects.toThrow(/board primary owner does not exist/i);
+      await expect(
+        client.execute(
+          `INSERT INTO branches
+           (branch_id,created_at,created_by,permission_source,data,primary_owner_user_id,permission_binding)
+           VALUES ('orphan-branch',3,'missing','override','{}','missing','override')`
+        )
+      ).rejects.toThrow(/branch primary owner does not exist/i);
+      const sharing = await client.execute(
+        'SELECT count(*) AS count FROM branch_session_sharing_rules'
+      );
+      expect(Number(sharing.rows[0]?.count)).toBe(0);
+
+      for (const table of [
+        'board_owners',
+        'branch_owners',
+        'board_group_grants',
+        'branch_group_grants',
+      ]) {
+        const rows = await client.execute(`SELECT count(*) AS count FROM ${table}`);
+        expect(Number(rows.rows[0]?.count)).toBe(0);
+      }
+      const retired = await client.execute(
+        `SELECT others_can,others_fs_access,json_extract(data,'$.dangerously_allow_session_sharing') AS sharing
+         FROM branches WHERE branch_id='branch-1'`
+      );
+      expect(retired.rows[0]).toEqual({
+        others_can: 'none',
+        others_fs_access: 'none',
+        sharing: 0,
+      });
+      const legacyBoardCompatibility = await client.execute(
+        `SELECT json_extract(data,'$.access_mode') AS access_mode,
+                json_extract(data,'$.default_others_can') AS others_can,
+                json_extract(data,'$.default_others_fs_access') AS fs_access,
+                json_extract(data,'$.default_dangerously_allow_session_sharing') AS sharing
+         FROM boards WHERE board_id='board-1'`
+      );
+      expect(legacyBoardCompatibility.rows[0]).toEqual({
+        access_mode: 'private',
+        others_can: 'none',
+        fs_access: 'none',
+        sharing: 0,
+      });
+      await expect(
+        client.execute(
+          `UPDATE branches SET primary_owner_user_id='manager' WHERE branch_id='branch-1'`
+        )
+      ).rejects.toThrow(/primary owner is immutable/);
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps private board fallbacks closed and prefers current owners in SQLite', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-rbac-private-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+    try {
+      await createLegacyTables(client);
+      await client.executeMultiple(`
+        INSERT INTO users VALUES ('owner'),('manager'),('removed-creator'),('unmatched');
+        INSERT INTO groups VALUES ('design');
+        INSERT INTO boards VALUES (
+          'private-board',1,2,'removed-creator',
+          '{"access_mode":"private","default_others_can":"session","default_others_fs_access":"write"}'
+        ),(
+          'creator-only-private',1,2,'removed-creator',
+          '{"access_mode":"private","default_others_can":"none","default_others_fs_access":"none"}'
+        );
+        INSERT INTO board_owners VALUES
+          ('private-board','owner',1),('private-board','manager',2),
+          ('creator-only-private','owner',1);
+        INSERT INTO board_group_grants VALUES
+          ('private-board','design','all','write',1,2);
+        INSERT INTO branches VALUES
+          ('inherited','private-board',1,2,'owner','board','session','write','{}'),
+          ('removed-creator',NULL,1,2,'removed-creator','override','none','none','{}'),
+          ('nullable-owner-order',NULL,1,2,'removed-creator','override','none','none','{}');
+        INSERT INTO branch_owners VALUES
+          ('inherited','owner',1),
+          ('removed-creator','manager',3),
+          ('nullable-owner-order','manager',NULL),
+          ('nullable-owner-order','owner',5);
+      `);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0098_board_branch_capability_policies.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const owners = await client.execute(
+        `SELECT 'board:'||board_id AS resource,primary_owner_user_id FROM boards
+         UNION ALL SELECT 'branch:'||branch_id,primary_owner_user_id FROM branches`
+      );
+      expect(
+        Object.fromEntries(owners.rows.map((row) => [row.resource, row.primary_owner_user_id]))
+      ).toMatchObject({
+        'board:private-board': 'owner',
+        'board:creator-only-private': 'owner',
+        'branch:inherited': 'owner',
+        'branch:removed-creator': 'manager',
+        'branch:nullable-owner-order': 'owner',
+      });
+
+      const template = await client.execute(
+        `SELECT sharing_mode,others_role,others_fs_access
+         FROM branch_permission_configs WHERE board_id='private-board'`
+      );
+      // Named current owners require a shared package, but private-board
+      // defaults must never turn into an unmatched-member fallback.
+      expect(template.rows[0]).toMatchObject({
+        sharing_mode: 'shared',
+        others_role: 'none',
+        others_fs_access: 'none',
+      });
+      const binding = await client.execute(
+        `SELECT permission_binding FROM branches WHERE branch_id='inherited'`
+      );
+      expect(binding.rows[0]).toMatchObject({ permission_binding: 'inherit' });
+      const ignoredGroup = await client.execute(
+        `SELECT count(*) AS count FROM branch_permission_entries e
+         JOIN branch_permission_configs c ON c.config_id=e.config_id
+         WHERE c.board_id='private-board' AND e.group_id='design'`
+      );
+      expect(Number(ignoredGroup.rows[0]?.count)).toBe(0);
+      const creatorGrant = await client.execute(
+        `SELECT role FROM board_access_entries
+         WHERE board_id='private-board' AND user_id='removed-creator'`
+      );
+      expect(creatorGrant.rows[0]).toEqual({ role: 'manager' });
+      const creatorOnlyPolicy = await client.execute(
+        `SELECT p.sharing_mode,p.others_role,e.role
+         FROM board_access_policies p
+         JOIN board_access_entries e ON e.board_id=p.board_id AND e.user_id='removed-creator'
+         WHERE p.board_id='creator-only-private'`
+      );
+      expect(creatorOnlyPolicy.rows[0]).toEqual({
+        sharing_mode: 'shared',
+        others_role: 'none',
+        role: 'manager',
+      });
+      const unmatchedLegacyVisibility = await client.execute(
+        `SELECT count(*) AS count FROM boards
+         WHERE created_by='unmatched'
+            OR COALESCE(json_extract(data,'$.access_mode'),'shared')='shared'
+            OR EXISTS (
+              SELECT 1 FROM board_owners
+              WHERE board_owners.board_id=boards.board_id AND board_owners.user_id='unmatched'
+            )
+            OR EXISTS (
+              SELECT 1 FROM branches
+              WHERE branches.board_id=boards.board_id
+                AND branches.permission_source='override'
+                AND branches.others_can<>'none'
+            )`
+      );
+      expect(Number(unmatchedLegacyVisibility.rows[0]?.count)).toBe(0);
+
+      await expect(
+        client.execute(
+          `UPDATE branches SET permission_binding='corrupt' WHERE branch_id='inherited'`
+        )
+      ).rejects.toThrow(/CHECK constraint failed/);
+      await expect(
+        client.execute(
+          `UPDATE branch_permission_configs SET others_fs_access='execute' WHERE board_id='private-board'`
+        )
+      ).rejects.toThrow(/CHECK constraint failed/);
+      await expect(client.execute(`DELETE FROM users WHERE user_id='owner'`)).rejects.toThrow(
+        /owns protected boards or branches/
+      );
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when SQLite cannot attribute a primary owner', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-rbac-owner-preflight-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+    try {
+      await createLegacyTables(client);
+      await client.execute(
+        `INSERT INTO branches VALUES ('orphan',NULL,1,1,'missing','override','none','none','{}')`
+      );
+      const db = createDatabase({ url: `file:${join(directory, 'migration.db')}` });
+      await expect(preflightSQLiteCapabilityPolicyOwners(db)).rejects.toThrow(/branch:orphan/);
+      await (db as unknown as { $client: { close(): Promise<void> } }).$client.close();
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0098_board_branch_capability_policies.sql', import.meta.url),
+        'utf8'
+      );
+      let failed = false;
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (!statement.trim()) continue;
+        try {
+          await client.execute(statement);
+        } catch (error) {
+          failed = true;
+          expect(String(error)).toMatch(/constraint/i);
+          break;
+        }
+      }
+      expect(failed).toBe(true);
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('forces tenant RLS and reports unattributed object IDs in PostgreSQL', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0095_board_branch_capability_policies.sql', import.meta.url),
+      'utf8'
+    );
+    for (const table of [
+      'board_access_policies',
+      'board_access_entries',
+      'branch_permission_configs',
+      'branch_permission_entries',
+      'branch_session_sharing_rules',
+      'branch_session_sharing_grants',
+    ]) {
+      expect(migration).toContain(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
+      expect(migration).toContain(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
+      expect(migration).toContain(`tenant_isolation_${table}`);
+    }
+    expect(migration).toContain("string_agg(kind||':'||id");
+    expect(migration).toContain('RBAC migration cannot attribute primary owners');
+    expect(migration).toContain("SET LOCAL lock_timeout = '3s'");
+    expect(migration).toContain('ORDER BY bo.created_at NULLS LAST,bo.user_id');
+    expect(migration).toContain('CONSTRAINT "boards_tenant_primary_owner_fk"');
+    expect(migration).toContain('CONSTRAINT "branches_tenant_primary_owner_fk"');
+    expect(migration).toContain("CHECK (\"permission_binding\" IN ('inherit','override'))");
+    expect(migration).toContain("CHECK (\"sharing_mode\" IN ('private','shared'))");
+    expect(migration).toContain("CHECK (\"others_fs_access\" IN ('none','read','write'))");
+    expect(migration).toContain("CHECK (\"fs_access\" IN ('none','read','write'))");
+    expect(migration).toContain('"access_mode":"private"');
+    expect(migration).toContain('"default_others_can":"none"');
+    expect(migration).toContain('"others_role" text');
+    expect(migration).toContain('"role" text');
+    expect(migration).not.toContain('"capabilities" jsonb');
+    expect(migration).not.toContain('"others_capabilities"');
+    expect(migration).toContain(
+      'FOREIGN KEY ("tenant_id","board_id") REFERENCES "board_access_policies"("tenant_id","board_id")'
+    );
+    expect(migration).toContain(
+      'FOREIGN KEY ("tenant_id","config_id") REFERENCES "branch_permission_configs"("tenant_id","config_id")'
+    );
+    expect(migration).toContain(
+      'FOREIGN KEY ("tenant_id","config_id","session_owner_user_id") REFERENCES "branch_session_sharing_rules"("tenant_id","config_id","session_owner_user_id")'
+    );
+  });
+
+  it('replaces personal grants with closed shared-session switches in SQLite', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'agor-session-sharing-migration-'));
+    const client = createClient({ url: `file:${join(directory, 'migration.db')}` });
+    try {
+      await client.executeMultiple(`
+        CREATE TABLE branch_permission_configs (config_id text PRIMARY KEY NOT NULL);
+        CREATE TABLE branch_session_sharing_rules (
+          config_id text NOT NULL, session_owner_user_id text NOT NULL,
+          PRIMARY KEY (config_id,session_owner_user_id)
+        );
+        CREATE TABLE branch_session_sharing_grants (grant_id text PRIMARY KEY NOT NULL);
+        CREATE TABLE app_variables (namespace text NOT NULL, key text NOT NULL);
+        CREATE TABLE branches (branch_id text PRIMARY KEY NOT NULL, data text NOT NULL);
+        CREATE TABLE boards (board_id text PRIMARY KEY NOT NULL, data text NOT NULL);
+        INSERT INTO branch_permission_configs VALUES ('config-1');
+        INSERT INTO branch_session_sharing_rules VALUES ('config-1','owner-1');
+        INSERT INTO branch_session_sharing_grants VALUES ('grant-1');
+        INSERT INTO app_variables VALUES ('workspace_preferences','personal_session_sharing_enabled');
+        INSERT INTO branches VALUES ('branch-1','{"dangerously_allow_session_sharing":true,"keep":1}');
+        INSERT INTO boards VALUES ('board-1','{"default_dangerously_allow_session_sharing":true,"keep":1}');
+      `);
+      const migration = await readFile(
+        new URL('../../drizzle/sqlite/0102_shared_session_prompting.sql', import.meta.url),
+        'utf8'
+      );
+      for (const statement of migration.split('--> statement-breakpoint')) {
+        if (statement.trim()) await client.execute(statement);
+      }
+
+      const config = await client.execute(
+        'SELECT allow_shared_session_prompts FROM branch_permission_configs'
+      );
+      expect(config.rows).toEqual([{ allow_shared_session_prompts: 0 }]);
+      const tables = await client.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'branch_session_sharing_%'"
+      );
+      expect(tables.rows).toEqual([]);
+      const preference = await client.execute('SELECT count(*) AS count FROM app_variables');
+      expect(Number(preference.rows[0]?.count)).toBe(0);
+      const legacyJson = await client.execute(`
+        SELECT json_extract(data,'$.dangerously_allow_session_sharing') AS branch_sharing,
+               json_extract((SELECT data FROM boards WHERE board_id='board-1'),
+                            '$.default_dangerously_allow_session_sharing') AS board_sharing,
+               json_extract(data,'$.keep') AS kept
+        FROM branches WHERE branch_id='branch-1'
+      `);
+      expect(legacyJson.rows[0]).toEqual({ branch_sharing: null, board_sharing: null, kept: 1 });
+    } finally {
+      client.close();
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 
@@ -534,5 +1066,118 @@ describe('MCP catalog install identity migration', () => {
     expect(sqlite).toContain('owner_user_id` IS loser.`owner_user_id');
     expect(sqlite).toContain("coalesce(`owner_user_id`,'')");
     expect(postgres).toContain('coalesce("owner_user_id",\'\')');
+  });
+});
+
+describe('MCP stdio transport repair migrations', () => {
+  it('removes only remote fields from SQLite stdio rows', async () => {
+    const client = createClient({ url: ':memory:' });
+    await client.executeMultiple(`
+      CREATE TABLE mcp_servers (
+        mcp_server_id text PRIMARY KEY,
+        transport text NOT NULL,
+        tenant_id text NOT NULL,
+        data text NOT NULL
+      );
+      CREATE TABLE user_mcp_oauth_tokens (
+        user_id text,
+        mcp_server_id text NOT NULL,
+        oauth_access_token text NOT NULL
+      );
+      CREATE TABLE mcp_oauth_pending_flows (
+        attempt_id text PRIMARY KEY,
+        mcp_server_id text NOT NULL,
+        sealed_material text
+      );
+      INSERT INTO mcp_servers VALUES (
+        'legacy-stdio',
+        'stdio',
+        'tenant-a',
+        '{"command":"mcp-server-shortcut","args":[""],"env":{"SHORTCUT_API_TOKEN":"{{ user.env.SHORTCUT_API_TOKEN }}"},"auth":{"type":"bearer","token":"obsolete"},"url":"https://unused.example","headers":{"X-Unused":"obsolete"},"config_version":7}'
+      );
+      INSERT INTO mcp_servers VALUES (
+        'clean-stdio',
+        'stdio',
+        'tenant-b',
+        '{"command":"other-server","env":{"TOKEN":"{{ user.env.OTHER_TOKEN }}"}}'
+      );
+      INSERT INTO mcp_servers VALUES (
+        'remote',
+        'http',
+        'tenant-a',
+        '{"url":"https://mcp.example.com","headers":{"X-Key":"kept"},"auth":{"type":"bearer","token":"kept"}}'
+      );
+      INSERT INTO user_mcp_oauth_tokens VALUES
+        ('user-a', 'legacy-stdio', 'obsolete-legacy-grant'),
+        ('user-b', 'clean-stdio', 'obsolete-clean-grant'),
+        ('user-a', 'remote', 'kept-remote-grant');
+      INSERT INTO mcp_oauth_pending_flows VALUES
+        ('legacy-flow', 'legacy-stdio', 'obsolete-legacy-sealed-material'),
+        ('clean-flow', 'clean-stdio', 'obsolete-clean-sealed-material'),
+        ('remote-flow', 'remote', 'kept-remote-sealed-material');
+    `);
+
+    const migration = await readFile(
+      new URL('../../drizzle/sqlite/0099_strip_stdio_remote_fields.sql', import.meta.url),
+      'utf8'
+    );
+    await client.executeMultiple(migration.replaceAll('--> statement-breakpoint', ''));
+
+    const rows = await client.execute(
+      'SELECT mcp_server_id, tenant_id, data FROM mcp_servers ORDER BY mcp_server_id'
+    );
+    const decoded = Object.fromEntries(
+      rows.rows.map((row) => [row.mcp_server_id, JSON.parse(row.data as string)])
+    );
+    expect(decoded['legacy-stdio']).toEqual({
+      command: 'mcp-server-shortcut',
+      args: [''],
+      env: { SHORTCUT_API_TOKEN: '{{ user.env.SHORTCUT_API_TOKEN }}' },
+      config_version: 7,
+    });
+    expect(decoded['clean-stdio']).toEqual({
+      command: 'other-server',
+      env: { TOKEN: '{{ user.env.OTHER_TOKEN }}' },
+    });
+    expect(decoded.remote).toEqual({
+      url: 'https://mcp.example.com',
+      headers: { 'X-Key': 'kept' },
+      auth: { type: 'bearer', token: 'kept' },
+    });
+    expect(rows.rows.map((row) => [row.mcp_server_id, row.tenant_id])).toEqual([
+      ['clean-stdio', 'tenant-b'],
+      ['legacy-stdio', 'tenant-a'],
+      ['remote', 'tenant-a'],
+    ]);
+    const grants = await client.execute(
+      'SELECT mcp_server_id FROM user_mcp_oauth_tokens ORDER BY mcp_server_id'
+    );
+    expect(grants.rows.map((row) => row.mcp_server_id)).toEqual(['remote']);
+    const pendingFlows = await client.execute(
+      'SELECT mcp_server_id, sealed_material FROM mcp_oauth_pending_flows ORDER BY mcp_server_id'
+    );
+    expect(pendingFlows.rows).toEqual([
+      {
+        mcp_server_id: 'remote',
+        sealed_material: 'kept-remote-sealed-material',
+      },
+    ]);
+    client.close();
+  });
+
+  it('bounds the PostgreSQL cross-tenant repair to a temporary exact capability', async () => {
+    const migration = await readFile(
+      new URL('../../drizzle/postgres/0096_strip_stdio_remote_fields.sql', import.meta.url),
+      'utf8'
+    );
+
+    expect(migration).toContain(`SET "data" = server."data" - 'auth' - 'url' - 'headers'`);
+    expect(migration).toContain(`WHERE "transport" = 'stdio'`);
+    expect(migration).toContain('DELETE FROM "user_mcp_oauth_tokens"');
+    expect(migration).toContain('DELETE FROM "mcp_oauth_pending_flows"');
+    expect(migration).toContain("= 'stdio_remote_repair_0096'");
+    expect(migration.match(/CREATE POLICY "stdio_repair_0096_/g)).toHaveLength(6);
+    expect(migration.match(/DROP POLICY "stdio_repair_0096_/g)).toHaveLength(6);
+    expect(migration).toContain("SELECT set_config('agor.system_scope', '', true)");
   });
 });

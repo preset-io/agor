@@ -51,6 +51,12 @@ variants with `LOAD_FIXTURES=true` added next to `SEED=true`. Select one via the
 `agor_environment_set({ branchId, variant: "sqlite-demo", andStart: true })`, or at
 branch creation with `variant: "sqlite-demo"`.
 
+Managed standalone variants explicitly acknowledge offline-cutover migrations
+before their one daemon starts. Existing rendered variants are recognized by
+their development-only `SEED=true` setting. This convenience applies only to
+the variant's isolated Compose database volume; never use seeding or the
+cutover acknowledgement against a shared or production database.
+
 Both are off by default and can be enabled independently. With `LOAD_FIXTURES`,
 extra demo logins are available (passwords printed in the seed log):
 

@@ -3,6 +3,28 @@
  */
 
 export {
+  assertValidMCPAuthPatch,
+  MCPAuthValidationError,
+  mergeMCPAuth,
+  replaceMCPAuth,
+} from '../tools/mcp/auth-patch';
+export {
+  asMCPExternalError,
+  isMCPAbortError,
+  MCPExternalError,
+  type MCPExternalErrorAction,
+  type MCPExternalErrorCategory,
+  type MCPExternalErrorStage,
+  type SanitizedMCPExternalError,
+  sanitizeMCPExternalError,
+} from '../tools/mcp/external-error';
+export {
+  assertValidDiscoveredMCPCapabilities,
+  assertValidEffectiveMCPServer,
+  assertValidMCPServerWrite,
+  MCPServerWriteValidationError,
+} from '../tools/mcp/server-validation';
+export {
   canConfigureMCPServers,
   isAtLeastMemberRole,
   isMcpGrantSubjectEntitled,
@@ -22,16 +44,22 @@ export {
   AGOR_MCP_SERVER_NAME,
   getMcpServersForSession,
   type MCPAuthHeadersRepository,
+  MCPOAuthAuthorityUnavailableError,
+  type MCPOAuthAuthResolution,
   type MCPResolutionDeps,
   type MCPScopingServerRepository,
   type MCPScopingSessionRepository,
   type MCPServerWithSource,
+  resolveScopedMCPAuthHeaders,
 } from './scoping';
 export {
   buildMCPTemplateContextFromEnv,
   containsTemplate,
+  extractMCPTemplateDependencies,
+  hasTemplateMarker,
   isUserEnvPlaceholder,
   type MCPTemplateContext,
+  type MCPTemplateDependencies,
   type MCPTemplateResolutionResult,
   resolveMcpServerEnv,
   resolveMcpServersTemplates,

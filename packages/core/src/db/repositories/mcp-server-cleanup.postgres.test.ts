@@ -124,5 +124,34 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         ).resolves.not.toBeNull();
       });
     });
+
+    it('atomically merges independent tool decisions on PostgreSQL', async () => {
+      const tenantId = `mcp-tools-${generateId()}`;
+      await runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
+        const user = await new UsersRepository(scoped).create({
+          email: `${generateId()}@example.com`,
+          name: 'Tool owner',
+        });
+        const repo = new MCPServerRepository(scoped);
+        const server = await repo.create({
+          name: 'postgres-tools',
+          transport: 'http',
+          url: 'https://example.test/mcp',
+          scope: 'session',
+          source: 'user',
+          owner_user_id: user.user_id as UserID,
+        });
+        await repo.update(server.mcp_server_id, {
+          tool_permissions: { hidden_rule: 'ask' },
+        });
+        await Promise.all([
+          repo.setOwnedToolEnabled(server.mcp_server_id, user.user_id as UserID, 'a', false),
+          repo.setOwnedToolEnabled(server.mcp_server_id, user.user_id as UserID, 'b', false),
+        ]);
+        await expect(repo.findById(server.mcp_server_id)).resolves.toMatchObject({
+          tool_permissions: { a: 'deny', b: 'deny', hidden_rule: 'ask' },
+        });
+      });
+    });
   }
 );

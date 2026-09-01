@@ -6,9 +6,10 @@ import {
   LoadingOutlined,
 } from '@ant-design/icons';
 import { Alert, Button, Flex, Tooltip, Typography, theme } from 'antd';
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAuthorityOperationGuard } from '../../hooks/useAuthorityOperationGuard';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
-import { useCopyToClipboard } from '../../utils/clipboard';
+import { copyToClipboard } from '../../utils/clipboard';
 
 const { Text } = Typography;
 const { useToken } = theme;
@@ -48,6 +49,7 @@ export interface CodexDeviceSignInProps {
    * — that would wall off re-signing-in until the daemon prunes the attempt.
    */
   autoStart?: boolean;
+  operationScope?: readonly unknown[] | null;
 }
 
 /**
@@ -61,6 +63,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   onVerified,
   onUseFallback,
   autoStart = true,
+  operationScope,
 }: CodexDeviceSignInProps) {
   const { token } = useToken();
   const [status, setStatus] = useState<CodexDeviceAuthStatus>({ phase: 'idle' });
@@ -70,7 +73,8 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   // dev URLs (non-secure context) AntD awaits navigator.clipboard's rejection
   // first, which consumes the click's user activation and makes its execCommand
   // fallback fail too. copyToClipboard tries execCommand first when insecure.
-  const [codeCopied, copyCode] = useCopyToClipboard();
+  const [codeCopied, setCodeCopied] = useState(false);
+  const copiedResetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const deviceService = useMemo(
     () =>
@@ -92,14 +96,46 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   // then decides what THIS service should show — and resets `starting` because a
   // replacement that ADOPTS an attempt never calls requestCode, so without the
   // reset the spinner would cover a live code.
-  const { run, isCurrent } = useIdentityGuardedAsync([deviceService], () => {
-    setStarting(false);
-    setStatus({ phase: 'idle' });
-    setRemainingMs(null);
-  });
+  const effectiveOperationScope =
+    operationScope === undefined ? ([deviceService] as const) : operationScope;
+  const operationAvailable = effectiveOperationScope !== null;
+  const authorityGuard = useAuthorityOperationGuard(effectiveOperationScope);
+  const { run, isCurrent } = useIdentityGuardedAsync(
+    [deviceService, ...(effectiveOperationScope ?? [null])],
+    () => {
+      if (copiedResetRef.current) clearTimeout(copiedResetRef.current);
+      copiedResetRef.current = null;
+      setCodeCopied(false);
+      setStarting(false);
+      setStatus({ phase: 'idle' });
+      setRemainingMs(null);
+    }
+  );
+
+  const copyCode = useCallback(
+    async (code: string) => {
+      const operation = authorityGuard.begin();
+      if (!operation.isCurrent()) return;
+      const copied = await copyToClipboard(code);
+      if (!operation.isCurrent() || !copied) return;
+      if (copiedResetRef.current) clearTimeout(copiedResetRef.current);
+      setCodeCopied(true);
+      copiedResetRef.current = setTimeout(() => {
+        if (operation.isCurrent()) setCodeCopied(false);
+      }, 2_000);
+    },
+    [authorityGuard]
+  );
+
+  useEffect(
+    () => () => {
+      if (copiedResetRef.current) clearTimeout(copiedResetRef.current);
+    },
+    []
+  );
 
   const requestCode = useCallback(async () => {
-    if (!deviceService) return;
+    if (!deviceService || !operationAvailable || !authorityGuard.isCurrent()) return;
     setStarting(true);
     try {
       const next = (await run(() => deviceService.create({}))) as CodexDeviceAuthStatus;
@@ -115,7 +151,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
     } finally {
       setStarting(false);
     }
-  }, [deviceService, run]);
+  }, [authorityGuard, deviceService, operationAvailable, run]);
 
   const cancelAttempt = useCallback(async () => {
     if (!deviceService || !status.attemptId) return;
@@ -139,7 +175,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   // and `run` (service swap): a find() resolving after the service swapped never
   // restores the previous client's code — matching requestCode's own guard.
   useEffect(() => {
-    if (!deviceService) return;
+    if (!deviceService || !operationAvailable) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -159,7 +195,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
     return () => {
       cancelled = true;
     };
-  }, [deviceService, requestCode, autoStart, run]);
+  }, [deviceService, requestCode, autoStart, run, operationAvailable]);
 
   // Poll while pending; terminal phases stop the loop. A self-scheduling
   // timeout (next poll armed only after the previous response lands) keeps
@@ -167,7 +203,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   // out-of-order pending. Identity-preserving setState keeps unchanged polls
   // from re-rendering even this pane.
   useEffect(() => {
-    if (status.phase !== 'pending' || !deviceService) return;
+    if (status.phase !== 'pending' || !deviceService || !operationAvailable) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
@@ -192,7 +228,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [status.phase, deviceService, isCurrent]);
+  }, [status.phase, deviceService, isCurrent, operationAvailable]);
 
   // 1s countdown while a code is live.
   useEffect(() => {
@@ -208,8 +244,8 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   }, [status.phase, status.expiresAt]);
 
   useEffect(() => {
-    if (status.phase === 'success') onVerified();
-  }, [status.phase, onVerified]);
+    if (status.phase === 'success' && authorityGuard.isCurrent()) onVerified();
+  }, [authorityGuard, status.phase, onVerified]);
 
   if (starting || (status.phase === 'idle' && autoStart)) {
     return (
@@ -227,7 +263,7 @@ export const CodexDeviceSignIn = memo(function CodexDeviceSignIn({
   if (status.phase === 'idle') {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
-        <Button type="primary" disabled={!client} onClick={requestCode}>
+        <Button type="primary" disabled={!client || !operationAvailable} onClick={requestCode}>
           Get a sign-in code
         </Button>
         {!client && (

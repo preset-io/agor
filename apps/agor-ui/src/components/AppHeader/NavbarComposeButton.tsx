@@ -13,7 +13,6 @@ import {
   getDefaultPermissionMode,
   getTeammateConfig,
   mapToCodexPermissionConfig,
-  resolveUserPrimaryAgenticTool,
 } from '@agor-live/client';
 import { BulbOutlined, CloseOutlined, EditOutlined, RobotOutlined } from '@ant-design/icons';
 import {
@@ -29,13 +28,12 @@ import {
   theme,
 } from 'antd';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
 import type { NewSessionConfig, SessionCreationResult } from '../../domain/sessionCreation';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
 import { useIdentityGuardedAsync } from '../../hooks/useIdentityGuardedAsync';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
 import { useAgorStore } from '../../store/agorStore';
-import { selectBoardById, selectMcpServerById, selectUserById } from '../../store/selectors';
+import { selectMcpServerById, selectUserById } from '../../store/selectors';
 import { AgenticConfigChipRow } from '../AgenticConfigChipRow';
 import { buildConfigFromFormValues, getFormValuesFromConfig } from '../AgenticToolConfigForm';
 import { INLINE_AGENTIC_CONFIGURATION } from '../AgenticToolConfigurationPicker';
@@ -44,6 +42,7 @@ import {
   getUserDefaultConfigurationSource,
 } from '../AgenticToolConfigurationPicker/useAgenticConfigurationSources';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../AgentSelectionGrid';
+import { resolveAvailableUserAgenticTool } from '../AgentSelectionGrid/availableAgents';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
 import { SessionAttachmentTray } from '../SessionPanel/SessionAttachmentTray';
 import { SessionComposerDropZone } from '../SessionPanel/SessionComposerDropZone';
@@ -66,11 +65,6 @@ export interface NavbarComposeButtonProps {
     boardId: string
   ) => Promise<SessionCreationResult | null>;
   disabled?: boolean;
-}
-
-/** Knowledge Base renders no board even when a board id lingers in app state. */
-function isKnowledgePath(pathname: string): boolean {
-  return ['/knowledge', '/kb'].some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 
 function teammateName(branch: Branch): string {
@@ -101,7 +95,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
   const { message } = AntApp.useApp();
   const [form] = Form.useForm();
   const navigation = useAppNavigation();
-  const location = useLocation();
   const sessionCreationGuard = useIdentityGuardedAsync([
     currentUser?.user_id,
     authenticationGeneration,
@@ -109,7 +102,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
 
   const mcpServerById = useAgorStore(selectMcpServerById);
   const userById = useAgorStore(selectUserById);
-  const boardById = useAgorStore(selectBoardById);
+  const agenticToolSettings = useAgorStore((state) => state.agenticToolSettingsByName);
 
   const [open, setOpen] = useState(false);
   const [resolving, setResolving] = useState(false);
@@ -131,8 +124,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     });
   const mcpEditedRef = useRef(false);
   const mcpInitializedBranchIdRef = useRef<string | null>(null);
-
-  const onBoardSurface = !!currentBoardId && !isKnowledgePath(location.pathname);
 
   // One lightweight tinted-box treatment, shared by the tip and the no-primary banner.
   const bannerBox: React.CSSProperties = {
@@ -196,7 +187,11 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     if (!open) return;
     mcpEditedRef.current = false;
     mcpInitializedBranchIdRef.current = null;
-    const primaryTool = resolveUserPrimaryAgenticTool(currentUser);
+    const primaryTool = resolveAvailableUserAgenticTool(
+      currentUser,
+      agenticToolSettings,
+      AVAILABLE_AGENTS
+    );
     setSelectedAgent(primaryTool);
     const agentDefaults = getUserAgenticToolDefault(currentUser, primaryTool).configuration;
     form.resetFields();
@@ -367,16 +362,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
     submitting !== null ||
     (!prompt.trim() && attachments.length === 0);
 
-  const wayfinding = (() => {
-    if (!primaryBranch) return null;
-    const name = teammateName(primaryBranch);
-    const board = primaryBranch.board_id ? boardById.get(primaryBranch.board_id) : undefined;
-    if (onBoardSurface && primaryBranch.board_id && primaryBranch.board_id !== currentBoardId) {
-      return `→ Opens on ${name}${board ? ` · ${board.name}` : ''}`;
-    }
-    return null;
-  })();
-
   const triggerEmoji = (primaryBranch && teammateEmoji(primaryBranch)) || '🤖';
   const boardPhrase = primaryBranch
     ? `${teammateName(primaryBranch)}'s board`
@@ -472,6 +457,7 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
             branchId={primaryBranch?.branch_id}
             validateModelSelection
             showEffort
+            collapsibleChips
             onConfigValidityChange={handleConfigValidity}
             leadingField={
               <Form.Item label="Coding agent" style={{ marginBottom: token.marginSM }}>
@@ -516,14 +502,6 @@ export const NavbarComposeButton: React.FC<NavbarComposeButtonProps> = ({
             </SessionComposerDropZone>
           </Form.Item>
 
-          {wayfinding && (
-            <Typography.Text
-              type="secondary"
-              style={{ fontSize: token.fontSizeSM, display: 'block', marginBottom: token.marginXS }}
-            >
-              {wayfinding}
-            </Typography.Text>
-          )}
           {!primaryBranch && pendingSend && (
             <Typography.Text
               type="secondary"

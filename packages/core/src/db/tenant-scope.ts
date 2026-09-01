@@ -252,7 +252,8 @@ export async function runWithTenantDatabaseScope<T>(
 export async function runWithTenantDatabaseTransaction<T>(
   db: TenantScopeAwareDatabase | RawDatabase | Database,
   tenantId: TenantID | string | undefined,
-  work: (db: TenantScopedDatabase) => Promise<T>
+  work: (db: TenantScopedDatabase) => Promise<T>,
+  options: { postgresIsolationLevel?: 'repeatable read' | 'serializable' } = {}
 ): Promise<T> {
   const { existingScope, effectiveTenantId } = resolveTenantBoundary(tenantId, 'transaction');
   if (existingScope?.kind === 'system') {
@@ -276,7 +277,7 @@ export async function runWithTenantDatabaseTransaction<T>(
         await configurePostgresTenantScope(tx, baseDb, effectiveTenantId);
         return enterOwnedTenantDatabaseScope(tx, effectiveTenantId, true, callbacks, work);
       },
-      { sqliteImmediate: true }
+      { sqliteImmediate: true, postgresIsolationLevel: options.postgresIsolationLevel }
     );
 
   // SQLite requests normally have an identity-only DB scope. Temporarily leave

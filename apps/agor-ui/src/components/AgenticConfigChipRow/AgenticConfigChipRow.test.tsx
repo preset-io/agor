@@ -1,4 +1,4 @@
-import type { AgorClient, User } from '@agor-live/client';
+import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
 import {
   USER_DEFAULT_AGENTIC_CONFIGURATION,
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
@@ -16,6 +16,7 @@ vi.mock('../../store/agorStore', () => ({
       agenticToolSettingsByName: new Map([
         ['claude-code', { inline_configuration_allowed: storeSettings.inlineAllowed }],
         ['codex', { inline_configuration_allowed: storeSettings.inlineAllowed }],
+        ['opencode', { inline_configuration_allowed: storeSettings.inlineAllowed }],
       ]),
     }),
 }));
@@ -25,14 +26,45 @@ vi.mock('../ModelSelector', async () => {
   const actual = await vi.importActual<typeof import('../ModelSelector')>('../ModelSelector');
   return {
     ...actual,
-    ModelSelector: ({ onChange }: { onChange: (v: unknown) => void }) => (
-      <button
-        type="button"
-        data-testid="model-change"
-        onClick={() => onChange({ mode: 'alias', model: 'claude-haiku-4-5' })}
-      >
-        change model
-      </button>
+    ModelSelector: ({
+      onChange,
+      onCommit,
+      agentic_tool,
+    }: {
+      onChange: (v: unknown) => void;
+      onCommit?: () => void;
+      agentic_tool?: AgenticToolName;
+    }) => (
+      <>
+        <button
+          type="button"
+          data-testid="model-change"
+          onClick={() => {
+            onChange({ mode: 'alias', model: 'claude-haiku-4-5' });
+            onCommit?.();
+          }}
+        >
+          change model
+        </button>
+        <button
+          type="button"
+          data-testid="model-type"
+          onClick={() => onChange({ mode: 'exact', model: 'claude-sonnet-4-6-20260101' })}
+        >
+          type exact model
+        </button>
+        {agentic_tool === 'opencode' && (
+          <button
+            type="button"
+            data-testid="model-suggest"
+            onClick={() =>
+              onChange({ mode: 'exact', provider: 'openai', model: 'suggested-model' })
+            }
+          >
+            suggest model
+          </button>
+        )}
+      </>
     ),
     AdvisorModelSelect: ({ onChange }: { onChange: (value: string | undefined) => void }) => (
       <>
@@ -103,11 +135,15 @@ function Harness({
   client = makeClient(),
   initialSource,
   tool = 'claude-code',
+  collapsibleChips,
+  validateModelSelection,
 }: {
   user: User;
   client?: AgorClient | null;
   initialSource?: string;
-  tool?: 'claude-code' | 'codex' | 'gemini';
+  tool?: AgenticToolName;
+  collapsibleChips?: boolean;
+  validateModelSelection?: boolean;
 }) {
   const [form] = Form.useForm();
   return (
@@ -118,6 +154,8 @@ function Harness({
         mcpServerById={new Map()}
         currentUser={user}
         enableSaveAsDefault
+        collapsibleChips={collapsibleChips}
+        validateModelSelection={validateModelSelection}
       />
       <Form.Item shouldUpdate noStyle>
         {() => {
@@ -247,6 +285,20 @@ describe('AgenticConfigChipRow', () => {
     expect(state.perm).toBe('acceptEdits');
   });
 
+  it('keeps the model popover open for exact-model edits and closes only on commit', async () => {
+    render(<Harness user={userWithDefault} initialSource={USER_DEFAULT_AGENTIC_CONFIGURATION} />);
+
+    const modelChip = await screen.findByRole('button', { name: 'Model: Opus 4.8 · 200k' });
+    fireEvent.click(modelChip);
+    fireEvent.click(await screen.findByTestId('model-type'));
+
+    await waitFor(() => expect(modelChip).toHaveAttribute('aria-expanded', 'true'));
+    expect(screen.getByTestId('model-type')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('model-change'));
+    await waitFor(() => expect(modelChip).toHaveAttribute('aria-expanded', 'false'));
+  });
+
   it('owns the advisor control from the empty inline state', async () => {
     render(<Harness user={{ user_id: 'u2' } as User} initialSource="__inline__" />);
 
@@ -255,6 +307,7 @@ describe('AgenticConfigChipRow', () => {
     fireEvent.click(await screen.findByTestId('advisor-select'));
 
     await waitFor(() => expect(chip).toHaveTextContent('Advisor: advisor-model'));
+    expect(chip).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('surfaces an advisor inherited from "My default" and clears it as a custom override', async () => {
@@ -323,6 +376,80 @@ describe('AgenticConfigChipRow', () => {
     render(<Harness user={{ user_id: 'gemini-user' } as User} tool="gemini" />);
     await screen.findByTestId('permission-chip');
     expect(screen.queryByTestId('effort-chip')).not.toBeInTheDocument();
+  });
+
+  it('collapses the chip row behind a one-line summary when collapsibleChips is set', async () => {
+    render(
+      <div style={{ width: 240 }}>
+        <Harness user={userWithDefault} collapsibleChips />
+      </div>
+    );
+
+    // The Configuration select stays visible even while chips are collapsed.
+    await waitFor(() =>
+      expect(
+        screen.getByText(/My default · Claude Opus 4.8 · 200k · Accept edits/)
+      ).toBeInTheDocument()
+    );
+
+    // The collapsed summary keeps every resolved value on one middot-joined line.
+    const summary = screen.getByText(
+      'Opus 4.8 · 200k · Accept edits · Effort: High · No MCP servers · Advisor: Off'
+    );
+    const header = summary.closest('[role="button"]');
+    expect(header).toHaveAttribute('aria-expanded', 'false');
+    expect(summary.closest('.ant-collapse-title')).toHaveStyle({ flex: '1', minWidth: '0' });
+
+    // Expanding is keyboard operable and reveals the editable chips.
+    if (!header) throw new Error('missing disclosure header');
+    fireEvent.keyDown(header, { key: 'Enter' });
+    await waitFor(() => expect(header).toHaveAttribute('aria-expanded', 'true'));
+    expect(screen.getByTestId('model-chip')).toHaveTextContent('Opus 4.8');
+  });
+
+  it('keeps corrective model controls disclosed while required OpenCode config is invalid', async () => {
+    render(
+      <Harness
+        user={{ user_id: 'opencode-user' } as User}
+        tool="opencode"
+        initialSource="__inline__"
+        collapsibleChips
+        validateModelSelection
+      />
+    );
+
+    const modelChip = await screen.findByRole('button', {
+      name: 'Model: Select provider/model',
+    });
+    const header = screen.getByRole('button', { name: /session configuration:/i });
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+    expect(header).toHaveAttribute('aria-disabled', 'true');
+    expect(header).toHaveAccessibleName(/complete the required model selection before collapsing/i);
+    expect(modelChip).toBeVisible();
+
+    // Activating the locked header must not clear the forced-open latch.
+    fireEvent.click(header);
+    expect(header).toHaveAttribute('aria-expanded', 'true');
+
+    fireEvent.click(modelChip);
+    fireEvent.click(await screen.findByTestId('model-suggest'));
+
+    // A catalog suggestion updates the value but is not a user commit: neither
+    // the picker nor the disclosure should disappear.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /session configuration:/i })).toHaveAttribute(
+        'aria-disabled',
+        'false'
+      )
+    );
+    const unlockedHeader = screen.getByRole('button', { name: /session configuration:/i });
+    expect(modelChip).toHaveAttribute('aria-expanded', 'true');
+    expect(unlockedHeader).toHaveAttribute('aria-expanded', 'true');
+
+    // Once unlocked, the disclosure remains open until the user closes it and
+    // retains standard keyboard operation.
+    fireEvent.keyDown(unlockedHeader, { key: 'Enter' });
+    await waitFor(() => expect(unlockedHeader).toHaveAttribute('aria-expanded', 'false'));
   });
 });
 

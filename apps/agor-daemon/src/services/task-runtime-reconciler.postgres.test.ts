@@ -3,11 +3,13 @@
  * reconcilers sharing durable state.
  */
 
+import { createHash } from 'node:crypto';
 import {
   BranchRepository,
   createDatabase,
   createTenantScopedDatabaseProxy,
   type Database,
+  ExecutorSessionTokenAuthorityRepository,
   generateId,
   initializeDatabase,
   RepoRepository,
@@ -43,8 +45,6 @@ function createDaemonApp(
     },
     recordExecutorStartupWarning: (id: string, warning: string) =>
       tasks.recordExecutorStartupWarning(id, warning),
-    reportRuntimeTelemetry: (data: { task_id: string }) =>
-      tasks.reportRuntimeTelemetry(data.task_id),
     claimTermination: async (input: Parameters<TaskRepository['claimTermination']>[0]) => {
       const result = await tasks.claimTermination(input);
       if (result.outcome === 'claimed') {
@@ -148,10 +148,8 @@ async function seed(db: Database) {
       session_id: session.session_id,
       created_by: user.user_id as UUID,
       full_prompt: 'stale remote task',
-      status: TaskStatus.RUNNING,
+      status: TaskStatus.DISPATCHING,
       executor_mode: 'templated',
-      executor_connected_at: '2000-01-01T00:00:00.000Z',
-      last_executor_heartbeat_at: '2000-01-01T00:00:01.000Z',
       message_range: {
         start_index: 0,
         end_index: 0,
@@ -159,6 +157,32 @@ async function seed(db: Database) {
       },
       git_state: { ref_at_start: 'main', sha_at_start: 'stale' },
       tool_use_count: 0,
+    });
+    const tokenFingerprint = createHash('sha256').update(active.task_id).digest('hex');
+    const authority = {
+      token_fingerprint: tokenFingerprint,
+      principal_user_id: user.user_id,
+      session_id: session.session_id,
+      branch_id: branch.branch_id,
+      branchRbacEnabled: true,
+    };
+    await tasks.bindExecutorLaunchAuthority(active.task_id, {
+      branchRbacEnabled: true,
+    });
+    await tasks.connectExecutor(active.task_id, new Date('2000-01-01T00:00:01.000Z'));
+    const tokenNow = new Date();
+    await new ExecutorSessionTokenAuthorityRepository(scoped).issue({
+      tenantId,
+      tokenFingerprint,
+      tokenType: 'executor-session',
+      purpose: 'executor-task',
+      sessionId: session.session_id,
+      taskId: active.task_id,
+      branchId: branch.branch_id,
+      userId: user.user_id,
+      createdAt: tokenNow,
+      expiresAt: new Date(tokenNow.getTime() + 60_000),
+      maxUses: -1,
     });
     const queued = await tasks.create({
       task_id: generateId() as TaskID,
@@ -175,7 +199,7 @@ async function seed(db: Database) {
       git_state: { ref_at_start: '', sha_at_start: '' },
       tool_use_count: 0,
     });
-    return { tenantId, session, active, queued };
+    return { tenantId, session, active, queued, authority };
   });
 }
 
@@ -284,11 +308,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         } as StartupContext)
       ).resolves.toBeNull();
       await runWithTenantDatabaseScope(scopedB, seeded.tenantId, () =>
-        (
-          appB.service('tasks') as unknown as {
-            reportRuntimeTelemetry(data: { task_id: string }): Promise<unknown>;
-          }
-        ).reportRuntimeTelemetry({ task_id: seeded.active.task_id })
+        new TaskRepository(scopedB).reportRuntimeTelemetry(seeded.active.task_id, seeded.authority)
       );
       const reconcilerB = new TaskRuntimeReconciler({
         app: appB,

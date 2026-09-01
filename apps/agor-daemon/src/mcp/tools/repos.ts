@@ -13,6 +13,7 @@ import {
 } from '../schema.js';
 import type { McpContext } from '../server.js';
 import { coerceString, textResult } from '../server.js';
+import { runWithMcpTenantDatabaseWrite } from '../tenant-scope.js';
 
 export function registerRepoTools(server: McpServer, ctx: McpContext): void {
   // Tool 1: agor_repos_list
@@ -134,9 +135,16 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       const name = coerceString(args.name);
       const defaultBranch = coerceString(args.default_branch);
       const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
-      const result = await reposService.cloneRepository(
-        { url, slug, name, ...(defaultBranch ? { default_branch: defaultBranch } : {}) },
-        ctx.baseServiceParams
+      // `cloneRepository` is a custom (non-transport) service method, so this
+      // direct call bypasses the around hooks that enter the tenant database
+      // scope for HTTP callers. Re-enter it here so its `this.db` reads/writes
+      // join one short tenant unit — the executor clone itself is fire-and-forget
+      // and runs outside this scope. See mcp/tenant-scope.ts.
+      const result = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        reposService.cloneRepository(
+          { url, slug, name, ...(defaultBranch ? { default_branch: defaultBranch } : {}) },
+          ctx.baseServiceParams
+        )
       );
       return textResult(result);
     }
@@ -163,6 +171,12 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       if (!path) throw new Error('path is required');
       const slug = coerceString(args.slug);
       const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
+      // Intentionally NOT wrapped in runWithMcpTenantDatabaseScope:
+      // addLocalRepository is rejected outright in `required_from_auth` mode
+      // (BadRequest before any DB touch), so the scope guard can never fire
+      // here. Wrapping would only risk holding a Postgres transaction across the
+      // method's awaited `git.repo.inspect` executor call if that guard were ever
+      // lifted. Local-repo registration stays a static/single-tenant path.
       const repo = await reposService.addLocalRepository({ path, slug }, ctx.baseServiceParams);
       return textResult(repo);
     }
@@ -222,7 +236,12 @@ export function registerRepoTools(server: McpServer, ctx: McpContext): void {
       if (defaultBranch !== undefined) patch.default_branch = defaultBranch;
 
       const reposService = ctx.app.service('repos') as unknown as ReposServiceImpl;
-      const updated = await reposService.updateMetadata(repoId, patch, ctx.baseServiceParams);
+      // Custom (non-transport) method: its `this.get`/`this.patch`/`findBySlug`
+      // touch the guarded daemon DB directly, so enter the tenant scope here to
+      // match the HTTP route's around hook.
+      const updated = await runWithMcpTenantDatabaseWrite(ctx, () =>
+        reposService.updateMetadata(repoId, patch, ctx.baseServiceParams)
+      );
       return textResult(updated);
     }
   );

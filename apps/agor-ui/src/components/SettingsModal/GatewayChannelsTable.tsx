@@ -1,6 +1,16 @@
 // Import the manifest helpers from the connector-free subpath so the browser
 // bundle never pulls in @slack/web-api / @slack/socket-mode (node-only) via the
 // gateway barrel.
+
+import {
+  buildDiscordSetupArtifact,
+  DISCORD_DEVELOPER_PORTAL_URL,
+  DISCORD_MINIMUM_BOT_PERMISSION_BITMASK,
+  DISCORD_MINIMUM_BOT_PERMISSION_NAMES,
+  type DiscordSetupDecisions,
+  discordBotInviteUrl,
+  evaluateDiscordConnectionVerification,
+} from '@agor/core/gateway/discord-setup';
 import {
   buildSlackManifest,
   requiredBotEvents,
@@ -9,6 +19,12 @@ import {
   type SlackWizardOptions,
   slackAppManifestUrl,
 } from '@agor/core/gateway/slack-manifest';
+import {
+  DEFAULT_DISCORD_CATCH_UP,
+  MAX_DISCORD_CATCH_UP,
+  MIN_DISCORD_CATCH_UP,
+  validateDiscordConfig,
+} from '@agor/core/types';
 import type {
   AgenticToolName,
   AgorClient,
@@ -36,7 +52,6 @@ import {
 } from '@agor-live/client';
 import {
   CheckCircleOutlined,
-  CloseCircleOutlined,
   CopyOutlined,
   DeleteOutlined,
   EditOutlined,
@@ -76,10 +91,16 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { getDaemonUrl } from '@/config/daemon';
+import {
+  type AuthorityOperationGuard,
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from '@/hooks/useAuthorityOperationGuard';
 import { mapToSortedArray } from '@/utils/mapHelpers';
 import { useThemedMessage } from '@/utils/message';
+import { sanitizeSecretValue } from '@/utils/sanitizeSecret';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { ACCESS_TOKEN_KEY } from '@/utils/tokenRefresh';
 import { buildModelConfigFromFormValues, getFormValuesFromConfig } from '../AgenticToolConfigForm';
@@ -106,8 +127,12 @@ interface GatewayChannelsTableProps {
   mcpServerById: Map<string, MCPServer>;
   currentUser?: User | null;
   onCreate?: (data: GatewayChannelCreateData) => void;
-  onUpdate?: (channelId: string, updates: GatewayChannelPatchData) => void;
-  onDelete?: (channelId: string) => void;
+  onUpdate?: (
+    channelId: string,
+    updates: GatewayChannelPatchData,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onDelete?: (channelId: string, shouldApply?: () => boolean) => void | Promise<void>;
 }
 
 const CHANNEL_TYPE_OPTIONS: {
@@ -120,7 +145,7 @@ const CHANNEL_TYPE_OPTIONS: {
   { value: 'github', label: 'GitHub', icon: <GithubOutlined /> },
   { value: 'teams', label: 'Microsoft Teams', icon: <TeamOutlined /> },
   { value: 'shortcut', label: 'Shortcut', icon: <ThunderboltOutlined /> },
-  { value: 'discord', label: 'Discord', icon: <MessageOutlined />, comingSoon: true },
+  { value: 'discord', label: 'Discord', icon: <MessageOutlined /> },
   { value: 'whatsapp', label: 'WhatsApp', icon: <MessageOutlined />, comingSoon: true },
   { value: 'telegram', label: 'Telegram', icon: <MessageOutlined />, comingSoon: true },
 ];
@@ -379,6 +404,13 @@ function createStepsForType(type: ChannelType): { title: string }[] {
       return [{ title: 'Channel' }, { title: 'Setup' }];
     case 'shortcut':
       return [{ title: 'Channel' }, { title: 'Setup' }];
+    case 'discord':
+      return [
+        { title: 'Channel' },
+        { title: 'Create app' },
+        { title: 'Access' },
+        { title: 'Token & test' },
+      ];
     default:
       return [{ title: 'Channel' }];
   }
@@ -388,12 +420,19 @@ function createStepsForType(type: ChannelType): { title: string }[] {
  * Form fields the create footer validates before leaving a given step. The final
  * step returns `[]` — submission runs a full `validateFields()` instead.
  */
-function createStepFields(type: ChannelType, step: number, alignSlackUsers: boolean): string[] {
+function createStepFields(
+  type: ChannelType,
+  step: number,
+  alignSlackUsers: boolean,
+  alignDiscordUsers: boolean
+): string[] {
   if (step === 0) {
     const fields = ['name', 'target_branch_id', 'channel_type'];
     // Slack and GitHub pick identity inside their platform steps; everyone else
     // chooses it on the universal Channel step.
-    if (type !== 'slack' && type !== 'github' && type !== 'shortcut') fields.push('agor_user_id');
+    if (type !== 'slack' && type !== 'github' && type !== 'shortcut' && type !== 'discord') {
+      fields.push('agor_user_id');
+    }
     return fields;
   }
   if (type === 'slack' && step === 1) {
@@ -403,6 +442,24 @@ function createStepFields(type: ChannelType, step: number, alignSlackUsers: bool
   }
   if (type === 'github' && step === 2) {
     return ['github_app_id', 'github_private_key'];
+  }
+  if (type === 'discord' && step === 1) {
+    return [
+      'discord_application_id',
+      'discord_guild_id',
+      'discord_message_content_enabled',
+      'discord_thread_mode',
+    ];
+  }
+  if (type === 'discord' && step === 2) {
+    return [
+      'discord_allowed_channel_ids',
+      'discord_align_users',
+      ...(alignDiscordUsers ? ['discord_user_map'] : ['agor_user_id']),
+    ];
+  }
+  if (type === 'discord' && step === 3) {
+    return ['discord_bot_token'];
   }
   return [];
 }
@@ -437,6 +494,25 @@ const CONNECTION_PROBE_FIELDS = new Set<string>([
   'shortcut_api_token',
   'shortcut_agent_member_id',
   'shortcut_mention_name',
+  'discord_bot_token',
+  'discord_application_id',
+  'discord_guild_id',
+  'discord_allowed_channel_ids',
+  'discord_allowed_user_ids',
+  'discord_allowed_role_ids',
+  'discord_message_content_enabled',
+  'discord_thread_mode',
+  'discord_thread_auto_archive_minutes',
+  'discord_align_users',
+  'discord_user_map',
+  'discord_catch_up_max_pages',
+  'discord_catch_up_max_messages',
+  'discord_catch_up_max_prompt_bytes',
+  'discord_catch_up_request_timeout_ms',
+  'discord_catch_up_rate_limit_max_retries',
+  'discord_catch_up_rate_limit_max_total_delay_ms',
+  'discord_outbound_enabled',
+  'discord_default_outbound_target',
 ]);
 
 /**
@@ -543,13 +619,28 @@ const CompactAlert: React.FC<{
 const ConnectionTestResultView: React.FC<{ result: GatewayConnectionTestResult }> = ({
   result,
 }) => {
-  const hasFollowups = result.failures.length > 0 || result.notVerifiable.length > 0;
+  const verification = result.verification;
+  const hasVerificationWarning = verification?.status === 'warning';
+  const hasFollowups =
+    result.failures.length > 0 || result.notVerifiable.length > 0 || hasVerificationWarning;
   return (
     <div style={{ marginBottom: 16 }}>
       <CompactAlert
-        type={result.ok ? 'success' : 'error'}
-        icon={result.ok ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-        heading={result.ok ? 'Connection succeeded' : 'Connection failed'}
+        type={result.ok && !hasVerificationWarning ? 'success' : result.ok ? 'warning' : 'error'}
+        icon={
+          result.ok && !hasVerificationWarning ? (
+            <CheckCircleOutlined />
+          ) : (
+            <ExclamationCircleOutlined />
+          )
+        }
+        heading={
+          !result.ok
+            ? 'Connection failed'
+            : hasVerificationWarning
+              ? 'Connection reachable; verification incomplete'
+              : 'Connection succeeded'
+        }
         description={
           <>
             {result.team && (
@@ -578,11 +669,22 @@ const ConnectionTestResultView: React.FC<{ result: GatewayConnectionTestResult }
                 {result.channelAccess.map((c, i) => (
                   <span key={c.channelId}>
                     {i > 0 ? ', ' : ''}
-                    <code>{c.channelId}</code>: {c.ok ? 'ok' : 'no access'}
+                    <code>{c.channelId}</code>:{' '}
+                    {c.permissions
+                      ? `view ${c.permissions.view ? 'ok' : 'no'}, send ${c.permissions.send ? 'ok' : 'no'}, history ${c.permissions.readHistory ? 'ok' : 'no'}, public threads ${c.permissions.createPublicThreads ? 'ok' : 'no'}, thread replies ${c.permissions.sendInThreads ? 'ok' : 'no'}`
+                      : c.ok
+                        ? 'ok'
+                        : 'no access'}
                   </span>
                 ))}
               </Typography.Paragraph>
             )}
+            {hasVerificationWarning &&
+              verification?.warnings.map((warning) => (
+                <div key={warning}>
+                  <strong>Verification warning:</strong> {warning}
+                </div>
+              ))}
           </>
         }
         style={{ marginBottom: hasFollowups ? 12 : 0 }}
@@ -654,7 +756,8 @@ const SlackScopeChangeWarning: React.FC<{
   addedScopes: string[];
   appInfo: SlackAppInfo | null;
   options: SlackWizardOptions;
-}> = ({ addedScopes, appInfo, options }) => {
+  authorityGuard: AuthorityOperationGuard;
+}> = ({ addedScopes, appInfo, options, authorityGuard }) => {
   const { showError } = useThemedMessage();
   const [copied, setCopied] = useState(false);
   const scopeKey = addedScopes.join(',');
@@ -667,7 +770,10 @@ const SlackScopeChangeWarning: React.FC<{
   if (addedScopes.length === 0) return null;
 
   const handleCopy = async () => {
+    const operation = authorityGuard.begin();
+    if (!operation.isCurrent()) return;
     const ok = await copyTextToClipboard(JSON.stringify(buildSlackManifest(options), null, 2));
+    if (!operation.isCurrent()) return;
     if (ok) {
       setCopied(true);
     } else {
@@ -722,7 +828,8 @@ const SlackScopeChangeWarning: React.FC<{
 const SlackManifestPanel: React.FC<{
   options: SlackWizardOptions;
   appInfo: SlackAppInfo | null;
-}> = ({ options, appInfo }) => {
+  authorityGuard: AuthorityOperationGuard;
+}> = ({ options, appInfo, authorityGuard }) => {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
   const [copied, setCopied] = useState(false);
@@ -738,7 +845,10 @@ const SlackManifestPanel: React.FC<{
   }, [manifestJson]);
 
   const handleCopy = async () => {
+    const operation = authorityGuard.begin();
+    if (!operation.isCurrent()) return;
     const ok = await copyTextToClipboard(manifestJson);
+    if (!operation.isCurrent()) return;
     if (ok) {
       setCopied(true);
     } else {
@@ -838,8 +948,11 @@ const GatewayAgentConfigurationFields: React.FC<{
   const alignShortcutUsers =
     (Form.useWatch('shortcut_align_users', form) as boolean | undefined) ??
     (form.getFieldValue('shortcut_align_users') as boolean | undefined);
+  const alignDiscordUsers =
+    (Form.useWatch('discord_align_users', form) as boolean | undefined) ??
+    (form.getFieldValue('discord_align_users') as boolean | undefined);
   const usesAlignedExecutionOwner = Boolean(
-    alignSlackUsers || alignGithubUsers || alignShortcutUsers
+    alignSlackUsers || alignGithubUsers || alignShortcutUsers || alignDiscordUsers
   );
   const resolvedExecutionOwnerId =
     executionOwnerId ?? (form.getFieldValue('agor_user_id') as string | undefined);
@@ -908,6 +1021,7 @@ const SlackSetupWizard: React.FC<{
   testResult: GatewayConnectionTestResult | null;
   testLoading: boolean;
   onTest: () => void;
+  authorityGuard: AuthorityOperationGuard;
 }> = ({
   client,
   currentUser,
@@ -921,6 +1035,7 @@ const SlackSetupWizard: React.FC<{
   testResult,
   testLoading,
   onTest,
+  authorityGuard,
 }) => {
   const { token } = theme.useToken();
   const { showError } = useThemedMessage();
@@ -1042,7 +1157,10 @@ const SlackSetupWizard: React.FC<{
   );
 
   const handleCopy = async () => {
+    const operation = authorityGuard.begin();
+    if (!operation.isCurrent()) return;
     const ok = await copyTextToClipboard(manifestJson);
+    if (!operation.isCurrent()) return;
     if (ok) {
       setCopied(true);
     } else {
@@ -1051,8 +1169,11 @@ const SlackSetupWizard: React.FC<{
   };
 
   const handleTestClick = async () => {
+    const operation = authorityGuard.begin();
+    if (!operation.isCurrent()) return;
     try {
       await form.validateFields(['bot_token', 'app_token']);
+      if (!operation.isCurrent()) return;
     } catch {
       return;
     }
@@ -1409,6 +1530,484 @@ const SlackSetupWizard: React.FC<{
   );
 };
 
+const DiscordSetupFields: React.FC<{
+  mode: 'create' | 'edit';
+  step: number;
+  editingChannel?: GatewayChannel | null;
+  userById: Map<string, User>;
+  testResult: GatewayConnectionTestResult | null;
+  testLoading: boolean;
+  draftCreated?: boolean;
+  onTest: () => void;
+}> = ({ mode, step, editingChannel, userById, testResult, testLoading, draftCreated, onTest }) => {
+  const form = Form.useFormInstance();
+  const config = editingChannel?.config as Record<string, unknown> | undefined;
+  const enabled = (Form.useWatch('enabled', form) as boolean | undefined) ?? true;
+  const alignUsers =
+    (Form.useWatch('discord_align_users', form) as boolean | undefined) ??
+    (config?.align_discord_users as boolean | undefined) ??
+    false;
+  const applicationId = Form.useWatch('discord_application_id', form) as string | undefined;
+  const allowedUserIds =
+    (Form.useWatch('discord_allowed_user_ids', form) as string[] | undefined) ?? [];
+  const allowedRoleIds =
+    (Form.useWatch('discord_allowed_role_ids', form) as string[] | undefined) ?? [];
+  const show = (stepNumber: number) => mode === 'edit' || step === stepNumber;
+  const sectionStyle = (stepNumber: number): React.CSSProperties => ({
+    display: show(stepNumber) ? undefined : 'none',
+  });
+  const validateSnowflakes = (_: unknown, value: unknown) => {
+    if (!Array.isArray(value) || value.length === 0) return Promise.resolve();
+    if (value.some((id) => typeof id !== 'string' || !/^\d{17,20}$/.test(id))) {
+      return Promise.reject(new Error('Use Discord snowflake IDs (17–20 digits).'));
+    }
+    return Promise.resolve();
+  };
+  const validateNonEmptySnowflakes = (_: unknown, value: unknown) => {
+    if (!Array.isArray(value) || value.length === 0) {
+      return Promise.reject(new Error('Add at least one Discord channel or author allowlist ID.'));
+    }
+    return validateSnowflakes(_, value);
+  };
+  const validateUserMap = (_: unknown, value: unknown) => {
+    if (typeof value !== 'string' || !value.trim()) {
+      return Promise.reject(new Error('A tenant-owned Discord user map is required.'));
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return Promise.reject(new Error('Enter a valid JSON object.'));
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return Promise.reject(new Error('Use a JSON object mapping Discord IDs to Agor emails.'));
+    }
+    const entries = Object.entries(parsed as Record<string, unknown>);
+    if (
+      entries.length === 0 ||
+      entries.some(
+        ([key, email]) => !/^\d{17,20}$/.test(key) || typeof email !== 'string' || !email.trim()
+      )
+    ) {
+      return Promise.reject(
+        new Error('Map each 17–20 digit Discord user ID to a non-empty Agor email.')
+      );
+    }
+    return Promise.resolve();
+  };
+  const validateAuthorAllowlist = (_: unknown, value: unknown) => {
+    if (allowedUserIds.length === 0 && allowedRoleIds.length === 0) {
+      return Promise.reject(new Error('Add at least one allowed user or role ID.'));
+    }
+    return validateSnowflakes(_, value);
+  };
+  return (
+    <div style={{ paddingTop: 8 }}>
+      <CompactAlert
+        type="info"
+        heading="Discord setup"
+        description="This explicit contract uses structured mentions as the wake-up trigger, REST catch-up for the bounded interval, and one public thread per top-level summon. Older implicit Discord configurations remain inert until translated."
+        style={{ marginBottom: 16 }}
+      />
+      {(mode === 'edit' || step >= 1) && (
+        <div style={sectionStyle(1)}>
+          <CompactAlert
+            type="info"
+            heading="Create the Discord app"
+            description={
+              <span>
+                Open the{' '}
+                <Typography.Link
+                  href={DISCORD_DEVELOPER_PORTAL_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Discord Developer Portal
+                </Typography.Link>
+                , create an application and bot, and copy the Application ID and the target Guild
+                ID. Enable and acknowledge Discord&apos;s privileged{' '}
+                <strong>Message Content</strong> intent; an explicit mention is not a substitute for
+                that intent.
+              </span>
+            }
+            style={{ marginBottom: 16 }}
+          />
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+            Required Gateway Intents: Guilds, Guild Messages, and Message Content. Minimum bot
+            permissions ({DISCORD_MINIMUM_BOT_PERMISSION_BITMASK}):{' '}
+            {DISCORD_MINIMUM_BOT_PERMISSION_NAMES.join(', ')}.
+            {applicationId ? (
+              <>
+                {' '}
+                <Typography.Link
+                  href={discordBotInviteUrl(applicationId)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Open the exact bot invite URL
+                </Typography.Link>
+              </>
+            ) : null}
+          </Typography.Paragraph>
+          <Form.Item
+            label="Application ID"
+            name="discord_application_id"
+            rules={[{ required: true, message: 'Application ID is required' }]}
+          >
+            <Input placeholder="123456789012345678" />
+          </Form.Item>
+          <Form.Item
+            label="Guild ID"
+            name="discord_guild_id"
+            rules={[{ required: true, message: 'Guild ID is required' }]}
+          >
+            <Input placeholder="123456789012345678" />
+          </Form.Item>
+          <Form.Item
+            name="discord_message_content_enabled"
+            valuePropName="checked"
+            rules={[
+              {
+                validator: (_, value) =>
+                  value === true
+                    ? Promise.resolve()
+                    : Promise.reject(new Error('Enable and acknowledge Message Content intent.')),
+              },
+            ]}
+          >
+            <Checkbox>
+              I enabled the privileged <strong>Message Content</strong> intent in the Discord
+              Developer Portal
+            </Checkbox>
+          </Form.Item>
+          <Form.Item
+            label="Thread mode"
+            name="discord_thread_mode"
+            initialValue="public_thread_per_summon"
+            rules={[{ required: true, message: 'Choose the supported Discord thread mode' }]}
+            tooltip="Top-level summons create or reuse one public thread; existing public-thread mappings remain readable for compatibility."
+          >
+            <Select>
+              <Select.Option value="public_thread_per_summon">
+                Public thread per summon
+              </Select.Option>
+            </Select>
+          </Form.Item>
+        </div>
+      )}
+
+      {(mode === 'edit' || step >= 1) && (
+        <div style={sectionStyle(2)}>
+          <CompactAlert
+            type="info"
+            heading="Grant minimum access"
+            description="Invite the bot to the guild and each allowed public text channel with View Channel, Read Message History, Send Messages, Create Public Threads, and Send Messages in Threads. The probe can inspect these bits, but cannot prove future event delivery, role matchability, or an end-to-end Agor session."
+            style={{ marginBottom: 16 }}
+          />
+          <Form.Item
+            label="Allowed public text channel IDs"
+            name="discord_allowed_channel_ids"
+            rules={[{ validator: validateNonEmptySnowflakes }]}
+            tooltip="One or more public text channels. Inbound and outbound traffic is restricted to this list."
+          >
+            <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="Channel snowflakes" />
+          </Form.Item>
+          <Form.Item
+            label="Allowed user IDs"
+            name="discord_allowed_user_ids"
+            rules={[{ validator: validateAuthorAllowlist }]}
+            tooltip="At least one user or role allowlist entry is required."
+          >
+            <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="User snowflakes" />
+          </Form.Item>
+          <Form.Item
+            label="Allowed role IDs"
+            name="discord_allowed_role_ids"
+            rules={[{ validator: validateAuthorAllowlist }]}
+            tooltip="At least one user or role allowlist entry is required."
+          >
+            <Select mode="tags" tokenSeparators={[',', ' ']} placeholder="Role snowflakes" />
+          </Form.Item>
+          <PlatformIdentityFields
+            alignFieldName="discord_align_users"
+            alignLabel="Align Discord users"
+            alignDescription="Use a tenant-owned Discord user ID → Agor email map. Unmapped authors are rejected; there is no fallback identity."
+            alignUsers={alignUsers}
+            userById={userById}
+            alignedContent={
+              <Form.Item
+                label="Tenant-owned Discord user map"
+                name="discord_user_map"
+                tooltip="JSON object mapping Discord user snowflakes to Agor email addresses."
+                rules={[{ validator: validateUserMap }]}
+              >
+                <JSONEditor
+                  rows={4}
+                  placeholder={'{\n  "123456789012345678": "user@example.com"\n}'}
+                />
+              </Form.Item>
+            }
+          />
+          <Form.Item
+            label="Thread auto-archive"
+            name="discord_thread_auto_archive_minutes"
+            initialValue={1440}
+            tooltip="Applied to threads created for top-level summons."
+          >
+            <Select>
+              {[60, 1440, 4320, 10080].map((minutes) => (
+                <Select.Option key={minutes} value={minutes}>
+                  {minutes >= 1440
+                    ? `${minutes / 1440} day${minutes === 1440 ? '' : 's'}`
+                    : `${minutes} minutes`}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Typography.Text strong style={{ display: 'block', margin: '16px 0 8px' }}>
+            Bounded Discord REST catch-up
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            The live mention is the only wake-up trigger. Messages fetched after the last admitted
+            cursor are bounded, treated as untrusted context, and are not stored as a transcript.
+          </Typography.Text>
+          <Space orientation="vertical" size="small" style={{ width: '100%' }}>
+            <Form.Item
+              label="Maximum REST pages"
+              name="discord_catch_up_max_pages"
+              initialValue={DEFAULT_DISCORD_CATCH_UP.max_pages}
+            >
+              <InputNumber
+                min={MIN_DISCORD_CATCH_UP.max_pages}
+                max={MAX_DISCORD_CATCH_UP.max_pages}
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+            <Form.Item
+              label="Maximum messages"
+              name="discord_catch_up_max_messages"
+              initialValue={DEFAULT_DISCORD_CATCH_UP.max_messages}
+            >
+              <InputNumber
+                min={MIN_DISCORD_CATCH_UP.max_messages}
+                max={MAX_DISCORD_CATCH_UP.max_messages}
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+            <Form.Item
+              label="Maximum prompt bytes"
+              name="discord_catch_up_max_prompt_bytes"
+              initialValue={DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes}
+            >
+              <InputNumber
+                min={MIN_DISCORD_CATCH_UP.max_prompt_bytes}
+                max={MAX_DISCORD_CATCH_UP.max_prompt_bytes}
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+            <Form.Item
+              label="REST request timeout (ms)"
+              name="discord_catch_up_request_timeout_ms"
+              initialValue={DEFAULT_DISCORD_CATCH_UP.request_timeout_ms}
+            >
+              <InputNumber
+                min={MIN_DISCORD_CATCH_UP.request_timeout_ms}
+                max={MAX_DISCORD_CATCH_UP.request_timeout_ms}
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+            <Form.Item
+              label="Rate-limit retries"
+              name="discord_catch_up_rate_limit_max_retries"
+              initialValue={DEFAULT_DISCORD_CATCH_UP.rate_limit_max_retries}
+            >
+              <InputNumber
+                min={MIN_DISCORD_CATCH_UP.rate_limit_max_retries}
+                max={MAX_DISCORD_CATCH_UP.rate_limit_max_retries}
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+            <Form.Item
+              label="Maximum rate-limit delay (ms)"
+              name="discord_catch_up_rate_limit_max_total_delay_ms"
+              initialValue={DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms}
+            >
+              <InputNumber
+                min={MIN_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms}
+                max={MAX_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms}
+                style={{ width: '100%' }}
+              />
+            </Form.Item>
+          </Space>
+          <CompactAlert
+            type="info"
+            heading="Capabilities"
+            description="Files: disabled (files:false). Agent tools: none (agent_tools:[])."
+            style={{ marginTop: 12 }}
+          />
+        </div>
+      )}
+
+      {(mode === 'edit' || step >= 1) && (
+        <div style={sectionStyle(3)}>
+          <CompactAlert
+            type="info"
+            heading="Token & test"
+            description="Copy the bot token from Developer Portal → Bot. Store it here only; it is encrypted and never returned. A passing probe is advisory and does not replace live Discord QA."
+            style={{ marginBottom: 16 }}
+          />
+          <Form.Item
+            label="Discord bot token"
+            name="discord_bot_token"
+            rules={
+              mode === 'create' && draftCreated === true && enabled !== false
+                ? [{ required: true, message: 'Bot token is required' }]
+                : []
+            }
+            tooltip="Discord Developer Portal → Bot. Stored encrypted; never paste it into chat."
+          >
+            <Input.Password
+              disabled={mode === 'create' && draftCreated !== true}
+              placeholder={
+                mode === 'edit' && isSecretStored(config, 'bot_token')
+                  ? '••••••••'
+                  : 'Discord bot token'
+              }
+            />
+          </Form.Item>
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            Proactive sends target an allowlisted parent channel and create a durable seed. The
+            first human reply consumes that seed; it does not create a summon thread.
+          </Typography.Text>
+          <Form.Item
+            label="Enable proactive outbound"
+            name="discord_outbound_enabled"
+            valuePropName="checked"
+            initialValue={false}
+          >
+            <Switch />
+          </Form.Item>
+          <Form.Item
+            label="Default outbound target"
+            name="discord_default_outbound_target"
+            tooltip="Optional. Must be channel:<snowflake> and match one allowed channel. Discord thread targets are rejected."
+          >
+            <Input placeholder="channel:123456789012345678" />
+          </Form.Item>
+          <Button loading={testLoading} onClick={onTest} block>
+            Test Discord connection
+          </Button>
+          {testResult && <ConnectionTestResultView result={testResult} />}
+        </div>
+      )}
+    </div>
+  );
+};
+
+function readFormString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readFormStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const strings = value.filter((item): item is string => typeof item === 'string');
+  return strings.length === value.length ? strings : [];
+}
+
+function readFormBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return fallback;
+}
+
+function readFormNumber(value: unknown, fallback: number): number {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function readFormStringRecord(value: unknown): Record<string, string> | undefined {
+  const serialized = readFormString(value);
+  if (!serialized?.trim()) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    return undefined;
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined;
+  }
+
+  const record: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(parsed)) {
+    if (typeof entry !== 'string') return undefined;
+    record[key] = entry;
+  }
+  return record;
+}
+
+function toDiscordSetupDecisions(values: Record<string, unknown>): DiscordSetupDecisions {
+  const alignUsers = readFormBoolean(values.discord_align_users, false);
+  const catch_up = {
+    max_pages: readFormNumber(
+      values.discord_catch_up_max_pages,
+      DEFAULT_DISCORD_CATCH_UP.max_pages
+    ),
+    max_messages: readFormNumber(
+      values.discord_catch_up_max_messages,
+      DEFAULT_DISCORD_CATCH_UP.max_messages
+    ),
+    max_prompt_bytes: readFormNumber(
+      values.discord_catch_up_max_prompt_bytes,
+      DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes
+    ),
+    request_timeout_ms: readFormNumber(
+      values.discord_catch_up_request_timeout_ms,
+      DEFAULT_DISCORD_CATCH_UP.request_timeout_ms
+    ),
+    rate_limit_max_retries: readFormNumber(
+      values.discord_catch_up_rate_limit_max_retries,
+      DEFAULT_DISCORD_CATCH_UP.rate_limit_max_retries
+    ),
+    rate_limit_max_total_delay_ms: readFormNumber(
+      values.discord_catch_up_rate_limit_max_total_delay_ms,
+      DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms
+    ),
+  };
+  const userMap = readFormStringRecord(values.discord_user_map);
+
+  return {
+    applicationId: readFormString(values.discord_application_id) ?? '',
+    guildId: readFormString(values.discord_guild_id) ?? '',
+    messageContentAcknowledged: readFormBoolean(values.discord_message_content_enabled, false),
+    allowedChannelIds: readFormStringArray(values.discord_allowed_channel_ids),
+    allowedUserIds: readFormStringArray(values.discord_allowed_user_ids),
+    allowedRoleIds: readFormStringArray(values.discord_allowed_role_ids),
+    agorUserId: alignUsers ? null : readFormString(values.agor_user_id),
+    alignUsers,
+    userMap: alignUsers ? userMap : undefined,
+    outboundEnabled: readFormBoolean(values.discord_outbound_enabled, false),
+    defaultOutboundTarget: readFormString(values.discord_default_outbound_target) || null,
+    catchUp: catch_up,
+    threadAutoArchiveMinutes: readFormNumber(values.discord_thread_auto_archive_minutes, 1440),
+  };
+}
+
+function discordConfigFromFormValues(values: Record<string, unknown>): Record<string, unknown> {
+  const artifact = buildDiscordSetupArtifact(toDiscordSetupDecisions(values));
+  const botToken = readFormString(values.discord_bot_token);
+  return {
+    ...artifact.draft.config,
+    ...(botToken ? { bot_token: sanitizeSecretValue(botToken) } : {}),
+  };
+}
+
 /** Shared form fields for create and edit modals */
 const ChannelFormFields: React.FC<{
   client: AgorClient | null;
@@ -1432,10 +2031,14 @@ const ChannelFormFields: React.FC<{
   /** Slack guided-setup state (create mode only). */
   connectionTestResult: GatewayConnectionTestResult | null;
   connectionTestLoading: boolean;
+  /** Discord draft id; token entry is write-only and starts after draft creation. */
+  discordDraftId?: string | null;
   onSlackTest: () => void;
   onShortcutTest: () => void;
+  onDiscordTest: () => void;
   /** Slack app identity resolved server-side on edit open (edit mode only). */
   slackAppInfo: SlackAppInfo | null;
+  authorityGuard: AuthorityOperationGuard;
 }> = ({
   client,
   currentUser,
@@ -1455,9 +2058,12 @@ const ChannelFormFields: React.FC<{
   githubError,
   connectionTestResult,
   connectionTestLoading,
+  discordDraftId,
   onSlackTest,
   onShortcutTest,
+  onDiscordTest,
   slackAppInfo,
+  authorityGuard,
 }) => {
   const { showError } = useThemedMessage();
   const { token } = theme.useToken();
@@ -1572,6 +2178,7 @@ const ChannelFormFields: React.FC<{
       addedScopes={addedSlackScopes}
       appInfo={slackAppInfo}
       options={slackOptions}
+      authorityGuard={authorityGuard}
     />
   );
 
@@ -1651,17 +2258,20 @@ const ChannelFormFields: React.FC<{
             <BranchSelect branchById={branchById} />
           </Form.Item>
 
-          {/* Slack and GitHub choose identity in their platform-specific Identity sections. */}
-          {channelType !== 'slack' && channelType !== 'github' && channelType !== 'shortcut' && (
-            <Form.Item
-              label="Post messages as"
-              name="agor_user_id"
-              rules={[{ required: true, message: 'Please select a user' }]}
-              tooltip="Sessions from this channel will run as this Agor user"
-            >
-              <UserSelect userById={userById} />
-            </Form.Item>
-          )}
+          {/* Platform-specific identity sections own Slack/GitHub/Shortcut/Discord identity. */}
+          {channelType !== 'slack' &&
+            channelType !== 'github' &&
+            channelType !== 'shortcut' &&
+            channelType !== 'discord' && (
+              <Form.Item
+                label="Post messages as"
+                name="agor_user_id"
+                rules={[{ required: true, message: 'Please select a user' }]}
+                tooltip="Sessions from this channel will run as this Agor user"
+              >
+                <UserSelect userById={userById} />
+              </Form.Item>
+            )}
 
           <Form.Item
             label="Enabled"
@@ -1675,15 +2285,29 @@ const ChannelFormFields: React.FC<{
           {channelType !== 'slack' &&
             channelType !== 'github' &&
             channelType !== 'teams' &&
-            channelType !== 'shortcut' && (
+            channelType !== 'shortcut' &&
+            channelType !== 'discord' && (
               <CompactAlert
                 type="info"
                 heading={`${channelType.charAt(0).toUpperCase() + channelType.slice(1)} support coming soon`}
-                description="Not yet available. Slack, GitHub, and Microsoft Teams are currently supported."
+                description="Not yet available. Slack, Discord, GitHub, and Microsoft Teams are currently supported."
                 style={{ marginBottom: 16 }}
               />
             )}
         </div>
+
+        {channelType === 'discord' && (mode === 'edit' || createStep >= 1) && (
+          <DiscordSetupFields
+            mode={mode}
+            step={createStep}
+            editingChannel={editingChannel}
+            userById={userById}
+            testResult={connectionTestResult}
+            testLoading={connectionTestLoading}
+            draftCreated={mode === 'edit' || Boolean(discordDraftId)}
+            onTest={onDiscordTest}
+          />
+        )}
 
         {/* ── GitHub App Setup (create steps + shared config collapse) ── */}
         {channelType === 'github' && (
@@ -1732,6 +2356,8 @@ const ChannelFormFields: React.FC<{
                   icon={<GithubOutlined />}
                   block
                   onClick={async () => {
+                    const operation = authorityGuard.begin();
+                    if (!operation.isCurrent()) return;
                     const daemonUrl = getDaemonUrl();
                     const params = new URLSearchParams();
                     const appName = form.getFieldValue('github_app_name');
@@ -1755,10 +2381,12 @@ const ChannelFormFields: React.FC<{
                           'Content-Type': 'application/json',
                         },
                       });
+                      if (!operation.isCurrent()) return;
                       if (!stateRes.ok) {
                         const body = await stateRes
                           .json()
                           .catch(() => ({}) as Record<string, unknown>);
+                        if (!operation.isCurrent()) return;
                         const err =
                           typeof body?.error === 'string'
                             ? body.error
@@ -1767,6 +2395,7 @@ const ChannelFormFields: React.FC<{
                         return;
                       }
                       const { state } = (await stateRes.json()) as { state?: string };
+                      if (!operation.isCurrent()) return;
                       if (!state) {
                         showError('Daemon did not return an install state token.');
                         return;
@@ -1777,6 +2406,7 @@ const ChannelFormFields: React.FC<{
                         '_blank'
                       );
                     } catch (err) {
+                      if (!operation.isCurrent()) return;
                       showError(
                         err instanceof Error ? err.message : 'Failed to initiate GitHub App install'
                       );
@@ -2334,11 +2964,14 @@ const ChannelFormFields: React.FC<{
                       icon={<ThunderboltOutlined />}
                       loading={connectionTestLoading}
                       onClick={async () => {
+                        const operation = authorityGuard.begin();
+                        if (!operation.isCurrent()) return;
                         // The token is required only on create; in edit the stored
                         // token backs the redacted field, so skip validation there.
                         if (mode === 'create') {
                           try {
                             await form.validateFields(['shortcut_api_token']);
+                            if (!operation.isCurrent()) return;
                           } catch {
                             return;
                           }
@@ -2512,6 +3145,7 @@ const ChannelFormFields: React.FC<{
             testResult={connectionTestResult}
             testLoading={connectionTestLoading}
             onTest={onSlackTest}
+            authorityGuard={authorityGuard}
           />
         )}
 
@@ -2645,7 +3279,13 @@ const ChannelFormFields: React.FC<{
                     subtitle="recommended scopes & events"
                   />
                 ),
-                children: <SlackManifestPanel options={slackOptions} appInfo={slackAppInfo} />,
+                children: (
+                  <SlackManifestPanel
+                    options={slackOptions}
+                    appInfo={slackAppInfo}
+                    authorityGuard={authorityGuard}
+                  />
+                ),
               },
 
               // ── Message Sources ──
@@ -2995,6 +3635,11 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
 }) => {
   const { showSuccess, showError } = useThemedMessage();
   const { token } = theme.useToken();
+  const callerAuthority = useAuthenticatedAuthorityScope(
+    client,
+    currentUser ? `${currentUser.user_id}:${currentUser.role}` : null
+  );
+  const operationGuard = useAuthorityOperationGuard(callerAuthority.operationScope);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editingChannel, setEditingChannel] = useState<GatewayChannel | null>(null);
@@ -3011,7 +3656,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       const usesAlignedExecutionOwner = Boolean(
         form.getFieldValue('align_slack_users') ||
           form.getFieldValue('github_align_users') ||
-          form.getFieldValue('shortcut_align_users')
+          form.getFieldValue('shortcut_align_users') ||
+          form.getFieldValue('discord_align_users')
       );
       const ownerId = form.getFieldValue('agor_user_id') as string | undefined;
       const executionOwner = !usesAlignedExecutionOwner && ownerId ? userById.get(ownerId) : null;
@@ -3034,6 +3680,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // ── Unified create-wizard step (0 = universal "Channel" step) ──
   const [createStep, setCreateStep] = useState(0);
   const [creating, setCreating] = useState(false);
+  const [discordDraftId, setDiscordDraftId] = useState<string | null>(null);
 
   // ── GitHub App Setup State (create mode) ──
   const [githubLoading, setGithubLoading] = useState(false);
@@ -3057,7 +3704,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   }, [referencedBranchesById]);
 
   useEffect(() => {
-    if (!client) return;
+    const operation = operationGuard.begin();
+    if (!client || !operation.isCurrent()) return;
 
     const targetIds = new Set<string>();
     for (const channel of gatewayChannelById.values()) {
@@ -3071,7 +3719,6 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     );
     if (missingIds.length === 0) return;
 
-    let cancelled = false;
     void Promise.all(
       missingIds.map(async (id) => {
         if (loadingReferencedBranchIds.current.has(id)) return null;
@@ -3086,7 +3733,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         }
       })
     ).then((results) => {
-      if (cancelled) return;
+      if (!operation.isCurrent()) return;
       const resolved = results.filter((wt): wt is Branch => wt !== null);
       if (resolved.length === 0) return;
 
@@ -3100,9 +3747,9 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     });
 
     return () => {
-      cancelled = true;
+      operation.cancel();
     };
-  }, [client, gatewayChannelById, branchById]);
+  }, [client, gatewayChannelById, branchById, operationGuard]);
 
   const branchOptionsById = useMemo(() => {
     const merged = new Map<string, Branch>();
@@ -3134,9 +3781,38 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   // Reset the whole create flow back to its universal first step.
   const resetCreateFlow = useCallback(() => {
     setCreateStep(0);
+    setDiscordDraftId(null);
     resetGithubState();
     resetConnectionTest();
   }, [resetGithubState, resetConnectionTest]);
+
+  // Passwords/tokens and selected saved rows belong to the authenticated
+  // caller. Erase them during the identity commit, while the operation guard
+  // prevents an older validation/fetch continuation from recreating them.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: authenticated identity and role intentionally erase credential-bearing forms
+  useLayoutEffect(() => {
+    createForm.resetFields();
+    editForm.resetFields();
+    setCreateModalOpen(false);
+    setEditModalOpen(false);
+    setEditingChannel(null);
+    setChannelType('slack');
+    setSelectedAgent('claude-code');
+    setRequiresSupportedToolSelection(false);
+    setCreating(false);
+    setReferencedBranchesById(new Map());
+    referencedBranchesByIdRef.current = new Map();
+    loadingReferencedBranchIds.current.clear();
+    resetCreateFlow();
+  }, [createForm, currentUser?.role, currentUser?.user_id, editForm, resetCreateFlow]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
+  useLayoutEffect(() => {
+    setCreating(false);
+    setGithubLoading(false);
+    setConnectionTestLoading(false);
+    setConnectionTestResult(null);
+  }, [callerAuthority.operationScope]);
 
   const invalidateConnectionTest = useCallback(() => {
     setConnectionTestResult(null);
@@ -3175,10 +3851,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       channelType: ChannelType,
       config: Record<string, unknown>,
       gatewayChannelId?: string
-    ) => {
+    ): Promise<GatewayConnectionTestResult | null> => {
+      const operation = operationGuard.begin();
+      if (!operation.isCurrent()) return null;
       if (!client) {
         showError('Not connected to server');
-        return;
+        return null;
       }
       setConnectionTestLoading(true);
       setConnectionTestResult(null);
@@ -3194,9 +3872,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         const result = (await client
           .service('gateway-channels/test')
           .create(payload)) as GatewayConnectionTestResult;
+        if (!operation.isCurrent()) return null;
         setConnectionTestResult(result);
+        return result;
       } catch (error) {
-        setConnectionTestResult({
+        if (!operation.isCurrent()) return null;
+        const result: GatewayConnectionTestResult = {
           ok: false,
           failures: [
             {
@@ -3205,12 +3886,14 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             },
           ],
           notVerifiable: [],
-        });
+        };
+        setConnectionTestResult(result);
+        return result;
       } finally {
-        setConnectionTestLoading(false);
+        if (operation.isCurrent()) setConnectionTestLoading(false);
       }
     },
-    [client, showError]
+    [client, operationGuard, showError]
   );
 
   // Probe the entered Slack tokens against the live workspace. No
@@ -3219,8 +3902,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const handleSlackTest = useCallback(async () => {
     const values = createForm.getFieldsValue(true);
     await runConnectionProbe('slack', {
-      bot_token: values.bot_token,
-      app_token: values.app_token,
+      bot_token: values.bot_token ? sanitizeSecretValue(values.bot_token) : values.bot_token,
+      app_token: values.app_token ? sanitizeSecretValue(values.app_token) : values.app_token,
       enable_channels: values.enable_channels ?? false,
       enable_groups: values.enable_groups ?? false,
       enable_mpim: values.enable_mpim ?? false,
@@ -3246,7 +3929,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     const form = editModalOpen ? editForm : createForm;
     const values = form.getFieldsValue(true);
     const config: Record<string, unknown> = {};
-    if (values.shortcut_api_token) config.api_token = values.shortcut_api_token;
+    if (values.shortcut_api_token)
+      config.api_token = sanitizeSecretValue(values.shortcut_api_token);
     if (values.shortcut_agent_member_id) config.agent_member_id = values.shortcut_agent_member_id;
     if (values.shortcut_mention_name) config.mention_name = values.shortcut_mention_name;
     await runConnectionProbe(
@@ -3255,6 +3939,35 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       editModalOpen ? (editingChannel?.id ?? undefined) : undefined
     );
   }, [editModalOpen, editForm, createForm, editingChannel, runConnectionProbe]);
+
+  const handleDiscordTest = useCallback(async () => {
+    const form = editModalOpen ? editForm : createForm;
+    const values = form.getFieldsValue(true);
+    const config = discordConfigFromFormValues(values);
+    const draftId = editModalOpen ? undefined : (discordDraftId ?? undefined);
+    if (draftId && client) {
+      // A Discord draft is the probe authority. Persist the complete form
+      // configuration while it is still disabled, then probe only the stored
+      // configuration so a later enable cannot bind a different draft.
+      await client.service('gateway-channels').patch(draftId, {
+        config,
+        enabled: false,
+      });
+    }
+    await runConnectionProbe(
+      'discord',
+      config,
+      editModalOpen ? (editingChannel?.id ?? undefined) : draftId
+    );
+  }, [
+    client,
+    editModalOpen,
+    editForm,
+    createForm,
+    editingChannel,
+    discordDraftId,
+    runConnectionProbe,
+  ]);
 
   // Probe an existing Slack channel via the `gateway-channels/test` service. The
   // backend resolves the stored decrypted tokens from `gatewayChannelId`, so the
@@ -3312,13 +4025,17 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       }
     } else if (values.channel_type === 'teams') {
       if (values.teams_app_id) config.app_id = values.teams_app_id;
-      if (values.teams_app_password) config.app_password = values.teams_app_password;
+      if (values.teams_app_password) {
+        config.app_password = sanitizeSecretValue(values.teams_app_password as string);
+      }
       config.tenant_id = values.teams_tenant_id;
       config.webhook_port = (values.teams_webhook_port as number) ?? 3978;
       config.webhook_path = (values.teams_webhook_path as string) || '/api/messages';
       config.require_mention = values.teams_require_mention ?? true;
     } else if (values.channel_type === 'shortcut') {
-      if (values.shortcut_api_token) config.api_token = values.shortcut_api_token;
+      if (values.shortcut_api_token) {
+        config.api_token = sanitizeSecretValue(values.shortcut_api_token as string);
+      }
       if (values.shortcut_agent_member_id) {
         config.agent_member_id = values.shortcut_agent_member_id;
       } else {
@@ -3345,8 +4062,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         }
       }
     } else if (values.channel_type === 'slack') {
-      if (values.bot_token) config.bot_token = values.bot_token;
-      if (values.app_token) config.app_token = values.app_token;
+      if (values.bot_token) config.bot_token = sanitizeSecretValue(values.bot_token as string);
+      if (values.app_token) config.app_token = sanitizeSecretValue(values.app_token as string);
       // The Slack wizard only creates inbound/Socket-Mode channels (bot + app
       // token, Socket Mode required), so record that intent by default. This
       // makes getRequiredSecretFields require app_token for UI-created inbound
@@ -3371,6 +4088,10 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         file_upload: values.agent_file_upload ?? SLACK_AGENT_TOOL_DEFAULTS.file_upload,
         file_download: values.agent_file_download ?? SLACK_AGENT_TOOL_DEFAULTS.file_download,
       };
+    } else if (values.channel_type === 'discord') {
+      if (values.discord_bot_token) config.bot_token = values.discord_bot_token;
+      Object.assign(config, discordConfigFromFormValues(values));
+      if (!values.discord_align_users) delete config.user_map;
     }
 
     // Build agentic config from form values
@@ -3420,14 +4141,19 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             : {}),
         };
 
-    // Existing aligned channels may still carry a preserved agor_user_id from a
-    // previous run-as configuration, but newly-created aligned channels can omit it.
-    // The gateway only reads agor_user_id when alignment is OFF.
+    const usesAlignedIdentity = Boolean(
+      values.align_slack_users ||
+        values.github_align_users ||
+        values.shortcut_align_users ||
+        values.discord_align_users
+    );
     return {
       name: values.name as string,
       channel_type: values.channel_type as ChannelType,
       target_branch_id: values.target_branch_id as UUID,
-      agor_user_id: values.agor_user_id as UUID,
+      // Clear a previously selected fixed user when alignment is enabled; an
+      // aligned channel must never retain a fallback execution identity.
+      agor_user_id: usesAlignedIdentity ? null : (values.agor_user_id as UUID),
       config,
       agentic_config: agenticConfig,
       mcp_server_ids: (values.mcpServerIds as string[] | undefined) ?? [],
@@ -3436,6 +4162,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   };
 
   const handleCreate = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (!selectedAgent) {
       showError('Choose a supported agentic tool before creating this channel');
       return;
@@ -3443,9 +4171,64 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     setCreating(true);
     try {
       await createForm.validateFields();
+      if (!operation.isCurrent()) return;
       // Use getFieldsValue(true) to include values from collapsed (unmounted)
       // panels that validateFields() may omit.
       const values = createForm.getFieldsValue(true);
+      if (values.channel_type === 'discord') {
+        const discordConfig = discordConfigFromFormValues(values);
+        if (!discordDraftId) {
+          const validation = validateDiscordConfig(discordConfig, { requireBotToken: false });
+          if (!validation.ok) {
+            throw new Error(`Invalid Discord draft: ${validation.errors.join('; ')}`);
+          }
+          const draftData = extractFormData(values, undefined, selectedAgent);
+          delete draftData.config.bot_token;
+          draftData.enabled = false;
+          if (!client) {
+            showError('Not connected to server');
+            return;
+          }
+          const created = (await client
+            .service('gateway-channels')
+            .create(draftData)) as GatewayChannel;
+          if (!created?.id) throw new Error('Discord draft did not return a channel id');
+          setDiscordDraftId(created.id);
+          showSuccess('Discord draft created. Enter the bot token in the secure field, then test.');
+          return;
+        }
+        if (!values.discord_bot_token) {
+          throw new Error('Discord bot token is required after the draft is created');
+        }
+        if (!client) {
+          showError('Not connected to server');
+          return;
+        }
+        // Persist the exact form configuration in the encrypted, disabled
+        // draft. The following probe reads that stored draft, and the service
+        // performs a generation-fenced verification again before enabling.
+        await client.service('gateway-channels').patch(discordDraftId, {
+          config: discordConfig,
+          enabled: false,
+        });
+        const result = await runConnectionProbe('discord', {}, discordDraftId);
+        const verification = evaluateDiscordConnectionVerification(
+          result,
+          values.discord_application_id
+        );
+        if (!verification.verified) {
+          throw new Error(
+            `${verification.failure.warnings.join('; ') || verification.failure.reason}; the draft remains disabled`
+          );
+        }
+        await client.service('gateway-channels').patch(discordDraftId, { enabled: true });
+        showSuccess('Discord gateway verified and enabled.');
+        createForm.resetFields();
+        setCreateModalOpen(false);
+        setChannelType('slack');
+        resetCreateFlow();
+        return;
+      }
       // The whitelist only applies when the wizard limits public channels to a
       // specific set; "all public channels" (or no public channels) must clear it.
       if (
@@ -3461,13 +4244,16 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         return;
       }
 
+      if (!operation.isCurrent()) return;
       await client.service('gateway-channels').create(data);
+      if (!operation.isCurrent()) return;
       showSuccess('Gateway channel created!');
       createForm.resetFields();
       setCreateModalOpen(false);
       setChannelType('slack');
       resetCreateFlow();
     } catch (error: unknown) {
+      if (!operation.isCurrent()) return;
       const err = error as { errorFields?: { errors: string[] }[]; message?: string };
       if (err.errorFields?.length) {
         showError(err.errorFields[0].errors[0] || 'Please fill in required fields');
@@ -3475,7 +4261,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         showError(`Failed to create channel: ${err.message || String(error)}`);
       }
     } finally {
-      setCreating(false);
+      if (operation.isCurrent()) setCreating(false);
     }
   };
 
@@ -3485,6 +4271,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   const isFinalCreateStep = createStep >= createSteps.length - 1;
 
   const handleCreatePrimary = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (isFinalCreateStep) {
       await handleCreate();
       return;
@@ -3492,11 +4280,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     const fields = createStepFields(
       channelType,
       createStep,
-      createForm.getFieldValue('align_slack_users') ?? false
+      createForm.getFieldValue('align_slack_users') ?? false,
+      createForm.getFieldValue('discord_align_users') ?? false
     );
     if (fields.length > 0) {
       try {
         await createForm.validateFields(fields);
+        if (!operation.isCurrent()) return;
       } catch {
         return;
       }
@@ -3530,6 +4320,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
     // the wrong Slack app.
     slackAppInfoChannelIdRef.current = channel.channel_type === 'slack' ? channel.id : null;
     if (channel.channel_type === 'slack' && client) {
+      const operation = operationGuard.begin();
       void (async () => {
         let info: SlackAppInfo | null = null;
         try {
@@ -3540,7 +4331,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
         } catch {
           info = null;
         }
-        if (slackAppInfoChannelIdRef.current === channel.id) {
+        if (operation.isCurrent() && slackAppInfoChannelIdRef.current === channel.id) {
           setSlackAppInfo(info);
         }
       })();
@@ -3615,50 +4406,105 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
       if (userMap && typeof userMap === 'object' && Object.keys(userMap).length > 0) {
         formValues.shortcut_user_map = JSON.stringify(userMap, null, 2);
       }
+    } else if (channel.channel_type === 'discord') {
+      formValues.discord_application_id = config?.application_id;
+      formValues.discord_guild_id = config?.guild_id;
+      formValues.discord_allowed_channel_ids = (config?.allowed_channel_ids as string[]) ?? [];
+      formValues.discord_allowed_user_ids = (config?.allowed_user_ids as string[]) ?? [];
+      formValues.discord_allowed_role_ids = (config?.allowed_role_ids as string[]) ?? [];
+      formValues.discord_message_content_enabled = config?.message_content_enabled ?? false;
+      formValues.discord_thread_mode = config?.thread_mode ?? 'public_thread_per_summon';
+      formValues.discord_thread_auto_archive_minutes = config?.thread_auto_archive_minutes ?? 1440;
+      formValues.discord_align_users = config?.align_discord_users ?? false;
+      const discordUserMap = config?.user_map as Record<string, string> | undefined;
+      if (
+        discordUserMap &&
+        typeof discordUserMap === 'object' &&
+        Object.keys(discordUserMap).length > 0
+      ) {
+        formValues.discord_user_map = JSON.stringify(discordUserMap, null, 2);
+      }
+      const catchUp = (config?.catch_up ?? {}) as Record<string, unknown>;
+      formValues.discord_catch_up_max_pages =
+        catchUp.max_pages ?? DEFAULT_DISCORD_CATCH_UP.max_pages;
+      formValues.discord_catch_up_max_messages =
+        catchUp.max_messages ?? DEFAULT_DISCORD_CATCH_UP.max_messages;
+      formValues.discord_catch_up_max_prompt_bytes =
+        catchUp.max_prompt_bytes ?? DEFAULT_DISCORD_CATCH_UP.max_prompt_bytes;
+      formValues.discord_catch_up_request_timeout_ms =
+        catchUp.request_timeout_ms ?? DEFAULT_DISCORD_CATCH_UP.request_timeout_ms;
+      formValues.discord_catch_up_rate_limit_max_retries =
+        catchUp.rate_limit_max_retries ?? DEFAULT_DISCORD_CATCH_UP.rate_limit_max_retries;
+      formValues.discord_catch_up_rate_limit_max_total_delay_ms =
+        catchUp.rate_limit_max_total_delay_ms ??
+        DEFAULT_DISCORD_CATCH_UP.rate_limit_max_total_delay_ms;
+      formValues.discord_files = false;
+      formValues.discord_agent_tools = [];
+      formValues.discord_outbound_enabled = config?.outbound_enabled ?? false;
+      formValues.discord_default_outbound_target = config?.default_outbound_target;
     }
 
     editForm.setFieldsValue(formValues);
     setEditModalOpen(true);
   };
 
-  const handleUpdate = () => {
+  const handleUpdate = async () => {
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     if (!editingChannel) return;
     if (!selectedAgent) {
       showError('Choose a supported agentic tool before saving this historical channel');
       return;
     }
-    editForm
-      .validateFields()
-      .then(() => {
-        // Use getFieldsValue(true) to include values from collapsed (unmounted)
-        // panels that validateFields() may omit.
-        const values = editForm.getFieldsValue(true);
-        const updates = extractFormData(
-          values,
-          editingChannel.config as Record<string, unknown>,
-          selectedAgent
-        );
-        onUpdate?.(editingChannel.id, updates);
-        editForm.resetFields();
-        setEditModalOpen(false);
-        setEditingChannel(null);
-        setChannelType('slack');
-        setRequiresSupportedToolSelection(false);
-      })
-      .catch((error) => {
-        console.error('Form validation failed:', error);
-        if (error.errorFields?.length > 0) {
-          showError(error.errorFields[0].errors[0] || 'Please fill in required fields');
+    try {
+      await editForm.validateFields();
+      if (!operation.isCurrent()) return;
+      // Use getFieldsValue(true) to include values from collapsed (unmounted)
+      // panels that validateFields() may omit.
+      const values = editForm.getFieldsValue(true);
+      if (values.channel_type === 'discord' && values.enabled !== false) {
+        const validation = validateDiscordConfig(discordConfigFromFormValues(values), {
+          requireBotToken: false,
+        });
+        if (!validation.ok) {
+          throw new Error(`Invalid Discord configuration: ${validation.errors.join('; ')}`);
         }
-      });
+      }
+      const updates = extractFormData(
+        values,
+        editingChannel.config as Record<string, unknown>,
+        selectedAgent
+      );
+      if (!operation.isCurrent()) return;
+      await onUpdate?.(editingChannel.id, updates, operation.isCurrent);
+      if (!operation.isCurrent()) return;
+      editForm.resetFields();
+      setEditModalOpen(false);
+      setEditingChannel(null);
+      setChannelType('slack');
+      setRequiresSupportedToolSelection(false);
+    } catch (error) {
+      if (!operation.isCurrent()) return;
+      console.error('Form validation failed:', error);
+      const validation = error as { errorFields?: { errors?: string[] }[] };
+      if (validation.errorFields?.length) {
+        showError(validation.errorFields[0]?.errors?.[0] || 'Please fill in required fields');
+      } else {
+        showError(error instanceof Error ? error.message : String(error));
+      }
+    }
   };
 
   const handleToggleEnabled = (channel: GatewayChannel) => {
-    onUpdate?.(channel.id, { enabled: !channel.enabled });
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    onUpdate?.(channel.id, { enabled: !channel.enabled }, operation.isCurrent);
   };
 
   const handleDelete = (channelId: string) => {
-    onDelete?.(channelId);
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
+    onDelete?.(channelId, operation.isCurrent);
   };
 
   const columns = [
@@ -3783,7 +4629,7 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
   return (
     <div>
       <ResponsiveSettingsHeader
-        description="Route messages from Slack, GitHub, Microsoft Teams, and other platforms to Agor sessions."
+        description="Route messages from Slack, Discord, GitHub, Microsoft Teams, and other platforms to Agor sessions."
         actions={(compact) => (
           <Space wrap style={{ width: compact ? '100%' : undefined }}>
             <Input
@@ -3843,7 +4689,8 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             No channels configured.
           </Typography.Text>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            Add a channel to route messages from Slack, Teams, or other platforms to Agor sessions.
+            Add a channel to route messages from Slack, Discord, Teams, or other platforms to Agor
+            sessions.
           </Typography.Text>
         </div>
       ) : (
@@ -3878,7 +4725,13 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             <Space style={{ marginLeft: 'auto' }}>
               <Button onClick={closeCreateModal}>Cancel</Button>
               <Button type="primary" loading={creating} onClick={handleCreatePrimary}>
-                {isFinalCreateStep ? 'Create channel' : 'Continue'}
+                {isFinalCreateStep
+                  ? channelType === 'discord'
+                    ? discordDraftId
+                      ? 'Verify and enable'
+                      : 'Create secure draft'
+                    : 'Create channel'
+                  : 'Continue'}
               </Button>
             </Space>
           </div>
@@ -3909,9 +4762,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             githubError={githubError}
             connectionTestResult={connectionTestResult}
             connectionTestLoading={connectionTestLoading}
+            discordDraftId={discordDraftId}
             onSlackTest={handleSlackTest}
             onShortcutTest={handleShortcutTest}
+            onDiscordTest={handleDiscordTest}
             slackAppInfo={null}
+            authorityGuard={operationGuard}
           />
         </Form>
       </AdaptiveSettingsModal>
@@ -3969,9 +4825,12 @@ export const GatewayChannelsTable: React.FC<GatewayChannelsTableProps> = ({
             githubError={null}
             connectionTestResult={connectionTestResult}
             connectionTestLoading={connectionTestLoading}
+            discordDraftId={null}
             onSlackTest={handleSlackEditTest}
             onShortcutTest={handleShortcutTest}
+            onDiscordTest={handleDiscordTest}
             slackAppInfo={slackAppInfo}
+            authorityGuard={operationGuard}
           />
         </Form>
       </AdaptiveSettingsModal>

@@ -298,6 +298,24 @@ describe('resolveEffectiveConfig', () => {
     expect(resolved.execution?.sandbox).toMatchObject({ enabled: true, home_mode: 'per_user' });
     expect(resolved.execution?.branch_rbac).not.toBe(true); // not sandbox mode → no forced RBAC
   });
+
+  it('projects the SDK-home rollout override without implicitly enabling the sandbox', () => {
+    const enabled = resolveEffectiveConfig({}, { AGOR_SANDBOX_SDK_HOME_MODE: 'per_branch' });
+    expect(enabled.execution?.sandbox).toEqual({ sdk_home_mode: 'per_branch' });
+    expect(enabled.execution?.branch_rbac).not.toBe(true);
+
+    const disabled = resolveEffectiveConfig(
+      { execution: { sandbox: { sdk_home_mode: 'per_branch' } } },
+      { AGOR_SANDBOX_SDK_HOME_MODE: 'inherit' }
+    );
+    expect(disabled.execution?.sandbox?.sdk_home_mode).toBe('inherit');
+  });
+
+  it('rejects an unknown AGOR_SANDBOX_SDK_HOME_MODE override', () => {
+    expect(() => resolveEffectiveConfig({}, { AGOR_SANDBOX_SDK_HOME_MODE: 'branch' })).toThrow(
+      /must be one of: inherit, per_branch/
+    );
+  });
 });
 
 describe('assertValidEffectiveExecutionConfig', () => {
@@ -854,6 +872,54 @@ describe('loadConfig', () => {
     __resetConfigCacheForTests();
     await fs.writeFile(configPath, yaml.dump({ metrics: true }), 'utf-8');
     await expect(loadConfig()).rejects.toThrow(/metrics must be an object/);
+  });
+
+  it('defaults APM service tracing to off and validates the depth knob', async () => {
+    const agorDir = path.join(tempDir, '.agor');
+    const configPath = path.join(agorDir, 'config.yaml');
+    await fs.mkdir(agorDir, { recursive: true });
+
+    // Default: off, present so callers can read it without optional-chaining.
+    expect(getDefaultConfig().metrics?.apm).toEqual({ trace_services: 'off' });
+
+    // Env override wins over file config, for flipping depth without a redeploy.
+    expect(
+      resolveEffectiveConfig(
+        { metrics: { apm: { trace_services: 'off' } } },
+        { AGOR_APM_TRACE_SERVICES: 'full' }
+      ).metrics?.apm?.trace_services
+    ).toBe('full');
+    expect(() => resolveEffectiveConfig({}, { AGOR_APM_TRACE_SERVICES: 'loud' })).toThrow(
+      /AGOR_APM_TRACE_SERVICES must be one of/
+    );
+
+    for (const depth of ['off', 'entrypoint', 'full'] as const) {
+      __resetConfigCacheForTests();
+      await fs.writeFile(
+        configPath,
+        yaml.dump({ metrics: { apm: { trace_services: depth } } }),
+        'utf-8'
+      );
+      await expect(loadConfig()).resolves.toMatchObject({
+        metrics: { apm: { trace_services: depth } },
+      });
+    }
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(
+      configPath,
+      yaml.dump({ metrics: { apm: { trace_services: 'verbose' } } }),
+      'utf-8'
+    );
+    await expect(loadConfig()).rejects.toThrow(/metrics\.apm\.trace_services must be one of/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(configPath, yaml.dump({ metrics: { apm: { surprise: true } } }), 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/metrics\.apm\.surprise/);
+
+    __resetConfigCacheForTests();
+    await fs.writeFile(configPath, yaml.dump({ metrics: { apm: [] } }), 'utf-8');
+    await expect(loadConfig()).rejects.toThrow(/metrics\.apm must be an object/);
   });
 
   it('accepts a deployment-owned agentic tool package list', async () => {

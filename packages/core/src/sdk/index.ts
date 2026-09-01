@@ -21,4 +21,4 @@ export type {
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
 // Codex SDK - direct type exports for convenience
-export type { CodexOptions, Thread, ThreadItem } from '@openai/codex-sdk';
+export type { CodexOptions, Thread, ThreadItem, TurnCompletedEvent } from '@openai/codex-sdk';

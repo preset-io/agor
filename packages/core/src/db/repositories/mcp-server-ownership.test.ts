@@ -20,11 +20,15 @@ import { MCPServerRepository } from './mcp-servers';
 import { RepoRepository } from './repos';
 import { SessionMCPServerRepository } from './session-mcp-servers';
 import { SessionRepository } from './sessions';
+import { UsersRepository } from './users';
 
 const ALICE = '00000000-0000-7000-8000-00000000a11c' as UserID;
 const BOB = '00000000-0000-7000-8000-00000000b0b0' as UserID;
 
 async function setupTenant(db: Database) {
+  const users = new UsersRepository(db);
+  await users.create({ user_id: ALICE, email: 'alice-mcp-owner@example.invalid', role: 'member' });
+  await users.create({ user_id: BOB, email: 'bob-mcp-owner@example.invalid', role: 'member' });
   const repo = await new RepoRepository(db).create({
     repo_id: generateId() as UUID,
     slug: `ownership-repo-${Math.floor(Math.random() * 1_000_000)}`,
@@ -219,7 +223,7 @@ describe('private MCP server ownership', () => {
       transport: 'http',
       url: 'https://mcp.linear.app/mcp',
       scope: 'session',
-      source: 'user',
+      source: 'catalog',
       owner_user_id: BOB,
       catalog_entry_name: 'com.linear/linear',
     });

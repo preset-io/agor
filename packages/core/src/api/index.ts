@@ -9,19 +9,21 @@ import type {
   AgenticToolPreset,
   Artifact,
   Board,
+  BoardCapabilityPolicies,
   BoardComment,
   BoardCommentCreate,
   BoardCommentPatch,
   BoardCommentReposition,
   BoardExportBlob,
-  BoardGroupGrantWithGroup,
   Branch,
+  BranchCapabilityPolicy,
   BranchEnvironmentUpdate,
-  BranchGroupGrantWithGroup,
+  CapabilityPolicyWorkspacePreferences,
   CardType,
   CardWithType,
   CloneRepositoryResult,
   CreateAgenticToolPreset,
+  CreateMCPServerInput,
   CreateSessionInput,
   GatewayChannel,
   GatewayChannelCreateData,
@@ -40,6 +42,12 @@ import type {
   MCPCatalogConnectData,
   MCPCatalogConnectResult,
   MCPCatalogEntry,
+  MCPCatalogReadiness,
+  MCPMarketplaceOverview,
+  MCPMarketplaceRemoveServerData,
+  MCPMarketplaceRemoveServerResult,
+  MCPMarketplaceToolPermissionData,
+  MCPMarketplaceToolPermissionResult,
   MCPMemberPolicySetting,
   MCPServer,
   Message,
@@ -67,6 +75,7 @@ import type {
   TemplateRenderResponse,
   TenantAgenticToolSettings,
   TenantAgenticToolSettingsPatch,
+  UpdateMCPServerInput,
   User,
   UserAvatarSettings,
   UserAvatarSyncRequest,
@@ -201,6 +210,51 @@ export interface TemplatesService {
   create(data: TemplateRenderRequest, params?: Params): Promise<TemplateRenderResponse>;
 }
 
+export interface MCPMarketplaceService {
+  find(params?: Params): Promise<MCPMarketplaceOverview>;
+}
+
+export interface MCPMarketplaceRemoveServerService {
+  create(
+    data: MCPMarketplaceRemoveServerData,
+    params?: Params
+  ): Promise<MCPMarketplaceRemoveServerResult>;
+}
+
+export interface MCPMarketplaceToolPermissionService {
+  create(
+    data: MCPMarketplaceToolPermissionData,
+    params?: Params
+  ): Promise<MCPMarketplaceToolPermissionResult>;
+}
+
+export interface BoardPermissionsService {
+  find(params?: Params): Promise<BoardCapabilityPolicies>;
+  patch(
+    id: null,
+    data: ClientInput<BoardCapabilityPolicies>,
+    params?: Params
+  ): Promise<BoardCapabilityPolicies>;
+}
+
+export interface BranchPermissionsService {
+  find(params?: Params): Promise<BranchCapabilityPolicy>;
+  patch(
+    id: null,
+    data: ClientInput<BranchCapabilityPolicy>,
+    params?: Params
+  ): Promise<BranchCapabilityPolicy>;
+}
+
+export interface WorkspacePreferencesService {
+  find(params?: Params): Promise<CapabilityPolicyWorkspacePreferences>;
+  patch(
+    id: null,
+    data: CapabilityPolicyWorkspacePreferences,
+    params?: Params
+  ): Promise<CapabilityPolicyWorkspacePreferences>;
+}
+
 /**
  * Service interfaces for type safety
  */
@@ -218,15 +272,19 @@ export interface ServiceTypes {
   users: User;
   groups: Group;
   'group-memberships': GroupMembership;
-  'boards/:id/owners': User;
-  'boards/:id/group-grants': BoardGroupGrantWithGroup;
-  'branches/:id/group-grants': BranchGroupGrantWithGroup;
+  'boards/:id/permissions': BoardCapabilityPolicies;
+  'branches/:id/permissions': BranchCapabilityPolicy;
+  'workspace-preferences': CapabilityPolicyWorkspacePreferences;
   cards: CardWithType;
   'card-types': CardType; // CardType CRUD
   artifacts: Artifact;
   'mcp-servers': MCPServer;
   'mcp-catalog': MCPCatalogEntry;
+  'mcp-catalog/readiness': MCPCatalogReadiness;
   'mcp-catalog/connect': MCPCatalogConnectResult;
+  'mcp-marketplace': MCPMarketplaceOverview;
+  'mcp-marketplace/remove-unattached': MCPMarketplaceRemoveServerResult;
+  'mcp-marketplace/tool-permission': MCPMarketplaceToolPermissionResult;
   'mcp-member-policy': MCPMemberPolicySetting;
   'kb/namespaces': KnowledgeNamespace;
   'kb/documents': KnowledgeDocument;
@@ -241,6 +299,26 @@ export interface ServiceTypes {
   'agentic-tool-presets': AgenticToolPreset;
   'opencode-auth': OpenCodeProviderSettings;
   'opencode-models': OpenCodeModelCatalog;
+  'executor-git-environment': ExecutorGitEnvironment;
+}
+
+/**
+ * Bounded plaintext capability returned only to authenticated Git executors.
+ *
+ * Keep this public client DTO structural: `@agor/git` is a private workspace
+ * package and must not appear in the packed `@agor-live/client` declaration
+ * graph. A daemon-side type-equivalence test keeps it aligned with the
+ * authoritative Git transport allowlist.
+ */
+export interface ExecutorGitEnvironment {
+  GITHUB_TOKEN?: string;
+  GH_TOKEN?: string;
+  HTTP_PROXY?: string;
+  HTTPS_PROXY?: string;
+  NO_PROXY?: string;
+  ALL_PROXY?: string;
+  SSL_CERT_FILE?: string;
+  SSL_CERT_DIR?: string;
 }
 
 /**
@@ -298,6 +376,14 @@ export interface GatewayChannelsService
     never,
     ClientInput<GatewayChannelPatchData> | null
   > {}
+
+/** MCP servers expose redacted entities but accept purpose-built auth patch DTOs. */
+export type MCPServersService = AgorService<
+  MCPServer,
+  ClientInput<CreateMCPServerInput>,
+  ClientInput<UpdateMCPServerInput>,
+  ClientInput<UpdateMCPServerInput> | null
+>;
 
 export type AgenticToolSettingsService = AgorService<
   TenantAgenticToolSettings,
@@ -588,16 +674,8 @@ export interface BoardsService extends AgorService<Board> {
   ensureTeammateWelcomeNote(data: TeammateWelcomeNoteRequest, params?: Params): Promise<Board>;
 }
 
-/**
- * Users service with git environment support
- */
+/** Users service custom methods. */
 export interface UsersService extends AgorService<User> {
-  /**
-   * Get the full resolved git environment for a user.
-   * Auth: service-account JWTs may fetch any user's env;
-   * regular users may only fetch their own.
-   */
-  getGitEnvironment(data: { userId: string }, params?: Params): Promise<Record<string, string>>;
   getAvatarSettings(data?: unknown, params?: Params): Promise<UserAvatarSettings>;
   updateAvatarSettings(
     data: Partial<UserAvatarSettings>,
@@ -756,6 +834,9 @@ export interface AgorClient
   service(path: 'repos/local'): ReposLocalService;
   service(path: 'branches'): BranchesService;
   service(path: 'boards'): BoardsService;
+  service(path: 'boards/:id/permissions'): BoardPermissionsService;
+  service(path: 'branches/:id/permissions'): BranchPermissionsService;
+  service(path: 'workspace-preferences'): WorkspacePreferencesService;
   service(path: 'schedules'): SchedulesService;
   service(path: 'gateway-channels'): GatewayChannelsService;
   service(path: 'kb/settings'): KnowledgeSettingsService;
@@ -771,9 +852,13 @@ export interface AgorClient
   service(path: 'cards'): AgorService<CardWithType>;
   service(path: 'card-types'): AgorService<CardType>;
   service(path: 'users'): UsersService;
-  service(path: 'mcp-servers'): AgorService<MCPServer>;
+  service(path: 'mcp-servers'): MCPServersService;
   service(path: 'mcp-catalog'): AgorService<MCPCatalogEntry>;
+  service(path: 'mcp-catalog/readiness'): AgorService<MCPCatalogReadiness>;
   service(path: 'mcp-catalog/connect'): MCPCatalogConnectService;
+  service(path: 'mcp-marketplace'): MCPMarketplaceService;
+  service(path: 'mcp-marketplace/remove-unattached'): MCPMarketplaceRemoveServerService;
+  service(path: 'mcp-marketplace/tool-permission'): MCPMarketplaceToolPermissionService;
   service(path: 'mcp-member-policy'): MCPMemberPolicyService;
   service(path: 'templates'): TemplatesService;
 
@@ -1219,7 +1304,6 @@ function extendUsersService(client: AgorClient): void {
   if (usersService[USERS_SERVICE_EXTENDED]) return;
   if (typeof usersService.methods === 'function') {
     usersService.methods(
-      'getGitEnvironment',
       'getAvatarSettings',
       'updateAvatarSettings',
       'syncAvatars',
@@ -1525,7 +1609,7 @@ export function createClient(
     let attemptCount = 0;
     const maxAttempts = options?.reconnectionAttempts ?? (isBrowser ? Infinity : 2);
 
-    socket.on('connect_error', (error: Error) => {
+    socket.on('connect_error', () => {
       attemptCount++;
       if (attemptCount === 1) {
         console.error(`✗ Daemon not running at ${url}`);

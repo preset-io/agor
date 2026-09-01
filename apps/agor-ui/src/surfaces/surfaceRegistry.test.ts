@@ -3,6 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { BRAND, surfaceTitle } from '../branding/brand';
 import {
+  getDemoRoutePaths,
   getRouteSurface,
   isKnowledgeRoutePath,
   isWorkspaceRoutePath,
@@ -43,7 +44,13 @@ describe('surface route registry', () => {
     }
   );
 
-  it.each(['/marketplace'])('classifies %s as Marketplace', (path) => {
+  it.each([
+    '/marketplace',
+    '/marketplace/catalog',
+    '/marketplace/servers',
+    '/marketplace/sessions',
+    '/marketplace/credentials',
+  ])('classifies %s as Marketplace', (path) => {
     expect(getRouteSurface(path).id).toBe('marketplace');
     expect(isWorkspaceRoutePath(path)).toBe(false);
     // Browsing the catalog must not spin up the board/session store.
@@ -73,6 +80,11 @@ describe('surface route registry', () => {
     expect(routeStartsWorkspaceRuntime('/demo/streamdown')).toBe(false);
     expect(routeUsesDeviceRouter('/demo/streamdown')).toBe(false);
     expect(routeUsesSharedUserSettings('/demo/streamdown')).toBe(false);
+  });
+
+  it('excludes the RBAC prototype from production demo route registration', () => {
+    expect(getDemoRoutePaths(false)).not.toContain('/demo/rbac-policy');
+    expect(getDemoRoutePaths(true)).toContain('/demo/rbac-policy');
   });
 
   it.each(['/demo', '/demo/', '/demo/anything-else'])(

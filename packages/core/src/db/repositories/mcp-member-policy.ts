@@ -14,10 +14,12 @@
  * the tenant value.
  */
 
+import { sql } from 'drizzle-orm';
 import type { MCPMemberPolicy, TenantID, UserID } from '../../types';
 import { DEFAULT_MCP_MEMBER_POLICY, MCP_MEMBER_POLICIES } from '../../types';
 import type { Database, TenantScopeAwareDatabase } from '../client';
-import { runWithTenantDatabaseScope } from '../tenant-scope';
+import { isPostgresDatabase } from '../database-wrapper';
+import { runWithTenantDatabaseScope, runWithTenantDatabaseTransaction } from '../tenant-scope';
 import { AppVariableRepository } from './app-variables';
 
 export const MCP_MEMBER_POLICY_NAMESPACE = 'mcp';
@@ -34,6 +36,15 @@ function parseStoredPolicy(raw: string | null): MCPMemberPolicy {
     `⚠️  Ignoring unrecognized mcp_member_policy "${trimmed}"; falling back to ${DEFAULT_MCP_MEMBER_POLICY}`
   );
   return DEFAULT_MCP_MEMBER_POLICY;
+}
+
+async function lockMcpMemberPolicyAuthority(
+  db: Database,
+  tenantId: TenantID | string | undefined
+): Promise<void> {
+  if (!isPostgresDatabase(db)) return;
+  const lockName = `agor:mcp-member-policy:${tenantId ?? '<static>'}`;
+  await db.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`);
 }
 
 /**
@@ -54,6 +65,26 @@ export async function resolveMcpMemberPolicy(
   });
 }
 
+/**
+ * Reload the policy under the transaction-wide authority lock shared with its
+ * writer. SQLite callers must already be in an IMMEDIATE transaction; the
+ * Marketplace action service supplies that boundary.
+ */
+export async function resolveMcpMemberPolicyForUpdate(
+  db: TenantScopeAwareDatabase | Database,
+  _userId: UserID | string | null | undefined,
+  tenantId: TenantID | string | undefined
+): Promise<MCPMemberPolicy> {
+  return runWithTenantDatabaseScope(db, tenantId, async (scopedDb) => {
+    await lockMcpMemberPolicyAuthority(scopedDb, tenantId);
+    const raw = await new AppVariableRepository(scopedDb).getPlain(
+      MCP_MEMBER_POLICY_NAMESPACE,
+      MCP_MEMBER_POLICY_KEY
+    );
+    return parseStoredPolicy(raw);
+  });
+}
+
 /** Write the tenant-wide MCP member policy. */
 export async function setMcpMemberPolicy(
   db: TenantScopeAwareDatabase | Database,
@@ -64,7 +95,23 @@ export async function setMcpMemberPolicy(
   if (!(MCP_MEMBER_POLICIES as readonly string[]).includes(policy)) {
     throw new Error(`Unknown mcp_member_policy: ${policy}`);
   }
-  await runWithTenantDatabaseScope(db, tenantId, async (scopedDb) => {
+  // A single SQLite UPSERT is already serialized against the Marketplace
+  // action's BEGIN IMMEDIATE transaction. Avoiding a needless nested client
+  // transaction also preserves `:memory:` connection identity in lightweight
+  // service harnesses.
+  if (!isPostgresDatabase(db)) {
+    await runWithTenantDatabaseScope(db, tenantId, (scopedDb) =>
+      new AppVariableRepository(scopedDb).set({
+        namespace: MCP_MEMBER_POLICY_NAMESPACE,
+        key: MCP_MEMBER_POLICY_KEY,
+        value: policy,
+        updated_by: updatedBy ?? null,
+      })
+    );
+    return;
+  }
+  await runWithTenantDatabaseTransaction(db, tenantId, async (scopedDb) => {
+    await lockMcpMemberPolicyAuthority(scopedDb, tenantId);
     await new AppVariableRepository(scopedDb).set({
       namespace: MCP_MEMBER_POLICY_NAMESPACE,
       key: MCP_MEMBER_POLICY_KEY,

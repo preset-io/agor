@@ -1,6 +1,6 @@
 import type { MCPServer, SessionID } from '@agor/core/types';
-import { describe, expect, it, vi } from 'vitest';
-import { getMcpServersForSession } from './scoping';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getMcpServersForSession, resolveScopedMCPAuthHeaders } from './scoping';
 import type { HandlerPermissionCapabilities } from './tool-permissions';
 
 const makeServer = (id: string, scope: MCPServer['scope'], name = id): MCPServer =>
@@ -8,16 +8,19 @@ const makeServer = (id: string, scope: MCPServer['scope'], name = id): MCPServer
     mcp_server_id: id,
     name,
     transport: 'http',
+    url: `https://${id}.example.test/mcp`,
     scope,
     source: 'user',
     enabled: true,
     created_at: new Date(),
     updated_at: new Date(),
-    auth: { type: 'token', token: `value-${id}` },
+    auth: { type: 'bearer', token: `value-${id}` },
   }) as unknown as MCPServer;
 
 /** A handler that can drop individual tools — keeps these cases about scoping. */
 const ENFORCING: HandlerPermissionCapabilities = { toolFiltering: 'exclude' };
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('getMcpServersForSession', () => {
   it('uses session-scoped effective config retrieval when available', async () => {
@@ -41,8 +44,8 @@ describe('getMcpServersForSession', () => {
     expect(findAll).not.toHaveBeenCalled();
     expect(listServers).not.toHaveBeenCalled();
     expect(servers).toEqual([
-      { server: globalServer, source: 'global' },
-      { server: sessionServer, source: 'session-assigned' },
+      { server: globalServer, source: 'global', oauthAuthResolution: 'not_applicable' },
+      { server: sessionServer, source: 'session-assigned', oauthAuthResolution: 'not_applicable' },
     ]);
   });
 
@@ -94,13 +97,17 @@ describe('getMcpServersForSession', () => {
     ]);
   });
 
-  it('filters private servers by session owner, not the OAuth context user', async () => {
+  it('filters private servers by the current prompt actor', async () => {
     const shared = makeServer('shared', 'global');
+    const actorPrivate = {
+      ...makeServer('actor-private', 'session'),
+      owner_user_id: 'prompt-user',
+    } as MCPServer;
     const foreignPrivate = {
       ...makeServer('foreign-private', 'global'),
       owner_user_id: 'owner-b',
     } as MCPServer;
-    const listEffectiveServers = vi.fn().mockResolvedValue([shared, foreignPrivate]);
+    const listEffectiveServers = vi.fn().mockResolvedValue([shared, actorPrivate, foreignPrivate]);
 
     const servers = await getMcpServersForSession(
       'session-a' as SessionID,
@@ -108,15 +115,14 @@ describe('getMcpServersForSession', () => {
         mcpServerRepo: { findAll: vi.fn() } as never,
         sessionMCPRepo: { listEffectiveServers } as never,
         forUserId: 'prompt-user',
-        sessionOwnerId: 'owner-a',
       },
       ENFORCING
     );
 
-    expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['shared']);
+    expect(servers.map(({ server }) => server.mcp_server_id)).toEqual(['shared', 'actor-private']);
   });
 
-  it('warns when a private server is withheld because session owner identity is missing', async () => {
+  it('warns when a private server is withheld because prompt actor identity is missing', async () => {
     const privateServer = {
       ...makeServer('private', 'session'),
       owner_user_id: 'owner-a',
@@ -137,14 +143,14 @@ describe('getMcpServersForSession', () => {
 
       expect(servers).toEqual([]);
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining('session owner identity is missing')
+        expect.stringContaining('prompt actor identity is missing')
       );
     } finally {
       warn.mockRestore();
     }
   });
 
-  it('passes the session owner to global repository filtering', async () => {
+  it('passes the prompt actor to global repository filtering', async () => {
     const findAll = vi.fn().mockResolvedValue([makeServer('shared', 'global')]);
     const listServers = vi.fn().mockResolvedValue([]);
 
@@ -154,15 +160,15 @@ describe('getMcpServersForSession', () => {
         mcpServerRepo: { findAll } as never,
         sessionMCPRepo: { listServers } as never,
         forUserId: 'prompt-user',
-        sessionOwnerId: 'owner-a',
       },
       ENFORCING
     );
 
-    expect(findAll).toHaveBeenCalledWith(
-      { scope: 'global', enabled: true, usableByUserId: 'owner-a' },
-      'prompt-user'
-    );
+    expect(findAll).toHaveBeenCalledWith({
+      scope: 'global',
+      enabled: true,
+      usableByUserId: 'prompt-user',
+    });
   });
 
   it('resolves an OAuth server whose only template is oauth_client_secret', async () => {
@@ -210,6 +216,7 @@ describe('getMcpServersForSession', () => {
         type: 'oauth',
         oauth_mode: 'per_user',
         oauth_access_token: '••••••••',
+        oauth_token_expires_at: 1,
       },
     } as MCPServer;
     const tokenServer = makeServer('token-server', 'global', 'token');
@@ -229,11 +236,242 @@ describe('getMcpServersForSession', () => {
     );
 
     expect(getAuthHeaders).toHaveBeenCalledWith(['oauth-server']);
-    const hydrated = servers.find(({ server }) => server.mcp_server_id === 'oauth-server')?.server;
-    expect(hydrated?.auth).toMatchObject({
+    const hydrated = servers.find(({ server }) => server.mcp_server_id === 'oauth-server');
+    expect(hydrated?.server.auth).toMatchObject({
       type: 'oauth',
       oauth_access_token: 'real-oauth-token',
     });
+    expect(hydrated?.oauthAuthResolution).toBe('available');
+    await expect(resolveScopedMCPAuthHeaders(hydrated!)).resolves.toEqual({
+      Authorization: 'Bearer real-oauth-token',
+    });
+  });
+
+  it('does not fall through when the scoped credential authority has no OAuth grant', async () => {
+    const oauthServer = {
+      ...makeServer('oauth-server', 'session', 'oauth'),
+      url: 'https://provider.example/mcp',
+      auth: {
+        type: 'oauth',
+        oauth_client_id: 'client-id',
+        oauth_client_secret: 'client-secret',
+        oauth_token_url: 'https://provider.example/token',
+      },
+    } as MCPServer;
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const servers = await getMcpServersForSession(
+      'session-a' as SessionID,
+      {
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: {
+          listEffectiveServers: vi.fn().mockResolvedValue([oauthServer]),
+        } as never,
+        mcpOAuthAuthHeadersRepo: { getAuthHeaders: vi.fn().mockResolvedValue({}) } as never,
+      },
+      ENFORCING
+    );
+
+    expect(servers[0].oauthAuthResolution).toBe('unavailable');
+    await expect(resolveScopedMCPAuthHeaders(servers[0])).resolves.toBeUndefined();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['file protocol', 'file:///tmp/mcp'],
+    ['embedded credentials', 'https://user:secret@mcp.example.test'],
+    ['malformed URL', 'not a url'],
+  ])('withholds a server whose resolved URL uses %s before SDK dispatch', async (_label, url) => {
+    const invalid = { ...makeServer('invalid', 'global'), url } as MCPServer;
+    const servers = await getMcpServersForSession(
+      'session-a' as SessionID,
+      {
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: { listEffectiveServers: vi.fn().mockResolvedValue([invalid]) } as never,
+      },
+      ENFORCING
+    );
+
+    expect(servers).toEqual([]);
+  });
+
+  it('withholds malformed secret-bearing templates without leaking their values', async () => {
+    const sentinel = 'SENTINEL_NO_MCP_DISPATCH_19d2';
+    const malformed = `${sentinel}{{#if user.env.MISSING_SECRET}}`;
+    const invalid = {
+      ...makeServer('invalid-template', 'global'),
+      url: `https://mcp.example.test/${malformed}`,
+      headers: { Authorization: malformed },
+      env: { MCP_SECRET: malformed },
+      auth: {
+        type: 'jwt',
+        api_url: `https://auth.example.test/${malformed}`,
+        api_token: malformed,
+        api_secret: malformed,
+      },
+    } as MCPServer;
+    const spies = [
+      vi.spyOn(console, 'log').mockImplementation(() => undefined),
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+      vi.spyOn(console, 'error').mockImplementation(() => undefined),
+      vi.spyOn(console, 'debug').mockImplementation(() => undefined),
+    ];
+    try {
+      const servers = await getMcpServersForSession(
+        'session-a' as SessionID,
+        {
+          mcpServerRepo: { findAll: vi.fn() } as never,
+          sessionMCPRepo: {
+            listEffectiveServers: vi.fn().mockResolvedValue([invalid]),
+          } as never,
+        },
+        ENFORCING
+      );
+
+      expect(servers).toEqual([]);
+      expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(sentinel);
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+
+  const markerFieldCases = [
+    {
+      family: 'url',
+      build: (value: string) => ({
+        ...makeServer('marker-url', 'global'),
+        url: `https://mcp.example.test/${value}`,
+      }),
+    },
+    {
+      family: 'headers',
+      build: (value: string) => ({
+        ...makeServer('marker-headers', 'global'),
+        headers: { 'X-Private': value },
+      }),
+    },
+    {
+      family: 'env',
+      build: (value: string) => ({
+        ...makeServer('marker-env', 'global'),
+        env: { PRIVATE_VALUE: value },
+      }),
+    },
+    {
+      family: 'bearer',
+      build: (value: string) => ({
+        ...makeServer('marker-bearer', 'global'),
+        auth: { type: 'bearer' as const, token: value },
+      }),
+    },
+    {
+      family: 'jwt',
+      build: (value: string) => ({
+        ...makeServer('marker-jwt', 'global'),
+        auth: {
+          type: 'jwt' as const,
+          api_url: 'https://auth.example.test/token',
+          api_token: 'configured',
+          api_secret: value,
+        },
+      }),
+    },
+    {
+      family: 'oauth',
+      build: (value: string) => ({
+        ...makeServer('marker-oauth', 'global'),
+        auth: { type: 'oauth' as const, oauth_client_secret: value },
+      }),
+    },
+  ];
+
+  it.each(
+    markerFieldCases.flatMap(({ family, build }) =>
+      (['{{', '}}'] as const).flatMap((delimiter) =>
+        (['stored', 'user.env'] as const).map((source) => ({
+          family,
+          build,
+          delimiter,
+          source,
+        }))
+      )
+    )
+  )(
+    'withholds a $source unmatched $delimiter marker in $family before executor dispatch',
+    async ({ build, delimiter, source, family }) => {
+      const sentinel = `SENTINEL_${source === 'stored' ? 'STORED' : 'ENV'}_${family}_${delimiter === '{{' ? 'OPEN' : 'CLOSE'}_${delimiter}`;
+      const storedValue = source === 'stored' ? sentinel : '{{ user.env.INJECTED_MARKER }}';
+      const userEnv = source === 'user.env' ? { INJECTED_MARKER: sentinel } : {};
+      const invalid = build(storedValue) as MCPServer;
+      const previousKeys = process.env.AGOR_USER_ENV_KEYS;
+      const previousValue = process.env.INJECTED_MARKER;
+      process.env.AGOR_USER_ENV_KEYS = Object.keys(userEnv).join(',');
+      Object.assign(process.env, userEnv);
+      const spies = [
+        vi.spyOn(console, 'log').mockImplementation(() => undefined),
+        vi.spyOn(console, 'warn').mockImplementation(() => undefined),
+        vi.spyOn(console, 'error').mockImplementation(() => undefined),
+        vi.spyOn(console, 'debug').mockImplementation(() => undefined),
+      ];
+      try {
+        const servers = await getMcpServersForSession(
+          'session-a' as SessionID,
+          {
+            mcpServerRepo: { findAll: vi.fn() } as never,
+            sessionMCPRepo: {
+              listEffectiveServers: vi.fn().mockResolvedValue([invalid]),
+            } as never,
+          },
+          ENFORCING
+        );
+        expect(servers).toEqual([]);
+        expect(JSON.stringify(spies.flatMap((spy) => spy.mock.calls))).not.toContain(sentinel);
+      } finally {
+        if (previousKeys === undefined) delete process.env.AGOR_USER_ENV_KEYS;
+        else process.env.AGOR_USER_ENV_KEYS = previousKeys;
+        if (previousValue === undefined) delete process.env.INJECTED_MARKER;
+        else process.env.INJECTED_MARKER = previousValue;
+        for (const spy of spies) spy.mockRestore();
+      }
+    }
+  );
+  it('can surface a sanitized authority failure separately from credential unavailability', async () => {
+    const server = makeServer('oauth-server', 'session', 'oauth');
+    server.url = 'https://provider.example/mcp';
+    server.auth = {
+      type: 'oauth',
+      oauth_client_id: 'client-id',
+      oauth_client_secret: 'client-secret',
+      oauth_token_url: 'https://provider.example/token',
+    };
+    const repositoryDetail = 'repository-sensitive-detail';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const servers = await getMcpServersForSession(
+      'session-a' as SessionID,
+      {
+        mcpServerRepo: { findAll: vi.fn() } as never,
+        sessionMCPRepo: {
+          listEffectiveServers: vi.fn().mockResolvedValue([server]),
+        } as never,
+        mcpOAuthAuthHeadersRepo: {
+          getAuthHeaders: vi.fn().mockRejectedValue(new Error(repositoryDetail)),
+        } as never,
+      },
+      ENFORCING
+    );
+
+    await expect(
+      resolveScopedMCPAuthHeaders(servers[0], { surfaceAuthorityError: true })
+    ).rejects.toMatchObject({
+      name: 'MCPOAuthAuthorityUnavailableError',
+      message: 'OAuth credential authority unavailable',
+    });
+    expect(servers[0].oauthAuthResolution).toBe('error');
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      '[mcp.auth] authority_unavailable authority=executor_repository'
+    );
+    expect(warn.mock.calls.flat().join(' ')).not.toContain(repositoryDetail);
   });
 });
 

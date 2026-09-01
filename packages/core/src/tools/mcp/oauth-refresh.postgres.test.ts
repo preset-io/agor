@@ -24,6 +24,7 @@ import {
   AmbiguousRefreshError,
   FailedRefreshError,
   GrantConfigurationChangedError,
+  OAuthRefreshAuthorityCancelledError,
   OAuthRefreshExchangeError,
   refreshAndPersistToken,
 } from './oauth-refresh';
@@ -433,6 +434,62 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         refresh_generation: 1,
         refresh_success_generation: 0,
       });
+    });
+
+    it('releases an authority-cancelled pre-dispatch claim without quarantining the grant', async () => {
+      const tokenProvider = await provider((_body, response) => {
+        response.writeHead(500);
+        response.end();
+      });
+      const bound = await seed(
+        'authority-cancel',
+        tokenProvider.url.replace('127.0.0.1', 'localhost')
+      );
+      let dnsStarted!: () => void;
+      let releaseDns!: () => void;
+      const dnsObserved = new Promise<void>((resolve) => (dnsStarted = resolve));
+      const dnsGate = new Promise<void>((resolve) => (releaseDns = resolve));
+      let current = true;
+      const refresh = refreshAndPersistToken({
+        db: dbA,
+        tenantId: bound.tenantId,
+        userId: bound.userId,
+        mcpServerId: bound.serverId,
+        validateGrant: async () => true,
+        observedRefreshVersion: initialRefreshVersion(bound),
+        allowLocalhostHttpDevelopment: true,
+        resolveDns: async () => {
+          dnsStarted();
+          await dnsGate;
+          return [{ address: '127.0.0.1', family: 4 }];
+        },
+        assertCurrent: () => {
+          if (!current) throw new Error('gateway task authority changed');
+        },
+      });
+      await dnsObserved;
+      current = false;
+      releaseDns();
+
+      const error = await refresh.catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(OAuthRefreshAuthorityCancelledError);
+      expect(error).toMatchObject({
+        code: 'oauth_refresh_authority_cancelled',
+        authorityCause: { message: 'gateway task authority changed' },
+      });
+      expect(tokenProvider.calls()).toBe(0);
+      const retained = await runWithTenantDatabaseScope(dbA, bound.tenantId, (scoped) =>
+        new UserMCPOAuthTokenRepository(scoped, masterSecret).getToken(bound.userId, bound.serverId)
+      );
+      expect(retained).toMatchObject({
+        oauth_access_token: 'expired-access-authority-cancel',
+        oauth_refresh_token: 'refresh-authority-cancel-0',
+        refresh_status: 'idle',
+        refresh_generation: 1,
+        refresh_success_generation: 0,
+      });
+      expect(retained?.refresh_claim_id).toBeUndefined();
+      expect(retained?.refresh_claimed_at).toBeUndefined();
     });
 
     it('marks a stale refresh owner ambiguous and never replays its rotating token', async () => {

@@ -62,14 +62,14 @@ Each branch is fully isolated. Changes in one don't affect another. AI agents ca
 
 A branch is a filesystem directory plus a database record. The record tracks:
 
-| Field                           | Purpose                                             |
-| ------------------------------- | --------------------------------------------------- |
-| `name`                          | Human-readable label shown on the card              |
-| `branch`                        | Git branch checked out in the working directory     |
-| `issue_url`, `pull_request_url` | GitHub linkage, auto-injected into zone prompts    |
-| `owners` / `others_can`         | RBAC permissions (when branch RBAC is enabled)      |
-| `board_id` + `(x, y)`           | Where the card lives on the canvas                  |
-| `environment`                   | Per-branch dev environment (start/stop, ports, URL) |
+| Field                              | Purpose                                             |
+| ---------------------------------- | --------------------------------------------------- |
+| `name`                             | Human-readable label shown on the card              |
+| `branch`                           | Git branch checked out in the working directory     |
+| `issue_url`, `pull_request_url`    | GitHub linkage, auto-injected into zone prompts     |
+| primary owner + permission package | RBAC roles, file access, and session sharing        |
+| `board_id` + `(x, y)`              | Where the card lives on the canvas                  |
+| `environment`                      | Per-branch dev environment (start/stop, ports, URL) |
 
 <img
   src="/screenshots/branch-modal.png"
@@ -80,6 +80,29 @@ A branch is a filesystem directory plus a database record. The record tracks:
 _Behind every card: the branch details modal (General / Sessions / Environment / Files / Schedule tabs). The same fields the table above describes, rendered as actual inputs._
 
 Sessions, tasks, comments, and artifacts all reference a branch. **The branch is the spine.**
+
+---
+
+## Asynchronous filesystem readiness
+
+Branch creation records the branch and dispatches worktree or clone materialization asynchronously.
+The create response can therefore contain `filesystem_status: "creating"`; REST and UI creation are
+not blocked while Git work completes.
+
+MCP callers can set `waitForReady: true` on `agor_branches_create` to wait in the creation call, or
+use the retry-safe `agor_branches_wait_for_ready` tool before creating the first session. Waiting is
+opt-in, so existing MCP callers—and all REST and UI callers—remain asynchronous. Both paths check
+immediately, then perform a fresh tenant- and RBAC-scoped branch read once per second. They wait for
+45 seconds by default and accept a bounded `waitTimeoutMs` from 1 second to 5 minutes. Values longer
+than the MCP client's request deadline require that client or host deadline to be raised as well.
+
+The standalone wait tool is the safer choice when request replay is possible: branch creation is not
+idempotent, and losing a waited create response does not cancel the branch that was already created.
+Long clones can safely repeat the read-only wait call. A timeout preserves the branch and does not
+cancel or retry materialization; terminal failures return the refreshed branch and its persisted safe
+error. Client cancellation only stops further polling. No database transaction or connection is
+retained between reads; each individual read remains subject to the daemon's normal database query
+timeout.
 
 ---
 
@@ -249,15 +272,27 @@ The branch is also where several other features attach:
 
 ## Permissions (RBAC)
 
-When `execution.branch_rbac: true` is set, branches enforce ownership and a per-tier `others_can` permission:
+When `execution.branch_rbac: true` is set, every branch has one primary owner and a complete permission package. Primary ownership cannot be reassigned.
 
-| Tier      | What others can do                                                                           |
-| --------- | -------------------------------------------------------------------------------------------- |
-| `none`    | No access, completely private to owners                                                     |
-| `view`    | Read branches, sessions, tasks, messages                                                     |
-| `session` | **Default.** Create their own sessions on this branch                                        |
-| `prompt`  | Prompt any session, including others' (but the session still runs as its creator's identity) |
-| `all`     | Full control                                                                                 |
+A branch can inherit its board's defaults or override the whole package. Choosing an override starts with a copy of the current defaults, so you only need to change the exceptions. Moving an inherited branch to another board is blocked until you choose an override; this prevents a move from silently changing access.
+
+| Role         | What it allows                                                                      |
+| ------------ | ----------------------------------------------------------------------------------- |
+| Viewer       | View the branch and its conversations                                               |
+| Collaborator | Viewer access plus creating and prompting branch-home Sessions                      |
+| Manager      | Collaborator access plus branch, environment, session-lifecycle, and access control |
+
+File access is selected separately as `none`, `read`, or `read/write`. A Collaborator or Manager can open a terminal only with `read` or `read/write` file access.
+
+Each access row names one person or group. A direct person entry wins over group memberships. Otherwise group entries combine and the highest file access wins. **Others** applies only to active members of the workspace who have no direct or group match.
+
+Collaborators and Managers may prompt another person's branch-home Session only
+when a workspace admin enables session sharing and the effective branch
+permission package enables **Allow shared session prompting**. The prompt is
+attributed to and executes as the actual caller; only the conversation and
+branch SDK state are shared. Sessions that use their creator's execution
+home—including Sessions created before a branch adopts branch SDK homes—are
+never shareable. Start a new independent branch-home Session instead.
 
 See **[Security](/security)** for deployment modes and the trust boundary discussion.
 

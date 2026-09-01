@@ -13,6 +13,10 @@ import { useEffect, useState } from 'react';
 
 const LAST_BRANCH_KEY = 'agor-marketplace-branch';
 
+function branchPreferenceKey(userId: string | undefined): string | null {
+  return userId ? `${LAST_BRANCH_KEY}:${userId}` : null;
+}
+
 export interface ConnectTargets {
   branches: Branch[];
   loading: boolean;
@@ -58,18 +62,22 @@ export function useConnectTargets(client: AgorClient | null, enabled: boolean): 
   return { branches, loading, error };
 }
 
-/** The branch the user last connected into, so the picker is usually pre-answered. */
-export function getLastConnectBranchId(): string | null {
+/** The branch this user last connected into, so the picker is usually pre-answered. */
+export function getLastConnectBranchId(userId: string | undefined): string | null {
+  const key = branchPreferenceKey(userId);
+  if (!key) return null;
   try {
-    return localStorage.getItem(LAST_BRANCH_KEY);
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-export function rememberConnectBranchId(branchId: string): void {
+export function rememberConnectBranchId(userId: string | undefined, branchId: string): void {
+  const key = branchPreferenceKey(userId);
+  if (!key) return;
   try {
-    localStorage.setItem(LAST_BRANCH_KEY, branchId);
+    localStorage.setItem(key, branchId);
   } catch {
     // localStorage full or unavailable
   }

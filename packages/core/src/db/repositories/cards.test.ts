@@ -5,12 +5,14 @@
  */
 
 import type { BoardID, CardID, UUID } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
-import { dbTest } from '../test-helpers';
+import { ownedDbTest as dbTest } from '../test-helpers';
+import { BoardObjectRepository } from './board-objects';
 import { BoardRepository } from './boards';
 import { CardRepository } from './cards';
+import { UsersRepository } from './users';
 
 async function createBoard(db: Database): Promise<BoardID> {
   const board = await new BoardRepository(db).create({
@@ -77,9 +79,52 @@ describe('CardRepository.findAll', () => {
   });
 });
 
+describe('CardRepository.findByZoneId', () => {
+  dbTest('joins placements in one query instead of one lookup per card', async ({ db }) => {
+    const board = await createBoard(db);
+    const cards = new CardRepository(db);
+    const objects = new BoardObjectRepository(db);
+    const first = await cards.create({ board_id: board, title: 'first' });
+    const second = await cards.create({ board_id: board, title: 'second' });
+    await objects.create({
+      board_id: board,
+      card_id: first.card_id as CardID,
+      position: { x: 0, y: 0 },
+      zone_id: 'todo',
+    });
+    await objects.create({
+      board_id: board,
+      card_id: second.card_id as CardID,
+      position: { x: 1, y: 0 },
+      zone_id: 'done',
+    });
+
+    const client = (
+      db as unknown as { $client: { execute: (...args: unknown[]) => Promise<unknown> } }
+    ).$client;
+    const execute = vi.spyOn(client, 'execute');
+    const result = await cards.findByZoneId(board, 'todo');
+
+    expect(result.map((card) => card.title)).toEqual(['first']);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('CardRepository.findVisibleById', () => {
   dbTest('resolves prefixes only among boards visible to the caller', async ({ db }) => {
     const userId = generateId() as UUID;
+    const hiddenOwnerId = generateId() as UUID;
+    const users = new UsersRepository(db);
+    await users.create({
+      user_id: userId,
+      email: `visible-card-owner-${userId}@example.invalid`,
+      role: 'member',
+    });
+    await users.create({
+      user_id: hiddenOwnerId,
+      email: `hidden-card-owner-${hiddenOwnerId}@example.invalid`,
+      role: 'member',
+    });
     const boards = new BoardRepository(db);
     const visibleBoard = await boards.create({
       board_id: generateId(),
@@ -90,7 +135,7 @@ describe('CardRepository.findVisibleById', () => {
     const hiddenBoard = await boards.create({
       board_id: generateId(),
       name: 'Hidden private board',
-      created_by: generateId(),
+      created_by: hiddenOwnerId,
       access_mode: 'private',
     });
     const repo = new CardRepository(db);

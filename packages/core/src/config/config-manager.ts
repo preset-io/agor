@@ -32,6 +32,7 @@ import { assertValidMultiTenancyConfig } from './multitenancy';
 import { AgorPasswordPolicyProfile } from './password-policy';
 import { isPlainConfigRecord } from './plain-record';
 import {
+  type AgorApmSettings,
   type AgorConfig,
   AgorExternalIdentityProvider,
   AgorExternalIdentityProvisioning,
@@ -39,6 +40,7 @@ import {
   AgorRoleAuthority,
   type AgorStatsDSettings,
   AgorUserLifecycleAuthority,
+  APM_TRACE_SERVICE_DEPTHS,
   BRANCH_STORAGE_MODES,
   type BranchStorageMode,
   DEFAULT_BRANCH_STORAGE_MODE,
@@ -343,6 +345,18 @@ function validateStatsDConfig(statsd: AgorStatsDSettings | undefined): void {
   }
 }
 
+function validateApmConfig(apm: AgorApmSettings | undefined): void {
+  if (apm === undefined) return;
+  if (!apm || typeof apm !== 'object' || Array.isArray(apm)) {
+    throw new Error('Config error: metrics.apm must be an object');
+  }
+  if (apm.trace_services !== undefined && !APM_TRACE_SERVICE_DEPTHS.includes(apm.trace_services)) {
+    throw new Error(
+      `Config error: metrics.apm.trace_services must be one of: ${APM_TRACE_SERVICE_DEPTHS.join(', ')}`
+    );
+  }
+}
+
 function parseOptionalBooleanEnvironmentValue(
   value: string | undefined,
   name: string
@@ -351,6 +365,18 @@ function parseOptionalBooleanEnvironmentValue(
   if (value === '1' || value === 'true') return true;
   if (value === '0' || value === 'false') return false;
   throw new Error(`Config error: ${name} must be one of: true, false, 1, 0`);
+}
+
+function parseOptionalApmTraceDepthEnvironmentValue(
+  value: string | undefined
+): AgorApmSettings['trace_services'] | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (!APM_TRACE_SERVICE_DEPTHS.includes(value as never)) {
+    throw new Error(
+      `Config error: AGOR_APM_TRACE_SERVICES must be one of: ${APM_TRACE_SERVICE_DEPTHS.join(', ')}`
+    );
+  }
+  return value as AgorApmSettings['trace_services'];
 }
 
 function parseOptionalPortEnvironmentValue(
@@ -366,6 +392,14 @@ function parseOptionalPortEnvironmentValue(
     throw new Error(`Config error: ${name} must be an integer from 1 to 65535`);
   }
   return port;
+}
+
+function parseOptionalSdkHomeModeEnvironmentValue(
+  value: string | undefined
+): 'inherit' | 'per_branch' | undefined {
+  if (value === undefined || value === '') return undefined;
+  if (value === 'inherit' || value === 'per_branch') return value;
+  throw new Error('Config error: AGOR_SANDBOX_SDK_HOME_MODE must be one of: inherit, per_branch');
 }
 
 /**
@@ -830,6 +864,7 @@ function validateConfig(config: AgorConfig): void {
     'protect_secrets',
     'isolate_branches',
     'home_mode',
+    'sdk_home_mode',
     'preserve_canonical_home_alias',
     'extra_allow_write',
     'extra_deny_read',
@@ -979,7 +1014,7 @@ function validateConfig(config: AgorConfig): void {
   ) {
     throw new Error('Config error: metrics must be an object');
   }
-  only(config.metrics, 'metrics', ['statsd']);
+  only(config.metrics, 'metrics', ['statsd', 'apm']);
   only(config.metrics?.statsd, 'metrics.statsd', [
     'enabled',
     'host',
@@ -987,7 +1022,9 @@ function validateConfig(config: AgorConfig): void {
     'prefix',
     'global_tags',
   ]);
+  only(config.metrics?.apm, 'metrics.apm', ['trace_services']);
   validateStatsDConfig(config.metrics?.statsd);
+  validateApmConfig(config.metrics?.apm);
   only(legacyConfig.onboarding, 'onboarding', [
     ...RETIRED_CONFIG_KEYS.onboarding,
     'frameworkRepoUrl',
@@ -1380,6 +1417,9 @@ export function getDefaultConfig(): AgorConfig {
         prefix: 'agor.daemon.',
         global_tags: {},
       },
+      apm: {
+        trace_services: 'off',
+      },
     },
     multi_tenancy: {
       filesystem_isolation_enabled: false,
@@ -1411,6 +1451,7 @@ export function resolveEffectiveConfig(
     'AGOR_STATSD_ENABLED'
   );
   const statsdPort = parseOptionalPortEnvironmentValue(env.AGOR_STATSD_PORT, 'AGOR_STATSD_PORT');
+  const apmTraceServices = parseOptionalApmTraceDepthEnvironmentValue(env.AGOR_APM_TRACE_SERVICES);
   const externalLaunch = resolveEffectiveExternalLaunchConfig(config.external_launch, env);
 
   // Resolve the effective Unix isolation mode (env override wins) so the
@@ -1440,6 +1481,7 @@ export function resolveEffectiveConfig(
     env.AGOR_SANDBOX_HOME_MODE === 'per_user' || env.AGOR_SANDBOX_HOME_MODE === 'shared'
       ? env.AGOR_SANDBOX_HOME_MODE
       : undefined;
+  const envSdkHomeMode = parseOptionalSdkHomeModeEnvironmentValue(env.AGOR_SANDBOX_SDK_HOME_MODE);
   let resolvedSandbox = config.execution?.sandbox;
   if (sandboxIsolation) {
     resolvedSandbox = {
@@ -1455,6 +1497,13 @@ export function resolveEffectiveConfig(
       ...(envSandboxEnabled ? { enabled: true } : {}),
       ...(envHomeMode ? { home_mode: envHomeMode } : {}),
     };
+  }
+  // SDK-home relocation is an independent rollout control: setting it must
+  // not implicitly enable or weaken the filesystem sandbox. The rich/full
+  // development profile opts in explicitly, while ordinary deployments keep
+  // the legacy-safe `inherit` default when neither YAML nor env names a mode.
+  if (envSdkHomeMode) {
+    resolvedSandbox = { ...resolvedSandbox, sdk_home_mode: envSdkHomeMode };
   }
   const resolvedExecutorResponse =
     defaults.execution?.executor_response ||
@@ -1532,11 +1581,17 @@ export function resolveEffectiveConfig(
         ...(statsdPort !== undefined ? { port: statsdPort } : {}),
         ...(env.AGOR_STATSD_PREFIX ? { prefix: env.AGOR_STATSD_PREFIX } : {}),
       },
+      apm: {
+        ...defaults.metrics?.apm,
+        ...config.metrics?.apm,
+        ...(apmTraceServices !== undefined ? { trace_services: apmTraceServices } : {}),
+      },
     },
     uploads: { ...defaults.uploads, ...config.uploads },
     multi_tenancy: { ...defaults.multi_tenancy, ...config.multi_tenancy },
   };
   validateStatsDConfig(resolved.metrics?.statsd);
+  validateApmConfig(resolved.metrics?.apm);
   return resolved;
 }
 
@@ -2237,6 +2292,43 @@ export function getBranchesDir(tenantId?: string): string {
  */
 export function getBranchPath(repoSlug: string, branchName: string, tenantId?: string): string {
   return path.join(getBranchesDir(tenantId), repoSlug, branchName);
+}
+
+/**
+ * Get the on-disk root for per-branch SDK homes.
+ *
+ * Returns: $AGOR_DATA_HOME/branch-homes
+ *
+ * A sibling of `worktrees/` and `homes/` (see {@link getBranchesDir},
+ * `resolveOwnerHomeStore`). Purely additive — nothing existing moves. Inherits
+ * filesystem-multitenancy isolation via {@link getTenantDataRoot}. See design
+ * §6.2.
+ *
+ * @returns Absolute path to the branch-homes root
+ */
+export function getBranchHomesDir(tenantId?: string): string {
+  return path.join(getTenantDataRoot(tenantId), 'branch-homes');
+}
+
+/**
+ * Get the per-branch SDK home path for a specific branch.
+ *
+ * Returns: $AGOR_DATA_HOME/branch-homes/<branchId>
+ *
+ * Keyed by the immutable `branchId` — NOT the branch name — because names are
+ * mutable and non-unique across repos. This is the single resolver that derives
+ * the path from the branch id, so the on-disk location cannot drift or be
+ * injected (the branch record only stores a boolean/enum intent, never a path;
+ * see design §9.2).
+ *
+ * @param branchId - The branch's immutable id
+ * @returns Absolute path to the branch's SDK home
+ */
+export function getBranchHomePath(branchId: string, tenantId?: string): string {
+  if (!branchId || branchId.includes('/') || branchId.includes('..')) {
+    throw new Error(`Invalid branchId for SDK home path: ${JSON.stringify(branchId)}`);
+  }
+  return path.join(getBranchHomesDir(tenantId), branchId);
 }
 
 /**

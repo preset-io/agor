@@ -1,4 +1,4 @@
-import type { AgorClient, Board, Branch, Repo, User } from '@agor-live/client';
+import type { AgorClient, Board, Branch, Repo } from '@agor-live/client';
 import { act, render, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import { useCallback, useLayoutEffect, useRef, useState } from 'react';
@@ -27,24 +27,11 @@ const branch = {
   name: 'teammate',
   filesystem_status: 'ready',
   created_by: 'user-creator',
+  primary_owner_user_id: 'user-owner',
 } as unknown as Branch;
 const repo = { repo_id: 'repo-1', slug: 'preset-io/agor' } as unknown as Repo;
-const owner = { user_id: 'user-owner', name: 'owner', role: 'member' } as unknown as User;
 
-// A real (stable) client so the panel's owners effect actually runs: with
-// `client={null}` it early-returns and the guard proves nothing about it.
-const ownersFind = vi.fn(async () => [owner]);
-const ownersService = { find: ownersFind, on: () => {}, off: () => {} };
-const client = { service: () => ownersService } as unknown as AgorClient;
-
-// Let the owners request settle so its state update is not miscounted as a
-// re-render caused by the parent.
-async function settleOwnersFetch() {
-  await waitFor(() => {
-    expect(ownersFind).toHaveBeenCalled();
-  });
-  await act(async () => {});
-}
+const client = { service: () => ({}) } as unknown as AgorClient;
 
 // Mirror of App's `useStableCallback`: freeze a handler's identity across renders
 // while delegating to the latest impl via a ref. The inner App stabilizes the
@@ -125,7 +112,6 @@ describe('BoardTeammatePanel memo + prop-stabilization re-render bailout', () =>
   beforeEach(() => {
     panelRenders = 0;
     triggerParentRerender = () => {};
-    ownersFind.mockClear();
     agorStore.setState({ ...EMPTY_MAPS });
   });
 
@@ -135,7 +121,6 @@ describe('BoardTeammatePanel memo + prop-stabilization re-render bailout', () =>
     await waitFor(() => {
       expect(panelRenders).toBeGreaterThanOrEqual(1);
     });
-    await settleOwnersFetch();
     const baseline = panelRenders;
 
     // Parent re-renders without changing any prop value or touching the store.
@@ -166,23 +151,5 @@ describe('BoardTeammatePanel memo + prop-stabilization re-render bailout', () =>
     await waitFor(() => {
       expect(panelRenders).toBeGreaterThan(baseline);
     });
-  });
-
-  it('does not refetch branch owners when unrelated store slices churn', async () => {
-    render(<ParentHarness stabilize={true} />);
-    await settleOwnersFetch();
-    expect(ownersFind).toHaveBeenCalledTimes(1);
-
-    // A patched branch row hands out a new Branch identity, and the user map is
-    // replaced wholesale on hydration. Neither changes who owns the branch, so
-    // neither may re-fire the owners request.
-    await act(async () => {
-      agorStore.setState({
-        branchById: new Map([[branch.branch_id, { ...branch }]]),
-        userById: new Map([[owner.user_id, owner]]),
-      });
-    });
-
-    expect(ownersFind).toHaveBeenCalledTimes(1);
   });
 });

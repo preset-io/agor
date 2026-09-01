@@ -11,6 +11,7 @@
  * - Yield structured events for database persistence
  */
 
+import { projectClaudeResultResponse, SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE } from '@agor/core';
 import {
   SUPPRESSED_CLAUDE_STATUSES,
   shouldSuppressClaudeSystemEvent,
@@ -25,7 +26,7 @@ import type {
   SDKUserMessage,
   SDKUserMessageReplay,
 } from '@agor/core/sdk';
-import type { SessionID } from '@agor/core/types';
+import type { ContextUsageSnapshot, SessionID } from '@agor/core/types';
 import { MessageRole } from '@agor/core/types';
 
 /**
@@ -81,8 +82,8 @@ export type ProcessedEvent =
       parent_tool_use_id?: string | null;
       agentSessionId?: string;
       resolvedModel?: string;
-      /** Set on the synthesized result message emitted for a zero-turn success
-       * (no real assistant turns) — the only signal safe to gate auth classification on. */
+      /** Set on the fixed, synthesized message emitted for a zero-turn success
+       * (no real assistant turns). Raw provider result prose is never copied. */
       isSynthesizedResult?: boolean;
     }
   | {
@@ -110,7 +111,9 @@ export type ProcessedEvent =
     }
   | {
       type: 'result';
-      raw_sdk_message: SDKResultMessage; // Pass the entire SDK message unchanged
+      /** Internal-only SDK value used for accounting before the executor applies
+       * the closed persistence projection. Never persist or publish directly. */
+      raw_sdk_message: SDKResultMessage;
       agentSessionId?: string;
     }
   | {
@@ -147,8 +150,8 @@ export type ProcessedEvent =
     }
   | {
       type: 'context_usage';
-      /** Raw response from SDK getContextUsage() — authoritative context window snapshot */
-      contextUsage: import('@agor/core/sdk').SDKControlGetContextUsageResponse;
+      /** Closed canonical projection of SDK getContextUsage(). */
+      contextUsage: ContextUsageSnapshot;
     }
   | {
       type: 'stopped';
@@ -524,17 +527,11 @@ export class SDKMessageProcessor {
   private handleResult(msg: SDKResultMessage): ProcessedEvent[] {
     const events: ProcessedEvent[] = [];
 
-    // The SDK puts final output text in result.result for both normal prompts and local commands.
-    // For local commands (e.g. /usage, /cost), this is the ONLY output (no assistant messages).
-    // For normal prompts, assistant messages are already streamed separately.
-    // We emit result text as a system message when no assistant messages were produced.
-    if (
-      msg.subtype === 'success' &&
-      'result' in msg &&
-      msg.result &&
-      typeof msg.result === 'string' &&
-      msg.result.trim().length > 0
-    ) {
+    // A zero-turn result is provider-controlled text with no model message boundary.
+    // Never copy it into conversation content: messages are persisted and published
+    // in realtime before any downstream UI can distinguish a provider failure from
+    // a local command result.
+    if (projectClaudeResultResponse(msg)?.subtype === 'success') {
       const hasAssistantMessages = this.state.assistantMessageCount > 0;
       if (!hasAssistantMessages) {
         events.push({
@@ -543,7 +540,7 @@ export class SDKMessageProcessor {
           content: [
             {
               type: 'text',
-              text: msg.result,
+              text: SAFE_ZERO_TURN_PROVIDER_RESULT_MESSAGE,
             },
           ],
           toolUses: undefined,
@@ -558,7 +555,7 @@ export class SDKMessageProcessor {
     events.push(
       {
         type: 'result',
-        raw_sdk_message: msg, // Pass the entire SDK message unchanged
+        raw_sdk_message: msg,
         agentSessionId: this.state.capturedAgentSessionId,
       },
       {
@@ -779,7 +776,7 @@ export class SDKMessageProcessor {
     if (type === 'auth_status') {
       const isAuth = msg.isAuthenticating as boolean | undefined;
       const error = msg.error as string | undefined;
-      if (error) return `Authentication error: ${error}`;
+      if (error) return 'Authentication failed. Review the saved provider configuration.';
       return isAuth ? 'Authenticating...' : 'Authentication complete';
     }
 

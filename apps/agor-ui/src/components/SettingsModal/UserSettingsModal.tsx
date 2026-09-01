@@ -62,13 +62,18 @@ import {
   Typography,
   theme,
 } from 'antd';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { isIdentityCapabilityAvailable, useAuthConfig } from '../../hooks/useAuthConfig';
+import {
+  useAuthenticatedAuthorityScope,
+  useAuthorityOperationGuard,
+} from '../../hooks/useAuthorityOperationGuard';
 import { useAgorStore } from '../../store/agorStore';
 import { selectMcpServerById } from '../../store/selectors';
 import { buildAgenticToolCredentialPatch } from '../../utils/agenticToolCredentials';
 import { DEFAULT_AUDIO_PREFERENCES } from '../../utils/audio';
 import { copyToClipboard } from '../../utils/clipboard';
+import { isOnboardingDeferred, type OnboardingReopenMode } from '../../utils/onboardingLifecycle';
 import {
   passwordPolicyHelp,
   passwordPolicyRequirements,
@@ -251,19 +256,26 @@ export interface UserSettingsModalProps {
   user: User | null;
   client: AgorClient | null;
   currentUser?: User | null;
-  onUpdate?: (userId: string, updates: UpdateUserInput) => Promise<void>;
-  onRestartOnboarding?: () => void | Promise<void>;
+  onUpdate?: (
+    userId: string,
+    updates: UpdateUserInput,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
+  onReopenOnboarding?: (
+    mode: OnboardingReopenMode,
+    shouldApply?: () => boolean
+  ) => void | Promise<void>;
   initialTab?: string;
 }
 
-export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
+const UserSettingsModalForIdentity: React.FC<UserSettingsModalProps> = ({
   open,
   onClose,
   user,
   client,
   currentUser,
   onUpdate,
-  onRestartOnboarding,
+  onReopenOnboarding,
   initialTab,
 }) => {
   const { token } = theme.useToken();
@@ -322,8 +334,22 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   const passwordRequirements = passwordPolicyRequirements(authConfig?.passwordPolicy);
   const isEditingOther = !!user && !!currentUser && user.user_id !== currentUser.user_id;
   const isSelf = !!user && !!currentUser && user.user_id === currentUser.user_id;
+  const canResumeOnboarding =
+    isSelf && user?.onboarding_completed !== true && isOnboardingDeferred(user?.preferences);
   const canEditTarget =
     !isEditingOther || (isAdmin && hasRoleAuthorityOver(currentUser?.role, user?.role));
+  const callerIdentityKey = currentUser
+    ? `${currentUser.user_id}:${currentUser.role}:${user?.user_id ?? '__no-target__'}`
+    : null;
+  const callerAuthority = useAuthenticatedAuthorityScope(client, callerIdentityKey);
+  const operationScope = useMemo(
+    () =>
+      open && user?.user_id && callerAuthority.operationScope
+        ? [...callerAuthority.operationScope, user.user_id, canEditTarget]
+        : null,
+    [callerAuthority.operationScope, canEditTarget, open, user?.user_id]
+  );
+  const operationGuard = useAuthorityOperationGuard(operationScope);
   const canAdministerTarget = isAdmin && canEditTarget;
   const canWriteIdentity = canEditTarget && identityWriteAvailable;
   const canWriteRole = canAdministerTarget && !isSelf && roleWriteAvailable;
@@ -436,6 +462,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Track which of those panels the user has edited so Save flushes ALL of them
   // — otherwise editing one panel and saving from another would drop the edit.
   const [dirtyMainPanels, setDirtyMainPanels] = useState<Set<string>>(() => new Set());
+
+  // Socket reauthentication preserves this same user's form drafts, but any
+  // spinner/result ownership belongs to the old authority generation. Release
+  // those locks synchronously so a stale finally block cannot wedge Settings.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: operationScope intentionally releases stale generation-owned UI locks
+  useLayoutEffect(() => {
+    setSavingModal(false);
+    setSavingToolField({});
+    setSavingEnvVars({});
+    setLoadingGroups(false);
+  }, [operationScope]);
+
   const markMainPanelDirty = useCallback((panel: string) => {
     setDirtyMainPanels((prev) => (prev.has(panel) ? prev : new Set(prev).add(panel)));
   }, []);
@@ -477,7 +515,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   );
 
   const loadUserGroups = useCallback(async () => {
+    const operation = operationGuard.begin();
     const userId = user?.user_id;
+    if (!operation.isCurrent()) return;
     if (!client || !userId || !canAdministerTarget) {
       setAvailableGroups([]);
       setUserGroupIds([]);
@@ -493,6 +533,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         client.service('groups').findAll({ query: { archived: false } }),
         client.service('group-memberships').findAll({ query: { user_id: userId } }),
       ]);
+      if (!operation.isCurrent()) return;
       const nextGroupIds = (memberships as GroupMembership[]).map(
         (membership) => membership.group_id
       );
@@ -501,11 +542,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       setGroupsLoaded(true);
       form.setFieldValue('groupIds', nextGroupIds);
     } catch (error) {
+      if (!operation.isCurrent()) return;
       console.error('Failed to load user groups:', error);
     } finally {
-      setLoadingGroups(false);
+      if (operation.isCurrent()) setLoadingGroups(false);
     }
-  }, [canAdministerTarget, client, form, user?.user_id]);
+  }, [canAdministerTarget, client, form, operationGuard, user?.user_id]);
 
   // Initialize when modal opens with user data
   useEffect(() => {
@@ -640,9 +682,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     onClose();
   };
 
-  const syncUserGroups = async (nextGroupIds: string[]) => {
-    if (!client || !user || !canAdministerTarget || !groupsLoaded) return;
+  const syncUserGroups = async (
+    nextGroupIds: string[],
+    operation: ReturnType<typeof operationGuard.begin>
+  ) => {
+    if (!client || !user || !canAdministerTarget || !groupsLoaded || !operation.isCurrent()) {
+      return;
+    }
     await syncGroupsForUser(client, user.user_id, userGroupIds, nextGroupIds);
+    if (!operation.isCurrent()) return;
     setUserGroupIds(nextGroupIds);
   };
 
@@ -653,8 +701,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     ] satisfies AgenticToolName[]),
   ];
 
-  const saveAgenticConfigs = async (tools: AgenticToolName[]) => {
-    if (!user || tools.length === 0) return;
+  const saveAgenticConfigs = async (
+    tools: AgenticToolName[],
+    operation: ReturnType<typeof operationGuard.begin>
+  ) => {
+    if (!user || tools.length === 0 || !operation.isCurrent()) return;
 
     const nextConfig: NonNullable<UpdateUserInput['default_agentic_config']> = {
       ...(user.default_agentic_config ?? {}),
@@ -687,11 +738,17 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       ? ((agenticConfigDraftByTool[mcpSourceTool]?.mcpServerIds ??
           agenticFormByTool[mcpSourceTool].getFieldValue('mcpServerIds')) as string[] | undefined)
       : user.default_mcp_server_ids;
-    await onUpdate?.(user.user_id, {
-      default_agentic_config: nextConfig,
-      default_agentic_selection: nextSelections,
-      default_mcp_server_ids: defaultMcpServerIds ?? [],
-    });
+    if (!operation.isCurrent()) return;
+    await onUpdate?.(
+      user.user_id,
+      {
+        default_agentic_config: nextConfig,
+        default_agentic_selection: nextSelections,
+        default_mcp_server_ids: defaultMcpServerIds ?? [],
+      },
+      operation.isCurrent
+    );
+    if (!operation.isCurrent()) return;
 
     setDirtyAgenticConfigTools((prev) => {
       if (prev.size === 0) return prev;
@@ -711,8 +768,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     if (mcpEditSourceTool && tools.includes(mcpEditSourceTool)) setMcpEditSourceTool(null);
   };
 
-  const saveDirtyAgenticConfigs = async () => {
-    await saveAgenticConfigs(getAgenticConfigToolsToSave());
+  const saveDirtyAgenticConfigs = async (operation: ReturnType<typeof operationGuard.begin>) => {
+    if (!operation.isCurrent()) return;
+    await saveAgenticConfigs(getAgenticConfigToolsToSave(), operation);
   };
 
   // Profile panel: identity fields + Slack-avatar preference.
@@ -720,8 +778,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // `preferences` object here (rather than one patch per panel) is what keeps a
   // Profile edit and a Preferences edit from clobbering each other's keys when
   // both are flushed against the same not-yet-refreshed `user` prop.
-  const commitMainPanels = async (panels: Set<string>): Promise<boolean> => {
-    if (!user || !canEditTarget) return false;
+  const commitMainPanels = async (
+    panels: Set<string>,
+    operation: ReturnType<typeof operationGuard.begin>
+  ): Promise<boolean> => {
+    if (!user || !canEditTarget || !operation.isCurrent()) return false;
 
     try {
       const toValidate: string[] = [];
@@ -732,6 +793,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         toValidate.push('password');
       }
       if (toValidate.length) await form.validateFields(toValidate);
+      if (!operation.isCurrent()) return false;
 
       const updates: UpdateUserInput = {};
       const nextPreferences: NonNullable<UpdateUserInput['preferences']> = { ...user.preferences };
@@ -784,11 +846,19 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
       if (preferencesTouched) updates.preferences = nextPreferences;
 
-      if (Object.keys(updates).length > 0) await onUpdate?.(user.user_id, updates);
+      if (!operation.isCurrent()) return false;
+      if (Object.keys(updates).length > 0) {
+        await onUpdate?.(user.user_id, updates, operation.isCurrent);
+      }
+      if (!operation.isCurrent()) return false;
       if (panels.has('security')) form.setFieldValue('password', '');
-      if (panels.has('access')) await syncUserGroups(form.getFieldValue('groupIds') || []);
-      return true;
+      if (panels.has('access')) {
+        if (!operation.isCurrent()) return false;
+        await syncUserGroups(form.getFieldValue('groupIds') || [], operation);
+      }
+      return operation.isCurrent();
     } catch (err) {
+      if (!operation.isCurrent()) return false;
       console.error('Failed to save settings:', err);
       return false;
     }
@@ -802,13 +872,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     field: AgenticToolConfigField,
     value: string
   ): Promise<void> => {
-    if (!user) return;
+    const operation = operationGuard.begin();
+    if (!user || !operation.isCurrent()) return;
     const spinnerKey = `${tool}.${field}`;
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
       const patch = buildAgenticToolCredentialPatch(tool, field, value);
-      await onUpdate?.(user.user_id, patch);
+      await onUpdate?.(user.user_id, patch, operation.isCurrent);
+      if (!operation.isCurrent()) return;
       if (patch.agentic_auth_methods) {
         setAgenticAuthMethods((current) => ({ ...current, ...patch.agentic_auth_methods }));
       }
@@ -817,10 +889,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         [tool]: { ...(prev[tool] ?? {}), [field]: true },
       }));
     } catch (err) {
+      if (!operation.isCurrent()) return;
       console.error(`Failed to save ${tool}.${field}:`, err);
       throw err;
     } finally {
-      setSavingToolField((prev) => ({ ...prev, [spinnerKey]: false }));
+      if (operation.isCurrent()) {
+        setSavingToolField((prev) => ({ ...prev, [spinnerKey]: false }));
+      }
     }
   };
 
@@ -829,22 +904,31 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     tool: AgenticToolName,
     field: AgenticToolConfigField
   ): Promise<void> => {
-    if (!user) return;
+    const operation = operationGuard.begin();
+    if (!user || !operation.isCurrent()) return;
     const spinnerKey = `${tool}.${field}`;
 
     try {
       setSavingToolField((prev) => ({ ...prev, [spinnerKey]: true }));
-      await onUpdate?.(user.user_id, buildAgenticToolCredentialPatch(tool, field, null));
+      await onUpdate?.(
+        user.user_id,
+        buildAgenticToolCredentialPatch(tool, field, null),
+        operation.isCurrent
+      );
+      if (!operation.isCurrent()) return;
       setAgenticToolStatus((prev) => {
         const nextToolFields = { ...(prev[tool] ?? {}) };
         delete nextToolFields[field];
         return { ...prev, [tool]: nextToolFields };
       });
     } catch (err) {
+      if (!operation.isCurrent()) return;
       console.error(`Failed to clear ${tool}.${field}:`, err);
       throw err;
     } finally {
-      setSavingToolField((prev) => ({ ...prev, [spinnerKey]: false }));
+      if (operation.isCurrent()) {
+        setSavingToolField((prev) => ({ ...prev, [spinnerKey]: false }));
+      }
     }
   };
 
@@ -852,12 +936,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     tool: 'claude-code' | 'codex',
     method: AgenticAuthMethod
   ) => {
-    if (!user) return;
+    const operation = operationGuard.begin();
+    if (!user || !operation.isCurrent()) return;
     const next = { ...agenticAuthMethods, [tool]: method };
     setAgenticAuthMethods(next);
     try {
-      await onUpdate?.(user.user_id, { agentic_auth_methods: next });
+      await onUpdate?.(user.user_id, { agentic_auth_methods: next }, operation.isCurrent);
     } catch (error) {
+      if (!operation.isCurrent()) return;
       setAgenticAuthMethods(user.agentic_auth_methods ?? {});
       throw error;
     }
@@ -865,77 +951,91 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
 
   // Handle env var save (value + scope). v0.5 env-var-access.
   const handleEnvVarSave = async (key: string, value: string, scope: EnvVarScope) => {
-    if (!user) return;
+    const operation = operationGuard.begin();
+    if (!user || !operation.isCurrent()) return;
 
     try {
       setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
-      await onUpdate?.(user.user_id, {
-        env_vars: { [key]: value },
-        env_var_scopes: { [key]: scope },
-      });
+      await onUpdate?.(
+        user.user_id,
+        {
+          env_vars: { [key]: value },
+          env_var_scopes: { [key]: scope },
+        },
+        operation.isCurrent
+      );
+      if (!operation.isCurrent()) return;
       setUserEnvVars((prev) => ({
         ...prev,
         [key]: { set: true, scope, resource_id: null },
       }));
     } catch (err) {
+      if (!operation.isCurrent()) return;
       console.error(`Failed to save ${key}:`, err);
       throw err;
     } finally {
-      setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
+      if (operation.isCurrent()) setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
     }
   };
 
   // Handle scope change for an existing env var (no value rotation).
   const handleEnvVarScopeChange = async (key: string, scope: EnvVarScope) => {
-    if (!user) return;
+    const operation = operationGuard.begin();
+    if (!user || !operation.isCurrent()) return;
     try {
       setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
-      await onUpdate?.(user.user_id, {
-        env_var_scopes: { [key]: scope },
-      });
+      await onUpdate?.(user.user_id, { env_var_scopes: { [key]: scope } }, operation.isCurrent);
+      if (!operation.isCurrent()) return;
       setUserEnvVars((prev) => ({
         ...prev,
         [key]: { ...(prev[key] ?? { set: true }), set: true, scope, resource_id: null },
       }));
     } catch (err) {
+      if (!operation.isCurrent()) return;
       console.error(`Failed to update scope for ${key}:`, err);
       throw err;
     } finally {
-      setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
+      if (operation.isCurrent()) setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
     }
   };
 
   // Handle env var delete
   const handleEnvVarDelete = async (key: string) => {
-    if (!user) return;
+    const operation = operationGuard.begin();
+    if (!user || !operation.isCurrent()) return;
 
     try {
       setSavingEnvVars((prev) => ({ ...prev, [key]: true }));
-      await onUpdate?.(user.user_id, {
-        env_vars: { [key]: null },
-      });
+      await onUpdate?.(user.user_id, { env_vars: { [key]: null } }, operation.isCurrent);
+      if (!operation.isCurrent()) return;
       setUserEnvVars((prev) => {
         const updated = { ...prev };
         delete updated[key];
         return updated;
       });
     } catch (err) {
+      if (!operation.isCurrent()) return;
       console.error(`Failed to delete ${key}:`, err);
       throw err;
     } finally {
-      setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
+      if (operation.isCurrent()) setSavingEnvVars((prev) => ({ ...prev, [key]: false }));
     }
   };
 
   // Handle agentic tool config save. The footer's shared saving state guards the
   // in-flight UI; this only needs to flush the dirty tools and surface errors.
-  const handleAgenticConfigSave = async (tool: AgenticToolName) => {
-    if (!user) return;
+  const handleAgenticConfigSave = async (
+    tool: AgenticToolName,
+    operation = operationGuard.begin()
+  ) => {
+    if (!user || !operation.isCurrent()) return;
 
     try {
       await agenticFormByTool[tool].validateFields();
-      await saveAgenticConfigs(getAgenticConfigToolsToSave(tool));
+      if (!operation.isCurrent()) return;
+      await saveAgenticConfigs(getAgenticConfigToolsToSave(tool), operation);
     } catch (err) {
+      if (!operation.isCurrent()) return;
       console.error(`Failed to save ${tool} config:`, err);
       throw err;
     }
@@ -1249,9 +1349,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         panelKey: 'preferences',
       });
     }
-    if (isSelf && onRestartOnboarding) {
+    if (isSelf && onReopenOnboarding) {
       entries.push({
-        label: 'Restart onboarding',
+        label: canResumeOnboarding ? 'Resume onboarding' : 'Restart onboarding',
         kind: 'setting',
         keywords: 'wizard setup teammate',
         panelKey: 'profile',
@@ -1415,7 +1515,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     canAdministerTarget,
     isEditingOther,
     isSelf,
-    onRestartOnboarding,
+    canResumeOnboarding,
+    onReopenOnboarding,
     canWriteExecutionHome,
     canWritePassword,
   ]);
@@ -1520,6 +1621,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // from another provider before closing.
   const handleModalSave = async () => {
     if (!user || savingModal || !canEditTarget) return;
+    const operation = operationGuard.begin();
+    if (!operation.isCurrent()) return;
     setSavingModal(true);
     try {
       // Flush EVERY edited main panel (plus the active one if it owns the shared
@@ -1530,19 +1633,30 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       if (MAIN_FORM_KEYS.includes(activeKey as (typeof MAIN_FORM_KEYS)[number])) {
         mainPanels.add(activeKey);
       }
-      if (mainPanels.size > 0 && !(await commitMainPanels(mainPanels))) return;
+      if (mainPanels.size > 0 && !(await commitMainPanels(mainPanels, operation))) return;
+      if (!operation.isCurrent()) return;
 
       // Then persist agentic configs once: the active provider's session
       // defaults plus any dirty defaults left over from other provider tabs.
       if (activeTool && providerSubtab === 'defaults') {
-        await handleAgenticConfigSave(activeTool);
+        await handleAgenticConfigSave(activeTool, operation);
       } else {
-        await saveDirtyAgenticConfigs();
+        await saveDirtyAgenticConfigs(operation);
       }
+      if (!operation.isCurrent()) return;
       handleClose();
     } finally {
-      setSavingModal(false);
+      if (operation.isCurrent()) setSavingModal(false);
     }
+  };
+
+  const handleReopenOnboarding = async (mode: OnboardingReopenMode) => {
+    const operation = operationGuard.begin();
+    if (!onReopenOnboarding || !operation.isCurrent()) return;
+    await onReopenOnboarding(mode, operation.isCurrent);
+    // The owner callback may close Settings/open another surface only while
+    // this exact authority cycle is still current; stale children do nothing.
+    if (!operation.isCurrent()) return;
   };
 
   const renderProfilePanel = () => (
@@ -1617,22 +1731,38 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         </FieldRow>
       </Form>
 
-      {onRestartOnboarding && isSelf && (
+      {onReopenOnboarding && isSelf && (
         <>
           <SectionDivider label="Onboarding" />
           <Typography.Paragraph type="secondary" style={{ maxWidth: 480 }}>
-            Reopen the AI teammate setup wizard from the beginning. Existing repos, boards,
-            branches, and credentials stay in place.
+            {canResumeOnboarding
+              ? 'Continue the AI teammate setup wizard from your saved progress, or start over.'
+              : 'Reopen the AI teammate setup wizard from the beginning. Existing repos, boards, branches, and credentials stay in place.'}
           </Typography.Paragraph>
-          <Popconfirm
-            title="Restart onboarding?"
-            description="This clears saved wizard progress and opens onboarding again."
-            okText="Restart"
-            cancelText="Cancel"
-            onConfirm={onRestartOnboarding}
-          >
-            <Button>Restart onboarding</Button>
-          </Popconfirm>
+          <Space wrap>
+            {canResumeOnboarding && (
+              <Popconfirm
+                title="Resume onboarding?"
+                description="This keeps saved wizard progress and opens onboarding again."
+                okText="Resume"
+                cancelText="Cancel"
+                onConfirm={() => handleReopenOnboarding('resume')}
+              >
+                <Button>Resume onboarding</Button>
+              </Popconfirm>
+            )}
+            <Popconfirm
+              title="Restart onboarding?"
+              description="This clears saved wizard progress and opens onboarding again."
+              okText="Restart"
+              cancelText="Cancel"
+              onConfirm={() => handleReopenOnboarding('restart')}
+            >
+              <Button>
+                {canResumeOnboarding ? 'Restart from beginning' : 'Restart onboarding'}
+              </Button>
+            </Popconfirm>
+          </Space>
         </>
       )}
     </>
@@ -1784,6 +1914,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         }
       />
       <EnvVarEditor
+        identityKey={callerIdentityKey}
+        operationScope={operationScope}
         envVars={userEnvVars}
         onSave={handleEnvVarSave}
         onScopeChange={handleEnvVarScopeChange}
@@ -2016,6 +2148,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         ) : tool === 'codex' ? (
           <CodexAuthSettings
             client={client}
+            identityKey={callerIdentityKey}
+            operationScope={operationScope}
             authMethod={authMethod ?? 'api_key'}
             allowChatgptLogin={isSelf}
             apiKeyFields={allToolFields}
@@ -2052,6 +2186,8 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               </FieldRow>
             )}
             <ApiKeyFields
+              identityKey={callerIdentityKey}
+              operationScope={operationScope}
               tool={tool}
               fields={toolFields}
               fieldStatus={fieldStatus}
@@ -2114,14 +2250,18 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               Agor API tokens allow you to authenticate with the Agor API from scripts, CI
               pipelines, and external tools. Tokens have the same permissions as your user account.
             </Typography.Paragraph>
-            <PersonalApiKeysTab client={client} />
+            <PersonalApiKeysTab
+              client={client}
+              identityKey={callerIdentityKey}
+              operationScope={operationScope}
+            />
           </>
         );
       case 'uploads':
         return (
           <>
             <PanelHeader title={PANEL_META.uploads.title} />
-            <UploadsTab />
+            <UploadsTab identityKey={callerIdentityKey} operationScope={operationScope} />
           </>
         );
       case 'access':
@@ -2365,3 +2505,16 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
     </Modal>
   );
 };
+
+/**
+ * Provider tokens, personal environment values, API keys, and Ant Form drafts
+ * are private to both the authenticated caller and the selected target. A
+ * launch-auth identity replacement must destroy them even when both callers
+ * have the same role; same-user reconnects retain the stable key.
+ */
+export const UserSettingsModal: React.FC<UserSettingsModalProps> = (props) => (
+  <UserSettingsModalForIdentity
+    key={`${props.currentUser?.user_id ?? '__no-authenticated-user__'}:${props.currentUser?.role ?? '__no-authenticated-role__'}:${props.user?.user_id ?? '__no-target-user__'}:${props.user?.role ?? '__no-target-role__'}`}
+    {...props}
+  />
+);

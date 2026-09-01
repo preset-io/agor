@@ -1,8 +1,15 @@
 import type { AgorClient, MCPServer } from '@agor-live/client';
-import { ApiOutlined, EditOutlined, LoginOutlined, ReloadOutlined } from '@ant-design/icons';
+import {
+  ApiOutlined,
+  EditOutlined,
+  LoginOutlined,
+  ReloadOutlined,
+  SettingOutlined,
+} from '@ant-design/icons';
 import { Tooltip } from 'antd';
-import { useState } from 'react';
-import { usePermissions } from '@/hooks/usePermissions';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useAuthorityOperationGuard } from '@/hooks/useAuthorityOperationGuard';
+import { VISUALLY_HIDDEN_STYLE } from '@/utils/accessibility';
 import { refreshAndRefetchMCPOAuthGrant } from '../../utils/mcpOAuthAttempt';
 import { useThemedMessage } from '../../utils/message';
 import { formatAbsoluteTime } from '../../utils/time';
@@ -15,6 +22,15 @@ interface MCPServerPillProps {
   server: MCPServer;
   needsAuth: boolean;
   client: AgorClient | null;
+  /** Opaque identity + role + successful-auth generation, null while disconnected. */
+  authorityKey: string | null;
+  /** Current server-side role/connection floor for OAuth mutations. */
+  actionAllowed: boolean;
+  actionBlockedReason: string;
+  /** Same authoritative gate used by the owning editor's mutation service. */
+  configureAllowed: boolean;
+  configureBlockedReason: string;
+  onOAuthAttemptStarted?: (attemptId: string, serverId: string) => void;
   /** Lets an overlay owner open an editor without nesting its lifecycle in this pill. */
   onEdit?: (server: MCPServer) => void;
 }
@@ -58,14 +74,15 @@ function formatRefreshError(error?: string): string {
     case 'token_refresh_failed':
       return 'provider token refresh failed — try again, or sign in again if it keeps failing';
     default:
-      return error || 'unknown error';
+      return 'credential refresh failed — retry, or sign in again if it keeps failing';
   }
 }
 
 /**
  * Clickable MCP server pill.
  *
- *   - Unauthenticated: warning + login icon, activation starts OAuth.
+ *   - OAuth unauthenticated: warning + login icon, activation starts OAuth.
+ *   - Bearer/JWT incomplete: warning + settings icon, activation opens config.
  *   - Authenticated:   purple + API icon, tooltip shows human-readable expiry,
  *                      activation force-refreshes the token (even before it's due)
  *                      so operators can probe per-provider refresh policy.
@@ -77,32 +94,60 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
   server,
   needsAuth,
   client,
+  authorityKey,
+  actionAllowed,
+  actionBlockedReason,
+  configureAllowed,
+  configureBlockedReason,
+  onOAuthAttemptStarted,
   onEdit,
 }) => {
   const { showSuccess, showInfo, showWarning, showError } = useThemedMessage();
-  const { isAdmin } = usePermissions();
   const [refreshing, setRefreshing] = useState(false);
   // Local override so the tooltip reflects a just-refreshed expiry without
   // waiting for a full MCPServer re-fetch from the parent.
   const [expiresAtOverride, setExpiresAtOverride] = useState<number | undefined>(undefined);
+  const operationGuard = useAuthorityOperationGuard(
+    authorityKey && actionAllowed ? [authorityKey, client, actionAllowed] : null
+  );
+
+  // Local status/expiry is caller-shaped too. Clear it immediately when the
+  // identity, role, auth generation, or connection authority changes.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: these props are the transition key
+  useLayoutEffect(() => {
+    setRefreshing(false);
+    setExpiresAtOverride(undefined);
+  }, [actionAllowed, authorityKey]);
 
   const isOAuthServer = server.auth?.type === 'oauth';
+  const needsConfiguration = needsAuth && !isOAuthServer;
   const expiresAt = expiresAtOverride ?? server.auth?.oauth_token_expires_at;
 
   const { handleStartOAuthFlow, oauthFailure, startingOAuthFlow } = useMCPServerOAuthStart({
     client,
+    authorityKey,
     onPrepareOAuthStart: async () => server.mcp_server_id,
+    onOAuthAttemptStarted,
     onOAuthSucceeded: () => showSuccess(`${server.display_name || server.name} authenticated!`),
     showError,
     showInfo,
     showSuccess,
+    startAllowed: actionAllowed,
+    startBlockedReason: actionBlockedReason,
   });
 
   const handleRefreshClick = async () => {
-    if (!client || refreshing) return;
+    const operation = operationGuard.begin();
+    if (!client || !actionAllowed || !authorityKey || refreshing || !operation.isCurrent()) return;
+    const shouldApply = operation.isCurrent;
     setRefreshing(true);
     try {
-      const result = await refreshAndRefetchMCPOAuthGrant(client, server.mcp_server_id);
+      const result = await refreshAndRefetchMCPOAuthGrant(
+        client,
+        server.mcp_server_id,
+        shouldApply
+      );
+      if (!shouldApply()) return;
 
       if (result.success) {
         setExpiresAtOverride(result.expires_at);
@@ -119,10 +164,11 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
       } else {
         showError(`Refresh failed: ${formatRefreshError(result.error)}`);
       }
-    } catch (err) {
-      showError(`Refresh error: ${err instanceof Error ? err.message : String(err)}`);
+    } catch {
+      if (!shouldApply()) return;
+      showError('Credential refresh failed. Check the connection and try again.');
     } finally {
-      setRefreshing(false);
+      if (shouldApply()) setRefreshing(false);
     }
   };
 
@@ -163,36 +209,73 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
     );
   }
 
-  const needsAuthTooltip = `${server.display_name || server.name} isn’t connected. Activate to sign in.`;
-
   const label = server.display_name || server.name;
-  // The pill's own action, or nothing for a non-OAuth server. Named here
-  // because both the Tag's pointer target and the label button need to agree on
-  // whether there is one.
-  const primaryAction = needsAuth
-    ? () => void handleStartOAuthFlow()
-    : isOAuthServer
-      ? handleRefreshClick
+  const needsAuthTooltip = isOAuthServer
+    ? actionAllowed
+      ? `${label} isn’t connected. Activate to sign in.`
+      : actionBlockedReason
+    : configureAllowed && onEdit
+      ? `${label} needs configuration. Activate to configure saved credentials.`
+      : `${label} needs configuration. ${configureBlockedReason}`;
+
+  // OAuth and static credential recovery are deliberately separate actions:
+  // only OAuth may enter the browser-flow hook; bearer/JWT opens the editor.
+  const primaryAction = needsConfiguration
+    ? configureAllowed && onEdit
+      ? () => onEdit(server)
+      : undefined
+    : actionAllowed && isOAuthServer
+      ? needsAuth
+        ? () => void handleStartOAuthFlow()
+        : handleRefreshClick
       : undefined;
+  const [announcedState, setAnnouncedState] = useState('');
+  const previousStatus = useRef({ needsAuth, startingOAuthFlow, refreshing });
+  useEffect(() => {
+    const previous = previousStatus.current;
+    let announcement = '';
+    if (!previous.startingOAuthFlow && startingOAuthFlow) {
+      announcement = `${label} sign-in is starting.`;
+    } else if (!previous.refreshing && refreshing) {
+      announcement = `${label} credentials are refreshing.`;
+    } else if (previous.needsAuth !== needsAuth) {
+      announcement = needsAuth
+        ? isOAuthServer
+          ? `${label} requires authentication.`
+          : `${label} needs configuration.`
+        : `${label} is ready.`;
+    }
+    previousStatus.current = { needsAuth, startingOAuthFlow, refreshing };
+    if (announcement) setAnnouncedState(announcement);
+  }, [isOAuthServer, label, needsAuth, refreshing, startingOAuthFlow]);
 
   return (
     <>
+      <span aria-live="polite" aria-atomic="true" style={VISUALLY_HIDDEN_STYLE}>
+        {announcedState}
+      </span>
       <Tooltip
         // The label is a button for actionable pills, so the same explanation
         // keyboard users receive on focus is available to pointer users on hover.
         trigger={['hover', 'focus']}
         title={
-          needsAuth
-            ? startingOAuthFlow
-              ? 'Starting OAuth authentication'
-              : needsAuthTooltip
-            : authedTooltip
+          needsConfiguration && !configureAllowed
+            ? configureBlockedReason
+            : !actionAllowed && isOAuthServer
+              ? actionBlockedReason
+              : needsAuth
+                ? startingOAuthFlow
+                  ? 'Starting OAuth authentication'
+                  : needsAuthTooltip
+                : authedTooltip
         }
       >
         <Tag
           color={needsAuth ? 'warning' : ENTITY_PILL_COLORS.mcp}
           icon={
-            needsAuth ? (
+            needsConfiguration ? (
+              <SettingOutlined aria-hidden />
+            ) : needsAuth ? (
               <LoginOutlined aria-hidden />
             ) : refreshing ? (
               <ReloadOutlined spin aria-hidden />
@@ -202,7 +285,7 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
           }
           style={{
             cursor:
-              refreshing || startingOAuthFlow ? 'wait' : isOAuthServer ? 'pointer' : 'default',
+              refreshing || startingOAuthFlow ? 'wait' : primaryAction ? 'pointer' : 'default',
           }}
           onClick={primaryAction}
         >
@@ -214,7 +297,11 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
             <button
               type="button"
               aria-label={
-                needsAuth ? `Sign in to ${label}` : `Refresh OAuth credentials for ${label}`
+                needsConfiguration
+                  ? `Needs configuration: ${label}`
+                  : needsAuth
+                    ? `Sign in to ${label}`
+                    : `Refresh OAuth credentials for ${label}`
               }
               aria-busy={startingOAuthFlow || refreshing}
               onClick={(event) => {
@@ -234,9 +321,23 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
               {label}
             </button>
           ) : (
-            label
+            <button
+              type="button"
+              aria-disabled="true"
+              aria-label={`${label} MCP server. ${needsConfiguration ? `Needs configuration. ${configureBlockedReason}` : needsAuth ? 'Authentication required.' : 'Ready.'}`}
+              style={{
+                margin: 0,
+                padding: 0,
+                background: 'transparent',
+                border: 'none',
+                color: 'inherit',
+                font: 'inherit',
+              }}
+            >
+              {label}
+            </button>
           )}
-          {isAdmin && onEdit && (
+          {configureAllowed && onEdit && (
             // Real <button> for keyboard focus + screen-reader semantics.
             // Native `title` (not <Tooltip>) so we don't stack a second
             // AntD tooltip on top of the parent expiry/auth tooltip.
@@ -279,7 +380,13 @@ export const MCPServerPill: React.FC<MCPServerPillProps> = ({
           )}
         </Tag>
       </Tooltip>
-      {oauthFailure && <MCPOAuthRecoveryAlert failure={oauthFailure} />}
+      {oauthFailure && (
+        <MCPOAuthRecoveryAlert
+          failure={oauthFailure}
+          onRetry={() => void handleStartOAuthFlow()}
+          onConfigure={configureAllowed && onEdit ? () => onEdit(server) : undefined}
+        />
+      )}
     </>
   );
 };

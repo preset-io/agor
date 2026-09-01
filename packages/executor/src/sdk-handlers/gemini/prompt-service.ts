@@ -16,18 +16,23 @@ import * as path from 'node:path';
 import { loadManagedAgenticToolSdk } from '@agor/core/agentic-integrations';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { resolveMCPAuthHeaders } from '@agor/core/tools/mcp/jwt-auth';
 import type * as GeminiTypes from '@google/gemini-cli-core';
 import type { Part } from '@google/genai';
+import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 
 const Gemini = await loadManagedAgenticToolSdk<typeof GeminiTypes>('gemini');
 type ResumedSessionData = GeminiTypes.ResumedSessionData;
 
+class GeminiSessionNotFoundError extends Error {}
+
 import { shortId } from '@agor/core/db';
 import {
   getMcpServersForSession,
+  isMCPAbortError,
   listMcpToolsWithPermission,
   PERMISSIONS_BLOCKED_WITHOUT_PROMPT,
+  resolveScopedMCPAuthHeaders,
+  sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import { getDaemonUrl } from '../../config.js';
 import type {
@@ -162,7 +167,7 @@ export class GeminiPromptService {
       // Get session metadata for model
       const session = await this.sessionsRepo.findById(sessionId);
       if (!session) {
-        throw new Error(`Session ${sessionId} not found`);
+        throw new GeminiSessionNotFoundError(`Session ${sessionId} not found`);
       }
 
       // Context user for per-user OAuth/API-key resolution — the task creator
@@ -217,11 +222,9 @@ export class GeminiPromptService {
         for await (const event of stream) {
           reportSdkActivity(onActivity, 'gemini', String(event.type));
           // Debug logging for all events
-          const eventValue = 'value' in event ? event.value : undefined;
-          console.debug(
-            `[Gemini Event] ${event.type}:`,
-            eventValue ? JSON.stringify(eventValue).slice(0, 100) : '(no value)'
-          );
+          // Event values may include MCP tool results or provider errors.
+          // Logging the closed event type is sufficient for stream diagnosis.
+          console.debug(`[Gemini Event] type=${event.type}`);
 
           // Handle different event types from Gemini SDK
           switch (event.type) {
@@ -345,34 +348,17 @@ export class GeminiPromptService {
             }
 
             case Gemini.GeminiEventType.Error: {
-              // Error occurred during execution
               const errorValue = 'value' in event ? event.value : 'Unknown error';
-              console.error(`Gemini SDK error: ${JSON.stringify(errorValue)}`);
-
-              // Extract meaningful error message
-              let errorMessage = 'Unknown error';
-              if (typeof errorValue === 'object' && errorValue !== null) {
-                if (
-                  'error' in errorValue &&
-                  typeof errorValue.error === 'object' &&
-                  errorValue.error !== null
-                ) {
-                  const errorObj = errorValue.error as { message?: string };
-                  errorMessage = errorObj.message || JSON.stringify(errorValue);
-                } else {
-                  errorMessage = JSON.stringify(errorValue);
-                }
-              } else if (typeof errorValue === 'string') {
-                errorMessage = errorValue;
-              }
-
-              throw new Error(`Gemini execution failed: ${errorMessage}`);
+              const safe = sanitizeMCPExternalError(errorValue, { stage: 'runtime' });
+              console.error(
+                `Gemini SDK error category=${safe.category} type=${safe.diagnostic.type}`
+              );
+              throw new Error(safe.message);
             }
 
             case Gemini.GeminiEventType.Thought: {
-              // Agent thinking/reasoning (could stream to UI in future)
-              const thoughtValue = 'value' in event ? event.value : '';
-              console.debug(`[Gemini Thought] ${thoughtValue}`);
+              // Thought values can contain provider-reflected tool/auth data.
+              // The closed event type logged above is sufficient diagnostics.
               break;
             }
 
@@ -381,14 +367,12 @@ export class GeminiPromptService {
               console.warn(
                 '[Gemini] Tool call needs confirmation - this should not happen in AUTO_EDIT/YOLO mode!'
               );
-              console.warn('[Gemini] Confirmation details:', JSON.stringify(event.value, null, 2));
               break;
             }
 
             default: {
-              // Log other event types for debugging
-              const debugValue = 'value' in event ? event.value : '';
-              console.debug(`[Gemini Event] ${event.type}:`, debugValue);
+              // Unknown SDK event payloads are untrusted and may reflect URLs,
+              // headers, or provider error bodies. Never stringify them.
               break;
             }
           }
@@ -474,23 +458,23 @@ export class GeminiPromptService {
                   response: {
                     error:
                       completedCall.status === 'error'
-                        ? completedCall.response?.error?.message || 'Tool execution failed'
+                        ? sanitizeMCPExternalError(completedCall.response?.error, {
+                            stage: 'runtime',
+                          }).message
                         : 'Tool execution returned no response',
                   },
                 },
               } as Part);
             }
           } catch (error) {
+            const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
             console.error(
-              `[Gemini Loop] Error processing completed tool ${completedCall.request.name}:`,
-              error
+              `[Gemini Loop] Error processing completed tool category=${safe.category} type=${safe.diagnostic.type}`
             );
-            // On error, create a function response part with the error
-            const errorMessage = error instanceof Error ? error.message : String(error);
             functionResponseParts.push({
               functionResponse: {
                 name: completedCall.request.name,
-                response: { error: errorMessage },
+                response: { error: safe.message },
               },
             } as Part);
           }
@@ -513,13 +497,17 @@ export class GeminiPromptService {
       }
     } catch (error) {
       // Check if error is from abort
-      if (error instanceof Error && error.name === 'AbortError') {
+      if (isMCPAbortError(error)) {
         console.log(`🛑 Gemini execution stopped for session ${sessionId}`);
         // Don't re-throw abort errors - this is expected behavior
         return;
       }
-      console.error('Gemini streaming error:', error);
-      throw error;
+      if (error instanceof GeminiSessionNotFoundError) throw error;
+      const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
+      console.error(
+        `Gemini streaming error category=${safe.category} type=${safe.diagnostic.type}`
+      );
+      throw new Error(safe.message);
     } finally {
       outerAbortSignal?.removeEventListener('abort', forwardOuterAbort);
       if (this.activeControllers.get(sessionId) === abortController) {
@@ -541,7 +529,13 @@ export class GeminiPromptService {
     try {
       // Calculate project hash (same as SDK does)
       const projectHash = crypto.createHash('sha256').update(projectRoot).digest('hex');
-      const chatsDir = path.join(os.homedir(), '.gemini', 'tmp', projectHash, 'chats');
+      // Read from the SAME location the Gemini CLI writes to. GEMINI_CLI_HOME is
+      // a home ROOT (the CLI appends `.gemini`), so honor it when a per-branch
+      // SDK home relocates it (design §8 item 3); else fall back to the passwd
+      // home. Without this, Agor would read the old `~/.gemini` while the SDK
+      // wrote to the relocated branch home (silent split-brain).
+      const geminiHomeRoot = process.env.GEMINI_CLI_HOME || os.homedir();
+      const chatsDir = path.join(geminiHomeRoot, '.gemini', 'tmp', projectHash, 'chats');
 
       // Check if chats directory exists
       try {
@@ -634,8 +628,9 @@ export class GeminiPromptService {
           console.log(`🔄 [Gemini] Refreshed authentication using ${authMethod}`);
         } catch (error) {
           // Log but don't throw - let the subsequent prompt attempt fail with a better error
+          const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
           console.warn(
-            `⚠️  [Gemini] refreshAuth() failed: ${error instanceof Error ? error.message : String(error)}`
+            `⚠️  [Gemini] refreshAuth() failed category=${safe.category} type=${safe.diagnostic.type}`
           );
           console.warn(`   Continuing anyway - prompt may fail if credentials are invalid`);
         }
@@ -751,22 +746,30 @@ export class GeminiPromptService {
             mcpServerRepo: this.mcpServerRepo,
             mcpOAuthAuthHeadersRepo: this.mcpOAuthAuthHeadersRepo,
             forUserId: contextUserId,
-            sessionOwnerId: session.created_by,
           },
           { toolFiltering: 'exclude' }
         );
 
+        const authDiagnostics = new McpAuthDiagnosticAccumulator();
         // Convert to Gemini SDK format
-        for (const { server } of serversWithSource) {
+        for (const scoped of serversWithSource) {
+          const { server } = scoped;
           let headers: Record<string, string> | undefined;
           try {
-            const authHeaders = await resolveMCPAuthHeaders(server.auth, server.url);
+            const authHeaders = await resolveScopedMCPAuthHeaders(scoped, {
+              surfaceAuthorityError: true,
+            });
             headers = mergeMCPRemoteHeaders({ custom: server.headers, auth: authHeaders });
-          } catch (error) {
-            console.warn(
-              `   ⚠️  Failed to resolve MCP auth headers for ${server.name}:`,
-              error instanceof Error ? error.message : String(error)
-            );
+            if (
+              server.transport !== 'stdio' &&
+              server.auth &&
+              server.auth.type !== 'none' &&
+              !authHeaders?.Authorization
+            ) {
+              authDiagnostics.recordUnavailable();
+            }
+          } catch {
+            authDiagnostics.recordResolutionFailure();
           }
 
           const excludeTools = listMcpToolsWithPermission(
@@ -818,6 +821,8 @@ export class GeminiPromptService {
           }
         }
 
+        authDiagnostics.emitSummary('gemini');
+
         if (Object.keys(mcpServersConfig).length > 0) {
           console.log(
             `   🔧 MCP config for Gemini SDK:`,
@@ -837,7 +842,10 @@ export class GeminiPromptService {
           );
         }
       } catch (error) {
-        console.warn('⚠️  Failed to fetch MCP servers for Gemini session:', error);
+        const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
+        console.warn(
+          `⚠️  Failed to fetch MCP servers for Gemini session category=${safe.category} type=${safe.diagnostic.type}`
+        );
         // Continue without MCP servers - non-fatal error
       }
     }
@@ -893,11 +901,11 @@ export class GeminiPromptService {
       const authMethod = authType === Gemini.AuthType.LOGIN_WITH_GOOGLE ? 'OAuth' : 'API key';
       console.log(`🔐 [Gemini] Authenticated using ${authMethod}`);
     } catch (error) {
-      const err = error as Error;
-      console.error(`❌ [Gemini] Authentication failed:`, err.message);
-      throw new Error(
-        `Gemini authentication failed: ${err.message}. Please configure GEMINI_API_KEY or run 'gemini login' to authenticate with OAuth.`
+      const safe = sanitizeMCPExternalError(error, { stage: 'runtime' });
+      console.error(
+        `❌ [Gemini] Authentication failed category=${safe.category} type=${safe.diagnostic.type}`
       );
+      throw new Error(safe.message);
     }
 
     // Try to load existing session file from SDK's filesystem storage

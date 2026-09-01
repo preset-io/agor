@@ -5,10 +5,13 @@
  * scope model ('global' | 'session').
  */
 
-import type { MCPServer, MCPServerID, UserID } from '@agor/core/types';
-import { describe, expect } from 'vitest';
+import type { MCPServer, MCPServerID, UpdateMCPServerInput, UserID } from '@agor/core/types';
+import { eq } from 'drizzle-orm';
+import { describe, expect, vi } from 'vitest';
 import { generateId } from '../../lib/ids';
 import { MCP_HEADER_REDACTED_SENTINEL } from '../../tools/mcp/http-headers';
+import { select, update } from '../database-wrapper';
+import { mcpServers } from '../schema';
 import { dbTest } from '../test-helpers';
 import { EntityNotFoundError } from './base';
 import { MCPServerRepository } from './mcp-servers';
@@ -17,15 +20,19 @@ import { MCPServerRepository } from './mcp-servers';
  * Create test MCP server data with required fields
  */
 function createMCPServerData(overrides?: Partial<MCPServer>) {
+  const transport = overrides?.transport ?? (overrides?.auth || overrides?.url ? 'http' : 'stdio');
   return {
     mcp_server_id: overrides?.mcp_server_id ?? (generateId() as MCPServerID),
     name: overrides?.name ?? 'test-server',
-    transport: overrides?.transport ?? ('stdio' as const),
+    transport,
     scope: overrides?.scope ?? ('global' as const),
     enabled: overrides?.enabled ?? true,
     source: overrides?.source ?? ('user' as const),
     created_at: overrides?.created_at ?? new Date(),
     updated_at: overrides?.updated_at ?? new Date(),
+    ...(transport === 'stdio'
+      ? { command: overrides?.command ?? 'npx' }
+      : { url: overrides?.url ?? 'https://mcp.example.test/mcp' }),
     ...overrides,
   };
 }
@@ -54,6 +61,35 @@ describe('MCPServerRepository.create', () => {
     expect(created.owner_user_id).toBe(userId);
     expect(created.enabled).toBe(true);
     expect(created.source).toBe('user');
+  });
+
+  dbTest(
+    'accepts canonical UUIDv4 and UUIDv7 owners at the persistence boundary',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const legacyUserId = '707bae66-dda5-4c01-9136-a5cda16e048e' as UserID;
+      const currentUserId = generateId() as UserID;
+
+      for (const [name, owner_user_id] of [
+        ['legacy-owner', legacyUserId],
+        ['current-owner', currentUserId],
+      ] as const) {
+        await expect(
+          repo.create(createMCPServerData({ name, owner_user_id }))
+        ).resolves.toMatchObject({ owner_user_id });
+      }
+    }
+  );
+
+  dbTest('rejects short and non-UUID owners at the persistence boundary', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+
+    for (const owner_user_id of ['01933e4a7b897c35a8f39d2e', 'not-a-uuid']) {
+      await expect(
+        repo.create(createMCPServerData({ owner_user_id: owner_user_id as UserID }))
+      ).rejects.toThrow('owner_user_id must be a canonical full UUID or null');
+    }
+    expect(await repo.findAll()).toHaveLength(0);
   });
 
   dbTest('should create MCP server with session scope', async ({ db }) => {
@@ -104,6 +140,29 @@ describe('MCPServerRepository.create', () => {
       ).rejects.toThrow(/must be either strict or legacy/);
     }
   });
+});
+
+describe('MCPServerRepository pagination', () => {
+  dbTest(
+    'pushes sorting, limit, and offset into the list query while count ignores paging',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      for (const name of ['charlie', 'alpha', 'bravo']) {
+        await repo.create(createMCPServerData({ name, enabled: true }));
+      }
+      await repo.create(createMCPServerData({ name: 'disabled', enabled: false }));
+
+      const page = await repo.findAll({
+        enabled: true,
+        sort: { name: 1 },
+        limit: 1,
+        offset: 1,
+      });
+
+      expect(page.map((server) => server.name)).toEqual(['bravo']);
+      expect(await repo.count({ enabled: true, limit: 1, offset: 1 })).toBe(3);
+    }
+  );
 });
 
 // ============================================================================
@@ -220,6 +279,20 @@ describe('MCPServerRepository.findAll', () => {
     expect(stdioServers).toHaveLength(1);
     expect(stdioServers[0].name).toBe('stdio-1');
   });
+
+  dbTest('bounds and paginates status-style server scans', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    for (const name of ['page-1', 'page-2', 'page-3']) {
+      await repo.create(createMCPServerData({ name }));
+    }
+
+    const first = await repo.findAll({ limit: 1, offset: 0 });
+    const second = await repo.findAll({ limit: 1, offset: 1 });
+
+    expect(first).toHaveLength(1);
+    expect(second).toHaveLength(1);
+    expect(first[0]!.mcp_server_id).not.toBe(second[0]!.mcp_server_id);
+  });
 });
 
 // ============================================================================
@@ -227,6 +300,104 @@ describe('MCPServerRepository.findAll', () => {
 // ============================================================================
 
 describe('MCPServerRepository.update', () => {
+  dbTest('keeps daemon-owned config revisions monotonic', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create({
+      ...createMCPServerData({
+        display_name: 'Before',
+        transport: 'http',
+        url: 'https://before.example.test/mcp',
+      }),
+      config_version: Number.MAX_SAFE_INTEGER,
+    } as never);
+    expect(created).toMatchObject({ config_version: 1 });
+
+    const metadataOnly = await repo.update(created.mcp_server_id, {
+      display_name: 'After',
+      expected_config_version: 1,
+    });
+    expect(metadataOnly).toMatchObject({ config_version: 2 });
+
+    const endpointEdit = await repo.update(created.mcp_server_id, {
+      url: 'https://changed.example.test/mcp',
+      expected_config_version: 2,
+    });
+    expect(endpointEdit).toMatchObject({ config_version: 3 });
+  });
+
+  dbTest(
+    'fails closed at revision exhaustion without making revision 1 valid again',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const created = await repo.create(createMCPServerData({ display_name: 'Before' }));
+      const row = await select(db)
+        .from(mcpServers)
+        .where(eq(mcpServers.mcp_server_id, created.mcp_server_id))
+        .one();
+      for (const exhausted of [Number.MAX_SAFE_INTEGER - 1, Number.MAX_SAFE_INTEGER]) {
+        await update(db, mcpServers)
+          .set({ data: { ...row!.data, config_version: exhausted } })
+          .where(eq(mcpServers.mcp_server_id, created.mcp_server_id))
+          .run();
+
+        await expect(repo.findById(created.mcp_server_id)).resolves.toMatchObject({
+          display_name: 'Before',
+          config_version: exhausted,
+        });
+        await expect(
+          repo.update(created.mcp_server_id, {
+            display_name: 'Must not advance into an exhausted revision',
+            expected_config_version: exhausted,
+          })
+        ).rejects.toThrow('configuration revision is invalid or exhausted');
+
+        // A client which retained the initial revision must never regain CAS
+        // authority after exhaustion (ABA).
+        await expect(
+          repo.update(created.mcp_server_id, {
+            display_name: 'Ancient stale edit',
+            expected_config_version: 1,
+          })
+        ).rejects.toThrow('configuration revision is invalid or exhausted');
+      }
+
+      const stored = await select(db)
+        .from(mcpServers)
+        .where(eq(mcpServers.mcp_server_id, created.mcp_server_id))
+        .one();
+      expect(stored?.data.config_version).toBe(Number.MAX_SAFE_INTEGER);
+      expect(stored?.data.display_name).toBe('Before');
+    }
+  );
+
+  dbTest('projects a pre-existing invalid revision as baseline 1', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(createMCPServerData({ display_name: 'Invalid revision' }));
+    const row = await select(db)
+      .from(mcpServers)
+      .where(eq(mcpServers.mcp_server_id, created.mcp_server_id))
+      .one();
+    await update(db, mcpServers)
+      .set({ data: { ...row!.data, config_version: 0 } })
+      .where(eq(mcpServers.mcp_server_id, created.mcp_server_id))
+      .run();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(repo.findById(created.mcp_server_id)).resolves.toMatchObject({
+        config_version: 1,
+      });
+      await expect(
+        repo.update(created.mcp_server_id, {
+          display_name: 'Recovered invalid revision',
+          expected_config_version: 1,
+        })
+      ).resolves.toMatchObject({ config_version: 2 });
+      expect(JSON.stringify(warning.mock.calls)).not.toContain('Invalid revision');
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   dbTest('should update MCP server', async ({ db }) => {
     const repo = new MCPServerRepository(db);
     const created = await repo.create(createMCPServerData({ name: 'original', enabled: true }));
@@ -261,6 +432,99 @@ describe('MCPServerRepository.update', () => {
       })
     ).rejects.toThrow(/must be either strict or legacy/);
   });
+
+  dbTest(
+    'merges a narrow auth patch without clobbering credentials or compatibility',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const created = await repo.create(
+        createMCPServerData({
+          transport: 'http',
+          url: 'https://calendar.example.test/mcp',
+          auth: {
+            type: 'oauth',
+            oauth_scope: 'calendar.readonly',
+            oauth_client_id: 'registered-client',
+            oauth_client_secret: 'registered-secret',
+            oauth_compatibility_mode: 'legacy',
+          },
+        })
+      );
+
+      const updated = await repo.update(created.mcp_server_id, {
+        auth: { oauth_scope: 'calendar.events' },
+        expected_config_version: created.config_version,
+      });
+
+      expect(updated.config_version).toBe((created.config_version ?? 1) + 1);
+      expect(updated.auth).toEqual({
+        type: 'oauth',
+        oauth_scope: 'calendar.events',
+        oauth_client_id: 'registered-client',
+        oauth_client_secret: 'registered-secret',
+        oauth_compatibility_mode: 'legacy',
+      });
+    }
+  );
+
+  dbTest('clears one auth field with null and rejects a stale config version', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        auth: { type: 'oauth', oauth_scope: 'one', oauth_client_id: 'client' },
+      })
+    );
+    const updated = await repo.update(created.mcp_server_id, {
+      auth: { oauth_scope: null },
+      expected_config_version: created.config_version,
+    });
+    expect(updated.auth).toEqual({ type: 'oauth', oauth_client_id: 'client' });
+    await expect(
+      repo.update(created.mcp_server_id, {
+        auth: { oauth_scope: 'stale' },
+        expected_config_version: created.config_version,
+      })
+    ).rejects.toMatchObject({ name: 'MCPServerConfigConflictError' });
+  });
+
+  dbTest('supports an explicit same-mode whole-auth replacement', async ({ db }) => {
+    const repo = new MCPServerRepository(db);
+    const created = await repo.create(
+      createMCPServerData({
+        auth: {
+          type: 'oauth',
+          oauth_scope: 'old',
+          oauth_client_id: 'old-client',
+          oauth_client_secret: 'old-secret',
+        },
+      })
+    );
+    const updated = await repo.update(created.mcp_server_id, {
+      auth: { type: 'oauth', oauth_scope: 'new' },
+      replace_auth: true,
+      expected_config_version: created.config_version,
+    });
+    expect(updated.auth).toEqual({ type: 'oauth', oauth_scope: 'new' });
+  });
+
+  dbTest(
+    'keeps materialized provenance aligned with an internal whole-row update',
+    async ({ db }) => {
+      const repo = new MCPServerRepository(db);
+      const created = await repo.create(
+        createMCPServerData({ source: 'catalog', catalog_entry_name: 'catalog/original' })
+      );
+
+      await repo.update(created.mcp_server_id, {
+        catalog_entry_name: 'catalog/drifted',
+      } as unknown as UpdateMCPServerInput);
+
+      await expect(repo.findById(created.mcp_server_id)).resolves.toMatchObject({
+        catalog_entry_name: 'catalog/drifted',
+      });
+      await expect(repo.findAll({ catalogEntryName: 'catalog/drifted' })).resolves.toHaveLength(1);
+    }
+  );
 });
 
 // ============================================================================

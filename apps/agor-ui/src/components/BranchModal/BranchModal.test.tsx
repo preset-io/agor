@@ -9,6 +9,7 @@
 import type { AgorClient, Branch, TeammateConfig, User } from '@agor-live/client';
 import { screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
 import { BranchModal } from './BranchModal';
@@ -31,6 +32,7 @@ vi.mock('./tabs/ScheduleTab', () => ({
 }));
 
 beforeEach(() => {
+  __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
   scheduleTabProps.mockClear();
   agorStore.setState({ ...EMPTY_MAPS });
 });
@@ -62,6 +64,50 @@ function renderBranchModal({
 }
 
 describe('BranchModal — permissions tab visibility', () => {
+  it('mounts the target editor without a development-preview banner', async () => {
+    const owner = makeUser({ user_id: 'user-1', role: 'admin', name: 'Alice' });
+    const { client, calls } = makeStubClient({ owners: [owner], users: [owner] });
+
+    renderWithApp(
+      <BranchModal
+        open
+        onClose={() => {}}
+        branch={makeBranch({ created_by: owner.user_id })}
+        repo={makeRepo()}
+        sessions={[]}
+        client={client}
+        currentUser={owner}
+        defaultTab="permissions"
+      />
+    );
+
+    expect(await screen.findByText('Branch permissions')).toBeInTheDocument();
+    expect(screen.queryByText('New permissions · development preview')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Current persisted permissions · legacy model')
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply permissions preview' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset permissions preview' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeDisabled();
+    expect(calls.some((call) => ['create', 'patch', 'remove'].includes(call.method))).toBe(false);
+  });
+
+  it('hides normalized permissions when legacy RBAC is disabled', async () => {
+    const admin = makeUser({ user_id: 'user-1', role: 'admin', name: 'Admin' });
+    __setAuthConfigForTests({ requireAuth: true }, { branchRbac: false });
+
+    const { client, calls } = makeStubClient({ rbac404: true, users: [admin] });
+    renderBranchModal({
+      currentUser: admin,
+      client,
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('tab', { name: /permissions/i })).not.toBeInTheDocument();
+    });
+    expect(calls.some((call) => call.service === 'branches/:id/permissions')).toBe(false);
+  });
+
   it('supplies other schedule owners from the global store when RBAC is disabled', async () => {
     const caller = makeUser({ user_id: 'caller', role: 'member' });
     const owner = makeUser({ user_id: 'owner', role: 'member' });

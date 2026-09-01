@@ -7,6 +7,7 @@
  * - resolveResourceMetadataUrl(): header parse + .well-known fallback
  */
 
+import { request as httpRequest } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MCPOAuthDCRDiagnostic } from '../../types/mcp.js';
 
@@ -45,6 +46,7 @@ import {
   OAuthCallbackValidationError,
   OAuthCodeExchangeError,
   parseOAuthCallback,
+  performMCPOAuthFlow,
   resolveMCPOAuthDiscovery,
   resolveResourceMetadataUrl,
   startMCPOAuthFlow,
@@ -59,6 +61,104 @@ async function rejectedError<T extends Error>(promise: Promise<unknown>): Promis
   }
   throw new Error('Expected OAuth flow to reject');
 }
+
+describe('loopback OAuth callback response', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { validState: false, expectedHeading: 'Invalid Callback' },
+    { validState: true, expectedHeading: 'Authentication Failed' },
+  ])(
+    'validates state before provider errors (valid state: $validState) and never reflects error query HTML or secrets',
+    async ({ validState, expectedHeading }) => {
+      const sentinel = 'SENTINEL_LOOPBACK_CALLBACK_XSS_92f1';
+      const issuer = 'http://127.0.0.1:45555';
+      const metadataUrl = 'http://127.0.0.1:45554/.well-known/oauth-protected-resource';
+      globalThis.fetch = vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url === metadataUrl) {
+          return new Response(
+            JSON.stringify({
+              resource: 'http://127.0.0.1:45554/mcp',
+              authorization_servers: [issuer],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
+        if (url.startsWith(`${issuer}/.well-known/`)) {
+          return new Response(
+            JSON.stringify({
+              issuer,
+              authorization_endpoint: `${issuer}/authorize`,
+              token_endpoint: `${issuer}/token`,
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } }
+          );
+        }
+        throw new Error('unexpected test URL');
+      }) as unknown as typeof fetch;
+
+      let callbackResponse:
+        | {
+            status: number | undefined;
+            headers: Record<string, string | string[] | undefined>;
+            body: string;
+          }
+        | undefined;
+      const flow = performMCPOAuthFlow(
+        `Bearer resource_metadata="${metadataUrl}"`,
+        'client-id',
+        async (authorizationUrl) => {
+          const auth = new URL(authorizationUrl);
+          const callback = new URL(auth.searchParams.get('redirect_uri')!);
+          callback.searchParams.set(
+            'state',
+            validState ? auth.searchParams.get('state')! : 'wrong-state'
+          );
+          callback.searchParams.set('error', `<script>${sentinel}</script>`);
+
+          callbackResponse = await new Promise<NonNullable<typeof callbackResponse>>(
+            (resolve, reject) => {
+              const request = httpRequest(callback, (response) => {
+                const chunks: Buffer[] = [];
+                response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+                response.on('end', () =>
+                  resolve({
+                    status: response.statusCode,
+                    headers: response.headers,
+                    body: Buffer.concat(chunks).toString('utf8'),
+                  })
+                );
+              });
+              request.on('error', reject);
+              request.end();
+            }
+          );
+        }
+      );
+
+      const failure = await rejectedError(flow);
+      expect(failure.message).toBe(
+        validState ? 'No authorization code received' : 'State mismatch - possible CSRF attack'
+      );
+      expect(callbackResponse?.status).toBe(400);
+      expect(callbackResponse?.headers['content-type']).toBe('text/html; charset=utf-8');
+      expect(callbackResponse?.headers['content-security-policy']).toContain("default-src 'none'");
+      expect(callbackResponse?.headers['x-content-type-options']).toBe('nosniff');
+      expect(callbackResponse?.headers['cache-control']).toBe('no-store');
+      expect(callbackResponse?.body).toContain(expectedHeading);
+      expect(JSON.stringify({ callbackResponse, failure: String(failure) })).not.toContain(
+        sentinel
+      );
+      expect(callbackResponse?.body).not.toContain('<script>');
+    }
+  );
+});
 
 // ---------------------------------------------------------------------------
 // completeMCPOAuthFlow — token exchange request contract
@@ -807,6 +907,32 @@ describe('resolveMCPOAuthDiscovery', () => {
 
     const result = await resolveMCPOAuthDiscovery(null, 'https://broken.example.com/mcp');
     expect(result).toBeNull();
+  });
+
+  it('stops between well-known candidates when the authority deadline expires', async () => {
+    let current = true;
+    const fetchMock = vi.fn(async () => {
+      // The first path-aware candidate began while current, but its held
+      // response crossed the reservation deadline. The post-await assertion
+      // must abort rather than issuing the root fallback request.
+      current = false;
+      return { ok: false, status: 404 };
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      resolveMCPOAuthDiscovery(null, 'https://example.com/mcp', {
+        compatibilityMode: 'legacy',
+        assertCurrent: () => {
+          if (!current) throw new Error('reservation expired');
+        },
+      })
+    ).rejects.toThrow('reservation expired');
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://example.com/.well-known/oauth-protected-resource/mcp',
+      expect.anything()
+    );
   });
 
   it('prefers RFC 9728 well-known over AS-direct when both succeed', async () => {

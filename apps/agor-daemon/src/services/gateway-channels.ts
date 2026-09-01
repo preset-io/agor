@@ -6,18 +6,31 @@
  */
 
 import { materializeAgenticToolConfiguration } from '@agor/agentic-tools/config';
-import { AgenticConfigurationResolutionError, PAGINATION } from '@agor/core/config';
-import { GatewayChannelRepository, type TenantScopeAwareDatabase } from '@agor/core/db';
+import { AgenticConfigurationResolutionError, PAGINATION, validateEnvVar } from '@agor/core/config';
+import {
+  GatewayChannelRepository,
+  getCurrentTenantId,
+  runWithTenantDatabaseScope,
+  type TenantScopeAwareDatabase,
+} from '@agor/core/db';
 import { BadRequest, Forbidden, NotAuthenticated } from '@agor/core/feathers';
-import { getConnector, isSlackWriteTargetAllowed } from '@agor/core/gateway';
+import {
+  evaluateDiscordConnectionVerification,
+  getConnector,
+  isSlackWriteTargetAllowed,
+  validateDiscordSetup,
+} from '@agor/core/gateway';
 import { isInvalidModelConfigError } from '@agor/core/models';
 import {
   type AgenticToolConfigurationSource,
   type AuthenticatedParams,
   GATEWAY_CHANNEL_WRITE_FIELDS,
+  GATEWAY_REDACTED_SENTINEL,
   type GatewayChannel,
   type GatewayChannelCreateData,
   type GatewayChannelPatchData,
+  isGatewayProviderAuthorityPatch,
+  mergeGatewayChannelConfigPatch,
   type NullableId,
   type Params,
   type PersistedGatewayAgenticConfig,
@@ -68,6 +81,7 @@ export class GatewayChannelsService extends DrizzleService<
   PersistedGatewayChannelWriteData
 > {
   private db: TenantScopeAwareDatabase;
+  private readonly channelRepo: GatewayChannelRepository;
 
   constructor(db: TenantScopeAwareDatabase) {
     const repo = new GatewayChannelRepository(db);
@@ -80,6 +94,19 @@ export class GatewayChannelsService extends DrizzleService<
       },
     });
     this.db = db;
+    this.channelRepo = repo;
+  }
+
+  /**
+   * Gateway patching may probe a provider, so the service is registered on
+   * the identity-only tenant boundary. Keep each database phase short and
+   * let the provider call happen after this scope has committed.
+   */
+  private async withTenantDatabase<T>(params: Params | undefined, work: () => Promise<T>) {
+    const tenantId =
+      (params as (Params & { tenant?: { tenant_id?: string } }) | undefined)?.tenant?.tenant_id ??
+      getCurrentTenantId();
+    return runWithTenantDatabaseScope(this.db, tenantId, async () => work());
   }
 
   private hasStableExecutionOwner(
@@ -90,8 +117,33 @@ export class GatewayChannelsService extends DrizzleService<
       channel.agor_user_id &&
         config.align_slack_users !== true &&
         config.align_github_users !== true &&
-        config.align_shortcut_users !== true
+        config.align_shortcut_users !== true &&
+        config.align_discord_users !== true
     );
+  }
+
+  private assertValidEnvironmentVariables(config: PersistedGatewayAgenticConfig | null): void {
+    const seen = new Set<string>();
+    for (const variable of config?.envVars ?? []) {
+      if (seen.has(variable.key)) {
+        throw new BadRequest(`Duplicate gateway environment variable: ${variable.key}`);
+      }
+      seen.add(variable.key);
+      if (variable.value === GATEWAY_REDACTED_SENTINEL) {
+        // The transport hook must resolve preservation sentinels to the current
+        // plaintext before this authoritative service boundary. A sentinel
+        // reaching a direct/provider-less call is never a credential.
+        throw new BadRequest(
+          `Gateway environment variable ${variable.key} contains an unresolved redaction sentinel`
+        );
+      }
+      const errors = validateEnvVar(variable.key, variable.value);
+      if (errors.length > 0) {
+        throw new BadRequest(
+          `Invalid gateway environment variable ${variable.key}: ${errors.map((error) => error.message).join('; ')}`
+        );
+      }
+    }
   }
 
   private async validateConfig(
@@ -125,7 +177,9 @@ export class GatewayChannelsService extends DrizzleService<
           ? (channel.agor_user_id as UserID)
           : undefined,
       });
-      return materializedAgenticToolConfigurationToGatewayConfig(config, materialized);
+      const resolved = materializedAgenticToolConfigurationToGatewayConfig(config, materialized);
+      this.assertValidEnvironmentVariables(resolved);
+      return resolved;
     } catch (error) {
       if (
         isInvalidModelConfigError(error) ||
@@ -148,47 +202,173 @@ export class GatewayChannelsService extends DrizzleService<
     );
     data = pickWriteFields<GatewayChannelCreateData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
 
-    const materializedAgenticConfig = await this.validateConfig(data.agentic_config ?? null, {
-      agor_user_id: data.agor_user_id as GatewayChannel['agor_user_id'],
-      config: data.config ?? {},
+    return this.withTenantDatabase(params, async () => {
+      const materializedAgenticConfig = await this.validateConfig(data.agentic_config ?? null, {
+        agor_user_id: data.agor_user_id as GatewayChannel['agor_user_id'],
+        config: data.config ?? {},
+      });
+      const creatorId = (params as AuthenticatedParams | undefined)?.user?.user_id;
+      const trustedCreatedBy =
+        creatorId ?? (prepared ? (rawData.created_by as string | undefined) : undefined);
+      const persistedData: PersistedGatewayChannelCreateData = {
+        ...data,
+        agentic_config: materializedAgenticConfig,
+        ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
+      };
+      return super.create(persistedData, params);
     });
-    const creatorId = (params as AuthenticatedParams | undefined)?.user?.user_id;
-    const trustedCreatedBy =
-      creatorId ?? (prepared ? (rawData.created_by as string | undefined) : undefined);
-    const persistedData: PersistedGatewayChannelCreateData = {
-      ...data,
-      agentic_config: materializedAgenticConfig,
-      ...(trustedCreatedBy ? { created_by: trustedCreatedBy } : {}),
-    };
-    return super.create(persistedData, params);
+  }
+
+  async find(params?: Params) {
+    return this.withTenantDatabase(params, () => super.find(params));
+  }
+
+  async get(id: string, params?: Params) {
+    return this.withTenantDatabase(params, () => super.get(id, params));
   }
 
   async patch(id: NullableId, data: GatewayChannelPatchData, params?: Params) {
+    return this.patchInternal(id, data, params);
+  }
+
+  /** Internal token-widget seam; provider identity is never a public write field. */
+  async patchWithVerifiedDiscordInstallation(
+    id: string,
+    data: GatewayChannelPatchData,
+    providerInstallationId: string,
+    expectedProviderConfigGeneration: number,
+    params?: Params
+  ) {
+    return this.patchInternal(
+      id,
+      data,
+      params,
+      providerInstallationId,
+      expectedProviderConfigGeneration
+    );
+  }
+
+  private async patchInternal(
+    id: NullableId,
+    data: GatewayChannelPatchData,
+    params?: Params,
+    verifiedProviderInstallationId?: string,
+    expectedProviderConfigGeneration?: number
+  ) {
     const rawData = data as Record<string, unknown>;
     assertServiceWriteFields('Gateway channel', rawData, GATEWAY_CHANNEL_WRITE_FIELDS, params);
     data = pickWriteFields<GatewayChannelPatchData>(rawData, GATEWAY_CHANNEL_WRITE_FIELDS);
 
-    let persistedData: PersistedGatewayChannelPatchData = data;
-    if (
-      data.agentic_config !== undefined ||
-      data.agor_user_id !== undefined ||
-      data.config !== undefined
-    ) {
-      if (id === null || Array.isArray(id)) {
-        throw new BadRequest('Gateway agentic configuration cannot be multi-patched');
-      }
-      const current = await this.get(String(id), params);
-      const materializedAgenticConfig = await this.validateConfig(
-        data.agentic_config === undefined ? current.agentic_config : data.agentic_config,
-        {
-          agor_user_id: data.agor_user_id ?? current.agor_user_id,
-          config: { ...current.config, ...data.config },
-        },
-        data.agentic_config === undefined
-      );
-      persistedData = { ...data, agentic_config: materializedAgenticConfig };
+    const authorityPatch = isGatewayProviderAuthorityPatch(data);
+    if ((id === null || Array.isArray(id)) && authorityPatch) {
+      throw new BadRequest('Gateway provider-authority changes cannot be multi-patched');
     }
-    return super.patch(id, persistedData, params);
+
+    const needsCurrent =
+      id !== null &&
+      !Array.isArray(id) &&
+      (authorityPatch ||
+        data.agentic_config !== undefined ||
+        data.agor_user_id !== undefined ||
+        data.config !== undefined);
+    const prepared = needsCurrent
+      ? await this.withTenantDatabase(params, async () => {
+          const current = await this.channelRepo.findById(String(id));
+          if (!current) throw new BadRequest('Gateway channel was not found');
+
+          let persistedData: PersistedGatewayChannelPatchData = data;
+          if (
+            data.agentic_config !== undefined ||
+            data.agor_user_id !== undefined ||
+            data.config !== undefined
+          ) {
+            const materializedAgenticConfig = await this.validateConfig(
+              data.agentic_config === undefined ? current.agentic_config : data.agentic_config,
+              {
+                agor_user_id:
+                  data.agor_user_id !== undefined ? data.agor_user_id : current.agor_user_id,
+                config: mergeGatewayChannelConfigPatch(
+                  current.config,
+                  data.config,
+                  data.channel_type ?? current.channel_type,
+                  data.enabled ?? current.enabled
+                ),
+              },
+              data.agentic_config === undefined
+            );
+            // Validation may need the current agentic configuration to resolve the
+            // effective execution owner, but an authority patch did not request an
+            // agentic write. Keep that derived snapshot out of the repository patch
+            // so it cannot overwrite a concurrent sparse non-authority update.
+            if (data.agentic_config !== undefined) {
+              persistedData = { ...data, agentic_config: materializedAgenticConfig };
+            }
+          }
+          return { current, persistedData };
+        })
+      : { current: undefined, persistedData: data as PersistedGatewayChannelPatchData };
+    const { current, persistedData } = prepared;
+
+    // Public Discord authority changes probe the exact merged configuration
+    // before using the repository's verified-installation CAS seam. The secure
+    // token widget already supplies that verified result and therefore skips a
+    // redundant second provider call.
+    if (authorityPatch && current && current.channel_type !== undefined) {
+      const effectiveType = data.channel_type ?? current.channel_type;
+      const effectiveEnabled = data.enabled ?? current.enabled;
+      const effectiveConfig = mergeGatewayChannelConfigPatch(
+        current.config,
+        data.config,
+        effectiveType,
+        effectiveEnabled
+      );
+      const effectiveAgorUserId =
+        data.agor_user_id !== undefined ? data.agor_user_id : current.agor_user_id;
+      if (
+        verifiedProviderInstallationId === undefined &&
+        effectiveType === 'discord' &&
+        effectiveEnabled
+      ) {
+        const validation = validateDiscordSetup(effectiveConfig, effectiveAgorUserId);
+        if (!validation.ok) {
+          throw new BadRequest(
+            `Invalid Discord gateway configuration: ${validation.errors.join('; ')}`
+          );
+        }
+        const result = await getConnector('discord', effectiveConfig).testConnection?.();
+        const verification = evaluateDiscordConnectionVerification(
+          result,
+          effectiveConfig.application_id
+        );
+        if (!verification.verified) {
+          const reason = verification.failure.warnings.join('; ') || verification.failure.reason;
+          throw new BadRequest(`Discord verification failed: ${reason}`);
+        }
+        verifiedProviderInstallationId = verification.installationId;
+        expectedProviderConfigGeneration = current.provider_config_generation;
+      }
+    }
+    if (verifiedProviderInstallationId !== undefined) {
+      if (id === null || Array.isArray(id)) {
+        throw new BadRequest('Discord installation verification requires one channel');
+      }
+      if (expectedProviderConfigGeneration === undefined) {
+        throw new BadRequest('Discord installation verification requires a config generation');
+      }
+      return this.withTenantDatabase(params, () =>
+        this.channelRepo.updateWithVerifiedDiscordInstallation(
+          String(id),
+          persistedData,
+          verifiedProviderInstallationId,
+          expectedProviderConfigGeneration
+        )
+      );
+    }
+    return this.withTenantDatabase(params, () => super.patch(id, persistedData, params));
+  }
+
+  async remove(id: NullableId, params?: Params) {
+    return this.withTenantDatabase(params, () => super.remove(id, params));
   }
 
   async uploadFileStreamFromExecutor(

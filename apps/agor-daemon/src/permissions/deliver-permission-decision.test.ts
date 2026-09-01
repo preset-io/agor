@@ -70,6 +70,13 @@ function harness(
     }),
     isOwner: vi.fn().mockResolvedValue(false),
     resolveUserPermission: vi.fn().mockResolvedValue(options.branchPermission ?? 'prompt'),
+    resolveSessionPromptAuthority: vi.fn().mockResolvedValue({
+      allowed:
+        ['session', 'prompt', 'all'].includes(options.branchPermission ?? 'prompt') &&
+        (options.sessionCreatedBy ?? 'user-a') === 'user-a',
+      execution_user_id: 'user-a',
+      source: (options.sessionCreatedBy ?? 'user-a') === 'user-a' ? 'own_session' : 'denied',
+    }),
   };
   const authorization = {
     branchRbacEnabled: options.branchRbacEnabled ?? false,
@@ -218,7 +225,7 @@ describe('deliverPermissionDecision', () => {
         params,
         authorization,
       })
-    ).rejects.toThrow("'view' permission");
+    ).rejects.toThrow(/don't have permission to prompt this branch/i);
     expect(messages.findByTask).not.toHaveBeenCalled();
     expect(messages.emit).not.toHaveBeenCalled();
   });

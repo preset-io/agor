@@ -9,6 +9,7 @@
 
 import { execSync } from 'node:child_process';
 import { generateId, shortId } from '@agor/core/db';
+import { sanitizeMCPExternalError } from '@agor/core/mcp';
 import type {
   BranchRepository,
   MCPOAuthAuthHeadersRepository,
@@ -352,12 +353,12 @@ export class CodexTool implements ITool {
                 currentMessageId = newMessageId;
                 streamStarted = true;
               } catch (err) {
-                console.error(`[Codex] Streaming start failed for ${newMessageId}:`, err);
+                const safe = sanitizeMCPExternalError(err, { stage: 'runtime' });
+                console.error(
+                  `[Codex] Streaming start failed message_id=${newMessageId} category=${safe.category} type=${safe.diagnostic.type}`
+                );
                 try {
-                  await streamingCallbacks.onStreamError(
-                    newMessageId,
-                    err instanceof Error ? err : new Error(String(err))
-                  );
+                  await streamingCallbacks.onStreamError(newMessageId, new Error(safe.message));
                 } catch {
                   /* best-effort */
                 }
@@ -372,12 +373,12 @@ export class CodexTool implements ITool {
             try {
               await streamingCallbacks.onStreamChunk(currentMessageId, event.textChunk);
             } catch (err) {
-              console.error(`[Codex] Streaming chunk failed for ${currentMessageId}:`, err);
+              const safe = sanitizeMCPExternalError(err, { stage: 'runtime' });
+              console.error(
+                `[Codex] Streaming chunk failed message_id=${currentMessageId} category=${safe.category} type=${safe.diagnostic.type}`
+              );
               try {
-                await streamingCallbacks.onStreamError(
-                  currentMessageId,
-                  err instanceof Error ? err : new Error(String(err))
-                );
+                await streamingCallbacks.onStreamError(currentMessageId, new Error(safe.message));
               } catch {
                 /* best-effort */
               }
@@ -517,12 +518,15 @@ export class CodexTool implements ITool {
                   await streamingCallbacks.onStreamEnd(assistantMessageId);
                 }
               } catch (err) {
-                console.error(`[Codex] Streaming callback failed for ${assistantMessageId}:`, err);
+                const safe = sanitizeMCPExternalError(err, { stage: 'runtime' });
+                console.error(
+                  `[Codex] Streaming callback failed message_id=${assistantMessageId} category=${safe.category} type=${safe.diagnostic.type}`
+                );
                 // Notify UI so it can clear spinner/pending state
                 try {
                   await streamingCallbacks.onStreamError(
                     assistantMessageId,
-                    err instanceof Error ? err : new Error(String(err))
+                    new Error(safe.message)
                   );
                 } catch {
                   /* best-effort */
@@ -544,7 +548,10 @@ export class CodexTool implements ITool {
                   await streamingCallbacks.onThinkingEnd(assistantMessageId);
                 }
               } catch (err) {
-                console.error(`[Codex] Thinking callback failed for ${assistantMessageId}:`, err);
+                const safe = sanitizeMCPExternalError(err, { stage: 'runtime' });
+                console.error(
+                  `[Codex] Thinking callback failed message_id=${assistantMessageId} category=${safe.category} type=${safe.diagnostic.type}`
+                );
               }
             }
 

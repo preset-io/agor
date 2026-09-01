@@ -5,15 +5,19 @@
  * Extracted from index.ts for maintainability.
  */
 
+import { createHash, randomBytes } from 'node:crypto';
+import { type FileHandle, mkdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { OPENCODE_DAEMON_CONTRIBUTION } from '@agor/agentic-tool-opencode/daemon';
-
+import { AGENTIC_TOOL_DISPLAY_NAMES } from '@agor/agentic-tools';
+import { mutateCredentialFile, openCredentialFileForBind } from '@agor/core/codex/credential-file';
 import {
   type AgorConfig,
+  getBranchHomePath,
   isDeploymentAgenticToolAvailable,
   MESSAGE_PAGINATION,
-  PublicBaseUrlNotConfiguredError,
   type ResolvedDeploymentConfig,
   requirePublicBaseUrl,
   resolveDeploymentAgenticToolPolicy,
@@ -21,21 +25,29 @@ import {
   resolveMultiTenancyConfig,
 } from '@agor/core/config';
 import {
+  AmbiguousIdError,
   and,
   BoardRepository,
   BranchRepository,
+  DiscordMessageDeliveryRepository,
+  EntityNotFoundError,
+  enqueueAfterTenantDatabaseCommit,
   eq,
   GatewayChannelRepository,
   generateId,
   getCurrentTenantId,
+  getMCPEgressGatewayMode,
   inArray,
   isPostgresDatabaseHandle,
+  MCPCatalogCandidateRepository,
+  MCPMarketplaceRepository,
   type MCPOAuthPendingFlowRecord,
   MCPServerRepository,
   mcpServers,
   RepoRepository,
   runWithoutTenantDatabaseScope,
   runWithTenantDatabaseScope,
+  runWithTenantDatabaseTransaction,
   type SaveTokenInput,
   SessionMCPServerRepository,
   SessionRepository,
@@ -51,18 +63,29 @@ import {
   visibleSessionReferenceAccessExists,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import { BadRequest, Conflict, Forbidden, NotAuthenticated } from '@agor/core/feathers';
+import {
+  hasTemplateMarker,
+  isMCPServerUsableBy,
+  type MCPExternalErrorStage,
+  sanitizeMCPExternalError,
+} from '@agor/core/mcp';
 import type {
   OAuthFlowContext,
   OAuthTokenResponse,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
-import { OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import { OAuthConfigurationError } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { RefreshAndPersistDeps } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
+  AgenticToolName,
   AuthenticatedParams,
   HookContext,
   MCPAuth,
   MCPOAuthAttemptID,
+  MCPOAuthBrowserEventRequest,
+  MCPOAuthBrowserOperation,
+  MCPOAuthBrowserReservation,
+  MCPOAuthBrowserReservationRequest,
   MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
   MCPOAuthRuntimeCompatibilityMode,
@@ -79,13 +102,23 @@ import {
   assertPublicMCPOAuthCompatibilityMode,
   hasMinimumRole,
   isMCPOAuthGrantBindingVersion,
+  MCP_MEMBER_POLICY_CHANGED_EVENT,
+  MCP_OAUTH_BROWSER_OPERATIONS,
   ROLES,
   TaskStatus,
 } from '@agor/core/types';
 import type { UnixUserMode } from '@agor/core/unix';
-import { safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
+import { type OutboundDnsLookup, safeOutboundFetch } from '@agor/core/utils/safe-outbound-fetch';
 import type express from 'express';
+import { getAgenticToolDaemonContribution } from './agentic-tool-daemon-contributions.js';
 import { authenticatedTaskExecutorRuntimeScope } from './auth/executor-runtime-scope.js';
+import {
+  hasSecureLocalCredentialOverlay,
+  resolveBranchSdkHomeCompatibility,
+  resolveBranchSdkHomeLaunch,
+  sessionUsesBranchSdkHome,
+} from './branch-sdk-home.js';
+import { invalidateLiveBranchCodexCredentialBinds } from './codex-auth-bind-invalidation.js';
 import type {
   BoardsServiceImpl,
   MessagesServiceImpl,
@@ -104,8 +137,13 @@ import {
   inOpenCodeNativeStateMutationSlot,
   type OpenCodeNativeStateMutationFence,
 } from './integrations/opencode/native-state-coordinator.js';
+import { scrubMCPSecretsFromExecutorEnv } from './mcp-egress/executor-env.js';
 import { getDaemonMetrics } from './metrics/index.js';
-import { runInOAuthTenantScope, runInOAuthTenantWriteScope } from './oauth-auth-helpers.js';
+import {
+  runInOAuthTenantScope,
+  runInOAuthTenantWriteScope,
+  runInOAuthTenantWriteTransaction,
+} from './oauth-auth-helpers.js';
 import { persistOAuthToken } from './oauth-cache.js';
 import {
   emitHaNativeSocketEvent,
@@ -119,22 +157,23 @@ import {
 } from './services/artifacts.js';
 import { createBoardCommentsService } from './services/board-comments.js';
 import { createBoardObjectsService } from './services/board-objects.js';
-import { setupBoardOwnersService } from './services/board-owners.js';
 import { createBoardsService } from './services/boards.js';
-import { setupBranchOwnersService } from './services/branch-owners.js';
 import { createBranchesService } from './services/branches.js';
+import { setupCapabilityPolicyServices } from './services/capability-policies.js';
 import { createCardTypesService } from './services/card-types.js';
 import { createCardsService } from './services/cards.js';
 import { createCheckAuthService } from './services/check-auth.js';
 import { createClaudeModelsService } from './services/claude-models.js';
 import { createCodexAuthImportService } from './services/codex-auth-import.js';
 import { createCodexAuthLogoutService } from './services/codex-auth-logout.js';
+import { resolveCodexCredentialRoute } from './services/codex-auth-shared.js';
 import { createCodexDeviceAuthService } from './services/codex-device-auth.js';
 import { CodexDeviceAuthAttemptAuthority } from './services/codex-device-auth-attempt-authority.js';
 import { createDurableCodexDeviceAuthService } from './services/codex-device-auth-durable.js';
 import { createConfigService } from './services/config.js';
 import { createCopilotModelsService } from './services/copilot-models.js';
 import { createCursorModelsService } from './services/cursor-models.js';
+import { createExecutorGitEnvironmentService } from './services/executor-git-environment.js';
 import { prepareSessionForExecutorStart } from './services/executor-startup.js';
 import { createFileService } from './services/file.js';
 import { createFilesService } from './services/files.js';
@@ -149,12 +188,12 @@ import { registerGitHubAppSetupRoutes } from './services/github-app-setup.js';
 import {
   createGroupMembershipsService,
   createGroupsService,
+  GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS,
   GROUPS_SERVICE_TRANSPORT_METHODS,
   setupBoardAlignedBranchesService,
-  setupBoardGroupGrantsService,
+  setupBoardEffectiveAccessService,
   setupBranchEffectiveAccessService,
   setupBranchFsAccessUsersService,
-  setupBranchGroupGrantsService,
 } from './services/groups.js';
 import { createKnowledgeDocumentEditsService } from './services/knowledge-document-edits.js';
 import { createKnowledgeDocumentsService } from './services/knowledge-documents.js';
@@ -169,7 +208,17 @@ import { createKnowledgeSearchService } from './services/knowledge-search.js';
 import { createKnowledgeSettingsService } from './services/knowledge-settings.js';
 import { createKnowledgeVersionsService } from './services/knowledge-versions.js';
 import { createLeaderboardService } from './services/leaderboard.js';
+import {
+  classifyMCPAuthRecovery,
+  recoveryForOAuthAttemptFailure,
+} from './services/mcp-auth-recovery.js';
 import { createMCPCatalogService } from './services/mcp-catalog.js';
+import { MCPCatalogReadinessService } from './services/mcp-catalog-readiness.js';
+import { MCPMarketplaceService } from './services/mcp-marketplace.js';
+import {
+  MCPMarketplaceRemoveServerService,
+  MCPMarketplaceToolPermissionService,
+} from './services/mcp-marketplace-actions.js';
 import {
   logMCPOAuthCompatibilityPolicy,
   resolveMCPOAuthCompatibilityPolicy,
@@ -192,7 +241,10 @@ import {
 } from './services/mcp-oauth-grant-binding.js';
 import { MCPOAuthPendingFlowAuthority } from './services/mcp-oauth-pending-flow-authority.js';
 import { resolveAuthenticatedServerIds } from './services/mcp-oauth-status.js';
-import { createMCPServersService } from './services/mcp-servers.js';
+import {
+  createMCPServersService,
+  runWithMCPServerMutationDatabase,
+} from './services/mcp-servers.js';
 import { createMessagesService, MESSAGES_SERVICE_TRANSPORT_METHODS } from './services/messages.js';
 import { performOAuthDisconnect } from './services/oauth-disconnect.js';
 import { createReposService } from './services/repos.js';
@@ -204,19 +256,35 @@ import { createSessionEnvSelectionsService } from './services/session-env-select
 import { createSessionMCPServersService } from './services/session-mcp-servers.js';
 import { createSessionStreamsService } from './services/session-streams.js';
 import { createSessionsService } from './services/sessions.js';
-import { createTasksService, TASKS_SERVICE_TRANSPORT_METHODS } from './services/tasks.js';
+import {
+  createTasksService,
+  TASKS_SERVICE_TRANSPORT_METHODS,
+  type TasksService,
+} from './services/tasks.js';
 import { TASKS_SERVICE_CUSTOM_EVENTS } from './services/tasks-events.js';
 import { createTemplatesService } from './services/templates.js';
 import { createTenantAgenticToolSettingsService } from './services/tenant-agentic-tools.js';
 import { TerminalsService } from './services/terminals.js';
 import { createThreadSessionMapService } from './services/thread-session-map.js';
-import { createUsersService, USERS_SERVICE_TRANSPORT_METHODS } from './services/users.js';
+import {
+  createTenantTransactionUsersService,
+  createUsersService,
+  USERS_SERVICE_TRANSPORT_METHODS,
+} from './services/users.js';
 import { requestExecutorTermination } from './termination-coordinator.js';
 import { appendSystemMessage } from './utils/append-system-message.js';
 import { requireMinimumRole } from './utils/authorization.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import { renderOAuthResultPage } from './utils/html.js';
-import { persistDiscoveredMCPCapabilities } from './utils/mcp-discovered-capabilities.js';
+import { emitMarketplaceInvalidation } from './utils/marketplace-invalidation.js';
+import { createAuthorityGuardedMCPFetch } from './utils/mcp-authority-fetch.js';
+import {
+  bindMCPDiscoveryOAuthGrant,
+  bindMCPDiscoveryResolvedConfiguration,
+  captureMCPDiscoveryAuthority,
+  type MCPDiscoveryAuthoritySnapshot,
+  persistDiscoveredMCPCapabilities,
+} from './utils/mcp-discovered-capabilities.js';
 import {
   shouldExposeMCPServerSecrets,
   shouldExposeMCPServerSecretsForSessionToken,
@@ -228,6 +296,10 @@ import {
   registerMcpCapabilityRoleFloor,
 } from './utils/mcp-server-authorization.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from './utils/sandbox-context.js';
+import {
+  AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT,
+  readSocketAuthorityId,
+} from './utils/socket-request-authority.js';
 import { type SpawnExecutorOptions, spawnExecutor } from './utils/spawn-executor.js';
 import { classifyExecutorExit } from './utils/task-launch-state.js';
 import { withFreshTenantWrite } from './utils/tenant-db-scope.js';
@@ -249,6 +321,12 @@ export interface RegisterServicesContext {
   allowSuperadmin: boolean;
   requireAuth: (context: HookContext) => Promise<HookContext>;
   deployment: ResolvedDeploymentConfig;
+  /** Injectable durable authority for boundary tests; production derives it from PostgreSQL. */
+  mcpOAuthPendingFlowAuthority?: MCPOAuthPendingFlowAuthority;
+  /** Injectable transaction-lock boundary paired with the durable authority. */
+  lockMcpOAuthGrantConfiguration?: typeof lockMCPOAuthGrantConfiguration;
+  /** Injectable DNS boundary for adversarial Socket.io authority tests. */
+  mcpOutboundDnsLookup?: OutboundDnsLookup;
 }
 
 /**
@@ -319,13 +397,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   const sessionsService = createSessionsService(db, app, (tool) =>
     isDeploymentAgenticToolAvailable(tool, deploymentAgenticToolPolicy)
   ) as unknown as SessionsServiceImpl;
+  const tasksService = createTasksService(db, app, sessionTokenService, {
+    branchRbacEnabled,
+  });
   app.use('/sessions', sessionsService, {
     events: ['permission:request', 'permission:timeout'],
   });
 
   // Wire up the execute handler for spawning executor processes
   sessionsService.setExecuteHandler(
-    createExecuteHandler(ctx, sessionsService, sessionTokenService)
+    createExecuteHandler(ctx, sessionsService, sessionTokenService, tasksService)
   );
 
   // Realtime control-plane: browsers subscribe (create) / unsubscribe (remove)
@@ -341,7 +422,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   });
   app.service('/session-streams').publish(() => []);
 
-  app.use('/tasks', createTasksService(db, app, sessionTokenService), {
+  app.use('/tasks', tasksService, {
     methods: [...TASKS_SERVICE_TRANSPORT_METHODS],
     // Custom events not in this list are dropped at the FeathersJS transport
     // boundary — they fire on the local EventEmitter but never reach socket
@@ -357,7 +438,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     events: [...TASKS_SERVICE_CUSTOM_EVENTS],
   });
   app.use('/leaderboard', createLeaderboardService(db));
-  const messagesService = createMessagesService(db) as unknown as MessagesServiceImpl;
+  const deliveryRepository = new DiscordMessageDeliveryRepository(db);
+  const messagesService = createMessagesService(db, (tx, message) =>
+    deliveryRepository.enqueueForMessageInTransaction(tx, message).then(() => undefined)
+  ) as unknown as MessagesServiceImpl;
   const messageOpenApiProperties = {
     message_id: { type: 'string', format: 'uuid' },
     session_id: { type: 'string', format: 'uuid' },
@@ -500,7 +584,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // Branches, repos
   // ============================================================================
 
-  app.use('/branches', createBranchesService(db, app), {
+  app.use('/branches', createBranchesService(db, app, { appRbacEnabled: branchRbacEnabled }), {
     methods: [
       'find',
       'get',
@@ -516,31 +600,17 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   console.log(`[RBAC] Branch RBAC ${branchRbacEnabled ? 'Enabled' : 'Disabled'}`);
   console.log(`[RBAC] Superadmin bypass ${allowSuperadmin ? 'Enabled' : 'Disabled'}`);
 
-  if (
-    branchRbacEnabled &&
-    !app.services['branches/:id/owners'] &&
-    !app.services['branches/:id/owners/:userId']
-  ) {
-    const branchRepo = new BranchRepository(db);
-    setupBranchOwnersService(app, branchRepo, {
-      allowSuperadmin,
-    });
-  }
-
   app.use('/groups', createGroupsService(db), {
     methods: [...GROUPS_SERVICE_TRANSPORT_METHODS],
   });
   app.use('/group-memberships', createGroupMembershipsService(db), {
-    methods: ['find', 'create', 'remove'],
+    methods: [...GROUP_MEMBERSHIPS_SERVICE_TRANSPORT_METHODS],
   });
-  setupBranchEffectiveAccessService(app, new BranchRepository(db));
+  setupBranchEffectiveAccessService(app, new BranchRepository(db), { allowSuperadmin });
+  setupBoardEffectiveAccessService(app, new BoardRepository(db), { allowSuperadmin });
   setupBoardAlignedBranchesService(app, new BranchRepository(db));
   setupBranchFsAccessUsersService(app, new BranchRepository(db));
-  if (branchRbacEnabled) {
-    setupBoardOwnersService(app, new BoardRepository(db));
-    setupBoardGroupGrantsService(app, db);
-    setupBranchGroupGrantsService(app, db, new BranchRepository(db));
-  }
+  setupCapabilityPolicyServices(app, db, { allowSuperadmin });
 
   // `createBranch` is deliberately NOT a transport method: it takes `(id, data)`,
   // which is not the Feathers custom-method contract, and it is already exposed as
@@ -661,7 +731,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
     app.service('gateway-channels/app-info').publish(() => []);
 
     app.use('/thread-session-map', createThreadSessionMapService(db));
-    app.use('/gateway', createGatewayService(db, app), {
+    app.use('/gateway', createGatewayService(db, app, { appRbacEnabled: branchRbacEnabled }), {
       // Only expose the inbound gateway entrypoint and existing route hook
       // externally. Proactive outbound emits are intentionally invoked through
       // the authenticated Agor MCP tool surface; exposing emitMessage here would
@@ -714,8 +784,19 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // method to subscription. Token material never leaves the daemon.
   const codexDeviceAttempts =
     ctx.deployment.mode === 'ha' ? new CodexDeviceAuthAttemptAuthority(db) : undefined;
+  const invalidateCodexCredentialBinds = (input: {
+    tenantId: string;
+    userId: UserID;
+    reason: 'credentials_imported' | 'credentials_removed';
+  }) =>
+    hasSecureLocalCredentialOverlay(config)
+      ? invalidateLiveBranchCodexCredentialBinds({ app, db, ...input })
+      : Promise.resolve();
 
-  app.use('/codex-auth/import', createCodexAuthImportService(app, db, codexDeviceAttempts));
+  app.use(
+    '/codex-auth/import',
+    createCodexAuthImportService(app, db, codexDeviceAttempts, invalidateCodexCredentialBinds)
+  );
   app.service('/codex-auth/import').hooks({ before: { create: [ctx.requireAuth] } });
 
   // ChatGPT device-code sign-in: create starts an attempt (code + verification
@@ -724,8 +805,14 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   app.use(
     '/codex-auth/device',
     codexDeviceAttempts
-      ? createDurableCodexDeviceAuthService(app, db, codexDeviceAttempts)
-      : createCodexDeviceAuthService(app, db)
+      ? createDurableCodexDeviceAuthService(
+          app,
+          db,
+          codexDeviceAttempts,
+          undefined,
+          invalidateCodexCredentialBinds
+        )
+      : createCodexDeviceAuthService(app, db, invalidateCodexCredentialBinds)
   );
   app.service('/codex-auth/device').hooks({
     before: { create: [ctx.requireAuth], find: [ctx.requireAuth], remove: [ctx.requireAuth] },
@@ -735,7 +822,10 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   // credential route and clears the stored auth method (emitting `patched` so the
   // UI re-probes to disconnected). Server-local only; does not revoke the OAuth
   // grant, so other machines stay signed in.
-  app.use('/codex-auth/logout', createCodexAuthLogoutService(app, db, codexDeviceAttempts));
+  app.use(
+    '/codex-auth/logout',
+    createCodexAuthLogoutService(app, db, codexDeviceAttempts, invalidateCodexCredentialBinds)
+  );
   app.service('/codex-auth/logout').hooks({ before: { create: [ctx.requireAuth] } });
 
   // Claude dynamic model discovery via @anthropic-ai/sdk's models.list().
@@ -780,7 +870,7 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const sessionMCPServersService = createSessionMCPServersService(db);
   const sessionEnvSelectionsService = createSessionEnvSelectionsService(db);
-  // Top-level /session-env-selections — event channel ONLY.
+  // Top-level /session-env-selections — compatibility placeholder only.
   //
   // Unlike /session-mcp-servers, selection NAMES are a confidentiality
   // concern (they reveal which of the session creator's private env vars
@@ -790,11 +880,11 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   //
   // Reads go exclusively through `/sessions/:id/env-selections`, which
   // enforces session-creator / admin RBAC (see register-routes.ts). This
-  // service exists only so FeathersJS can emit `created` / `removed` /
-  // `patched` events to socket clients that need to refresh.
+  // service remains registered for API/client compatibility, but its
+  // realtime publisher audience is `none` until an owner-aware consumer and
+  // disclosure contract are added.
   app.use('/session-env-selections', {
-    // Empty find() — clients can still subscribe to events, but cannot
-    // query rows via this top-level service.
+    // Empty find() — clients cannot query rows via this top-level service.
     async find() {
       return [];
     },
@@ -886,14 +976,20 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
 
   const usersService = createUsersService(db, app);
   // UsersService implements find/get/create/patch/remove (no `update`), plus
-  // custom RPCs like `getGitEnvironment` and avatar sync helpers. Listing `update` here makes Feathers' hook
+  // avatar sync helpers. Listing `update` here makes Feathers' hook
   // wiring throw "Can not apply hooks. 'update' is not a function" at startup.
   app.use('/users', usersService, {
     methods: [...USERS_SERVICE_TRANSPORT_METHODS],
   });
 
+  // Plaintext Git credentials are not a Users RPC. They are exposed only to
+  // the exact daemon-issued Git executor command acting as its token owner.
+  app.use('/executor-git-environment', createExecutorGitEnvironmentService(db), {
+    methods: ['create'],
+  });
+
   // Bootstrap superadmin users
-  await bootstrapSuperadminUsers(config, usersService, allowSuperadmin);
+  await bootstrapSuperadminUsers(config, db, allowSuperadmin);
 
   // Store oauthCallbackHandler on app for boot.ts to wire up
   appRecord.oauthCallbackHandler = oauthCallbackHandler;
@@ -933,7 +1029,8 @@ function createDeferredSignal() {
 function createExecuteHandler(
   ctx: RegisterServicesContext,
   sessionsService: SessionsServiceImpl,
-  sessionTokenService: import('./services/session-token-service.js').SessionTokenService
+  sessionTokenService: import('./services/session-token-service.js').SessionTokenService,
+  tasksService: TasksService
 ) {
   const { db, app, config, daemonUrl } = ctx;
   const deploymentAgenticToolPolicy = resolveDeploymentAgenticToolPolicy(config);
@@ -973,7 +1070,19 @@ function createExecuteHandler(
       session,
       requestedMode: data.permissionMode,
     });
-    const userId = (params as AuthenticatedParams).user?.user_id as UserID | undefined;
+    if (!tenantId) throw new Error('Missing active tenant context for executor launch');
+    const launchAuthority = await runWithTenantDatabaseScope(db, tenantId, () =>
+      tasksService.bindExecutorLaunchAuthority(data.taskId)
+    );
+    if (
+      launchAuthority.session_id !== sessionId ||
+      launchAuthority.branch_id !== session.branch_id
+    ) {
+      throw new Error('Task launch authority does not match its prepared Session');
+    }
+    // Principal, Session, Branch, and projected filesystem floor all come from
+    // the locked Task and normalized capability policy, never request params.
+    const userId = launchAuthority.principal_user_id as UserID;
     if (
       session.agentic_tool_preset_id &&
       data.permissionMode !== undefined &&
@@ -992,51 +1101,31 @@ function createExecuteHandler(
       });
     }
 
-    // Generate session token for executor authentication
-    const appWithExecutor = app as unknown as {
-      sessionTokenService?: import('./services/session-token-service.js').SessionTokenService;
-    };
-    if (!appWithExecutor.sessionTokenService) {
-      throw new Error('Session token service not initialized');
-    }
-    // Hook chain enforces auth before we get here.
-    const sessionToken = await appWithExecutor.sessionTokenService.generateToken(
-      sessionId,
-      (params as AuthenticatedParams).user!.user_id,
-      {
-        taskId: data.taskId,
-        branchId: session.branch_id,
-        // Executor JWTs authenticate at Socket.IO handshake/reconnect (and on
-        // every REST request), so low use limits make normal execution fail
-        // during transport recovery. Keep expiry + lifecycle revocation for
-        // these runtime credentials. Bounded tokens retain per-validation use
-        // counting for compatibility.
-        maxUses: -1,
-      }
-    );
-
     const taskId = data.taskId;
     const runInFreshTerminationTenantWriteDatabase = <T>(work: () => Promise<T>) =>
       withFreshTenantWrite(db, tenantId, work);
 
     // Get branch path (+ authoritative base repo path for the sandbox) and, for
-    // RBAC-aware mounting, the session OWNER's effective filesystem access to
-    // the branch. The filesystem sandbox binds `<baseRepoPath>/.git` writable so
+    // RBAC-aware mounting, the current PROMPT ACTOR's effective filesystem
+    // access to the branch. A shared branch Session still must not upgrade the
+    // caller's branch mounts to the Session owner's access.
+    // The filesystem sandbox binds `<baseRepoPath>/.git` writable so
     // worktree commits work; we resolve `repo.local_path` from Agor's own DB
     // state rather than parsing the on-disk `.git` pointer (deterministic, and
     // unaffected if a worktree's origin/gitdir is later rewritten).
     const sandboxCfg = config.execution?.sandbox;
-    const rbacOn = config.execution?.branch_rbac === true;
     let cwd = process.cwd();
     let sandboxBaseRepoPath: string | undefined;
+    // Per-branch SDK home intent read from the branch record (design §9.2/§8B.3).
+    let branchSdkHomeIntent: 'per_branch' | null = null;
     const sandboxWorktreesRoot =
       sandboxCfg?.enabled === true
         ? resolveSandboxStoragePaths(config, tenantId).worktreesRoot
         : undefined;
-    // Effective fs access of the OWNER on the branch: 'write' | 'read' | 'none'.
+    // Effective fs access of the prompt actor on the branch: write/read/none.
     // Drives whether the sandbox binds the branch rw / ro / not at all. Defaults
     // to 'write' when RBAC is off (open-access behavior).
-    let principalBranchAccess: 'write' | 'read' | 'none' = 'write';
+    const principalBranchAccess = launchAuthority.fs_access;
     if (session.branch_id) {
       const branchMounts = await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
         const branchRepo = new BranchRepository(tenantDb);
@@ -1054,58 +1143,150 @@ function createExecuteHandler(
           const repo = await new RepoRepository(tenantDb).findById(branch.repo_id);
           baseRepoPath = repo?.local_path ?? undefined;
         }
-        let fsAccess: 'write' | 'read' | 'none' = 'write';
-        if (rbacOn && session.created_by) {
-          const access = await branchRepo.resolveUserAccess(branch, session.created_by as UUID);
-          fsAccess =
-            access.fs_access === 'write' ? 'write' : access.fs_access === 'read' ? 'read' : 'none';
-        }
-        return { path: branch.path, baseRepoPath, fsAccess };
+        return { path: branch.path, baseRepoPath, sdkHome: branch.sdk_home ?? null };
       });
       if (!branchMounts)
         throw new Error(`Branch ${session.branch_id} not found for executor startup`);
       cwd = branchMounts.path;
       sandboxBaseRepoPath = branchMounts.baseRepoPath;
-      principalBranchAccess = branchMounts.fsAccess;
+      branchSdkHomeIntent = branchMounts.sdkHome;
       // Under the sandbox, 'none' means the branch would not be mounted at all,
       // so the task cannot operate on it. Fail fast with a clear message rather
       // than letting bwrap abort on a missing chdir target.
       if (sandboxCfg?.enabled === true && principalBranchAccess === 'none') {
         throw new Error(
-          `The session owner has no filesystem access to branch ${session.branch_id}. ` +
-            'Grant at least read access (others_fs_access) to run sessions on this branch under ' +
+          `The prompt actor has no filesystem access to branch ${session.branch_id}. ` +
+            'Grant at least Read file access in the branch policy to run sessions under ' +
             'the filesystem sandbox.'
         );
       }
     }
 
-    // Per-owner home store for `sandbox.home_mode: per_user` — a private,
-    // persistent home overlaid at the passwd home inside the sandbox. Keyed by
-    // the SESSION OWNER (not the prompter): the home carries the owner's tool
-    // auth/state, so prompting another user's session runs against the owner's
-    // home. The SOURCE is the owner's `filesystem_home`
+    // Per-execution home store for `sandbox.home_mode: per_user` — a private,
+    // persistent home overlaid at the passwd home inside the sandbox. Legacy
+    // `execution_home` sessions keep using their immutable owner identity.
+    // Branch-scoped sessions instead use the prompt actor's home: resumable SDK
+    // state comes from the branch overlay, so exposing the session owner's
+    // arbitrary files would be both unnecessary and unsafe. The SOURCE is the
+    // selected user's `filesystem_home`
     // if set (the migration points it at their existing /home/<user> so no files
     // move), else the canonical store (see resolveOwnerHomeStore). Only computed
     // when the mode is active — and FAIL CLOSED if the owner can't be resolved.
     let sandboxHomeStore: string | undefined;
     if (sandboxCfg?.enabled === true && sandboxCfg?.home_mode === 'per_user') {
-      if (!session.created_by) {
+      const executionHomeUserId =
+        session.sdk_home_scope === 'branch' ? userId : (session.created_by as UserID | undefined);
+      if (!executionHomeUserId) {
         throw new Error(
-          'sandbox home_mode=per_user requires a resolvable session owner; refusing to spawn ' +
-            'with a shared home (fail closed).'
+          'sandbox home_mode=per_user requires a resolvable execution user; refusing to spawn ' +
+            'without a caller-scoped home (fail closed).'
         );
       }
-      const ownerFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+      const executionFilesystemHome = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
         new UsersRepository(tenantDb)
-          .findById(session.created_by as string)
+          .findById(executionHomeUserId as string)
           .then((u) => u?.filesystem_home?.trim() || undefined)
       );
       sandboxHomeStore = resolveOwnerHomeStore({
         config,
         tenantId,
-        ownerUserId: session.created_by,
-        filesystemHome: ownerFilesystemHome,
+        ownerUserId: executionHomeUserId,
+        filesystemHome: executionFilesystemHome,
       });
+    }
+
+    // ── Per-branch SDK home (design §7/§8/§11) ─────────────────────────────
+    // Executor startup follows the SESSION stamp, never today's deployment
+    // flag or branch intent alone. This is the compatibility seam that lets an
+    // old, resumable session keep its historical execution home while a fresh
+    // session on the same adopted branch uses branch-owned SDK state.
+    const sdkHomeTool = session.agentic_tool as AgenticToolName;
+    const isDelegatedExecution = (config.execution?.unix_user_mode ?? 'simple') === 'delegated';
+    let sandboxBranchSdkHome: string | undefined;
+    let branchSdkHomeEnv: Record<string, string> | undefined;
+    let branchSdkHomeTemplatePath = '';
+    let branchCodexAuthBind:
+      | { source: string; destination: string; handle?: FileHandle }
+      | undefined;
+    const useBranchSdkHome = sessionUsesBranchSdkHome({
+      sessionScope: session.sdk_home_scope,
+      branchSdkHomeIntent,
+    });
+    if (useBranchSdkHome) {
+      if (!session.branch_id) {
+        throw new Error(`Branch-scoped session ${session.session_id} has no branch`);
+      }
+      const branchId = session.branch_id as string;
+      // A relocatable directory is necessary but not sufficient: OpenCode's
+      // current XDG data home also contains its native credential file. Until
+      // its actor credential namespace is split from branch-owned state, a
+      // branch home would either lose configured credentials or share them.
+      const compatibility = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        resolveBranchSdkHomeCompatibility({
+          tool: sdkHomeTool,
+          delegated: isDelegatedExecution,
+          secureLocalCredentialOverlay: hasSecureLocalCredentialOverlay(config),
+          userId,
+          db: tenantDb,
+        })
+      );
+      if (compatibility.unsupportedReason) {
+        throw new BadRequest(
+          `${AGENTIC_TOOL_DISPLAY_NAMES[sdkHomeTool]} cannot run in a branch-scoped session ` +
+            `because ${compatibility.unsupportedReason}. Use a supported tool or authentication mode.`
+        );
+      }
+      const branchHomeDir = getBranchHomePath(branchId, tenantId ?? undefined);
+      // Delegated mode: Agor mounts nothing; the external launcher owns
+      // enforcement and is told the path via `{branch_sdk_home}` (§7.4). We do
+      // not inject env, create dirs, or mount here.
+      branchSdkHomeTemplatePath = branchHomeDir;
+      if (!isDelegatedExecution) {
+        // Lazy-create the branch home + per-tool subdirs on first prompt
+        // (§6.2); idempotent, and the bwrap --bind source must exist pre-spawn
+        // (§7.2 — dropMasksForMissingTargets never drops a --bind).
+        await mkdir(branchHomeDir, { recursive: true });
+        const launch = resolveBranchSdkHomeLaunch({
+          tool: sdkHomeTool,
+          branchId,
+          tenantId: tenantId ?? undefined,
+        });
+        branchSdkHomeEnv = launch.envVars;
+        for (const dir of launch.ensureDirs) await mkdir(dir, { recursive: true });
+        if (compatibility.requiresLocalCodexAuthOverlay) {
+          if (!userId) throw new BadRequest('Codex subscription auth requires a prompt actor');
+          const credentialRoute = await resolveCodexCredentialRoute(
+            userId,
+            (work) => runWithTenantDatabaseScope(db, tenantId, work),
+            config
+          );
+          if (!credentialRoute.ok || !credentialRoute.codexHome) {
+            throw new BadRequest(
+              credentialRoute.ok
+                ? 'Codex subscription auth requires a persistent per-user credential home'
+                : credentialRoute.message
+            );
+          }
+          const branchCodexHome = launch.envVars.CODEX_HOME;
+          if (!branchCodexHome) {
+            throw new Error('Codex branch SDK-home launch is missing CODEX_HOME');
+          }
+          const destination = join(branchCodexHome, 'auth.json');
+          // Bubblewrap requires an existing file mountpoint. Keep the
+          // branch-owned inode deliberately empty: the caller credential is
+          // visible only as a per-executor mount and is never copied into
+          // shared branch state. The capability-based writer refuses symlinked
+          // parent directories and replaces an adversarial final symlink.
+          await mutateCredentialFile({ target: destination, content: '' });
+          branchCodexAuthBind = {
+            source: join(credentialRoute.codexHome, 'auth.json'),
+            destination,
+          };
+        }
+        // Bind the branch home into the sandbox (consumed by buildSandboxWrap).
+        // Harmless when the sandbox is disabled (buildSandboxWrap returns null).
+        sandboxBranchSdkHome = branchHomeDir;
+      }
     }
 
     // Resolve the optional delegated home key reported to an external launcher.
@@ -1113,11 +1294,19 @@ function createExecuteHandler(
     const { resolveDelegatedHomeKey } = await import('@agor/core/unix');
 
     const unixUserMode = (config.execution?.unix_user_mode ?? 'simple') as UnixUserMode;
-    const sessionUnixUser = session.unix_username;
+    let executionHomeKey = session.unix_username;
+    if (unixUserMode === 'delegated' && session.sdk_home_scope === 'branch') {
+      if (!userId) throw new Error('Missing prompt actor for delegated branch-scoped execution');
+      executionHomeKey = await runWithTenantDatabaseScope(db, tenantId, (tenantDb) =>
+        new UsersRepository(tenantDb)
+          .findById(userId)
+          .then((user) => user?.unix_username?.trim() || null)
+      );
+    }
 
     const delegatedHomeKeyResolution = resolveDelegatedHomeKey({
       mode: unixUserMode,
-      executionHomeKey: sessionUnixUser,
+      executionHomeKey,
     });
 
     const executorHomeDir = homedir();
@@ -1139,17 +1328,18 @@ function createExecuteHandler(
           gatewaySource.channel_id
         );
         if (channel?.agentic_config?.envVars) {
-          gatewayEnv = channel.agentic_config.envVars.map((v) => ({
-            ...v,
-            value: (() => {
-              if (!v.value || !isEncrypted(v.value)) return v.value;
-              try {
-                return decryptApiKey(v.value);
-              } catch {
-                return v.value;
-              }
-            })(),
-          }));
+          gatewayEnv = channel.agentic_config.envVars.flatMap((v) => {
+            if (!v.value || !isEncrypted(v.value)) return [v];
+            try {
+              // Compatibility for rows created through the historical
+              // double-encryption hook. New rows are decrypted once by the
+              // repository and never enter this branch.
+              return [{ ...v, value: decryptApiKey(v.value) }];
+            } catch {
+              console.error(`[gateway] Dropping unreadable gateway env var ${v.key}`);
+              return [];
+            }
+          });
         }
         // Merge connector-provided session credentials (e.g. Shortcut's API
         // token, which the media-intake skill uses to fetch ticket
@@ -1207,25 +1397,72 @@ function createExecuteHandler(
       }
     }
 
+    // MCP-only secret material is resolved by the daemon proxy. Remove both
+    // referenced keys and high-signal literal-value collisions from the
+    // executor environment; short/low-entropy values such as DEBUG=1 are not
+    // classified as credentials.
+    await runWithTenantDatabaseScope(db, tenantId, async (tenantDb) => {
+      const mode = await getMCPEgressGatewayMode(tenantDb);
+      if (mode !== 'compatibility' && mode !== 'enforced') return;
+      const attached = await new SessionMCPServerRepository(tenantDb).listServers(
+        sessionId as SessionID,
+        true
+      );
+      if (!userId) throw new Error('Missing prompt actor for MCP credential scrubbing');
+      const usableAttached = attached.filter((server) => isMCPServerUsableBy(server, userId));
+      const global = await new MCPServerRepository(tenantDb).findAll({
+        scope: 'global',
+        enabled: true,
+        usableByUserId: userId,
+      });
+      scrubMCPSecretsFromExecutorEnv(executorEnv, [...usableAttached, ...global]);
+    });
+
+    // Point the tool's SDK/config-home env var(s) at the per-branch SDK home
+    // (design §8). These are relocations, NOT credentials — so the MCP scrub
+    // above leaves them alone, and they compose with the caller-scoped
+    // credential env injected by createUserProcessEnvironment (#2555): different
+    // keys, no collision (verified — the branch home never carries a credential,
+    // §8A.3). Skipped in delegated mode (the launcher owns the environment).
+    if (branchSdkHomeEnv) {
+      Object.assign(executorEnv, branchSdkHomeEnv);
+    }
+
     executorEnv.DAEMON_URL = daemonUrl;
 
-    const openCodeLaunch = (() => {
-      if (session.agentic_tool !== 'opencode') return undefined;
-      if (!tenantId) throw new Error('Missing active tenant context for OpenCode execution');
-      if (!executorHomeDir) throw new Error('Missing executor home for OpenCode execution');
-      return OPENCODE_DAEMON_CONTRIBUTION.getExecutorLaunch({
+    // Generalized executor-launch hook (design §4/§13 Phase 2). Every tool has a
+    // daemon contribution; only OpenCode implements getExecutorLaunch today, so
+    // this stays a no-op for all other tools and preserves prior behavior.
+    const executorLaunch = (() => {
+      const contribution = getAgenticToolDaemonContribution(session.agentic_tool);
+      if (!contribution?.getExecutorLaunch) return undefined;
+      // These guards fire for any tool with a launch hook (currently OpenCode).
+      if (!tenantId) throw new Error('Missing active tenant context for executor-launch hook');
+      if (!executorHomeDir) throw new Error('Missing executor home for executor-launch hook');
+      return contribution.getExecutorLaunch({
         tenantId,
         session,
         homeDir: executorHomeDir,
       });
     })();
 
+    // Issue only after every launch prerequisite succeeds. The credential
+    // scope repeats the locked, server-derived launch authority; token retries
+    // cannot lower the already-bound filesystem floor.
+    const sessionToken = await sessionTokenService.generateToken(sessionId, userId, {
+      taskId: data.taskId,
+      branchId: launchAuthority.branch_id,
+      // Runtime JWTs reconnect and authenticate frequently. Expiry + lifecycle
+      // revocation, not bounded validation uses, retire this credential.
+      maxUses: -1,
+    });
+
     // Build executor payload
     const executorPayload = {
       command: 'prompt' as const,
       sessionToken,
       daemonUrl,
-      ...(openCodeLaunch?.executorPayload ?? {}),
+      ...(executorLaunch?.executorPayload ?? {}),
       env: executorEnv,
       params: {
         sessionId,
@@ -1247,10 +1484,28 @@ function createExecuteHandler(
         sandboxHomeStore,
         sandboxWorktreesRoot,
         principalBranchAccess,
+        // Per-branch SDK home to bind into the sandbox (design §7). Undefined
+        // for execution-home sessions and in delegated mode (where the launcher
+        // mounts it via the {branch_sdk_home} template).
+        sandboxBranchSdkHome,
       },
     };
 
     const logPrefix = `[Executor ${shortId(sessionId)}]`;
+
+    // Open as late as possible and keep the capability alive only through
+    // child_process.spawn(). The directory-capability helper rejects every
+    // symlink component and the final file; `--bind-fd` then mounts this exact
+    // inode even if another sandbox renames the pathname concurrently.
+    if (branchCodexAuthBind) {
+      try {
+        branchCodexAuthBind.handle = await openCredentialFileForBind(branchCodexAuthBind.source);
+      } catch {
+        throw new BadRequest(
+          'Codex subscription credentials are missing or unsafe to mount. Reconnect Codex in Agent Setup or use an API key.'
+        );
+      }
+    }
 
     type NativeStateSpawn = {
       fence: OpenCodeNativeStateMutationFence;
@@ -1264,11 +1519,25 @@ function createExecuteHandler(
       delegatedHomeKey: delegatedHomeKeyResolution.delegatedHomeKey || undefined,
       preparedEnv: executorEnv,
       logPrefix,
+      ...(branchCodexAuthBind?.handle
+        ? {
+            localSandboxFileBinds: [
+              {
+                sourceFd: branchCodexAuthBind.handle.fd,
+                destination: branchCodexAuthBind.destination,
+              },
+            ],
+          }
+        : {}),
       templateVariables: {
         session_id: sessionId,
         task_id: taskId,
         branch_id: session.branch_id,
         user_id: userId,
+        branch_fs_access: principalBranchAccess,
+        // Delegated launchers own SDK-home enforcement (§7.4): absolute path for
+        // a branch-scoped session, empty string for an execution-home session.
+        branch_sdk_home: branchSdkHomeTemplatePath,
       },
       onSpawn: (child, spawnContext) => {
         metrics.increment('executor.launches', 1, { mode: spawnContext.mode });
@@ -1394,20 +1663,18 @@ function createExecuteHandler(
           // Launcher callbacks can outlive the tenant transaction that spawned
           // them. Leave any inherited DB scope before opening the fresh
           // tenant scope derived from the verified token claim.
-          await runWithoutTenantDatabaseScope(() =>
-            appWithExecutor.sessionTokenService?.revokeToken(sessionToken)
-          );
+          await runWithoutTenantDatabaseScope(() => sessionTokenService.revokeToken(sessionToken));
         } finally {
           nativeState?.finished.resolve();
         }
       },
     });
 
-    if (openCodeLaunch) {
+    if (executorLaunch) {
       const ready = createDeferredSignal();
       const finished = createDeferredSignal();
       let spawned = false;
-      const slot = inOpenCodeNativeStateMutationSlot(openCodeLaunch.namespaceKey, async (fence) => {
+      const slot = inOpenCodeNativeStateMutationSlot(executorLaunch.namespaceKey, async (fence) => {
         try {
           spawnExecutor(
             executorPayload,
@@ -1426,7 +1693,13 @@ function createExecuteHandler(
       });
       await ready.promise;
     } else {
-      spawnExecutor(executorPayload, executorOptions());
+      try {
+        spawnExecutor(executorPayload, executorOptions());
+      } finally {
+        // The child inherits its own descriptor during synchronous spawn.
+        // Close only the daemon's copy once spawn returns or throws.
+        await branchCodexAuthBind?.handle?.close().catch(() => undefined);
+      }
     }
 
     return {
@@ -1447,13 +1720,26 @@ export async function registerMCPServices(
 ): Promise<{ oauthCallbackHandler: (req: express.Request, res: express.Response) => void }> {
   const { db, app } = ctx;
   const sessionsRepository = new SessionRepository(db);
-  const durableOAuthFlows = isPostgresDatabaseHandle(db)
-    ? new MCPOAuthPendingFlowAuthority(db)
-    : null;
+  const postgresOAuthDeployment = isPostgresDatabaseHandle(db);
+  const durableOAuthFlows =
+    ctx.mcpOAuthPendingFlowAuthority ??
+    (postgresOAuthDeployment ? new MCPOAuthPendingFlowAuthority(db) : null);
+  const lockOAuthGrantConfiguration =
+    ctx.lockMcpOAuthGrantConfiguration ?? lockMCPOAuthGrantConfiguration;
+  const externalFailure = (event: string, stage: MCPExternalErrorStage, error: unknown) => {
+    const safe = sanitizeMCPExternalError(error, { stage });
+    const { type, code } = safe.diagnostic;
+    console.error(
+      `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${code ? ` code=${code}` : ''}`
+    );
+    return safe;
+  };
   const oauthFetch = async (
     input: string | URL | Request,
-    init: RequestInit = {}
+    init: RequestInit = {},
+    assertCurrent?: () => void
   ): Promise<Response> => {
+    assertCurrent?.();
     const requestInput = input instanceof Request ? input : undefined;
     const target: string | URL = input instanceof Request ? input.url : input;
     const { signal: _signal, redirect: _redirect, ...safeInit } = init;
@@ -1471,7 +1757,9 @@ export async function registerMCPServices(
       // Loopback HTTP is retained only for standalone/SQLite development.
       // PostgreSQL is the multi-daemon/hosted authority and must never turn
       // an admin-supplied endpoint into daemon-local egress.
-      allowLocalhostHttp: !durableOAuthFlows,
+      allowLocalhostHttp: !postgresOAuthDeployment,
+      assertCurrent,
+      resolveDns: ctx.mcpOutboundDnsLookup,
     });
   };
   const refreshGrantValidator =
@@ -1677,6 +1965,30 @@ export async function registerMCPServices(
     return new URL('/mcp-servers/oauth-callback', baseUrl).toString();
   }
 
+  type OAuthBrowserReservationClaim = {
+    reservationToken: string;
+    /** Immutable deadline retained after the one-shot map entry is consumed. */
+    expiresAt: number;
+    operation: MCPOAuthBrowserOperation;
+    mcpServerId?: string;
+    userId: string;
+    role: string;
+    tenantId?: string;
+    socketId: string;
+    authorityFingerprint?: string;
+  };
+
+  type LiveSocketRequestAuthorityClaim = Pick<
+    OAuthBrowserReservationClaim,
+    'userId' | 'role' | 'tenantId' | 'socketId' | 'authorityFingerprint'
+  >;
+
+  type OAuthPostBrowserAuthorityClaim = LiveSocketRequestAuthorityClaim &
+    Pick<OAuthBrowserReservationClaim, 'operation' | 'mcpServerId'> & {
+      /** Server-issued attempt that promoted the pre-browser reservation. */
+      attemptId: MCPOAuthAttemptID;
+    };
+
   type StartTwoPhaseOAuthOptions = {
     mcpUrl: string;
     wwwAuthenticate: string;
@@ -1705,6 +2017,12 @@ export async function registerMCPServices(
     compatibilityMode?: MCPOAuthRuntimeCompatibilityMode;
     dcrMode?: MCPOAuthDCRMode;
     socketId?: string;
+    browserReservation?: OAuthBrowserReservationClaim;
+    /**
+     * Immutable live Socket.io request authority for public flows which do
+     * not use a browser-event reservation (notably oauth-start).
+     */
+    requestAuthority?: () => void;
   };
 
   type StartTwoPhaseOAuthResult = {
@@ -1716,6 +2034,13 @@ export async function registerMCPServices(
 
   type StartTwoPhaseOAuthAndAwaitResult = StartTwoPhaseOAuthResult & {
     awaitToken: () => Promise<OAuthTokenResponse>;
+    /**
+     * The reservation TTL protects provider discovery, DCR, and browser emit.
+     * Once emitted, this attempt-bound assertion protects the longer callback
+     * wait and every use of its returned token without extending reservation
+     * capacity or accepting a client-supplied generation.
+     */
+    assertRequestAuthority?: () => void;
   };
 
   async function startTwoPhaseMCPOAuthFlow(
@@ -1737,10 +2062,26 @@ export async function registerMCPServices(
     opts: StartTwoPhaseOAuthOptions,
     awaitToken: boolean
   ): Promise<StartTwoPhaseOAuthResult | StartTwoPhaseOAuthAndAwaitResult> {
-    const { startMCPOAuthFlow } = await import('@agor/core/tools/mcp/oauth-mcp-transport');
+    const assertFlowAuthority =
+      opts.requestAuthority || opts.browserReservation
+        ? () => {
+            opts.requestAuthority?.();
+            if (opts.browserReservation) {
+              assertOAuthBrowserReservationStillCurrent(opts.browserReservation);
+            }
+          }
+        : undefined;
+    assertFlowAuthority?.();
+    const { startMCPOAuthFlow } = await runWithinOAuthAuthority(
+      assertFlowAuthority,
+      () => import('@agor/core/tools/mcp/oauth-mcp-transport')
+    );
 
     // Strict public base URL — see oauth-start endpoint for the rationale.
-    const redirectUri = await resolveMCPOAuthRedirectUri();
+    const redirectUri = await runWithinOAuthAuthority(
+      assertFlowAuthority,
+      resolveMCPOAuthRedirectUri
+    );
 
     const hasRfc9728 = !!opts.resourceMetadataUrl;
     const hasAsDirect = !!opts.prefetchedAuthServerMetadata;
@@ -1782,15 +2123,19 @@ export async function registerMCPServices(
           'Saved MCP OAuth requires an authenticated user binding. Sign in, then restart OAuth.'
         );
       }
-      const server = await runInOAuthTenantScope(db, opts.tenantId, () =>
-        new MCPServerRepository(db).findById(opts.mcpServerId!)
+      const server = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+        runInOAuthTenantScope(db, opts.tenantId, () =>
+          new MCPServerRepository(db).findById(opts.mcpServerId!)
+        )
       );
       if (!server?.enabled || server.url !== opts.mcpUrl || server.auth?.type !== 'oauth') {
         throw new Error(
           'The saved MCP server no longer matches this OAuth request. Save changes, then restart OAuth.'
         );
       }
-      const compatibilityPolicy = await resolveMCPOAuthCompatibilityPolicy(server);
+      const compatibilityPolicy = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+        resolveMCPOAuthCompatibilityPolicy(server)
+      );
       logMCPOAuthCompatibilityPolicy('flow-start', server.mcp_server_id, compatibilityPolicy);
       // The row reloaded in the tenant scope is the only durable authority.
       // Callers may have discovered metadata from a transient form snapshot,
@@ -1805,8 +2150,10 @@ export async function registerMCPServices(
       effectiveDcrMode = server.auth.oauth_dcr_mode;
       effectiveOAuthMode = server.auth.oauth_mode ?? 'per_user';
       if (effectiveOAuthMode === 'shared') {
-        const initiatingUser = await runInOAuthTenantScope(db, opts.tenantId, () =>
-          new UsersRepository(db).findById(opts.userId!)
+        const initiatingUser = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+          runInOAuthTenantScope(db, opts.tenantId, () =>
+            new UsersRepository(db).findById(opts.userId!)
+          )
         );
         if (!hasMinimumRole(initiatingUser?.role, ROLES.ADMIN)) {
           throw new Forbidden('Shared MCP OAuth grants can only be started by an admin');
@@ -1830,25 +2177,36 @@ export async function registerMCPServices(
     // the pending-flow authority below instead.
     const localAttemptId = durableOAuthFlows ? undefined : (generateId() as MCPOAuthAttemptID);
 
-    const context = await startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
-      authorizationUrlOverride: effectiveAuthorizationUrlOverride,
-      tokenUrlOverride: effectiveTokenUrlOverride,
-      clientSecret: effectiveClientSecret,
-      scope: effectiveScope,
-      resourceMetadataUrl: opts.resourceMetadataUrl,
-      prefetchedAuthServerMetadata: opts.prefetchedAuthServerMetadata,
-      // The core helper still needs a stable metadata key for its standalone
-      // flow context. Daemon callers never read or populate its origin-only
-      // bearer cache.
-      cacheKey: opts.prefetchedAuthServerMetadata ? effectiveMcpUrl : undefined,
-      // Process-global DCR credentials are not a tenant/user/server namespace.
-      // Daemon flows never share them, including in SQLite deployments.
-      reuseDynamicClientRegistration: false,
-      resourceUri: effectiveMcpUrl,
-      compatibilityMode: effectiveCompatibilityMode,
-      dcrMode: effectiveDcrMode,
-      allowLocalhostHttp: !durableOAuthFlows,
-    });
+    // Metadata discovery and DCR are the first provider-owned side effects in
+    // this helper. Re-check the live socket authority immediately before they
+    // begin; consuming a valid A reservation is not enough if that same socket
+    // has since authenticated as B.
+    assertFlowAuthority?.();
+    const context = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+      startMCPOAuthFlow(opts.wwwAuthenticate, effectiveClientId, redirectUri, {
+        authorizationUrlOverride: effectiveAuthorizationUrlOverride,
+        tokenUrlOverride: effectiveTokenUrlOverride,
+        clientSecret: effectiveClientSecret,
+        scope: effectiveScope,
+        resourceMetadataUrl: opts.resourceMetadataUrl,
+        prefetchedAuthServerMetadata: opts.prefetchedAuthServerMetadata,
+        // The core helper still needs a stable metadata key for its standalone
+        // flow context. Daemon callers never read or populate its origin-only
+        // bearer cache.
+        cacheKey: opts.prefetchedAuthServerMetadata ? effectiveMcpUrl : undefined,
+        // Process-global DCR credentials are not a tenant/user/server namespace.
+        // Daemon flows never share them, including in SQLite deployments.
+        reuseDynamicClientRegistration: false,
+        resourceUri: effectiveMcpUrl,
+        compatibilityMode: effectiveCompatibilityMode,
+        dcrMode: effectiveDcrMode,
+        allowLocalhostHttp: !postgresOAuthDeployment,
+        // The reservation is consumed before provider work starts, but its
+        // deadline remains authoritative throughout discovery/DCR/flow setup.
+        assertCurrent: assertFlowAuthority,
+      })
+    );
+    assertFlowAuthority?.();
 
     const resolvedGrantBinding = {
       resourceUri: context.resourceUri,
@@ -1865,96 +2223,112 @@ export async function registerMCPServices(
     let localGrantBinding: NonNullable<SaveTokenInput['grantBinding']> | undefined;
     let localGrantSubjectKey: string | undefined;
     if (savedServerAuthority && !durableOAuthFlows) {
-      localGrantBinding = await runInOAuthTenantScope(db, opts.tenantId, async () => {
-        const currentServer = await new MCPServerRepository(db).findById(
-          savedServerAuthority!.mcp_server_id
-        );
-        const currentPolicy = currentServer
-          ? await resolveMCPOAuthCompatibilityPolicy(currentServer)
-          : undefined;
-        if (
-          !currentServer?.enabled ||
-          currentServer.auth?.type !== 'oauth' ||
-          currentServer.url !== context.resourceUri ||
-          (currentServer.auth.oauth_mode ?? 'per_user') !== effectiveOAuthMode ||
-          currentPolicy?.mode !== context.compatibilityMode ||
-          hasMCPOAuthRelevantServerConfigurationChanged(savedServerAuthority, currentServer)
-        ) {
-          throw new Error(
-            'The MCP server changed while OAuth metadata was being resolved. Restart OAuth.'
+      assertFlowAuthority?.();
+      localGrantBinding = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+        runInOAuthTenantScope(db, opts.tenantId, async () => {
+          const currentServer = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+            new MCPServerRepository(db).findById(savedServerAuthority!.mcp_server_id)
           );
-        }
-
-        const subjectUserId = effectiveOAuthMode === 'per_user' ? (opts.userId as UserID) : null;
-        const subjectKey = [
-          currentServer.mcp_server_id,
-          effectiveOAuthMode,
-          subjectUserId ?? '<shared>',
-        ].join('\u001f');
-        const existingGrant = await new UserMCPOAuthTokenRepository(db).getToken(
-          subjectUserId,
-          currentServer.mcp_server_id
-        );
-        const generation =
-          Math.max(existingGrant?.grant_generation ?? 0, localOAuthGrantGenerationHighWater) + 1;
-        if (!Number.isSafeInteger(generation)) {
-          throw new Error('Standalone OAuth grant generation authority is exhausted');
-        }
-        localOAuthGrantGenerationHighWater = generation;
-        const subjectReservations =
-          localOAuthGrantReservations.get(subjectKey) ??
-          new Map<MCPOAuthAttemptID, { generation: number; reservedAt: number }>();
-        subjectReservations.set(localAttemptId!, { generation, reservedAt: Date.now() });
-        localOAuthGrantReservations.set(subjectKey, subjectReservations);
-        localGrantSubjectKey = subjectKey;
-        const version = grantBindingVersionForCompatibilityMode(context.compatibilityMode);
-        return {
-          generation,
-          version,
-          fingerprint: fingerprintMCPOAuthGrantConfiguration(
-            process.env.AGOR_MASTER_SECRET!,
-            currentServer,
-            resolvedGrantBinding,
-            version
-          ),
-          metadataUri: context.metadataUrl,
-          resourceUri: context.resourceUri,
-          issuer: context.issuer,
-          authorizationEndpoint: context.authorizationEndpoint,
-          tokenEndpoint: context.tokenEndpoint,
-          redirectUri: context.redirectUri,
-        };
-      });
-    }
-
-    const attemptId = durableBinding
-      ? await runInOAuthTenantWriteScope(db, durableBinding.tenantId, async () => {
-          await lockMCPOAuthGrantConfiguration(
-            db,
-            durableBinding.tenantId,
-            durableBinding.mcpServerId
-          );
-          const currentServer = await new MCPServerRepository(db).findById(
-            durableBinding.mcpServerId
-          );
+          assertFlowAuthority?.();
+          const currentPolicy = currentServer
+            ? await runWithinOAuthAuthority(assertFlowAuthority, () =>
+                resolveMCPOAuthCompatibilityPolicy(currentServer)
+              )
+            : undefined;
+          assertFlowAuthority?.();
           if (
-            !currentServer ||
+            !currentServer?.enabled ||
+            currentServer.auth?.type !== 'oauth' ||
+            currentServer.url !== context.resourceUri ||
+            (currentServer.auth.oauth_mode ?? 'per_user') !== effectiveOAuthMode ||
+            currentPolicy?.mode !== context.compatibilityMode ||
             hasMCPOAuthRelevantServerConfigurationChanged(savedServerAuthority, currentServer)
           ) {
             throw new Error(
               'The MCP server changed while OAuth metadata was being resolved. Restart OAuth.'
             );
           }
-          return durableOAuthFlows!.create({
-            context,
-            ...durableBinding,
-            configFingerprint: fingerprintMCPOAuthGrantConfiguration(
+          assertFlowAuthority?.();
+
+          const subjectUserId = effectiveOAuthMode === 'per_user' ? (opts.userId as UserID) : null;
+          const subjectKey = [
+            currentServer.mcp_server_id,
+            effectiveOAuthMode,
+            subjectUserId ?? '<shared>',
+          ].join('\u001f');
+          const existingGrant = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+            new UserMCPOAuthTokenRepository(db).getToken(subjectUserId, currentServer.mcp_server_id)
+          );
+          assertFlowAuthority?.();
+          const generation =
+            Math.max(existingGrant?.grant_generation ?? 0, localOAuthGrantGenerationHighWater) + 1;
+          if (!Number.isSafeInteger(generation)) {
+            throw new Error('Standalone OAuth grant generation authority is exhausted');
+          }
+          localOAuthGrantGenerationHighWater = generation;
+          const subjectReservations =
+            localOAuthGrantReservations.get(subjectKey) ??
+            new Map<MCPOAuthAttemptID, { generation: number; reservedAt: number }>();
+          subjectReservations.set(localAttemptId!, { generation, reservedAt: Date.now() });
+          localOAuthGrantReservations.set(subjectKey, subjectReservations);
+          localGrantSubjectKey = subjectKey;
+          const version = grantBindingVersionForCompatibilityMode(context.compatibilityMode);
+          return {
+            generation,
+            version,
+            fingerprint: fingerprintMCPOAuthGrantConfiguration(
               process.env.AGOR_MASTER_SECRET!,
               currentServer,
-              resolvedGrantBinding
+              resolvedGrantBinding,
+              version
             ),
-          });
+            metadataUri: context.metadataUrl,
+            resourceUri: context.resourceUri,
+            issuer: context.issuer,
+            authorizationEndpoint: context.authorizationEndpoint,
+            tokenEndpoint: context.tokenEndpoint,
+            redirectUri: context.redirectUri,
+          };
         })
+      );
+    }
+
+    assertFlowAuthority?.();
+    const attemptId = durableBinding
+      ? await runWithinOAuthAuthority(assertFlowAuthority, () =>
+          runInOAuthTenantWriteScope(db, durableBinding.tenantId, async () => {
+            await runWithinOAuthAuthority(assertFlowAuthority, () =>
+              lockOAuthGrantConfiguration(db, durableBinding.tenantId, durableBinding.mcpServerId)
+            );
+            assertFlowAuthority?.();
+            const currentServer = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+              new MCPServerRepository(db).findById(durableBinding.mcpServerId)
+            );
+            assertFlowAuthority?.();
+            if (
+              !currentServer ||
+              hasMCPOAuthRelevantServerConfigurationChanged(savedServerAuthority, currentServer)
+            ) {
+              throw new Error(
+                'The MCP server changed while OAuth metadata was being resolved. Restart OAuth.'
+              );
+            }
+            assertFlowAuthority?.();
+            const createdAttempt = await runWithinOAuthAuthority(assertFlowAuthority, () =>
+              durableOAuthFlows!.create({
+                context,
+                ...durableBinding,
+                configFingerprint: fingerprintMCPOAuthGrantConfiguration(
+                  process.env.AGOR_MASTER_SECRET!,
+                  currentServer,
+                  resolvedGrantBinding
+                ),
+              })
+            );
+            assertFlowAuthority?.();
+            return createdAttempt;
+          })
+        )
       : localAttemptId!;
 
     let tokenPromise: Promise<OAuthTokenResponse> | undefined;
@@ -2002,6 +2376,7 @@ export async function registerMCPServices(
       });
     }
 
+    assertFlowAuthority?.();
     if (!durableOAuthFlows) {
       for (const [olderState, older] of pendingOAuthFlows) {
         const sameSubject =
@@ -2039,16 +2414,41 @@ export async function registerMCPServices(
       });
     }
 
-    if (awaitToken && opts.socketId && app.io) {
+    if (awaitToken && opts.browserReservation && app.io) {
+      assertFlowAuthority?.();
       // Compatibility hint for blocking discover/test callers, which cannot
       // return the URL before their callback arrives. Target the exact
       // authenticated initiating socket only — never a user/tenant/global
       // room — and keep durable status as the completion authority.
-      app.io.local.to(opts.socketId).emit('oauth:open_browser', {
+      app.io.local.to(opts.browserReservation.socketId).emit('oauth:open_browser', {
         authUrl: context.authorizationUrl,
         attempt_id: attemptId,
+        reservation_token: opts.browserReservation.reservationToken,
+        caller_user_id: opts.browserReservation.userId,
       });
     }
+
+    // The short reservation deadline intentionally ends after the browser URL
+    // is emitted. Provider interaction can legitimately outlive that minute,
+    // while the blocking HTTP request remains bounded by AWAIT_TOKEN_TIMEOUT.
+    // Promote only the server-issued attempt and its exact live socket/caller
+    // authority; no client generation or reflected token participates.
+    const postBrowserAuthorityClaim =
+      awaitToken && opts.browserReservation
+        ? ({
+            attemptId,
+            operation: opts.browserReservation.operation,
+            mcpServerId: opts.browserReservation.mcpServerId,
+            userId: opts.browserReservation.userId,
+            role: opts.browserReservation.role,
+            tenantId: opts.browserReservation.tenantId,
+            socketId: opts.browserReservation.socketId,
+            authorityFingerprint: opts.browserReservation.authorityFingerprint,
+          } satisfies OAuthPostBrowserAuthorityClaim)
+        : undefined;
+    const assertRequestAuthority = postBrowserAuthorityClaim
+      ? () => assertOAuthPostBrowserAuthorityStillCurrent(postBrowserAuthorityClaim)
+      : undefined;
 
     const base: StartTwoPhaseOAuthResult = {
       attemptId,
@@ -2061,19 +2461,23 @@ export async function registerMCPServices(
         const awaitDurableToken = async (): Promise<OAuthTokenResponse> => {
           const deadline = Date.now() + AWAIT_TOKEN_TIMEOUT_MS;
           while (Date.now() < deadline) {
-            const attempt = await durableOAuthFlows!.getForUser(
-              durableBinding.tenantId,
-              durableBinding.userId,
-              attemptId
+            const attempt = await runWithinOAuthAuthority(assertRequestAuthority, () =>
+              durableOAuthFlows!.getForUser(
+                durableBinding.tenantId,
+                durableBinding.userId,
+                attemptId
+              )
             );
             if (!attempt) throw new Error('OAuth attempt is no longer available. Restart OAuth.');
             if (attempt.status === 'succeeded') {
               const tokenUserId: UserID | null =
                 durableBinding.oauthMode === 'per_user' ? durableBinding.userId : null;
-              const token = await runInOAuthTenantScope(db, durableBinding.tenantId, () =>
-                new UserMCPOAuthTokenRepository(db).getToken(
-                  tokenUserId,
-                  durableBinding.mcpServerId
+              const token = await runWithinOAuthAuthority(assertRequestAuthority, () =>
+                runInOAuthTenantScope(db, durableBinding.tenantId, () =>
+                  new UserMCPOAuthTokenRepository(db).getToken(
+                    tokenUserId,
+                    durableBinding.mcpServerId
+                  )
                 )
               );
               if (!token) {
@@ -2099,22 +2503,284 @@ export async function registerMCPServices(
                   : 'OAuth did not complete. Start a new OAuth flow.'
               );
             }
-            await new Promise((resolve) => setTimeout(resolve, 500));
+            await runWithinOAuthAuthority(
+              assertRequestAuthority,
+              () => new Promise((resolve) => setTimeout(resolve, 500))
+            );
           }
           throw new Error(
             'Timed out waiting for OAuth callback. Restart OAuth if it completes later.'
           );
         };
-        return { ...base, awaitToken: awaitDurableToken };
+        return {
+          ...base,
+          assertRequestAuthority,
+          awaitToken: () => runWithinOAuthAuthority(assertRequestAuthority, awaitDurableToken),
+        };
       }
-      return { ...base, awaitToken: () => tokenPromise! };
+      return {
+        ...base,
+        assertRequestAuthority,
+        awaitToken: () => runWithinOAuthAuthority(assertRequestAuthority, () => tokenPromise!),
+      };
     }
+    assertFlowAuthority?.();
     return base;
   }
 
   const tenantIdFromParams = (params?: AuthenticatedParams): string | undefined =>
     (params as (AuthenticatedParams & { tenant?: { tenant_id?: string } }) | undefined)?.tenant
       ?.tenant_id ?? getCurrentTenantId();
+
+  const OAUTH_BROWSER_RESERVATION_TTL_MS = 60_000;
+  const MAX_OAUTH_BROWSER_RESERVATIONS = 1_024;
+  // Layered bounds prevent a single busy socket, user, or tenant from
+  // exhausting the process-global reservation pool. A tenant can use its full
+  // share without depending on reservation order in another tenant.
+  const MAX_OAUTH_BROWSER_RESERVATIONS_PER_TENANT = 128;
+  const MAX_OAUTH_BROWSER_RESERVATIONS_PER_USER = 32;
+  const MAX_OAUTH_BROWSER_RESERVATIONS_PER_SOCKET = 8;
+  type OAuthBrowserReservationRecord = OAuthBrowserReservationClaim & {
+    authorityFingerprint?: string;
+    cleanupTimer: ReturnType<typeof setTimeout>;
+  };
+  const oauthBrowserReservations = new Map<string, OAuthBrowserReservationRecord>();
+
+  const socketIdFromParams = (params?: AuthenticatedParams): string | undefined => {
+    // Feathers intentionally exposes `socket.feathers`, not the Socket.IO
+    // socket itself, as params.connection. Accept only the immutable marker
+    // installed on that exact server-owned connection object and prove that
+    // it still belongs to the live socket map. Never trust an id supplied in
+    // request data, headers, auth payload, or a fabricated connection object.
+    if (params?.provider !== 'socketio') return undefined;
+    const socketId = readSocketAuthorityId(params.connection);
+    if (!socketId) return undefined;
+    const socket = app.io?.sockets?.sockets?.get(socketId) as
+      | { feathers?: unknown; connected?: boolean }
+      | undefined;
+    if (
+      !socket ||
+      socket.connected === false ||
+      socket.feathers !== params.connection ||
+      readSocketAuthorityId(socket.feathers) !== socketId
+    ) {
+      return undefined;
+    }
+    return socketId;
+  };
+  const authorityFingerprintFromParams = (params?: AuthenticatedParams): string | undefined => {
+    const connection = params?.connection as
+      | { authentication?: { accessToken?: unknown } }
+      | undefined;
+    const token =
+      typeof params?.authentication?.accessToken === 'string'
+        ? params.authentication.accessToken
+        : typeof connection?.authentication?.accessToken === 'string'
+          ? connection.authentication.accessToken
+          : undefined;
+    return token ? createHash('sha256').update(token).digest('base64url').slice(0, 22) : undefined;
+  };
+  const liveSocketAuthority = (
+    socketId: string
+  ):
+    | {
+        userId?: string;
+        role?: string;
+        tenantId?: string;
+        authorityFingerprint?: string;
+      }
+    | undefined => {
+    const socket = app.io?.sockets?.sockets?.get(socketId) as
+      | {
+          feathers?: AuthenticatedParams;
+          data?: { tenant?: { tenant_id?: string } };
+          connected?: boolean;
+        }
+      | undefined;
+    if (!socket || socket.connected === false) return undefined;
+    const connection = socket.feathers;
+    if (readSocketAuthorityId(connection) !== socketId) return undefined;
+    return {
+      userId: connection?.user?.user_id,
+      role: connection?.user?.role,
+      tenantId:
+        socket.data?.tenant?.tenant_id ??
+        (connection as (AuthenticatedParams & { tenant?: { tenant_id?: string } }) | undefined)
+          ?.tenant?.tenant_id,
+      authorityFingerprint: authorityFingerprintFromParams({
+        ...(connection ?? {}),
+        connection,
+        authentication: connection?.authentication,
+      } as AuthenticatedParams),
+    };
+  };
+  const isLiveSocketRequestAuthorityCurrent = (claim: LiveSocketRequestAuthorityClaim): boolean => {
+    const authority = liveSocketAuthority(claim.socketId);
+    return !!(
+      authority &&
+      authority.userId === claim.userId &&
+      authority.role === claim.role &&
+      authority.tenantId === claim.tenantId &&
+      (claim.authorityFingerprint === undefined ||
+        authority.authorityFingerprint === claim.authorityFingerprint)
+    );
+  };
+  const requestAuthorityAssertion = (params?: AuthenticatedParams): (() => void) | undefined => {
+    // REST requests are already tied to one authenticated HTTP request and
+    // internal calls intentionally use their caller-owned authority model.
+    // A real Socket.IO request, however, must always carry the server marker:
+    // silently falling back here would disable in-place identity fencing.
+    if (params?.provider !== 'socketio') return undefined;
+    const userId = params?.user?.user_id;
+    const role = params?.user?.role;
+    const socketId = socketIdFromParams(params);
+    if (!userId || !role || !socketId) {
+      throw new Forbidden('MCP Socket.IO request authority is unavailable');
+    }
+    const claim: LiveSocketRequestAuthorityClaim = {
+      userId,
+      role,
+      tenantId: tenantIdFromParams(params),
+      socketId,
+      authorityFingerprint: authorityFingerprintFromParams(params),
+    };
+    return () => {
+      if (!isLiveSocketRequestAuthorityCurrent(claim)) {
+        throw new Forbidden('MCP request socket authority is no longer current');
+      }
+    };
+  };
+  const assertOAuthBrowserReservationStillCurrent = (
+    reservation: OAuthBrowserReservationClaim
+  ): void => {
+    if (Date.now() >= reservation.expiresAt) {
+      throw new Forbidden('OAuth browser reservation has expired');
+    }
+    const authority = liveSocketAuthority(reservation.socketId);
+    if (
+      !authority ||
+      authority.userId !== reservation.userId ||
+      authority.role !== reservation.role ||
+      authority.tenantId !== reservation.tenantId ||
+      (reservation.authorityFingerprint !== undefined &&
+        authority.authorityFingerprint !== reservation.authorityFingerprint)
+    ) {
+      throw new Forbidden('OAuth browser reservation authority is no longer current');
+    }
+  };
+  const assertOAuthPostBrowserAuthorityStillCurrent = (
+    claim: OAuthPostBrowserAuthorityClaim
+  ): void => {
+    if (!isLiveSocketRequestAuthorityCurrent(claim)) {
+      throw new Forbidden(
+        `OAuth attempt ${claim.attemptId} request authority is no longer current`
+      );
+    }
+  };
+  const reservationAssertion = (
+    reservation?: OAuthBrowserReservationClaim
+  ): (() => void) | undefined =>
+    reservation ? () => assertOAuthBrowserReservationStillCurrent(reservation) : undefined;
+  const runWithinOAuthAuthority = async <T>(
+    assertCurrent: (() => void) | undefined,
+    work: () => Promise<T>
+  ): Promise<T> => {
+    assertCurrent?.();
+    try {
+      const result = await work();
+      assertCurrent?.();
+      return result;
+    } catch (error) {
+      // Authority loss wins over simultaneous provider/DB/SDK failure. Never
+      // let an obsolete request fall into a permissive retry or fallback.
+      assertCurrent?.();
+      throw error;
+    }
+  };
+  const runWithinOAuthBrowserReservation = async <T>(
+    reservation: OAuthBrowserReservationClaim | undefined,
+    work: () => Promise<T>
+  ): Promise<T> => runWithinOAuthAuthority(reservationAssertion(reservation), work);
+  const deleteOAuthBrowserReservation = (token: string): void => {
+    const current = oauthBrowserReservations.get(token);
+    if (!current) return;
+    clearTimeout(current.cleanupTimer);
+    oauthBrowserReservations.delete(token);
+  };
+  const pruneOAuthBrowserReservations = (now = Date.now()): void => {
+    for (const [token, reservation] of oauthBrowserReservations) {
+      if (reservation.expiresAt <= now) deleteOAuthBrowserReservation(token);
+    }
+  };
+  const clearOAuthBrowserReservationsForSocket = (socketId: string): void => {
+    for (const [token, reservation] of oauthBrowserReservations) {
+      if (reservation.socketId === socketId) deleteOAuthBrowserReservation(token);
+    }
+  };
+  // Reservations are bound to one physical transport. Socket setup emits this
+  // daemon-internal event synchronously for every disconnect, including when
+  // Socket.IO itself is created only after services have registered.
+  app.on(AGOR_SOCKET_AUTHORITY_DISCONNECTED_EVENT, clearOAuthBrowserReservationsForSocket);
+  const readReservationToken = (value: unknown): string | undefined => {
+    // Older/non-browser callers may omit the compatibility hint. Nullish
+    // values are equivalently absent and must never crash the request path.
+    if (value === undefined || value === null) return undefined;
+    if (!value || typeof value !== 'object') {
+      throw new BadRequest('oauth_browser_event must be an object');
+    }
+    const token = (value as Partial<MCPOAuthBrowserEventRequest>).reservation_token;
+    if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{32,128}$/.test(token)) {
+      throw new BadRequest('oauth_browser_event.reservation_token is invalid');
+    }
+    return token;
+  };
+  const consumeOAuthBrowserReservation = (
+    value: unknown,
+    params: AuthenticatedParams | undefined,
+    expected: { operation: MCPOAuthBrowserOperation; mcpServerId?: string }
+  ): OAuthBrowserReservationClaim | undefined => {
+    const token = readReservationToken(value);
+    if (!token) return undefined;
+    pruneOAuthBrowserReservations();
+    const reservation = oauthBrowserReservations.get(token);
+    if (!reservation) {
+      throw new Forbidden('OAuth browser reservation is invalid, expired, or already used');
+    }
+    // Consume before comparing any binding. A guessed or replayed token gets
+    // exactly one attempt and can never be corrected into a valid request.
+    deleteOAuthBrowserReservation(token);
+    const callerUserId = params?.user?.user_id;
+    const socketId = socketIdFromParams(params);
+    const tenantId = tenantIdFromParams(params);
+    const authorityFingerprint = authorityFingerprintFromParams(params);
+    if (
+      !callerUserId ||
+      !socketId ||
+      reservation.userId !== callerUserId ||
+      reservation.role !== params?.user?.role ||
+      reservation.socketId !== socketId ||
+      reservation.tenantId !== tenantId ||
+      reservation.operation !== expected.operation ||
+      reservation.mcpServerId !== expected.mcpServerId ||
+      (reservation.authorityFingerprint !== undefined &&
+        reservation.authorityFingerprint !== authorityFingerprint)
+    ) {
+      throw new Forbidden('OAuth browser reservation does not match this authority or operation');
+    }
+    const claim = {
+      reservationToken: token,
+      expiresAt: reservation.expiresAt,
+      operation: reservation.operation,
+      mcpServerId: reservation.mcpServerId,
+      userId: reservation.userId,
+      role: reservation.role,
+      tenantId: reservation.tenantId,
+      socketId: reservation.socketId,
+      authorityFingerprint: reservation.authorityFingerprint,
+    };
+    assertOAuthBrowserReservationStillCurrent(claim);
+    return claim;
+  };
 
   /**
    * The standing of whoever started a flow, re-asked at the moment it completes.
@@ -2295,7 +2961,7 @@ export async function registerMCPServices(
       // Recheck role and the complete server/config fingerprint inside the same
       // transaction that persists the grant and consumes the success fence.
       if (pendingFlow.durableRecord) {
-        await lockMCPOAuthGrantConfiguration(
+        await lockOAuthGrantConfiguration(
           db,
           pendingFlow.durableRecord.tenantId,
           pendingFlow.durableRecord.mcpServerId
@@ -2577,9 +3243,7 @@ export async function registerMCPServices(
         return;
       }
     } catch (err) {
-      console.error(
-        `[OAuth Callback] Failed category=${err instanceof Error ? err.name : 'unknown'}`
-      );
+      externalFailure('OAuth Callback', 'oauth_callback', err);
       sendOAuthResultPage(
         res,
         false,
@@ -2589,30 +3253,162 @@ export async function registerMCPServices(
     }
   };
 
-  app.use('/mcp-servers', createMCPServersService(db));
-  const invalidateOAuthGrantsAfterServerChange = async (
-    context: HookContext,
-    next: () => Promise<void>
-  ) => {
-    const tenantId = tenantIdFromParams(context.params as AuthenticatedParams);
-    const serverId = String(context.id ?? '');
-    await runInOAuthTenantWriteScope(db, tenantId, async () => {
-      if (durableOAuthFlows && tenantId && serverId) {
-        await lockMCPOAuthGrantConfiguration(db, tenantId, serverId as MCPServerID);
+  app.use('/mcp-servers', createMCPServersService(db), {
+    // The policy endpoint is RPC-shaped and does not publish its caller-shaped
+    // response. It invalidates through this already tenant-scoped service
+    // instead; browsers then refetch their own `can_configure` answer.
+    events: [MCP_MEMBER_POLICY_CHANGED_EVENT],
+  });
+  app.use('/mcp-servers/oauth-browser-reservations', {
+    async create(
+      data: MCPOAuthBrowserReservationRequest,
+      params?: AuthenticatedParams
+    ): Promise<MCPOAuthBrowserReservation> {
+      if (
+        !data ||
+        !MCP_OAUTH_BROWSER_OPERATIONS.includes(data.operation as MCPOAuthBrowserOperation)
+      ) {
+        throw new BadRequest('OAuth browser reservation operation is invalid');
       }
-      const before = serverId ? await new MCPServerRepository(db).findById(serverId) : null;
-      await next();
-      const after = serverId ? await new MCPServerRepository(db).findById(serverId) : null;
-      if (!hasMCPOAuthRelevantServerConfigurationChanged(before, after)) return;
-      await new UserMCPOAuthTokenRepository(db).deleteAllForServer(serverId as MCPServerID);
+      if (
+        data.mcp_server_id !== undefined &&
+        (typeof data.mcp_server_id !== 'string' || !data.mcp_server_id)
+      ) {
+        throw new BadRequest('OAuth browser reservation server is invalid');
+      }
+      const userId = params?.user?.user_id;
+      const role = params?.user?.role;
+      const socketId = socketIdFromParams(params);
+      const tenantId = tenantIdFromParams(params);
+      const authorityFingerprint = authorityFingerprintFromParams(params);
+      // Newer-main deliberately removes raw bearer material from the immutable
+      // Socket.IO connection projection. The physical socket id plus its
+      // server-owned user/role/tenant projection is therefore the authority
+      // binding for handshake-authenticated sockets. Keep the optional token
+      // fingerprint for legacy/synthetic callers that still expose one, but
+      // never require the bearer to be retained merely to reserve a browser
+      // event.
+      if (!userId || !role || !socketId) {
+        throw new BadRequest('OAuth browser reservations require an authenticated live socket');
+      }
+      const currentAuthority = liveSocketAuthority(socketId);
+      if (
+        currentAuthority?.userId !== userId ||
+        currentAuthority.role !== role ||
+        currentAuthority.tenantId !== tenantId ||
+        currentAuthority.authorityFingerprint !== authorityFingerprint
+      ) {
+        throw new Forbidden('OAuth browser reservation authority is not current');
+      }
+      pruneOAuthBrowserReservations();
+      let tenantReservations = 0;
+      let userReservations = 0;
+      let socketReservations = 0;
+      for (const reservation of oauthBrowserReservations.values()) {
+        if (reservation.tenantId === tenantId) {
+          tenantReservations += 1;
+          if (reservation.userId === userId) userReservations += 1;
+        }
+        if (reservation.socketId === socketId) socketReservations += 1;
+      }
+      if (socketReservations >= MAX_OAUTH_BROWSER_RESERVATIONS_PER_SOCKET) {
+        throw new BadRequest('Too many pending OAuth browser reservations for this connection');
+      }
+      if (userReservations >= MAX_OAUTH_BROWSER_RESERVATIONS_PER_USER) {
+        throw new BadRequest('Too many pending OAuth browser reservations for this user');
+      }
+      if (tenantReservations >= MAX_OAUTH_BROWSER_RESERVATIONS_PER_TENANT) {
+        throw new BadRequest('Too many pending OAuth browser reservations for this tenant');
+      }
+      if (oauthBrowserReservations.size >= MAX_OAUTH_BROWSER_RESERVATIONS) {
+        throw new BadRequest('Too many pending OAuth browser reservations');
+      }
+      const reservationToken = randomBytes(32).toString('base64url');
+      const expiresAt = Date.now() + OAUTH_BROWSER_RESERVATION_TTL_MS;
+      const cleanupTimer = setTimeout(
+        () => deleteOAuthBrowserReservation(reservationToken),
+        OAUTH_BROWSER_RESERVATION_TTL_MS
+      );
+      cleanupTimer.unref();
+      oauthBrowserReservations.set(reservationToken, {
+        reservationToken,
+        operation: data.operation,
+        mcpServerId: data.mcp_server_id,
+        userId,
+        role,
+        tenantId,
+        socketId,
+        expiresAt,
+        authorityFingerprint,
+        cleanupTimer,
+      });
+      return { reservation_token: reservationToken, expires_at: expiresAt };
+    },
+  });
+  app.service('mcp-servers/oauth-browser-reservations').hooks({
+    before: { create: [ctx.requireAuth] },
+  });
+  // The returned token is a caller-private, one-shot capability. Feathers'
+  // default `created` publication would otherwise put it on the tenant
+  // realtime channel before the browser can use it.
+  // `registerMCPServices` is also exercised without a realtime transport in
+  // service-only harnesses; there is nothing to publish in that shape.
+  app.service('mcp-servers/oauth-browser-reservations').publish?.(() => []);
+  const coordinateMCPServerMutation = async (context: HookContext, next: () => Promise<void>) => {
+    // Service-level around hooks wrap the normal before-hook chain. Over REST,
+    // params.user/tenant do not exist until requireAuth runs, while Socket.io
+    // often arrives pre-populated. Authenticate explicitly before this hook
+    // reads tenant identity or opens the grant/config transaction; the regular
+    // before hook remains defense in depth and is harmlessly idempotent.
+    if (context.params.provider) await ctx.requireAuth(context);
+    const tenantId = tenantIdFromParams(context.params as AuthenticatedParams);
+    const requestedServerId = String(context.id ?? '');
+    await runInOAuthTenantWriteTransaction(db, tenantId, async (scopedDb) => {
+      const repository = new MCPServerRepository(scopedDb);
+      let serverId: MCPServerID;
+      try {
+        serverId = await repository.resolveCanonicalId(requestedServerId);
+      } catch (error) {
+        if (!(error instanceof EntityNotFoundError) && !(error instanceof AmbiguousIdError)) {
+          throw error;
+        }
+        // Preserve the service's normal not-found/ambiguous-ID error mapping.
+        await next();
+        return;
+      }
+      // Around hooks run before the ordinary authorization hooks. Rewriting to
+      // the canonical ID makes authorization, the repository write, advisory
+      // locking, snapshots, grants, and pending-flow cleanup use one identity.
+      context.id = serverId;
       if (durableOAuthFlows && tenantId) {
-        await durableOAuthFlows.invalidateForServer(tenantId, serverId as MCPServerID);
+        await lockOAuthGrantConfiguration(scopedDb, tenantId, serverId);
+      }
+      const before = await repository.findById(serverId);
+      await runWithMCPServerMutationDatabase(scopedDb, next);
+      const after = await repository.findById(serverId);
+      if (!hasMCPOAuthRelevantServerConfigurationChanged(before, after)) return;
+      await new UserMCPOAuthTokenRepository(scopedDb).deleteAllForServer(serverId);
+      if (durableOAuthFlows && tenantId) {
+        await durableOAuthFlows.invalidateForServer(tenantId, serverId);
       } else {
-        for (const [state, flow] of pendingOAuthFlows) {
-          if (flow.mcpServerId !== serverId) continue;
-          pendingOAuthFlows.delete(state);
-          markLocalOAuthAttempt(flow, 'failed', 'server_configuration_changed');
-          flow.tokenReject?.(new Error('MCP OAuth server configuration changed'));
+        const affectedLocalFlows = [...pendingOAuthFlows].filter(
+          ([, flow]) => flow.mcpServerId === serverId
+        );
+        // SQLite pending flows live in memory and therefore cannot join the DB
+        // transaction. Stage their destructive notification after commit so a
+        // failed config/grant transaction leaves them intact. A callback that
+        // races the tiny commit-to-callback interval still revalidates its
+        // saved-server fingerprint before token exchange/persistence.
+        const queued = enqueueAfterTenantDatabaseCommit(() => {
+          for (const [state, flow] of affectedLocalFlows) {
+            if (pendingOAuthFlows.get(state) !== flow) continue;
+            pendingOAuthFlows.delete(state);
+            markLocalOAuthAttempt(flow, 'failed', 'server_configuration_changed');
+            flow.tokenReject?.(new Error('MCP OAuth server configuration changed'));
+          }
+        });
+        if (!queued) {
+          throw new Error('MCP OAuth mutation did not own an atomic database transaction');
         }
       }
       console.log('[MCP OAuth Grant] grants_invalidated category=server_configuration_changed');
@@ -2620,45 +3416,102 @@ export async function registerMCPServices(
   };
   app.service('mcp-servers').hooks({
     around: {
-      patch: [invalidateOAuthGrantsAfterServerChange],
-      update: [invalidateOAuthGrantsAfterServerChange],
+      patch: [coordinateMCPServerMutation],
+      update: [coordinateMCPServerMutation],
     },
   });
 
   // Read-only marketplace browse surface. Only find/get are exposed; the
   // catalog is a file in this repository and has no writers at runtime.
   app.use('/mcp-catalog', createMCPCatalogService(), { methods: ['find', 'get'] });
+  app.use(
+    '/mcp-catalog/readiness',
+    new MCPCatalogReadinessService(app, {
+      listCandidates: (userId) => new MCPCatalogCandidateRepository(db).listForUser(userId),
+      // Readiness is advisory and may not open credential material merely to
+      // draw a button. Normal configuration writes revoke bound grants; this
+      // ID/boolean projection is enough to predict reuse. Connect separately
+      // re-reads and verifies the full HMAC at its final authority boundary.
+      isGrantAuthorized: async (candidate) => candidate.grant?.binding_ready === true,
+    }),
+    { methods: ['get'] }
+  );
+  app.use('/mcp-marketplace', new MCPMarketplaceService(new MCPMarketplaceRepository(db)), {
+    methods: ['find'],
+  });
+  app.use(
+    '/mcp-marketplace/remove-unattached',
+    new MCPMarketplaceRemoveServerService(db, (userIds, params) =>
+      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
+    ),
+    { methods: ['create'] }
+  );
+  app.use(
+    '/mcp-marketplace/tool-permission',
+    new MCPMarketplaceToolPermissionService(db, (userIds, params) =>
+      emitMarketplaceInvalidation(app, params.tenant?.tenant_id, userIds)
+    ),
+    { methods: ['create'] }
+  );
+  // Action replies are private acknowledgements. These services mutate through
+  // repository transactions, so they explicitly emit the user-targeted empty
+  // Marketplace invalidation rather than pretending the ordinary MCP CRUD
+  // service emitted a lifecycle event.
+  for (const path of [
+    'mcp-marketplace/remove-unattached',
+    'mcp-marketplace/tool-permission',
+  ] as const) {
+    // Feathers services have `publish` once a realtime provider is configured.
+    // Narrow service-only harnesses intentionally omit that provider.
+    const action = app.service(path) as unknown as {
+      publish?: (publisher: () => never[]) => void;
+    };
+    action.publish?.(() => []);
+  }
 
   // JWT test endpoint
   app.use('/mcp-servers/test-jwt', {
-    async create(data: {
-      api_url: string;
-      api_token: string;
-      api_secret: string;
-      mcp_url?: string;
-    }) {
+    async create(
+      data: {
+        api_url: string;
+        api_token: string;
+        api_secret: string;
+        mcp_url?: string;
+      },
+      params?: AuthenticatedParams
+    ) {
+      const assertRequestAuthority = requestAuthorityAssertion(params);
       try {
-        const response = await oauthFetch(data.api_url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: data.api_token, secret: data.api_secret }),
-        });
-        if (!response.ok) {
-          const errorText = await response.text();
-          return {
-            success: false,
-            error: `JWT fetch failed: HTTP ${response.status}: ${errorText}`,
-          };
-        }
-        const result = (await response.json()) as {
-          access_token?: string;
-          payload?: { access_token?: string };
-        };
-        const token = result.access_token || result.payload?.access_token;
-        if (!token) return { success: false, error: 'Response missing access_token' };
+        const { fetchJWTToken } = await runWithinOAuthAuthority(
+          assertRequestAuthority,
+          () => import('@agor/core/tools/mcp/jwt-auth')
+        );
+        await runWithinOAuthAuthority(assertRequestAuthority, () =>
+          fetchJWTToken(
+            {
+              api_url: data.api_url,
+              api_token: data.api_token,
+              api_secret: data.api_secret,
+            },
+            {
+              allowLocalhostHttp: !postgresOAuthDeployment,
+              // A connection test must exercise the provider and must never
+              // leave a caller secret in the process-global compatibility cache.
+              cache: false,
+              assertCurrent: assertRequestAuthority,
+              resolveDns: ctx.mcpOutboundDnsLookup,
+            }
+          )
+        );
+        assertRequestAuthority?.();
         return { success: true, tokenValid: true };
       } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        // Socket replacement wins over provider/DNS/parse failures. In
+        // particular, never downgrade a stale A request to a normal failure
+        // response that B's mounted UI could consume.
+        assertRequestAuthority?.();
+        const safe = externalFailure('MCP JWT Test', 'jwt', error);
+        return { success: false, error: safe.message, category: safe.category };
       }
     },
   });
@@ -2674,41 +3527,57 @@ export async function registerMCPServices(
    * (`readOnlyHint: true`) so we don't risk side effects on write tools.
    * Returns the 401 Response if one is found this way, otherwise null.
    */
-  async function probeMcpAuthViaReadOnlyToolCall(mcpUrl: string): Promise<Response | null> {
+  async function probeMcpAuthViaReadOnlyToolCall(
+    mcpUrl: string,
+    assertCurrent?: () => void
+  ): Promise<Response | null> {
     try {
-      const listResponse = await oauthFetch(mcpUrl, {
-        method: 'POST',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
-        signal: AbortSignal.timeout(15_000),
-      });
+      assertCurrent?.();
+      const listResponse = await oauthFetch(
+        mcpUrl,
+        {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'tools/list', id: 1 }),
+          signal: AbortSignal.timeout(15_000),
+        },
+        assertCurrent
+      );
+      assertCurrent?.();
       if (!listResponse.ok) return null;
 
       const listBody = (await listResponse.json()) as {
         result?: { tools?: Array<{ name?: string; annotations?: { readOnlyHint?: boolean } }> };
       };
+      assertCurrent?.();
       const readOnlyTool = listBody.result?.tools?.find(
         (tool) => tool.annotations?.readOnlyHint === true && typeof tool.name === 'string'
       );
       if (!readOnlyTool?.name) return null;
 
-      const callResponse = await oauthFetch(mcpUrl, {
-        method: 'POST',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          method: 'tools/call',
-          id: 2,
-          params: { name: readOnlyTool.name, arguments: {} },
-        }),
-        signal: AbortSignal.timeout(15_000),
-      });
+      assertCurrent?.();
+      const callResponse = await oauthFetch(
+        mcpUrl,
+        {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'tools/call',
+            id: 2,
+            params: { name: readOnlyTool.name, arguments: {} },
+          }),
+          signal: AbortSignal.timeout(15_000),
+        },
+        assertCurrent
+      );
+      assertCurrent?.();
       return callResponse.status === 401 ? callResponse : null;
     } catch (probeError) {
-      console.log(
-        '[OAuth Probe] Read-only tool-call fallback probe failed:',
-        probeError instanceof Error ? probeError.message : String(probeError)
-      );
+      // Do not downgrade an authority/deadline failure into "no fallback
+      // challenge" and continue the browser flow.
+      assertCurrent?.();
+      externalFailure('OAuth Probe', 'discovery', probeError);
       return null;
     }
   }
@@ -2725,12 +3594,26 @@ export async function registerMCPServices(
         scope?: string;
         grant_type?: string;
         start_browser_flow?: boolean;
+        oauth_browser_event?: MCPOAuthBrowserEventRequest;
         compatibility_mode?: 'strict' | 'legacy';
         dcr_mode?: MCPOAuthDCRMode;
       },
-      params?: AuthenticatedParams & { connection?: { id?: string } }
+      params?: AuthenticatedParams
     ) {
       try {
+        const browserReservation = data.start_browser_flow
+          ? consumeOAuthBrowserReservation(data.oauth_browser_event, params, {
+              operation: 'test-oauth',
+              mcpServerId: data.mcp_server_id,
+            })
+          : undefined;
+        if (data.start_browser_flow && !browserReservation) {
+          throw new BadRequest('A valid OAuth browser reservation is required');
+        }
+        const assertBrowserReservation = reservationAssertion(browserReservation);
+        const assertInitialRequestAuthority =
+          assertBrowserReservation ?? requestAuthorityAssertion(params);
+        assertInitialRequestAuthority?.();
         assertPublicMCPOAuthCompatibilityMode({
           oauth_compatibility_mode: data.compatibility_mode,
         });
@@ -2739,15 +3622,17 @@ export async function registerMCPServices(
         // saved-row authority as every other flow-start endpoint applies.
         // Testing a not-yet-created server passes no id and is unaffected.
         const authoritativeServer = data.mcp_server_id
-          ? await runInOAuthTenantScope(
-              db,
-              tenantIdFromParams(params as AuthenticatedParams | undefined),
-              () =>
-                loadMcpServerForCaller(
-                  db,
-                  data.mcp_server_id as string,
-                  params as AuthenticatedParams | undefined
-                )
+          ? await runWithinOAuthAuthority(assertInitialRequestAuthority, () =>
+              runInOAuthTenantScope(
+                db,
+                tenantIdFromParams(params as AuthenticatedParams | undefined),
+                () =>
+                  loadMcpServerForCaller(
+                    db,
+                    data.mcp_server_id as string,
+                    params as AuthenticatedParams | undefined
+                  )
+              )
             )
           : undefined;
         if (
@@ -2773,7 +3658,9 @@ export async function registerMCPServices(
         const effectiveMcpUrl = authoritativeServer?.url ?? data.mcp_url;
         const effectiveAuth = authoritativeServer?.auth;
         const compatibilityPolicy = authoritativeServer
-          ? await resolveMCPOAuthCompatibilityPolicy(authoritativeServer)
+          ? await runWithinOAuthAuthority(assertInitialRequestAuthority, () =>
+              resolveMCPOAuthCompatibilityPolicy(authoritativeServer)
+            )
           : undefined;
         const compatibilityMode = compatibilityPolicy?.mode ?? data.compatibility_mode ?? 'strict';
         if (compatibilityPolicy) {
@@ -2806,21 +3693,29 @@ export async function registerMCPServices(
 
         let probeResponse: Response;
         try {
-          probeResponse = await oauthFetch(effectiveMcpUrl, {
-            method: 'POST',
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
-            signal: AbortSignal.timeout(15_000),
-          });
+          probeResponse = await runWithinOAuthAuthority(assertInitialRequestAuthority, () =>
+            oauthFetch(
+              effectiveMcpUrl,
+              {
+                method: 'POST',
+                headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+                body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
+                signal: AbortSignal.timeout(15_000),
+              },
+              assertInitialRequestAuthority
+            )
+          );
         } catch (fetchError) {
-          return {
-            success: false,
-            error: `Failed to connect to MCP server: ${fetchError instanceof Error ? fetchError.message : String(fetchError)}`,
-          };
+          assertInitialRequestAuthority?.();
+          const safe = externalFailure('OAuth Test', 'discovery', fetchError);
+          return { success: false, error: safe.message, category: safe.category };
         }
 
         if (probeResponse.status !== 401) {
-          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(effectiveMcpUrl);
+          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(
+            effectiveMcpUrl,
+            assertInitialRequestAuthority
+          );
           if (fallbackProbe) {
             console.log(
               '[OAuth Test] Handshake-level probe returned no auth requirement; ' +
@@ -2831,10 +3726,6 @@ export async function registerMCPServices(
         }
 
         const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
-        const allHeaders: Record<string, string> = {};
-        probeResponse.headers.forEach((value, key) => {
-          allHeaders[key] = value;
-        });
         console.log(`[OAuth Test] Probe response status=${probeResponse.status}`);
 
         let metadataUrl: string | null = null;
@@ -2843,12 +3734,14 @@ export async function registerMCPServices(
           | null = null;
         let discoverySource: string | null = null;
         if (probeResponse.status === 401) {
+          assertInitialRequestAuthority?.();
           const { resolveMCPOAuthDiscovery } = await import(
             '@agor/core/tools/mcp/oauth-mcp-transport'
           );
           const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, effectiveMcpUrl, {
             compatibilityMode,
-            allowLocalhostHttp: !durableOAuthFlows,
+            allowLocalhostHttp: !postgresOAuthDeployment,
+            assertCurrent: assertInitialRequestAuthority,
           });
           if (discovery?.kind === 'resource-metadata') {
             metadataUrl = discovery.metadataUrl;
@@ -2874,10 +3767,6 @@ export async function registerMCPServices(
             console.log('[OAuth Test] Starting browser-based OAuth 2.1 flow...');
 
             try {
-              const connection = (params as AuthenticatedParams)?.connection as
-                | { id?: string }
-                | undefined;
-
               // Route through the daemon's two-phase flow so the redirect_uri
               // is the daemon's public base URL (browser-reachable for any
               // user) rather than a 127.0.0.1 callback server bound to the
@@ -2896,31 +3785,52 @@ export async function registerMCPServices(
                   oauthMode: effectiveOAuthMode,
                   clientId: effectiveClientId,
                   tenantId: tenantIdFromParams(params as AuthenticatedParams | undefined),
-                  socketId: connection?.id,
+                  socketId: socketIdFromParams(params as AuthenticatedParams | undefined),
+                  browserReservation,
                   clientSecret: effectiveClientSecret,
                   scope: effectiveScope,
                   compatibilityMode,
                   dcrMode: effectiveDcrMode,
                 });
               } catch (err) {
-                if (err instanceof PublicBaseUrlNotConfiguredError) {
-                  return { success: false, error: err.message, oauthType: 'oauth2.1' };
+                const recovery = classifyMCPAuthRecovery(err);
+                if (recovery.category === 'redirect_configuration_required') {
+                  return {
+                    success: false,
+                    error: recovery.message,
+                    recovery,
+                    oauthType: 'oauth2.1',
+                  };
                 }
                 throw err;
               }
 
+              const assertRequestAuthority = started.assertRequestAuthority;
+              if (!assertRequestAuthority) {
+                throw new Forbidden('OAuth callback request authority is unavailable');
+              }
               const tokenResponse = await started.awaitToken();
 
-              const testResponse = await oauthFetch(effectiveMcpUrl, {
-                method: 'POST',
-                headers: {
-                  Authorization: `Bearer ${tokenResponse.access_token}`,
-                  Accept: 'application/json',
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
-                signal: AbortSignal.timeout(15_000),
-              });
+              const testResponse = await runWithinOAuthAuthority(assertRequestAuthority, () =>
+                oauthFetch(
+                  effectiveMcpUrl,
+                  {
+                    method: 'POST',
+                    headers: {
+                      Authorization: `Bearer ${tokenResponse.access_token}`,
+                      Accept: 'application/json',
+                      'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'initialize',
+                      id: 1,
+                    }),
+                    signal: AbortSignal.timeout(15_000),
+                  },
+                  assertRequestAuthority
+                )
+              );
 
               return {
                 success: true,
@@ -2928,17 +3838,18 @@ export async function registerMCPServices(
                 message: 'OAuth 2.1 authentication successful!',
                 tokenValid: true,
                 mcpStatus: testResponse.status,
-                mcpStatusText: testResponse.statusText,
               };
             } catch (flowError) {
-              console.error(
-                `[OAuth Test] Browser flow failed category=${
-                  flowError instanceof Error ? flowError.name : 'unknown'
-                }`
-              );
+              const recovery = classifyMCPAuthRecovery(flowError, {
+                mcpServerId: data.mcp_server_id,
+              });
+              // Recovery must be fully derived before the external sanitizer;
+              // no post-sanitization branch may inspect the original unknown.
+              externalFailure('OAuth Test', 'oauth', flowError);
               return {
                 success: false,
-                error: `OAuth 2.1 browser flow failed: ${flowError instanceof Error ? flowError.message : String(flowError)}`,
+                error: recovery.message,
+                recovery,
                 oauthType: 'oauth2.1',
               };
             }
@@ -2970,7 +3881,11 @@ export async function registerMCPServices(
             // RFC 9728 path: fetch resource metadata to get the AS URL.
             // (Above guard ensures `metadataUrl` is set when we reach here.)
             const rfc9728Url = metadataUrl as string;
-            const metadataResponse = await oauthFetch(rfc9728Url);
+            const metadataResponse = await oauthFetch(
+              rfc9728Url,
+              {},
+              assertInitialRequestAuthority
+            );
             if (!metadataResponse.ok) {
               return {
                 success: false,
@@ -3010,9 +3925,13 @@ export async function registerMCPServices(
               registration_endpoint?: string;
             } | null = null;
             try {
-              authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl);
+              authServerMetadata = await fetchAuthorizationServerMetadata(authServerUrl, {
+                allowLocalhostHttp: !postgresOAuthDeployment,
+                assertCurrent: assertInitialRequestAuthority,
+              });
               console.log('[OAuth Test] Authorization-server metadata resolved');
             } catch {
+              assertInitialRequestAuthority?.();
               console.log('[OAuth Test] Authorization-server metadata unavailable');
             }
 
@@ -3036,11 +3955,12 @@ export async function registerMCPServices(
               requiresBrowserFlow: true,
             };
           } catch (metadataError) {
+            const safe = externalFailure('OAuth Test', 'oauth_metadata', metadataError);
             return {
               success: false,
-              error: `Failed to fetch OAuth metadata: ${metadataError instanceof Error ? metadataError.message : String(metadataError)}`,
+              error: safe.message,
+              category: safe.category,
               oauthType: 'oauth2.1',
-              metadataUrl: metadataUrl ?? undefined,
             };
           }
         }
@@ -3055,13 +3975,6 @@ export async function registerMCPServices(
         }
 
         if (probeResponse.status === 401) {
-          let responseBody = '';
-          try {
-            responseBody = await probeResponse.text();
-          } catch {
-            /* Ignore */
-          }
-
           if (effectiveClientId && effectiveClientSecret) {
             console.log('[OAuth Test] Using Client Credentials flow');
             const { fetchOAuthToken, inferOAuthTokenUrl } = await import(
@@ -3079,39 +3992,44 @@ export async function registerMCPServices(
                   oauthType: 'client_credentials',
                 };
             }
-            const { token, debugInfo } = await fetchOAuthToken(
+            const { token } = await fetchOAuthToken(
               {
                 token_url: tokenUrl,
                 client_id: effectiveClientId,
                 client_secret: effectiveClientSecret,
                 scope: effectiveScope,
                 grant_type: effectiveGrantType || 'client_credentials',
-                allowLocalhostHttp: !durableOAuthFlows,
+                allowLocalhostHttp: !postgresOAuthDeployment,
                 cacheNamespace: [
                   tenantIdFromParams(params as AuthenticatedParams | undefined) ?? '<standalone>',
                   data.mcp_server_id ?? '<unsaved>',
                   (params as AuthenticatedParams | undefined)?.user?.user_id ?? '<unknown-user>',
                 ].join(':'),
                 cache: !durableOAuthFlows,
+                assertCurrent: assertInitialRequestAuthority,
               },
               true
             );
             let mcpStatus: number | undefined;
             let mcpStatusText: string | undefined;
             try {
-              const mcpResponse = await oauthFetch(effectiveMcpUrl, {
-                method: 'POST',
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  Accept: 'application/json',
-                  'Content-Type': 'application/json',
+              const mcpResponse = await oauthFetch(
+                effectiveMcpUrl,
+                {
+                  method: 'POST',
+                  headers: {
+                    Authorization: `Bearer ${token}`,
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
                 },
-                body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
-              });
+                assertInitialRequestAuthority
+              );
               mcpStatus = mcpResponse.status;
-              mcpStatusText = mcpResponse.statusText;
             } catch (mcpError) {
-              mcpStatusText = mcpError instanceof Error ? mcpError.message : 'Connection failed';
+              assertInitialRequestAuthority?.();
+              mcpStatusText = externalFailure('OAuth Test', 'runtime', mcpError).message;
             }
             return {
               success: true,
@@ -3120,7 +4038,6 @@ export async function registerMCPServices(
               tokenUrlSource,
               mcpStatus,
               mcpStatusText,
-              debugInfo,
             };
           }
 
@@ -3130,9 +4047,6 @@ export async function registerMCPServices(
               'Server requires authentication (401) but OAuth 2.1 auto-discovery failed at every step.',
             oauthType: 'unknown',
             mcpStatus: probeResponse.status,
-            wwwAuthenticate: wwwAuthenticate || '<not present>',
-            responseHeaders: allHeaders,
-            responseBody: responseBody.substring(0, 500),
             hint:
               `${DISCOVERY_CASCADE_TRIED} ` +
               'None returned valid metadata. Options: (a) provide Client Credentials with explicit token URL, ' +
@@ -3142,11 +4056,26 @@ export async function registerMCPServices(
 
         return {
           success: false,
-          error: `MCP server returned ${probeResponse.status} ${probeResponse.statusText}`,
+          error: `MCP server returned status ${probeResponse.status}.`,
           mcpStatus: probeResponse.status,
         };
       } catch (error) {
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        const recovery = classifyMCPAuthRecovery(error, {
+          mcpServerId: data.mcp_server_id,
+        });
+        if (
+          recovery.category === 'authentication_required' ||
+          recovery.category === 'permission_changed' ||
+          recovery.category === 'configuration_changed'
+        ) {
+          return {
+            success: false,
+            error: recovery.message,
+            recovery,
+          };
+        }
+        const safe = externalFailure('OAuth Test', 'oauth', error);
+        return { success: false, error: safe.message, category: safe.category };
       }
     },
   });
@@ -3159,7 +4088,9 @@ export async function registerMCPServices(
       data: { mcp_url?: string; mcp_server_id?: string; client_id?: string },
       params?: AuthenticatedParams
     ) {
+      const assertRequestAuthority = requestAuthorityAssertion(params);
       try {
+        assertRequestAuthority?.();
         console.log('[OAuth Start] Starting two-phase OAuth flow');
         const userId = params?.user?.user_id;
         const tenantId = tenantIdFromParams(params);
@@ -3176,19 +4107,28 @@ export async function registerMCPServices(
         // Its stored OAuth client configuration belongs to whoever owns the
         // row; a caller who may not use the server may not borrow it either.
         const savedServer = savedServerId
-          ? await runInOAuthTenantScope(db, tenantId, () => {
-              return loadMcpServerForCaller(db, savedServerId, params);
-            })
+          ? await runWithinOAuthAuthority(assertRequestAuthority, () =>
+              runInOAuthTenantScope(db, tenantId, () => {
+                return loadMcpServerForCaller(db, savedServerId, params);
+              })
+            )
           : null;
 
         if (
           savedServerId &&
           (!savedServer?.enabled || !savedServer.url || savedServer.auth?.type !== 'oauth')
         ) {
+          const recovery = {
+            category: 'configuration_changed' as const,
+            action: 'save_and_retry' as const,
+            message:
+              'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
+            ...(savedServerId ? { mcp_server_id: savedServerId as MCPServerID } : {}),
+          };
           return {
             success: false,
-            error:
-              'OAuth requires an enabled, saved MCP server in the current tenant. Save changes, then restart OAuth.',
+            error: recovery.message,
+            recovery,
           } satisfies MCPOAuthStartFailure;
         }
 
@@ -3197,9 +4137,14 @@ export async function registerMCPServices(
         // fields remain accepted only for older callers.
         const effectiveMcpUrl = savedServer?.url ?? data.mcp_url;
         if (!effectiveMcpUrl) {
+          const recovery = classifyMCPAuthRecovery(
+            new OAuthConfigurationError('metadata_unavailable'),
+            { mcpServerId: savedServerId }
+          );
           return {
             success: false,
-            error: 'OAuth requires a saved MCP server URL. Save changes, then restart OAuth.',
+            error: recovery.message,
+            recovery,
           } satisfies MCPOAuthStartFailure;
         }
 
@@ -3213,10 +4158,17 @@ export async function registerMCPServices(
             savedServer.url !== effectiveMcpUrl ||
             savedServer.auth?.type !== 'oauth')
         ) {
+          const recovery = {
+            category: 'configuration_changed' as const,
+            action: 'save_and_retry' as const,
+            message:
+              'The saved MCP server changed before OAuth could start. Reload it, save the intended configuration, then retry.',
+            ...(savedServerId ? { mcp_server_id: savedServerId as MCPServerID } : {}),
+          };
           return {
             success: false,
-            error:
-              'PostgreSQL OAuth requires an enabled, saved MCP server matching this request. Save changes, then restart OAuth.',
+            error: recovery.message,
+            recovery,
           } satisfies MCPOAuthStartFailure;
         }
 
@@ -3227,7 +4179,9 @@ export async function registerMCPServices(
           clientIdFromConfig = savedServer.auth.oauth_client_id;
           clientSecretOverride = savedServer.auth.oauth_client_secret;
           scopeOverride = savedServer.auth.oauth_scope;
-          const compatibilityPolicy = await resolveMCPOAuthCompatibilityPolicy(savedServer);
+          const compatibilityPolicy = await runWithinOAuthAuthority(assertRequestAuthority, () =>
+            resolveMCPOAuthCompatibilityPolicy(savedServer)
+          );
           compatibilityMode = compatibilityPolicy.mode;
           logMCPOAuthCompatibilityPolicy(
             'oauth-start',
@@ -3238,8 +4192,10 @@ export async function registerMCPServices(
           if (oauthMode === 'shared') {
             const currentUser =
               durableOAuthFlows && tenantId && userId
-                ? await runInOAuthTenantScope(db, tenantId, () =>
-                    new UsersRepository(db).findById(userId)
+                ? await runWithinOAuthAuthority(assertRequestAuthority, () =>
+                    runInOAuthTenantScope(db, tenantId, () =>
+                      new UsersRepository(db).findById(userId)
+                    )
                   )
                 : params?.user;
             if (!hasMinimumRole(currentUser?.role, ROLES.ADMIN)) {
@@ -3248,15 +4204,21 @@ export async function registerMCPServices(
           }
         }
 
-        let probeResponse = await oauthFetch(effectiveMcpUrl, {
-          method: 'POST',
-          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
-          signal: AbortSignal.timeout(15_000),
-        });
+        let probeResponse = await oauthFetch(
+          effectiveMcpUrl,
+          {
+            method: 'POST',
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', method: 'initialize', id: 1 }),
+            signal: AbortSignal.timeout(15_000),
+          },
+          assertRequestAuthority
+        );
 
         if (probeResponse.status !== 401) {
-          const fallbackProbe = await probeMcpAuthViaReadOnlyToolCall(effectiveMcpUrl);
+          const fallbackProbe = await runWithinOAuthAuthority(assertRequestAuthority, () =>
+            probeMcpAuthViaReadOnlyToolCall(effectiveMcpUrl, assertRequestAuthority)
+          );
           if (fallbackProbe) {
             console.log(
               '[OAuth Start] Handshake-level probe returned no auth requirement; ' +
@@ -3267,29 +4229,47 @@ export async function registerMCPServices(
         }
 
         if (probeResponse.status !== 401) {
+          const recovery = {
+            category: 'configuration_changed' as const,
+            action: 'save_and_retry' as const,
+            message:
+              'This MCP server did not request OAuth authentication. Verify the saved MCP URL and authentication type, then retry.',
+            ...(savedServerId ? { mcp_server_id: savedServerId as MCPServerID } : {}),
+          };
           return {
             success: false,
-            error: 'Server did not return 401 — OAuth 2.1 authentication may not be required',
+            error: recovery.message,
+            recovery,
           } satisfies MCPOAuthStartFailure;
         }
 
         const wwwAuthenticate = probeResponse.headers.get('www-authenticate') || '';
-        const { resolveMCPOAuthDiscovery } = await import(
-          '@agor/core/tools/mcp/oauth-mcp-transport'
+        const { resolveMCPOAuthDiscovery } = await runWithinOAuthAuthority(
+          assertRequestAuthority,
+          () => import('@agor/core/tools/mcp/oauth-mcp-transport')
         );
-        const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, effectiveMcpUrl, {
-          compatibilityMode,
-          allowLocalhostHttp: !durableOAuthFlows,
-        });
+        const discovery = await runWithinOAuthAuthority(assertRequestAuthority, () =>
+          resolveMCPOAuthDiscovery(wwwAuthenticate, effectiveMcpUrl, {
+            compatibilityMode,
+            allowLocalhostHttp: !postgresOAuthDeployment,
+            assertCurrent: assertRequestAuthority,
+          })
+        );
         if (!discovery) {
+          const recovery = classifyMCPAuthRecovery(
+            new OAuthConfigurationError('metadata_unavailable'),
+            {
+              mcpServerId: savedServerId,
+            }
+          );
           return {
             success: false,
-            error: `Server returned 401 but does not advertise OAuth metadata. ${DISCOVERY_CASCADE_TRIED} None succeeded.`,
+            error: recovery.message,
+            recovery,
           } satisfies MCPOAuthStartFailure;
         }
 
-        const connection = params?.connection as { id?: string } | undefined;
-        const socketId = connection?.id;
+        const socketId = socketIdFromParams(params);
 
         let result: StartTwoPhaseOAuthResult;
         try {
@@ -3312,18 +4292,24 @@ export async function registerMCPServices(
             socketId,
             compatibilityMode,
             dcrMode,
+            requestAuthority: assertRequestAuthority,
           });
         } catch (err) {
-          if (err instanceof PublicBaseUrlNotConfiguredError) {
-            console.error('[OAuth Start]', err.message);
+          const recovery = classifyMCPAuthRecovery(err, {
+            mcpServerId: data.mcp_server_id,
+          });
+          if (recovery.category === 'redirect_configuration_required') {
+            console.error('[OAuth Start] Failed category=PublicBaseUrlNotConfiguredError');
             return {
               success: false,
-              error: err.message,
+              error: recovery.message,
+              recovery,
             } satisfies MCPOAuthStartFailure;
           }
           throw err;
         }
 
+        assertRequestAuthority?.();
         return {
           success: true,
           authorizationUrl: result.authorizationUrl,
@@ -3333,17 +4319,41 @@ export async function registerMCPServices(
             'Browser opened for authentication. After signing in, copy the callback URL and paste it below.',
         };
       } catch (error) {
-        console.error(
-          `[OAuth Start] Failed category=${error instanceof Error ? error.name : 'unknown'}`
-        );
-        const diagnostic = error instanceof OAuthDCRFailure ? error.diagnostic : undefined;
-        const redirectUri = diagnostic
-          ? await resolveMCPOAuthRedirectUri().catch(() => null)
-          : null;
+        // A live-authority failure must never be normalized into an ordinary
+        // provider diagnostic; callers may otherwise continue an obsolete
+        // flow under the replacement identity on the same socket.
+        assertRequestAuthority?.();
+        const preliminaryRecovery = classifyMCPAuthRecovery(error, {
+          mcpServerId: data.mcp_server_id,
+        });
+        let redirectUri: string | null = null;
+        if (
+          preliminaryRecovery.category === 'client_registration_required' ||
+          preliminaryRecovery.category === 'client_registration_failed'
+        ) {
+          try {
+            redirectUri = await runWithinOAuthAuthority(
+              assertRequestAuthority,
+              resolveMCPOAuthRedirectUri
+            );
+          } catch {
+            assertRequestAuthority?.();
+          }
+        }
+        assertRequestAuthority?.();
+        const recovery = redirectUri
+          ? classifyMCPAuthRecovery(error, {
+              mcpServerId: data.mcp_server_id,
+              redirectUri,
+            })
+          : preliminaryRecovery;
+        // This is deliberately the final consumer of the original unknown.
+        // Response construction below uses only the closed recovery contract.
+        externalFailure('OAuth Start', 'oauth', error);
         return {
           success: false,
-          error: error instanceof Error ? error.message : String(error),
-          ...(diagnostic ? { diagnostic } : {}),
+          error: recovery.message,
+          recovery,
           ...(redirectUri ? { redirect_uri: redirectUri } : {}),
         } satisfies MCPOAuthStartFailure;
       }
@@ -3353,6 +4363,22 @@ export async function registerMCPServices(
   app.service('mcp-servers/oauth-start').hooks({ before: { create: [ctx.requireAuth] } });
 
   // OAuth complete endpoint
+  const oauthCompletionFailure = (
+    failureCode: string,
+    mcpServerId?: string,
+    messageOverride?: string
+  ) => {
+    const recovery = recoveryForOAuthAttemptFailure(failureCode, mcpServerId);
+    return {
+      success: false as const,
+      error:
+        messageOverride ??
+        recovery?.message ??
+        'OAuth completion could not be validated. Reconnect this MCP server and try again.',
+      tokenObtained: false,
+      ...(recovery ? { recovery } : {}),
+    };
+  };
   app.use('/mcp-servers/oauth-complete', {
     async create(
       data: { callback_url: string } | { code: string; state: string; iss?: string },
@@ -3360,6 +4386,7 @@ export async function registerMCPServices(
     ) {
       let pendingFlow: PendingOAuthFlow | undefined;
       let completionStatus: 'failed' | 'ambiguous' | undefined;
+      let completionFailureCode: string | undefined;
       try {
         const { completeMCPOAuthFlow, parseOAuthCallback } = await import(
           '@agor/core/tools/mcp/oauth-mcp-transport'
@@ -3386,45 +4413,40 @@ export async function registerMCPServices(
           }
           const claimed = await durableOAuthFlows.claimForUser(activeTenantId, activeUserId, state);
           if (claimed.outcome === 'not_claimed') {
-            return {
-              success: claimed.flow?.status === 'succeeded',
-              error:
-                claimed.flow?.status === 'succeeded'
-                  ? undefined
-                  : terminalMessageForStatus(claimed.flow?.status ?? 'expired'),
-              tokenObtained: claimed.flow?.status === 'succeeded',
-            };
+            if (claimed.flow?.status === 'succeeded') {
+              return { success: true, tokenObtained: true };
+            }
+            return oauthCompletionFailure(
+              claimed.flow?.failureCode ?? 'authorization_failed',
+              claimed.flow?.mcpServerId
+            );
           }
           pendingFlow = pendingFromDurableClaim(durableOAuthFlows.openClaim(claimed.flow, state));
         } else {
           pendingFlow = pendingOAuthFlows.get(state);
           if (!pendingFlow) {
-            return {
-              success: false,
-              error: 'OAuth flow expired or not found. Please start the flow again.',
-            };
+            return oauthCompletionFailure('authorization_timed_out');
           }
           if (pendingFlow.tenantId && activeTenantId && pendingFlow.tenantId !== activeTenantId) {
-            return {
-              success: false,
-              error: 'OAuth flow belongs to a different tenant. Please restart the OAuth flow.',
-            };
+            return oauthCompletionFailure(
+              'authorization_failed',
+              undefined,
+              'OAuth flow belongs to a different tenant. Please restart the OAuth flow.'
+            );
           }
           if (pendingFlow.userId && activeUserId && pendingFlow.userId !== activeUserId) {
-            return {
-              success: false,
-              error: 'OAuth flow belongs to a different user. Please restart the OAuth flow.',
-            };
+            return oauthCompletionFailure(
+              'permission_changed',
+              pendingFlow.mcpServerId,
+              'OAuth flow belongs to a different user. Please restart the OAuth flow.'
+            );
           }
           pendingOAuthFlows.delete(state);
           // Same age check the callback applies — see `isLocalOAuthFlowExpired`.
           if (isLocalOAuthFlowExpired(pendingFlow)) {
             markLocalOAuthAttempt(pendingFlow, 'expired', 'authorization_timed_out');
             pendingFlow.tokenReject?.(new Error('OAuth flow expired before callback was received'));
-            return {
-              success: false,
-              error: 'OAuth flow expired or not found. Please start the flow again.',
-            };
+            return oauthCompletionFailure('authorization_timed_out', pendingFlow.mcpServerId);
           }
           markLocalOAuthAttempt(pendingFlow, 'exchanging');
         }
@@ -3442,6 +4464,7 @@ export async function registerMCPServices(
         if (pendingFlow) {
           const classification = classifyMCPOAuthCompletionFailure(error);
           const { ambiguous, failureCode } = classification;
+          completionFailureCode = failureCode;
           completionStatus = classification.status;
           if (pendingFlow.durableRecord) {
             try {
@@ -3463,14 +4486,19 @@ export async function registerMCPServices(
             )
           );
         }
-        console.error(
-          `[OAuth Complete] Failed category=${error instanceof Error ? error.name : 'unknown'}`
+        externalFailure('OAuth Complete', 'oauth_callback', error);
+        const recovery = recoveryForOAuthAttemptFailure(
+          completionFailureCode ?? 'authorization_failed',
+          pendingFlow?.mcpServerId
         );
         return {
           success: false,
-          error: pendingFlow
-            ? terminalMessageForStatus(completionStatus ?? 'failed')
-            : 'OAuth completion could not be validated. Start a new OAuth flow.',
+          error:
+            recovery?.message ??
+            (pendingFlow
+              ? terminalMessageForStatus(completionStatus ?? 'failed')
+              : 'OAuth completion could not be validated. Start a new OAuth flow.'),
+          ...(recovery ? { recovery } : {}),
         };
       }
     },
@@ -3532,11 +4560,7 @@ export async function registerMCPServices(
         });
         return { authenticated_server_ids: authenticatedServerIds };
       } catch (error) {
-        console.error(
-          `[OAuth Status] Token lookup failed category=${
-            error instanceof Error ? error.name : 'unknown'
-          }`
-        );
+        externalFailure('OAuth Status', 'oauth', error);
         return { authenticated_server_ids: [] };
       }
     },
@@ -3557,12 +4581,18 @@ export async function registerMCPServices(
           userId,
           attemptId as MCPOAuthAttemptID
         );
-        if (!attempt) return { status: 'not_found' as const };
+        if (!attempt) {
+          return {
+            status: 'not_found' as const,
+            recovery: recoveryForOAuthAttemptFailure('authorization_failed'),
+          };
+        }
         return {
           status: attempt.status,
           mcp_server_id: attempt.mcpServerId,
           oauth_mode: attempt.oauthMode,
           failure_code: attempt.failureCode ?? undefined,
+          recovery: recoveryForOAuthAttemptFailure(attempt.failureCode, attempt.mcpServerId),
         };
       }
 
@@ -3572,13 +4602,17 @@ export async function registerMCPServices(
         attempt.userId !== userId ||
         (attempt.tenantId && attempt.tenantId !== tenantId)
       ) {
-        return { status: 'not_found' as const };
+        return {
+          status: 'not_found' as const,
+          recovery: recoveryForOAuthAttemptFailure('authorization_failed'),
+        };
       }
       return {
         status: attempt.status,
         mcp_server_id: attempt.mcpServerId,
         oauth_mode: attempt.oauthMode,
         failure_code: attempt.failureCode,
+        recovery: recoveryForOAuthAttemptFailure(attempt.failureCode, attempt.mcpServerId),
       };
     },
   };
@@ -3637,6 +4671,21 @@ export async function registerMCPServices(
       }
       const tenantId = tenantIdFromParams(params);
       if (!tenantId) throw new NotAuthenticated('oauth-auth-headers requires tenant identity');
+      const mcpEgressAssertCurrent = (
+        params as
+          | (AuthenticatedParams & {
+              mcp_egress_assert_current?: () => void | Promise<void>;
+            })
+          | undefined
+      )?.mcp_egress_assert_current;
+      const egressMode = await runInOAuthTenantScope(db, tenantId, () =>
+        getMCPEgressGatewayMode(db)
+      );
+      if (params?.provider && (egressMode === 'compatibility' || egressMode === 'enforced')) {
+        throw new Forbidden(
+          'MCP OAuth headers are daemon-only while authoritative egress mediation is enabled'
+        );
+      }
       if (trustedSessionExecutor) {
         if (!executorSessionId) {
           throw new Forbidden('oauth-auth-headers requires executor session scope');
@@ -3657,7 +4706,10 @@ export async function registerMCPServices(
               globalServers: await new MCPServerRepository(db).findAll({
                 scope: 'global',
                 enabled: true,
-                usableByUserId: executorSession.created_by,
+                // The task token is issued to the actual prompter. Connector
+                // credentials and private server visibility stay with that
+                // caller rather than silently borrowing the Session owner.
+                usableByUserId: userId,
               }),
             };
           }
@@ -3672,9 +4724,12 @@ export async function registerMCPServices(
           }
         }
       }
-      const { needsRefresh, refreshAndPersistToken, InvalidGrantError } = await import(
-        '@agor/core/tools/mcp/oauth-refresh'
-      );
+      const {
+        needsRefresh,
+        refreshAndPersistToken,
+        InvalidGrantError,
+        OAuthRefreshAuthorityCancelledError,
+      } = await import('@agor/core/tools/mcp/oauth-refresh');
 
       /**
        * The grant owner's current standing, for the refresh paths below.
@@ -3796,9 +4851,11 @@ export async function registerMCPServices(
                     refreshGeneration: row.refresh_generation,
                   },
                   validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+                  assertCurrent: mcpEgressAssertCurrent,
                 });
                 headers[serverId] = { authorization: `Bearer ${observed}` };
-              } catch {
+              } catch (refreshErr) {
+                if (refreshErr instanceof OAuthRefreshAuthorityCancelledError) throw refreshErr;
                 headers[serverId] = { error: 'needs_reauth' };
               }
               return;
@@ -3818,8 +4875,10 @@ export async function registerMCPServices(
                     refreshGeneration: row.refresh_generation,
                   },
                   validateGrant: refreshGrantValidator(tenantId, serverId as MCPServerID),
+                  assertCurrent: mcpEgressAssertCurrent,
                 });
               } catch (refreshErr) {
+                if (refreshErr instanceof OAuthRefreshAuthorityCancelledError) throw refreshErr;
                 if (refreshErr instanceof InvalidGrantError) {
                   headers[serverId] = { error: 'needs_reauth' };
                   return;
@@ -3841,11 +4900,8 @@ export async function registerMCPServices(
 
             headers[serverId] = { authorization: `Bearer ${accessToken}` };
           } catch (err) {
-            console.error(
-              `[OAuth AuthHeaders] request_failed category=${
-                err instanceof Error ? err.name : 'unknown_error'
-              }`
-            );
+            if (err instanceof OAuthRefreshAuthorityCancelledError) throw err;
+            externalFailure('OAuth AuthHeaders', 'oauth', err);
             headers[serverId] = { error: 'unknown_error' };
           }
         })
@@ -3960,31 +5016,32 @@ export async function registerMCPServices(
 
         return { success: true, expires_at: expiresAt };
       } catch (err) {
-        if (
-          err instanceof InvalidGrantError ||
-          err instanceof MissingRefreshTokenError ||
-          err instanceof AmbiguousRefreshError ||
-          err instanceof GrantConfigurationChangedError
-        ) {
-          return { success: false, error: 'needs_reauth' };
+        try {
+          if (
+            err instanceof InvalidGrantError ||
+            err instanceof MissingRefreshTokenError ||
+            err instanceof AmbiguousRefreshError ||
+            err instanceof GrantConfigurationChangedError
+          ) {
+            return { success: false, error: 'needs_reauth' };
+          }
+          // A peer observed a known, non-ambiguous owner failure. Match the
+          // owner's retryable response rather than forcing one daemon's caller
+          // to reconnect for the same refresh generation.
+          if (err instanceof FailedRefreshError) {
+            return { success: false, error: 'token_refresh_failed' };
+          }
+          if (err instanceof MissingTokenEndpointError) {
+            return { success: false, error: 'missing_token_endpoint' };
+          }
+          if (err instanceof MissingClientIdError) {
+            return { success: false, error: 'missing_client_id' };
+          }
+        } catch {
+          // Hostile proxies are not trusted local refresh errors. Continue to
+          // the closed external sanitizer without serializing the original.
         }
-        // A peer observed a known, non-ambiguous owner failure. Match the
-        // owner's retryable response rather than forcing one daemon's caller
-        // to reconnect for the same refresh generation.
-        if (err instanceof FailedRefreshError) {
-          return { success: false, error: 'token_refresh_failed' };
-        }
-        if (err instanceof MissingTokenEndpointError) {
-          return { success: false, error: 'missing_token_endpoint' };
-        }
-        if (err instanceof MissingClientIdError) {
-          return { success: false, error: 'missing_client_id' };
-        }
-        console.error(
-          `[OAuth Refresh] refresh_failed category=${
-            err instanceof Error ? err.name : 'unknown_error'
-          }`
-        );
+        externalFailure('OAuth Refresh', 'oauth', err);
         return {
           success: false,
           error: 'token_refresh_failed',
@@ -4060,10 +5117,26 @@ export async function registerMCPServices(
           oauth_dcr_mode?: MCPOAuthDCRMode;
         };
         headers?: Record<string, string>;
+        oauth_browser_event?: MCPOAuthBrowserEventRequest;
       },
       params?: AuthenticatedParams
     ) {
       try {
+        const browserReservation = consumeOAuthBrowserReservation(
+          data.oauth_browser_event,
+          params,
+          {
+            operation: 'discover',
+            mcpServerId: data.mcp_server_id,
+          }
+        );
+        const assertBrowserReservation = reservationAssertion(browserReservation);
+        // Before browser emit this is the expiring reservation assertion. A
+        // successful server-issued attempt promotes it to a non-expiring,
+        // request-bounded live-socket assertion while the callback is pending.
+        let assertRequestAuthority = assertBrowserReservation ?? requestAuthorityAssertion(params);
+        const assertCurrentRequestAuthority = () => assertRequestAuthority?.();
+        assertBrowserReservation?.();
         assertPublicMCPOAuthCompatibilityMode(data.auth);
         const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
         const { StreamableHTTPClientTransport } = await import(
@@ -4090,7 +5163,7 @@ export async function registerMCPServices(
         // like `{{ user.env.MCP_URL }}` have no scheme yet), so validating
         // pre-resolution would block legitimate templates from ever reaching
         // the resolver. The resolved URL is re-validated below before use.
-        const isTemplated = (url: string): boolean => url.includes('{{');
+        const isTemplated = (url: string): boolean => hasTemplateMarker(url);
 
         const hasInlineConfig = !!data.url;
         // `auth` is typed as the canonical MCPAuth (rather than narrowing to
@@ -4109,6 +5182,7 @@ export async function registerMCPServices(
         };
         let serverId: string | undefined;
         let authoritativeServer: MCPServer | undefined;
+        let discoveryAuthority: MCPDiscoveryAuthoritySnapshot | undefined;
 
         if (hasInlineConfig) {
           if (!isTemplated(data.url!)) {
@@ -4123,8 +5197,10 @@ export async function registerMCPServices(
             name: 'inline-test',
           };
           if (data.mcp_server_id) {
-            const server = await runInOAuthTenantScope(db, tenantId, () =>
-              loadMcpServerForCaller(db, data.mcp_server_id as string, params)
+            const server = await runWithinOAuthBrowserReservation(browserReservation, () =>
+              runInOAuthTenantScope(db, tenantId, () =>
+                loadMcpServerForCaller(db, data.mcp_server_id as string, params)
+              )
             );
             const denial = denyDiscoverOfAnotherUsersServer(server, params);
             if (denial) return denial;
@@ -4148,8 +5224,10 @@ export async function registerMCPServices(
             serverId = data.mcp_server_id;
           }
         } else if (data.mcp_server_id) {
-          const server = await runInOAuthTenantScope(db, tenantId, () =>
-            loadMcpServerForCaller(db, data.mcp_server_id as string, params)
+          const server = await runWithinOAuthBrowserReservation(browserReservation, () =>
+            runInOAuthTenantScope(db, tenantId, () =>
+              loadMcpServerForCaller(db, data.mcp_server_id as string, params)
+            )
           );
           const denial = denyDiscoverOfAnotherUsersServer(server, params);
           if (denial) return denial;
@@ -4197,12 +5275,27 @@ export async function registerMCPServices(
         if (!userId) {
           throw new NotAuthenticated('MCP discover requires an authenticated user');
         }
+        if (serverId && authoritativeServer) {
+          // Capture the exact authority/configuration used by this probe before
+          // the first provider-controlled await. Persistence re-locks and
+          // compares it after discovery; the request never carries this stamp.
+          discoveryAuthority = await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
+            runWithTenantDatabaseScope(db, tenantId, (scopedDb) =>
+              captureMCPDiscoveryAuthority(
+                scopedDb,
+                tenantId,
+                userId,
+                authoritativeServer as MCPServer
+              )
+            )
+          );
+        }
 
         const { resolveUserEnvironment } = await import('@agor/core/config');
         const { resolveProbeServerTemplates } = await import('./utils/mcp-probe-templates.js');
 
-        const userEnv = await runInOAuthTenantScope(db, tenantId, () =>
-          resolveUserEnvironment(userId, db)
+        const userEnv = await runWithinOAuthBrowserReservation(browserReservation, () =>
+          runInOAuthTenantScope(db, tenantId, () => resolveUserEnvironment(userId, db))
         );
         const resolution = resolveProbeServerTemplates(
           {
@@ -4232,47 +5325,79 @@ export async function registerMCPServices(
           if (!recheck.valid) return { success: false, error: recheck.error };
           serverConfig.url = resolution.resolved.url;
         }
+        if (discoveryAuthority) {
+          discoveryAuthority = bindMCPDiscoveryResolvedConfiguration(
+            discoveryAuthority,
+            {
+              url: resolution.resolved.url,
+              transport: resolution.resolved.transport,
+              auth: resolution.resolved.auth,
+              headers: resolution.resolved.headers,
+            },
+            process.env.AGOR_MASTER_SECRET ?? ''
+          );
+        }
 
         console.log('[MCP Discovery] Starting test for:', serverConfig.name || 'inline-config');
 
-        let authHeaders = await resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url, {
-          allowLocalhostHttp: !durableOAuthFlows,
-          cacheNamespace: [tenantId ?? '<standalone>', serverId ?? '<unsaved>', userId].join(':'),
-          disableProcessTokenCache: !!durableOAuthFlows,
-        });
+        assertBrowserReservation?.();
+        let authHeaders = await runWithinOAuthBrowserReservation(browserReservation, () =>
+          resolveMCPAuthHeaders(serverConfig.auth, serverConfig.url, {
+            allowLocalhostHttp: !postgresOAuthDeployment,
+            cacheNamespace: [tenantId ?? '<standalone>', serverId ?? '<unsaved>', userId].join(':'),
+            disableProcessTokenCache: !!durableOAuthFlows,
+            assertCurrent: assertRequestAuthority,
+          })
+        );
 
         const probeAndAcquireOAuthToken = async (mcpUrl: string): Promise<string | undefined> => {
           try {
-            const probeResponse = await oauthFetch(mcpUrl, {
-              method: 'GET',
-              headers: mergeMCPRemoteHeaders({
-                base: { Accept: 'application/json' },
-                custom: serverConfig.headers,
-              }) ?? { Accept: 'application/json' },
-            });
+            const probeResponse = await runWithinOAuthBrowserReservation(browserReservation, () =>
+              oauthFetch(
+                mcpUrl,
+                {
+                  method: 'GET',
+                  headers: mergeMCPRemoteHeaders({
+                    base: { Accept: 'application/json' },
+                    custom: serverConfig.headers,
+                  }) ?? { Accept: 'application/json' },
+                },
+                assertRequestAuthority
+              )
+            );
             const wwwAuthenticate = probeResponse.headers.get('www-authenticate');
             if (probeResponse.status !== 401) return undefined;
+            // Provider discovery and dynamic client registration can create
+            // durable state outside Agor. Never begin either unless this
+            // exact socket/caller/operation already consumed a server-issued
+            // one-shot reservation.
+            if (!browserReservation) return undefined;
+            assertBrowserReservation?.();
             const { resolveMCPOAuthDiscovery } = await import(
               '@agor/core/tools/mcp/oauth-mcp-transport'
             );
-            const compatibilityPolicy = await resolveMCPOAuthCompatibilityPolicy(
-              authoritativeServer ?? {
-                ...serverConfig,
-                source: serverConfig.source ?? 'user',
-              }
+            const compatibilityPolicy = await runWithinOAuthBrowserReservation(
+              browserReservation,
+              () =>
+                resolveMCPOAuthCompatibilityPolicy(
+                  authoritativeServer ?? {
+                    ...serverConfig,
+                    source: serverConfig.source ?? 'user',
+                  }
+                )
             );
             const compatibilityMode = compatibilityPolicy.mode;
             logMCPOAuthCompatibilityPolicy('discover', serverId, compatibilityPolicy);
             const discovery = await resolveMCPOAuthDiscovery(wwwAuthenticate, mcpUrl, {
               compatibilityMode,
-              allowLocalhostHttp: !durableOAuthFlows,
+              allowLocalhostHttp: !postgresOAuthDeployment,
+              assertCurrent: assertBrowserReservation,
             });
             if (!discovery) return undefined;
 
             // Route through the daemon's two-phase flow (callback → daemon's
             // public URL) instead of the legacy 127.0.0.1 callback server, so
             // remote browsers can complete the redirect on a deployed Agor.
-            const connection = params?.connection as { id?: string } | undefined;
             if (
               (serverConfig.auth?.oauth_mode ?? 'per_user') === 'shared' &&
               !hasMinimumRole(params?.user?.role, ROLES.ADMIN)
@@ -4302,25 +5427,60 @@ export async function registerMCPServices(
               compatibilityMode,
               dcrMode: serverConfig.auth?.oauth_dcr_mode,
               tenantId,
-              socketId: connection?.id,
+              socketId: socketIdFromParams(params),
+              browserReservation,
             });
 
+            if (!started.assertRequestAuthority) {
+              throw new Forbidden('OAuth callback request authority is unavailable');
+            }
+            assertRequestAuthority = started.assertRequestAuthority;
             const tokenResponse = await started.awaitToken();
             // The callback durably persisted the token row. The access token
             // is returned only to this in-flight request and is never cached
             // in an origin-only process namespace.
+            if (serverId && discoveryAuthority) {
+              const grantSubject =
+                (serverConfig.auth?.oauth_mode ?? 'per_user') === 'shared' ? null : userId;
+              const persistedGrant = await runWithTenantDatabaseScope(db, tenantId, (scopedDb) =>
+                new UserMCPOAuthTokenRepository(scopedDb, process.env.AGOR_MASTER_SECRET).getToken(
+                  grantSubject,
+                  serverId as MCPServerID
+                )
+              );
+              if (
+                !persistedGrant ||
+                persistedGrant.oauth_access_token !== tokenResponse.access_token
+              ) {
+                throw new Conflict('OAuth authorization changed during MCP discovery. Retry.');
+              }
+              discoveryAuthority = bindMCPDiscoveryOAuthGrant(
+                discoveryAuthority,
+                grantSubject,
+                persistedGrant,
+                process.env.AGOR_MASTER_SECRET ?? ''
+              );
+            }
             return tokenResponse.access_token;
           } catch (error) {
+            // A provider/DB rejection is allowed to degrade to "no fresh
+            // token" only while this exact browser authority is still live.
+            // Expiry or socket replacement must escape before callers build
+            // private headers or open another MCP connection.
+            assertRequestAuthority?.();
             // Misconfigured public base URL is a daemon-level problem, not a
             // missing-token signal — re-throw so the discover endpoint can
             // surface it to the caller instead of silently falling through to
             // an unauthenticated MCP probe.
-            if (error instanceof PublicBaseUrlNotConfiguredError) throw error;
-            console.error(
-              `[MCP Discovery] OAuth token acquisition failed category=${
-                error instanceof Error ? error.name : 'unknown'
-              }`
-            );
+            const recovery = classifyMCPAuthRecovery(error);
+            if (
+              recovery.category === 'redirect_configuration_required' ||
+              recovery.category === 'permission_changed' ||
+              recovery.category === 'configuration_changed'
+            ) {
+              throw error;
+            }
+            externalFailure('MCP Discovery OAuth token acquisition', 'discovery', error);
             return undefined;
           }
         };
@@ -4329,58 +5489,76 @@ export async function registerMCPServices(
           // Durable token rows are the only daemon authority. The old cache
           // keyed solely by MCP origin could cross tenant/server/user grants.
           let oauthToken: string | undefined;
+          let selectedGrant: UserMCPOAuthToken | undefined;
+          const lookupUserId = serverConfig.auth?.oauth_mode === 'shared' ? null : userId;
           if (serverId) {
-            oauthToken = await runInOAuthTenantScope(db, tenantId, async () => {
-              const tokenRepo = new UserMCPOAuthTokenRepository(db);
-              const lookupUserId =
-                serverConfig.auth?.oauth_mode === 'shared'
-                  ? null
-                  : ((params?.user?.user_id as UserID | undefined) ?? null);
-              const grant = await tokenRepo.getToken(lookupUserId, serverId as MCPServerID);
-              if (!grant) return undefined;
-              if (
-                shouldVerifyMCPOAuthGrantBinding(
-                  isPostgresDatabaseHandle(db),
-                  grant.grant_binding_version
-                ) &&
-                !isMCPOAuthGrantBoundToServer(
-                  process.env.AGOR_MASTER_SECRET!,
-                  {
-                    mcp_server_id: serverId as MCPServerID,
-                    enabled: true,
-                    transport: serverConfig.transport,
-                    url: serverConfig.url,
-                    source: serverConfig.source ?? 'user',
-                    catalog_entry_name: serverConfig.catalog_entry_name,
-                    headers: serverConfig.headers,
-                    auth: serverConfig.auth,
-                  },
-                  grant,
-                  (
-                    await resolveMCPOAuthCompatibilityPolicy(
+            selectedGrant = await runWithinOAuthBrowserReservation(browserReservation, () =>
+              runWithTenantDatabaseScope(db, tenantId, async (scopedDb) => {
+                const tokenRepo = new UserMCPOAuthTokenRepository(scopedDb);
+                const grant = await runWithinOAuthBrowserReservation(browserReservation, () =>
+                  tokenRepo.getToken(lookupUserId, serverId as MCPServerID)
+                );
+                if (!grant) return undefined;
+                const compatibilityPolicy = await runWithinOAuthBrowserReservation(
+                  browserReservation,
+                  () =>
+                    resolveMCPOAuthCompatibilityPolicy(
                       authoritativeServer ?? {
                         ...serverConfig,
                         source: serverConfig.source ?? 'user',
                       }
                     )
-                  ).mode
-                )
-              ) {
-                return undefined;
-              }
-              if (grant.oauth_token_expires_at && grant.oauth_token_expires_at <= new Date()) {
-                return undefined;
-              }
-              return grant.oauth_access_token;
-            });
+                );
+                if (
+                  shouldVerifyMCPOAuthGrantBinding(
+                    isPostgresDatabaseHandle(db),
+                    grant.grant_binding_version
+                  ) &&
+                  !isMCPOAuthGrantBoundToServer(
+                    process.env.AGOR_MASTER_SECRET!,
+                    {
+                      mcp_server_id: serverId as MCPServerID,
+                      enabled: true,
+                      transport: serverConfig.transport,
+                      url: serverConfig.url,
+                      source: serverConfig.source ?? 'user',
+                      catalog_entry_name: serverConfig.catalog_entry_name,
+                      headers: serverConfig.headers,
+                      auth: serverConfig.auth,
+                    },
+                    grant,
+                    compatibilityPolicy.mode
+                  )
+                ) {
+                  return undefined;
+                }
+                if (grant.oauth_token_expires_at && grant.oauth_token_expires_at <= new Date()) {
+                  return undefined;
+                }
+                return grant;
+              })
+            );
+            oauthToken = selectedGrant?.oauth_access_token;
+            if (selectedGrant && discoveryAuthority) {
+              discoveryAuthority = bindMCPDiscoveryOAuthGrant(
+                discoveryAuthority,
+                lookupUserId,
+                selectedGrant,
+                process.env.AGOR_MASTER_SECRET ?? ''
+              );
+            }
           }
           if (!oauthToken) {
             const freshToken = await probeAndAcquireOAuthToken(serverConfig.url);
             if (freshToken) oauthToken = freshToken;
           }
-          if (oauthToken) authHeaders = { Authorization: `Bearer ${oauthToken}` };
+          if (oauthToken) {
+            assertCurrentRequestAuthority();
+            authHeaders = { Authorization: `Bearer ${oauthToken}` };
+          }
         }
 
+        assertCurrentRequestAuthority();
         const headers = mergeMCPRemoteHeaders({
           base: { Accept: 'application/json, text/event-stream' },
           custom: serverConfig.headers,
@@ -4388,22 +5566,10 @@ export async function registerMCPServices(
         }) ?? { Accept: 'application/json, text/event-stream' };
 
         const createMCPConnection = (connHeaders: Record<string, string>) => {
-          let sessionId: string | undefined;
-          const connSessionAwareFetch: typeof fetch = async (input, init) => {
-            if (sessionId && init?.headers) {
-              const headersObj =
-                init.headers instanceof Headers
-                  ? Object.fromEntries(init.headers.entries())
-                  : (init.headers as Record<string, string>);
-              if (!headersObj['mcp-session-id']) {
-                init = { ...init, headers: { ...headersObj, 'mcp-session-id': sessionId } };
-              }
-            }
-            const response = await oauthFetch(input, init);
-            const respSessionId = response.headers.get('mcp-session-id');
-            if (respSessionId) sessionId = respSessionId;
-            return response;
-          };
+          const connSessionAwareFetch = createAuthorityGuardedMCPFetch(
+            oauthFetch,
+            assertCurrentRequestAuthority
+          );
           const transport = new StreamableHTTPClientTransport(new URL(serverConfig.url!), {
             fetch: connSessionAwareFetch,
             requestInit: { headers: connHeaders },
@@ -4427,15 +5593,22 @@ export async function registerMCPServices(
             const timeout = new Promise<never>((_, reject) => {
               setTimeout(() => reject(new Error('Connection timeout after 10 seconds')), 10000);
             });
-            await Promise.race([mcpClient.connect(mcpTransport), timeout]);
+            await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
+              Promise.race([mcpClient.connect(mcpTransport), timeout])
+            );
           };
 
           try {
             await connectWithTimeout(client, httpTransport);
           } catch (connectError) {
+            assertCurrentRequestAuthority();
+            if (classifyMCPAuthRecovery(connectError).category === 'permission_changed') {
+              throw connectError;
+            }
             if (hadCachedOAuthToken && serverConfig.url && serverConfig.auth?.type === 'oauth') {
               const freshToken = await probeAndAcquireOAuthToken(serverConfig.url);
               if (freshToken) {
+                assertCurrentRequestAuthority();
                 const freshHeaders = mergeMCPRemoteHeaders({
                   base: { Accept: 'application/json, text/event-stream' },
                   custom: serverConfig.headers,
@@ -4469,48 +5642,80 @@ export async function registerMCPServices(
             description?: string;
             inputSchema?: Record<string, unknown>;
           }>;
-          type ResourcesResult = MCPListResult<{ uri: string; name: string; mimeType?: string }>;
+          type ResourcesResult = MCPListResult<{
+            uri: string;
+            name: string;
+            description?: string;
+            mimeType?: string;
+          }>;
           type PromptsResult = MCPListResult<{
             name: string;
             description?: string;
             arguments?: Array<{ name: string; description?: string; required?: boolean }>;
           }>;
 
-          const toolsResult = (await Promise.race([
-            client.listTools(),
-            listTimeout,
-          ])) as ToolsResult;
+          const toolsResult = (await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
+            Promise.race([client.listTools(), listTimeout])
+          )) as ToolsResult;
+          const optionalList = async <T>(work: () => Promise<T>, fallback: T): Promise<T> => {
+            try {
+              return await runWithinOAuthAuthority(assertCurrentRequestAuthority, work);
+            } catch {
+              assertCurrentRequestAuthority();
+              return fallback;
+            }
+          };
           const resourcesResult = (await Promise.race([
-            client.listResources().catch(() => ({ resources: [] })),
+            optionalList(() => client.listResources(), { resources: [] }),
             listTimeout,
           ])) as ResourcesResult;
           const promptsResult = (await Promise.race([
-            client.listPrompts().catch(() => ({ prompts: [] })),
+            optionalList(() => client.listPrompts(), { prompts: [] }),
             listTimeout,
           ])) as PromptsResult;
 
-          if (serverId) {
-            await persistDiscoveredMCPCapabilities(db, tenantId, serverId as MCPServerID, {
-              tools: toolsResult.tools.map((t) => ({
-                name: t.name,
-                description: t.description || '',
-                input_schema: t.inputSchema,
-              })),
-              resources: resourcesResult.resources.map((r) => ({
-                uri: r.uri,
-                name: r.name,
-                mimeType: r.mimeType,
-              })),
-              prompts: promptsResult.prompts.map((p) => ({
-                name: p.name,
-                description: p.description || '',
-                arguments: p.arguments?.map((a) => ({
-                  name: a.name,
-                  description: a.description || '',
-                  required: a.required,
-                })),
-              })),
-            });
+          if (serverId && discoveryAuthority) {
+            await runWithinOAuthAuthority(assertCurrentRequestAuthority, () =>
+              runWithTenantDatabaseTransaction(db, tenantId, (scopedDb) =>
+                persistDiscoveredMCPCapabilities(
+                  scopedDb,
+                  tenantId,
+                  discoveryAuthority as MCPDiscoveryAuthoritySnapshot,
+                  {
+                    tools: toolsResult.tools.map((t) => ({
+                      name: t.name,
+                      description: t.description,
+                      input_schema: t.inputSchema,
+                    })),
+                    resources: resourcesResult.resources.map((r) => ({
+                      uri: r.uri,
+                      name: r.name,
+                      description: r.description,
+                      mimeType: r.mimeType,
+                    })),
+                    prompts: promptsResult.prompts.map((p) => ({
+                      name: p.name,
+                      description: p.description,
+                      arguments: p.arguments?.map((a) => ({
+                        name: a.name,
+                        description: a.description,
+                        required: a.required,
+                      })),
+                    })),
+                  },
+                  process.env.AGOR_MASTER_SECRET ?? ''
+                )
+              )
+            );
+            // Discovery writes through a short repository transaction rather
+            // than the generic MCP service. Refresh every device belonging to
+            // the actor and durable owner with the same empty, tenant-targeted
+            // control event used by Marketplace actions.
+            emitMarketplaceInvalidation(
+              app,
+              tenantId,
+              [userId, authoritativeServer?.owner_user_id].filter(Boolean) as UserID[]
+            );
           }
 
           return {
@@ -4544,14 +5749,20 @@ export async function registerMCPServices(
           }
         }
       } catch (error) {
-        if (error instanceof PublicBaseUrlNotConfiguredError) {
-          console.error('[MCP Discovery]', error.message);
-          return { success: false, error: error.message };
+        const recovery = classifyMCPAuthRecovery(error);
+        if (recovery.category === 'redirect_configuration_required') {
+          console.error('[MCP Discovery] category=redirect_configuration_required');
+          return { success: false, error: recovery.message, recovery };
         }
-        console.error(
-          `[MCP Discovery] Failed category=${error instanceof Error ? error.name : 'unknown'}`
-        );
-        return { success: false, error: error instanceof Error ? error.message : String(error) };
+        if (
+          recovery.category === 'authentication_required' ||
+          recovery.category === 'permission_changed' ||
+          recovery.category === 'configuration_changed'
+        ) {
+          return { success: false, error: recovery.message, recovery };
+        }
+        const safe = externalFailure('MCP Discovery', 'discovery', error);
+        return { success: false, error: safe.message, category: safe.category };
       }
     },
   });
@@ -4584,9 +5795,9 @@ export async function registerMCPServices(
 // Bootstrap Superadmin Users
 // ============================================================================
 
-async function bootstrapSuperadminUsers(
+export async function bootstrapSuperadminUsers(
   config: AgorConfig,
-  usersService: ReturnType<typeof createUsersService>,
+  db: TenantScopeAwareDatabase,
   allowSuperadmin: boolean
 ): Promise<void> {
   const { ROLES } = await import('@agor/core/types');
@@ -4600,29 +5811,46 @@ async function bootstrapSuperadminUsers(
     return;
   }
 
-  let promotedCount = 0;
-  for (const rawUserId of bootstrapUsers) {
-    const userId = rawUserId?.trim();
-    if (!userId) continue;
-    try {
-      // biome-ignore lint/suspicious/noExplicitAny: userId is a branded UserID at runtime
-      const user = await usersService.get(userId as any);
-      if (user.role === ROLES.SUPERADMIN) continue;
-      // Deliberately use the provider-less, actor-less UsersService seam. This
-      // is daemon startup provisioning from operator-owned config, not a user
-      // request; request-derived callers must always carry actor params.
-      // biome-ignore lint/suspicious/noExplicitAny: userId is a branded UserID at runtime
-      await usersService.patch(userId as any, { role: ROLES.SUPERADMIN });
-      promotedCount++;
-      console.log(
-        `[RBAC] Bootstrap promoted user ${shortId(userId)} (${user.email}) to superadmin`
-      );
-    } catch (error) {
-      console.warn(
-        `[RBAC] Failed to bootstrap superadmin for user ${shortId(userId)}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+  const multiTenancy = resolveMultiTenancyConfig(config);
+  if (multiTenancy.mode !== 'static') {
+    throw new Error(
+      'execution.bootstrap_superadmin_users requires multi_tenancy.mode=static; tenant identity is ambiguous in required_from_auth mode'
+    );
   }
+  const tenant = {
+    tenant_id: multiTenancy.static_tenant_id,
+    source: 'static' as const,
+  };
+  const trustedParams = { tenant } as unknown as Params;
+
+  let promotedCount = 0;
+  await runWithTenantDatabaseTransaction(db, tenant.tenant_id, async (scopedDb) => {
+    // Bind the service to the transaction handle. A long-lived service owns the
+    // base PostgreSQL handle and would execute outside the SET LOCAL RLS scope.
+    const usersService = createTenantTransactionUsersService(scopedDb, config);
+    for (const rawUserId of bootstrapUsers) {
+      const userId = rawUserId?.trim();
+      if (!userId) continue;
+      try {
+        // biome-ignore lint/suspicious/noExplicitAny: userId is a branded UserID at runtime
+        const user = await usersService.get(userId as any, trustedParams);
+        if (user.role === ROLES.SUPERADMIN) continue;
+        // Deliberately use the provider-less, actor-less UsersService seam.
+        // The surrounding static-tenant transaction supplies RLS identity and
+        // lets UsersService take the tenant authorization fence.
+        // biome-ignore lint/suspicious/noExplicitAny: userId is a branded UserID at runtime
+        await usersService.patch(userId as any, { role: ROLES.SUPERADMIN }, trustedParams);
+        promotedCount++;
+        console.log(
+          `[RBAC] Bootstrap promoted user ${shortId(userId)} (${user.email}) to superadmin`
+        );
+      } catch (error) {
+        console.warn(
+          `[RBAC] Failed to bootstrap superadmin for user ${shortId(userId)}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  });
   console.log(
     `[RBAC] Bootstrap superadmin sync complete (${promotedCount}/${bootstrapUsers.length} promoted)`
   );

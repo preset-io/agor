@@ -52,8 +52,14 @@ export function requiredMCPFields({
   }
 
   fields.push('url');
-  if (authType === 'bearer') fields.push('auth_token');
-  if (authType === 'jwt') fields.push('jwt_api_url', 'jwt_api_token', 'jwt_api_secret');
+  // CREATE must be immediately configured. EDIT deliberately permits an
+  // explicit secret clear: the saved row remains editable and the session/UI
+  // status moves to needs-auth until replacement credentials are supplied.
+  if (authType === 'bearer' && mode === 'create') fields.push('auth_token');
+  if (authType === 'jwt') {
+    fields.push('jwt_api_url');
+    if (mode === 'create') fields.push('jwt_api_token', 'jwt_api_secret');
+  }
   return fields;
 }
 

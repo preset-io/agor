@@ -3,6 +3,7 @@ import { resolveTenantContext } from '@agor/core/config';
 import type { Application } from '@agor/core/feathers';
 import { BadRequest, Forbidden } from '@agor/core/feathers';
 import type { Params } from '@agor/core/types';
+import { FEATHERS_INSTRUMENTATION_REASON } from '../utils/feathers-instrumentation.js';
 import {
   joinSessionStreamChannel,
   leaveSessionStreamChannel,
@@ -60,12 +61,14 @@ export function createSessionStreamsService(
     sessionId: string,
     params: Params
   ): Promise<string | null> => {
-    const session = (await app
-      .service('sessions')
-      .get(sessionId as never, { ...(params ?? {}), query: {} } as never)) as
-      | { session_id?: string }
-      | null
-      | undefined;
+    const session = (await app.service('sessions').get(
+      sessionId as never,
+      {
+        ...(params ?? {}),
+        query: {},
+        [FEATHERS_INSTRUMENTATION_REASON]: 'session_stream_admission',
+      } as never
+    )) as { session_id?: string } | null | undefined;
     return session?.session_id ?? null;
   };
 

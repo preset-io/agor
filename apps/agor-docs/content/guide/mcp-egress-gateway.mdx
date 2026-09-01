@@ -1,0 +1,186 @@
+# MCP egress gateway operations
+
+Agor's MCP egress gateway keeps reusable bearer, JWT-client, OAuth, custom-header,
+and referenced environment secrets in the daemon. Eligible executors receive an
+authenticated-encrypted opaque capability scoped to one tenant, live Task, Session, principal,
+credential owner, server, saved `config_version`, credential-material binding,
+and OAuth grant identity. The capability is routing authority, not a provider
+credential.
+
+The daemon resolves the final credential and owns every provider dispatch. The
+capability has no fixed one-hour expiry: it remains usable for a long-running
+Task, while every use reloads the Task and rejects it as soon as that Task is no
+longer live. It cannot be reused for another task, user, tenant, session, or
+server.
+
+## Exact guarantee
+
+For each outbound HTTP hop, Agor validates the durable Task, users, attachment,
+branch access, rollout mode, server `config_version`, referenced environment
+material, and OAuth grant identity immediately before opening that hop's socket.
+Therefore:
+
+> **No request hop is admitted after a relevant mutation has committed. A
+> request admitted before that commit may complete and may already have been
+> observed by the provider.**
+
+All constituent reads use one SQLite immediate transaction or PostgreSQL
+repeatable-read snapshot. Runtime OAuth access/refresh values are excluded from
+the canonical durable material identity; grant generation and binding remain included.
+
+This is an admission guarantee, not a claim that `request.end()` proves physical
+provider receipt or that Agor can retract bytes already accepted by a provider.
+A local `AbortController` cancels matching work as a best-effort accelerator.
+Its reasons are a closed set of safe gateway codes; durable revalidation wins
+when available, and an unknown shutdown is reported only as generic egress
+unavailability. It is not a cross-daemon correctness primitive. Active-active
+daemons obtain the same decision from PostgreSQL; Redis is not required for correctness.
+
+Credential rotation that preserves an OAuth grant's generation and binding does
+not invalidate that grant. Disconnect, `invalid_grant` deletion, grant
+replacement, binding change, configuration change, detach, task completion, or
+principal/role loss prevents the next admission.
+
+OAuth refresh is part of this boundary: after token-endpoint DNS resolution and
+immediately before a refresh token, client secret, or Basic header is sent, the
+OAuth service rechecks the same task/session/tenant/server/rollout assertion.
+An authority rejection at that point is a typed, known no-send cancellation:
+the exact refresh claim returns to idle and the prior grant remains usable.
+Failures after dispatch remain ambiguous and keep their stricter recovery state.
+
+## Rollout modes
+
+Configure the per-tenant mode in **Settings → MCP Servers**.
+
+| Mode | Behavior |
+| --- | --- |
+| `off` | Direct MCP configuration and reusable credentials reach executors. No gateway guarantee. |
+| `observe` | Direct behavior remains, with secret-free observation logs. No gateway guarantee. |
+| `compatibility` | Eligible servers use opaque capabilities. Ineligible servers are omitted rather than receiving raw secrets. |
+| `enforced` | The same supported set is mediated and every raw-secret projection path fails closed. Enabling it requires an operator attestation that pre-gateway executors were terminated. |
+
+An administrator can always make an emergency downgrade to `observe` or `off`,
+even while local requests exist. The UI requires an explicit raw-secret-egress
+acknowledgement, and the daemon writes a security audit log with tenant, actor,
+and old/new modes. A downgrade restores direct secrets; it is an escape hatch,
+not a revocation operation.
+
+## Supported and refused transports
+
+This phase deliberately supports a small, reviewable set:
+
+- **Bounded Streamable HTTP:** `POST` and `DELETE`; protocol headers; JSON responses; and
+  JSON-only SSE responses that terminate within 30 seconds and 16 MiB. Each
+  SSE response is reconstructed from validated JSON `data` fields only. GET,
+  unsupported methods, and every redirect are refused before a second send.
+- **All stdio:** refused in both compatibility and enforced modes, before any
+  process spawn or pipe write. Agor does not claim stdio revocation in this
+  phase.
+- **Legacy SSE endpoint handoff and WebSocket:** refused. Current SDK seams do
+  not let the daemon own every subsequent send.
+- **Unbounded or non-JSON streaming:** refused. The gateway buffers a bounded
+  response before releasing it so it never retains an indefinite unscanned
+  tail.
+- **Servers with any `ask` tool rule:** omitted with the actionable
+  `approval_not_mediated` reason. The canonical permission flow does not yet
+  issue a one-shot task/server/tool receipt that the gateway can consume.
+  `deny` is independently checked at the gateway before egress.
+- **Indeterminate templates:** omitted with `template_configuration`. Gateway
+  templates may use absolute `user.env.KEY` references and registered static
+  helpers (including nested/default fallback expressions). `@root`, `this`,
+  relative paths, blocks, partials, dynamic/unknown helpers, and `lookup` are
+  not mediated. If such a template might name user environment data, Agor
+  scrubs every user-defined environment key from the executor as defense in
+  depth while leaving unrelated servers available.
+
+Remote and delegated executors do not receive a silent raw-secret fallback in a
+mediated mode. If their SDK cannot consume the HTTP capability projection, the
+MCP server is unavailable for that task.
+
+Connection pooling is disabled: a pooled socket could bypass destination
+validation and obscure the per-hop admission point.
+
+Admission also reserves bounded process/tenant/task/server capacity before any
+credential work (32/16/4/8 concurrent calls respectively). Exhaustion returns
+`429 egress_capacity_exceeded`; clients should retry with bounded backoff. This
+bounds the 16 MiB response buffers and open sockets.
+
+## Reflection boundary
+
+The MCP provider is an intentional credential recipient and therefore a trust
+boundary. Agor does **not** claim to stop a malicious provider from encoding or
+exfiltrating a credential it received.
+
+To close accidental reflection, the daemon builds candidate values from final
+authorization/custom headers, resolved auth and environment fields, every
+referenced user environment value, and URL path/query material. Candidates
+shorter than eight characters or with fewer than four distinct characters are
+ignored; untemplated literal URL parts use a stricter 16-character/eight-distinct
+floor, so common paths and values such as `DEBUG=1` do not create false positives. The gateway
+parses JSON and each JSON SSE `data` frame, inspects decoded string values, and
+releases only a bounded, validated body. Public MCP response headers are
+allowlisted and scanned. Provider bodies, URLs, and errors are never logged.
+
+## Operations and health
+
+`GET /mcp-egress/status` is tenant-scoped and available to members; only admins
+see rollout controls. It reports the mode, exact guarantee, supported/refused
+transports, and **process-local** active capacity count, split into provider
+in-flight requests and credential/admission reservations. Oldest age covers
+both phases. It reports admission
+availability as unknown unless an independent probe exists rather than
+manufacturing a healthy value from the status request itself. It also lists
+each visible server excluded for transport, `ask`, or missing OAuth authority
+with a recovery action; non-admins can read these diagnostics but cannot change
+rollout mode. Detail is bounded to 100 visible servers per response and reports
+when additional diagnostics were truncated. Non-admins do not see a noisy
+default-off banner when there are zero calls and zero exclusions; admins retain
+the compact rollout control.
+
+`GET /health` reports the rollout mode, database probe, local in-flight count,
+and oldest local request. Useful metrics are:
+
+- `mcp_egress.proxy_ms` by outcome and transport;
+- rejected gateway requests by stable, secret-free reason in logs;
+- database health/latency from the normal daemon health path.
+
+The target budgets remain `<=5 ms` p95 and `<=25 ms` p99 admission and `<=20 ms` p95
+forwarding overhead. This phase has no measured HA/99.99% availability evidence. It performs one
+initial authority/material load and one final durable authority check per
+physical hop; it does not maintain lease, mutation, quarantine, or outbox rows.
+Run the checked-in SQLite benchmark harness after storage or authorization-path
+changes. PostgreSQL/HA numbers require `AGOR_TEST_POSTGRES_URL` and the managed
+HA environment.
+
+On a quiet, otherwise idle host, the implementation review run on 2026-08-25 measured 200 warmed SQLite
+admissions at p50 3.450 ms, p95 4.236 ms, and p99 5.088 ms. Reproduce it with
+`AGOR_RUN_MCP_EGRESS_BENCHMARK=1 pnpm --filter @agor/daemon exec vitest run
+src/mcp-egress/gateway.test.ts`. These local figures are not a PostgreSQL/HA
+availability measurement. The opt-in harness reports host-sensitive figures and
+does not enforce them as a CI release threshold; run it only on a quiet idle host
+and compare with a recorded baseline.
+
+A crash loses only best-effort local cancellation state. The next daemon does
+not mass-quarantine servers: enforced admission still fails closed when its
+durable checks are unavailable, and already-observed provider work remains
+outside the stronger claim.
+
+## Migration and rollback
+
+There is no schema migration in this phase. The mode uses existing tenant app
+variables, authority uses existing MCP `config_version`, and OAuth uses the
+existing grant generation/binding.
+
+1. Deploy with every tenant at `off`.
+2. Use `observe` to inventory direct clients and transports.
+3. Enable `compatibility`; verify that required servers are eligible and that
+   omitted `ask`, stdio, SSE-handoff, and WebSocket servers show actionable
+   status.
+4. Terminate every executor created before mediation, independently verify the
+   fence, then attest and enable `enforced`.
+
+To recover availability, an admin may explicitly downgrade. Rolling back to a
+binary without gateway support also restores raw-secret projection even if the
+tenant row says `enforced`; treat that software rollback as the same audited
+security downgrade. Conversation handles and unrelated tasks are not invalidated
+by an MCP server mutation.

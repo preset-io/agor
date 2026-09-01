@@ -25,7 +25,6 @@ import type {
   Session,
   TaskID,
   User,
-  UserID,
   WidgetMessageMetadata,
 } from '@agor/core/types';
 import { getRequiredSecretFields, hasMinimumRole, MessageRole, ROLES } from '@agor/core/types';
@@ -104,16 +103,12 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // schema because Zod transforms degrade MCP JSON Schema discovery.
       const toolParams = normalizeEnvVarsParams(envVarsParamsSchema.parse(args));
 
-      // Look up the host session + its creator. The session creator is the
-      // identity whose env vars get written and read by the executor — this
-      // matches the `dangerously_allow_session_sharing: false` semantics.
-      const session = (await ctx.app
-        .service('sessions')
-        .get(currentSessionId, ctx.baseServiceParams)) as Session;
-      const sessionCreatorId = session.created_by as UserID;
-      const creator = (await ctx.app
+      // MCP session tokens are minted for the current prompt's actor. Use that
+      // same identity for environment variables even when the actor is
+      // prompting a shared Session owned by someone else.
+      const promptActor = (await ctx.app
         .service('users')
-        .get(sessionCreatorId, ctx.baseServiceParams)) as User;
+        .get(ctx.userId, ctx.baseServiceParams)) as User;
 
       const params: EnvVarsParams = toolParams;
 
@@ -122,7 +117,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       // the agent. Global-only check is intentional — session-scoped values
       // depend on session_env_selections which we don't read here.
       const presentEverywhere = allNamesPresentInScope(
-        creator.env_vars,
+        promptActor.env_vars,
         params.names,
         'global' as EnvVarScope
       );
@@ -229,7 +224,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
     'agor_widgets_request_gateway_token',
     {
       description:
-        "Ask an admin to securely provide a gateway channel's platform tokens (Slack bot/app tokens, GitHub private key, Teams app password) via a compact form that appears at the end of your message, so setup finishes without anyone pasting xoxb-/xapp- tokens into chat. " +
+        "Ask an admin to securely provide a gateway channel's platform credentials (Slack xoxb-/xapp- tokens, Discord bot token, GitHub private key, Teams app password) via a compact form that appears at the end of your message. Never ask for any secret in chat. " +
         'PREFER this tool over telling the admin to open Settings and paste tokens manually: it collects and verifies the credentials inline. ' +
         'FIRE-AND-FORGET: the widget renders inline at the end of your turn; end your turn after calling. You will receive a user-role message when it is resolved. ' +
         'Token values never enter your context — only the channel identity and field NAMES do. ' +
@@ -257,6 +252,12 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
       const channel = (await ctx.app
         .service('gateway-channels')
         .get(args.gatewayChannelId, ctx.baseServiceParams)) as GatewayChannel;
+      const hostSession = (await ctx.app
+        .service('sessions')
+        .get(currentSessionId, ctx.baseServiceParams)) as Session;
+      if (!hostSession.branch_id || channel.target_branch_id !== hostSession.branch_id) {
+        throw new Error("Gateway channel is not bound to this session's target branch");
+      }
       const channelType = channel.channel_type as ChannelType;
       if (!isSupportedGatewayTokenChannelType(channelType)) {
         throw new Error(

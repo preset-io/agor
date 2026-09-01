@@ -1,11 +1,15 @@
 import type { AgenticToolName, AgorClient, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp, ConfigProvider, type FormInstance, Grid } from 'antd';
 import { type ReactNode, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import { __resetAuthConfigForTests, __setAuthConfigForTests } from '../../hooks/useAuthConfig';
 import { agorStore } from '../../store/agorStore';
 import { UserSettingsModal } from './UserSettingsModal';
+
+const { syncGroupsForUser } = vi.hoisted(() => ({ syncGroupsForUser: vi.fn() }));
+vi.mock('./groupMembershipSync', () => ({ syncGroupsForUser }));
 
 vi.mock('../ApiKeyFields', () => ({
   ApiKeyFields: () => null,
@@ -171,6 +175,60 @@ function makeUser(overrides: Partial<User> = {}): User {
 const ASYNC = { timeout: 10_000 };
 
 describe('UserSettingsModal', { timeout: 60_000 }, () => {
+  it('keeps deferred resume distinct from destructive restart', async () => {
+    const onReopenOnboarding = vi.fn(async () => undefined);
+    const user = makeUser({
+      onboarding_completed: false,
+      preferences: {
+        onboarding: {
+          boardId: '01933e4a-7b89-7c35-a8f3-9d2e1c4b5a6f',
+          deferredAt: '2026-08-29T12:00:00.000Z',
+        },
+      },
+    });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+        onReopenOnboarding={onReopenOnboarding}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Resume onboarding' })).toBeInTheDocument();
+    expect(screen.getByText(/from your saved progress/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Restart from beginning' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Resume onboarding' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Resume' }));
+    await waitFor(() =>
+      expect(onReopenOnboarding).toHaveBeenCalledWith('resume', expect.any(Function))
+    );
+  });
+
+  it('offers a from-scratch restart when onboarding is not deferred', () => {
+    const user = makeUser({ onboarding_completed: true });
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null}
+        onUpdate={vi.fn()}
+        onReopenOnboarding={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Restart onboarding' })).toBeInTheDocument();
+    expect(screen.getByText(/from the beginning/i)).toBeInTheDocument();
+  });
+
   it('fails closed when an admin opens a superadmin settings modal', () => {
     const currentAdmin = makeUser({
       user_id: 'admin-1',
@@ -278,17 +336,21 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith('user-1', {
-        default_agentic_config: {
-          'claude-code': { permissionMode: 'acceptEdits' },
-          codex: { permissionMode: 'allow-all' },
+      expect(onUpdate).toHaveBeenCalledWith(
+        'user-1',
+        {
+          default_agentic_config: {
+            'claude-code': { permissionMode: 'acceptEdits' },
+            codex: { permissionMode: 'allow-all' },
+          },
+          default_agentic_selection: {
+            'claude-code': { source: 'inline' },
+            codex: { source: 'inline' },
+          },
+          default_mcp_server_ids: [],
         },
-        default_agentic_selection: {
-          'claude-code': { source: 'inline' },
-          codex: { source: 'inline' },
-        },
-        default_mcp_server_ids: [],
-      });
+        expect.any(Function)
+      );
     }, ASYNC);
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -354,25 +416,29 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 
     await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith('user-1', {
-        default_agentic_config: {
-          'claude-code': {
-            permissionMode: 'default',
-            modelConfig: { mode: 'alias', model: 'claude-opus-4-8' },
+      expect(onUpdate).toHaveBeenCalledWith(
+        'user-1',
+        {
+          default_agentic_config: {
+            'claude-code': {
+              permissionMode: 'default',
+              modelConfig: { mode: 'alias', model: 'claude-opus-4-8' },
+            },
           },
+          default_agentic_selection: {
+            'claude-code': { source: 'inline' },
+          },
+          default_mcp_server_ids: [],
         },
-        default_agentic_selection: {
-          'claude-code': { source: 'inline' },
-        },
-        default_mcp_server_ids: [],
-      });
+        expect.any(Function)
+      );
     }, ASYNC);
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('saves a new password from the Security panel and closes from the footer', async () => {
-    const user = makeUser();
+    const user = makeUser({ role: 'member', unix_username: 'member-home' });
     const onUpdate = vi.fn(async () => {});
     const onClose = vi.fn();
 
@@ -397,9 +463,16 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledWith(
         'user-1',
-        expect.objectContaining({ password: 'new-secure-password' })
+        expect.objectContaining({ password: 'new-secure-password' }),
+        expect.any(Function)
       );
     }, ASYNC);
+
+    const [, updates] = onUpdate.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    // This is a dirty Security-panel save, not a Profile-only false positive:
+    // the stored admin-owned field is present in the form but must not cross
+    // the self-edit request boundary for a member.
+    expect(updates).not.toHaveProperty('unix_username');
 
     expect(onClose).toHaveBeenCalledTimes(1);
   });
@@ -963,6 +1036,63 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     expect(services).not.toContain('api/v1/user/api-keys');
   });
 
+  it('cancels group sync and onClose when caller identity changes during a multi-step save', async () => {
+    const adminA = makeUser({ user_id: 'admin-a', email: 'a@example.test', role: 'admin' });
+    const adminB = makeUser({ user_id: 'admin-b', email: 'b@example.test', role: 'admin' });
+    const target = makeUser({ user_id: 'target-user', email: 'target@example.test' });
+    let resolveUpdate: (() => void) | undefined;
+    const onUpdate = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveUpdate = resolve;
+        })
+    );
+    const onClose = vi.fn();
+    const client = {
+      service: (name: string) => ({
+        findAll: vi.fn(async () =>
+          name === 'groups'
+            ? [{ group_id: 'group-1', name: 'Engineering', slug: 'engineering' }]
+            : []
+        ),
+      }),
+    } as unknown as AgorClient;
+    let replaceCaller: (() => void) | undefined;
+
+    function Harness() {
+      const [caller, setCaller] = useState(adminA);
+      replaceCaller = () => setCaller(adminB);
+      return (
+        <UserSettingsModal
+          open
+          onClose={onClose}
+          user={target}
+          currentUser={caller}
+          client={client}
+          onUpdate={onUpdate}
+          initialTab="groups"
+        />
+      );
+    }
+
+    renderWithApp(<Harness />);
+    await screen.findByRole('heading', { name: 'Groups & access' });
+    await waitFor(() => expect(screen.getByLabelText('Groups')).toBeEnabled(), ASYNC);
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce(), ASYNC);
+
+    // The first update was dispatched as A. Replace the caller after commit but
+    // before its promise continuation can read group form state or close B's UI.
+    act(() => replaceCaller?.());
+    resolveUpdate?.();
+    await act(async () => Promise.resolve());
+
+    expect(syncGroupsForUser).not.toHaveBeenCalled();
+    expect(onUpdate).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText('Editing Admin')).toBeInTheDocument();
+  });
+
   it('falls back to Profile for a deep link to a tenant-disabled provider', async () => {
     // Gemini is disabled for the tenant, so `provider:gemini` is not a visible
     // panel; a stale deep link to it must not render its credential controls.
@@ -1033,11 +1163,12 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
   it('shows and saves the primary coding agent from Preferences', async () => {
     const user = makeUser({ primary_agentic_tool: 'codex' });
     const onUpdate = vi.fn(async () => {});
+    const onClose = vi.fn();
 
     renderWithApp(
       <UserSettingsModal
         open
-        onClose={vi.fn()}
+        onClose={onClose}
         user={user}
         currentUser={user}
         client={null as AgorClient | null}
@@ -1058,9 +1189,13 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
     await waitFor(() => {
       expect(onUpdate).toHaveBeenCalledWith(
         user.user_id,
-        expect.objectContaining({ primary_agentic_tool: 'gemini' })
+        expect.objectContaining({ primary_agentic_tool: 'gemini' }),
+        expect.any(Function)
       );
     }, ASYNC);
+    const [, , shouldApply] = onUpdate.mock.calls[0] as unknown as [string, unknown, () => boolean];
+    expect(shouldApply()).toBe(true);
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it('opens a provider search hit on its own sub-tab (Session defaults, not Authentication)', async () => {
@@ -1380,6 +1515,7 @@ describe('UserSettingsModal', { timeout: 60_000 }, () => {
 // every tool enabled) before each test so provider panels render, and clear any
 // per-test override afterwards so visibility never leaks between tests.
 beforeEach(() => {
+  syncGroupsForUser.mockReset();
   __setAuthConfigForTests({ requireAuth: true });
   vi.spyOn(Grid, 'useBreakpoint').mockReturnValue({ md: true });
   agorStore.getState().setAgenticToolSettings([]);
@@ -1387,4 +1523,147 @@ beforeEach(() => {
 afterEach(() => {
   agorStore.getState().setAgenticToolSettings([]);
   vi.unstubAllGlobals();
+});
+
+/**
+ * Administrative fields are not self-edit profile data. `role` and
+ * `unix_username` were seeded from the user and sent whenever their panel was
+ * dirty — and the panel in view is marked dirty on open. These pin the payload,
+ * because that is where the defect lived; a disabled field is not a request
+ * boundary.
+ */
+describe('UserSettingsModal — administrative fields in save payloads', () => {
+  it('omits role when a member saves their own profile', async () => {
+    const user = makeUser({ role: 'member', unix_username: 'bob' });
+    const onUpdate = vi.fn(async () => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={user}
+        currentUser={user}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    // No edit at all: the Profile panel is dirty from opening on it, which is
+    // exactly the path that used to 403.
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+    }, ASYNC);
+
+    const [, updates] = onUpdate.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(updates).not.toHaveProperty('role');
+    expect(updates).not.toHaveProperty('unix_username');
+    // The fields they may set still go, so this is a narrowing and not a mute.
+    expect(updates).toHaveProperty('name');
+    expect(updates).toHaveProperty('email');
+  });
+
+  it('does not submit the disabled role selector when an admin edits themselves', async () => {
+    const admin = makeUser({ role: 'admin' });
+    const onUpdate = vi.fn(async () => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={admin}
+        currentUser={admin}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1), ASYNC);
+    const [, updates] = onUpdate.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(updates).not.toHaveProperty('role');
+    expect(updates).toHaveProperty('name');
+    expect(updates).toHaveProperty('email');
+  });
+
+  it('still sends role when an admin edits someone', async () => {
+    const target = makeUser({ user_id: 'user-2', role: 'member' });
+    const admin = makeUser({ user_id: 'user-1', role: 'admin' });
+    const onUpdate = vi.fn(async () => {});
+
+    renderWithApp(
+      <UserSettingsModal
+        open
+        onClose={vi.fn()}
+        user={target}
+        currentUser={admin}
+        client={null as AgorClient | null}
+        onUpdate={onUpdate}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+    }, ASYNC);
+
+    const [, updates] = onUpdate.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(updates).toHaveProperty('role', 'member');
+  });
+});
+
+describe('UserSettingsModal — socket authority generations', () => {
+  it('preserves a same-user password draft but never closes from an obsolete save', async () => {
+    let resolve!: () => void;
+    const pending = new Promise<void>((done) => {
+      resolve = done;
+    });
+    const onUpdate = vi.fn(() => pending);
+    const onClose = vi.fn();
+    const user = makeUser({ user_id: 'same-user', role: 'member' });
+    const view = (generation: number) => (
+      <ConfigProvider theme={{ hashed: false }}>
+        <AntApp>
+          <ConnectionProvider
+            value={{
+              connected: true,
+              connecting: false,
+              authGeneration: generation,
+              outOfSync: false,
+              capturedSha: null,
+              currentSha: null,
+            }}
+          >
+            <UserSettingsModal
+              open
+              onClose={onClose}
+              user={user}
+              currentUser={user}
+              client={null}
+              onUpdate={onUpdate}
+            />
+          </ConnectionProvider>
+        </AntApp>
+      </ConfigProvider>
+    );
+    const rendered = render(view(10));
+    fireEvent.click(screen.getByRole('menuitem', { name: /security/i }));
+    const password = await screen.findByPlaceholderText('••••••••');
+    fireEvent.change(password, { target: { value: 'same-user-password-draft' } });
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledOnce(), ASYNC);
+
+    rendered.rerender(view(11));
+    await act(async () => {
+      resolve();
+      await pending;
+    });
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByPlaceholderText('••••••••')).toHaveValue('same-user-password-draft');
+    expect(screen.getByRole('button', { name: /^save$/i })).not.toBeDisabled();
+  }, 30_000);
 });

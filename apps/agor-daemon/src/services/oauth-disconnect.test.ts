@@ -124,4 +124,26 @@ describe('performOAuthDisconnect', () => {
     const result = await performOAuthDisconnect(deps);
     expect(result.success).toBe(true);
   });
+
+  it('returns and logs only the closed contract for hostile repository exceptions', async () => {
+    const sentinel = 'SENTINEL_OAUTH_DISCONNECT_EXCEPTION';
+    const failure = new Error(sentinel);
+    Object.defineProperty(failure, 'name', {
+      get() {
+        throw new Error(sentinel);
+      },
+    });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const deps = createMockDeps({
+      mcpServerRepo: { findById: vi.fn().mockRejectedValue(failure) },
+    });
+
+    const result = await performOAuthDisconnect(deps);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'OAuth connection could not be removed',
+    });
+    expect(JSON.stringify(log.mock.calls)).not.toContain(sentinel);
+  });
 });

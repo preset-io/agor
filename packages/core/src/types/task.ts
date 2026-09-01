@@ -83,7 +83,21 @@ export type TerminationCause =
   | 'user_stop'
   | 'startup_timeout'
   | 'heartbeat_lost'
-  | 'sdk_health_failure';
+  | 'sdk_health_failure'
+  | 'authorization_revoked';
+
+/** Fixed server/executor copy for runtime authorization withdrawal. */
+export const AUTHORIZATION_REVOKED_TERMINATION_MESSAGE =
+  'Authorization to continue this task was revoked.';
+
+/** Why a durable termination request is waiting for another HA coordinator. */
+export const TERMINATION_COORDINATION_PENDING_CODES = [
+  'non_owner_replica',
+  'coordination_in_progress',
+] as const;
+
+export type TerminationCoordinationPendingCode =
+  (typeof TERMINATION_COORDINATION_PENDING_CODES)[number];
 
 /**
  * Expiring, database-fenced ownership of one containment attempt.
@@ -270,7 +284,7 @@ export function isTaskExecuting(task: TaskExecutionState): boolean {
 export interface ContextUsageSnapshot {
   totalTokens: number;
   maxTokens: number;
-  /** 0–100, integer, ready to display */
+  /** Finite 0–100 percentage reported by the source tool. */
   percentage: number;
 }
 
@@ -338,13 +352,14 @@ export interface Task {
   // Model (resolved model ID used for this task, e.g., "claude-sonnet-4-5-20250929")
   model?: string;
 
-  // Raw SDK response - single source of truth for token accounting
-  // Stores the unmutated SDK event (turn.completed for Codex, Finished for Gemini, etc.)
+  // Closed SDK response projection - source of truth for token accounting.
+  // Provider prose and unknown SDK extension objects are removed before storage.
   // Access token usage, context window, costs, etc. via normalizers
   // Optional to support legacy tasks that don't have this field
   raw_sdk_response?: unknown; // Raw SDK response stored as JSON
 
-  // Normalized SDK response - computed from raw_sdk_response by executor
+  // Normalized SDK response - computed and runtime-projected by the executor,
+  // then projected again by the daemon before persistence/realtime.
   // Stored here so UI doesn't need SDK-specific normalization logic
   // Will be empty for legacy tasks (pre-normalization)
   normalized_sdk_response?: {

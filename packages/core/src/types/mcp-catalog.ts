@@ -424,6 +424,30 @@ export interface MCPCatalogConnectResult {
 }
 
 /**
+ * Cheap, advisory answer for the Marketplace drawer before Connect is pressed.
+ *
+ * Readiness never probes a vendor, refreshes a grant, creates a row, or starts
+ * a Session. It describes only durable local state plus the checked-in catalog
+ * claim. `mcp-catalog/connect` remains authoritative and repeats every relevant
+ * check at the write boundary.
+ */
+export const MCP_CATALOG_READINESS_STATES = [
+  'no_auth',
+  'bearer_required',
+  'oauth_required',
+  'installed_ready',
+  'reusable_oauth',
+] as const;
+
+export type MCPCatalogReadinessState = (typeof MCP_CATALOG_READINESS_STATES)[number];
+
+export interface MCPCatalogReadiness {
+  /** Echo of the catalog identity that was evaluated. */
+  catalog_key: string;
+  state: MCPCatalogReadinessState;
+}
+
+/**
  * What the live endpoint turned out to want, on a connect refused over the API
  * key.
  *

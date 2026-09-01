@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  boardPresenceAssociationRoomName,
   boardPresenceRoomName,
   emitHaNativeSocketEvent,
   executorTaskRoomName,
@@ -19,6 +20,9 @@ describe('realtime routing boundary', () => {
     expect(boardPresenceRoomName('tenant-a', 'board-a')).toBe(
       'agor:v2:tenant:dGVuYW50LWE:board:Ym9hcmQtYQ:presence'
     );
+    expect(boardPresenceAssociationRoomName('tenant-a', 'board-a')).toBe(
+      'agor:v2:tenant:dGVuYW50LWE:board:Ym9hcmQtYQ:presence-association'
+    );
   });
 
   it('keeps adversarial room components injective across tenant boundaries', () => {
@@ -34,6 +38,9 @@ describe('realtime routing boundary', () => {
     expect(terminalChannelName('tenant/a/user/b', 'c', 'd')).not.toBe(
       terminalChannelName('tenant/a', 'b/user/c', 'd')
     );
+    expect(boardPresenceAssociationRoomName('tenant-a:board:x', 'y')).not.toBe(
+      boardPresenceAssociationRoomName('tenant-a', 'x:board:y')
+    );
   });
 
   it('emits only through the explicit native HA event inventory', () => {
@@ -41,18 +48,22 @@ describe('realtime routing boundary', () => {
       'cursor-moved',
       'cursor-left',
       'presence-updated',
+      'presence-left',
       'repo:cloneError',
       'oauth:completed',
       'oauth:disconnected',
+      'marketplace:invalidated',
     ]);
     const target = { emit: vi.fn() };
     emitHaNativeSocketEvent(target, 'cursor-left', {
       userId: 'user-a',
+      presenceId: 'presence-a',
       boardId: '019fe5bc-65cf-7095-b160-454363604446' as never,
       timestamp: 1,
     });
     expect(target.emit).toHaveBeenCalledWith('cursor-left', {
       userId: 'user-a',
+      presenceId: 'presence-a',
       boardId: '019fe5bc-65cf-7095-b160-454363604446',
       timestamp: 1,
     });

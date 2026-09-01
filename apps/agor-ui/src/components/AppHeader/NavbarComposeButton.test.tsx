@@ -22,9 +22,9 @@ vi.mock('../../hooks/useAppNavigation', () => ({
 vi.mock('../../store/agorStore', () => ({
   useAgorStore: (selector: (state: unknown) => unknown) =>
     selector({
-      boardById: new Map([['board-primary', { board_id: 'board-primary', name: 'Ada Board' }]]),
       mcpServerById: new Map(),
       userById: new Map(),
+      agenticToolSettingsByName: new Map(),
     }),
 }));
 
@@ -377,30 +377,6 @@ describe('NavbarComposeButton', () => {
 
     await waitFor(() => expect(onCreateSession).toHaveBeenCalledTimes(1));
     expect(onCreateSession.mock.calls[0][0]).toMatchObject({ mcpServerIds: ['branch-mcp'] });
-  });
-
-  it('shows a board-switch wayfinding line when the primary lives on another board', async () => {
-    renderCompose({ primary: primaryBranch, currentBoardId: 'board-current' });
-    openPopover();
-    await screen.findByTestId('compose-prompt');
-    expect(screen.getByText(/Opens on Ada/)).toBeInTheDocument();
-  });
-
-  it('shows no wayfinding line on a non-board surface', async () => {
-    renderCompose({ primary: primaryBranch, currentBoardId: '', pathname: '/knowledge' });
-    openPopover();
-    await screen.findByTestId('compose-prompt');
-    expect(screen.queryByText(/Opens a panel here/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Opens on/)).not.toBeInTheDocument();
-  });
-
-  it('omits the wayfinding line when already on the primary’s own board', async () => {
-    renderCompose({ primary: primaryBranch, currentBoardId: 'board-primary' });
-    openPopover();
-    await screen.findByTestId('compose-prompt');
-    expect(screen.queryByText(/Opens on/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Opens a panel here/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Creates a session/)).not.toBeInTheDocument();
   });
 
   it('gives both send buttons an explanatory tooltip', async () => {
