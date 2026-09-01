@@ -17,6 +17,7 @@ export { CuratedCatalogError, loadCuratedCatalog } from './curated-loader';
 export {
   auditCatalogHealth,
   type CatalogHealthAuditDependencies,
+  type CatalogHealthReason,
   type CatalogHealthResult,
   type CatalogHealthStatus,
 } from './health-audit';

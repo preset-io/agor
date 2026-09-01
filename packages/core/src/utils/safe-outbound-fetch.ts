@@ -208,6 +208,23 @@ async function resolvePinnedAddress(
   return addresses[0] as { address: string; family: 4 | 6 };
 }
 
+async function resolveSafeOutboundTarget(
+  input: string | URL,
+  options: Pick<SafeOutboundFetchOptions, 'allowLocalhostHttp' | 'resolveDns'>,
+  signal: AbortSignal
+): Promise<{ url: URL; pinned: { address: string; family: 4 | 6 } }> {
+  const url = new URL(input);
+  const allowLocalhostHttp = options.allowLocalhostHttp === true;
+  assertSafeParsedUrl(url, allowLocalhostHttp);
+  const pinned = await resolvePinnedAddress(
+    url,
+    allowLocalhostHttp,
+    signal,
+    options.resolveDns ?? lookup
+  );
+  return { url, pinned };
+}
+
 /**
  * Adapt one already-validated address to Node's two lookup callback contracts.
  * `http(s).request` asks for `all: true` when auto-selecting a family and
@@ -244,13 +261,7 @@ async function requestOnce(
   let pinned: { address: string; family: 4 | 6 };
   try {
     throwIfAborted(signal);
-    assertSafeParsedUrl(url, options.allowLocalhostHttp === true);
-    pinned = await resolvePinnedAddress(
-      url,
-      options.allowLocalhostHttp === true,
-      signal,
-      options.resolveDns ?? lookup
-    );
+    ({ pinned } = await resolveSafeOutboundTarget(url, options, signal));
   } catch (error) {
     // A caller cancellation while validating DNS is known to precede socket
     // construction. Preserve that fact instead of classifying it as an
@@ -401,6 +412,39 @@ export async function safeOutboundFetch(
       }
       url = redirectUrl;
     }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Validate and resolve an OAuth destination without opening a socket.
+ *
+ * This is for read-only readiness checks. It deliberately shares the exact
+ * parsed-URL, HTTPS, DNS, and public-address predicate used by
+ * {@link safeOutboundFetch}. Callers that subsequently send a request must
+ * still use `safeOutboundFetch`: it repeats this resolution and pins that
+ * checked address into the request lookup, avoiding a check/use DNS race.
+ */
+export async function assertSafeOutboundUrl(
+  input: string | URL,
+  options: Pick<
+    SafeOutboundFetchOptions,
+    'allowLocalhostHttp' | 'resolveDns' | 'signal' | 'timeoutMs'
+  > = {}
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_MS) {
+    throw new UnsafeOutboundUrlError('Outbound OAuth timeout is invalid');
+  }
+  const deadline = new AbortController();
+  const timer = setTimeout(() => deadline.abort(outboundTimeoutError()), timeoutMs);
+  const signal = options.signal
+    ? AbortSignal.any([deadline.signal, options.signal])
+    : deadline.signal;
+  try {
+    throwIfAborted(signal);
+    await resolveSafeOutboundTarget(input, options, signal);
   } finally {
     clearTimeout(timer);
   }
