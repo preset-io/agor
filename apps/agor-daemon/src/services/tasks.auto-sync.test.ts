@@ -39,17 +39,28 @@ function executorParams() {
 }
 
 function buildService() {
-  const calls: Array<{
+  const syncCalls: Array<{
     params: Record<string, unknown> | undefined;
     options:
       | { desiredRevision: string; requestedByUserId: string; skipIfUnavailable: boolean }
       | undefined;
+  }> = [];
+  const patchCalls: Array<{
+    id: string;
+    data: { last_commit_sha: string };
+    params: Record<string, unknown> | undefined;
   }> = [];
 
   const app = {
     service(path: string) {
       if (path === 'branches') {
         return {
+          patch: vi.fn(
+            async (id: string, data: { last_commit_sha: string }, p?: Record<string, unknown>) => {
+              patchCalls.push({ id, data, params: p });
+              return {};
+            }
+          ),
           syncEnvironment: vi.fn(
             async (
               _id: string,
@@ -60,7 +71,7 @@ function buildService() {
                 skipIfUnavailable: boolean;
               }
             ) => {
-              calls.push({ params: p, options });
+              syncCalls.push({ params: p, options });
               return {};
             }
           ),
@@ -83,7 +94,7 @@ function buildService() {
       }
     ).maybeAutoSyncEnvironmentAfterTask(branchId, desiredRevision, userId, params);
 
-  return { run, calls };
+  return { run, syncCalls, patchCalls };
 }
 
 describe('TasksService auto-sync submits exact desired state internally', () => {
@@ -94,27 +105,36 @@ describe('TasksService auto-sync submits exact desired state internally', () => 
   });
 
   it('never forwards executor-scoped credentials', async () => {
-    const { run, calls } = buildService();
+    const { run, syncCalls, patchCalls } = buildService();
 
     await run();
 
-    expect(calls).toHaveLength(1);
-    const params = calls[0]?.params;
-    expect(params?.authentication).toBeUndefined();
-    expect(params?.task_id).toBeUndefined();
-    expect(params?.session_id).toBeUndefined();
-    expect(params?.provider).toBeUndefined();
+    expect(syncCalls).toHaveLength(1);
+    expect(patchCalls).toHaveLength(1);
+    for (const params of [syncCalls[0]?.params, patchCalls[0]?.params]) {
+      expect(params?.authentication).toBeUndefined();
+      expect(params?.task_id).toBeUndefined();
+      expect(params?.session_id).toBeUndefined();
+      expect(params?.provider).toBeUndefined();
+    }
   });
 
   it('preserves tenant and exact revision/user attribution', async () => {
-    const { run, calls } = buildService();
+    const { run, syncCalls, patchCalls } = buildService();
 
     await run();
 
-    expect((calls[0]?.params?.tenant as { tenant_id?: string } | undefined)?.tenant_id).toBe(
+    expect((syncCalls[0]?.params?.tenant as { tenant_id?: string } | undefined)?.tenant_id).toBe(
       'tenant-a'
     );
-    expect(calls[0]?.options).toEqual({
+    expect((patchCalls[0]?.params?.tenant as { tenant_id?: string } | undefined)?.tenant_id).toBe(
+      'tenant-a'
+    );
+    expect(patchCalls[0]).toMatchObject({
+      id: branchId,
+      data: { last_commit_sha: revision },
+    });
+    expect(syncCalls[0]?.options).toEqual({
       desiredRevision: revision,
       requestedByUserId: userId,
       skipIfUnavailable: true,
@@ -124,11 +144,12 @@ describe('TasksService auto-sync submits exact desired state internally', () => 
   it.each(['a'.repeat(12), `${revision}-dirty`, 'unknown', null])(
     'refuses a non-deployable task-end revision: %s',
     async (invalid) => {
-      const { run, calls } = buildService();
+      const { run, syncCalls, patchCalls } = buildService();
 
       await run(invalid);
 
-      expect(calls).toHaveLength(0);
+      expect(syncCalls).toHaveLength(0);
+      expect(patchCalls).toHaveLength(0);
     }
   );
 });

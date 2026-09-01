@@ -58,7 +58,8 @@ async function updateBranchEnvironment(
   client: Awaited<ReturnType<typeof createExecutorClient>>,
   branchId: string,
   environmentUpdate: Record<string, unknown>,
-  expectedEnvironmentGeneration?: number
+  expectedEnvironmentGeneration?: number,
+  expectedEnvironmentStatus?: 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
 ): Promise<{ applied: boolean; generation?: number }> {
   try {
     const branch = await client.service('branches').updateEnvironment({
@@ -66,6 +67,9 @@ async function updateBranchEnvironment(
       environment_update: environmentUpdate,
       ...(expectedEnvironmentGeneration !== undefined
         ? { expected_environment_generation: expectedEnvironmentGeneration }
+        : {}),
+      ...(expectedEnvironmentStatus !== undefined
+        ? { expected_environment_status: expectedEnvironmentStatus }
         : {}),
     });
     return { applied: true, generation: branch.environment_generation };
@@ -91,26 +95,53 @@ function supersededResult(
   return { success: true, data: { branchId, action, superseded: true } };
 }
 
+function terminateCommandProcess(child: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
+  if (child.pid && process.platform !== 'win32') {
+    try {
+      // Shell commands may start grandchildren. The child is detached into its
+      // own process group below, so terminate the whole command tree.
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The shell may have exited between the timeout and this signal. Fall
+      // back to ChildProcess.kill so platforms without process-group support
+      // still receive a best-effort cancellation.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // A concurrently exited command is already cancelled.
+  }
+}
+
 async function runShellCommand(options: {
   command: string;
   cwd: string;
   env?: Record<string, string>;
   commandType: 'start' | 'stop' | 'nuke' | 'sync' | 'logs';
   parseLifecycleResult?: boolean;
+  timeoutMs?: number;
 }): Promise<{
   pid?: number;
   output?: string;
   lifecycleResult?: EnvironmentLifecycleResult;
   facts: Record<string, string>;
 }> {
-  const { command, cwd, env, commandType, parseLifecycleResult = false } = options;
+  const { command, cwd, env, commandType, parseLifecycleResult = false, timeoutMs } = options;
   assertEnvCommandAllowed(command, commandType);
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0)) {
+    throw new Error(`${commandType} command timeout must be a positive integer`);
+  }
 
   const child = spawn(command, {
     cwd,
     env: { ...process.env, ...(env ?? {}) },
     stdio: 'pipe',
     shell: true,
+    // Only deadline-bound commands need a private process group. Preserve the
+    // existing spawn behavior for logs/sync/stop/nuke.
+    detached: timeoutMs !== undefined && process.platform !== 'win32',
   });
 
   const capture = new EnvironmentCommandOutputCapture({
@@ -123,7 +154,14 @@ async function runShellCommand(options: {
 
   try {
     await new Promise<void>((resolve, reject) => {
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      let forceKillHandle: NodeJS.Timeout | undefined;
+      const clearCommandTimers = () => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (forceKillHandle) clearTimeout(forceKillHandle);
+      };
       child.on('close', (code: number | null) => {
+        clearCommandTimers();
         if (code === 0) {
           resolve();
         } else {
@@ -138,11 +176,25 @@ async function runShellCommand(options: {
         }
       });
       child.on('error', (error: Error) => {
+        clearCommandTimers();
         const enriched = error as Error & { output?: string; pid?: number };
         enriched.output = capture.visibleOutput();
         enriched.pid = child.pid;
         reject(enriched);
       });
+      if (timeoutMs !== undefined) {
+        timeoutHandle = setTimeout(() => {
+          const error = new Error(
+            `${commandType} command exceeded its ${timeoutMs}ms deadline`
+          ) as Error & { output?: string; pid?: number };
+          error.output = capture.visibleOutput();
+          error.pid = child.pid;
+          terminateCommandProcess(child, 'SIGTERM');
+          forceKillHandle = setTimeout(() => terminateCommandProcess(child, 'SIGKILL'), 5_000);
+          forceKillHandle.unref();
+          reject(error);
+        }, timeoutMs);
+      }
     });
   } catch (error) {
     try {
@@ -282,7 +334,8 @@ export async function handleEnvironmentLifecycle(
         client,
         branchId,
         { status: 'stopping' },
-        lifecycleGeneration
+        lifecycleGeneration,
+        'stopping'
       );
       if (!stopping.applied) return supersededResult(branchId, payload.params.action);
       lifecycleGeneration = stopping.generation ?? lifecycleGeneration;
@@ -326,7 +379,8 @@ export async function handleEnvironmentLifecycle(
             ? { access_urls: [{ name: 'App', url: payload.params.appUrl }] }
             : {}),
         },
-        lifecycleGeneration
+        lifecycleGeneration,
+        payload.params.action === 'restart' ? 'stopping' : 'starting'
       );
       if (!starting.applied) return supersededResult(branchId, payload.params.action);
       lifecycleGeneration = starting.generation ?? lifecycleGeneration;
@@ -337,6 +391,10 @@ export async function handleEnvironmentLifecycle(
         env: payload.env,
         commandType: 'start',
         parseLifecycleResult: true,
+        timeoutMs: Math.min(
+          resolveEnvironmentStartupTimeoutMs(payload.params.startupTimeoutMs),
+          Math.max(1, Date.parse(startupDeadlineAt) - Date.now())
+        ),
       });
 
       const accessUrls =
@@ -376,7 +434,8 @@ export async function handleEnvironmentLifecycle(
             ...(result.output ? { output: result.output } : {}),
           },
         },
-        lifecycleGeneration
+        lifecycleGeneration,
+        'starting'
       );
       if (!completion.applied) return supersededResult(branchId, payload.params.action);
 
@@ -424,7 +483,8 @@ export async function handleEnvironmentLifecycle(
           ...(result.output ? { output: result.output } : {}),
         },
       },
-      lifecycleGeneration
+      lifecycleGeneration,
+      'stopping'
     );
     if (!completion.applied) return supersededResult(branchId, payload.params.action);
 
@@ -471,7 +531,8 @@ export async function handleEnvironmentLifecycle(
               ...(output ? { output } : {}),
             },
           },
-          lifecycleGeneration
+          lifecycleGeneration,
+          currentStatus
         );
         if (!failure.applied) return supersededResult(branchId, payload.params.action);
       }

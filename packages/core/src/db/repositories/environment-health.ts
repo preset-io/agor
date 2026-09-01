@@ -417,6 +417,14 @@ export class EnvironmentHealthRepository {
               },
             }
           : activeEnvironment;
+        // A startup timeout is a terminal lifecycle boundary, not merely a
+        // health observation. Invalidate the Start generation while holding
+        // the same row lock as the starting -> error transition so its shell
+        // callback can never publish URLs or revive the branch afterward.
+        // Do not bump for starting -> running: readiness may become healthy
+        // before Start exits and its current-generation callback still owns
+        // publication of the typed lifecycle result.
+        const invalidatesTimedOutStart = status === 'starting' && nextStatus === 'error';
         // A network failure while an environment is still starting is a
         // legitimate, deliberately unrecorded observation: startup grace
         // keeps the prior durable state until a recordable result arrives.
@@ -429,6 +437,17 @@ export class EnvironmentHealthRepository {
             .set({
               data: { ...data, environment_instance: nextEnvironment },
               ...(stateChanged ? { updated_at: now } : {}),
+              ...(invalidatesTimedOutStart
+                ? {
+                    environment_generation: sql`${branches.environment_generation} + 1`,
+                    environment_health_claim_token: null,
+                    environment_health_claimed_at: null,
+                    environment_health_claim_expires_at: null,
+                    environment_health_next_observation_at: null,
+                    environment_health_claim_instance_id: null,
+                    environment_health_claim_boot_id: null,
+                  }
+                : {}),
             })
             .where(
               and(

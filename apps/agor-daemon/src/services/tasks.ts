@@ -717,6 +717,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       } as TaskParams;
 
       const branchesService = this.app.service('branches') as unknown as {
+        patch: (id: string, data: { last_commit_sha: string }, p?: unknown) => Promise<unknown>;
         syncEnvironment: (
           id: string,
           p?: unknown,
@@ -731,6 +732,11 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       console.log(
         `🔄 [TasksService] Requesting remote environment revision ${revision.slice(0, 12)} for branch ${shortId(branchId)}`
       );
+      // A completed task's clean sha_at_end is an observed branch fact. Record
+      // it separately from the remote desired revision: the public sync route
+      // accepts a caller-selected target and must never be able to rewrite
+      // last_commit_sha merely by requesting it.
+      await branchesService.patch(branchId, { last_commit_sha: revision }, internalParams);
       await branchesService.syncEnvironment(branchId, internalParams, {
         desiredRevision: revision,
         requestedByUserId,

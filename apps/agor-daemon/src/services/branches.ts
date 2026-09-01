@@ -2353,6 +2353,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           environmentUpdate?: BranchEnvironmentUpdate;
           expected_environment_generation?: number;
           expectedEnvironmentGeneration?: number;
+          expected_environment_status?: EnvironmentInstance['status'];
+          expectedEnvironmentStatus?: EnvironmentInstance['status'];
         },
     environmentUpdateOrParams?: BranchEnvironmentUpdate | BranchParams,
     params?: BranchParams,
@@ -2373,6 +2375,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const expectedEnvironmentGeneration = isRpcEnvelope
       ? (idOrData.expected_environment_generation ?? idOrData.expectedEnvironmentGeneration)
       : internalOptions?.expectedEnvironmentGeneration;
+    const expectedEnvironmentStatus = isRpcEnvelope
+      ? (idOrData.expected_environment_status ?? idOrData.expectedEnvironmentStatus)
+      : internalOptions?.expectedEnvironmentStatus;
     const coordinatedLifecycleUpdate =
       internalOptions?.beginLifecycle === true || expectedEnvironmentGeneration !== undefined;
 
@@ -2397,6 +2402,15 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       (!Number.isSafeInteger(expectedEnvironmentGeneration) || expectedEnvironmentGeneration < 0)
     ) {
       throw new BadRequest('Expected environment generation must be a non-negative integer');
+    }
+    if (
+      expectedEnvironmentStatus !== undefined &&
+      !['stopped', 'starting', 'running', 'stopping', 'error'].includes(expectedEnvironmentStatus)
+    ) {
+      throw new BadRequest('Expected environment status is invalid');
+    }
+    if (expectedEnvironmentStatus !== undefined && expectedEnvironmentGeneration === undefined) {
+      throw new BadRequest('Expected environment status requires an expected generation');
     }
 
     const existing = await this.withTenantDatabase(resolvedParams, () =>
@@ -2497,9 +2511,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
               {
                 invalidateEnvironmentObservation: internalOptions?.beginLifecycle === true,
                 expectedEnvironmentGeneration,
-                ...(internalOptions && Object.hasOwn(internalOptions, 'expectedEnvironmentStatus')
-                  ? { expectedEnvironmentStatus: internalOptions.expectedEnvironmentStatus }
-                  : {}),
+                ...(expectedEnvironmentStatus !== undefined ? { expectedEnvironmentStatus } : {}),
               }
             );
             return this.get(id, resolvedParams);
@@ -3621,49 +3633,68 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       app: snapshot.app,
     });
 
-    // Drop the outgoing variant's runtime observations. `facts` and the
-    // `access_urls` derived from them describe the environment the OTHER
-    // variant started, and nothing regenerates them until the new variant is
-    // started — so leaving them behind means a `local` branch keeps serving a
-    // Codespace link in the UI, and any variant that defines no health URL
-    // falls through to the stale `health` fact and probes a foreign
-    // environment. Safe to do here: switching variants is already refused
-    // while the environment is running or starting.
-    if (variantChanged && branch.environment_instance) {
-      await this.updateEnvironment(
-        id,
-        { facts: null, lifecycle_result: null, access_urls: null, source_sync: null },
-        params
+    // Persist configuration and outgoing runtime clears in ONE row-locked CAS.
+    // The earlier implementation cleared runtime observations and patched the
+    // new variant in two independent writes after a stale status check. Start
+    // could claim the old variant between them, dispatch its command, and then
+    // leave the branch stored as `starting` with the new variant's commands.
+    const renderedUpdate = {
+      environment_variant: snapshot.variant,
+      startup_timeout_ms: snapshot.startup_timeout_ms,
+      start_command: snapshot.start || undefined,
+      stop_command: snapshot.stop || undefined,
+      // Coerce absent optional fields to null (not undefined) so switching
+      // to a variant that omits a field CLEARS the previous variant's value.
+      // deepMerge (repository update) treats null as "write NULL" and
+      // undefined as "skip" — undefined would leave a stale command/URL.
+      nuke_command: snapshot.nuke ?? null,
+      logs_command: snapshot.logs ?? null,
+      health_check_url: snapshot.health ?? null,
+      app_url: snapshot.app ?? null,
+      ...(variantChanged && branch.environment_instance
+        ? {
+            // These observations belong to the outgoing variant. Null is the
+            // repository's explicit nested clear sentinel.
+            environment_instance: {
+              facts: null,
+              lifecycle_result: null,
+              access_urls: null,
+              source_sync: null,
+            },
+          }
+        : {}),
+    } as Partial<Branch>;
+
+    try {
+      await this.withTenantDatabase(params, () =>
+        this.branchRepo.update(id, renderedUpdate, {
+          expectedEnvironmentGeneration: this.requireEnvironmentGeneration(branch),
+          expectedEnvironmentStatus: branch.environment_instance?.status,
+        })
       );
+    } catch (error) {
+      if (error instanceof EnvironmentLifecycleConflictError) {
+        throw new Conflict(error.message, {
+          code: ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
+          branch_id: error.branchId,
+          expected_environment_generation: error.expectedGeneration,
+          current_environment_generation: error.currentGeneration,
+          expected_status: error.expectedStatus,
+          current_status: error.currentStatus,
+        });
+      }
+      throw error;
     }
 
-    return await this.withTenantDatabase(params, () =>
-      this.patch(
-        id,
-        {
-          environment_variant: snapshot.variant,
-          startup_timeout_ms: snapshot.startup_timeout_ms,
-          start_command: snapshot.start || undefined,
-          stop_command: snapshot.stop || undefined,
-          // Coerce absent optional fields to null (not undefined) so switching
-          // to a variant that omits a field CLEARS the previous variant's value.
-          // deepMerge (repository update) treats null as "write NULL" and
-          // undefined as "skip" — undefined would leave a stale command/URL, e.g.
-          // switching local → codespaces (no health) previously left the local
-          // health_check_url, so the monitor probed a dead local port and the env
-          // never left 'starting'. Branch types these columns as `string |
-          // undefined` for readers (rows coerce NULL → undefined), so passing the
-          // null clear-sentinel is a deliberate read/write asymmetry; cast at the
-          // patch boundary rather than widening the reader type everywhere.
-          nuke_command: snapshot.nuke ?? null,
-          logs_command: snapshot.logs ?? null,
-          health_check_url: snapshot.health ?? null,
-          app_url: snapshot.app ?? null,
-          updated_at: new Date().toISOString(),
-        } as Partial<Branch>,
-        params
-      )
-    );
+    const rendered = await this.withTenantDatabase(params, () => this.get(id, params));
+    emitServiceEvent(this.app, {
+      path: 'branches',
+      event: 'patched',
+      data: rendered,
+      params,
+      id,
+    });
+    return rendered;
   }
 }
 

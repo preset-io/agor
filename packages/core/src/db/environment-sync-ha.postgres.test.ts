@@ -21,6 +21,7 @@ const postgresUrl = process.env.AGOR_TEST_POSTGRES_URL;
 const usesPostgresSchema = process.env.AGOR_DB_DIALECT === 'postgresql';
 let branchUnique = (Date.now() % 1_000_000) + 9_000_000;
 const REVISION_A = 'a'.repeat(40);
+const REVISION_B = 'b'.repeat(40);
 
 async function seedRunningBranch(db: Database, tenantId: TenantID) {
   return runWithTenantDatabaseScope(db, tenantId, async (scoped) => {
@@ -152,6 +153,28 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         new BranchRepository(scoped).findById(branch.branch_id)
       );
       expect(current?.environment_instance?.source_sync).toBeUndefined();
+    });
+
+    it('keeps a requested remote revision separate from the observed branch commit', async () => {
+      const tenantId = `env-sync-observed-${generateId()}` as TenantID;
+      const { branch, user } = await seedRunningBranch(dbA, tenantId);
+
+      await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+        const branchesRepo = new BranchRepository(scoped);
+        await branchesRepo.update(branch.branch_id, { last_commit_sha: REVISION_A });
+        await new EnvironmentSyncRepository(scoped).request({
+          branchId: branch.branch_id,
+          desiredRevision: REVISION_B,
+          requestedByUserId: user.user_id as UserID,
+        });
+
+        await expect(branchesRepo.findById(branch.branch_id)).resolves.toMatchObject({
+          last_commit_sha: REVISION_A,
+          environment_instance: {
+            source_sync: { desired_revision: REVISION_B },
+          },
+        });
+      });
     });
   }
 );

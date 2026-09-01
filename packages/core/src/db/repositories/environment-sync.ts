@@ -111,7 +111,6 @@ export class EnvironmentSyncRepository {
           const now = await this.mutationNow(txDb, input.branchId);
           const data = row.data as {
             environment_instance?: BranchEnvironmentInstance;
-            last_commit_sha?: string;
             [key: string]: unknown;
           };
           const environment = data.environment_instance ?? { status: 'stopped' as const };
@@ -135,13 +134,11 @@ export class EnvironmentSyncRepository {
               ? { retry_not_before_at: current.retry_not_before_at }
               : {}),
           };
-          const dataChanged = changed || data.last_commit_sha !== desiredRevision;
-          if (dataChanged || input.requestedByUserId !== current?.requested_by_user_id) {
+          if (changed || input.requestedByUserId !== current?.requested_by_user_id) {
             await update(txDb, branches)
               .set({
                 data: {
                   ...data,
-                  last_commit_sha: desiredRevision,
                   environment_instance: { ...environment, source_sync: state },
                 },
                 updated_at: now,

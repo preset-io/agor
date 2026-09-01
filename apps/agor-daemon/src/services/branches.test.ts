@@ -1206,6 +1206,45 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
+  it('applies an executor RPC status fence together with its lifecycle generation', async () => {
+    const { service, branchRepo } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-env-rpc-status-fence' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-env-rpc-status-fence',
+      path: '/tmp/wt-env-rpc-status-fence',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 2,
+      environment_generation: 7,
+      environment_instance: { status: 'starting' },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const update = vi.spyOn(branchRepo, 'update').mockResolvedValue({
+      ...branch,
+      environment_instance: { status: 'running' },
+    } as never);
+
+    await runInTestTenantScope(() =>
+      service.updateEnvironment({
+        branch_id: branch.branch_id,
+        environment_update: { status: 'running' },
+        expected_environment_generation: 7,
+        expected_environment_status: 'starting',
+      })
+    );
+
+    expect(update).toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.objectContaining({
+        environment_instance: expect.objectContaining({ status: 'running' }),
+      }),
+      expect.objectContaining({
+        expectedEnvironmentGeneration: 7,
+        expectedEnvironmentStatus: 'starting',
+      })
+    );
+  });
+
   it('rejects direct transport forgery of daemon-owned source reconciliation state', async () => {
     const { service } = createServiceHarness();
     const branch = {
@@ -3575,6 +3614,7 @@ describe('BranchesService.renderEnvironment variant-switch fact hygiene', () => 
       sessionTokenService: { generateToken: vi.fn(async () => 'executor-token') },
       service(path: string) {
         if (path === 'repos') return { get: reposGet };
+        if (path === 'branches') return { emit: vi.fn() };
         throw new Error(`Unknown service: ${path}`);
       },
     } as unknown as Application;
@@ -3586,6 +3626,7 @@ describe('BranchesService.renderEnvironment variant-switch fact hygiene', () => 
       name: 'wt-1',
       path: '/tmp/wt-1',
       branch_unique_id: 1,
+      environment_generation: 0,
       environment_variant: opts.current,
       environment_instance: {
         status: 'stopped',
@@ -3593,41 +3634,49 @@ describe('BranchesService.renderEnvironment variant-switch fact hygiene', () => 
         access_urls: [{ name: 'App', url: CODESPACE_URL }],
       },
     } as never);
-    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockResolvedValue({} as never);
-    const patchSpy = vi.spyOn(service, 'patch').mockResolvedValue({} as never);
-    return { service, updateEnvironment, patchSpy };
+    const branchRepo = (service as unknown as { branchRepo: { update: ReturnType<typeof vi.fn> } })
+      .branchRepo;
+    const update = vi.spyOn(branchRepo, 'update').mockResolvedValue({} as never);
+    return { service, update };
   };
 
   it('clears facts and access_urls when the variant changes', async () => {
-    const { service, updateEnvironment } = harness({ current: 'remote', requested: 'local' });
+    const { service, update } = harness({ current: 'remote', requested: 'local' });
 
     await service.renderEnvironment('wt-1' as BranchID, { variant: 'local' });
 
-    expect(updateEnvironment).toHaveBeenCalledWith(
+    expect(update).toHaveBeenCalledWith(
       'wt-1',
-      { facts: null, lifecycle_result: null, access_urls: null, source_sync: null },
-      undefined
+      expect.objectContaining({
+        environment_instance: {
+          facts: null,
+          lifecycle_result: null,
+          access_urls: null,
+          source_sync: null,
+        },
+      }),
+      { expectedEnvironmentGeneration: 0, expectedEnvironmentStatus: 'stopped' }
     );
   });
 
   it('does NOT clear them when re-rendering the SAME variant', async () => {
-    const { service, updateEnvironment } = harness({ current: 'remote', requested: 'remote' });
+    const { service, update } = harness({ current: 'remote', requested: 'remote' });
 
     // Re-rendering a live remote variant must keep resolving {{env.*}} from the
     // facts that variant reported — clearing here would break the app URL.
     await service.renderEnvironment('wt-1' as BranchID, { variant: 'remote' });
 
-    expect(updateEnvironment).not.toHaveBeenCalled();
+    expect(update.mock.calls[0]?.[1]).not.toHaveProperty('environment_instance');
   });
 
   it('does not leak the old variant facts into the new variant templates', async () => {
-    const { service, patchSpy } = harness({ current: 'local', requested: 'remote' });
+    const { service, update } = harness({ current: 'local', requested: 'remote' });
 
     await service.renderEnvironment('wt-1' as BranchID, { variant: 'remote' });
 
     // `remote` renders app from `{{env.url}}`. The only facts on the branch
     // belong to the outgoing variant, so this must NOT resolve to them.
-    const patched = patchSpy.mock.calls[0]?.[1] as Record<string, unknown>;
+    const patched = update.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(patched.app_url ?? '').not.toContain('cs-abc-8088');
   });
 });
@@ -3744,6 +3793,7 @@ describe('syncEnvironment exact desired/applied contract', () => {
     const service = new BranchesService(createTenantScopeTestDb() as never, app);
     vi.spyOn(service as never, 'loadEnvironmentForAction').mockResolvedValue(branch as never);
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const patch = vi.spyOn(service, 'patch');
     const syncRepo = (
       service as unknown as {
         environmentSyncRepo: {
@@ -3765,11 +3815,11 @@ describe('syncEnvironment exact desired/applied contract', () => {
       .mockResolvedValue({ outcome: 'settled', needs_reconcile: false });
     vi.spyOn(service as never, 'publishEnvironmentSyncState').mockResolvedValue(branch as never);
     const reconcile = vi.spyOn(service, 'reconcileEnvironmentSync').mockResolvedValue();
-    return { service, branch, request, complete, fail, reconcile };
+    return { service, branch, request, complete, fail, reconcile, patch };
   };
 
-  it('persists the exact requested revision and frozen user before reconciliation', async () => {
-    const { service, request, reconcile } = harness();
+  it('persists desired state without rewriting observed branch data', async () => {
+    const { service, request, reconcile, patch } = harness();
 
     await service.syncEnvironment('wt-sync-race' as BranchID, undefined, {
       desiredRevision: revision,
@@ -3781,6 +3831,7 @@ describe('syncEnvironment exact desired/applied contract', () => {
       desiredRevision: revision,
       requestedByUserId: userId,
     });
+    expect(patch).not.toHaveBeenCalled();
     expect(reconcile).toHaveBeenCalledWith('wt-sync-race', undefined);
   });
 

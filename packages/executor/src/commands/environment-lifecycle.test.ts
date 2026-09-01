@@ -46,10 +46,12 @@ function successfulChild(stdout = '') {
     stdout: EventEmitter;
     stderr: EventEmitter;
     pid: number;
+    kill: ReturnType<typeof vi.fn>;
   };
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
   child.pid = 1234;
+  child.kill = vi.fn();
   queueMicrotask(() => {
     if (stdout) child.stdout.emit('data', Buffer.from(stdout));
     child.emit('close', 0);
@@ -125,6 +127,7 @@ describe('environment lifecycle generation fencing', () => {
     expect(updateEnvironment).toHaveBeenCalledTimes(2);
     expect(updateEnvironment.mock.calls[1]?.[0]).toMatchObject({
       expected_environment_generation: 1,
+      expected_environment_status: 'starting',
       environment_update: {
         access_urls: [{ name: 'Shell', url: 'https://shell.example.test/' }],
       },
@@ -146,6 +149,9 @@ describe('environment lifecycle generation fencing', () => {
     expect(
       updateEnvironment.mock.calls.map((call) => call[0].expected_environment_generation)
     ).toEqual([1, 1, 2]);
+    expect(updateEnvironment.mock.calls.map((call) => call[0].expected_environment_status)).toEqual(
+      ['stopping', 'stopping', 'starting']
+    );
     expect(mocks.spawn).toHaveBeenCalledTimes(2);
     const restartStart = updateEnvironment.mock.calls[1]?.[0].environment_update as {
       startup_deadline_at?: string;
@@ -175,8 +181,63 @@ describe('environment lifecycle generation fencing', () => {
       data: { action: 'start' },
     });
     expect(updateEnvironment.mock.calls[0]?.[0]).toMatchObject({
+      expected_environment_status: 'starting',
       environment_update: { startup_deadline_at: persistedDeadline },
     });
+    expect(updateEnvironment.mock.calls[1]?.[0]).toMatchObject({
+      expected_environment_status: 'starting',
+    });
+  });
+
+  it('terminates a Start command when its persisted startup deadline expires', async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: EventEmitter;
+      stderr: EventEmitter;
+      pid: number;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.pid = 1234;
+    child.kill = vi.fn();
+    mocks.spawn.mockReturnValue(child);
+    const processKill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    const updateEnvironment = vi
+      .fn()
+      .mockResolvedValueOnce({ environment_generation: 1 })
+      .mockResolvedValueOnce({ environment_generation: 2 });
+    client({
+      generation: 1,
+      updateEnvironment,
+      environmentInstance: {
+        status: 'starting',
+        startup_deadline_at: new Date(Date.now() + 20).toISOString(),
+      },
+    });
+    const expiringPayload = payload('start');
+
+    try {
+      await expect(handleEnvironmentLifecycle(expiringPayload, {})).resolves.toMatchObject({
+        success: false,
+        error: {
+          code: 'ENVIRONMENT_COMMAND_FAILED',
+          message: expect.stringMatching(/exceeded.*deadline/i),
+        },
+      });
+      expect(processKill).toHaveBeenCalledWith(-child.pid, 'SIGTERM');
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        expiringPayload.params.startCommand,
+        expect.objectContaining({ detached: process.platform !== 'win32' })
+      );
+      expect(updateEnvironment.mock.calls[1]?.[0]).toMatchObject({
+        expected_environment_generation: 1,
+        expected_environment_status: 'starting',
+        environment_update: { status: 'error' },
+      });
+    } finally {
+      child.emit('close', null);
+      processKill.mockRestore();
+    }
   });
 });
 

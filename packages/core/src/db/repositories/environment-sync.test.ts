@@ -165,6 +165,32 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
   });
 
   dbTest(
+    'does not let a requested remote revision rewrite the observed branch commit',
+    async ({ db }) => {
+      const { branch, user } = await seedRunningBranch(db);
+      const branches = new BranchRepository(db);
+      const sync = new EnvironmentSyncRepository(db);
+      await branches.update(branch.branch_id, { last_commit_sha: REVISION_A });
+
+      // The public/manual sync API accepts a caller-provided desired revision.
+      // That value controls remote reconciliation, but it is not proof that the
+      // branch worktree itself is currently at that commit.
+      await sync.request({
+        branchId: branch.branch_id,
+        desiredRevision: REVISION_B,
+        requestedByUserId: user.user_id as UserID,
+      });
+
+      await expect(branches.findById(branch.branch_id)).resolves.toMatchObject({
+        last_commit_sha: REVISION_A,
+        environment_instance: {
+          source_sync: { desired_revision: REVISION_B },
+        },
+      });
+    }
+  );
+
+  dbTest(
     'does not back off a newer desired revision when the old attempt fails',
     async ({ db }) => {
       const { branch } = await seedRunningBranch(db);

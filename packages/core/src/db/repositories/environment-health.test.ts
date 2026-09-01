@@ -461,6 +461,7 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
         environmentStatus: 'error',
       });
       await expect(branches.findById(branch.branch_id)).resolves.toMatchObject({
+        environment_generation: claim.claim.environment_generation + 1,
         environment_instance: {
           status: 'error',
           last_health_check: { status: 'unhealthy', consecutive: 1 },
@@ -468,6 +469,59 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
       });
     }
   );
+
+  dbTest('rejects a late Start completion after the startup deadline', async ({ db }) => {
+    const branch = await seedStartingBranch(db);
+    const branches = new BranchRepository(db);
+    const health = new EnvironmentHealthRepository(db);
+    await branches.update(branch.branch_id, {
+      environment_instance: {
+        status: 'starting',
+        process: { started_at: '2000-01-01T00:00:00.000Z' },
+        startup_deadline_at: '2000-01-01T01:00:00.000Z',
+      },
+    });
+    const claim = await health.claim({
+      branchId: branch.branch_id,
+      claimToken: 'late-start-completion',
+      leaseDurationMs: 30_000,
+      identity: { instanceId: 'daemon-after-outage', bootId: 'boot-after-outage' },
+    });
+    if (claim.outcome !== 'claimed') throw new Error('Expected claim');
+
+    await health.commit({
+      branchId: branch.branch_id,
+      claimToken: claim.claim.claim_token,
+      environmentGeneration: claim.claim.environment_generation,
+      observation: {
+        status: 'unhealthy',
+        message: 'Startup deadline expired',
+        recordWhileStarting: false,
+      },
+    });
+
+    // This is the callback shape used by a shell Start that exits after the
+    // health monitor has already timed it out. Its old generation must no
+    // longer be authorized to publish runtime state or revive the branch.
+    await expect(
+      branches.update(
+        branch.branch_id,
+        {
+          environment_instance: {
+            status: 'running',
+            access_urls: [{ name: 'App', url: 'https://late.example.test/' }],
+          },
+        },
+        { expectedEnvironmentGeneration: claim.claim.environment_generation }
+      )
+    ).rejects.toThrow(/superseded/i);
+    const afterTimeout = await branches.findById(branch.branch_id);
+    expect(afterTimeout).toMatchObject({
+      environment_generation: claim.claim.environment_generation + 1,
+      environment_instance: { status: 'error' },
+    });
+    expect(afterTimeout?.environment_instance?.access_urls).toBeUndefined();
+  });
 
   dbTest('demotes a running environment that has gone away', async ({ db }) => {
     const branch = await seedStartingBranch(db);
