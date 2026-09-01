@@ -10,6 +10,7 @@ import {
   runWithTenantDatabaseScope,
   UsersRepository,
 } from '@agor/core/db';
+import { ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE } from '@agor/core/environment/lifecycle-result';
 import { feathers } from '@agor/core/feathers';
 import {
   type Application,
@@ -391,12 +392,18 @@ describe('BranchesService environment start async behavior', () => {
       start_command: 'docker compose up -d --build',
       app_url: 'http://localhost:3000',
       environment_instance: { status: 'stopped' },
+      environment_generation: 0,
     };
 
     let currentEnvironment: Record<string, unknown> = { ...branch.environment_instance };
+    let currentGeneration = branch.environment_generation;
     vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
     vi.spyOn(service, 'get').mockImplementation(async () => {
-      return { ...branch, environment_instance: currentEnvironment } as never;
+      return {
+        ...branch,
+        environment_generation: currentGeneration,
+        environment_instance: currentEnvironment,
+      } as never;
     });
     const resolveEnvironmentCommand = vi
       .spyOn(service as never, 'resolveEnvironmentCommand')
@@ -417,12 +424,14 @@ describe('BranchesService environment start async behavior', () => {
       async (_id, update, _params, internalOptions) => {
         environmentUpdates.push(update as Record<string, unknown>);
         lifecycleOptions.push(internalOptions);
+        if (internalOptions?.beginLifecycle) currentGeneration += 1;
         currentEnvironment = {
           ...currentEnvironment,
           ...update,
         };
         return {
           ...branch,
+          environment_generation: currentGeneration,
           environment_instance: currentEnvironment,
         } as never;
       }
@@ -464,6 +473,7 @@ describe('BranchesService environment start async behavior', () => {
           principalBranchAccess: 'write',
           startCommand: branch.start_command,
           appUrl: branch.app_url,
+          lifecycleGeneration: 1,
         }),
       }),
       expect.objectContaining({
@@ -485,7 +495,11 @@ describe('BranchesService environment start async behavior', () => {
         }),
       ])
     );
-    expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
+    expect(lifecycleOptions[0]).toMatchObject({
+      beginLifecycle: true,
+      expectedEnvironmentGeneration: 0,
+      expectedEnvironmentStatus: 'stopped',
+    });
   });
 
   it('marks a repeated start request as a fresh lifecycle boundary', async () => {
@@ -499,12 +513,17 @@ describe('BranchesService environment start async behavior', () => {
     // the write + publish.
     vi.spyOn(service, 'get').mockResolvedValue({
       ...branch,
+      environment_generation: 0,
       environment_instance: { status: 'error' },
     } as never);
 
     await runInTestTenantScope(() => service.startEnvironment(branch.branch_id));
 
-    expect(lifecycleOptions[0]).toEqual({ beginLifecycle: true });
+    expect(lifecycleOptions[0]).toMatchObject({
+      beginLifecycle: true,
+      expectedEnvironmentGeneration: 0,
+      expectedEnvironmentStatus: 'error',
+    });
   });
 
   it('still refuses a start while one is already in flight', async () => {
@@ -627,12 +646,18 @@ describe('BranchesService environment start async behavior', () => {
       start_command: 'docker compose up -d --build',
       app_url: 'http://localhost:3000',
       environment_instance: { status: 'running' },
+      environment_generation: 0,
     };
 
     let currentEnvironment: Record<string, unknown> = { ...branch.environment_instance };
+    let currentGeneration = branch.environment_generation;
     vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
     vi.spyOn(service, 'get').mockImplementation(async () => {
-      return { ...branch, environment_instance: currentEnvironment } as never;
+      return {
+        ...branch,
+        environment_generation: currentGeneration,
+        environment_instance: currentEnvironment,
+      } as never;
     });
     vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
       kind: 'shell',
@@ -644,13 +669,20 @@ describe('BranchesService environment start async behavior', () => {
       executionUserId: 'user-1',
       branchFsAccess: 'write',
     } as never);
-    vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
-      currentEnvironment = {
-        ...currentEnvironment,
-        ...(update as Record<string, unknown>),
-      };
-      return { ...branch, environment_instance: currentEnvironment } as never;
-    });
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update, _params, options) => {
+        if (options?.beginLifecycle) currentGeneration += 1;
+        currentEnvironment = {
+          ...currentEnvironment,
+          ...(update as Record<string, unknown>),
+        };
+        return {
+          ...branch,
+          environment_generation: currentGeneration,
+          environment_instance: currentEnvironment,
+        } as never;
+      }
+    );
 
     (
       service as unknown as { processes: Map<BranchID, { process: { kill: () => void } }> }
@@ -695,12 +727,18 @@ describe('BranchesService environment start async behavior', () => {
       stop_command: 'docker compose down',
       app_url: 'http://localhost:3000',
       environment_instance: { status: 'running' },
+      environment_generation: 0,
     };
 
     let currentEnvironment: Record<string, unknown> = { ...branch.environment_instance };
+    let currentGeneration = branch.environment_generation;
     vi.spyOn(service as never, 'ensureCanTriggerEnv').mockResolvedValue(undefined as never);
     vi.spyOn(service, 'get').mockImplementation(async () => {
-      return { ...branch, environment_instance: currentEnvironment } as never;
+      return {
+        ...branch,
+        environment_generation: currentGeneration,
+        environment_instance: currentEnvironment,
+      } as never;
     });
     vi.spyOn(service as never, 'resolveEnvironmentCommand').mockImplementation(
       async (command: string) =>
@@ -721,16 +759,27 @@ describe('BranchesService environment start async behavior', () => {
         truncated: false,
         status: 200,
       } as never);
-    vi.spyOn(service, 'updateEnvironment').mockImplementation(async (_id, update) => {
-      currentEnvironment = {
-        ...currentEnvironment,
-        ...(update as Record<string, unknown>),
+    vi.spyOn(service, 'updateEnvironment').mockImplementation(
+      async (_id, update, _params, options) => {
+        if (options?.beginLifecycle) currentGeneration += 1;
+        currentEnvironment = {
+          ...currentEnvironment,
+          ...(update as Record<string, unknown>),
+        };
+        return {
+          ...branch,
+          environment_generation: currentGeneration,
+          environment_instance: currentEnvironment,
+        } as never;
+      }
+    );
+    mockedRequestExecutor.mockImplementation(async () => {
+      currentEnvironment = { ...currentEnvironment, status: 'stopped' };
+      currentGeneration += 1;
+      return {
+        success: true,
+        data: { branchId: branch.branch_id, action: 'stop' },
       };
-      return { ...branch, environment_instance: currentEnvironment } as never;
-    });
-    mockedRequestExecutor.mockResolvedValue({
-      success: true,
-      data: { branchId: branch.branch_id, action: 'stop' },
     });
 
     await service.restartEnvironment(branch.branch_id);
@@ -742,6 +791,7 @@ describe('BranchesService environment start async behavior', () => {
           action: 'stop',
           branchId: branch.branch_id,
           stopCommand: branch.stop_command,
+          lifecycleGeneration: 1,
         }),
       }),
       expect.objectContaining({ logPrefix: `[Environment.stop ${branch.name}]` })
@@ -3251,6 +3301,7 @@ describe('BranchesService.startEnvironment concurrency guard', () => {
     branch_unique_id: 1,
     start_command: 'echo start',
     environment_instance: status ? { status } : undefined,
+    environment_generation: 0,
   });
 
   const serviceFor = (branch: unknown) => {
@@ -3266,9 +3317,11 @@ describe('BranchesService.startEnvironment concurrency guard', () => {
       service as unknown as { loadEnvironmentForAction: (...a: unknown[]) => Promise<unknown> },
       'loadEnvironmentForAction'
     ).mockResolvedValue(branch as never);
-    const updateEnvironment = vi
-      .spyOn(service, 'updateEnvironment')
-      .mockResolvedValue(branch as never);
+    const updateEnvironment = vi.spyOn(service, 'updateEnvironment').mockResolvedValue({
+      ...(branch as Record<string, unknown>),
+      environment_generation: 1,
+      environment_instance: { status: 'starting' },
+    } as never);
     return { service, updateEnvironment };
   };
 
@@ -3282,15 +3335,13 @@ describe('BranchesService.startEnvironment concurrency guard', () => {
     expect(updateEnvironment).not.toHaveBeenCalled();
   });
 
-  it('does NOT block a start while stopping — restartEnvironment depends on it', async () => {
-    // restartEnvironment calls stopEnvironment then startEnvironment; the stop
-    // executor is async, so the status is still `stopping` when start runs.
-    // Guarding it here silently broke restart, which this locks against.
-    const { service } = serviceFor(startableBranch('stopping'));
+  it('rejects a separate start while a stop still owns the lifecycle', async () => {
+    const { service, updateEnvironment } = serviceFor(startableBranch('stopping'));
 
-    await expect(service.startEnvironment('wt-start-guard' as BranchID)).rejects.not.toThrow(
-      /already (running|starting)|is stopping/i
+    await expect(service.startEnvironment('wt-start-guard' as BranchID)).rejects.toThrow(
+      /still stopping/i
     );
+    expect(updateEnvironment).not.toHaveBeenCalled();
   });
 
   it('still rejects a start when already running', async () => {
@@ -3310,6 +3361,87 @@ describe('BranchesService.startEnvironment concurrency guard', () => {
         /already (running|starting)|stopping/i
       );
     }
+  });
+
+  dbTest('atomically dispatches only one of two concurrent starts', async ({ db }) => {
+    const users = new UsersRepository(db);
+    const repos = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const owner = await users.create({
+      email: 'start-race-owner@example.test',
+      name: 'Start Race Owner',
+      role: 'member',
+    });
+    const repo = await repos.create({
+      name: 'start-race-repo',
+      slug: 'start-race-repo',
+      repo_type: 'local',
+      local_path: '/tmp/start-race-repo',
+      default_branch: 'main',
+    });
+    const initial = await branchRepo.create({
+      branch_id: generateId() as BranchID,
+      repo_id: repo.repo_id,
+      name: 'start-race',
+      ref: 'start-race',
+      path: '/tmp/start-race-repo/start-race',
+      created_by: owner.user_id,
+      branch_unique_id: 90_001,
+      start_command: 'echo start',
+      environment_instance: { status: 'stopped' },
+    });
+    const branchesService = { emit: vi.fn() };
+    const app = {
+      get: () => ({}),
+      service(path: string) {
+        if (path === 'branches') return branchesService;
+        if (path === 'repos') return { get: vi.fn(async () => repo) };
+        throw new Error(`Unknown service: ${path}`);
+      },
+    } as unknown as Application;
+    const service = new BranchesService(db, app);
+    vi.spyOn(service, 'get').mockImplementation(async (id) => {
+      const current = await branchRepo.findById(id);
+      if (!current) throw new Error('branch disappeared');
+      return current as never;
+    });
+    let arrivals = 0;
+    let release!: () => void;
+    const bothLoaded = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    vi.spyOn(service as never, 'loadEnvironmentForAction').mockImplementation(async () => {
+      arrivals += 1;
+      if (arrivals === 2) release();
+      await bothLoaded;
+      return initial as never;
+    });
+    vi.spyOn(service as never, 'resolveEnvironmentCommand').mockResolvedValue({
+      kind: 'shell',
+      command: initial.start_command,
+    } as never);
+    const dispatch = vi
+      .spyOn(service as never, 'dispatchEnvironmentExecutor')
+      .mockResolvedValue(undefined as never);
+
+    const results = await Promise.allSettled([
+      service.startEnvironment(initial.branch_id),
+      service.startEnvironment(initial.branch_id),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((result) => result.status === 'rejected');
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      reason: expect.objectContaining({
+        data: expect.objectContaining({ code: ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE }),
+      }),
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    await expect(branchRepo.findById(initial.branch_id)).resolves.toMatchObject({
+      environment_generation: 1,
+      environment_instance: { status: 'starting' },
+    });
   });
 });
 
@@ -3492,6 +3624,7 @@ describe('syncEnvironment concurrency', () => {
       branch_unique_id: 1,
       environment_variant: 'codespaces',
       environment_instance: { status: 'running', facts: { name: 'cs-1' } },
+      environment_generation: 1,
     };
     const app = {
       get: () => ({}),

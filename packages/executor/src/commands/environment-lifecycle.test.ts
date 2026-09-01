@@ -1,0 +1,143 @@
+import { EventEmitter } from 'node:events';
+import { ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE } from '@agor/core/environment/lifecycle-result';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { EnvironmentLifecyclePayload } from '../payload-types';
+
+const mocks = vi.hoisted(() => ({
+  createExecutorClient: vi.fn(),
+  spawn: vi.fn(),
+}));
+
+vi.mock('node:child_process', () => ({ spawn: mocks.spawn }));
+vi.mock('../services/feathers-client.js', () => ({
+  createExecutorClient: mocks.createExecutorClient,
+}));
+
+import { handleEnvironmentLifecycle } from './environment';
+
+const branchId = '550e8400-e29b-41d4-a716-446655440000';
+
+function payload(
+  action: EnvironmentLifecyclePayload['params']['action'],
+  lifecycleGeneration = 1
+): EnvironmentLifecyclePayload {
+  return {
+    command: 'environment.lifecycle',
+    sessionToken: 'executor-token',
+    params: {
+      branchId,
+      branchPath: '/tmp/branch',
+      action,
+      startCommand: 'echo start',
+      stopCommand: 'echo stop',
+      nukeCommand: 'echo nuke',
+      syncCommand: 'echo sync',
+      lifecycleGeneration,
+    },
+  };
+}
+
+function successfulChild(stdout = '') {
+  const child = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    pid: number;
+  };
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.pid = 1234;
+  queueMicrotask(() => {
+    if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+    child.emit('close', 0);
+  });
+  return child;
+}
+
+function client(options: { generation: number; updateEnvironment: ReturnType<typeof vi.fn> }) {
+  const branch = {
+    branch_id: branchId,
+    path: '/tmp/branch',
+    environment_generation: options.generation,
+    environment_instance: { status: 'starting' },
+  };
+  const service = {
+    get: vi.fn(async () => branch),
+    updateEnvironment: options.updateEnvironment,
+  };
+  mocks.createExecutorClient.mockResolvedValue({
+    service: vi.fn(() => service),
+  });
+  return service;
+}
+
+function supersededConflict() {
+  return {
+    message: 'Environment lifecycle was superseded',
+    data: { code: ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE },
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.spawn.mockImplementation(() => successfulChild());
+});
+
+describe('environment lifecycle generation fencing', () => {
+  it('does not execute a command whose lifecycle was superseded before spawn', async () => {
+    const updateEnvironment = vi.fn();
+    client({ generation: 2, updateEnvironment });
+
+    await expect(handleEnvironmentLifecycle(payload('start', 1), {})).resolves.toMatchObject({
+      success: true,
+      data: { superseded: true },
+    });
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    expect(updateEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('suppresses a late start result after a newer lifecycle wins', async () => {
+    mocks.spawn.mockImplementation(() =>
+      successfulChild(
+        `AGOR_ENVIRONMENT_RESULT=${JSON.stringify({
+          version: 1,
+          access_urls: [{ name: 'Shell', url: 'https://shell.example.test' }],
+        })}\n`
+      )
+    );
+    const updateEnvironment = vi
+      .fn()
+      .mockResolvedValueOnce({ environment_generation: 1 })
+      .mockRejectedValueOnce(supersededConflict());
+    client({ generation: 1, updateEnvironment });
+
+    await expect(handleEnvironmentLifecycle(payload('start'), {})).resolves.toMatchObject({
+      success: true,
+      data: { superseded: true },
+    });
+    expect(updateEnvironment).toHaveBeenCalledTimes(2);
+    expect(updateEnvironment.mock.calls[1]?.[0]).toMatchObject({
+      expected_environment_generation: 1,
+      environment_update: {
+        access_urls: [{ name: 'Shell', url: 'https://shell.example.test/' }],
+      },
+    });
+  });
+
+  it('carries the new generation across the internal stop-to-start restart transition', async () => {
+    const updateEnvironment = vi
+      .fn()
+      .mockResolvedValueOnce({ environment_generation: 1 })
+      .mockResolvedValueOnce({ environment_generation: 2 })
+      .mockResolvedValueOnce({ environment_generation: 2 });
+    client({ generation: 1, updateEnvironment });
+
+    await expect(handleEnvironmentLifecycle(payload('restart'), {})).resolves.toMatchObject({
+      success: true,
+      data: { action: 'restart' },
+    });
+    expect(
+      updateEnvironment.mock.calls.map((call) => call[0].expected_environment_generation)
+    ).toEqual([1, 1, 2]);
+    expect(mocks.spawn).toHaveBeenCalledTimes(2);
+  });
+});

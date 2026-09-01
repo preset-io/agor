@@ -978,6 +978,82 @@ describe('BranchRepository.update', () => {
     expect(updated.updated_at).toBe(created.updated_at);
   });
 
+  dbTest(
+    'lets exactly one concurrent lifecycle boundary claim the current generation',
+    async ({ db }) => {
+      const repoRepo = new RepoRepository(db);
+      const branchRepo = new BranchRepository(db);
+      const repo = await repoRepo.create(createRepoData());
+      const created = await branchRepo.create(
+        createBranchData({
+          repo_id: repo.repo_id,
+          environment_instance: { status: 'stopped' },
+        })
+      );
+      expect(created.environment_generation).toBe(0);
+
+      const claim = () =>
+        branchRepo.update(
+          created.branch_id,
+          { environment_instance: { status: 'starting' } },
+          {
+            invalidateEnvironmentObservation: true,
+            expectedEnvironmentGeneration: 0,
+            expectedEnvironmentStatus: 'stopped',
+          }
+        );
+      const results = await Promise.allSettled([claim(), claim()]);
+
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.find((result) => result.status === 'rejected');
+      expect(rejected).toMatchObject({
+        status: 'rejected',
+        reason: expect.objectContaining({ name: 'EnvironmentLifecycleConflictError' }),
+      });
+      await expect(branchRepo.findById(created.branch_id)).resolves.toMatchObject({
+        environment_generation: 1,
+        environment_instance: { status: 'starting' },
+      });
+    }
+  );
+
+  dbTest('rejects a stale completion without mutating the newer lifecycle', async ({ db }) => {
+    const repoRepo = new RepoRepository(db);
+    const branchRepo = new BranchRepository(db);
+    const repo = await repoRepo.create(createRepoData());
+    const created = await branchRepo.create(
+      createBranchData({
+        repo_id: repo.repo_id,
+        environment_instance: { status: 'starting' },
+      })
+    );
+    const stopped = await branchRepo.update(
+      created.branch_id,
+      { environment_instance: { status: 'stopped' } },
+      { invalidateEnvironmentObservation: true }
+    );
+
+    await expect(
+      branchRepo.update(
+        created.branch_id,
+        {
+          environment_instance: {
+            status: 'running',
+            access_urls: [{ name: 'Stale', url: 'https://stale.example.test' }],
+          },
+        },
+        { expectedEnvironmentGeneration: created.environment_generation }
+      )
+    ).rejects.toMatchObject({ name: 'EnvironmentLifecycleConflictError' });
+    await expect(branchRepo.findById(created.branch_id)).resolves.toMatchObject({
+      environment_generation: stopped.environment_generation,
+      environment_instance: { status: 'stopped' },
+    });
+    expect((await branchRepo.findById(created.branch_id))?.environment_instance?.access_urls).toBe(
+      undefined
+    );
+  });
+
   dbTest('should update by full UUID and short ID', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);

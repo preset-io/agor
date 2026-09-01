@@ -94,6 +94,65 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       ]);
     });
 
+    it('admits exactly one lifecycle boundary across two daemon connections', async () => {
+      const tenantId = `env-lifecycle-${generateId()}` as TenantID;
+      const branch = await seedBranch(dbA, tenantId, 'stopped');
+      const claim = (db: Database) =>
+        runWithTenantDatabaseScope(db, tenantId, (scoped) =>
+          new BranchRepository(scoped).update(
+            branch.branch_id,
+            { environment_instance: { status: 'starting' } },
+            {
+              invalidateEnvironmentObservation: true,
+              expectedEnvironmentGeneration: branch.environment_generation,
+              expectedEnvironmentStatus: 'stopped',
+            }
+          )
+        );
+
+      const results = await Promise.allSettled([claim(dbA), claim(dbB)]);
+
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new BranchRepository(scoped).findById(branch.branch_id)
+        )
+      ).resolves.toMatchObject({
+        environment_generation: 1,
+        environment_instance: { status: 'starting' },
+      });
+    });
+
+    it('does not let a lifecycle generation cross a tenant boundary', async () => {
+      const tenantA = `env-lifecycle-a-${generateId()}` as TenantID;
+      const tenantB = `env-lifecycle-b-${generateId()}` as TenantID;
+      await seedBranch(dbA, tenantA, 'stopped');
+      const branchB = await seedBranch(dbA, tenantB, 'stopped');
+
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantA, (scoped) =>
+          new BranchRepository(scoped).update(
+            branchB.branch_id,
+            { environment_instance: { status: 'starting' } },
+            {
+              invalidateEnvironmentObservation: true,
+              expectedEnvironmentGeneration: branchB.environment_generation,
+              expectedEnvironmentStatus: 'stopped',
+            }
+          )
+        )
+      ).rejects.toThrow();
+      await expect(
+        runWithTenantDatabaseScope(dbB, tenantB, (scoped) =>
+          new BranchRepository(scoped).findById(branchB.branch_id)
+        )
+      ).resolves.toMatchObject({
+        environment_generation: 0,
+        environment_instance: { status: 'stopped' },
+      });
+    });
+
     it('elects one owner, renews only the current token, takes over, and fences stale results', async () => {
       const tenantId = `env-owner-${generateId()}` as TenantID;
       const branch = await seedBranch(dbA, tenantId);

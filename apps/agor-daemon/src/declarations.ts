@@ -322,6 +322,8 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
           branchId?: BranchID;
           environment_update?: BranchEnvironmentUpdate;
           environmentUpdate?: BranchEnvironmentUpdate;
+          expected_environment_generation?: number;
+          expectedEnvironmentGeneration?: number;
         },
     environmentUpdate?: BranchEnvironmentUpdate | FeathersParams,
     params?: FeathersParams

@@ -613,6 +613,9 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
 
       /** Static health URL rendered by the daemon/branch snapshot. */
       healthCheckUrl: z.string().optional(),
+
+      /** Monotonic lifecycle boundary that must still own every state update. */
+      lifecycleGeneration: z.number().int().nonnegative().optional(),
     })
     .superRefine((params, ctx) => {
       if ((params.action === 'start' || params.action === 'restart') && !params.startCommand) {

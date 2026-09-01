@@ -256,6 +256,12 @@ export interface Branch {
    */
   environment_instance?: BranchEnvironmentInstance;
 
+  /**
+   * Server-managed monotonic lifecycle boundary used to fence asynchronous
+   * environment commands and health observations. Clients may read but never set it.
+   */
+  readonly environment_generation?: number;
+
   // ===== Sessions =====
 
   /**
