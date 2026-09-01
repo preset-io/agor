@@ -27,8 +27,16 @@ export type MCPExternalErrorAction =
   | 'reauthenticate'
   | 'review_configuration'
   | 'contact_admin';
-export type MCPExternalErrorType = 'Error' | 'TypeError' | 'AbortError' | 'UnknownError';
-export type MCPExternalErrorReason = 'capability_persistence_validation_rejected';
+export type MCPExternalErrorType =
+  | 'Error'
+  | 'TypeError'
+  | 'AbortError'
+  | 'HTTPError'
+  | 'ConfigurationError'
+  | 'UnknownError';
+export type MCPExternalErrorReason =
+  | 'capability_persistence_validation_rejected'
+  | 'oauth_metadata_incompatible';
 
 const ALLOWED_EXTERNAL_CODES = new Set([
   'ABORT_ERR',
@@ -54,6 +62,8 @@ export interface SanitizedMCPExternalError {
     stage: MCPExternalErrorStage;
     type: MCPExternalErrorType;
     code?: string;
+    /** Closed HTTP status from a transport exception; never response prose. */
+    status?: number;
     reason?: MCPExternalErrorReason;
   };
 }
@@ -80,6 +90,9 @@ export class MCPExternalError extends Error {
       type: safeDiagnosticType(sanitized.diagnostic?.type),
       ...(safeAllowedCode(sanitized.diagnostic?.code)
         ? { code: safeAllowedCode(sanitized.diagnostic?.code) }
+        : {}),
+      ...(safeHTTPStatus(sanitized.diagnostic) !== undefined
+        ? { status: safeHTTPStatus(sanitized.diagnostic) }
         : {}),
       ...(safeReason(sanitized.diagnostic?.reason)
         ? { reason: safeReason(sanitized.diagnostic?.reason) }
@@ -111,6 +124,8 @@ function safeDiagnosticType(type: unknown): MCPExternalErrorType {
   return type === 'Error' ||
     type === 'TypeError' ||
     type === 'AbortError' ||
+    type === 'HTTPError' ||
+    type === 'ConfigurationError' ||
     type === 'UnknownError'
     ? type
     : 'UnknownError';
@@ -121,7 +136,10 @@ function safeAllowedCode(code: unknown): string | undefined {
 }
 
 function safeReason(reason: unknown): MCPExternalErrorReason | undefined {
-  return reason === 'capability_persistence_validation_rejected' ? reason : undefined;
+  return reason === 'capability_persistence_validation_rejected' ||
+    reason === 'oauth_metadata_incompatible'
+    ? reason
+    : undefined;
 }
 
 function safeInstanceOf(
@@ -158,6 +176,29 @@ function safeOwnDataValue(error: unknown, property: string): unknown {
 }
 
 /**
+ * The MCP SDK's StreamableHTTPError exposes the response status as an own,
+ * numeric `code` field. Accept only the closed HTTP error range; negative
+ * JSON-RPC codes and arbitrary provider strings remain untrusted.
+ */
+function safeHTTPStatus(error: unknown): number | undefined {
+  for (const field of ['status', 'statusCode', 'code']) {
+    const value = safeOwnDataValue(error, field);
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 300 && value <= 599) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function categoryForHTTPStatus(status: number): MCPExternalErrorCategory {
+  if (status === 401 || status === 403) return 'provider_rejected';
+  if (status === 408 || status === 425 || status === 429 || status >= 500) {
+    return 'provider_unavailable';
+  }
+  return 'configuration_required';
+}
+
+/**
  * Abort recognition which never invokes an attacker-controlled `name` getter.
  * SDKs commonly construct `Error` and assign an own data `name`, while web
  * AbortErrors also expose the closed `ABORT_ERR` code.
@@ -168,7 +209,8 @@ export function isMCPAbortError(error: unknown): boolean {
   return isTrustedDOMAbortError(error);
 }
 
-function safeType(error: unknown): MCPExternalErrorType {
+function safeType(error: unknown, httpStatus?: number): MCPExternalErrorType {
+  if (httpStatus !== undefined) return 'HTTPError';
   if (isMCPAbortError(error)) return 'AbortError';
   if (safeInstanceOf(error, TypeError)) return 'TypeError';
   if (safeInstanceOf(error, Error)) return 'Error';
@@ -231,6 +273,7 @@ export function sanitizeMCPExternalError(
   options: {
     stage: MCPExternalErrorStage;
     category?: MCPExternalErrorCategory;
+    type?: MCPExternalErrorType;
     reason?: MCPExternalErrorReason;
   }
 ): SanitizedMCPExternalError {
@@ -244,6 +287,7 @@ export function sanitizeMCPExternalError(
       const contract = fixedContract(category);
       const diagnostic = safeOwnDataValue(error, 'diagnostic');
       const code = safeAllowedCode(safeOwnDataValue(diagnostic, 'code'));
+      const status = safeHTTPStatus(diagnostic);
       const reason = safeReason(safeOwnDataValue(diagnostic, 'reason'));
       return {
         category,
@@ -253,6 +297,7 @@ export function sanitizeMCPExternalError(
           stage: safeStage(options.stage),
           type: safeDiagnosticType(safeOwnDataValue(diagnostic, 'type')),
           ...(code ? { code } : {}),
+          ...(status !== undefined ? { status } : {}),
           ...(reason ? { reason } : {}),
         },
       };
@@ -262,11 +307,16 @@ export function sanitizeMCPExternalError(
     }
   }
 
+  const status = safeHTTPStatus(error);
   const code = safeCode(error);
-  const type = safeType(error);
+  const type = safeDiagnosticType(options.type ?? safeType(error, status));
   const category = safeCategory(
     options.category ??
-      (code || type === 'TypeError' || type === 'AbortError' ? 'provider_unavailable' : 'unknown')
+      (status !== undefined
+        ? categoryForHTTPStatus(status)
+        : code || type === 'TypeError' || type === 'AbortError'
+          ? 'provider_unavailable'
+          : 'unknown')
   );
   const contract = fixedContract(category);
   return {
@@ -277,6 +327,7 @@ export function sanitizeMCPExternalError(
       stage: safeStage(options.stage),
       type,
       ...(code ? { code } : {}),
+      ...(status !== undefined ? { status } : {}),
       ...(safeReason(options.reason) ? { reason: safeReason(options.reason) } : {}),
     },
   };
