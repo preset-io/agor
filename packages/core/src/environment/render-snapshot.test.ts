@@ -169,4 +169,35 @@ describe('renderBranchSnapshot', () => {
     const snapshot = renderBranchSnapshot({ slug: 'myrepo', environment: env }, branch);
     expect(snapshot?.start).toBe('echo myrepo eu-central-1');
   });
+
+  it('renders exact, quoted provider identity without remote credentials', () => {
+    const env: RepoEnvironment = {
+      version: 2,
+      default: 'remote',
+      variants: {
+        remote: {
+          start:
+            'bridge up --binding {{shellQuote branch.id}} --ref {{shellQuote branch.ref}} --repo {{shellQuote repo.github_slug}}',
+          stop: 'bridge stop',
+        },
+      },
+    };
+    const snapshot = renderBranchSnapshot(
+      {
+        slug: 'display-slug',
+        remote_url: 'https://x-access-token:secret@github.com/preset-io/agor.git',
+        environment: env,
+      },
+      {
+        ...branch,
+        branch_id: '01999999-1111-7222-8333-444444444444',
+        ref: "feature/it's-$(inert)",
+      }
+    );
+
+    expect(snapshot?.start).toBe(
+      `bridge up --binding '01999999-1111-7222-8333-444444444444' --ref 'feature/it'"'"'s-$(inert)' --repo 'preset-io/agor'`
+    );
+    expect(snapshot?.start).not.toContain('secret');
+  });
 });

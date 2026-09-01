@@ -77,12 +77,15 @@ Every field in a variant is a Handlebars template. The render context is built i
 
 | Variable | Source | Example | Notes |
 |---|---|---|---|
+| `{{branch.id}}` | Branch | `0198f5d4-...` | Stable branch UUID. Use as a provider-resource binding, not as a display name. |
 | `{{branch.unique_id}}` | Branch | `3` | Auto-incrementing integer. Use for deterministic port offsets. |
 | `{{branch.name}}` | Branch | `feat-new-filter` | Slugified branch name. Good for `docker compose -p`. |
+| `{{branch.ref}}` | Branch | `refs/heads/feat-new-filter` | Exact git ref recorded for the branch. Empty if unavailable. |
 | `{{branch.path}}` | Branch | `/home/you/agor/feat-new-filter` | Absolute path on disk. |
 | `{{branch.base_ref}}` | Branch | `main` | Source branch/tag name the branch was created from (the "Base Branch"/"Base Tag" in the create dialog). The **name**, not a SHA. Empty string if unknown. |
 | `{{branch.ref_type}}` | Branch | `branch` | `branch` or `tag`, indicating whether `base_ref` names a branch or a tag. Defaults to `branch`. |
 | `{{repo.slug}}` | Repo | `preset-io/superset` | Repository slug. |
+| `{{repo.github_slug}}` | Repo | `preset-io/agor` | Credential-free `owner/repository` identity derived from a registered `github.com` remote. Empty for other hosts. |
 | `{{host.ip_address}}` | Auto-detected | `10.0.1.42` | Fallback order: `template_overrides.host.ip_address` → `daemon.host_ip_address` in `~/.agor/config.yaml` → autodetect. |
 | `{{custom.<key>}}` | Branch custom context | `{{custom.compose_profile}}` | Anything you store in `branch.custom_context`. |
 | `{{custom.<key>}}` via overrides | `template_overrides.custom.*` | `{{custom.internal_registry}}` | Repo-wide fallback if the branch doesn't set a key. |
@@ -98,6 +101,8 @@ Every field in a variant is a Handlebars template. The render context is built i
 | `mod` | `{{mod branch.unique_id 4}}` | `3` |
 
 Math helpers are deterministic. The same branch always renders the same ports, which is what keeps parallel branches from colliding.
+
+Use `{{shellQuote value}}` when inserting any template value into a shell command. It renders the value as exactly one inert POSIX shell argument, including values with spaces, quotes, or shell metacharacters.
 
 > Broken template syntax is reported at **render time**, not at save time. Click Render to see the exact error with a line number.
 
