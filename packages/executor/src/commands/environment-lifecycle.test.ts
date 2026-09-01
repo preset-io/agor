@@ -110,7 +110,7 @@ describe('environment lifecycle generation fencing', () => {
       successfulChild(
         `AGOR_ENVIRONMENT_RESULT=${JSON.stringify({
           version: 1,
-          access_urls: [{ name: 'Shell', url: 'https://shell.example.test' }],
+          access_urls: [{ name: 'App', url: 'https://app.example.test' }],
         })}\n`
       )
     );
@@ -129,7 +129,7 @@ describe('environment lifecycle generation fencing', () => {
       expected_environment_generation: 1,
       expected_environment_status: 'starting',
       environment_update: {
-        access_urls: [{ name: 'Shell', url: 'https://shell.example.test/' }],
+        access_urls: [{ name: 'App', url: 'https://app.example.test/' }],
       },
     });
   });

@@ -68,7 +68,7 @@ export interface RenderBranchInput {
   base_ref?: string;
   ref_type?: 'branch' | 'tag';
   /**
-   * Post-start facts reported by a lifecycle command
+   * Post-start template values derived from a typed lifecycle result
    * (`BranchEnvironmentInstance.facts`). Exposed to templates as `{{env.*}}`.
    * Undefined at branch-creation render time (the environment has not started),
    * so `{{env.url}}` renders to '' then and to the real value on a re-render
@@ -168,9 +168,9 @@ export function renderBranchSnapshot(
   // need to merge overrides in BEFORE custom. Easiest way: rebuild with
   // override'd base entities, then reattach `custom`.
   //
-  // `env` (post-start facts) is destructured out alongside `custom` so both are
-  // immune to `template_overrides` deep-merge: facts are runtime truth reported
-  // by the environment itself and must not be shadowed by static config.
+  // `env` (post-start runtime values) is destructured out alongside `custom` so
+  // both are immune to `template_overrides` deep-merge: lifecycle results are
+  // runtime truth and must not be shadowed by static config.
   const {
     custom,
     env: envFacts,

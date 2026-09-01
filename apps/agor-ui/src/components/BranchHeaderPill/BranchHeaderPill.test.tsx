@@ -146,8 +146,8 @@ describe('BranchHeaderPill', () => {
             environment_instance: {
               status: 'running',
               access_urls: [
-                { name: 'Shell', url: 'https://shell.example.test' },
-                { name: 'Manager', url: 'https://manager.example.test' },
+                { name: 'App', url: 'https://app.example.test' },
+                { name: 'Metrics', url: 'https://metrics.example.test' },
               ],
             },
           } as Branch
@@ -155,13 +155,13 @@ describe('BranchHeaderPill', () => {
       />
     );
 
-    expect(screen.getByRole('link', { name: 'Open Shell' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Open App' })).toHaveAttribute(
       'href',
-      'https://shell.example.test'
+      'https://app.example.test'
     );
-    expect(screen.getByRole('link', { name: 'Open Manager' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Open Metrics' })).toHaveAttribute(
       'href',
-      'https://manager.example.test'
+      'https://metrics.example.test'
     );
   });
 

@@ -23,10 +23,10 @@ describe('EnvironmentCommandOutputCapture', () => {
     const encoded = JSON.stringify({
       version: 1,
       access_urls: [
-        { name: 'Shell', url: 'https://shell.example.test' },
-        { name: 'Manager', url: 'https://manager.example.test' },
+        { name: 'App', url: 'https://app.example.test' },
+        { name: 'Metrics', url: 'https://metrics.example.test' },
       ],
-      health_url: 'https://shell.example.test/health',
+      health_url: 'https://app.example.test/health',
       resource: { provider: 'github-codespaces', id: '123', name: 'space' },
     });
     const result = capture({
@@ -39,12 +39,12 @@ describe('EnvironmentCommandOutputCapture', () => {
     });
 
     expect(result.lifecycleResult?.access_urls).toEqual([
-      { name: 'Shell', url: 'https://shell.example.test/' },
-      { name: 'Manager', url: 'https://manager.example.test/' },
+      { name: 'App', url: 'https://app.example.test/' },
+      { name: 'Metrics', url: 'https://metrics.example.test/' },
     ]);
     expect(result.facts).toMatchObject({
-      url: 'https://shell.example.test/',
-      url_manager: 'https://manager.example.test/',
+      url: 'https://app.example.test/',
+      url_metrics: 'https://metrics.example.test/',
       name: 'space',
     });
     expect(result.streamedStdout).toBe('building\n');
@@ -52,18 +52,18 @@ describe('EnvironmentCommandOutputCapture', () => {
     expect(result.output).not.toContain('AGOR_ENVIRONMENT_RESULT');
   });
 
-  it('accepts the bounded legacy Preset keys and converts them to the typed result', () => {
+  it('converts the bounded transitional lifecycle facts to the typed result', () => {
     const result = capture({
       stdoutChunks: [
-        'AGOR_FACT name=space\nAGOR_FACT url=https://shell.example.test\n',
+        'AGOR_FACT name=space\nAGOR_FACT url=https://app.example.test\n',
         'AGOR_FACT url_manager=https://manager.example.test\n',
-        'AGOR_FACT health=https://shell.example.test/health\nready\n',
+        'AGOR_FACT health=https://app.example.test/health\nready\n',
       ],
     });
     expect(result.lifecycleResult).toMatchObject({
       version: 1,
       access_urls: [
-        { name: 'App', url: 'https://shell.example.test/' },
+        { name: 'App', url: 'https://app.example.test/' },
         { name: 'Manager', url: 'https://manager.example.test/' },
       ],
       resource: { name: 'space' },
@@ -78,8 +78,8 @@ describe('EnvironmentCommandOutputCapture', () => {
     ],
     ['mixed protocols', ['AGOR_FACT name=space\nAGOR_ENVIRONMENT_RESULT={"version":1}\n']],
     ['unknown result field', ['AGOR_ENVIRONMENT_RESULT={"version":1,"token":"secret"}\n']],
-    ['unsupported legacy fact', ['AGOR_FACT token=secret\n']],
-    ['duplicate legacy fact', ['AGOR_FACT name=one\nAGOR_FACT name=two\n']],
+    ['unsupported transitional fact', ['AGOR_FACT token=secret\n']],
+    ['duplicate transitional fact', ['AGOR_FACT name=one\nAGOR_FACT name=two\n']],
   ])('fails closed for %s', (_name, stdoutChunks) => {
     expect(() => capture({ stdoutChunks })).toThrow();
   });
@@ -103,9 +103,9 @@ describe('EnvironmentCommandOutputCapture', () => {
   it('does not parse controls when lifecycle parsing is disabled', () => {
     const result = capture({
       parseLifecycleResult: false,
-      stdoutChunks: ['AGOR_FACT synced_sha=abc\n'],
+      stdoutChunks: ['AGOR_ENVIRONMENT_RESULT={"version":1}\n'],
     });
     expect(result.lifecycleResult).toBeUndefined();
-    expect(result.streamedStdout).toBe('AGOR_FACT synced_sha=abc\n');
+    expect(result.streamedStdout).toBe('AGOR_ENVIRONMENT_RESULT={"version":1}\n');
   });
 });

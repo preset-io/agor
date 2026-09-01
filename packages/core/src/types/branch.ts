@@ -644,23 +644,18 @@ export interface BranchEnvironmentInstance {
   };
 
   /**
-   * Legacy compatibility facts reported by a lifecycle command's stdout.
+   * Bounded template values derived from the typed lifecycle result.
    *
-   * A remote environment's address (and other post-start metadata) does not
-   * exist until it starts — a Codespace's hostname, a k8s pod's ingress, a
-   * preview deploy's URL are all invented by the backend at creation time.
-   * New adapters emit the bounded `AGOR_ENVIRONMENT_RESULT` protocol. During
-   * migration, the executor accepts only the historical `url`, `health`,
-   * `name`, and `url_manager` facts and converts them into `lifecycle_result`.
+   * A remote environment's address and provider identity may not exist until
+   * Start completes. `AGOR_ENVIRONMENT_RESULT` persists that runtime metadata
+   * in `lifecycle_result`; this field exposes a small derived view to
+   * Handlebars as `{{env.<key>}}` (see `buildBranchContext`). `env.url` is the
+   * primary access URL and additional named URLs use `env.url_<normalized_name>`.
+   * During adapter migration, bounded historical output is first converted to
+   * the same typed result and therefore reaches templates through this path.
    *
-   * These become available to Handlebars templates as `{{env.<key>}}` (see
-   * `buildBranchContext`). The `url` key is reserved: it populates
-   * `access_urls` after start, which is what surfaces `app: "{{env.url}}"`.
-   *
-   * Persisted (a cache of the last command's report), not authoritative — a
-   * later command may refresh or clear it. Cleared on nuke, and on a variant
-   * switch: facts are produced BY a specific variant's lifecycle command and
-   * describe a different environment once the variant changes.
+   * This is a cache, not a second source of truth. It is refreshed from the
+   * typed result and cleared on nuke or variant switch.
    */
   facts?: Record<string, string>;
 }
@@ -675,8 +670,8 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'lifecycle_result',
   'startup_deadline_at',
   'source_sync',
-  // Derived from the reserved `url` fact, so it goes stale in exactly the same
-  // situations facts do and has to be clearable alongside them.
+  // Derived from the typed lifecycle result, so it is cleared alongside the
+  // template-value cache whenever that result becomes stale.
   'access_urls',
 ] as const satisfies ReadonlyArray<keyof BranchEnvironmentInstance>;
 

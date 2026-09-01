@@ -3373,15 +3373,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     branch: Branch,
     cancellationSignal?: AbortSignal
   ): Promise<EnvironmentHealthObservation | null> {
-    // A REMOTE environment (a Codespace) has no frozen health_check_url — its
-    // reachable address does not exist until it starts, so the lifecycle command
-    // reports it as a `health` fact. Without this fallback every remote
-    // environment is permanently "not observable" and can never leave
-    // `starting`, which is the whole point of the codespaces variant.
-    //
-    // Facts are command output, so the URL is untrusted input and gets the
-    // stricter fact guard (loopback / RFC1918 / link-local / .internal) rather
-    // than the plain health-check guard applied to operator-authored config.
+    // A remote environment may not have a reachable address until Start
+    // completes. Its typed lifecycle result can therefore publish a dynamic
+    // health URL. Provider output is untrusted and must pass the stricter
+    // public-destination guard before the DNS-pinned request path uses it.
+    // The facts fallback is transitional for instances started by the older
+    // lifecycle output protocol and can be removed after adapters migrate.
     const rawResultHealthUrl = branch.environment_instance?.lifecycle_result?.health_url;
     const rawFactsHealthUrl = branch.environment_instance?.facts?.health;
     const rawDynamicHealthUrl = rawResultHealthUrl ?? rawFactsHealthUrl;

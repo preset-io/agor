@@ -487,15 +487,11 @@ export class DistributedHealthMonitor {
     branch: Branch,
     controller: AbortController
   ): Promise<EnvironmentHealthObservation | null> {
-    // A REMOTE environment (a Codespace) has no frozen health_check_url — its
-    // reachable address does not exist until the environment starts, so the
-    // lifecycle command reports it as a `health` fact instead. Without this
-    // fallback every remote environment is permanently "not observable" here
-    // and can never leave `starting`, which is the whole Codespaces variant.
-    //
-    // Facts are command output, so the URL is untrusted input and gets the
-    // stricter fact guard (blocks loopback/RFC1918/link-local/.internal) rather
-    // than the plain health-check guard applied to operator-authored config.
+    // A remote environment may not have a reachable address until Start
+    // completes. Its typed lifecycle result can publish a dynamic health URL;
+    // provider output must pass the public-destination guard before use. The
+    // facts fallback is transitional for instances started by the older output
+    // protocol and can be removed after adapters migrate.
     const rawResultHealthUrl = branch.environment_instance?.lifecycle_result?.health_url;
     const rawFactsHealthUrl = branch.environment_instance?.facts?.health;
     const rawDynamicHealthUrl = rawResultHealthUrl ?? rawFactsHealthUrl;

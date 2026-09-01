@@ -556,10 +556,10 @@ describe('BranchesService environment start async behavior', () => {
       body: JSON.stringify({
         version: 1,
         access_urls: [
-          { name: 'Shell', url: 'https://shell.example.test' },
-          { name: 'Manager', url: 'https://manager.example.test' },
+          { name: 'App', url: 'https://app.example.test' },
+          { name: 'Metrics', url: 'https://metrics.example.test' },
         ],
-        health_url: 'https://shell.example.test/health',
+        health_url: 'https://app.example.test/health',
         resource: { provider: 'github-codespaces', id: 'cs-123', name: 'space' },
       }),
       truncated: false,
@@ -573,20 +573,20 @@ describe('BranchesService environment start async behavior', () => {
       lifecycle_result: {
         version: 1,
         access_urls: [
-          { name: 'Shell', url: 'https://shell.example.test/' },
-          { name: 'Manager', url: 'https://manager.example.test/' },
+          { name: 'App', url: 'https://app.example.test/' },
+          { name: 'Metrics', url: 'https://metrics.example.test/' },
         ],
-        health_url: 'https://shell.example.test/health',
+        health_url: 'https://app.example.test/health',
         resource: { provider: 'github-codespaces', id: 'cs-123', name: 'space' },
       },
       access_urls: [
-        { name: 'Shell', url: 'https://shell.example.test/' },
-        { name: 'Manager', url: 'https://manager.example.test/' },
+        { name: 'App', url: 'https://app.example.test/' },
+        { name: 'Metrics', url: 'https://metrics.example.test/' },
       ],
       facts: {
-        url: 'https://shell.example.test/',
-        url_manager: 'https://manager.example.test/',
-        health: 'https://shell.example.test/health',
+        url: 'https://app.example.test/',
+        url_metrics: 'https://metrics.example.test/',
+        health: 'https://app.example.test/health',
         name: 'space',
         resource_id: 'cs-123',
         resource_provider: 'github-codespaces',

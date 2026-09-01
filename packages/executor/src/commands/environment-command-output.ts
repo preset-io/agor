@@ -56,7 +56,7 @@ class BoundedOutputTail {
 /**
  * Streaming stdout/stderr capture for lifecycle commands.
  *
- * Only stdout is a control channel. Result/fact records are suppressed before
+ * Only stdout is a control channel. Result records are suppressed before
  * streaming and persistence, while stderr is always ordinary diagnostic text.
  * The retained visible tail is bounded even when a command writes forever
  * without newlines.
@@ -149,7 +149,6 @@ export class EnvironmentCommandOutputCapture {
     if (this.resultPayloads.length > 0 && this.legacyFacts.size > 0) {
       throw new Error('environment command mixed typed and legacy result protocols');
     }
-
     let lifecycleResult: EnvironmentLifecycleResult | undefined;
     if (this.resultPayloads.length === 1) {
       const encoded = this.resultPayloads[0];

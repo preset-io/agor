@@ -324,10 +324,10 @@ export function renderTemplate(
  *   (for health checks/URLs that must reach the host from inside a container).
  *   Frozen at branch creation time. Empty string if not resolved.
  * - {{custom.*}} - Any custom context from branch.custom_context
- * - {{env.*}} - Facts reported by a lifecycle command's stdout (AGOR_FACT
- *   key=value), e.g. `{{env.url}}` for a remote environment whose address only
- *   exists after it starts. Empty object until the environment has run a
- *   command that emitted facts. See `BranchEnvironmentInstance.facts`.
+ * - {{env.*}} - Bounded values derived from `AGOR_ENVIRONMENT_RESULT`, e.g.
+ *   `{{env.url}}` for a remote environment whose address only exists after it
+ *   starts. Empty object until a lifecycle command has returned a typed result.
+ *   See `BranchEnvironmentInstance.facts`.
  *
  * Backwards-compat: also exposes the same scoped entity under `{{worktree.*}}`
  * so existing `.agor.yml` env-template configurations using the v0.19 names
@@ -348,9 +348,9 @@ export function buildBranchContext(branch: {
   base_ref?: string;
   ref_type?: 'branch' | 'tag';
   /**
-   * Facts reported by a prior lifecycle command (see
+   * Template values derived from a prior typed lifecycle result (see
    * `BranchEnvironmentInstance.facts`). Exposed as `{{env.*}}`. Undefined
-   * before the environment has started or when no facts were emitted.
+   * before the environment has started or when no result was emitted.
    */
   env_facts?: Record<string, string>;
 }): Record<string, unknown> {

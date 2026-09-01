@@ -202,11 +202,8 @@ describe('isAllowedHealthCheckUrl', () => {
 });
 
 describe('isAllowedFactProbeUrl', () => {
-  // A probe URL taken from `AGOR_FACT health=...` is parsed from a lifecycle
-  // command's STDOUT, so whoever controls that script chooses the address the
-  // daemon will GET every few seconds, with the status reflected back into
-  // last_health_check.message. That is a blind SSRF with a status oracle, so
-  // fact-sourced URLs get a stricter rule than admin-rendered health_check_url.
+  // Provider-reported health URLs are untrusted, so the transitional cache gets
+  // a stricter rule than an operator-authored health_check_url.
   it('blocks the daemon itself and other loopback addresses', () => {
     expect(isAllowedFactProbeUrl('http://localhost:3030/health')).toBe(false);
     expect(isAllowedFactProbeUrl('http://127.0.0.1:5432/')).toBe(false);
@@ -219,12 +216,11 @@ describe('isAllowedFactProbeUrl', () => {
     expect(isAllowedFactProbeUrl('http://192.168.1.1/')).toBe(false);
     expect(isAllowedFactProbeUrl('http://172.17.0.1:2375/containers/json')).toBe(false);
     expect(isAllowedFactProbeUrl('http://172.31.255.255/')).toBe(false);
-    // 172.15 and 172.32 are OUTSIDE the private block and must stay allowed.
     expect(isAllowedFactProbeUrl('http://172.15.0.1/')).toBe(true);
     expect(isAllowedFactProbeUrl('http://172.32.0.1/')).toBe(true);
   });
 
-  it('blocks cloud metadata and link-local, like the permissive rule does', () => {
+  it('blocks cloud metadata and link-local destinations', () => {
     expect(isAllowedFactProbeUrl('http://169.254.169.254/latest/meta-data/')).toBe(false);
     expect(isAllowedFactProbeUrl('http://metadata.google.internal/')).toBe(false);
   });
@@ -235,14 +231,12 @@ describe('isAllowedFactProbeUrl', () => {
     expect(isAllowedFactProbeUrl('http://printer.local/')).toBe(false);
   });
 
-  it('still allows a real remote environment URL', () => {
-    expect(isAllowedFactProbeUrl('https://cs-name-8088.app.github.dev/health')).toBe(true);
+  it('allows public destinations', () => {
+    expect(isAllowedFactProbeUrl('https://space-8088.app.github.dev/health')).toBe(true);
     expect(isAllowedFactProbeUrl('https://example.com/health')).toBe(true);
   });
 
-  it('is strictly narrower than the permissive health_check_url rule', () => {
-    // local environments legitimately probe localhost via health_check_url,
-    // so that path must NOT be tightened.
+  it('is stricter than the configured health URL rule', () => {
     expect(isAllowedHealthCheckUrl('http://localhost:3030/health')).toBe(true);
     expect(isAllowedFactProbeUrl('http://localhost:3030/health')).toBe(false);
   });

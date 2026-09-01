@@ -12,10 +12,10 @@ describe('validateEnvironmentLifecycleResult', () => {
       validateEnvironmentLifecycleResult({
         version: 1,
         access_urls: [
-          { name: 'Shell', url: 'https://shell.example.test' },
-          { name: 'Manager', url: 'https://manager.example.test/' },
+          { name: 'App', url: 'https://app.example.test' },
+          { name: 'Metrics', url: 'https://metrics.example.test/' },
         ],
-        health_url: 'https://shell.example.test/health',
+        health_url: 'https://app.example.test/health',
         resource: {
           provider: 'github-codespaces',
           id: 'cs_123',
@@ -26,10 +26,10 @@ describe('validateEnvironmentLifecycleResult', () => {
     ).toEqual({
       version: 1,
       access_urls: [
-        { name: 'Shell', url: 'https://shell.example.test/' },
-        { name: 'Manager', url: 'https://manager.example.test/' },
+        { name: 'App', url: 'https://app.example.test/' },
+        { name: 'Metrics', url: 'https://metrics.example.test/' },
       ],
-      health_url: 'https://shell.example.test/health',
+      health_url: 'https://app.example.test/health',
       resource: {
         provider: 'github-codespaces',
         id: 'cs_123',
@@ -97,20 +97,20 @@ describe('lifecycleResultTemplateFacts', () => {
       lifecycleResultTemplateFacts({
         version: 1,
         access_urls: [
-          { name: 'Shell', url: 'https://shell.example.test/' },
-          { name: 'Manager', url: 'https://manager.example.test/' },
+          { name: 'App', url: 'https://app.example.test/' },
+          { name: 'Metrics', url: 'https://metrics.example.test/' },
         ],
-        health_url: 'https://shell.example.test/health',
+        health_url: 'https://app.example.test/health',
         resource: { provider: 'github-codespaces', id: '123', name: 'space' },
         applied_revision: 'b'.repeat(40),
       })
     ).toEqual({
-      url: 'https://shell.example.test/',
-      health: 'https://shell.example.test/health',
+      url: 'https://app.example.test/',
+      health: 'https://app.example.test/health',
       name: 'space',
       resource_id: '123',
       resource_provider: 'github-codespaces',
-      url_manager: 'https://manager.example.test/',
+      url_metrics: 'https://metrics.example.test/',
       applied_revision: 'b'.repeat(40),
     });
   });
