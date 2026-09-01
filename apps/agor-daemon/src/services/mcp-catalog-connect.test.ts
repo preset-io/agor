@@ -913,14 +913,25 @@ describe('mcp-catalog/connect', () => {
     expect(created.mcpServers[0]).toMatchObject({ auth: { type: 'oauth' } });
   });
 
-  it('refuses an endpoint nothing answers on', async () => {
-    probeRemoteAuthType.mockResolvedValue('unreachable');
+  it.each([
+    ['unreachable', 'provider_unavailable', 'catalog_probe_unreachable'],
+    ['unknown', 'invalid_response', 'catalog_probe_unrecognized'],
+  ] as const)('refuses and logs a closed %s endpoint outcome', async (probed, category, reason) => {
+    probeRemoteAuthType.mockResolvedValue(probed);
     const { app, created, deps } = buildApp(CURATED);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await expect(createMCPCatalogConnectService(app, deps).create(request, params)).rejects.toThrow(
-      /could not be reached/
-    );
-    expect(created.mcpServers).toHaveLength(0);
+    try {
+      await expect(
+        createMCPCatalogConnectService(app, deps).create(request, params)
+      ).rejects.toThrow(/could not be reached/);
+      expect(created.mcpServers).toHaveLength(0);
+      expect(errorSpy).toHaveBeenCalledWith(
+        `[mcp-catalog/connect] event=mcp_external_failure stage=discovery category=${category} type=UnknownError reason=${reason} catalog_entry=${LINEAR}`
+      );
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   describe('stale auth_type', () => {

@@ -32,11 +32,15 @@ export type MCPExternalErrorType =
   | 'TypeError'
   | 'AbortError'
   | 'HTTPError'
+  | 'NetworkError'
   | 'ConfigurationError'
   | 'UnknownError';
 export type MCPExternalErrorReason =
   | 'capability_persistence_validation_rejected'
-  | 'oauth_metadata_incompatible';
+  | 'oauth_metadata_incompatible'
+  | 'oauth_redirect_configuration_required'
+  | 'catalog_probe_unreachable'
+  | 'catalog_probe_unrecognized';
 
 const ALLOWED_EXTERNAL_CODES = new Set([
   'ABORT_ERR',
@@ -49,6 +53,16 @@ const ALLOWED_EXTERNAL_CODES = new Set([
   'UND_ERR_CONNECT_TIMEOUT',
   'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_RESPONSE_STATUS_CODE',
+  // Agor-authored, value-free configuration/policy codes.
+  'EAGOROUTBOUND',
+  'PUBLIC_BASE_URL_NOT_CONFIGURED',
+  'unsafe_outbound_url',
+]);
+
+const CONFIGURATION_EXTERNAL_CODES = new Set([
+  'EAGOROUTBOUND',
+  'PUBLIC_BASE_URL_NOT_CONFIGURED',
+  'unsafe_outbound_url',
 ]);
 
 export interface SanitizedMCPExternalError {
@@ -125,6 +139,7 @@ function safeDiagnosticType(type: unknown): MCPExternalErrorType {
     type === 'TypeError' ||
     type === 'AbortError' ||
     type === 'HTTPError' ||
+    type === 'NetworkError' ||
     type === 'ConfigurationError' ||
     type === 'UnknownError'
     ? type
@@ -137,7 +152,10 @@ function safeAllowedCode(code: unknown): string | undefined {
 
 function safeReason(reason: unknown): MCPExternalErrorReason | undefined {
   return reason === 'capability_persistence_validation_rejected' ||
-    reason === 'oauth_metadata_incompatible'
+    reason === 'oauth_metadata_incompatible' ||
+    reason === 'oauth_redirect_configuration_required' ||
+    reason === 'catalog_probe_unreachable' ||
+    reason === 'catalog_probe_unrecognized'
     ? reason
     : undefined;
 }
@@ -209,12 +227,18 @@ export function isMCPAbortError(error: unknown): boolean {
   return isTrustedDOMAbortError(error);
 }
 
-function safeType(error: unknown, httpStatus?: number): MCPExternalErrorType {
+function safeType(error: unknown, httpStatus?: number, code?: string): MCPExternalErrorType {
   if (httpStatus !== undefined) return 'HTTPError';
+  if (code && CONFIGURATION_EXTERNAL_CODES.has(code)) return 'ConfigurationError';
   if (isMCPAbortError(error)) return 'AbortError';
+  if (code) return 'NetworkError';
   if (safeInstanceOf(error, TypeError)) return 'TypeError';
   if (safeInstanceOf(error, Error)) return 'Error';
   return 'UnknownError';
+}
+
+function categoryForCode(code: string): MCPExternalErrorCategory {
+  return CONFIGURATION_EXTERNAL_CODES.has(code) ? 'configuration_required' : 'provider_unavailable';
 }
 
 function safeCode(error: unknown): string | undefined {
@@ -309,14 +333,16 @@ export function sanitizeMCPExternalError(
 
   const status = safeHTTPStatus(error);
   const code = safeCode(error);
-  const type = safeDiagnosticType(options.type ?? safeType(error, status));
+  const type = safeDiagnosticType(options.type ?? safeType(error, status, code));
   const category = safeCategory(
     options.category ??
       (status !== undefined
         ? categoryForHTTPStatus(status)
-        : code || type === 'TypeError' || type === 'AbortError'
-          ? 'provider_unavailable'
-          : 'unknown')
+        : code
+          ? categoryForCode(code)
+          : type === 'TypeError' || type === 'AbortError'
+            ? 'provider_unavailable'
+            : 'unknown')
   );
   const contract = fixedContract(category);
   return {

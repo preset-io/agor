@@ -957,6 +957,36 @@ describe('saved-server capability discovery', () => {
     }
   });
 
+  it('reports a shared MCP egress timeout as provider availability', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const sentinel = 'SENTINEL_MCP_EGRESS_TIMEOUT';
+    mcpClientTestState.connectError = Object.assign(new Error(sentinel), { code: 'ETIMEDOUT' });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const result = await harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(result).toMatchObject({
+        success: false,
+        category: 'provider_unavailable',
+        error:
+          'The MCP or OAuth provider is temporarily unreachable. Check the saved configuration and retry.',
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'event=mcp_external_failure stage=discovery category=provider_unavailable type=NetworkError code=ETIMEDOUT'
+        )
+      );
+      expect(JSON.stringify({ result, logs: errorSpy.mock.calls })).not.toContain(sentinel);
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('persists protocol-valid multiline tool descriptions', async () => {
     const provider = await createTestProvider();
     providers.push(provider);
@@ -1307,6 +1337,36 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it('logs a closed deployment-configuration diagnostic when the public callback is missing', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    delete process.env.AGOR_BASE_URL;
+
+    try {
+      const result = await harness.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness));
+
+      expect(result).toMatchObject({
+        success: false,
+        recovery: {
+          category: 'redirect_configuration_required',
+          action: 'configure_redirect',
+        },
+      });
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'event=mcp_external_failure stage=oauth category=configuration_required type=ConfigurationError code=PUBLIC_BASE_URL_NOT_CONFIGURED reason=oauth_redirect_configuration_required'
+        )
+      );
+    } finally {
+      process.env.AGOR_BASE_URL = 'https://agor.example.test';
+      errorSpy.mockRestore();
+    }
+  });
+
   it('logs closed Context7-style OAuth metadata incompatibility diagnostics', async () => {
     const provider = await createTestProvider({ resourcePath: '/different/mcp' });
     providers.push(provider);
