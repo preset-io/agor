@@ -67,7 +67,6 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
-import { getGitState } from '@agor/core/git';
 import type {
   AuthenticatedParams,
   BoardID,
@@ -3032,9 +3031,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     requestOptions: EnvironmentSyncRequestOptions = {}
   ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'sync branch environments');
-    const desiredRevision = validateEnvironmentSourceRevision(
-      requestOptions.desiredRevision ?? (await getGitState(branch.path))
-    );
+    if (!requestOptions.desiredRevision) {
+      throw new BadRequest('Environment sync requires an exact desired Git revision');
+    }
+    const desiredRevision = validateEnvironmentSourceRevision(requestOptions.desiredRevision);
     try {
       await this.renderEnvironmentSyncCommand(branch, desiredRevision, params);
     } catch (error) {

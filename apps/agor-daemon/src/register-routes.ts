@@ -4084,10 +4084,19 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     app,
     '/branches/:id/sync',
     {
-      async create(_data: unknown, params: RouteParams) {
+      async create(data: unknown, params: RouteParams) {
         const id = params.route?.id;
         if (!id) throw new Error('Branch ID required');
-        return branchesService.syncEnvironment(id as import('@agor/core/types').BranchID, params);
+        const desiredRevision =
+          data && typeof data === 'object' && !Array.isArray(data)
+            ? (data as { desired_revision?: unknown }).desired_revision
+            : undefined;
+        if (typeof desiredRevision !== 'string') {
+          throw new BadRequest('Environment sync requires desired_revision');
+        }
+        return branchesService.syncEnvironment(id as import('@agor/core/types').BranchID, params, {
+          desiredRevision,
+        });
       },
     },
     {

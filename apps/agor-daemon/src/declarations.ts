@@ -332,7 +332,11 @@ export interface BranchesServiceImpl extends Service<Branch, Partial<Branch>, Fe
   stopEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   restartEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
   nukeEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
-  syncEnvironment(id: BranchID, params?: FeathersParams): Promise<Branch>;
+  syncEnvironment(
+    id: BranchID,
+    params?: FeathersParams,
+    options?: { desiredRevision?: string }
+  ): Promise<Branch>;
   /** Internal only; durable source-sync admission is not a client capability. */
   reconcileEnvironmentSync(id: BranchID, params?: FeathersParams): Promise<void>;
   renderEnvironment(

@@ -3784,6 +3784,17 @@ describe('syncEnvironment exact desired/applied contract', () => {
     expect(reconcile).toHaveBeenCalledWith('wt-sync-race', undefined);
   });
 
+  it('requires callers to name the exact revision instead of reading tenant files in the daemon', async () => {
+    const { service, request, reconcile } = harness();
+
+    await expect(service.syncEnvironment('wt-sync-race' as BranchID)).rejects.toThrow(
+      'exact desired Git revision'
+    );
+
+    expect(request).not.toHaveBeenCalled();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
   it.each(['a'.repeat(12), `${revision}-dirty`, 'unknown'])(
     'refuses a non-canonical desired revision: %s',
     async (invalid) => {
