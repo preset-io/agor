@@ -22,6 +22,7 @@ import { mapToArray, mapToSortedArray } from '@/utils/mapHelpers';
 import { filterBySettingsSearch } from '@/utils/settingsSearch';
 import { uiRouteHref } from '@/utils/uiRoutes';
 import { useAppNavigation } from '../../hooks/useAppNavigation';
+import { ArchiveToggleButton } from '../ArchiveButton';
 import { boardSelectOptions, getBoardEmoji } from '../BoardTile';
 import { HighlightMatch } from '../HighlightMatch';
 import { ListPanelHeader } from './panelPrimitives';
@@ -61,6 +62,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
   onClose,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [archivedFilter, setArchivedFilter] = useState<'active' | 'archived' | 'all'>('active');
   const [dirty, setDirty] = useState(false);
   const [form] = Form.useForm();
   const { token } = theme.useToken();
@@ -261,6 +263,13 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
               onClick={() => openEdit(artifact)}
             />
           </Tooltip>
+          <ArchiveToggleButton
+            archived={Boolean(artifact.archived)}
+            tooltip={artifact.archived ? 'Archived • Click to unarchive' : 'Archive artifact'}
+            onToggle={(nextArchived) =>
+              onUpdate?.(artifact.artifact_id, { archived: nextArchived })
+            }
+          />
           <Popconfirm
             title="Delete artifact?"
             description={`This will remove "${artifact.name}" and its files.`}
@@ -278,17 +287,18 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
     },
   ];
 
-  const activeArtifacts = useMemo(
-    () =>
-      mapToSortedArray(artifactById, (a, b) =>
-        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-      ).filter((artifact) => !artifact.archived),
-    [artifactById]
-  );
+  const visibleArtifacts = useMemo(() => {
+    const sorted = mapToSortedArray(artifactById, (a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    );
+    if (archivedFilter === 'active') return sorted.filter((artifact) => !artifact.archived);
+    if (archivedFilter === 'archived') return sorted.filter((artifact) => artifact.archived);
+    return sorted;
+  }, [artifactById, archivedFilter]);
 
   const dataSource = useMemo(
     () =>
-      filterBySettingsSearch(activeArtifacts, searchTerm, [
+      filterBySettingsSearch(visibleArtifacts, searchTerm, [
         (artifact) => artifact.name,
         (artifact) => artifact.description,
         (artifact) => artifact.template,
@@ -303,7 +313,7 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
           return [board?.name, board?.slug, artifact.board_id];
         },
       ]),
-    [activeArtifacts, searchTerm, branchById, boardById]
+    [visibleArtifacts, searchTerm, branchById, boardById]
   );
 
   if (editingArtifact) {
@@ -319,6 +329,23 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
           style={{ maxWidth: 520 }}
           onValuesChange={() => setDirty(true)}
         >
+          {/* Read-only orientation: which template this artifact runs and which
+              branch produced it — neither is editable here. */}
+          <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+            Template{' '}
+            <Tag color={templateColors[editingArtifact.template] ?? 'default'}>
+              {editingArtifact.template}
+            </Tag>
+            {editingArtifact.branch_id && (
+              <>
+                {' · '}Branch{' '}
+                <Typography.Text code>
+                  {branchById.get(editingArtifact.branch_id)?.name ??
+                    shortId(editingArtifact.branch_id)}
+                </Typography.Text>
+              </>
+            )}
+          </Typography.Paragraph>
           <Form.Item
             label="Name"
             name="name"
@@ -355,13 +382,25 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
         title="Artifacts"
         description="Live web application artifacts created by agents via MCP tools."
         search={
-          <Input
-            allowClear
-            placeholder="Search name, description, template, branch, or board"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            style={{ width: 360 }}
-          />
+          <Space>
+            <Input
+              allowClear
+              placeholder="Search name, description, template, branch, or board"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              style={{ width: 360 }}
+            />
+            <Select
+              value={archivedFilter}
+              onChange={setArchivedFilter}
+              style={{ width: 130 }}
+              options={[
+                { value: 'active', label: 'Active' },
+                { value: 'archived', label: 'Archived' },
+                { value: 'all', label: 'All' },
+              ]}
+            />
+          </Space>
         }
       />
 
@@ -374,12 +413,18 @@ export const ArtifactsTable: React.FC<ArtifactsTableProps> = ({
             minHeight: 400,
           }}
         >
-          {activeArtifacts.length === 0 ? (
-            <Empty description="No artifacts yet">
-              <Typography.Text type="secondary">
-                Artifacts are created by agents using the <code>agor_artifacts_publish</code> MCP
-                tool.
-              </Typography.Text>
+          {visibleArtifacts.length === 0 ? (
+            <Empty
+              description={
+                archivedFilter === 'archived' ? 'No archived artifacts' : 'No artifacts yet'
+              }
+            >
+              {archivedFilter !== 'archived' && (
+                <Typography.Text type="secondary">
+                  Artifacts are created by agents using the <code>agor_artifacts_publish</code> MCP
+                  tool.
+                </Typography.Text>
+              )}
             </Empty>
           ) : (
             <Empty description={`No artifacts match “${searchTerm}”`} />
