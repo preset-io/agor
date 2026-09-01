@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BoardRepository, UsersRepository } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, Params, User, UserID, UserRole } from '@agor/core/types';
@@ -452,6 +455,58 @@ describe('UsersService Claude credential-source authority', () => {
         },
       ]);
       expect(mutations.tombstoneCurrentCredential).toHaveBeenCalledTimes(2);
+    }
+  );
+
+  dbTest(
+    'preserves managed credentials across canonical-equivalent sandbox home updates',
+    async ({ db }) => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-home-route-'));
+      try {
+        const realHome = join(root, 'real-home');
+        const aliasHome = join(root, 'alias-home');
+        await mkdir(realHome);
+        await symlink(realHome, aliasHome, 'dir');
+        const mutations = {
+          runCredentialMutation: vi.fn(
+            async <T>(_key: string, work: (generation: number) => Promise<T>) => work(79)
+          ),
+          tombstoneCurrentCredential: vi.fn(async () => undefined),
+        };
+        const config = {
+          execution: {
+            unix_user_mode: 'sandbox' as const,
+            executor_storage: { user_home: 'persistent-per-user' as const },
+            sandbox: { enabled: true, home_mode: 'per_user' as const },
+          },
+        };
+        const service = new UsersService(db, undefined, config, mutations);
+        const admin = await createUser(service, 'admin', 'claude-canonical-route-admin');
+        const member = await createUser(service, 'member', 'claude-canonical-route-member');
+        const params = {
+          ...externalParams(admin),
+          tenant: { tenant_id: 'tenant-a' },
+        } as AuthenticatedParams;
+        const trusted = { ...params, provider: undefined } as Params;
+        markTrustedUserMutation(trusted, 'claude-auth');
+        await service.patch(member.user_id as UserID, { filesystem_home: realHome }, params);
+        await service.patch(
+          member.user_id as UserID,
+          {
+            agentic_auth_methods: { 'claude-code': 'subscription' },
+            agentic_credential_sources: { 'claude-code': 'managed_file' },
+          },
+          trusted
+        );
+
+        for (const equivalent of [`${realHome}/`, `${root}/./real-home`, aliasHome]) {
+          await service.patch(member.user_id as UserID, { filesystem_home: equivalent }, params);
+        }
+
+        expect(mutations.tombstoneCurrentCredential).not.toHaveBeenCalled();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     }
   );
 

@@ -106,6 +106,7 @@ import {
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
 import { claudeCredentialMutationKey } from './claude-oauth.js';
 import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
 import { UserAvatarSyncManager } from './user-avatar-sync.js';
@@ -1422,11 +1423,25 @@ export class UsersService {
       Object.hasOwn(data, 'unix_username') &&
       normalizeRouteField(data.unix_username) !==
         normalizeRouteField(authority.target.unix_username);
-    const filesystemHomeChanges =
-      Object.hasOwn(data, 'filesystem_home') &&
-      normalizeRouteField(data.filesystem_home) !==
-        normalizeRouteField(authority.target.filesystem_home);
     const executionMode = this.config.execution?.unix_user_mode ?? 'simple';
+    const filesystemHomeChanges = (() => {
+      if (executionMode !== 'sandbox' || !Object.hasOwn(data, 'filesystem_home')) return false;
+      const routeTenantId = this.claudeCredentialTenantId(params);
+      return (
+        resolveOwnerHomeStore({
+          config: this.config,
+          tenantId: routeTenantId,
+          ownerUserId: id,
+          filesystemHome: authority.target.filesystem_home,
+        }) !==
+        resolveOwnerHomeStore({
+          config: this.config,
+          tenantId: routeTenantId,
+          ownerUserId: id,
+          filesystemHome: data.filesystem_home,
+        })
+      );
+    })();
     const routeChanges =
       executionMode === 'sandbox'
         ? filesystemHomeChanges
