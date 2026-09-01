@@ -32,6 +32,7 @@ function payload(
       stopCommand: 'echo stop',
       nukeCommand: 'echo nuke',
       syncCommand: 'echo sync',
+      startupTimeoutMs: 120_000,
       lifecycleGeneration,
     },
   };
@@ -53,12 +54,16 @@ function successfulChild(stdout = '') {
   return child;
 }
 
-function client(options: { generation: number; updateEnvironment: ReturnType<typeof vi.fn> }) {
+function client(options: {
+  generation: number;
+  updateEnvironment: ReturnType<typeof vi.fn>;
+  environmentInstance?: Record<string, unknown>;
+}) {
   const branch = {
     branch_id: branchId,
     path: '/tmp/branch',
     environment_generation: options.generation,
-    environment_instance: { status: 'starting' },
+    environment_instance: options.environmentInstance ?? { status: 'starting' },
   };
   const service = {
     get: vi.fn(async () => branch),
@@ -139,5 +144,35 @@ describe('environment lifecycle generation fencing', () => {
       updateEnvironment.mock.calls.map((call) => call[0].expected_environment_generation)
     ).toEqual([1, 1, 2]);
     expect(mocks.spawn).toHaveBeenCalledTimes(2);
+    const restartStart = updateEnvironment.mock.calls[1]?.[0].environment_update as {
+      startup_deadline_at?: string;
+    };
+    const deadlineAt = Date.parse(restartStart.startup_deadline_at ?? '');
+    expect(deadlineAt).toBeGreaterThan(Date.now() + 119_000);
+    expect(deadlineAt).toBeLessThanOrEqual(Date.now() + 120_000);
+  });
+
+  it('preserves the daemon-owned deadline for a normal start', async () => {
+    const persistedDeadline = '2030-01-01T00:00:00.000Z';
+    const updateEnvironment = vi
+      .fn()
+      .mockResolvedValueOnce({ environment_generation: 1 })
+      .mockResolvedValueOnce({ environment_generation: 1 });
+    client({
+      generation: 1,
+      updateEnvironment,
+      environmentInstance: {
+        status: 'starting',
+        startup_deadline_at: persistedDeadline,
+      },
+    });
+
+    await expect(handleEnvironmentLifecycle(payload('start'), {})).resolves.toMatchObject({
+      success: true,
+      data: { action: 'start' },
+    });
+    expect(updateEnvironment.mock.calls[0]?.[0]).toMatchObject({
+      environment_update: { startup_deadline_at: persistedDeadline },
+    });
   });
 });

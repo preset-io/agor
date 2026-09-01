@@ -473,6 +473,7 @@ describe('BranchesService environment start async behavior', () => {
           principalBranchAccess: 'write',
           startCommand: branch.start_command,
           appUrl: branch.app_url,
+          startupTimeoutMs: 60 * 60 * 1_000,
           lifecycleGeneration: 1,
         }),
       }),
@@ -495,6 +496,13 @@ describe('BranchesService environment start async behavior', () => {
         }),
       ])
     );
+    const startUpdate = environmentUpdates.find((update) => update.status === 'starting');
+    const startedAt = Date.parse(
+      (startUpdate?.process as { started_at?: string } | undefined)?.started_at ?? ''
+    );
+    const deadlineAt = Date.parse((startUpdate?.startup_deadline_at as string | undefined) ?? '');
+    expect(Number.isFinite(startedAt)).toBe(true);
+    expect(deadlineAt - startedAt).toBe(60 * 60 * 1_000);
     expect(lifecycleOptions[0]).toMatchObject({
       beginLifecycle: true,
       expectedEnvironmentGeneration: 0,
@@ -3440,7 +3448,10 @@ describe('BranchesService.startEnvironment concurrency guard', () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
     await expect(branchRepo.findById(initial.branch_id)).resolves.toMatchObject({
       environment_generation: 1,
-      environment_instance: { status: 'starting' },
+      environment_instance: {
+        status: 'starting',
+        startup_deadline_at: expect.any(String),
+      },
     });
   });
 });

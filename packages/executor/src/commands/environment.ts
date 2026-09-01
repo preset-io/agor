@@ -8,6 +8,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { resolveEnvironmentStartupTimeoutMs } from '@agor/core/environment/health-transition';
 import {
   ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
   type EnvironmentLifecycleResult,
@@ -292,6 +293,17 @@ export async function handleEnvironmentLifecycle(
 
     if (payload.params.action === 'start' || payload.params.action === 'restart') {
       const startedAt = new Date().toISOString();
+      const existingDeadline = Date.parse(
+        payload.params.action === 'start'
+          ? (branch.environment_instance?.startup_deadline_at ?? '')
+          : ''
+      );
+      const startupDeadlineAt = Number.isFinite(existingDeadline)
+        ? new Date(existingDeadline).toISOString()
+        : new Date(
+            Date.parse(startedAt) +
+              resolveEnvironmentStartupTimeoutMs(payload.params.startupTimeoutMs)
+          ).toISOString();
       const starting = await updateBranchEnvironment(
         client,
         branchId,
@@ -301,6 +313,7 @@ export async function handleEnvironmentLifecycle(
             ...(branch.environment_instance?.process ?? {}),
             started_at: startedAt,
           },
+          startup_deadline_at: startupDeadlineAt,
           // This update crosses the Feathers/WebSocket JSON boundary; use null
           // as an explicit clear sentinel because JSON drops undefined values.
           last_health_check: null,
@@ -384,6 +397,7 @@ export async function handleEnvironmentLifecycle(
         // This update crosses the Feathers/WebSocket JSON boundary; use null
         // as an explicit clear sentinel because JSON drops undefined values.
         process: null,
+        startup_deadline_at: null,
         // Nuke destroys the environment, so any address it reported is now dead —
         // clear facts. Stop only pauses (a Codespace keeps its name and resumes
         // to the same URL), so facts are preserved there.

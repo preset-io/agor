@@ -290,6 +290,7 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         startCommand: 'docker compose up -d --build',
         appUrl: 'http://localhost:3000',
         healthCheckUrl: 'http://localhost:3000/health',
+        startupTimeoutMs: 2_700_000,
         lifecycleGeneration: 7,
       },
     };
@@ -299,6 +300,7 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
     expect(result.params.action).toBe('start');
     expect(result.params.startCommand).toBe('docker compose up -d --build');
     expect(result.params.healthCheckUrl).toBe('http://localhost:3000/health');
+    expect(result.params.startupTimeoutMs).toBe(2_700_000);
     expect(result.params.lifecycleGeneration).toBe(7);
   });
 

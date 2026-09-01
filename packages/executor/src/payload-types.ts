@@ -10,6 +10,10 @@
 
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
 import {
+  ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS,
+  ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS,
+} from '@agor/core/environment/health-transition';
+import {
   type ExecutorCommandResult,
   ExecutorCommandResultSchema,
   ExecutorResponseDescriptorSchema,
@@ -613,6 +617,14 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
 
       /** Static health URL rendered by the daemon/branch snapshot. */
       healthCheckUrl: z.string().optional(),
+
+      /** Wall-clock budget for a start attempt, snapshotted by the daemon. */
+      startupTimeoutMs: z
+        .number()
+        .int()
+        .min(ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS)
+        .max(ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS)
+        .optional(),
 
       /** Monotonic lifecycle boundary that must still own every state update. */
       lifecycleGeneration: z.number().int().nonnegative().optional(),

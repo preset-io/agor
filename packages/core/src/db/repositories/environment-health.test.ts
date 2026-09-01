@@ -114,7 +114,6 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
         claimToken: claim.claim.claim_token,
         environmentGeneration: claim.claim.environment_generation,
         observation: { status: 'healthy', message: 'HTTP 200', recordWhileStarting: true },
-        probeIntervalMs: 5_000,
       })
     ).resolves.toMatchObject({ outcome: 'committed', environmentStatus: 'starting' });
     await expect(
@@ -123,7 +122,6 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
         claimToken: claim.claim.claim_token,
         environmentGeneration: claim.claim.environment_generation,
         observation: { status: 'healthy', message: 'HTTP 200', recordWhileStarting: true },
-        probeIntervalMs: 5_000,
       })
     ).resolves.toEqual({
       outcome: 'committed',
@@ -137,7 +135,6 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
         claimToken: claim.claim.claim_token,
         environmentGeneration: claim.claim.environment_generation,
         observation: { status: 'unhealthy', message: 'Timeout', recordWhileStarting: false },
-        probeIntervalMs: 5_000,
       })
     ).resolves.toMatchObject({ outcome: 'committed', environmentStatus: 'running' });
     expect((await branches.findById(branch.branch_id))?.environment_instance).toMatchObject({
@@ -260,7 +257,6 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
         claimToken: old.claim.claim_token,
         environmentGeneration: old.claim.environment_generation,
         observation: { status: 'healthy', message: 'late HTTP 200', recordWhileStarting: true },
-        probeIntervalMs: 5_000,
       })
     ).resolves.toEqual({ outcome: 'stale' });
     expect((await branches.findById(branch.branch_id))?.environment_instance).toMatchObject({
@@ -309,7 +305,6 @@ describe('EnvironmentHealthRepository lifecycle fencing', () => {
         claimToken: old.claim.claim_token,
         environmentGeneration: old.claim.environment_generation,
         observation: { status: 'healthy', message: 'late HTTP 200', recordWhileStarting: true },
-        probeIntervalMs: 5_000,
       })
     ).resolves.toEqual({ outcome: 'stale' });
     await expect(
@@ -419,7 +414,6 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
           message: status === 'healthy' ? 'HTTP 200' : 'Timeout',
           recordWhileStarting: true,
         },
-        probeIntervalMs: 5_000,
       });
       // Committing parks the claim in a cooldown; the worker releases it before
       // the next round, so mirror that here rather than fighting the fence.
@@ -427,6 +421,53 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
     }
     return last as { environmentStatus?: string };
   };
+
+  dbTest(
+    'persists timeout after monitor downtime even for an unrecorded network failure',
+    async ({ db }) => {
+      const branch = await seedStartingBranch(db);
+      const branches = new BranchRepository(db);
+      const health = new EnvironmentHealthRepository(db);
+      await branches.update(branch.branch_id, {
+        environment_instance: {
+          status: 'starting',
+          process: { started_at: '2000-01-01T00:00:00.000Z' },
+          startup_deadline_at: '2000-01-01T01:00:00.000Z',
+        },
+      });
+      const claim = await health.claim({
+        branchId: branch.branch_id,
+        claimToken: 'expired-startup',
+        leaseDurationMs: 30_000,
+        identity: { instanceId: 'daemon-after-outage', bootId: 'boot-after-outage' },
+      });
+      if (claim.outcome !== 'claimed') throw new Error('Expected claim');
+
+      await expect(
+        health.commit({
+          branchId: branch.branch_id,
+          claimToken: claim.claim.claim_token,
+          environmentGeneration: claim.claim.environment_generation,
+          observation: {
+            status: 'unhealthy',
+            message: 'Health endpoint unreachable',
+            recordWhileStarting: false,
+          },
+        })
+      ).resolves.toEqual({
+        outcome: 'committed',
+        mutated: true,
+        stateChanged: true,
+        environmentStatus: 'error',
+      });
+      await expect(branches.findById(branch.branch_id)).resolves.toMatchObject({
+        environment_instance: {
+          status: 'error',
+          last_health_check: { status: 'unhealthy', consecutive: 1 },
+        },
+      });
+    }
+  );
 
   dbTest('demotes a running environment that has gone away', async ({ db }) => {
     const branch = await seedStartingBranch(db);

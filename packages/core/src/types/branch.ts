@@ -81,6 +81,9 @@ export interface Branch {
   /** Logs command - initialized from repo template, then user-editable (e.g., "docker logs agor-daemon") */
   logs_command?: string;
 
+  /** Maximum wall-clock time allowed for one start attempt. */
+  startup_timeout_ms?: number;
+
   /**
    * Name of the environment variant this branch is currently rendered from.
    *
@@ -527,6 +530,14 @@ export interface BranchEnvironmentInstance {
   };
 
   /**
+   * Persisted wall-clock deadline for the current start attempt.
+   *
+   * This must not be reconstructed from probe counts: health monitoring may
+   * pause while a daemon restarts or leadership moves between replicas.
+   */
+  startup_deadline_at?: string;
+
+  /**
    * Last health check result
    */
   last_health_check?: {
@@ -630,6 +641,7 @@ export const BRANCH_ENVIRONMENT_CLEARABLE_FIELDS = [
   'logs',
   'facts',
   'lifecycle_result',
+  'startup_deadline_at',
   // Derived from the reserved `url` fact, so it goes stale in exactly the same
   // situations facts do and has to be clearable alongside them.
   'access_urls',
@@ -760,6 +772,12 @@ export interface RepoEnvironmentVariant {
    * Single-level only: the target variant MUST NOT itself declare `extends`.
    */
   extends?: string;
+
+  /**
+   * Maximum wall-clock time for a start attempt, in milliseconds.
+   * Defaults to one hour and is inherited through `extends`.
+   */
+  startup_timeout_ms?: number;
 
   /**
    * Command to start the environment (Handlebars template).

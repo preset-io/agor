@@ -44,6 +44,7 @@ describe('renderBranchSnapshot', () => {
     const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch);
     expect(snapshot).toEqual({
       variant: 'dev',
+      startup_timeout_ms: 60 * 60 * 1_000,
       start: 'pnpm dev --port=3007',
       stop: 'pkill -f pnpm',
     });
@@ -66,6 +67,7 @@ describe('renderBranchSnapshot', () => {
     const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch, 'e2e');
     expect(snapshot).toEqual({
       variant: 'e2e',
+      startup_timeout_ms: 60 * 60 * 1_000,
       start: 'pnpm e2e',
       stop: 'pnpm e2e:stop',
       health: 'http://localhost:4007/health',
@@ -91,6 +93,7 @@ describe('renderBranchSnapshot', () => {
         base: {
           start: 'pnpm dev',
           stop: 'pkill pnpm',
+          startup_timeout_ms: 45 * 60 * 1_000,
           health: 'http://localhost:3000/health',
           logs: 'tail -n 100 base.log',
         },
@@ -105,6 +108,7 @@ describe('renderBranchSnapshot', () => {
     const snapshot = renderBranchSnapshot({ slug: 'r', environment: env }, branch, 'dev');
     expect(snapshot).toEqual({
       variant: 'dev',
+      startup_timeout_ms: 45 * 60 * 1_000,
       start: 'pnpm dev',
       stop: 'pkill pnpm',
       health: 'http://localhost:3007/dev-health',

@@ -228,7 +228,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               message: 'stale',
               recordWhileStarting: true,
             },
-            probeIntervalMs: 5_000,
           })
         ).toEqual({ outcome: 'stale' });
         expect(await health.release(branch.branch_id, winner.claim.claim_token)).toBe(false);
@@ -275,7 +274,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             message: 'must expire behind lock',
             recordWhileStarting: true,
           },
-          probeIntervalMs: 5_000,
         })
       );
       await new Promise((resolve) => setTimeout(resolve, 400));
@@ -340,7 +338,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               message: 'HTTP 200',
               recordWhileStarting: true,
             },
-            probeIntervalMs: 5_000,
           })
         ).toMatchObject({ outcome: 'committed', environmentStatus: 'starting' });
         expect(
@@ -353,7 +350,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               message: 'HTTP 200',
               recordWhileStarting: true,
             },
-            probeIntervalMs: 5_000,
           })
         ).toMatchObject({ outcome: 'committed', environmentStatus: 'running' });
 
@@ -379,7 +375,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             message: 'Timeout',
             recordWhileStarting: false,
           },
-          probeIntervalMs: 5_000,
         });
         expect(
           (await new BranchRepository(scoped).findById(branch.branch_id))?.environment_instance
@@ -406,7 +401,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               message: 'late HTTP 200',
               recordWhileStarting: true,
             },
-            probeIntervalMs: 5_000,
           })
         ).toEqual({ outcome: 'stale' });
         await new BranchRepository(scoped).update(branch.branch_id, {
@@ -464,7 +458,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
               message: 'must not cross tenants',
               recordWhileStarting: true,
             },
-            probeIntervalMs: 5_000,
           })
         ).toEqual({ outcome: 'stale' });
       });

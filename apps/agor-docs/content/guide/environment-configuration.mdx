@@ -125,6 +125,7 @@ environment:
     <variant-name>:
       description: "Human-readable one-liner"
       extends: <base-variant>      # optional, single-level only
+      startup_timeout_ms: 3600000 # optional; one hour by default
       start:  "<shell command template>"
       stop:   "<shell command template>"
       nuke:   "<shell command template>"   # optional
@@ -144,7 +145,11 @@ always URL templates, not shell commands.
 - `environment.default` must reference a variant that exists in `environment.variants`.
 - Each variant (after `extends` resolution) needs at least `start` and `stop`.
 
-`nuke`, `logs`, `health`, and `app` are optional. The corresponding UI buttons simply hide or no-op when absent.
+`startup_timeout_ms`, `nuke`, `logs`, `health`, and `app` are optional. The
+startup timeout defaults to one hour and may be set from 1 second through 24
+hours. Agor persists an exact deadline for every attempt, so a daemon restart
+or a pause in health monitoring does not restart the clock. The corresponding
+optional UI buttons simply hide or no-op when absent.
 
 ### `extends` (single-level only)
 

@@ -41,6 +41,7 @@ import {
   TenantWriteGateActiveError,
   type UsersRepository,
 } from '@agor/core/db';
+import { resolveEnvironmentStartupTimeoutMs } from '@agor/core/environment/health-transition';
 import {
   MANAGED_ENV_EXECUTION_MODE_DEFAULT,
   validateManagedEnvLifecyclePolicy,
@@ -230,6 +231,7 @@ const BRANCH_ENV_FIELDS = [
   'logs_command',
   'health_check_url',
   'app_url',
+  'startup_timeout_ms',
 ] as const;
 
 function itemHasAnyField(item: Record<string, unknown>, fields: readonly string[]): boolean {
@@ -319,6 +321,7 @@ export function validateBranchEnvPolicyHook(config: DeepReadonly<AgorConfig>) {
         validateRenderedManagedEnvUrlFields({
           app: item.app_url,
         });
+        resolveEnvironmentStartupTimeoutMs(item.startup_timeout_ms);
       } catch (error) {
         throw new BadRequest(error instanceof Error ? error.message : 'Invalid branch environment');
       }

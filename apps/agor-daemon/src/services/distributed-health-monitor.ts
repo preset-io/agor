@@ -441,9 +441,6 @@ export class DistributedHealthMonitor {
         claimToken: claim.claim_token,
         environmentGeneration: claim.environment_generation,
         observation,
-        // The startup budget is wall-clock, so the shared rules need this
-        // monitor's actual cadence to convert it into a probe count.
-        probeIntervalMs: this.options.scanIntervalMs,
       })
     );
     if (result.outcome !== 'committed') {

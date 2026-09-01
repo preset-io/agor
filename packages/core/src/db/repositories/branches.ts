@@ -269,6 +269,7 @@ export class BranchRepository implements BaseRepository<Branch, Partial<Branch>>
         notes: branch.notes,
         error_message: branch.error_message,
         environment_instance: branch.environment_instance,
+        startup_timeout_ms: branch.startup_timeout_ms,
         last_used: branch.last_used ?? new Date(now).toISOString(),
         custom_context: branch.custom_context,
         mcp_server_ids: branch.mcp_server_ids,

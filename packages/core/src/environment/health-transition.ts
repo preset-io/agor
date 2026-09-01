@@ -16,7 +16,7 @@
  * the streak survive a daemon restart.
  */
 
-/** Consecutive successes required before `starting`/`error` becomes `running`. */
+/** Consecutive successes required before `starting` becomes `running`. */
 export const ENVIRONMENT_READY_PROBE_THRESHOLD = 2;
 
 /** Consecutive failures required before a `running` environment is demoted. */
@@ -31,6 +31,31 @@ export const ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD = 3;
  */
 export const ENVIRONMENT_STARTUP_TIMEOUT_MS = 60 * 60 * 1000;
 
+/** Smallest supported per-variant startup budget. */
+export const ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS = 1_000;
+
+/** Largest supported per-variant startup budget. */
+export const ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Validate a configured startup budget, applying the one-hour default when it
+ * is absent. Kept here with the transition rules so YAML parsing, branch
+ * snapshots, daemon dispatch, and executor payloads cannot disagree.
+ */
+export function resolveEnvironmentStartupTimeoutMs(value: unknown): number {
+  if (value === undefined) return ENVIRONMENT_STARTUP_TIMEOUT_MS;
+  if (
+    !Number.isSafeInteger(value) ||
+    (value as number) < ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS ||
+    (value as number) > ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS
+  ) {
+    throw new Error(
+      `startup_timeout_ms must be an integer between ${ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS} and ${ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS}`
+    );
+  }
+  return value as number;
+}
+
 export type EnvironmentObservationStatus = 'healthy' | 'unhealthy' | 'unknown';
 
 export interface EnvironmentHealthTransitionInput {
@@ -40,12 +65,10 @@ export interface EnvironmentHealthTransitionInput {
   observation: EnvironmentObservationStatus;
   /** The previously recorded observation, whose streak this one may extend. */
   previous?: { status?: EnvironmentObservationStatus; consecutive?: number };
-  /**
-   * Poll interval, used to convert the startup budget into a probe count.
-   * Expressed in time rather than a hard-coded count so changing the cadence
-   * does not silently change how long a startup is given.
-   */
-  probeIntervalMs: number;
+  /** Database/observer wall-clock time for this observation. */
+  observedAtMs: number;
+  /** Persisted deadline for the current start attempt. */
+  startupDeadlineAtMs?: number;
 }
 
 export interface EnvironmentHealthTransition {
@@ -59,20 +82,16 @@ export interface EnvironmentHealthTransition {
 /**
  * Decide what a single health observation means for an environment's status.
  *
- * Never returns a transition for an `unknown` observation: "we could not tell"
- * is not evidence either way, and treating it as failure would demote every
- * environment whose probe is merely unconfigured.
+ * `unknown` is never evidence for demoting a running environment. A starting
+ * attempt is different: once its persisted wall-clock deadline has elapsed,
+ * either `unknown` or `unhealthy` ends the attempt so daemon/monitor downtime
+ * cannot extend it indefinitely.
  */
-
-/** Startup budget expressed in probes, so changing the cadence cannot silently change it. */
-function startupProbeBudget(probeIntervalMs: number): number {
-  return Math.ceil(ENVIRONMENT_STARTUP_TIMEOUT_MS / Math.max(1, probeIntervalMs));
-}
 
 export function decideEnvironmentHealthTransition(
   input: EnvironmentHealthTransitionInput
 ): EnvironmentHealthTransition {
-  const { currentStatus, observation, previous, probeIntervalMs } = input;
+  const { currentStatus, observation, previous, observedAtMs, startupDeadlineAtMs } = input;
 
   // A probe that reports the same thing as the last one extends its streak;
   // anything else starts over at 1. An absent count (a row written before this
@@ -81,14 +100,18 @@ export function decideEnvironmentHealthTransition(
     previous?.status === observation ? Math.max(1, previous.consecutive ?? 1) + 1 : 1;
 
   if (observation === 'healthy') {
-    // `error` is included so a demoted environment can recover on its own once
-    // it is reachable again — without it, demotion is a one-way door.
-    const canBecomeReady = currentStatus === 'starting' || currentStatus === 'error';
-    if (canBecomeReady && consecutive >= ENVIRONMENT_READY_PROBE_THRESHOLD) {
+    if (currentStatus === 'starting' && consecutive >= ENVIRONMENT_READY_PROBE_THRESHOLD) {
       return { consecutive, nextStatus: 'running', reason: 'ready' };
     }
     return { consecutive };
   }
+
+  const startupDeadlineElapsed =
+    currentStatus === 'starting' &&
+    Number.isFinite(observedAtMs) &&
+    startupDeadlineAtMs !== undefined &&
+    Number.isFinite(startupDeadlineAtMs) &&
+    observedAtMs >= startupDeadlineAtMs;
 
   // A `starting` environment that keeps reporting `unknown` — no probe is
   // configured, or its address is not observable — must still be bounded. It is
@@ -97,7 +120,7 @@ export function decideEnvironmentHealthTransition(
   // started, and `starting` disables Start in the UI. Without this it spins
   // forever with no way out.
   if (observation === 'unknown') {
-    if (currentStatus === 'starting' && consecutive >= startupProbeBudget(probeIntervalMs)) {
+    if (startupDeadlineElapsed) {
       return { consecutive, nextStatus: 'error', reason: 'startup-timeout' };
     }
     return { consecutive };
@@ -114,7 +137,7 @@ export function decideEnvironmentHealthTransition(
     // `starting` gets a long grace period — it may legitimately be building for
     // many minutes — but it must not spin forever, because the UI disables
     // Start while starting and the user would have no way out.
-    if (currentStatus === 'starting' && consecutive >= startupProbeBudget(probeIntervalMs)) {
+    if (startupDeadlineElapsed) {
       return { consecutive, nextStatus: 'error', reason: 'startup-timeout' };
     }
 

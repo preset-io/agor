@@ -2,11 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   decideEnvironmentHealthTransition,
   ENVIRONMENT_READY_PROBE_THRESHOLD,
-  ENVIRONMENT_STARTUP_TIMEOUT_MS,
   ENVIRONMENT_UNREACHABLE_PROBE_THRESHOLD,
+  resolveEnvironmentStartupTimeoutMs,
 } from './health-transition.js';
 
-const INTERVAL = 5_000;
+const NOW = Date.parse('2026-09-01T12:00:00.000Z');
+const FUTURE_DEADLINE = NOW + 60_000;
 
 const decide = (
   currentStatus: string | undefined,
@@ -17,7 +18,8 @@ const decide = (
     currentStatus,
     observation,
     previous,
-    probeIntervalMs: INTERVAL,
+    observedAtMs: NOW,
+    startupDeadlineAtMs: FUTURE_DEADLINE,
   });
 
 describe('decideEnvironmentHealthTransition', () => {
@@ -59,12 +61,12 @@ describe('decideEnvironmentHealthTransition', () => {
       expect(result.reason).toBe('ready');
     });
 
-    it('recovers error -> running, so demotion is not a one-way door', () => {
+    it('does not silently revive an errored environment', () => {
       const result = decide('error', 'healthy', {
         status: 'healthy',
         consecutive: ENVIRONMENT_READY_PROBE_THRESHOLD - 1,
       });
-      expect(result.nextStatus).toBe('running');
+      expect(result.nextStatus).toBeUndefined();
     });
 
     it('leaves an already-running environment alone', () => {
@@ -112,35 +114,46 @@ describe('decideEnvironmentHealthTransition', () => {
   });
 
   describe('startup timeout', () => {
-    const allowed = Math.ceil(ENVIRONMENT_STARTUP_TIMEOUT_MS / INTERVAL);
-
     it('does not fire during a legitimate long build', () => {
-      // A real cold Codespace create takes 12-27 min.
-      const fiveMinutes = Math.ceil((5 * 60 * 1000) / INTERVAL);
-      expect(
-        decide('starting', 'unhealthy', { status: 'unhealthy', consecutive: fiveMinutes })
-          .nextStatus
-      ).toBeUndefined();
+      const result = decideEnvironmentHealthTransition({
+        currentStatus: 'starting',
+        observation: 'unhealthy',
+        previous: { status: 'unhealthy', consecutive: 10_000 },
+        observedAtMs: NOW,
+        startupDeadlineAtMs: NOW + 1,
+      });
+      expect(result.nextStatus).toBeUndefined();
     });
 
-    it('gives up once the startup budget is exhausted', () => {
-      const result = decide('starting', 'unhealthy', {
-        status: 'unhealthy',
-        consecutive: allowed - 1,
+    it('gives up once the persisted wall-clock deadline is exhausted', () => {
+      const result = decideEnvironmentHealthTransition({
+        currentStatus: 'starting',
+        observation: 'unhealthy',
+        previous: { status: 'unhealthy', consecutive: 1 },
+        observedAtMs: NOW,
+        startupDeadlineAtMs: NOW,
       });
       expect(result.nextStatus).toBe('error');
       expect(result.reason).toBe('startup-timeout');
     });
 
-    it('scales with the poll interval rather than a hard-coded count', () => {
-      // Same wall-clock budget, ten times the cadence -> a tenth of the probes.
-      const slow = decideEnvironmentHealthTransition({
+    it('does not grant more time after a monitor or daemon outage', () => {
+      const afterOutage = decideEnvironmentHealthTransition({
         currentStatus: 'starting',
         observation: 'unhealthy',
-        previous: { status: 'unhealthy', consecutive: allowed / 10 },
-        probeIntervalMs: INTERVAL * 10,
+        // Only one prior probe: probe count would incorrectly grant an hour.
+        previous: { status: 'unhealthy', consecutive: 1 },
+        observedAtMs: NOW + 6 * 60 * 60 * 1_000,
+        startupDeadlineAtMs: NOW + 60_000,
       });
-      expect(slow.nextStatus).toBe('error');
+      expect(afterOutage).toMatchObject({ nextStatus: 'error', reason: 'startup-timeout' });
+    });
+
+    it('validates the per-variant timeout budget', () => {
+      expect(resolveEnvironmentStartupTimeoutMs(undefined)).toBe(60 * 60 * 1_000);
+      expect(resolveEnvironmentStartupTimeoutMs(45 * 60 * 1_000)).toBe(45 * 60 * 1_000);
+      expect(() => resolveEnvironmentStartupTimeoutMs(999)).toThrow(/between/);
+      expect(() => resolveEnvironmentStartupTimeoutMs(1.5)).toThrow(/integer/);
     });
   });
 
@@ -149,9 +162,14 @@ describe('decideEnvironmentHealthTransition', () => {
       // "We cannot tell" is not failure, but an environment nobody can observe
       // for the whole startup budget has not started — and `starting` disables
       // Start in the UI, so without this it spins with no way out.
-      const allowed = Math.ceil(ENVIRONMENT_STARTUP_TIMEOUT_MS / INTERVAL);
       expect(
-        decide('starting', 'unknown', { status: 'unknown', consecutive: allowed - 1 })
+        decideEnvironmentHealthTransition({
+          currentStatus: 'starting',
+          observation: 'unknown',
+          previous: { status: 'unknown', consecutive: 1 },
+          observedAtMs: NOW,
+          startupDeadlineAtMs: NOW,
+        })
       ).toMatchObject({ nextStatus: 'error', reason: 'startup-timeout' });
       // ...but not while it is still within the budget.
       expect(

@@ -39,6 +39,7 @@ import {
   type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
+import { resolveEnvironmentStartupTimeoutMs } from '@agor/core/environment/health-transition';
 import {
   ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
   type EnvironmentLifecycleResult,
@@ -190,6 +191,7 @@ interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
     syncCommand?: string;
     appUrl?: string;
     healthCheckUrl?: string;
+    startupTimeoutMs?: number;
     lifecycleGeneration?: number;
   };
 }
@@ -672,6 +674,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           nukeCommand: branch.nuke_command,
           appUrl: branch.app_url,
           healthCheckUrl: branch.health_check_url,
+          ...((action === 'start' || action === 'restart') && {
+            startupTimeoutMs: resolveEnvironmentStartupTimeoutMs(branch.startup_timeout_ms),
+          }),
           lifecycleGeneration: options.lifecycleGeneration,
           ...(options.syncCommand ? { syncCommand: options.syncCommand } : {}),
         },
@@ -2508,6 +2513,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const command = branch.start_command;
     const execution = await this.resolveEnvironmentCommand(command, 'start');
     const access_urls = branch.app_url ? [{ name: 'App', url: branch.app_url }] : undefined;
+    const startupTimeoutMs = resolveEnvironmentStartupTimeoutMs(branch.startup_timeout_ms);
+    const startedAt = new Date();
 
     const startingBranch = await this.updateEnvironment(
       id,
@@ -2515,8 +2522,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         status: 'starting',
         process: {
           ...branch.environment_instance?.process,
-          started_at: new Date().toISOString(),
+          started_at: startedAt.toISOString(),
         },
+        startup_deadline_at: new Date(startedAt.getTime() + startupTimeoutMs).toISOString(),
         access_urls,
         facts: undefined,
         lifecycle_result: undefined,
@@ -2633,11 +2641,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   async stopEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'stop branch environments');
 
-    const stoppingBranch = await this.updateEnvironment(id, { status: 'stopping' }, params, {
-      beginLifecycle: true,
-      expectedEnvironmentGeneration: this.requireEnvironmentGeneration(branch),
-      expectedEnvironmentStatus: branch.environment_instance?.status,
-    });
+    const stoppingBranch = await this.updateEnvironment(
+      id,
+      { status: 'stopping', startup_deadline_at: undefined },
+      params,
+      {
+        beginLifecycle: true,
+        expectedEnvironmentGeneration: this.requireEnvironmentGeneration(branch),
+        expectedEnvironmentStatus: branch.environment_instance?.status,
+      }
+    );
     const lifecycleGeneration = this.requireEnvironmentGeneration(stoppingBranch);
 
     try {
@@ -2693,6 +2706,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           {
             status: 'stopped',
             process: undefined,
+            startup_deadline_at: undefined,
             last_health_check: {
               timestamp: new Date().toISOString(),
               status: 'unknown',
@@ -2755,11 +2769,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     }
 
     if (startExecution.kind === 'webhook') {
-      const stoppingBranch = await this.updateEnvironment(id, { status: 'stopping' }, params, {
-        beginLifecycle: true,
-        expectedEnvironmentGeneration: this.requireEnvironmentGeneration(branch),
-        expectedEnvironmentStatus: branch.environment_instance?.status,
-      });
+      const stoppingBranch = await this.updateEnvironment(
+        id,
+        { status: 'stopping', startup_deadline_at: undefined },
+        params,
+        {
+          beginLifecycle: true,
+          expectedEnvironmentGeneration: this.requireEnvironmentGeneration(branch),
+          expectedEnvironmentStatus: branch.environment_instance?.status,
+        }
+      );
       await this.runEnvironmentExecutor({
         branch,
         action: 'stop',
@@ -2769,11 +2788,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return await this.startEnvironment(id, params);
     }
 
-    const stoppingBranch = await this.updateEnvironment(id, { status: 'stopping' }, params, {
-      beginLifecycle: true,
-      expectedEnvironmentGeneration: this.requireEnvironmentGeneration(branch),
-      expectedEnvironmentStatus: branch.environment_instance?.status,
-    });
+    const stoppingBranch = await this.updateEnvironment(
+      id,
+      { status: 'stopping', startup_deadline_at: undefined },
+      params,
+      {
+        beginLifecycle: true,
+        expectedEnvironmentGeneration: this.requireEnvironmentGeneration(branch),
+        expectedEnvironmentStatus: branch.environment_instance?.status,
+      }
+    );
     const lifecycleGeneration = this.requireEnvironmentGeneration(stoppingBranch);
 
     try {
@@ -2815,11 +2839,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error('No nuke_command configured for this branch');
     }
 
-    const stoppingBranch = await this.updateEnvironment(id, { status: 'stopping' }, params, {
-      beginLifecycle: true,
-      expectedEnvironmentGeneration: this.requireEnvironmentGeneration(branch),
-      expectedEnvironmentStatus: branch.environment_instance?.status,
-    });
+    const stoppingBranch = await this.updateEnvironment(
+      id,
+      { status: 'stopping', startup_deadline_at: undefined },
+      params,
+      {
+        beginLifecycle: true,
+        expectedEnvironmentGeneration: this.requireEnvironmentGeneration(branch),
+        expectedEnvironmentStatus: branch.environment_instance?.status,
+      }
+    );
     const lifecycleGeneration = this.requireEnvironmentGeneration(stoppingBranch);
 
     try {
@@ -2863,6 +2892,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           {
             status: 'stopped',
             process: undefined,
+            startup_deadline_at: undefined,
             facts: undefined,
             lifecycle_result: undefined,
             access_urls: undefined,
@@ -3111,10 +3141,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           claimToken,
           environmentGeneration: claimResult.claim.environment_generation,
           observation,
-          // The shared transition rules express the startup budget in
-          // wall-clock time, so they need this monitor's cadence to convert
-          // it into a probe count.
-          probeIntervalMs: ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS,
         })
       );
       const current = await this.withTenantDatabase(params, loadCurrent);
@@ -3435,6 +3461,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         id,
         {
           environment_variant: snapshot.variant,
+          startup_timeout_ms: snapshot.startup_timeout_ms,
           start_command: snapshot.start || undefined,
           stop_command: snapshot.stop || undefined,
           // Coerce absent optional fields to null (not undefined) so switching

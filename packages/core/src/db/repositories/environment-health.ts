@@ -1,7 +1,9 @@
 import { and, asc, eq, gt, or, sql } from 'drizzle-orm';
-import { ENVIRONMENT } from '../../config/constants';
 import type { DistributedWorkIdentity } from '../../coordination';
-import { decideEnvironmentHealthTransition } from '../../environment/health-transition';
+import {
+  decideEnvironmentHealthTransition,
+  ENVIRONMENT_STARTUP_TIMEOUT_MS,
+} from '../../environment/health-transition';
 import type { BranchEnvironmentInstance, BranchID, TenantID } from '../../types';
 import type { Database, SystemDatabase } from '../client';
 import {
@@ -63,6 +65,17 @@ export type EnvironmentHealthCommitResult =
        */
       environmentStatus: 'starting' | 'running' | 'error';
     };
+
+function startupDeadlineAtMs(environment: BranchEnvironmentInstance): number | undefined {
+  const persisted = Date.parse(environment.startup_deadline_at ?? '');
+  if (Number.isFinite(persisted)) return persisted;
+
+  // Compatibility for attempts started before startup_deadline_at existed.
+  // This still uses persisted wall-clock state, never the number/cadence of
+  // probes, so a daemon outage cannot grant an old attempt more time.
+  const startedAt = Date.parse(environment.process?.started_at ?? '');
+  return Number.isFinite(startedAt) ? startedAt + ENVIRONMENT_STARTUP_TIMEOUT_MS : undefined;
+}
 
 /**
  * System-scope discovery exposes routing metadata only. The RLS capability
@@ -335,14 +348,6 @@ export class EnvironmentHealthRepository {
     claimToken: string;
     environmentGeneration: number;
     observation: EnvironmentHealthObservation;
-    /**
-     * Poll cadence of the monitor taking this observation. The shared
-     * transition rules express the startup budget in wall-clock time and
-     * convert it using this, so a monitor running on a different cadence must
-     * pass its own. Defaults to the standard interval, which is what every
-     * caller that does not tune its loop is using anyway.
-     */
-    probeIntervalMs?: number;
   }): Promise<EnvironmentHealthCommitResult> {
     return runDatabaseTransaction(
       this.db,
@@ -371,10 +376,6 @@ export class EnvironmentHealthRepository {
         }
         const activeEnvironment = environment as BranchEnvironmentInstance;
 
-        const shouldRecord =
-          status === 'running' ||
-          input.observation.status === 'healthy' ||
-          input.observation.recordWhileStarting;
         // Same rules the standalone monitor applies, so an environment reaches
         // the same status under either monitor. Previously this promoted
         // `starting -> running` on a SINGLE healthy observation and never
@@ -385,8 +386,18 @@ export class EnvironmentHealthRepository {
           currentStatus: status,
           observation: input.observation.status,
           previous: activeEnvironment.last_health_check,
-          probeIntervalMs: input.probeIntervalMs ?? ENVIRONMENT.HEALTH_CHECK_INTERVAL_MS,
+          observedAtMs: now.getTime(),
+          startupDeadlineAtMs: startupDeadlineAtMs(activeEnvironment),
         });
+        // Network failures during legitimate startup remain unrecorded, but an
+        // expired attempt MUST persist its terminal transition. Previously the
+        // decision returned `error` while shouldRecord stayed false, so the row
+        // remained `starting` forever despite the apparent timeout result.
+        const shouldRecord =
+          status === 'running' ||
+          input.observation.status === 'healthy' ||
+          input.observation.recordWhileStarting ||
+          decision.nextStatus !== undefined;
         const nextStatus = decision.nextStatus ?? status;
         const previousHealth = activeEnvironment.last_health_check;
         const stateChanged =

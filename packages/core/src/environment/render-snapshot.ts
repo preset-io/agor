@@ -18,6 +18,7 @@ import { extractGitHubSlugFromUrl } from '../config/repo-reference';
 import { resolveVariantOrThrow } from '../config/variant-resolver';
 import { buildBranchContext, renderTemplate } from '../templates/handlebars-helpers';
 import type { RepoEnvironment } from '../types/branch';
+import { resolveEnvironmentStartupTimeoutMs } from './health-transition';
 
 /**
  * Rendered snapshot — the concrete command strings a branch should hold.
@@ -28,6 +29,7 @@ import type { RepoEnvironment } from '../types/branch';
 export interface RenderedEnvironmentSnapshot {
   /** Name of the variant that was rendered (for provenance / UI). */
   variant: string;
+  startup_timeout_ms: number;
   start: string;
   stop: string;
   sync?: string;
@@ -183,6 +185,7 @@ export function renderBranchSnapshot(
 
   const snapshot: RenderedEnvironmentSnapshot = {
     variant: chosen,
+    startup_timeout_ms: resolveEnvironmentStartupTimeoutMs(resolved.startup_timeout_ms),
     start: renderTemplate(resolved.start, context),
     stop: renderTemplate(resolved.stop, context),
   };
