@@ -612,6 +612,15 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
        *  into the running remote environment (see RepoEnvironmentVariant.sync). */
       syncCommand: z.string().optional(),
 
+      /** Exact clean commit this sync attempt must apply and acknowledge. */
+      desiredRevision: z
+        .string()
+        .regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/)
+        .optional(),
+
+      /** Opaque durable claim correlating this executor with one sync attempt. */
+      syncClaimToken: z.string().min(1).optional(),
+
       /** Static app URL rendered by the daemon/branch snapshot. */
       appUrl: z.string().optional(),
 
@@ -650,6 +659,17 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
           path: ['nukeCommand'],
           message: 'nukeCommand is required for nuke',
         });
+      }
+      if (params.action === 'sync') {
+        for (const field of ['syncCommand', 'desiredRevision', 'syncClaimToken'] as const) {
+          if (!params[field]) {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: [field],
+              message: `${field} is required for sync`,
+            });
+          }
+        }
       }
     }),
 });

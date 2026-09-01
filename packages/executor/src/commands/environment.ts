@@ -12,6 +12,7 @@ import { resolveEnvironmentStartupTimeoutMs } from '@agor/core/environment/healt
 import {
   ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
   type EnvironmentLifecycleResult,
+  validateEnvironmentSourceRevision,
 } from '@agor/core/environment/lifecycle-result';
 import { assertEnvCommandAllowed } from '@agor/core/unix';
 import type {
@@ -94,7 +95,7 @@ async function runShellCommand(options: {
   command: string;
   cwd: string;
   env?: Record<string, string>;
-  commandType: 'start' | 'stop' | 'nuke' | 'logs';
+  commandType: 'start' | 'stop' | 'nuke' | 'sync' | 'logs';
   parseLifecycleResult?: boolean;
 }): Promise<{
   pid?: number;
@@ -253,25 +254,27 @@ export async function handleEnvironmentLifecycle(
         command: payload.params.syncCommand!,
         cwd,
         env: payload.env,
-        commandType: 'start',
-        parseLifecycleResult: false,
+        commandType: 'sync',
+        parseLifecycleResult: true,
       });
-      const completion = await updateBranchEnvironment(
-        client,
-        branchId,
-        {
-          last_command: {
-            action: 'sync',
-            status: 'succeeded',
-            timestamp: new Date().toISOString(),
-            message: successMessage('sync'),
-            ...(result.output ? { output: result.output } : {}),
-          },
-        },
-        lifecycleGeneration
+      const appliedRevision = validateEnvironmentSourceRevision(
+        result.lifecycleResult?.applied_revision,
+        'environment sync command acknowledgement'
       );
-      if (!completion.applied) return supersededResult(branchId, 'sync');
-      return { success: true, data: { branchId, action: 'sync' } };
+      if (appliedRevision !== payload.params.desiredRevision) {
+        throw new Error(
+          `Sync command acknowledged ${appliedRevision}, expected ${payload.params.desiredRevision}`
+        );
+      }
+      return {
+        success: true,
+        data: {
+          branchId,
+          action: 'sync',
+          claimToken: payload.params.syncClaimToken,
+          appliedRevision,
+        },
+      };
     }
 
     if (payload.params.action === 'restart' && payload.params.stopCommand) {
@@ -402,7 +405,7 @@ export async function handleEnvironmentLifecycle(
         // clear facts. Stop only pauses (a Codespace keeps its name and resumes
         // to the same URL), so facts are preserved there.
         ...(payload.params.action === 'nuke'
-          ? { facts: null, lifecycle_result: null, access_urls: null }
+          ? { facts: null, lifecycle_result: null, access_urls: null, source_sync: null }
           : {}),
         last_health_check: {
           timestamp: new Date().toISOString(),
@@ -430,6 +433,17 @@ export async function handleEnvironmentLifecycle(
     const message = error instanceof Error ? error.message : String(error);
     const output =
       error instanceof Error ? (error as Error & { output?: string }).output : undefined;
+
+    if (payload.params.action === 'sync') {
+      return {
+        success: false,
+        error: {
+          code: 'ENVIRONMENT_COMMAND_FAILED',
+          message,
+          details: { branchId, action: 'sync', output },
+        },
+      };
+    }
 
     try {
       const current = await client.service('branches').get(branchId);

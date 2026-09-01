@@ -16,6 +16,7 @@ vi.mock('../services/feathers-client.js', () => ({
 import { handleEnvironmentLifecycle } from './environment';
 
 const branchId = '550e8400-e29b-41d4-a716-446655440000';
+const revision = 'a'.repeat(40);
 
 function payload(
   action: EnvironmentLifecyclePayload['params']['action'],
@@ -32,6 +33,8 @@ function payload(
       stopCommand: 'echo stop',
       nukeCommand: 'echo nuke',
       syncCommand: 'echo sync',
+      desiredRevision: revision,
+      syncClaimToken: 'claim-a',
       startupTimeoutMs: 120_000,
       lifecycleGeneration,
     },
@@ -174,5 +177,39 @@ describe('environment lifecycle generation fencing', () => {
     expect(updateEnvironment.mock.calls[0]?.[0]).toMatchObject({
       environment_update: { startup_deadline_at: persistedDeadline },
     });
+  });
+});
+
+describe('environment source sync acknowledgement', () => {
+  it('returns an exact typed acknowledgement without patching environment health', async () => {
+    mocks.spawn.mockImplementation(() =>
+      successfulChild(
+        `AGOR_ENVIRONMENT_RESULT=${JSON.stringify({ version: 1, applied_revision: revision })}\n`
+      )
+    );
+    const updateEnvironment = vi.fn();
+    client({ generation: 1, updateEnvironment, environmentInstance: { status: 'running' } });
+
+    await expect(handleEnvironmentLifecycle(payload('sync'), {})).resolves.toEqual({
+      success: true,
+      data: {
+        branchId,
+        action: 'sync',
+        claimToken: 'claim-a',
+        appliedRevision: revision,
+      },
+    });
+    expect(updateEnvironment).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the command does not acknowledge the requested commit', async () => {
+    const updateEnvironment = vi.fn();
+    client({ generation: 1, updateEnvironment, environmentInstance: { status: 'running' } });
+
+    await expect(handleEnvironmentLifecycle(payload('sync'), {})).resolves.toMatchObject({
+      success: false,
+      error: { code: 'ENVIRONMENT_COMMAND_FAILED' },
+    });
+    expect(updateEnvironment).not.toHaveBeenCalled();
   });
 });

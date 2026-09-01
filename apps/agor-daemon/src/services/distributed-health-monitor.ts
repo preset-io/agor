@@ -369,6 +369,9 @@ export class DistributedHealthMonitor {
       if (rowTenantId && rowTenantId !== tenantId) {
         throw new Error(`Environment health tenant mismatch for branch ${branchId}`);
       }
+      if (branch.environment_instance?.status === 'running') {
+        await this.triggerSourceReconciliation(tenantId, branchId);
+      }
       const claimToken = this.generateClaimToken();
       const claimResult = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
         new EnvironmentHealthRepository(scopedDb).claim({
@@ -447,6 +450,9 @@ export class DistributedHealthMonitor {
       this.activeClaims.delete(this.claimKey(tenantId, branch.branch_id));
       return false;
     }
+    if (result.environmentStatus === 'running') {
+      await this.triggerSourceReconciliation(tenantId, branch.branch_id);
+    }
     if (result.stateChanged) {
       const current = await runWithTenantDatabaseScope(this.db, tenantId, (scopedDb) =>
         new BranchRepository(scopedDb).findById(branch.branch_id)
@@ -462,6 +468,19 @@ export class DistributedHealthMonitor {
       }
     }
     return true;
+  }
+
+  private async triggerSourceReconciliation(tenantId: TenantID, branchId: BranchID): Promise<void> {
+    try {
+      const branches = this.app.service('branches') as unknown as {
+        reconcileEnvironmentSync(id: BranchID, params?: unknown): Promise<void>;
+      };
+      await branches.reconcileEnvironmentSync(branchId, tenantParams(tenantId));
+    } catch (error) {
+      console.warn(
+        `[distributed-work.environment-sync] tenant_id=${JSON.stringify(tenantId)} branch_id=${JSON.stringify(branchId)} error=${JSON.stringify(error instanceof Error ? error.message : String(error))}`
+      );
+    }
   }
 
   private async fetchObservation(

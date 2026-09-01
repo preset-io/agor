@@ -213,6 +213,9 @@ export class EnvironmentSyncRepository {
             lease_expires_at: new Date(now.getTime() + input.leaseDurationMs).toISOString(),
             instance_id: input.identity.instanceId,
             boot_id: input.identity.bootId,
+            ...(state.requested_by_user_id
+              ? { requested_by_user_id: state.requested_by_user_id }
+              : {}),
           };
           const nextState: SourceSyncState = {
             ...state,
@@ -349,6 +352,25 @@ export class EnvironmentSyncRepository {
             return { outcome: 'stale' };
           }
           const now = await this.mutationNow(txDb, input.branchId);
+          if (state.desired_revision !== revision) {
+            const nextState: SourceSyncState = { ...state };
+            delete nextState.active_attempt;
+            await update(txDb, branches)
+              .set({
+                data: {
+                  ...data,
+                  environment_instance: { ...environment, source_sync: nextState },
+                },
+              })
+              .where(eq(branches.branch_id, input.branchId))
+              .run();
+            return {
+              outcome: 'settled',
+              desired_revision: state.desired_revision,
+              applied_revision: state.applied_revision,
+              needs_reconcile: true,
+            };
+          }
           const failureCount = (state.failure_count ?? 0) + 1;
           const nextState: SourceSyncState = {
             desired_revision: state.desired_revision,

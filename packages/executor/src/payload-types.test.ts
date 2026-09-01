@@ -316,6 +316,36 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
       })
     ).toThrow();
   });
+
+  it('requires an exact desired revision and claim for sync', () => {
+    const valid = {
+      command: 'environment.lifecycle',
+      sessionToken: 'jwt-token-here',
+      params: {
+        branchId: '550e8400-e29b-41d4-a716-446655440000',
+        action: 'sync',
+        syncCommand: 'bridge sync',
+        desiredRevision: 'a'.repeat(40),
+        syncClaimToken: 'claim-a',
+      },
+    };
+
+    expect(EnvironmentLifecyclePayloadSchema.parse(valid).params.desiredRevision).toBe(
+      'a'.repeat(40)
+    );
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...valid,
+        params: { ...valid.params, desiredRevision: 'abc123' },
+      })
+    ).toThrow();
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...valid,
+        params: { branchId: valid.params.branchId, action: 'sync' },
+      })
+    ).toThrow();
+  });
 });
 
 describe('EnvironmentLogsPayloadSchema', () => {

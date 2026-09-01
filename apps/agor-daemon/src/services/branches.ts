@@ -28,6 +28,7 @@ import {
   type EnvironmentHealthObservation,
   EnvironmentHealthRepository,
   EnvironmentLifecycleConflictError,
+  EnvironmentSyncRepository,
   generateId,
   getCurrentTenantId,
   KnowledgeNamespaceRepository,
@@ -46,6 +47,7 @@ import {
   isAllowedDynamicEnvironmentHealthUrl,
   lifecycleResultTemplateFacts,
   validateEnvironmentLifecycleResult,
+  validateEnvironmentSourceRevision,
 } from '@agor/core/environment/lifecycle-result';
 import { renderBranchSnapshot } from '@agor/core/environment/render-snapshot';
 import {
@@ -65,6 +67,7 @@ import {
   NotAuthenticated,
   NotFound,
 } from '@agor/core/feathers';
+import { getGitState } from '@agor/core/git';
 import type {
   AuthenticatedParams,
   BoardID,
@@ -93,6 +96,7 @@ import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
 import { isAllowedFactProbeUrl, isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
@@ -174,6 +178,9 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
 
 type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke' | 'sync';
 
+const ENVIRONMENT_SYNC_EXECUTOR_TIMEOUT_MS = 15 * 60_000;
+const ENVIRONMENT_SYNC_CLAIM_LEASE_MS = ENVIRONMENT_SYNC_EXECUTOR_TIMEOUT_MS + 60_000;
+
 interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
   command: 'environment.lifecycle';
   sessionToken: string;
@@ -193,10 +200,24 @@ interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
     healthCheckUrl?: string;
     startupTimeoutMs?: number;
     lifecycleGeneration?: number;
+    desiredRevision?: string;
+    syncClaimToken?: string;
   };
 }
 
+interface EnvironmentSyncRequestOptions {
+  desiredRevision?: string;
+  requestedByUserId?: UserID;
+  /** Internal task trigger: variants without sync are an expected no-op. */
+  skipIfUnavailable?: boolean;
+}
+
+class EnvironmentSyncUnavailableError extends Error {}
+
 type EnvironmentInstance = NonNullable<Branch['environment_instance']>;
+type EnvironmentSyncAttempt = NonNullable<
+  NonNullable<EnvironmentInstance['source_sync']>['active_attempt']
+>;
 
 /**
  * Process tracking for environment management
@@ -234,6 +255,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private branchRepo: BranchRepository;
   private boardRepo: BoardRepository;
   private taskRepo: TaskRepository;
+  private environmentSyncRepo: EnvironmentSyncRepository;
   private db: TenantScopeAwareDatabase;
   private app: Application;
   private appRbacEnabled: boolean;
@@ -245,11 +267,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // its first body chunk; an empty response still completes on `end`.
     isBodyComplete: () => true,
   });
-  /**
-   * Tail of the per-branch sync queue. Syncs mutate one working tree inside the
-   * environment, so they must not overlap; see syncEnvironment.
-   */
-  private syncChain = new Map<BranchID, Promise<unknown>>();
   // Cache board-objects service reference (lazy-loaded to avoid circular deps)
   private boardObjectsService?: {
     find: (params?: unknown) => Promise<unknown>;
@@ -280,6 +297,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     this.branchRepo = branchRepo;
     this.boardRepo = new BoardRepository(db);
     this.taskRepo = new TaskRepository(db);
+    this.environmentSyncRepo = new EnvironmentSyncRepository(db);
     this.db = db;
     this.app = app;
     this.appRbacEnabled = options.appRbacEnabled ?? resolveExecutionSecurityMode().appRbacEnabled;
@@ -364,6 +382,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     stop?: string;
     nuke?: string;
     logs?: string;
+    sync?: string;
   }): Promise<void> {
     const mode = await this.getManagedEnvExecutionMode();
     validateManagedEnvLifecyclePolicy(
@@ -372,6 +391,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         stop: snapshot.stop,
         nuke: snapshot.nuke,
         logs: snapshot.logs,
+        sync: snapshot.sync,
       },
       mode,
       'rendered branch environment'
@@ -539,10 +559,48 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     };
   }
 
+  private async resolveEnvironmentExecutionAuthority(
+    branch: Branch,
+    params?: BranchParams,
+    requiredFsAccess: Exclude<BranchFsAccessLevel, 'none'> = 'write',
+    executionUserIdOverride?: UserID
+  ): Promise<{
+    executionUserId: UserID;
+    branchFsAccess: Exclude<BranchFsAccessLevel, 'none'>;
+  }> {
+    const config = this.app.get('config');
+    return this.withTenantDatabase(params, async () => {
+      const requestUser = (params as AuthenticatedParams | undefined)?.user;
+      const executionUserId = (executionUserIdOverride ??
+        requestUser?.user_id ??
+        branch.primary_owner_user_id ??
+        branch.created_by) as UserID;
+      const executionUser = executionUserIdOverride
+        ? await new UsersRepository(this.db).findById(executionUserId as string)
+        : requestUser;
+      if (executionUserIdOverride && !executionUser) {
+        throw new Error(`Environment execution user ${executionUserId} no longer exists`);
+      }
+      const branchFsAccess = hasMinimumRole(executionUser?.role, ROLES.ADMIN)
+        ? 'write'
+        : await ensureBranchWorkspaceAccess(
+            this.branchRepo,
+            branch,
+            executionUserId,
+            executionUser?.role as UserRole | undefined,
+            'all',
+            requiredFsAccess,
+            config.execution?.allow_superadmin === true
+          );
+      return { executionUserId, branchFsAccess };
+    });
+  }
+
   private async resolveEnvironmentExecutorContext(
     branch: Branch,
     params?: BranchParams,
-    requiredFsAccess: Exclude<BranchFsAccessLevel, 'none'> = 'write'
+    requiredFsAccess: Exclude<BranchFsAccessLevel, 'none'> = 'write',
+    executionUserIdOverride?: UserID
   ): Promise<{
     delegatedHomeKey?: string;
     env: Record<string, string>;
@@ -560,26 +618,13 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     };
   }> {
     const config = this.app.get('config');
+    const { executionUserId, branchFsAccess } = await this.resolveEnvironmentExecutionAuthority(
+      branch,
+      params,
+      requiredFsAccess,
+      executionUserIdOverride
+    );
     return this.withTenantDatabase(params, async () => {
-      const requestUser = (params as AuthenticatedParams | undefined)?.user;
-      const executionUserId = (requestUser?.user_id ??
-        branch.primary_owner_user_id ??
-        branch.created_by) as UserID;
-      // Environment control historically permits tenant admins even when they
-      // do not have an explicit branch entry. Preserve that hierarchy, while
-      // ordinary Managers remain constrained by the separate filesystem
-      // dimension selected in the policy form.
-      const branchFsAccess = hasMinimumRole(requestUser?.role, ROLES.ADMIN)
-        ? 'write'
-        : await ensureBranchWorkspaceAccess(
-            this.branchRepo,
-            branch,
-            executionUserId,
-            requestUser?.role as UserRole | undefined,
-            'all',
-            requiredFsAccess,
-            config.execution?.allow_superadmin === true
-          );
       const delegatedHomeKey = await resolveDelegatedExecutionHomeKey(
         this.db,
         executionUserId,
@@ -632,6 +677,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // Sync has no frozen branch column (unlike start/stop/nuke). It is rendered
     // fresh at dispatch time — with current facts — and passed through here.
     syncCommand?: string;
+    desiredRevision?: string;
+    syncClaimToken?: string;
+    executionUserIdOverride?: UserID;
     /** Exact lifecycle boundary that owns every executor callback. */
     lifecycleGeneration?: number;
   }): Promise<{
@@ -643,11 +691,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   }> {
     const { branch, action, params } = options;
     const { delegatedHomeKey, env, executionUserId, branchFsAccess, sandboxMounts } =
-      await this.resolveEnvironmentExecutorContext(branch, options.params);
+      await this.resolveEnvironmentExecutorContext(
+        branch,
+        options.params,
+        'write',
+        options.executionUserIdOverride
+      );
     const sessionToken = await this.withTenantDatabase(params, () =>
       issueExecutorCommandToken(
         this.app,
-        `environment-${action}`,
+        action === 'sync' && options.syncClaimToken
+          ? `environment-sync:${options.syncClaimToken}`
+          : `environment-${action}`,
         executionUserId,
         branch.branch_id
       )
@@ -679,6 +734,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           }),
           lifecycleGeneration: options.lifecycleGeneration,
           ...(options.syncCommand ? { syncCommand: options.syncCommand } : {}),
+          ...(options.desiredRevision ? { desiredRevision: options.desiredRevision } : {}),
+          ...(options.syncClaimToken ? { syncClaimToken: options.syncClaimToken } : {}),
         },
       },
       executionUserId,
@@ -761,7 +818,12 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     action: EnvironmentLifecycleAction;
     params?: BranchParams;
     lifecycleGeneration?: number;
-  }): Promise<void> {
+    syncCommand?: string;
+    desiredRevision?: string;
+    syncClaimToken?: string;
+    executionUserIdOverride?: UserID;
+    timeoutMs?: number;
+  }): Promise<Record<string, unknown> | undefined> {
     const { branch, action } = options;
     const { payload, delegatedHomeKey, env, executionUserId, branchFsAccess } =
       await this.createEnvironmentExecutorPayload(options);
@@ -773,7 +835,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       // Mixed webhook/shell restart needs the daemon to wait for shell stop
       // before it invokes the daemon-owned webhook start. Keep this generous
       // enough for docker compose down while still bounding the request.
-      timeoutMs: 10 * 60_000,
+      timeoutMs: options.timeoutMs ?? 10 * 60_000,
       templateVariables: {
         branch_id: branch.branch_id,
         user_id: executionUserId,
@@ -791,6 +853,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       error.commandOutput = details?.output;
       throw error;
     }
+    return result.data as Record<string, unknown> | undefined;
   }
 
   private async fetchEnvironmentLogsViaExecutor(
@@ -2321,6 +2384,16 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       throw new Error('Environment update is required');
     }
     if (
+      isRpcEnvelope &&
+      resolvedParams?.provider &&
+      Object.hasOwn(environmentUpdate, 'source_sync') &&
+      !matchesExecutorCommandRuntimeScope(resolvedParams, 'environment-nuke', id)
+    ) {
+      throw new Forbidden(
+        'Environment source reconciliation state is daemon-owned and cannot be patched directly'
+      );
+    }
+    if (
       expectedEnvironmentGeneration !== undefined &&
       (!Number.isSafeInteger(expectedEnvironmentGeneration) || expectedEnvironmentGeneration < 0)
     ) {
@@ -2472,6 +2545,17 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       params: resolvedParams,
       id,
     });
+
+    if (branch.environment_instance?.status === 'running') {
+      deferWithTenantContext(
+        resolvedParams,
+        () => this.reconcileEnvironmentSync(id, resolvedParams),
+        (error) =>
+          console.warn(
+            `[Environment.sync ${id}] Reconciliation trigger failed: ${error instanceof Error ? error.message : String(error)}`
+          )
+      );
+    }
 
     return branch;
   }
@@ -2896,6 +2980,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             facts: undefined,
             lifecycle_result: undefined,
             access_urls: undefined,
+            source_sync: undefined,
             last_health_check: {
               timestamp: new Date().toISOString(),
               status: 'unknown',
@@ -2941,60 +3026,45 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
    * Generic: any repo whose environment variant defines `sync` gets this for
    * free; variants without a `sync` command reject the call.
    */
-  async syncEnvironment(id: BranchID, params?: BranchParams): Promise<BranchWithZoneAndSessions> {
-    // Authorize before queueing, so an unauthorized caller fails immediately
-    // rather than after waiting behind someone else's sync.
-    await this.loadEnvironmentForAction(id, params, 'sync branch environments');
-
-    // Serialize syncs per branch. A sync force-pushes a scratch ref and then
-    // drives `git reset --hard` plus a recursive submodule update inside the
-    // environment; two at once are two git processes mutating ONE working tree
-    // (index.lock contention, half-updated submodules), and each reports the
-    // SHA it captured rather than the one that actually landed.
-    //
-    // Concurrency is routine, not exotic: task-completion auto-sync fires per
-    // finished task and several sessions can share a branch, the readiness
-    // catch-up sync fires on starting -> running, and either can race a manual
-    // sync from the REST route or the MCP tool.
-    //
-    // Chained rather than dropped, because a later caller may carry commits the
-    // in-flight run will not include — skipping it would silently leave the
-    // environment behind. Each run re-reads the branch, so a queued sync pushes
-    // HEAD as of when it actually starts.
-    // The chain link must represent the EXECUTOR's lifetime, not the dispatch
-    // call. Dispatch schedules the work and returns immediately (lifecycle
-    // verbs answer early by design and callers watch `environment_instance`),
-    // so chaining on it would serialize nothing — verified live: three
-    // concurrent syncs still produced three overlapping executor runs.
-    const previous = this.syncChain.get(id);
-    let settle!: () => void;
-    const executorFinished = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
-    this.syncChain.set(id, executorFinished);
-    void executorFinished.finally(() => {
-      // Only clear if nobody has chained behind us in the meantime.
-      if (this.syncChain.get(id) === executorFinished) this.syncChain.delete(id);
-    });
-
-    try {
-      if (previous) await previous.catch(() => {});
-      return await this.runEnvironmentSync(id, params, settle);
-    } catch (error) {
-      // Never leave the chain wedged on a sync that failed before it spawned.
-      settle();
-      throw error;
-    }
-  }
-
-  /** One sync run. Callers must go through syncEnvironment, which serializes these. */
-  private async runEnvironmentSync(
+  async syncEnvironment(
     id: BranchID,
-    params: BranchParams | undefined,
-    onExecutorSettled: () => void
+    params?: BranchParams,
+    requestOptions: EnvironmentSyncRequestOptions = {}
   ): Promise<BranchWithZoneAndSessions> {
     const branch = await this.loadEnvironmentForAction(id, params, 'sync branch environments');
+    const desiredRevision = validateEnvironmentSourceRevision(
+      requestOptions.desiredRevision ?? (await getGitState(branch.path))
+    );
+    try {
+      await this.renderEnvironmentSyncCommand(branch, desiredRevision, params);
+    } catch (error) {
+      if (requestOptions.skipIfUnavailable && error instanceof EnvironmentSyncUnavailableError) {
+        return branch;
+      }
+      throw error;
+    }
 
+    const requestedByUserId = (requestOptions.requestedByUserId ??
+      (params as AuthenticatedParams | undefined)?.user?.user_id ??
+      branch.primary_owner_user_id ??
+      branch.created_by) as UserID;
+    await this.withTenantDatabase(params, () =>
+      this.environmentSyncRepo.request({
+        branchId: id,
+        desiredRevision,
+        requestedByUserId,
+      })
+    );
+    await this.publishEnvironmentSyncState(id, params);
+    await this.reconcileEnvironmentSync(id, params);
+    return this.withTenantDatabase(params, () => this.get(id, params));
+  }
+
+  private async renderEnvironmentSyncCommand(
+    branch: Branch,
+    revision: string,
+    params?: BranchParams
+  ): Promise<string> {
     const reposService = this.app.service('repos');
     const repo = await this.withTenantDatabase(
       params,
@@ -3002,7 +3072,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
     const env = repo.environment;
     if (!env) {
-      throw new Error('Repo has no v2 environment config; nothing to sync');
+      throw new EnvironmentSyncUnavailableError(
+        'Repo has no v2 environment config; nothing to sync'
+      );
     }
 
     // Match the executor's render context and, crucially, pass the
@@ -3027,29 +3099,145 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           ...(branch.environment_instance?.facts ?? {}),
           ...lifecycleResultTemplateFacts(branch.environment_instance?.lifecycle_result),
         },
+        sync_revision: revision,
       },
       branch.environment_variant ?? undefined
     );
     if (!snapshot?.sync) {
-      throw new Error(
+      throw new EnvironmentSyncUnavailableError(
         `Environment variant "${branch.environment_variant ?? env.default}" defines no sync command`
       );
     }
+    return snapshot.sync;
+  }
 
-    // Shell-command execution only for now (the sync mechanism is a git push +
-    // remote fast-forward). A webhook-shaped sync can be added alongside the
-    // start/stop webhook path later if a backend needs it.
-    console.log(`🔄 Syncing environment for branch ${branch.name}`);
-    await this.dispatchEnvironmentExecutor({
-      branch,
-      action: 'sync',
+  private async publishEnvironmentSyncState(
+    id: BranchID,
+    params?: BranchParams
+  ): Promise<BranchWithZoneAndSessions> {
+    const current = await this.withTenantDatabase(params, () => this.get(id, params));
+    emitServiceEvent(this.app, {
+      path: 'branches',
+      event: 'patched',
+      data: current,
       params,
-      syncCommand: snapshot.sync,
-      lifecycleGeneration: this.requireEnvironmentGeneration(branch),
-      onSettled: onExecutorSettled,
+      id,
     });
+    return current;
+  }
 
-    return await this.withTenantDatabase(params, () => this.get(id, params));
+  /** Internal durable worker admission. Intentionally omitted from transport methods. */
+  async reconcileEnvironmentSync(id: BranchID, params?: BranchParams): Promise<void> {
+    const identity = this.app.get('distributedWorkIdentity') ?? {
+      instanceId: `branches-service-${process.pid}`,
+      bootId: `branches-service-${process.pid}`,
+    };
+    const claim = await this.withTenantDatabase(params, () =>
+      this.environmentSyncRepo.claim({
+        branchId: id,
+        claimToken: generateId(),
+        leaseDurationMs: ENVIRONMENT_SYNC_CLAIM_LEASE_MS,
+        identity,
+      })
+    );
+    if (claim.outcome !== 'claimed') return;
+
+    const current = await this.publishEnvironmentSyncState(id, params);
+    deferWithTenantContext(
+      params,
+      () => this.runClaimedEnvironmentSync(id, claim.attempt, params),
+      (error) => {
+        console.error(`[Environment.sync ${current.name}] Reconciliation worker failed:`, error);
+      }
+    );
+  }
+
+  private async runClaimedEnvironmentSync(
+    id: BranchID,
+    attempt: EnvironmentSyncAttempt,
+    params?: BranchParams
+  ): Promise<void> {
+    let needsReconcile = false;
+    try {
+      const branch = await this.withTenantDatabase(params, () =>
+        this.getCanonicalBranch(id, params)
+      );
+      const syncCommand = await this.renderEnvironmentSyncCommand(branch, attempt.revision, params);
+      if (!attempt.requested_by_user_id) {
+        throw new Error('Environment sync attempt has no execution user');
+      }
+
+      const execution = await this.resolveEnvironmentCommand(syncCommand, 'sync');
+      console.log(
+        `🔄 Syncing environment for branch ${branch.name} to ${attempt.revision.slice(0, 12)} via ${execution.kind}`
+      );
+      let appliedRevision: string;
+      if (execution.kind === 'webhook') {
+        await this.resolveEnvironmentExecutionAuthority(
+          branch,
+          params,
+          'write',
+          attempt.requested_by_user_id as UserID
+        );
+        const response = await this.executeEnvironmentWebhook({
+          url: execution.url,
+          branch,
+          commandType: 'sync',
+          triggeredBy: { user_id: attempt.requested_by_user_id },
+          maxBytes: 16 * 1024,
+        });
+        appliedRevision = validateEnvironmentSourceRevision(
+          this.parseEnvironmentWebhookLifecycleResult(response)?.applied_revision,
+          'environment sync webhook acknowledgement'
+        );
+      } else {
+        const result = await this.runEnvironmentExecutor({
+          branch,
+          action: 'sync',
+          params,
+          syncCommand: execution.command,
+          desiredRevision: attempt.revision,
+          syncClaimToken: attempt.token,
+          lifecycleGeneration: attempt.environment_generation,
+          executionUserIdOverride: attempt.requested_by_user_id as UserID,
+          timeoutMs: ENVIRONMENT_SYNC_EXECUTOR_TIMEOUT_MS,
+        });
+        appliedRevision = validateEnvironmentSourceRevision(
+          result?.appliedRevision,
+          'environment sync executor acknowledgement'
+        );
+      }
+      if (appliedRevision !== attempt.revision) {
+        throw new Error(
+          `Environment sync acknowledged ${appliedRevision}, expected ${attempt.revision}`
+        );
+      }
+      const settlement = await this.withTenantDatabase(params, () =>
+        this.environmentSyncRepo.complete({
+          branchId: id,
+          claimToken: attempt.token,
+          appliedRevision,
+          environmentGeneration: attempt.environment_generation,
+        })
+      );
+      needsReconcile = settlement.outcome === 'settled' && settlement.needs_reconcile;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const settlement = await this.withTenantDatabase(params, () =>
+        this.environmentSyncRepo.fail({
+          branchId: id,
+          claimToken: attempt.token,
+          revision: attempt.revision,
+          environmentGeneration: attempt.environment_generation,
+          message,
+        })
+      );
+      needsReconcile = settlement.outcome === 'settled' && settlement.needs_reconcile;
+      console.warn(`[Environment.sync ${id}] ${message}`);
+    }
+
+    await this.publishEnvironmentSyncState(id, params);
+    if (needsReconcile) await this.reconcileEnvironmentSync(id, params);
   }
 
   /**
@@ -3080,6 +3268,10 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       (currentStatus !== 'running' && currentStatus !== 'starting' && currentStatus !== 'error')
     ) {
       return branch;
+    }
+
+    if (currentStatus === 'running') {
+      await this.reconcileEnvironmentSync(id, params);
     }
 
     // An explicit status request may still diagnose an errored environment,
@@ -3153,19 +3345,8 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           id,
         });
 
-        // Catch-up sync: the environment just became reachable for the first
-        // time. Commits that landed while it was still building were never
-        // pushed into it — the task-completion auto-sync no-ops against an
-        // unreachable remote and nothing retries it — so fire one sync now and
-        // the running environment reflects the branch's latest committed state.
-        // Fire-and-forget; syncEnvironment throws for variants without a `sync`
-        // command (e.g. local), which we swallow.
         if (currentStatus === 'starting' && commitResult.environmentStatus === 'running') {
-          void this.syncEnvironment(id, params).catch((error) => {
-            const message = error instanceof Error ? error.message : String(error);
-            if (message.includes('defines no sync command')) return;
-            console.warn(`⚠️ Catch-up sync after readiness failed for ${branch.name}: ${message}`);
-          });
+          await this.reconcileEnvironmentSync(id, params);
         }
       }
       return current;
@@ -3451,7 +3632,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     if (variantChanged && branch.environment_instance) {
       await this.updateEnvironment(
         id,
-        { facts: null, lifecycle_result: null, access_urls: null },
+        { facts: null, lifecycle_result: null, access_urls: null, source_sync: null },
         params
       );
     }

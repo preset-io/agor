@@ -12,7 +12,10 @@ const REVISION_A = 'a'.repeat(40);
 const REVISION_B = 'b'.repeat(40);
 let uniqueId = 9_910_000;
 
-async function seedRunningBranch(db: Database) {
+async function seedRunningBranch(
+  db: Database,
+  status: 'starting' | 'running' | 'stopped' = 'running'
+) {
   const user = await new UsersRepository(db).create({
     email: `${generateId()}@example.test`,
     name: 'Environment sync owner',
@@ -32,7 +35,7 @@ async function seedRunningBranch(db: Database) {
     branch_unique_id: uniqueId++,
     path: `/tmp/${generateId()}`,
     created_by: user.user_id,
-    environment_instance: { status: 'running' },
+    environment_instance: { status },
   });
   return { branch, user };
 }
@@ -73,6 +76,10 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
     'never mistakes an older acknowledgement for the newest desired revision',
     async ({ db }) => {
       const { branch, user } = await seedRunningBranch(db);
+      const secondUser = await new UsersRepository(db).create({
+        email: `${generateId()}@example.test`,
+        name: 'Newer sync requester',
+      });
       const sync = new EnvironmentSyncRepository(db);
       await sync.request({
         branchId: branch.branch_id,
@@ -86,12 +93,13 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
         identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
       });
       if (first.outcome !== 'claimed') throw new Error('Expected first claim');
+      expect(first.attempt.requested_by_user_id).toBe(user.user_id);
 
       // A second task commits while A is already in flight.
       await sync.request({
         branchId: branch.branch_id,
         desiredRevision: REVISION_B,
-        requestedByUserId: user.user_id as UserID,
+        requestedByUserId: secondUser.user_id as UserID,
       });
       await expect(
         sync.complete({
@@ -113,7 +121,82 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
         leaseDurationMs: 60_000,
         identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
       });
-      expect(second).toMatchObject({ outcome: 'claimed', attempt: { revision: REVISION_B } });
+      expect(second).toMatchObject({
+        outcome: 'claimed',
+        attempt: { revision: REVISION_B, requested_by_user_id: secondUser.user_id },
+      });
+    }
+  );
+
+  dbTest('retains a task revision during startup and claims it once running', async ({ db }) => {
+    const { branch, user } = await seedRunningBranch(db, 'starting');
+    const branches = new BranchRepository(db);
+    const sync = new EnvironmentSyncRepository(db);
+    await sync.request({
+      branchId: branch.branch_id,
+      desiredRevision: REVISION_A,
+      requestedByUserId: user.user_id as UserID,
+    });
+
+    await expect(
+      sync.claim({
+        branchId: branch.branch_id,
+        claimToken: 'while-starting',
+        leaseDurationMs: 60_000,
+        identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+      })
+    ).resolves.toEqual({ outcome: 'unavailable' });
+
+    await branches.update(branch.branch_id, { environment_instance: { status: 'running' } });
+    await expect(
+      sync.claim({
+        branchId: branch.branch_id,
+        claimToken: 'after-readiness',
+        leaseDurationMs: 60_000,
+        identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
+      })
+    ).resolves.toMatchObject({
+      outcome: 'claimed',
+      attempt: {
+        revision: REVISION_A,
+        requested_by_user_id: user.user_id,
+      },
+    });
+  });
+
+  dbTest(
+    'does not back off a newer desired revision when the old attempt fails',
+    async ({ db }) => {
+      const { branch } = await seedRunningBranch(db);
+      const branches = new BranchRepository(db);
+      const sync = new EnvironmentSyncRepository(db);
+      await sync.request({ branchId: branch.branch_id, desiredRevision: REVISION_A });
+      const claim = await sync.claim({
+        branchId: branch.branch_id,
+        claimToken: 'old-revision',
+        leaseDurationMs: 60_000,
+        identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+      });
+      if (claim.outcome !== 'claimed') throw new Error('Expected claim');
+
+      await sync.request({ branchId: branch.branch_id, desiredRevision: REVISION_B });
+      await expect(
+        sync.fail({
+          branchId: branch.branch_id,
+          claimToken: claim.attempt.token,
+          revision: REVISION_A,
+          environmentGeneration: claim.attempt.environment_generation,
+          message: 'old attempt failed',
+        })
+      ).resolves.toMatchObject({ outcome: 'settled', needs_reconcile: true });
+
+      const current = await branches.findById(branch.branch_id);
+      expect(current?.environment_instance?.source_sync).toMatchObject({
+        desired_revision: REVISION_B,
+      });
+      expect(current?.environment_instance?.source_sync?.active_attempt).toBeUndefined();
+      expect(current?.environment_instance?.source_sync?.retry_not_before_at).toBeUndefined();
+      expect(current?.environment_instance?.source_sync?.last_error).toBeUndefined();
     }
   );
 

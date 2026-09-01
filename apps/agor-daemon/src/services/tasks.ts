@@ -36,6 +36,7 @@ import {
   type TerminationSettlementInput,
   type TerminationSettlementResult,
 } from '@agor/core/db';
+import { validateEnvironmentSourceRevision } from '@agor/core/environment/lifecycle-result';
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
 import type {
@@ -681,25 +682,23 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
   }
 
   /**
-   * Headless code-sync trigger. After a task completes, if the session's branch
-   * runs a REMOTE environment — one whose variant defines a `sync` command (e.g.
-   * a Codespace) — and that environment is running, push the branch's latest
-   * committed code into it. This is the design's "event-driven sync": the commit
-   * the task just produced is the event, so the remote environment tracks the
-   * branch with no polling and no click.
+   * Headless code-sync trigger. Persist the task's exact clean ending commit as
+   * desired state; the branch service validates the variant and reconciles it
+   * immediately when running or after the environment becomes ready.
    *
    * Fire-and-forget and best-effort:
    * - Never blocks or fails task completion (all errors are swallowed).
-   * - Idempotent: if HEAD did not advance, the remote fast-forward is a no-op.
-   * - Cheap gate: a branch with no running environment returns immediately; only
-   *   a running environment loads the repo to check for a `sync` command, so
-   *   local (non-remote) environments — which have none — are skipped.
+   * - Idempotent: repeated requests for one SHA converge to one applied state.
+   * - Dirty, abbreviated, and unknown revisions are rejected before dispatch.
    */
   private async maybeAutoSyncEnvironmentAfterTask(
     branchId: string,
+    desiredRevision: string,
+    requestedByUserId: string,
     params?: TaskParams
   ): Promise<void> {
     try {
+      const revision = validateEnvironmentSourceRevision(desiredRevision);
       // Run EVERY call here as a trusted INTERNAL daemon operation, NOT with the
       // completing caller's identity. A task that finished via the executor
       // carries an executor-scoped token that is (correctly) not valid for the
@@ -713,37 +712,25 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       } as TaskParams;
 
       const branchesService = this.app.service('branches') as unknown as {
-        get: (
+        syncEnvironment: (
           id: string,
-          p?: unknown
-        ) => Promise<{
-          repo_id: string;
-          environment_variant?: string | null;
-          environment_instance?: { status?: string };
-        }>;
-        syncEnvironment: (id: string, p?: unknown) => Promise<unknown>;
+          p?: unknown,
+          options?: {
+            desiredRevision: string;
+            requestedByUserId: string;
+            skipIfUnavailable: boolean;
+          }
+        ) => Promise<unknown>;
       };
-      const branch = await branchesService.get(branchId, internalParams);
-      if (branch.environment_instance?.status !== 'running') return;
-
-      const repo = (await this.app.service('repos').get(branch.repo_id, internalParams)) as {
-        environment?: {
-          default?: string;
-          variants?: Record<string, { sync?: string; extends?: string }>;
-        };
-      };
-      const variants = repo.environment?.variants;
-      const variantName = branch.environment_variant ?? repo.environment?.default;
-      if (!variants || !variantName) return;
-      // Resolve one level of `extends` so an inherited `sync` still counts.
-      const v = variants[variantName];
-      const hasSync = !!(v?.sync || (v?.extends && variants[v.extends]?.sync));
-      if (!hasSync) return;
 
       console.log(
-        `🔄 [TasksService] Auto-syncing remote environment for branch ${shortId(branchId)} after task completion`
+        `🔄 [TasksService] Requesting remote environment revision ${revision.slice(0, 12)} for branch ${shortId(branchId)}`
       );
-      await branchesService.syncEnvironment(branchId, internalParams);
+      await branchesService.syncEnvironment(branchId, internalParams, {
+        desiredRevision: revision,
+        requestedByUserId,
+        skipIfUnavailable: true,
+      });
     } catch (err) {
       console.warn(
         `⚠️  [TasksService] Auto-sync after task failed for branch ${shortId(branchId)}: ${
@@ -791,16 +778,27 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         // transaction that never re-fires its commit hook, so the sync would
         // never actually run. Best-effort: never blocks or fails completion.
         const syncBranchId = session.branch_id;
-        deferWithTenantContext(
-          params,
-          () => this.maybeAutoSyncEnvironmentAfterTask(syncBranchId, params),
-          (err) =>
-            console.warn(
-              `⚠️  [TasksService] Auto-sync trigger failed for session ${shortId(task.session_id)}: ${
-                err instanceof Error ? err.message : String(err)
-              }`
-            )
-        );
+        try {
+          const desiredRevision = validateEnvironmentSourceRevision(task.git_state.sha_at_end);
+          deferWithTenantContext(
+            params,
+            () =>
+              this.maybeAutoSyncEnvironmentAfterTask(
+                syncBranchId,
+                desiredRevision,
+                task.created_by,
+                params
+              ),
+            (err) =>
+              console.warn(
+                `⚠️  [TasksService] Auto-sync trigger failed for session ${shortId(task.session_id)}: ${
+                  err instanceof Error ? err.message : String(err)
+                }`
+              )
+          );
+        } catch {
+          // Dirty, abbreviated, and unknown task-end states are not deployable facts.
+        }
       }
 
       const latestTaskId = session.tasks?.[session.tasks.length - 1];

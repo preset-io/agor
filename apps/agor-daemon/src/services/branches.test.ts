@@ -1206,6 +1206,92 @@ describe('BranchesService environment start async behavior', () => {
     );
   });
 
+  it('rejects direct transport forgery of daemon-owned source reconciliation state', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-env-source-sync' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-env-source-sync',
+      path: '/tmp/wt-env-source-sync',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_instance: { status: 'running' },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const patchSpy = vi.spyOn(service, 'patch').mockResolvedValue(branch as never);
+
+    await expect(
+      service.updateEnvironment(
+        {
+          branch_id: branch.branch_id,
+          environment_update: {
+            source_sync: {
+              desired_revision: 'a'.repeat(40),
+              desired_at: '2026-09-01T00:00:00.000Z',
+              applied_revision: 'a'.repeat(40),
+            },
+          },
+        },
+        {
+          provider: 'rest',
+          user: { user_id: 'user-1', role: 'member' },
+        } as never
+      )
+    ).rejects.toThrow('source reconciliation state is daemon-owned');
+    expect(patchSpy).not.toHaveBeenCalled();
+  });
+
+  it('allows only the exact nuke executor scope to clear source reconciliation state', async () => {
+    const { service } = createServiceHarness();
+    const branch = {
+      branch_id: 'wt-env-source-nuke' as BranchID,
+      repo_id: 'repo-1',
+      name: 'wt-env-source-nuke',
+      path: '/tmp/wt-env-source-nuke',
+      created_by: 'user-1' as UUID,
+      branch_unique_id: 1,
+      environment_instance: {
+        status: 'stopping',
+        source_sync: {
+          desired_revision: 'a'.repeat(40),
+          desired_at: '2026-09-01T00:00:00.000Z',
+        },
+      },
+    };
+    vi.spyOn(service, 'get').mockResolvedValue(branch as never);
+    const patchSpy = vi.spyOn(service, 'patch').mockImplementation(async (_id, data) => {
+      return { ...branch, ...(data as object) } as never;
+    });
+
+    await service.updateEnvironment(
+      {
+        branch_id: branch.branch_id,
+        environment_update: { source_sync: null },
+      },
+      {
+        provider: 'rest',
+        user: { user_id: 'user-1', role: 'member' },
+        authentication: {
+          strategy: 'jwt',
+          payload: {
+            type: 'executor-session',
+            purpose: 'executor-command',
+            session_id: 'environment-nuke',
+            branch_id: branch.branch_id,
+          },
+        },
+      } as never
+    );
+
+    expect(patchSpy).toHaveBeenCalledWith(
+      branch.branch_id,
+      expect.objectContaining({
+        environment_instance: expect.objectContaining({ source_sync: null }),
+      }),
+      expect.any(Object)
+    );
+  });
+
   it('emits patched with a hook-shaped publish context carrying tenant params (regression #1750)', async () => {
     const { service, branchesService } = createServiceHarness();
     const branch = {
@@ -3519,7 +3605,7 @@ describe('BranchesService.renderEnvironment variant-switch fact hygiene', () => 
 
     expect(updateEnvironment).toHaveBeenCalledWith(
       'wt-1',
-      { facts: null, lifecycle_result: null, access_urls: null },
+      { facts: null, lifecycle_result: null, access_urls: null, source_sync: null },
       undefined
     );
   });
@@ -3613,20 +3699,12 @@ describe('BranchesService.updateEnvironment clear semantics', () => {
   });
 });
 
-describe('syncEnvironment concurrency', () => {
-  /**
-   * Sync force-pushes a scratch ref, then SSHes into the environment to
-   * `git reset --hard` onto it plus a recursive submodule update. Two of those
-   * at once means two git processes mutating ONE working tree — index.lock
-   * contention and half-updated submodules — and each run reports the SHA it
-   * captured, not the one that actually landed.
-   *
-   * It is reachable concurrently: task-completion auto-sync fires per finished
-   * task (several sessions can share a branch), the readiness catch-up sync
-   * fires on starting -> running, and both race a manual sync from the API or
-   * the MCP tool.
-   */
-  const harness = () => {
+describe('syncEnvironment exact desired/applied contract', () => {
+  const revision = 'a'.repeat(40);
+  const otherRevision = 'b'.repeat(40);
+  const userId = '018f0000-0000-7000-8000-0000000005a1' as UserID;
+
+  const harness = (options: { noSync?: boolean } = {}) => {
     const branch = {
       branch_id: 'wt-sync-race' as BranchID,
       repo_id: 'repo-1',
@@ -3636,6 +3714,7 @@ describe('syncEnvironment concurrency', () => {
       environment_variant: 'codespaces',
       environment_instance: { status: 'running', facts: { name: 'cs-1' } },
       environment_generation: 1,
+      primary_owner_user_id: userId,
     };
     const app = {
       get: () => ({}),
@@ -3649,7 +3728,11 @@ describe('syncEnvironment concurrency', () => {
                 version: 2,
                 default: 'codespaces',
                 variants: {
-                  codespaces: { start: 'echo up', stop: 'echo down', sync: 'echo sync' },
+                  codespaces: {
+                    start: 'echo up',
+                    stop: 'echo down',
+                    ...(options.noSync ? {} : { sync: 'echo sync' }),
+                  },
                 },
               },
             })),
@@ -3661,61 +3744,177 @@ describe('syncEnvironment concurrency', () => {
     const service = new BranchesService(createTenantScopeTestDb() as never, app);
     vi.spyOn(service as never, 'loadEnvironmentForAction').mockResolvedValue(branch as never);
     vi.spyOn(service, 'get').mockResolvedValue(branch as never);
-
-    let active = 0;
-    let maxActive = 0;
-    // Models the real dispatch: it schedules the executor and RETURNS
-    // IMMEDIATELY, reporting completion later via onSettled. An earlier version
-    // of this test awaited the dispatch itself, which made a broken fix look
-    // correct — the live run then showed three overlapping executors.
-    const dispatch = vi
-      .spyOn(service as never, 'dispatchEnvironmentExecutor')
-      .mockImplementation(async (options: unknown) => {
-        const { onSettled } = options as { onSettled?: () => void };
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        setTimeout(() => {
-          active -= 1;
-          onSettled?.();
-        }, 20);
-        return undefined as never;
-      });
-    return { service, dispatch, maxActive: () => maxActive };
+    const syncRepo = (
+      service as unknown as {
+        environmentSyncRepo: {
+          request: (input: unknown) => Promise<unknown>;
+          complete: (input: unknown) => Promise<unknown>;
+          fail: (input: unknown) => Promise<unknown>;
+        };
+      }
+    ).environmentSyncRepo;
+    const request = vi.spyOn(syncRepo, 'request').mockResolvedValue({
+      changed: true,
+      state: { desired_revision: revision, desired_at: new Date().toISOString() },
+    });
+    const complete = vi
+      .spyOn(syncRepo, 'complete')
+      .mockResolvedValue({ outcome: 'settled', needs_reconcile: false });
+    const fail = vi
+      .spyOn(syncRepo, 'fail')
+      .mockResolvedValue({ outcome: 'settled', needs_reconcile: false });
+    vi.spyOn(service as never, 'publishEnvironmentSyncState').mockResolvedValue(branch as never);
+    const reconcile = vi.spyOn(service, 'reconcileEnvironmentSync').mockResolvedValue();
+    return { service, branch, request, complete, fail, reconcile };
   };
 
-  it('never runs two syncs against one branch at the same time', async () => {
-    const { service, dispatch, maxActive } = harness();
+  it('persists the exact requested revision and frozen user before reconciliation', async () => {
+    const { service, request, reconcile } = harness();
 
-    await Promise.all([
-      service.syncEnvironment('wt-sync-race' as BranchID),
-      service.syncEnvironment('wt-sync-race' as BranchID),
-      service.syncEnvironment('wt-sync-race' as BranchID),
-    ]);
-    // Let the queued executors drain.
-    await new Promise((resolve) => setTimeout(resolve, 120));
-
-    // Every caller's commits still get pushed — none is dropped — but the
-    // executors are serialized rather than interleaved in one working tree.
-    expect(dispatch).toHaveBeenCalledTimes(3);
-    expect(maxActive()).toBe(1);
-  });
-
-  it('does not let one failed sync break the ones queued behind it', async () => {
-    const { service } = harness();
-    const dispatch = vi.spyOn(service as never, 'dispatchEnvironmentExecutor');
-    dispatch.mockRejectedValueOnce(new Error('push rejected'));
-    dispatch.mockImplementation(async (options: unknown) => {
-      (options as { onSettled?: () => void }).onSettled?.();
-      return undefined as never;
+    await service.syncEnvironment('wt-sync-race' as BranchID, undefined, {
+      desiredRevision: revision,
+      requestedByUserId: userId,
     });
 
-    const [first, second] = await Promise.allSettled([
-      service.syncEnvironment('wt-sync-race' as BranchID),
-      service.syncEnvironment('wt-sync-race' as BranchID),
-    ]);
+    expect(request).toHaveBeenCalledWith({
+      branchId: 'wt-sync-race',
+      desiredRevision: revision,
+      requestedByUserId: userId,
+    });
+    expect(reconcile).toHaveBeenCalledWith('wt-sync-race', undefined);
+  });
 
-    expect(first.status).toBe('rejected');
-    expect(second.status).toBe('fulfilled');
+  it.each(['a'.repeat(12), `${revision}-dirty`, 'unknown'])(
+    'refuses a non-canonical desired revision: %s',
+    async (invalid) => {
+      const { service, request } = harness();
+      await expect(
+        service.syncEnvironment('wt-sync-race' as BranchID, undefined, {
+          desiredRevision: invalid,
+          requestedByUserId: userId,
+        })
+      ).rejects.toThrow('full lowercase Git');
+      expect(request).not.toHaveBeenCalled();
+    }
+  );
+
+  it('treats a task-triggered local variant without sync as a no-op', async () => {
+    const { service, request, reconcile } = harness({ noSync: true });
+
+    await expect(
+      service.syncEnvironment('wt-sync-race' as BranchID, undefined, {
+        desiredRevision: revision,
+        requestedByUserId: userId,
+        skipIfUnavailable: true,
+      })
+    ).resolves.toMatchObject({ branch_id: 'wt-sync-race' });
+    expect(request).not.toHaveBeenCalled();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  it('settles only the exact executor acknowledgement', async () => {
+    const { service, branch, complete, fail } = harness();
+    vi.spyOn(service as never, 'getCanonicalBranch').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'renderEnvironmentSyncCommand').mockResolvedValue('sync exact');
+    const run = vi
+      .spyOn(service as never, 'runEnvironmentExecutor')
+      .mockResolvedValue({ appliedRevision: revision });
+
+    await (
+      service as unknown as {
+        runClaimedEnvironmentSync: (id: BranchID, attempt: unknown) => Promise<void>;
+      }
+    ).runClaimedEnvironmentSync('wt-sync-race' as BranchID, {
+      token: 'claim-a',
+      revision,
+      environment_generation: 1,
+      started_at: new Date().toISOString(),
+      lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      instance_id: 'daemon-a',
+      boot_id: 'boot-a',
+      requested_by_user_id: userId,
+    });
+
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        desiredRevision: revision,
+        syncClaimToken: 'claim-a',
+        executionUserIdOverride: userId,
+      })
+    );
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({ appliedRevision: revision, claimToken: 'claim-a' })
+    );
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  it('records a mismatched acknowledgement as a sync failure without environment demotion', async () => {
+    const { service, branch, complete, fail } = harness();
+    vi.spyOn(service as never, 'getCanonicalBranch').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'renderEnvironmentSyncCommand').mockResolvedValue('sync exact');
+    vi.spyOn(service as never, 'runEnvironmentExecutor').mockResolvedValue({
+      appliedRevision: otherRevision,
+    });
+
+    await (
+      service as unknown as {
+        runClaimedEnvironmentSync: (id: BranchID, attempt: unknown) => Promise<void>;
+      }
+    ).runClaimedEnvironmentSync('wt-sync-race' as BranchID, {
+      token: 'claim-a',
+      revision,
+      environment_generation: 1,
+      started_at: new Date().toISOString(),
+      lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      instance_id: 'daemon-a',
+      boot_id: 'boot-a',
+      requested_by_user_id: userId,
+    });
+
+    expect(complete).not.toHaveBeenCalled();
+    expect(fail).toHaveBeenCalledWith(
+      expect.objectContaining({ revision, message: expect.stringContaining('expected') })
+    );
+  });
+
+  it('requires the same typed acknowledgement from a sync webhook', async () => {
+    const { service, branch, complete, fail } = harness();
+    vi.spyOn(service as never, 'getCanonicalBranch').mockResolvedValue(branch as never);
+    vi.spyOn(service as never, 'renderEnvironmentSyncCommand').mockResolvedValue(
+      'https://hooks.example.com/sync'
+    );
+    vi.spyOn(service as never, 'resolveEnvironmentExecutionAuthority').mockResolvedValue({
+      executionUserId: userId,
+      branchFsAccess: 'write',
+    });
+    vi.spyOn(service as never, 'executeEnvironmentWebhook').mockResolvedValue({
+      body: JSON.stringify({ version: 1, applied_revision: revision }),
+      truncated: false,
+      status: 200,
+      contentType: 'application/json',
+    });
+    const run = vi.spyOn(service as never, 'runEnvironmentExecutor');
+
+    await (
+      service as unknown as {
+        runClaimedEnvironmentSync: (id: BranchID, attempt: unknown) => Promise<void>;
+      }
+    ).runClaimedEnvironmentSync('wt-sync-race' as BranchID, {
+      token: 'claim-webhook',
+      revision,
+      environment_generation: 1,
+      started_at: new Date().toISOString(),
+      lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+      instance_id: 'daemon-a',
+      boot_id: 'boot-a',
+      requested_by_user_id: userId,
+    });
+
+    expect(run).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledWith(
+      expect.objectContaining({ claimToken: 'claim-webhook', appliedRevision: revision })
+    );
+    expect(fail).not.toHaveBeenCalled();
   });
 });
 

@@ -600,6 +600,8 @@ export interface BranchEnvironmentInstance {
       lease_expires_at: string;
       instance_id: string;
       boot_id: string;
+      /** User whose credential/home context was frozen for this attempt. */
+      requested_by_user_id?: string;
     };
     last_error?: {
       revision: string;
@@ -828,14 +830,15 @@ export interface RepoEnvironmentVariant {
   stop?: string;
 
   /**
-   * Optional command to push the branch's latest committed code into a running
+   * Optional command or webhook to apply an exact clean commit in a remote
    * remote environment (Handlebars template). For a local environment this is
    * usually unset (the environment already runs on the branch's own files); for
    * a remote backend (e.g. a Codespace, which shares no filesystem with Agor)
-   * it publishes the branch and has the remote fast-forward its working tree, so
-   * the remote always sits on the latest state and in-environment watchers
-   * hot-reload. Invoked via `syncEnvironment` — on demand or after a commit.
-   * Emits facts like start/stop (e.g. `AGOR_FACT synced_sha=…`).
+   * it publishes the branch and updates the remote working tree, so
+   * in-environment watchers hot-reload. `{{sync.revision}}` is the exact desired
+   * SHA. Success must emit/return a versioned lifecycle result whose
+   * `applied_revision` matches it; Agor otherwise records a retryable sync
+   * failure without demoting environment health.
    */
   sync?: string;
 

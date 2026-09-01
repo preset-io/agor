@@ -128,13 +128,14 @@ environment:
       startup_timeout_ms: 3600000 # optional; one hour by default
       start:  "<shell command template>"
       stop:   "<shell command template>"
+      sync:   "<shell command template>"   # optional; exact source reconciliation
       nuke:   "<shell command template>"   # optional
       logs:   "<shell command template>"   # optional
       health: "<url template>"             # optional
       app:    "<url template>"             # optional
 ```
 
-`start`, `stop`, `nuke`, and `logs` are rendered lifecycle fields. In the
+`start`, `stop`, `sync`, `nuke`, and `logs` are rendered lifecycle fields. In the
 default `hybrid` mode they can be shell commands or explicit `http://` /
 `https://` webhooks. Webhooks are invoked with HTTP GET. `health` and `app` are
 always URL templates, not shell commands.
@@ -145,7 +146,7 @@ always URL templates, not shell commands.
 - `environment.default` must reference a variant that exists in `environment.variants`.
 - Each variant (after `extends` resolution) needs at least `start` and `stop`.
 
-`startup_timeout_ms`, `nuke`, `logs`, `health`, and `app` are optional. The
+`startup_timeout_ms`, `sync`, `nuke`, `logs`, `health`, and `app` are optional. The
 startup timeout defaults to one hour and may be set from 1 second through 24
 hours. Agor persists an exact deadline for every attempt, so a daemon restart
 or a pause in health monitoring does not restart the clock. The corresponding
@@ -405,7 +406,7 @@ execution:
   managed_envs_execution_mode: webhook-only
 ```
 
-In `webhook-only` mode, rendered `start`, `stop`, `nuke`, and `logs` fields
+In `webhook-only` mode, rendered `start`, `stop`, `sync`, `nuke`, and `logs` fields
 must render to explicit `http://` or `https://` URLs. Agor sends a GET request
 to the URL.
 
@@ -416,6 +417,7 @@ environment:
     remote:
       start: "https://orchestrator.example.com/agor/start?branch={{branch.name}}"
       stop:  "https://orchestrator.example.com/agor/stop?branch={{branch.name}}"
+      sync:  "https://orchestrator.example.com/agor/sync?branch={{branch.name}}&revision={{sync.revision}}"
       logs:  "https://orchestrator.example.com/agor/logs?branch={{branch.name}}"
       health: "https://apps.example.com/{{branch.name}}/health"
       app:    "https://apps.example.com/{{branch.name}}"
@@ -428,11 +430,18 @@ credentials are rejected. Use a trusted orchestration service, and avoid secrets
 in query strings because rendered branch snapshots and infrastructure logs may
 expose them.
 
-In daemon HA mode, lifecycle actions remain webhook-only; Agor does not assign
-distributed ownership for Start, Stop, Restart, or Nuke. Health observation is
+A `sync` command or webhook receives the exact clean desired Git object ID as
+`{{sync.revision}}`. Success must return the versioned lifecycle JSON result
+with `applied_revision` equal to that exact ID. Agor stores desired and applied
+revisions separately, admits only one leased attempt across daemon replicas,
+and retries failures without changing the environment's health status.
+
+In daemon HA mode, Start, Stop, Restart, and Nuke remain webhook-only and do not
+have distributed operation ownership. Source sync and health observation do:
+PostgreSQL admits one leased source-sync attempt and one health observation per
+branch, each fenced against lifecycle changes. Health observation is otherwise
 separate: every replica scans active environments, while PostgreSQL admits only
-one live observation claim per branch and fences the result against lease expiry
-and lifecycle changes. A remote/webhook environment without `health` remains
+one live observation claim per branch. A remote/webhook environment without `health` remains
 explicitly unobservable (`unknown`); Agor never treats another daemon's local
 process map as evidence that it is healthy.
 
