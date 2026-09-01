@@ -10,6 +10,7 @@ export const SETTINGS_SECTIONS = [
   'repos',
   'branches',
   'teammates',
+  'card-types',
   'cards',
   'artifacts',
   'mcp',

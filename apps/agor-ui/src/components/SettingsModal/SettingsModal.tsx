@@ -57,10 +57,11 @@ import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
 import { ToolIcon } from '../ToolIcon';
 import { AboutTab } from './AboutTab';
 import { AgenticToolsSection, TOOL_LABELS } from './AgenticToolsSection';
+import { AllCardsPanel } from './AllCardsPanel';
 import { ArtifactsTable } from './ArtifactsTable';
 import { BoardsTable } from './BoardsTable';
 import { BranchesTable } from './BranchesTable';
-import { CardsTable } from './CardsTable';
+import { CardTypesPanel } from './CardTypesPanel';
 import { GatewayChannelsTable } from './GatewayChannelsTable';
 import { GroupsTable } from './GroupsTable';
 import { MCPServersTable } from './MCPServersTable';
@@ -409,20 +410,34 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             label: 'Artifacts',
             icon: <ExperimentOutlined />,
           },
+        ],
+      },
+      {
+        // A non-clickable group label with two sibling entries: the type
+        // definitions and the global card list they classify.
+        key: 'cards-group',
+        label: (
+          <span>
+            Cards{' '}
+            <Tag
+              color="warning"
+              style={{ marginInlineStart: token.marginXXS, fontSize: token.fontSizeSM }}
+            >
+              Beta
+            </Tag>
+          </span>
+        ),
+        type: 'group' as const,
+        children: [
+          {
+            key: 'card-types',
+            label: 'Card Types',
+            icon: <CreditCardOutlined />,
+          },
           {
             key: 'cards',
-            label: (
-              <span>
-                Cards{' '}
-                <Tag
-                  color="warning"
-                  style={{ marginInlineStart: token.marginXXS, fontSize: token.fontSizeSM }}
-                >
-                  Beta
-                </Tag>
-              </span>
-            ),
-            icon: <CreditCardOutlined />,
+            label: 'All Cards',
+            icon: <AppstoreOutlined />,
           },
         ],
       },
@@ -619,14 +634,17 @@ const SettingsModalContent: React.FC<SettingsModalProps> = ({
             />
           )
         );
+      case 'card-types':
+        return <CardTypesPanel client={client} cardTypeById={cardTypeById} />;
       case 'cards':
         return (
-          <CardsTable
+          <AllCardsPanel
             client={client}
             cardById={cardById}
             cardTypeById={cardTypeById}
             boardById={boardById}
             boardObjects={boardObjects}
+            onClose={onClose}
           />
         );
       case 'artifacts':
