@@ -198,7 +198,9 @@ async function discoverModels(
  * A fresh server can serve a stale bundled catalog for its whole lifetime
  * (the models.dev refresh only reaches the next server), so a connected
  * curated provider's snapshot is completed with the curated active models the
- * pinned runtime is known to support. Admission applies the same witness.
+ * pinned runtime is known to support for display. Execution treats that merge
+ * only as a refresh signal, then restarts and revalidates the exact pair on the
+ * new native server.
  */
 function withKnownActiveModels(
   providerId: string,
