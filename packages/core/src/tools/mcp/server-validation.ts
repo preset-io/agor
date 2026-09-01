@@ -78,6 +78,14 @@ function hasControlCharacter(value: string): boolean {
   });
 }
 
+/** MCP descriptions are protocol text and may legitimately be multiline. */
+function hasUnsafeDescriptionControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.charCodeAt(0);
+    return (code <= 31 && code !== 9 && code !== 10 && code !== 13) || code === 127;
+  });
+}
+
 export interface MCPServerWriteValidationOptions {
   operation: 'create' | 'mutation';
   /** Trusted daemon/catalog/import paths may set provenance and capabilities. */
@@ -248,7 +256,11 @@ function boundedOptionalString(
 ): void {
   const value = record[field];
   if (value === undefined) return;
-  if (typeof value !== 'string' || value.length > MAX_VALUE_LENGTH || hasControlCharacter(value)) {
+  if (
+    typeof value !== 'string' ||
+    value.length > MAX_VALUE_LENGTH ||
+    hasUnsafeDescriptionControlCharacter(value)
+  ) {
     throw new Error(`${label}.${field} must be a bounded string`);
   }
 }

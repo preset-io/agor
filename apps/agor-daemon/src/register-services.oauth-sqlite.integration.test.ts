@@ -51,7 +51,10 @@ import {
 // The boundary under test is daemon discovery/OAuth authority, not the MCP
 // SDK's stream parser. Mock only the post-grant capability client so Vitest
 // does not try to type-strip eventsource-parser's published TypeScript file.
-const mcpClientTestState = vi.hoisted(() => ({ connectError: undefined as unknown }));
+const mcpClientTestState = vi.hoisted(() => ({
+  connectError: undefined as unknown,
+  tools: [] as Array<{ name: string; description?: string }>,
+}));
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
   Client: class {
     async connect() {
@@ -59,7 +62,7 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
     }
     async close() {}
     async listTools() {
-      return { tools: [] };
+      return { tools: mcpClientTestState.tools };
     }
     async listResources() {
       return { resources: [] };
@@ -910,6 +913,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   mcpClientTestState.connectError = undefined;
+  mcpClientTestState.tools = [];
   await Promise.all(realSocketHarnesses.splice(0).map((harness) => harness.close()));
   await Promise.all(providers.splice(0).map((provider) => provider.close()));
   for (const db of databases.splice(0)) {
@@ -919,6 +923,70 @@ afterEach(async () => {
   else process.env.AGOR_BASE_URL = previousBaseUrl;
   if (previousMasterSecret === undefined) delete process.env.AGOR_MASTER_SECRET;
   else process.env.AGOR_MASTER_SECRET = previousMasterSecret;
+});
+
+describe('saved-server capability discovery', () => {
+  it('persists protocol-valid multiline tool descriptions', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const server = await new MCPServerRepository(harness.rawDb).create({
+      name: 'multiline-description-server',
+      transport: 'http',
+      url: provider.savedMcpUrl,
+      scope: 'global',
+      owner_user_id: harness.user.user_id as UserID,
+      auth: { type: 'none' },
+    });
+    mcpClientTestState.tools = [
+      {
+        name: 'resolve-library-id',
+        description: 'Resolve a library.\n\nRules:\n- prefer an exact match\n- explain ambiguity',
+      },
+    ];
+
+    await expect(
+      harness.app
+        .service('mcp-servers/discover')
+        .create({ mcp_server_id: server.mcp_server_id }, paramsFor(harness))
+    ).resolves.toMatchObject({
+      success: true,
+      tools: mcpClientTestState.tools,
+    });
+    await expect(
+      new MCPServerRepository(harness.rawDb).findById(server.mcp_server_id)
+    ).resolves.toMatchObject({ tools: mcpClientTestState.tools });
+  });
+
+  it('reports rejected provider capability text as an invalid response without echoing it', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider);
+    const server = await new MCPServerRepository(harness.rawDb).create({
+      name: 'invalid-description-server',
+      transport: 'http',
+      url: provider.savedMcpUrl,
+      scope: 'global',
+      owner_user_id: harness.user.user_id as UserID,
+      auth: { type: 'none' },
+    });
+    mcpClientTestState.tools = [{ name: 'unsafe', description: 'provider-secret\0suffix' }];
+
+    const result = await harness.app
+      .service('mcp-servers/discover')
+      .create({ mcp_server_id: server.mcp_server_id }, paramsFor(harness));
+
+    expect(result).toMatchObject({
+      success: false,
+      category: 'invalid_response',
+      error:
+        'The provider returned an invalid MCP response. Retry, then review the provider configuration.',
+    });
+    expect(JSON.stringify(result)).not.toContain('provider-secret');
+    await expect(
+      new MCPServerRepository(harness.rawDb).findById(server.mcp_server_id)
+    ).resolves.toMatchObject({ tools: undefined });
+  });
 });
 
 describe('real Feathers Socket.IO request authority', () => {

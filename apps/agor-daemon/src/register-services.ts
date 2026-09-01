@@ -68,6 +68,7 @@ import {
   hasTemplateMarker,
   isMCPServerUsableBy,
   type MCPExternalErrorStage,
+  MCPServerWriteValidationError,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
 import type {
@@ -1806,13 +1807,27 @@ export async function registerMCPServices(
     (postgresOAuthDeployment ? new MCPOAuthPendingFlowAuthority(db) : null);
   const lockOAuthGrantConfiguration =
     ctx.lockMcpOAuthGrantConfiguration ?? lockMCPOAuthGrantConfiguration;
-  const externalFailure = (event: string, stage: MCPExternalErrorStage, error: unknown) => {
-    const safe = sanitizeMCPExternalError(error, { stage });
+  const externalFailure = (
+    event: string,
+    stage: MCPExternalErrorStage,
+    error: unknown,
+    category?: 'invalid_response'
+  ) => {
+    const safe = sanitizeMCPExternalError(error, { stage, category });
     const { type, code } = safe.diagnostic;
     console.error(
       `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${code ? ` code=${code}` : ''}`
     );
     return safe;
+  };
+  const isDiscoveryValidationFailure = (error: unknown): boolean => {
+    try {
+      return error instanceof MCPServerWriteValidationError;
+    } catch {
+      // Provider/library exceptions may be hostile proxies. Classification
+      // must never let their prototype trap escape the redaction boundary.
+      return false;
+    }
   };
   const oauthFetch = async (
     input: string | URL | Request,
@@ -5841,7 +5856,12 @@ export async function registerMCPServices(
         ) {
           return { success: false, error: recovery.message, recovery };
         }
-        const safe = externalFailure('MCP Discovery', 'discovery', error);
+        const safe = externalFailure(
+          'MCP Discovery',
+          'discovery',
+          error,
+          isDiscoveryValidationFailure(error) ? 'invalid_response' : undefined
+        );
         return { success: false, error: safe.message, category: safe.category };
       }
     },
