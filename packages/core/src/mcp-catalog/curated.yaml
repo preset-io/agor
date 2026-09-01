@@ -686,11 +686,7 @@ unpublished:
     popularity_rank: 14
     remote_url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
     transport: streamable-http
-    auth_type: credentials
-    credentials:
-      scheme: bearer
-      label: Personal or service account access token
-      acquisition_url: https://docs.datadoghq.com/mcp_server/setup/
+    auth_type: oauth
     website_url: https://docs.datadoghq.com/mcp_server/setup/
 
   - name: io.incident/mcp

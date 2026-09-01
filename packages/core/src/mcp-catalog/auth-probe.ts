@@ -19,7 +19,11 @@
  */
 
 import type { MCPCatalogProbedAuthType } from '@agor/core/types';
-import { isOAuthRequired } from '../tools/mcp/oauth-mcp-transport';
+import {
+  isOAuthRequired,
+  resolveMCPOAuthDiscovery,
+  validateMCPOAuthMetadata,
+} from '../tools/mcp/oauth-mcp-transport';
 import { createPinnedFetch, isOutboundRefusal } from '../utils/pinned-fetch';
 import { isPublicHttpUrl } from '../utils/url';
 
@@ -44,12 +48,40 @@ export interface AuthProbeOptions {
    * that supplies its own is supplying its own guarantees with it.
    */
   fetchImpl?: (input: string, init?: RequestInit) => Promise<Response>;
+  /**
+   * Deterministic seam for the metadata fallback used by a bare 401. Tests
+   * that inject the initialize transport skip public discovery unless they
+   * inject this too.
+   */
+  oauthMetadataValid?: (remoteUrl: string) => Promise<boolean>;
 }
 
 export interface RemoteAuthProbeResult {
   authType: MCPCatalogProbedAuthType;
   /** Present only for an OAuth challenge; never contains a caller credential. */
   wwwAuthenticate?: string;
+}
+
+/**
+ * Some OAuth MCP resources publish the complete RFC 9728/RFC 8414 chain but
+ * omit WWW-Authenticate from their bare 401. Reuse the production Marketplace
+ * discovery and validation boundary before calling such an answer a generic
+ * credential challenge. This remains read-only: validation stops before DCR
+ * or browser authorization.
+ */
+async function hasValidatedOAuthMetadata(remoteUrl: string): Promise<boolean> {
+  try {
+    const discovery = await resolveMCPOAuthDiscovery(null, remoteUrl, {
+      compatibilityMode: 'marketplace',
+    });
+    if (!discovery) return false;
+    await validateMCPOAuthMetadata(discovery, remoteUrl, {
+      compatibilityMode: 'marketplace',
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** True for a non-null, non-array object. */
@@ -203,10 +235,12 @@ async function sendInitialize(
 /**
  * Probe one remote MCP URL.
  *
- * Exactly one request is issued, to the URL given and nowhere else. Never
- * throws: an unreachable host, a timeout, or a malformed URL resolves to
- * `unknown` or `unreachable`, so a connect gets a clean refusal rather than a
- * stack trace. `unknown` means "not determined", never "open".
+ * The initialize is exactly one request to the URL given. A bare 401 may then
+ * use the same read-only, outbound-filtered OAuth metadata cascade as the
+ * production sign-in flow; no DCR or authorization is started. Never throws:
+ * an unreachable host, a timeout, or a malformed URL resolves to `unknown` or
+ * `unreachable`, so a connect gets a clean refusal rather than a stack trace.
+ * `unknown` means "not determined", never "open".
  */
 export async function probeRemoteAuth(
   remoteUrl: string,
@@ -223,6 +257,14 @@ export async function probeRemoteAuth(
       authType: 'oauth',
       wwwAuthenticate: response.headers.get('www-authenticate') ?? undefined,
     };
+
+  if (response.status === 401 && !response.headers.has('www-authenticate')) {
+    // A caller-supplied initialize transport is a unit-test seam, so keep the
+    // test hermetic unless it also supplies the metadata verdict explicitly.
+    const metadataValid =
+      options.oauthMetadataValid ?? (options.fetchImpl ? undefined : hasValidatedOAuthMetadata);
+    if (metadataValid && (await metadataValid(remoteUrl))) return { authType: 'oauth' };
+  }
 
   // A 401/403 without an OAuth challenge needs credentials the browser flow
   // cannot obtain, which is a different refusal to write than "sign in".
