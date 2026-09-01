@@ -105,6 +105,7 @@ import {
   WORKSPACE_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
+import { resolveOwnerHomeStore } from '../utils/sandbox-context.js';
 import type { ClaudeUserCredentialPatchCoordinator } from './claude-credential-mutation.js';
 import { lockTenantAuthorizationFence } from './tenant-authorization-fence.js';
 import { UserAvatarSyncManager } from './user-avatar-sync.js';
@@ -497,6 +498,7 @@ function validatedAssignedPassword(password: unknown, email?: string): string {
  */
 export class UsersService {
   private avatarSync?: UserAvatarSyncManager;
+  private readonly config: AgorConfig;
   private readonly identityAuthority: ResolvedIdentityAuthority;
 
   constructor(
@@ -506,6 +508,7 @@ export class UsersService {
     private readonly claudeCredentialPatches?: ClaudeUserCredentialPatchCoordinator
   ) {
     const effectiveConfig = config ?? (app?.get('config') as AgorConfig | undefined) ?? {};
+    this.config = effectiveConfig;
     this.identityAuthority = resolveIdentityAuthority(effectiveConfig);
     if (app) {
       // Application-bound services are created only from the long-lived,
@@ -993,15 +996,29 @@ export class UsersService {
     const changesClaudeCredentialSource =
       coordinateClaudeCredential && this.claudeCredentialPatches!.changesSource(data, params);
     const normalizeRouteField = (value: string | null | undefined) => value?.trim() || null;
-    const changesClaudeCredentialRoute =
+    const unixUsernameChanges =
       coordinateClaudeCredential &&
-      this.claudeCredentialPatches!.changesRoute(data) &&
-      ((data.unix_username !== undefined &&
-        normalizeRouteField(data.unix_username) !==
-          normalizeRouteField(authority.target.unix_username)) ||
-        (data.filesystem_home !== undefined &&
-          normalizeRouteField(data.filesystem_home) !==
-            normalizeRouteField(authority.target.filesystem_home)));
+      data.unix_username !== undefined &&
+      this.claudeCredentialPatches!.changesRoute({ unix_username: data.unix_username }) &&
+      normalizeRouteField(data.unix_username) !==
+        normalizeRouteField(authority.target.unix_username);
+    const filesystemHomeChanges =
+      coordinateClaudeCredential &&
+      data.filesystem_home !== undefined &&
+      this.claudeCredentialPatches!.changesRoute({ filesystem_home: data.filesystem_home }) &&
+      resolveOwnerHomeStore({
+        config: this.config,
+        tenantId: credentialTenantId,
+        ownerUserId: id,
+        filesystemHome: authority.target.filesystem_home,
+      }) !==
+        resolveOwnerHomeStore({
+          config: this.config,
+          tenantId: credentialTenantId,
+          ownerUserId: id,
+          filesystemHome: data.filesystem_home,
+        });
+    const changesClaudeCredentialRoute = unixUsernameChanges || filesystemHomeChanges;
     const hasPasswordWrite = Object.hasOwn(data, 'password');
     const assignedPassword = hasPasswordWrite
       ? validatedAssignedPassword(data.password, data.email ?? authority.target.email)

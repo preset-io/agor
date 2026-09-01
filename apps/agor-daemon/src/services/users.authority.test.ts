@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { BoardRepository, runWithTenantContext, UsersRepository } from '@agor/core/db';
 import { feathers } from '@agor/core/feathers';
 import type { AuthenticatedParams, Params, User, UserID, UserRole } from '@agor/core/types';
@@ -531,6 +534,64 @@ describe('UsersService Claude credential-source authority', () => {
     expect(complete).toHaveBeenCalledTimes(1);
     expect(cleanupRouteBeforePatch).toHaveBeenCalledTimes(1);
   });
+
+  dbTest(
+    'preserves managed credentials across canonical-equivalent sandbox home updates',
+    async ({ db }) => {
+      const root = await mkdtemp(join(tmpdir(), 'agor-claude-home-route-'));
+      try {
+        const realHome = join(root, 'real-home');
+        const aliasHome = join(root, 'alias-home');
+        await mkdir(realHome);
+        await symlink(realHome, aliasHome, 'dir');
+        const cleanupRouteBeforePatch = vi.fn(async () => undefined);
+        const config = {
+          execution: {
+            unix_user_mode: 'sandbox' as const,
+            sandbox: { enabled: true, home_mode: 'per_user' as const },
+          },
+        };
+        const service = new UsersService(db, undefined, config, {
+          applies: (data) => Object.hasOwn(data, 'filesystem_home'),
+          changesSource: () => false,
+          changesRoute: (data) => Object.hasOwn(data, 'filesystem_home'),
+          coordinatesRemoval: () => true,
+          lock: vi.fn(async () => undefined),
+          complete: vi.fn(async () => undefined),
+          cleanupRouteBeforePatch,
+          cleanupRouteBeforeRemove: vi.fn(async () => undefined),
+        });
+        const user = await createUser(service, 'admin', 'claude-canonical-route');
+        const params = externalParams(user);
+
+        await runWithTenantContext('default', async () => {
+          await service.patch(user.user_id as UserID, { filesystem_home: realHome }, params);
+          const trusted = { ...params, provider: undefined } as Params & {
+            [CLAUDE_AUTH_TRUSTED_USER_MUTATION]: boolean;
+          };
+          trusted[CLAUDE_AUTH_TRUSTED_USER_MUTATION] = true;
+          markTrustedUserMutation(trusted, 'claude-auth');
+          await service.patch(
+            user.user_id as UserID,
+            {
+              agentic_auth_methods: { 'claude-code': 'subscription' },
+              agentic_credential_sources: { 'claude-code': 'managed_file' },
+            },
+            trusted
+          );
+          cleanupRouteBeforePatch.mockClear();
+
+          for (const equivalent of [`${realHome}/`, `${root}/./real-home`, aliasHome]) {
+            await service.patch(user.user_id as UserID, { filesystem_home: equivalent }, params);
+          }
+        });
+
+        expect(cleanupRouteBeforePatch).not.toHaveBeenCalled();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  );
 
   dbTest(
     'linearizes managed-file → pasted-token → clear without reactivating the file',
