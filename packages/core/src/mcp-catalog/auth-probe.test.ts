@@ -174,6 +174,34 @@ describe('probeRemoteAuthType', () => {
     expect(await probeRemoteAuthType('https://example.com/mcp', { fetchImpl })).toBe('credentials');
   });
 
+  it('recognizes a bare 401 as OAuth only after the exact metadata contract validates', async () => {
+    mockFetch(async () => jsonResponse(401));
+    const oauthMetadataValid = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      probeRemoteAuth('https://mcp.datadoghq.com/api/unstable/mcp-server/mcp', {
+        fetchImpl,
+        oauthMetadataValid,
+      })
+    ).resolves.toEqual({ authType: 'oauth' });
+    expect(oauthMetadataValid).toHaveBeenCalledWith(
+      'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp'
+    );
+  });
+
+  it('does not reinterpret an explicit non-OAuth challenge through metadata fallback', async () => {
+    mockFetch(async () => jsonResponse(401, { 'www-authenticate': 'ApiKey realm="internal"' }));
+    const oauthMetadataValid = vi.fn().mockResolvedValue(true);
+
+    await expect(
+      probeRemoteAuthType('https://apikey.example.com/mcp', {
+        fetchImpl,
+        oauthMetadataValid,
+      })
+    ).resolves.toBe('credentials');
+    expect(oauthMetadataValid).not.toHaveBeenCalled();
+  });
+
   it('reports unreachable for a server error', async () => {
     mockFetch(async () => jsonResponse(503));
     expect(await probeRemoteAuthType('https://example.com/mcp', { fetchImpl })).toBe('unreachable');

@@ -56,6 +56,26 @@ describe('auditCatalogHealth', () => {
     });
   });
 
+  it('expects Datadog to audit as OAuth-ready without requiring a challenge header', async () => {
+    const datadog = entry('oauth');
+    datadog.name = 'com.datadoghq/mcp';
+    datadog.remote_url = 'https://mcp.datadoghq.com/api/unstable/mcp-server/mcp';
+    const oauthMetadataReady = vi.fn().mockResolvedValue(undefined);
+
+    const [result] = await auditCatalogHealth([datadog], {
+      probe: async () => ({ authType: 'oauth' }),
+      oauthMetadataReady,
+    });
+
+    expect(result).toEqual({
+      name: 'com.datadoghq/mcp',
+      status: 'ready',
+      expectedAuth: 'oauth',
+      observedAuth: 'oauth',
+    });
+    expect(oauthMetadataReady).toHaveBeenCalledWith(datadog, undefined);
+  });
+
   it('does not call a public credential challenge fully verified without a credential', async () => {
     const [result] = await auditCatalogHealth([entry('credentials')], {
       probe: async () => ({ authType: 'credentials' }),
