@@ -209,6 +209,25 @@ describe('configured executor spawning', () => {
     });
   });
 
+  it('marks provider-free workload prompts for the delegated launcher', async () => {
+    const proc = createMockProcess();
+    spawnMock.mockReturnValue(proc);
+    const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+
+    configureExecutor(
+      { executor_command_template: 'launch --type {executor_type} -- {command}' },
+      LOCAL_RESPONSE_OPTIONS
+    );
+
+    spawnExecutor({ command: 'prompt', params: { tool: 'workload' } });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      'sh',
+      ['-c', 'launch --type workload -- prompt'],
+      expect.objectContaining({ stdio: ['pipe', 'ignore', 'ignore'] })
+    );
+  });
+
   it('keeps reserved launcher credentials in the trusted template process only', async () => {
     const proc = createMockProcess();
     spawnMock.mockReturnValue(proc);

@@ -6,6 +6,7 @@ import type { TenantScopeAwareDatabase } from '@agor/core/db';
 import { AgenticToolPresetRepository, TenantAgenticToolSettingsRepository } from '@agor/core/db';
 import { BadRequest } from '@agor/core/feathers';
 import type {
+  AgenticToolName,
   Params,
   TenantAgenticToolName,
   TenantAgenticToolSettings,
@@ -14,7 +15,9 @@ import type {
 } from '@agor/core/types';
 import {
   DEFAULT_PROVIDER_RESOLUTION_POLICY,
+  isBuiltInAgenticToolName,
   isProviderConnectionTool,
+  isTenantAgenticToolEnabledByDefault,
   PROVIDER_RESOLUTION_POLICIES,
   TENANT_AGENTIC_TOOL_NAMES,
   TENANT_PROVIDER_CONNECTION_FIELDS,
@@ -53,7 +56,7 @@ export class TenantAgenticToolSettingsService {
       tool,
       revision: stored.revision ?? 0,
       deployment_available: deploymentEnabled,
-      enabled: deploymentEnabled && stored.enabled !== false,
+      enabled: deploymentEnabled && (stored.enabled ?? isTenantAgenticToolEnabledByDefault(tool)),
       resolution_policy: stored.resolution_policy ?? DEFAULT_PROVIDER_RESOLUTION_POLICY,
       inline_configuration_allowed: stored.inline_configuration_allowed !== false,
       connection,
@@ -79,6 +82,14 @@ export class TenantAgenticToolSettingsService {
     }
     if (data.enabled !== undefined && typeof data.enabled !== 'boolean') {
       throw new BadRequest('enabled must be a boolean');
+    }
+    if (
+      isBuiltInAgenticToolName(tool as AgenticToolName) &&
+      (data.inline_configuration_allowed !== undefined ||
+        data.resolution_policy !== undefined ||
+        data.connection !== undefined)
+    ) {
+      throw new BadRequest(`${tool} only supports workspace enablement`);
     }
     if (
       data.inline_configuration_allowed !== undefined &&

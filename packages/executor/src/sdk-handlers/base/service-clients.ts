@@ -10,7 +10,14 @@
  * than reaching into `claude/claude-tool.ts` to grab Claude-local types.
  */
 
-import type { MessageCreate, MessagePatch, Session, SessionUpdate } from '@agor/core/types';
+import type {
+  MessageCreate,
+  MessagePatch,
+  Session,
+  SessionUpdate,
+  WorkloadCompletionInput,
+  WorkloadCompletionResult,
+} from '@agor/core/types';
 import type { Message } from '../../types.js';
 
 /**
@@ -34,6 +41,7 @@ export interface TasksService {
   get(id: string): Promise<any>;
   // biome-ignore lint/suspicious/noExplicitAny: FeathersJS service accepts partial task updates
   patch(id: string, data: Partial<any>): Promise<any>;
+  completeWorkload(data: WorkloadCompletionInput): Promise<WorkloadCompletionResult>;
   emit(event: string, data: unknown): void;
 }
 

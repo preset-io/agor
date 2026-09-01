@@ -3,6 +3,7 @@ import {
   BranchRepository,
   RepoRepository,
   SessionRepository,
+  TenantAgenticToolSettingsRepository,
   type TenantScopeAwareDatabase,
   UsersRepository,
 } from '@agor/core/db';
@@ -91,6 +92,31 @@ describe('SessionsService SDK-home admission', () => {
       sdk_home: 'per_branch',
     });
   });
+
+  dbTest(
+    'admits an enabled built-in workload without requiring provider SDK state',
+    async ({ db }) => {
+      const { user, branch } = await fixture(db);
+      await new TenantAgenticToolSettingsRepository(db).patch('workload', { enabled: true });
+      const service = new SessionsService(db, appWithMode('per_branch'));
+
+      await expect(
+        service.create(
+          {
+            branch_id: branch.branch_id,
+            created_by: user.user_id,
+            agentic_tool: 'workload',
+            status: SessionStatus.IDLE,
+          },
+          { _agenticConfigResolved: true } as never
+        )
+      ).resolves.toMatchObject({ agentic_tool: 'workload', sdk_home_scope: 'branch' });
+
+      await expect(new BranchRepository(db).findById(branch.branch_id)).resolves.toMatchObject({
+        sdk_home: 'per_branch',
+      });
+    }
+  );
 
   dbTest('refuses an incompatible tool without adopting the branch', async ({ db }) => {
     const { user, branch } = await fixture(db);

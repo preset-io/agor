@@ -7,6 +7,7 @@
 
 import { getAgenticToolIntegration } from '@agor/agentic-tools';
 import type {
+  AgenticToolName,
   ExecutorPulseKind,
   MessageSource,
   PermissionMode,
@@ -19,7 +20,7 @@ import type { AgorClient } from '../../services/feathers-client.js';
 /**
  * Tool identifier
  */
-export type Tool = 'claude-code' | 'gemini' | 'codex' | 'opencode' | 'copilot' | 'cursor';
+export type Tool = AgenticToolName;
 
 /**
  * Tool runner function - executes via Feathers WebSocket
@@ -47,7 +48,7 @@ export interface ToolConfig {
   /** Display name */
   name: string;
   /** Environment variable for API key */
-  apiKeyEnvVar: string;
+  apiKeyEnvVar?: string;
   /** Tool runner function */
   runner: ToolRunner;
 }
@@ -114,7 +115,7 @@ export class ToolRegistry {
   /**
    * Get API key environment variable for tool
    */
-  static getApiKeyEnvVar(tool: Tool): string {
+  static getApiKeyEnvVar(tool: Tool): string | undefined {
     const config = ToolRegistry.get(tool);
     if (!config) {
       throw new Error(`Unknown tool: ${tool}`);
@@ -196,7 +197,17 @@ export class ToolRegistry {
 /**
  * Initialize tool registry with all available tools
  */
-export async function initializeToolRegistry(): Promise<void> {
+export async function initializeToolRegistry(tool?: Tool): Promise<void> {
+  if (tool === 'workload') {
+    const workload = await import('./workload.js');
+    ToolRegistry.register({
+      tool: 'workload',
+      name: getAgenticToolIntegration('workload').displayName,
+      runner: workload.executeWorkloadTask,
+    });
+    return;
+  }
+
   // Import all tool handlers
   const [claude, codex, opencode, copilot] = await Promise.all([
     import('./claude.js'),

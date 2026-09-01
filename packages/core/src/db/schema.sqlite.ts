@@ -88,7 +88,16 @@ export const sessions = sqliteTable(
     agentic_tool: text('agentic_tool', {
       // Retain the removed identifier so historical rows remain readable.
       // Runtime creation and execution validate against AgenticToolName.
-      enum: ['claude-code', 'claude-code-cli', 'codex', 'gemini', 'opencode', 'copilot', 'cursor'],
+      enum: [
+        'claude-code',
+        'claude-code-cli',
+        'codex',
+        'gemini',
+        'opencode',
+        'copilot',
+        'cursor',
+        'workload',
+      ],
     }).notNull(),
     agentic_tool_preset_id: text('agentic_tool_preset_id', { length: 36 }).references(
       (): AnySQLiteColumn => agenticToolPresets.preset_id,
@@ -1514,7 +1523,7 @@ export const agenticToolPresets = sqliteTable(
   {
     preset_id: text('preset_id').primaryKey(),
     tool: text('tool', {
-      enum: ['claude-code', 'codex', 'gemini', 'copilot', 'cursor', 'opencode'],
+      enum: ['claude-code', 'codex', 'gemini', 'copilot', 'cursor', 'opencode', 'workload'],
     }).notNull(),
     name: text('name').notNull(),
     description: text('description'),

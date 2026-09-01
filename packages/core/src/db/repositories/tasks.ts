@@ -8,6 +8,8 @@ import type {
   CapabilityPolicyFsAccess,
   ExecutorPulse,
   ExecutorTerminationCompleteInput,
+  Message,
+  MessageID,
   SdkFailure,
   SessionID,
   Task,
@@ -17,6 +19,8 @@ import type {
   TerminationCause,
   TerminationCoordinationClaim,
   UUID,
+  WorkloadCompletionInput,
+  WorkloadCompletionResult,
 } from '@agor/core/types';
 import {
   EXECUTING_TASK_STATUSES,
@@ -54,7 +58,16 @@ import {
   select,
   update,
 } from '../database-wrapper';
-import { type SessionRow, sessions, type TaskInsert, type TaskRow, tasks, users } from '../schema';
+import {
+  type MessageRow,
+  messages,
+  type SessionRow,
+  sessions,
+  type TaskInsert,
+  type TaskRow,
+  tasks,
+  users,
+} from '../schema';
 import { getCurrentTenantId } from '../tenant-context';
 import {
   AmbiguousIdError,
@@ -70,6 +83,24 @@ import {
 } from './branch-access';
 import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
+import type { MessageCreateTransactionHook } from './messages';
+
+const WORKLOAD_RESULT_MAX_BYTES = 4 * 1024;
+
+function workloadResultMessage(row: MessageRow): Message {
+  return {
+    message_id: row.message_id as MessageID,
+    session_id: row.session_id as SessionID,
+    task_id: row.task_id ? (row.task_id as TaskID) : undefined,
+    type: row.type,
+    role: row.role as Message['role'],
+    index: row.index,
+    timestamp: new Date(row.timestamp).toISOString(),
+    content_preview: row.content_preview ?? '',
+    content: (row.data as { content: Message['content'] }).content,
+    metadata: (row.data as { metadata?: Message['metadata'] }).metadata,
+  };
+}
 
 function executorOwnsTask(row: Pick<TaskRow, 'status' | 'executor_connected_at'>): boolean {
   return (
@@ -311,7 +342,10 @@ export interface TaskFindPageOptions {
  * Task repository implementation
  */
 export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
-  constructor(private db: Database) {}
+  constructor(
+    private db: Database,
+    private readonly onWorkloadResultCreateInTransaction?: MessageCreateTransactionHook
+  ) {}
 
   /** Retry an entire SQLite mutation so a contending writer re-reads fresh state. */
   private async runTaskMutation<T>(mutation: () => Promise<T>, attempt = 0): Promise<T> {
@@ -1672,6 +1706,132 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         }),
       };
     });
+  }
+
+  /**
+   * Atomically publish the built-in workload result and settle its Task.
+   *
+   * Session-first locking matches every turn transition. The deterministic
+   * Message identity makes a lost response safely retryable: an exact retry
+   * returns the already-committed pair, while any conflicting reuse fails
+   * closed. No transaction can expose a COMPLETED Task without its required
+   * result Message, or attach that success result after Stop owns the Task.
+   */
+  async completeWorkload(input: WorkloadCompletionInput): Promise<WorkloadCompletionResult> {
+    return this.mutateLockedSessionTask(
+      input.task_id,
+      async (txDb, taskRow, sessionRow, fullId) => {
+        if (sessionRow.agentic_tool !== 'workload') {
+          throw new RepositoryError('Workload completion requires a workload Session');
+        }
+
+        const current = this.rowToTask(taskRow);
+        const content = JSON.stringify({
+          schemaVersion: 1,
+          profile: 'wait',
+          outcome: 'completed',
+          taskId: current.task_id,
+          requested: { durationMs: input.requested_duration_ms },
+          observed: { elapsedMs: input.observed_elapsed_ms },
+        });
+        if (Buffer.byteLength(content, 'utf8') > WORKLOAD_RESULT_MAX_BYTES) {
+          throw new RepositoryError('Workload result exceeded its bounded contract');
+        }
+
+        const existingMessageRow = await select(txDb)
+          .from(messages)
+          .where(eq(messages.message_id, input.result_message_id))
+          .one();
+        if (existingMessageRow) {
+          const existing = workloadResultMessage(existingMessageRow);
+          const exactResult =
+            existing.session_id === current.session_id &&
+            existing.task_id === current.task_id &&
+            existing.type === 'assistant' &&
+            existing.role === 'assistant' &&
+            existing.content === content &&
+            existing.metadata?.is_meta === true &&
+            existing.metadata?.workload_result === true;
+          if (current.status === TaskStatus.COMPLETED && exactResult) {
+            return { outcome: 'idempotent', task: current, message: existing };
+          }
+          throw new RepositoryError('Workload result identity is already in use');
+        }
+
+        if (current.status !== TaskStatus.RUNNING || !current.executor_connected_at) {
+          throw new RepositoryError('Workload completion lost the active Task fence');
+        }
+
+        const now = await this.mutationNow(txDb, fullId);
+        const terminal = withTerminalTiming(current, { status: TaskStatus.COMPLETED }, now);
+        const settled = {
+          ...deepMerge(current, terminal),
+          status: TaskStatus.COMPLETED,
+          tool_use_count: 0,
+          task_id: current.task_id,
+          session_id: current.session_id,
+          created_by: current.created_by,
+          created_at: current.created_at,
+        } satisfies Task;
+        const taskInsert = this.taskToInsert(settled);
+
+        const latestIndex = await select(txDb, {
+          value: sql<number | null>`max(${messages.index})`,
+        })
+          .from(messages)
+          .where(eq(messages.session_id, current.session_id))
+          .one();
+        const insertedMessageRow = await insert(txDb, messages)
+          .values({
+            message_id: input.result_message_id,
+            created_at: now,
+            session_id: current.session_id,
+            task_id: current.task_id,
+            type: 'assistant',
+            role: 'assistant',
+            index: (latestIndex?.value ?? -1) + 1,
+            timestamp: now,
+            content_preview: content.slice(0, 200),
+            parent_tool_use_id: null,
+            data: {
+              content,
+              metadata: { is_meta: true, workload_result: true },
+            },
+          })
+          .returning()
+          .one();
+        const message = workloadResultMessage(insertedMessageRow);
+
+        await update(txDb, tasks)
+          .set({
+            status: TaskStatus.COMPLETED,
+            completed_at: taskInsert.completed_at,
+            data: {
+              ...taskInsert.data,
+              ...(taskRow.data.executor_launch_fs_access_floor
+                ? {
+                    executor_launch_fs_access_floor: taskRow.data.executor_launch_fs_access_floor,
+                  }
+                : {}),
+            },
+          })
+          .where(eq(tasks.task_id, fullId))
+          .run();
+        await update(txDb, sessions)
+          .set({
+            status: SessionStatus.IDLE,
+            ready_for_prompt: true,
+            updated_at: now,
+          })
+          .where(eq(sessions.session_id, sessionRow.session_id))
+          .run();
+        if (this.onWorkloadResultCreateInTransaction) {
+          await this.onWorkloadResultCreateInTransaction(txDb, message);
+        }
+
+        return { outcome: 'transitioned', task: settled, message };
+      }
+    );
   }
 
   /**

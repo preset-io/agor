@@ -94,6 +94,7 @@ import {
   hasMinimumRole,
   hasRoleAuthorityOver,
   isAgenticToolName,
+  isBuiltInAgenticToolName,
   isUserRole,
   isValidExecutionHomeKey,
   normalizeRole,
@@ -877,6 +878,15 @@ export class UsersService {
    * Update user
    */
   async patch(id: UserID, data: UpdateUserData, params?: Params): Promise<User> {
+    for (const tool of AGENTIC_TOOL_NAMES.filter(isBuiltInAgenticToolName)) {
+      if (
+        data.agentic_tools?.[tool] !== undefined ||
+        data.default_agentic_config?.[tool] !== undefined ||
+        data.default_agentic_selection?.[tool] !== undefined
+      ) {
+        throw new BadRequest(`${tool} does not support user credentials or default configuration`);
+      }
+    }
     if (typeof id !== 'string' || !id) {
       throw new BadRequest('Bulk user mutations are not supported');
     }

@@ -1777,6 +1777,11 @@ export function registerSessionTools(server: McpServer, ctx: McpContext): void {
           ],
           note: "Cursor models are also fetched live via /cursor-models (uses @cursor/sdk's Cursor.models.list()). This is the static fallback — account-specific models may not appear here.",
         },
+        workload: {
+          default: null,
+          models: [],
+          note: 'The deterministic workload is provider-free and has no model selection.',
+        },
       } satisfies Record<
         AgenticToolName,
         { default: string | null; models: unknown[]; note: string }

@@ -46,6 +46,7 @@ export const AGENTIC_TOOL_DAEMON_CONTRIBUTIONS: Readonly<
   opencode: OPENCODE_DAEMON_CONTRIBUTION,
   copilot: { name: 'copilot' },
   cursor: { name: 'cursor' },
+  workload: { name: 'workload' },
 });
 
 /**

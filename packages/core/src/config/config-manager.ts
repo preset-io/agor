@@ -12,7 +12,7 @@ import path from 'node:path';
 import * as yaml from 'js-yaml';
 import { type InstallableAgenticTool, isInstallableAgenticTool } from '../agentic-integrations';
 import { EXECUTOR_RESPONSE_PROTOCOL } from '../executor-protocol';
-import type { AgenticToolName } from '../types';
+import { type AgenticToolName, isBuiltInAgenticToolName } from '../types';
 import { normalizeHttpBaseUrl } from '../utils/url';
 import { ensureAgorHome, ensureAgorHomeSync, getAgorHome, getConfigPath } from './agor-home';
 import { getDefaultAnalyticsConfig } from './analytics-defaults.js';
@@ -1681,6 +1681,7 @@ export function isDeploymentAgenticToolAvailable(
   policy: DeploymentAgenticToolPolicy
 ): boolean {
   if (!policy.managed) return true;
+  if (isBuiltInAgenticToolName(tool)) return true;
   if (!isInstallableAgenticTool(tool)) return false;
   return policy.installed.has(tool);
 }

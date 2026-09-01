@@ -65,6 +65,7 @@ import type {
 } from '@agor/core/types';
 import {
   isAgenticToolDefaultConfigurationReference,
+  isBuiltInAgenticToolName,
   SessionStatus,
   USER_DEFAULT_AGENTIC_CONFIGURATION,
 } from '@agor/core/types';
@@ -102,6 +103,20 @@ type SessionArchiveTarget = {
 
 const MANUAL_ARCHIVED_REASON = 'manual' satisfies SessionArchiveReason;
 const PARENT_ARCHIVED_REASON = 'parent_archived' satisfies SessionArchiveReason;
+
+function rejectBuiltInSessionConfiguration(
+  tool: AgenticToolName,
+  data: Pick<CreateSessionInput, 'agentic_tool_preset_id' | 'model_config' | 'permission_config'>
+): void {
+  if (
+    isBuiltInAgenticToolName(tool) &&
+    (data.agentic_tool_preset_id != null ||
+      data.model_config != null ||
+      data.permission_config != null)
+  ) {
+    throw new BadRequest(`${tool} does not support presets, models, or permission configuration`);
+  }
+}
 
 function sessionConfigurationSource(
   data: Pick<CreateSessionInput, 'model_config' | 'permission_config'>
@@ -403,6 +418,7 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
       throw new BadRequest('sdk_home_scope is server-managed and cannot be set by clients');
     }
     const agenticTool = requireActiveAgenticTool(data.agentic_tool ?? 'claude-code');
+    rejectBuiltInSessionConfiguration(agenticTool, data);
     this.assertDeploymentToolConfigured(agenticTool);
     if (!(await isTenantAgenticToolEnabled(agenticTool, this.db))) {
       throw new BadRequest(`${agenticTool} is disabled for this workspace`);
@@ -1476,8 +1492,36 @@ export class SessionsService extends DrizzleService<Session, SessionUpdate, Sess
     if (data.agentic_tool !== undefined && id !== null && !Array.isArray(id)) {
       await this.assertAgenticToolMutable(String(id), patchedAgenticTool!);
     }
-    if (id && !Array.isArray(id) && !params?._applyingAgenticToolPreset) {
-      const current = await this.get(String(id), params);
+    const touchesAgenticConfiguration =
+      data.agentic_tool !== undefined ||
+      data.agentic_tool_preset_id !== undefined ||
+      data.model_config !== undefined ||
+      data.permission_config !== undefined;
+    const current =
+      id && !Array.isArray(id) && touchesAgenticConfiguration
+        ? await this.get(String(id), params)
+        : undefined;
+    const effectiveAgenticTool = current
+      ? (patchedAgenticTool ?? requireActiveAgenticTool(current.agentic_tool))
+      : undefined;
+    if (current && effectiveAgenticTool) {
+      rejectBuiltInSessionConfiguration(effectiveAgenticTool, data);
+    }
+    if (current && effectiveAgenticTool && isBuiltInAgenticToolName(effectiveAgenticTool)) {
+      // Built-in tools have no preset, model, or permission configuration.
+      // Normalize the entire configuration tuple in the same row update that
+      // changes the tool so a taskless configurable Session cannot carry its
+      // former provider state into the built-in runtime. This path is outside
+      // the preset-application branch intentionally: trusted internal callers
+      // must not be able to preserve stale provider configuration either.
+      data = {
+        ...data,
+        agentic_tool_preset_id: null,
+        permission_config: null,
+        model_config: null,
+      };
+      replaceAgenticConfig = true;
+    } else if (current && !params?._applyingAgenticToolPreset) {
       const mutatesAtomicConfig =
         data.model_config !== undefined ||
         data.permission_config !== undefined ||

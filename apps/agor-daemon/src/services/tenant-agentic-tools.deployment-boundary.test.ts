@@ -24,6 +24,12 @@ describe('tenant agentic tool deployment boundary', () => {
       deployment_available: true,
       enabled: true,
     });
+    await expect(service.get('workload')).resolves.toMatchObject({
+      tool: 'workload',
+      revision: 0,
+      deployment_available: false,
+      enabled: false,
+    });
   });
 
   it('rejects enabling a package the deployment operator did not configure', async () => {
@@ -34,6 +40,29 @@ describe('tenant agentic tool deployment boundary', () => {
 
     await expect(service.patch('codex', { enabled: true })).rejects.toThrow(
       /unavailable under this deployment's agentic-tool policy/
+    );
+  });
+
+  it('reports the built-in workload disabled until the tenant explicitly enables it', async () => {
+    vi.spyOn(TenantAgenticToolSettingsRepository.prototype, 'find').mockResolvedValue({});
+    const service = new TenantAgenticToolSettingsService({} as TenantScopeAwareDatabase);
+
+    await expect(service.get('workload')).resolves.toMatchObject({
+      tool: 'workload',
+      deployment_available: true,
+      enabled: false,
+    });
+  });
+
+  it.each([
+    { inline_configuration_allowed: false },
+    { resolution_policy: 'user_required' as const },
+    { connection: {} },
+  ])('rejects provider and preset configuration for the built-in workload', async (patch) => {
+    const service = new TenantAgenticToolSettingsService({} as TenantScopeAwareDatabase);
+
+    await expect(service.patch('workload', patch)).rejects.toThrow(
+      'workload only supports workspace enablement'
     );
   });
 

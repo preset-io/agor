@@ -31,6 +31,7 @@ import {
   getTenantDataRoot,
   initConfig,
   isBranchRbacEnabled,
+  isDeploymentAgenticToolAvailable,
   loadConfig,
   loadConfigSync,
   PublicBaseUrlNotConfiguredError,
@@ -936,6 +937,12 @@ describe('loadConfig', () => {
     });
   });
 
+  it('keeps the built-in workload available under managed package policy', () => {
+    const policy = { managed: true, installed: new Set(['codex'] as const) };
+    expect(isDeploymentAgenticToolAvailable('workload', policy)).toBe(true);
+    expect(isDeploymentAgenticToolAvailable('codex', policy)).toBe(true);
+    expect(isDeploymentAgenticToolAvailable('claude-code', policy)).toBe(false);
+  });
   it('rejects unsupported or duplicate configured agentic tools', async () => {
     const agorDir = path.join(tempDir, '.agor');
     const configPath = path.join(agorDir, 'config.yaml');
