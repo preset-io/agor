@@ -722,7 +722,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
         preferencesTouched = true;
       }
 
-      if (panels.has('access') && isAdmin && isEditingOther) {
+      // The force-password-change control now renders in the Security panel
+      // (its rendering moved from Access; the gate is unchanged).
+      if (panels.has('security') && isAdmin && isEditingOther) {
         updates.must_change_password = form.getFieldValue('must_change_password');
       }
 
@@ -1535,6 +1537,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           <Input.Password placeholder="••••••••" />
         </FieldRow>
 
+        {isAdmin && isEditingOther && (
+          <Form.Item name="must_change_password" valuePropName="checked">
+            <Checkbox>Force password change on next login</Checkbox>
+          </Form.Item>
+        )}
+
         <FieldRow
           label="Execution home key"
           name="unix_username"
@@ -1555,6 +1563,11 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
           <Input placeholder="johnsmith" maxLength={32} disabled={!isAdmin} />
         </FieldRow>
       </Form>
+      <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+        Looking for API keys and model provider credentials? Those live under{' '}
+        <strong>AI Providers</strong> in the sidebar, scoped per user so they never leak across
+        accounts.
+      </Typography.Paragraph>
     </>
   );
 
@@ -1630,19 +1643,6 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             {...searchableSelectProps}
           />
         </FieldRow>
-
-        {isAdmin && isEditingOther && (
-          <>
-            <SectionDivider label="Danger zone" />
-            <Form.Item
-              name="must_change_password"
-              valuePropName="checked"
-              style={{ marginBottom: 0 }}
-            >
-              <Checkbox>Force password change on next login</Checkbox>
-            </Form.Item>
-          </>
-        )}
       </Form>
     </>
   );

@@ -425,7 +425,7 @@ export const UsersTable: React.FC<UsersTableProps> = ({
           ? [
               {
                 key: 'avatars',
-                label: 'Avatars',
+                label: 'Avatar sync',
                 children: (
                   <UserAvatarsTab client={client} gatewayChannelById={gatewayChannelById} />
                 ),
