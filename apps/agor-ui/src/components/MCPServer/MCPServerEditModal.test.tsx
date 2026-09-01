@@ -10,6 +10,7 @@ const preparedServerId = vi.fn();
 type FormFieldsMockProps = {
   onPrepareOAuthStart: () => Promise<string | null>;
   onTestConnection: () => Promise<void>;
+  testResult?: { error?: string } | null;
 };
 
 vi.mock('@/utils/message', () => ({
@@ -24,7 +25,11 @@ vi.mock('@/utils/message', () => ({
 vi.mock('./MCPServerFormFields', async () => {
   const { Button, Form, Input } = await import('antd');
   return {
-    MCPServerFormFields: ({ onPrepareOAuthStart, onTestConnection }: FormFieldsMockProps) => (
+    MCPServerFormFields: ({
+      onPrepareOAuthStart,
+      onTestConnection,
+      testResult,
+    }: FormFieldsMockProps) => (
       <>
         <Form.Item label="Description" name="description">
           <Input />
@@ -48,6 +53,7 @@ vi.mock('./MCPServerFormFields', async () => {
           Start OAuth Flow
         </Button>
         <Button onClick={() => void onTestConnection()}>Test Connection</Button>
+        {testResult?.error && <div>{testResult.error}</div>}
       </>
     ),
   };
@@ -57,6 +63,56 @@ import { MCPServerEditModal } from './MCPServerEditModal';
 
 describe('MCPServerEditModal legacy DCR compatibility', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it('shows the daemon storage-policy rejection without replacing it with retry advice', async () => {
+    const error =
+      "The MCP server's capabilities did not meet Agor's storage safety limits, so Agor did not save them. Ask an administrator to review the secure operational event.";
+    const discover = vi.fn().mockResolvedValue({
+      success: false,
+      category: 'storage_policy_rejected',
+      action: 'contact_admin',
+      error,
+    });
+    const reserve = vi.fn().mockResolvedValue({
+      reservation_token: 'storage-policy-reservation-00000001',
+      expires_at: Date.now() + 60_000,
+    });
+    const client = {
+      service: vi.fn((path: string) => {
+        if (path === 'mcp-servers/discover') return { create: discover };
+        if (path === 'mcp-servers/oauth-browser-reservations') return { create: reserve };
+        return {};
+      }),
+      io: { on: vi.fn(), off: vi.fn() },
+    } as unknown as AgorClient;
+    const server = {
+      mcp_server_id: '01900000-0000-7000-8000-000000000099',
+      name: 'storage-policy-test',
+      transport: 'http',
+      url: 'https://mcp.example.com/mcp',
+      scope: 'global',
+      enabled: true,
+      auth: { type: 'none' },
+    } as MCPServer;
+
+    render(
+      <MCPServerEditModal
+        server={server}
+        open
+        client={client}
+        identityKey="user-a"
+        authorityKey="user-a:admin:1"
+        authGeneration={1}
+        mutationAllowed
+        onClose={vi.fn()}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Test Connection' }));
+
+    expect(await screen.findByText(error)).toBeVisible();
+    expect(discover).toHaveBeenCalledOnce();
+  });
 
   it('keeps oauth_dcr_mode absent when an unrelated field is saved', async () => {
     const patch = vi.fn().mockResolvedValue({});

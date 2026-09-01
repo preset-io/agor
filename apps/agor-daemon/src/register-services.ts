@@ -67,8 +67,10 @@ import { BadRequest, Conflict, Forbidden, NotAuthenticated } from '@agor/core/fe
 import {
   hasTemplateMarker,
   isMCPServerUsableBy,
+  isMCPServerWriteValidationError,
+  type MCPExternalErrorCategory,
+  type MCPExternalErrorReason,
   type MCPExternalErrorStage,
-  MCPServerWriteValidationError,
   normalizeDiscoveredMCPCapabilities,
   sanitizeMCPExternalError,
 } from '@agor/core/mcp';
@@ -1827,23 +1829,17 @@ export async function registerMCPServices(
     event: string,
     stage: MCPExternalErrorStage,
     error: unknown,
-    category?: 'invalid_response'
+    options: {
+      category?: MCPExternalErrorCategory;
+      reason?: MCPExternalErrorReason;
+    } = {}
   ) => {
-    const safe = sanitizeMCPExternalError(error, { stage, category });
-    const { type, code } = safe.diagnostic;
+    const safe = sanitizeMCPExternalError(error, { stage, ...options });
+    const { type, code, reason } = safe.diagnostic;
     console.error(
-      `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${code ? ` code=${code}` : ''}`
+      `[${event}] event=mcp_external_failure stage=${stage} category=${safe.category} type=${type}${code ? ` code=${code}` : ''}${reason ? ` reason=${reason}` : ''}`
     );
     return safe;
-  };
-  const isDiscoveryValidationFailure = (error: unknown): boolean => {
-    try {
-      return error instanceof MCPServerWriteValidationError;
-    } catch {
-      // Provider/library exceptions may be hostile proxies. Classification
-      // must never let their prototype trap escape the redaction boundary.
-      return false;
-    }
   };
   const oauthFetch = async (
     input: string | URL | Request,
@@ -5865,13 +5861,19 @@ export async function registerMCPServices(
         ) {
           return { success: false, error: recovery.message, recovery };
         }
-        const safe = externalFailure(
-          'MCP Discovery',
-          'discovery',
-          error,
-          isDiscoveryValidationFailure(error) ? 'invalid_response' : undefined
-        );
-        return { success: false, error: safe.message, category: safe.category };
+        const persistenceRejected = isMCPServerWriteValidationError(error);
+        const safe = externalFailure('MCP Discovery', 'discovery', error, {
+          ...(persistenceRejected ? { category: 'storage_policy_rejected' as const } : {}),
+          ...(persistenceRejected
+            ? { reason: 'capability_persistence_validation_rejected' as const }
+            : {}),
+        });
+        return {
+          success: false,
+          error: safe.message,
+          category: safe.category,
+          ...(persistenceRejected ? { action: safe.action } : {}),
+        };
       }
     },
   });

@@ -138,6 +138,7 @@ export const MCP_AUTH_RECOVERY_CATEGORIES = [
   'provider_unavailable',
   'provider_rejected',
   'invalid_response',
+  'storage_policy_rejected',
   'configuration_required',
   'unknown',
 ] as const;

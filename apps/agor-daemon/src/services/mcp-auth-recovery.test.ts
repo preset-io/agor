@@ -52,6 +52,7 @@ describe('MCP auth recovery contract', () => {
   it.each([
     ['provider_rejected', 'reauthenticate'],
     ['invalid_response', 'retry'],
+    ['storage_policy_rejected', 'contact_admin'],
     ['configuration_required', 'review_configuration'],
   ] as const)('preserves the shared closed %s recovery contract', (category, action) => {
     const recovery = classifyMCPAuthRecovery(
