@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -885,6 +885,12 @@ case "$*" in
     cat "$HOME/container-image-id"
     exit
     ;;
+  "volume ls --format {{.Name}}")
+    [ "\${FAIL_VOLUME_LIST:-false}" != "true" ] || exit 97
+    if [ -f "$HOME/agor-home-volume" ]; then
+      printf '%s\\n' 'agor-codespaces-sqlite_agor-home'
+    fi
+    ;;
   "compose -p agor-codespaces-sqlite build agor-dev")
     [ -n "\${AGOR_DEV_IMAGE_INPUT_FINGERPRINT:-}" ] || exit 94
     [ "\${FAIL_COMPOSE:-false}" != "true" ] || exit 95
@@ -903,6 +909,7 @@ case "$*" in
     [ "\${AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN:-}" = "false" ] || exit 92
     [ "\${SEED:-}" = "false" ] || exit 93
     cp "$HOME/tag-image-id" "$HOME/container-image-id"
+    touch "$HOME/agor-home-volume"
     touch "$HOME/healthy"
     ;;
   "compose -p agor-codespaces-sqlite ps")
@@ -956,6 +963,45 @@ printf '%s\\n' 'fake docker ok'
     2,
     'a matching healthy image still reconciles the actual Compose container'
   );
+
+  const passwordBackupPath = `${passwordPath}.backup`;
+  const buildCallsBeforePasswordLoss = dockerCallLines.filter(
+    (call) => call === 'compose -p agor-codespaces-sqlite build agor-dev'
+  ).length;
+  const removeCallsBeforePasswordLoss = dockerCallLines.filter(
+    (call) => call === 'compose -p agor-codespaces-sqlite rm -sfv agor-dev'
+  ).length;
+  const upCallsBeforePasswordLoss = dockerCallLines.filter(
+    (call) => call === 'compose -p agor-codespaces-sqlite up -d'
+  ).length;
+  await rename(passwordPath, passwordBackupPath);
+  await assert.rejects(
+    execFileAsync('bash', [script], { env }),
+    /bootstrap password is missing while persistent Agor data exists/
+  );
+  await assert.rejects(readFile(passwordPath, 'utf8'), (error) => error.code === 'ENOENT');
+  dockerCalls = await readFile(join(directory, 'docker-calls'), 'utf8');
+  dockerCallLines = dockerCalls.trim().split('\n');
+  assert.equal(
+    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite build agor-dev')
+      .length,
+    buildCallsBeforePasswordLoss
+  );
+  assert.equal(
+    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite rm -sfv agor-dev')
+      .length,
+    removeCallsBeforePasswordLoss
+  );
+  assert.equal(
+    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite up -d').length,
+    upCallsBeforePasswordLoss
+  );
+  await assert.rejects(
+    execFileAsync('bash', [script], { env: { ...env, FAIL_VOLUME_LIST: 'true' } }),
+    /Could not verify persistent Agor credential state/
+  );
+  await assert.rejects(readFile(passwordPath, 'utf8'), (error) => error.code === 'ENOENT');
+  await rename(passwordBackupPath, passwordPath);
 
   await writeFile(join(directory, 'tag-image-id'), 'interrupted-new-image\n');
   await execFileAsync('bash', [script], { env });

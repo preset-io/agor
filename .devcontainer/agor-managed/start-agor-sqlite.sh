@@ -126,6 +126,23 @@ if [[ -n "$compose_container_id" ]]; then
 fi
 
 if [[ ! -s "$admin_password_file" ]]; then
+  # The password file and the named Agor home are one credential state. If the
+  # file disappears while the database survives, generating a replacement
+  # would not update the existing admin and would silently advertise a password
+  # that cannot log in. Fail before touching Compose so the operator can restore
+  # the file or deliberately Nuke the disposable Codespace.
+  agor_home_volume="agor-codespaces-sqlite_agor-home"
+  if ! docker_volume_names="$(docker volume ls --format '{{.Name}}')"; then
+    echo "Could not verify persistent Agor credential state" >&2
+    exit 1
+  fi
+  while IFS= read -r docker_volume_name; do
+    if [[ "$docker_volume_name" == "$agor_home_volume" ]]; then
+      echo "Codespaces bootstrap password is missing while persistent Agor data exists; restore the password file or Nuke this disposable Codespace" >&2
+      exit 1
+    fi
+  done <<<"$docker_volume_names"
+
   generated_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
   if [[ ! "$generated_password" =~ ^[a-f0-9]{48}$ ]]; then
     echo "Could not generate the Codespaces bootstrap admin password" >&2
