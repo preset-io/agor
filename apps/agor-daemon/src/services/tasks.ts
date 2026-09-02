@@ -62,9 +62,11 @@ import type {
 } from '@agor/core/types';
 import {
   AUTHORIZATION_REVOKED_TERMINATION_MESSAGE,
+  assertValidWorkloadCompletionInput,
   ExecutorPulseKind,
   isCanonicalFullUuid,
   isTerminalTaskStatus,
+  parseWorkloadRequest,
   SDK_WATCHDOG_FAILURE_REASONS,
   SessionStatus,
   type TaskMetadata,
@@ -115,6 +117,14 @@ function isAnalyticsTerminalTaskStatus(status: Task['status'] | undefined): bool
 
 function isCompletionSideEffectTaskStatus(status: Task['status'] | undefined): boolean {
   return status !== undefined && COMPLETION_SIDE_EFFECT_TASK_STATUSES.has(status);
+}
+
+function isControlledFailureWorkload(task: Task): boolean {
+  try {
+    return parseWorkloadRequest(task.full_prompt).profile === 'controlled-failure';
+  } catch {
+    return false;
+  }
 }
 
 const TASK_SORT_FIELDS = new Set(['task_id', 'session_id', 'status', 'created_at', 'created_by']);
@@ -798,18 +808,13 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     data: WorkloadCompletionInput,
     params?: TaskParams
   ): Promise<WorkloadCompletionResult> {
+    try {
+      assertValidWorkloadCompletionInput(data);
+    } catch (error) {
+      throw new BadRequest(error instanceof Error ? error.message : 'WORKLOAD_COMPLETION_INVALID');
+    }
     if (!isCanonicalFullUuid(data.task_id) || !isCanonicalFullUuid(data.result_message_id)) {
       throw new BadRequest('Workload completion requires canonical Task and Message IDs');
-    }
-    if (
-      !Number.isSafeInteger(data.requested_duration_ms) ||
-      data.requested_duration_ms < 100 ||
-      data.requested_duration_ms > 120_000
-    ) {
-      throw new BadRequest('requested_duration_ms is outside the workload contract');
-    }
-    if (!Number.isSafeInteger(data.observed_elapsed_ms) || data.observed_elapsed_ms < 0) {
-      throw new BadRequest('observed_elapsed_ms must be a non-negative integer');
     }
 
     let result: WorkloadCompletionResult;
@@ -842,7 +847,7 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
     this.trackTaskCompleted(result.task);
     await this.processCompletionSideEffects(
       result.task,
-      TaskStatus.COMPLETED,
+      result.task.status,
       { ...(params ?? {}), provider: undefined } as TaskParams,
       true
     );
@@ -876,6 +881,12 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
         `⏭️ [TasksService] Coordinator owns terminality for stopping task ${shortId(currentTask.task_id)}`
       );
       return currentTask;
+    }
+    if (params?.provider && currentTask && isTerminalTaskStatus(nextStatus)) {
+      const session = await new SessionRepository(this.db).findById(currentTask.session_id);
+      if (session?.agentic_tool === 'workload' && isControlledFailureWorkload(currentTask)) {
+        throw new BadRequest('Controlled workload failures must complete through completeWorkload');
+      }
     }
     if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {
       // A prior terminal patch may have committed before durable credential

@@ -48,20 +48,7 @@ export interface RuntimeTelemetryInput {
   pulse?: Omit<ExecutorPulse, 'observed_at'>;
 }
 
-/**
- * Executor-owned input for the built-in deterministic workload's only
- * successful terminal transition. The daemon constructs the canonical result
- * Message and commits it with Task terminality; callers cannot supply transcript
- * content, position, Session identity, or terminal timestamps.
- */
-export interface WorkloadCompletionInput {
-  task_id: string;
-  result_message_id: string;
-  requested_duration_ms: number;
-  observed_elapsed_ms: number;
-}
-
-/** Atomic result publication returned by {@link WorkloadCompletionInput}. */
+/** Atomic result publication returned by the built-in workload completion seam. */
 export interface WorkloadCompletionResult {
   task: Task;
   message: Message;
