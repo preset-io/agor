@@ -41,6 +41,18 @@ while ! mkdir "$bootstrap_lock" 2>/dev/null; do
     rmdir "$bootstrap_lock" 2>/dev/null || true
     continue
   fi
+  if [[ ! "$existing_owner" =~ ^[0-9]+$ ]]; then
+    # Recover a lock whose owner died between mkdir and writing its PID. A
+    # live owner completes those adjacent operations far faster than this
+    # grace period; re-read before removing anything.
+    sleep 1
+    existing_owner="$(tr -d '\r\n' <"$bootstrap_lock_owner" 2>/dev/null || true)"
+    if [[ ! "$existing_owner" =~ ^[0-9]+$ ]]; then
+      rm -f "$bootstrap_lock_owner"
+      rmdir "$bootstrap_lock" 2>/dev/null || true
+      continue
+    fi
+  fi
   if ((SECONDS >= bootstrap_lock_deadline)); then
     echo "Timed out waiting for another Agor bootstrap" >&2
     exit 1
@@ -53,6 +65,17 @@ release_bootstrap_lock() {
   rmdir "$bootstrap_lock" 2>/dev/null || true
 }
 trap release_bootstrap_lock EXIT
+
+# Start recovery may arrive while GitHub's postStart hook is still building.
+# After it acquires the same lock, avoid a second build if that first launch
+# already made the stack healthy. Exact source Sync opts out because it must
+# rebuild from the newly selected commit.
+if [[ "${AGOR_FORCE_REBUILD:-false}" != "true" ]] &&
+  command -v curl >/dev/null 2>&1 &&
+  curl -fsS --max-time 5 http://127.0.0.1:3000/health >/dev/null 2>&1; then
+  echo "[agor-codespaces] Existing Compose stack is already healthy; skipping rebuild."
+  exit 0
+fi
 
 if [[ ! -s "$admin_password_file" ]]; then
   generated_password="$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')"
