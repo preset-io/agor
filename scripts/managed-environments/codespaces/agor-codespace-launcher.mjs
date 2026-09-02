@@ -412,7 +412,16 @@ export class GitHubCodespacesClient {
       check: false,
     });
     if (result.returncode === 0) return true;
-    if (result.returncode === 42) return false;
+    // OpenSSH preserves the remote command's exit status, but `gh codespace
+    // ssh` currently wraps any non-zero remote status as local exit 1 and
+    // writes the original status to stderr. Accept both representations for
+    // our reserved ordinary-not-ready code.
+    if (
+      result.returncode === 42 ||
+      /(?:^|\n)shell closed: exit status 42\s*$/m.test(`${result.stdout}\n${result.stderr}`)
+    ) {
+      return false;
+    }
 
     let detail = redact((result.stderr || result.stdout).trim());
     if (detail.length > 2_000) detail = `...${detail.slice(-2_000)}`;
@@ -850,10 +859,16 @@ export class CodespaceController {
         lastError = probe.detail;
         if (repairUnhealthy && probe.repairable && !repairAttempted) {
           repairAttempted = true;
-          await this.client.runBootstrap(name, this.repository, { timeout: this.waitSeconds });
+          try {
+            await this.client.runBootstrap(name, this.repository, { timeout: this.waitSeconds });
+          } catch (error) {
+            const detail = error instanceof LauncherError ? `: ${error.message}` : '';
+            throw new LauncherError(`Codespace bootstrap repair failed${detail}`, { cause: error });
+          }
         }
       } catch (error) {
         if (!(error instanceof LauncherError)) throw error;
+        if (error.message.startsWith('Codespace bootstrap repair failed')) throw error;
         if (/check if an SSH server is installed/i.test(error.message)) {
           throw new LauncherError(
             `${error.message}. This Codespace was built without the SSH transport required by the launcher; rebuild its dev container or Nuke it and press Play again.`

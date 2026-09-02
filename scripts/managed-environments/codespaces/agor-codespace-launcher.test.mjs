@@ -236,6 +236,22 @@ test('Start repairs an already-Available Codespace whose Agor stack is unhealthy
   assert.deepEqual(client.events.slice(0, 3), ['health', 'bootstrap', 'health']);
 });
 
+test('Start reports a failed dead-stack repair immediately instead of polling to timeout', async (t) => {
+  const { store } = await fixture(t);
+  const client = new FakeClient([resource()]);
+  client.remoteHealthy = false;
+  client.runBootstrap = async () => {
+    client.bootstrapCalls.push('attempted');
+    throw new LauncherError('remote bootstrap exited 91');
+  };
+
+  await assert.rejects(
+    controller(client, store, { monotonic: () => 0 }).start(),
+    /bootstrap repair failed: remote bootstrap exited 91/
+  );
+  assert.deepEqual(client.bootstrapCalls, ['attempted']);
+});
+
 test('Start does not launch a duplicate repair when a newly created Codespace is healthy', async (t) => {
   const { store } = await fixture(t);
   const client = new FakeClient();
@@ -656,7 +672,11 @@ test('the gh adapter explains that a missing remote ref must be pushed', async (
 test('the gh adapter distinguishes an unhealthy app from a broken SSH transport', async () => {
   const calls = [];
   const results = [
-    { returncode: 42, stdout: '', stderr: 'curl: connection refused' },
+    {
+      returncode: 1,
+      stdout: '',
+      stderr: 'curl: connection refused\nshell closed: exit status 42\n',
+    },
     {
       returncode: 1,
       stdout: '',
