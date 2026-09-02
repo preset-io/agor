@@ -22,7 +22,7 @@ import {
   getRegisteredCommands,
 } from './commands/index.js';
 import { ExecutorResponsePublisher } from './executor-response.js';
-import { initializeToolRegistry, ToolRegistry } from './handlers/sdk/tool-registry.js';
+import { initializeToolRegistry, type Tool, ToolRegistry } from './handlers/sdk/tool-registry.js';
 import { AgorExecutor } from './index.js';
 import {
   type ExecutorPayload,
@@ -248,7 +248,10 @@ async function handlePromptPayload(
   }
 
   // Validate tool using registry
-  await initializeToolRegistry();
+  // Select the requested tool before loading handlers. Built-in workloads must
+  // not be rejected by the provider-only default registry or eagerly load
+  // provider SDKs they deliberately do not use.
+  await initializeToolRegistry(payload.params.tool);
 
   if (!ToolRegistry.has(payload.params.tool)) {
     console.error(`[executor] Invalid tool: ${payload.params.tool}`);
@@ -306,9 +309,10 @@ async function handleLegacyMode(values: {
     process.exit(1);
   }
 
-  // Validate tool using registry
-  await initializeToolRegistry();
-  const tool = values.tool as string;
+  // Validate only the requested tool. This keeps the built-in workload path
+  // provider-free and gives it the same registration behavior as stdin mode.
+  const tool = values.tool as Tool;
+  await initializeToolRegistry(tool);
 
   if (!ToolRegistry.has(tool)) {
     console.error(`Invalid tool: ${tool}`);
@@ -373,7 +377,6 @@ async function main() {
   // Register Handlebars helpers ONCE at startup (needed for template rendering)
   const { registerHandlebarsHelpers } = await import('@agor/core/templates/handlebars-helpers');
   registerHandlebarsHelpers();
-  await initializeToolRegistry();
 
   // Parse command-line arguments
   const { values } = parseArgs({
@@ -425,6 +428,9 @@ async function main() {
     // Legacy mode - use CLI arguments
     await handleLegacyMode(values);
   } else {
+    // Usage lists the ordinary provider tools. Prompt execution itself performs
+    // tool-specific lazy registration above.
+    await initializeToolRegistry();
     printUsage();
     process.exit(1);
   }
