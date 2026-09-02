@@ -47,8 +47,10 @@ const REMOTE_REVISION_PREFIX = 'AGOR_CODESPACE_REVISION=';
 // This script runs through `bash -s` in the already-validated Codespace. Its
 // positional arguments are shell-quoted by the local launcher. It refuses to
 // mutate a dirty, detached, or wrong-origin checkout, fetches the configured
-// ref, proves the requested object is reachable from it, then rebuilds from
-// exactly that object while preserving the symbolic branch name.
+// ref, proves the requested object is reachable from it, then restarts from
+// exactly that object while preserving the symbolic branch name. The bootstrap
+// independently proves whether its existing development image matches the
+// selected revision's image inputs before deciding whether to rebuild it.
 const REMOTE_SYNC_SCRIPT = `${[
   'set -euo pipefail',
   'workspace=$1',
@@ -73,7 +75,7 @@ const REMOTE_SYNC_SCRIPT = `${[
   'git merge-base --is-ancestor "$revision" FETCH_HEAD || fail "Requested revision is not reachable from the configured ref"',
   'docker compose -p agor-codespaces-sqlite down',
   'git reset --hard "$revision"',
-  'env CODESPACE_NAME="$codespace_name" AGOR_FORCE_REBUILD=true bash .devcontainer/agor-managed/start-agor-sqlite.sh',
+  'env CODESPACE_NAME="$codespace_name" bash .devcontainer/agor-managed/start-agor-sqlite.sh',
   '[ "$(git rev-parse HEAD)" = "$revision" ] || fail "Codespace HEAD changed during bootstrap"',
   '[ -z "$(git status --porcelain=v1 --untracked-files=normal)" ] || fail "Codespace checkout became dirty during bootstrap"',
 ].join('\n')}\n`;

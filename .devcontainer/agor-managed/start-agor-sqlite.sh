@@ -61,16 +61,65 @@ while ! mkdir "$bootstrap_lock" 2>/dev/null; do
 done
 printf '%s\n' "$$" >"$bootstrap_lock_owner"
 release_bootstrap_lock() {
-  rm -f "$bootstrap_lock_owner"
+  local exit_status=$?
+  trap - EXIT
+  rm -f "$bootstrap_lock_owner" || true
   rmdir "$bootstrap_lock" 2>/dev/null || true
+  exit "$exit_status"
 }
 trap release_bootstrap_lock EXIT
 
+# The development image contains dependencies and entrypoints, while the
+# checkout itself is bind-mounted. Fingerprint every file and build argument
+# that determines that image, and embed the same fingerprint as an image label.
+# Reuse is safe only when those values match exactly. A failed build leaves the
+# old label in place, so its retry cannot accidentally accept a stale image.
+shopt -s nullglob
+development_image_input_files=(
+  .dockerignore
+  docker/Dockerfile
+  docker/docker-entrypoint.sh
+  docker/docker-entrypoint-postgres.sh
+  docker/zellij-config.kdl
+  docker-compose.yml
+  docker-compose.override.yml
+  package.json
+  pnpm-lock.yaml
+  pnpm-workspace.yaml
+  apps/*/package.json
+  packages/*/package.json
+  patches/*
+)
+development_image_fingerprint="$({
+  printf 'UID=%s\nGID=%s\n' "$(id -u)" "$(id -g)"
+  for development_image_input_file in "${development_image_input_files[@]}"; do
+    if [[ ! -f "$development_image_input_file" ]]; then
+      echo "Missing development image input: $development_image_input_file" >&2
+      exit 1
+    fi
+    printf 'path=%s\n' "$development_image_input_file"
+    if development_image_input_mode="$(stat -c '%a' "$development_image_input_file" 2>/dev/null)"; then
+      :
+    else
+      development_image_input_mode="$(stat -f '%Lp' "$development_image_input_file")"
+    fi
+    printf 'mode=%s\n' "$development_image_input_mode"
+    git hash-object -- "$development_image_input_file"
+  done
+} | git hash-object --stdin)"
+existing_image_fingerprint="$(
+  docker image inspect \
+    --format '{{ index .Config.Labels "io.agor.dev-image-input-fingerprint" }}' \
+    agor-dev:latest 2>/dev/null || true
+)"
+
 # Start recovery may arrive while GitHub's postStart hook is still building.
-# After it acquires the same lock, avoid a second build if that first launch
-# already made the stack healthy. Exact source Sync opts out because it must
-# rebuild from the newly selected commit.
+# After it acquires the same lock, avoid a second launch if that first launch
+# already made the stack healthy with the exact current development image.
+# Exact source Sync stops Compose before selecting its revision, so it cannot
+# take this short-circuit.
 if [[ "${AGOR_FORCE_REBUILD:-false}" != "true" ]] &&
+  [[ "$existing_image_fingerprint" == "$development_image_fingerprint" ]] &&
   command -v curl >/dev/null 2>&1 &&
   curl -fsS --max-time 5 http://127.0.0.1:3000/health >/dev/null 2>&1; then
   echo "[agor-codespaces] Existing Compose stack is already healthy; skipping rebuild."
@@ -94,24 +143,40 @@ if [[ ! "$admin_password" =~ ^[a-f0-9]{48}$ ]]; then
   exit 1
 fi
 
+compose_needs_build=false
+if [[ "${AGOR_FORCE_REBUILD:-false}" == "true" ]] ||
+  [[ "$existing_image_fingerprint" != "$development_image_fingerprint" ]]; then
+  compose_needs_build=true
+  echo "[agor-codespaces] Building and starting the SQLite Compose stack..."
+else
+  echo "[agor-codespaces] Starting the SQLite Compose stack from the existing development image..."
+fi
+
 # The nested Compose project owns a SQLite volume inside this Codespace. Ports
 # begin GitHub-private. The launcher may publish them only after its SSH health
 # probe succeeds, and repeats that reconciliation after every provider restart.
-echo "[agor-codespaces] Building and starting the SQLite Compose stack..."
-env \
-  UID="$(id -u)" \
-  GID="$(id -g)" \
-  INSTANCE_LABEL="codespace-${CODESPACE_NAME}" \
-  DAEMON_PORT=3000 \
-  UI_PORT=5000 \
-  AGOR_BASE_URL="$ui_url" \
-  VITE_DAEMON_URL="$daemon_url" \
-  CORS_ORIGIN="$ui_url" \
-  AGOR_ADMIN_PASSWORD="$admin_password" \
-  AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=false \
-  AGOR_MIGRATION_OFFLINE_CUTOVER=true \
-  SEED=false \
-  docker compose -p agor-codespaces-sqlite up -d --build
+start_compose() {
+  env \
+    UID="$(id -u)" \
+    GID="$(id -g)" \
+    INSTANCE_LABEL="codespace-${CODESPACE_NAME}" \
+    DAEMON_PORT=3000 \
+    UI_PORT=5000 \
+    AGOR_BASE_URL="$ui_url" \
+    VITE_DAEMON_URL="$daemon_url" \
+    CORS_ORIGIN="$ui_url" \
+    AGOR_DEV_IMAGE_INPUT_FINGERPRINT="$development_image_fingerprint" \
+    AGOR_ADMIN_PASSWORD="$admin_password" \
+    AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=false \
+    AGOR_MIGRATION_OFFLINE_CUTOVER=true \
+    SEED=false \
+    docker compose -p agor-codespaces-sqlite up -d "$@"
+}
+if [[ "$compose_needs_build" == "true" ]]; then
+  start_compose --build
+else
+  start_compose
+fi
 unset admin_password
 
 echo "[agor-codespaces] Compose launch finished. Current service state:"

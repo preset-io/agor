@@ -84,6 +84,7 @@ services:
       args:
         UID: ${UID:-1000}
         GID: ${GID:-1000}
+        AGOR_DEV_IMAGE_INPUT_FINGERPRINT: ${AGOR_DEV_IMAGE_INPUT_FINGERPRINT:-untracked}
     # Ensure we run as the 'agor' user (defined in Dockerfile)
     # This is critical for sudo access and permission handling in entrypoint
     user: agor

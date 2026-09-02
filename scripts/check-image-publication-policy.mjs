@@ -154,7 +154,7 @@ const codespacesWorktreeBuildStarts = [
 assert.equal(
   explicitStarts,
   localWorktreeBuildStarts + codespacesWorktreeBuildStarts,
-  'every explicit managed-environment start must build from its checked-out worktree'
+  'every explicit managed-environment start must build from or validate against its checked-out worktree'
 );
 
 if (codespacesWorktreeBuildStarts > 0) {
@@ -187,8 +187,34 @@ if (codespacesWorktreeBuildStarts > 0) {
   );
   assert.match(
     codespacesBootstrap,
-    /docker compose -p agor-codespaces-sqlite up -d --build\b/,
-    'the Codespaces bootstrap must build from the cloned remote worktree'
+    /io\.agor\.dev-image-input-fingerprint/,
+    'the Codespaces bootstrap must verify the existing development image fingerprint'
+  );
+  assert.match(
+    codespacesBootstrap,
+    /compose_needs_build=true/,
+    'the Codespaces bootstrap must build a missing or explicitly invalidated image'
+  );
+  assert.match(
+    codespacesBootstrap,
+    /docker compose -p agor-codespaces-sqlite up -d "\$@"/,
+    'the Codespaces bootstrap must reuse a valid existing development image'
+  );
+  const developmentDockerfile = await readFile(path.join(root, 'docker/Dockerfile'), 'utf8');
+  assert.match(
+    developmentDockerfile,
+    /ARG AGOR_DEV_IMAGE_INPUT_FINGERPRINT=untracked/,
+    'the development image must accept the bootstrap fingerprint as a build argument'
+  );
+  assert.match(
+    developmentDockerfile,
+    /LABEL io\.agor\.dev-image-input-fingerprint=/,
+    'the development image must persist the fingerprint used for safe reuse'
+  );
+  assert.match(
+    await readFile(path.join(root, 'docker-compose.yml'), 'utf8'),
+    /AGOR_DEV_IMAGE_INPUT_FINGERPRINT: \$\{AGOR_DEV_IMAGE_INPUT_FINGERPRINT:-untracked\}/,
+    'Compose must forward the bootstrap fingerprint into the development image build'
   );
   assert.doesNotMatch(codespacesBootstrap, imageReference);
   assert.doesNotMatch(codespacesBootstrap, /docker (?:compose )?pull\b/);
