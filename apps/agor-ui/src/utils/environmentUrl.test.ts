@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getEnvironmentAccessUrl,
   getEnvironmentAccessUrls,
+  getEnvironmentHealthUrl,
   hasEnvironmentHealthTarget,
 } from './environmentUrl';
 
@@ -117,5 +118,80 @@ describe('hasEnvironmentHealthTarget', () => {
         },
       } as Branch)
     ).toBe(false);
+  });
+
+  it('still reports a configured target that the browser refuses to open', () => {
+    const branch = {
+      ...base,
+      health_check_url: 'javascript:alert(1)',
+    } as Branch;
+
+    expect(hasEnvironmentHealthTarget(branch)).toBe(true);
+    expect(getEnvironmentHealthUrl(branch)).toBeUndefined();
+  });
+});
+
+describe('getEnvironmentHealthUrl', () => {
+  it('uses configured, typed, then legacy health targets in daemon precedence order', () => {
+    expect(
+      getEnvironmentHealthUrl({
+        ...base,
+        health_check_url: 'http://localhost:3030/health?full=1',
+        environment_instance: {
+          status: 'running',
+          lifecycle_result: {
+            version: 1,
+            health_url: 'https://runtime.example.test/health',
+          },
+        },
+      } as Branch)
+    ).toBe('http://localhost:3030/health?full=1');
+    expect(
+      getEnvironmentHealthUrl({
+        ...base,
+        environment_instance: {
+          status: 'running',
+          lifecycle_result: {
+            version: 1,
+            health_url: 'https://runtime.example.test/health',
+          },
+        },
+      } as Branch)
+    ).toBe('https://runtime.example.test/health');
+    expect(
+      getEnvironmentHealthUrl({
+        ...base,
+        environment_instance: {
+          status: 'running',
+          facts: { health: 'https://legacy.example.test/health' },
+        },
+      } as Branch)
+    ).toBe('https://legacy.example.test/health');
+  });
+
+  it('rejects unsafe authoritative targets without falling through', () => {
+    expect(
+      getEnvironmentHealthUrl({
+        ...base,
+        health_check_url: 'https://user:password@example.test/health',
+        environment_instance: {
+          status: 'running',
+          lifecycle_result: {
+            version: 1,
+            health_url: 'https://runtime.example.test/health',
+          },
+        },
+      } as Branch)
+    ).toBeUndefined();
+    expect(
+      getEnvironmentHealthUrl({
+        ...base,
+        environment_instance: {
+          status: 'running',
+          lifecycle_result: { version: 1, health_url: 'javascript:alert(1)' },
+          facts: { health: 'https://legacy.example.test/health' },
+        },
+      } as Branch)
+    ).toBeUndefined();
   });
 });

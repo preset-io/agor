@@ -39,14 +39,22 @@ export function getEnvironmentAccessUrl(branch: Branch): string | undefined {
   return getEnvironmentAccessUrls(branch)[0]?.url;
 }
 
+function resolveBranchHealthTarget(branch: Branch): string | undefined {
+  const environment = branch.environment_instance;
+  return resolveEnvironmentHealthTarget({
+    configuredHealthUrl: branch.health_check_url,
+    lifecycleResultHealthUrl: environment?.lifecycle_result?.health_url,
+    legacyFactHealthUrl: environment?.facts?.health,
+  }).healthUrl;
+}
+
+/** Select the same configured/typed/legacy health target as the daemon, then make it browser-safe. */
+export function getEnvironmentHealthUrl(branch: Branch): string | undefined {
+  const selected = resolveBranchHealthTarget(branch);
+  return safeHttpUrl(selected, Boolean(branch.health_check_url));
+}
+
 /** Whether the daemon has a configured or discovered target to probe. */
 export function hasEnvironmentHealthTarget(branch: Branch): boolean {
-  const environment = branch.environment_instance;
-  return Boolean(
-    resolveEnvironmentHealthTarget({
-      configuredHealthUrl: branch.health_check_url,
-      lifecycleResultHealthUrl: environment?.lifecycle_result?.health_url,
-      legacyFactHealthUrl: environment?.facts?.health,
-    }).healthUrl
-  );
+  return Boolean(resolveBranchHealthTarget(branch));
 }
