@@ -11,6 +11,7 @@ import { isPostgresDatabase } from './database-wrapper';
 import { initializeDatabase } from './migrate';
 import {
   BranchRepository,
+  EnvironmentHealthRepository,
   EnvironmentSyncRepository,
   RepoRepository,
   UsersRepository,
@@ -46,6 +47,7 @@ async function seedRunningBranch(db: Database, tenantId: TenantID) {
       branch_unique_id: branchUnique++,
       path: `/tmp/${generateId()}`,
       created_by: user.user_id,
+      health_check_url: 'https://example.invalid/health',
       environment_instance: { status: 'running' },
     });
     return { branch, user };
@@ -175,6 +177,205 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           },
         });
       });
+    });
+
+    it('fences health observations across a successful Sync on two daemon connections', async () => {
+      const tenantId = `env-sync-health-success-${generateId()}` as TenantID;
+      const { branch } = await seedRunningBranch(dbA, tenantId);
+      await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new EnvironmentSyncRepository(scoped).request({
+          branchId: branch.branch_id,
+          desiredRevision: REVISION_A,
+        })
+      );
+
+      const beforeSync = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new EnvironmentHealthRepository(scoped).claim({
+          branchId: branch.branch_id,
+          claimToken: 'health-before-sync',
+          leaseDurationMs: 60_000,
+          identity: { instanceId: 'health-a', bootId: 'health-boot-a' },
+        })
+      );
+      if (beforeSync.outcome !== 'claimed') throw new Error('Expected pre-Sync health claim');
+      const syncClaim = await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+        new EnvironmentSyncRepository(scoped).claim({
+          branchId: branch.branch_id,
+          claimToken: 'sync-on-daemon-b',
+          leaseDurationMs: 60_000,
+          identity: { instanceId: 'sync-b', bootId: 'sync-boot-b' },
+        })
+      );
+      if (syncClaim.outcome !== 'claimed') throw new Error('Expected Sync claim');
+
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new EnvironmentHealthRepository(scoped).commit({
+            branchId: branch.branch_id,
+            claimToken: beforeSync.claim.claim_token,
+            environmentGeneration: beforeSync.claim.environment_generation,
+            observation: {
+              status: 'unhealthy',
+              message: 'Late pre-Sync failure',
+              recordWhileStarting: true,
+            },
+          })
+        )
+      ).resolves.toEqual({ outcome: 'stale' });
+
+      const duringSync = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new EnvironmentHealthRepository(scoped).claim({
+          branchId: branch.branch_id,
+          claimToken: 'health-during-sync',
+          leaseDurationMs: 60_000,
+          identity: { instanceId: 'health-a', bootId: 'health-boot-a' },
+        })
+      );
+      if (duringSync.outcome !== 'claimed') throw new Error('Expected in-Sync health claim');
+      await expect(
+        runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+          new EnvironmentSyncRepository(scoped).complete({
+            branchId: branch.branch_id,
+            claimToken: syncClaim.attempt.token,
+            appliedRevision: REVISION_A,
+            environmentGeneration: syncClaim.attempt.environment_generation,
+          })
+        )
+      ).resolves.toMatchObject({ outcome: 'settled', applied_revision: REVISION_A });
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new EnvironmentHealthRepository(scoped).commit({
+            branchId: branch.branch_id,
+            claimToken: duringSync.claim.claim_token,
+            environmentGeneration: duringSync.claim.environment_generation,
+            observation: {
+              status: 'unhealthy',
+              message: 'Late in-Sync failure',
+              recordWhileStarting: true,
+            },
+          })
+        )
+      ).resolves.toEqual({ outcome: 'stale' });
+
+      const freshHealth = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+        new EnvironmentHealthRepository(scoped).claim({
+          branchId: branch.branch_id,
+          claimToken: 'health-after-sync',
+          leaseDurationMs: 60_000,
+          identity: { instanceId: 'health-a', bootId: 'health-boot-a' },
+        })
+      );
+      if (freshHealth.outcome !== 'claimed') throw new Error('Expected post-Sync health claim');
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+          new EnvironmentHealthRepository(scoped).commit({
+            branchId: branch.branch_id,
+            claimToken: freshHealth.claim.claim_token,
+            environmentGeneration: freshHealth.claim.environment_generation,
+            observation: {
+              status: 'unhealthy',
+              message: 'Fresh post-Sync failure',
+              recordWhileStarting: true,
+            },
+          })
+        )
+      ).resolves.toMatchObject({ outcome: 'committed', environmentStatus: 'running' });
+    });
+
+    it('keeps cross-tenant settlements from clearing health ownership', async () => {
+      const tenantA = `env-sync-settle-a-${generateId()}` as TenantID;
+      const tenantB = `env-sync-settle-b-${generateId()}` as TenantID;
+      const { branch } = await seedRunningBranch(dbA, tenantA);
+      await runWithTenantDatabaseScope(dbA, tenantA, (scoped) =>
+        new EnvironmentSyncRepository(scoped).request({
+          branchId: branch.branch_id,
+          desiredRevision: REVISION_A,
+        })
+      );
+      const syncClaim = await runWithTenantDatabaseScope(dbA, tenantA, (scoped) =>
+        new EnvironmentSyncRepository(scoped).claim({
+          branchId: branch.branch_id,
+          claimToken: 'tenant-a-sync',
+          leaseDurationMs: 60_000,
+          identity: { instanceId: 'sync-a', bootId: 'sync-boot-a' },
+        })
+      );
+      if (syncClaim.outcome !== 'claimed') throw new Error('Expected tenant A Sync claim');
+      const healthClaim = await runWithTenantDatabaseScope(dbA, tenantA, (scoped) =>
+        new EnvironmentHealthRepository(scoped).claim({
+          branchId: branch.branch_id,
+          claimToken: 'tenant-a-health',
+          leaseDurationMs: 60_000,
+          identity: { instanceId: 'health-a', bootId: 'health-boot-a' },
+        })
+      );
+      if (healthClaim.outcome !== 'claimed') throw new Error('Expected tenant A health claim');
+
+      await expect(
+        runWithTenantDatabaseScope(dbB, tenantB, (scoped) =>
+          new EnvironmentSyncRepository(scoped).complete({
+            branchId: branch.branch_id,
+            claimToken: syncClaim.attempt.token,
+            appliedRevision: REVISION_A,
+            environmentGeneration: syncClaim.attempt.environment_generation,
+          })
+        )
+      ).resolves.toEqual({ outcome: 'stale' });
+      await expect(
+        runWithTenantDatabaseScope(dbB, tenantB, (scoped) =>
+          new EnvironmentSyncRepository(scoped).fail({
+            branchId: branch.branch_id,
+            claimToken: syncClaim.attempt.token,
+            revision: REVISION_A,
+            environmentGeneration: syncClaim.attempt.environment_generation,
+            message: 'Wrong tenant must not settle',
+          })
+        )
+      ).resolves.toEqual({ outcome: 'stale' });
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantA, (scoped) =>
+          new EnvironmentHealthRepository(scoped).claimIsCurrent({
+            branchId: branch.branch_id,
+            claimToken: healthClaim.claim.claim_token,
+            environmentGeneration: healthClaim.claim.environment_generation,
+          })
+        )
+      ).resolves.toBe(true);
+
+      await expect(
+        runWithTenantDatabaseScope(dbB, tenantA, (scoped) =>
+          new EnvironmentSyncRepository(scoped).fail({
+            branchId: branch.branch_id,
+            claimToken: syncClaim.attempt.token,
+            revision: REVISION_A,
+            environmentGeneration: syncClaim.attempt.environment_generation,
+            message: 'Expected provider failure',
+          })
+        )
+      ).resolves.toMatchObject({ outcome: 'settled', needs_reconcile: true });
+      await expect(
+        runWithTenantDatabaseScope(dbA, tenantA, (scoped) =>
+          new EnvironmentHealthRepository(scoped).commit({
+            branchId: branch.branch_id,
+            claimToken: healthClaim.claim.claim_token,
+            environmentGeneration: healthClaim.claim.environment_generation,
+            observation: {
+              status: 'unhealthy',
+              message: 'Late expected-downtime failure',
+              recordWhileStarting: true,
+            },
+          })
+        )
+      ).resolves.toEqual({ outcome: 'stale' });
+
+      const current = await runWithTenantDatabaseScope(dbA, tenantA, (scoped) =>
+        new BranchRepository(scoped).findById(branch.branch_id)
+      );
+      expect(current?.environment_instance).toMatchObject({
+        status: 'running',
+        source_sync: { desired_revision: REVISION_A, failure_count: 1 },
+      });
+      expect(current?.environment_instance?.last_health_check).toBeUndefined();
     });
   }
 );

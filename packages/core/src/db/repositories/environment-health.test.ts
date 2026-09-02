@@ -539,6 +539,109 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
     );
   });
 
+  dbTest(
+    'keeps expected Sync downtime running only while its attempt is live and current',
+    async ({ db }) => {
+      const branch = await seedStartingBranch(db, 'running');
+      const branches = new BranchRepository(db);
+      const health = new EnvironmentHealthRepository(db);
+      const revision = 'a'.repeat(40);
+      await branches.update(branch.branch_id, {
+        environment_instance: {
+          status: 'running',
+          source_sync: {
+            desired_revision: revision,
+            desired_at: new Date().toISOString(),
+            active_attempt: {
+              token: 'live-sync-attempt',
+              revision,
+              environment_generation: branch.environment_generation,
+              started_at: new Date().toISOString(),
+              lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+              instance_id: 'daemon-a',
+              boot_id: 'boot-a',
+            },
+          },
+        },
+      });
+
+      // Sync is allowed to restart the app. Even the normal three-failure
+      // demotion threshold must not race the live Sync owner.
+      expect((await observe(health, branch.branch_id, 'unhealthy', 3)).environmentStatus).toBe(
+        'running'
+      );
+      expect((await branches.findById(branch.branch_id))?.environment_instance).toMatchObject({
+        status: 'running',
+        last_health_check: { status: 'unhealthy', consecutive: 3 },
+      });
+
+      // The exception is lifecycle-generation-bounded. A Sync attempt from
+      // before stop/restart must not keep the new lifecycle green.
+      await branches.update(branch.branch_id, {
+        environment_instance: { status: 'stopping' },
+      });
+      await branches.update(branch.branch_id, {
+        environment_instance: { status: 'running' },
+      });
+      const restarted = await branches.findById(branch.branch_id);
+      expect(restarted?.environment_instance?.source_sync?.active_attempt).toMatchObject({
+        environment_generation: branch.environment_generation,
+      });
+      expect(restarted?.environment_generation).not.toBe(branch.environment_generation);
+      expect((await observe(health, branch.branch_id, 'unhealthy', 1)).environmentStatus).toBe(
+        'error'
+      );
+
+      // It is lease-bounded too. A dead Sync worker cannot keep an actually dead
+      // environment green after its ownership expires.
+      const expiredBranch = await seedStartingBranch(db, 'running');
+      await branches.update(expiredBranch.branch_id, {
+        environment_instance: {
+          status: 'running',
+          source_sync: {
+            desired_revision: revision,
+            desired_at: new Date().toISOString(),
+            active_attempt: {
+              token: 'expired-sync-attempt',
+              revision,
+              environment_generation: expiredBranch.environment_generation,
+              started_at: new Date(Date.now() - 120_000).toISOString(),
+              lease_expires_at: new Date(Date.now() - 60_000).toISOString(),
+              instance_id: 'dead-daemon',
+              boot_id: 'dead-boot',
+            },
+          },
+        },
+      });
+      expect(
+        (await observe(health, expiredBranch.branch_id, 'unhealthy', 3)).environmentStatus
+      ).toBe('error');
+
+      const malformedBranch = await seedStartingBranch(db, 'running');
+      await branches.update(malformedBranch.branch_id, {
+        environment_instance: {
+          status: 'running',
+          source_sync: {
+            desired_revision: revision,
+            desired_at: new Date().toISOString(),
+            active_attempt: {
+              token: 'malformed-sync-attempt',
+              revision,
+              environment_generation: malformedBranch.environment_generation,
+              started_at: new Date().toISOString(),
+              lease_expires_at: 'not-a-timestamp',
+              instance_id: 'malformed-daemon',
+              boot_id: 'malformed-boot',
+            },
+          },
+        },
+      });
+      expect(
+        (await observe(health, malformedBranch.branch_id, 'unhealthy', 3)).environmentStatus
+      ).toBe('error');
+    }
+  );
+
   dbTest('does not admit a demoted environment for observation', async ({ db }) => {
     const branch = await seedStartingBranch(db);
     const branches = new BranchRepository(db);

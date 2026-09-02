@@ -4,6 +4,7 @@ import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
 import { BranchRepository } from './branches';
+import { EnvironmentHealthRepository } from './environment-health';
 import { EnvironmentSyncRepository } from './environment-sync';
 import { RepoRepository } from './repos';
 import { UsersRepository } from './users';
@@ -195,7 +196,19 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
     async ({ db }) => {
       const { branch } = await seedRunningBranch(db);
       const branches = new BranchRepository(db);
+      const health = new EnvironmentHealthRepository(db);
       const sync = new EnvironmentSyncRepository(db);
+      await branches.update(branch.branch_id, {
+        environment_instance: {
+          status: 'running',
+          last_health_check: {
+            timestamp: new Date().toISOString(),
+            status: 'unhealthy',
+            message: 'Expected Sync downtime',
+            consecutive: 2,
+          },
+        },
+      });
       await sync.request({ branchId: branch.branch_id, desiredRevision: REVISION_A });
       const claim = await sync.claim({
         branchId: branch.branch_id,
@@ -204,6 +217,13 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
         identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
       });
       if (claim.outcome !== 'claimed') throw new Error('Expected claim');
+      const duringSync = await health.claim({
+        branchId: branch.branch_id,
+        claimToken: 'health-during-superseded-sync',
+        leaseDurationMs: 60_000,
+        identity: { instanceId: 'health-a', bootId: 'health-boot-a' },
+      });
+      if (duringSync.outcome !== 'claimed') throw new Error('Expected health claim');
 
       await sync.request({ branchId: branch.branch_id, desiredRevision: REVISION_B });
       await expect(
@@ -215,14 +235,28 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
           message: 'old attempt failed',
         })
       ).resolves.toMatchObject({ outcome: 'settled', needs_reconcile: true });
+      await expect(
+        health.commit({
+          branchId: branch.branch_id,
+          claimToken: duringSync.claim.claim_token,
+          environmentGeneration: duringSync.claim.environment_generation,
+          observation: {
+            status: 'unhealthy',
+            message: 'Late observation from the superseded Sync',
+            recordWhileStarting: true,
+          },
+        })
+      ).resolves.toEqual({ outcome: 'stale' });
 
       const current = await branches.findById(branch.branch_id);
+      expect(current?.environment_instance?.status).toBe('running');
       expect(current?.environment_instance?.source_sync).toMatchObject({
         desired_revision: REVISION_B,
       });
       expect(current?.environment_instance?.source_sync?.active_attempt).toBeUndefined();
       expect(current?.environment_instance?.source_sync?.retry_not_before_at).toBeUndefined();
       expect(current?.environment_instance?.source_sync?.last_error).toBeUndefined();
+      expect(current?.environment_instance?.last_health_check).toBeUndefined();
     }
   );
 
@@ -303,6 +337,172 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
         identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
       })
     ).resolves.toMatchObject({ outcome: 'not_due' });
+  });
+
+  dbTest('fences health observations on both sides of a successful Sync', async ({ db }) => {
+    const { branch } = await seedRunningBranch(db);
+    const branches = new BranchRepository(db);
+    const health = new EnvironmentHealthRepository(db);
+    const sync = new EnvironmentSyncRepository(db);
+    await branches.update(branch.branch_id, {
+      environment_instance: {
+        status: 'running',
+        last_health_check: {
+          timestamp: new Date().toISOString(),
+          status: 'unhealthy',
+          message: 'Expected Sync downtime',
+          consecutive: 2,
+        },
+      },
+    });
+    await sync.request({ branchId: branch.branch_id, desiredRevision: REVISION_A });
+
+    const beforeSync = await health.claim({
+      branchId: branch.branch_id,
+      claimToken: 'health-before-sync',
+      leaseDurationMs: 60_000,
+      identity: { instanceId: 'health-a', bootId: 'health-boot-a' },
+    });
+    if (beforeSync.outcome !== 'claimed') throw new Error('Expected pre-Sync health claim');
+    const syncClaim = await sync.claim({
+      branchId: branch.branch_id,
+      claimToken: 'source-sync',
+      leaseDurationMs: 60_000,
+      identity: { instanceId: 'sync-a', bootId: 'sync-boot-a' },
+    });
+    if (syncClaim.outcome !== 'claimed') throw new Error('Expected Sync claim');
+
+    await expect(
+      health.commit({
+        branchId: branch.branch_id,
+        claimToken: beforeSync.claim.claim_token,
+        environmentGeneration: beforeSync.claim.environment_generation,
+        observation: {
+          status: 'unhealthy',
+          message: 'Late observation from before Sync',
+          recordWhileStarting: true,
+        },
+      })
+    ).resolves.toEqual({ outcome: 'stale' });
+
+    const duringSync = await health.claim({
+      branchId: branch.branch_id,
+      claimToken: 'health-during-sync',
+      leaseDurationMs: 60_000,
+      identity: { instanceId: 'health-b', bootId: 'health-boot-b' },
+    });
+    if (duringSync.outcome !== 'claimed') throw new Error('Expected in-Sync health claim');
+    await expect(
+      sync.complete({
+        branchId: branch.branch_id,
+        claimToken: syncClaim.attempt.token,
+        appliedRevision: REVISION_A,
+        environmentGeneration: syncClaim.attempt.environment_generation,
+      })
+    ).resolves.toMatchObject({ outcome: 'settled', applied_revision: REVISION_A });
+
+    await expect(
+      health.commit({
+        branchId: branch.branch_id,
+        claimToken: duringSync.claim.claim_token,
+        environmentGeneration: duringSync.claim.environment_generation,
+        observation: {
+          status: 'unhealthy',
+          message: 'Late observation from expected Sync downtime',
+          recordWhileStarting: true,
+        },
+      })
+    ).resolves.toEqual({ outcome: 'stale' });
+    const current = await branches.findById(branch.branch_id);
+    expect(current?.environment_instance).toMatchObject({
+      status: 'running',
+      source_sync: { desired_revision: REVISION_A, applied_revision: REVISION_A },
+      last_command: { action: 'sync', status: 'succeeded' },
+    });
+    expect(current?.environment_instance?.last_health_check).toBeUndefined();
+  });
+
+  dbTest('fences expected-downtime health after a failed Sync settlement', async ({ db }) => {
+    const { branch } = await seedRunningBranch(db);
+    const branches = new BranchRepository(db);
+    const health = new EnvironmentHealthRepository(db);
+    const sync = new EnvironmentSyncRepository(db);
+    await branches.update(branch.branch_id, {
+      environment_instance: {
+        status: 'running',
+        last_health_check: {
+          timestamp: new Date().toISOString(),
+          status: 'unhealthy',
+          message: 'Expected Sync downtime',
+          consecutive: 2,
+        },
+      },
+    });
+    await sync.request({ branchId: branch.branch_id, desiredRevision: REVISION_A });
+    const syncClaim = await sync.claim({
+      branchId: branch.branch_id,
+      claimToken: 'failed-source-sync',
+      leaseDurationMs: 60_000,
+      identity: { instanceId: 'sync-a', bootId: 'sync-boot-a' },
+    });
+    if (syncClaim.outcome !== 'claimed') throw new Error('Expected Sync claim');
+    const duringSync = await health.claim({
+      branchId: branch.branch_id,
+      claimToken: 'health-during-failed-sync',
+      leaseDurationMs: 60_000,
+      identity: { instanceId: 'health-a', bootId: 'health-boot-a' },
+    });
+    if (duringSync.outcome !== 'claimed') throw new Error('Expected health claim');
+
+    await expect(
+      sync.fail({
+        branchId: branch.branch_id,
+        claimToken: syncClaim.attempt.token,
+        revision: REVISION_A,
+        environmentGeneration: syncClaim.attempt.environment_generation,
+        message: 'Provider acknowledgement failed',
+      })
+    ).resolves.toMatchObject({ outcome: 'settled', needs_reconcile: true });
+    await expect(
+      health.commit({
+        branchId: branch.branch_id,
+        claimToken: duringSync.claim.claim_token,
+        environmentGeneration: duringSync.claim.environment_generation,
+        observation: {
+          status: 'unhealthy',
+          message: 'Late expected-downtime failure',
+          recordWhileStarting: true,
+        },
+      })
+    ).resolves.toEqual({ outcome: 'stale' });
+
+    const current = await branches.findById(branch.branch_id);
+    expect(current?.environment_instance).toMatchObject({
+      status: 'running',
+      source_sync: { desired_revision: REVISION_A, failure_count: 1 },
+      last_command: { action: 'sync', status: 'failed' },
+    });
+    expect(current?.environment_instance?.last_health_check).toBeUndefined();
+
+    const freshHealth = await health.claim({
+      branchId: branch.branch_id,
+      claimToken: 'fresh-health-after-failure',
+      leaseDurationMs: 60_000,
+      identity: { instanceId: 'health-b', bootId: 'health-boot-b' },
+    });
+    if (freshHealth.outcome !== 'claimed') throw new Error('Expected fresh health claim');
+    await expect(
+      health.commit({
+        branchId: branch.branch_id,
+        claimToken: freshHealth.claim.claim_token,
+        environmentGeneration: freshHealth.claim.environment_generation,
+        observation: {
+          status: 'unhealthy',
+          message: 'Fresh post-Sync failure',
+          recordWhileStarting: true,
+        },
+      })
+    ).resolves.toMatchObject({ outcome: 'committed', environmentStatus: 'running' });
   });
 
   dbTest('rejects abbreviated, dirty, and unknown revisions', async ({ db }) => {

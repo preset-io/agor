@@ -389,6 +389,15 @@ export class EnvironmentHealthRepository {
           observedAtMs: now.getTime(),
           startupDeadlineAtMs: startupDeadlineAtMs(activeEnvironment),
         });
+        const activeSyncAttempt = activeEnvironment.source_sync?.active_attempt;
+        const activeSyncLeaseExpiresAt = Date.parse(activeSyncAttempt?.lease_expires_at ?? '');
+        const syncOwnsExpectedDowntime =
+          status === 'running' &&
+          input.observation.status === 'unhealthy' &&
+          !!activeSyncAttempt &&
+          activeSyncAttempt.environment_generation === row.environment_generation &&
+          Number.isFinite(activeSyncLeaseExpiresAt) &&
+          activeSyncLeaseExpiresAt > now.getTime();
         // Network failures during legitimate startup remain unrecorded, but an
         // expired attempt MUST persist its terminal transition. Previously the
         // decision returned `error` while shouldRecord stayed false, so the row
@@ -398,7 +407,7 @@ export class EnvironmentHealthRepository {
           input.observation.status === 'healthy' ||
           input.observation.recordWhileStarting ||
           decision.nextStatus !== undefined;
-        const nextStatus = decision.nextStatus ?? status;
+        const nextStatus = syncOwnsExpectedDowntime ? status : (decision.nextStatus ?? status);
         const previousHealth = activeEnvironment.last_health_check;
         const stateChanged =
           shouldRecord &&

@@ -17,6 +17,14 @@ import { EntityNotFoundError, RepositoryError } from './base';
 const SYNC_ERROR_MAX_CHARS = 2_048;
 const SYNC_RETRY_MIN_MS = 5_000;
 const SYNC_RETRY_MAX_MS = 5 * 60_000;
+const CLEAR_ENVIRONMENT_HEALTH_COORDINATION = {
+  environment_health_claim_token: null,
+  environment_health_claimed_at: null,
+  environment_health_claim_expires_at: null,
+  environment_health_next_observation_at: null,
+  environment_health_claim_instance_id: null,
+  environment_health_claim_boot_id: null,
+} as const;
 
 type SourceSyncState = NonNullable<BranchEnvironmentInstance['source_sync']>;
 type SourceSyncAttempt = NonNullable<SourceSyncState['active_attempt']>;
@@ -226,6 +234,10 @@ export class EnvironmentSyncRepository {
                 ...data,
                 environment_instance: { ...environment, source_sync: nextState },
               },
+              // Sync may deliberately restart the remote app. Revoke any
+              // health request that left the database before this attempt so
+              // its pre-Sync observation cannot race the new source state.
+              ...CLEAR_ENVIRONMENT_HEALTH_COORDINATION,
             })
             .where(eq(branches.branch_id, input.branchId))
             .run();
@@ -283,22 +295,32 @@ export class EnvironmentSyncRepository {
               ? { requested_by_user_id: state.requested_by_user_id }
               : {}),
           };
+          const nextEnvironment = {
+            ...environment,
+            source_sync: nextState,
+            last_command: {
+              action: 'sync' as const,
+              status: 'succeeded' as const,
+              timestamp: now.toISOString(),
+              message: `Applied source revision ${appliedRevision.slice(0, 12)}`,
+            },
+          };
+          // Health failures observed during expected Sync downtime must not
+          // count toward the post-Sync outage threshold. A fresh probe will
+          // repopulate this truthful observation immediately.
+          delete nextEnvironment.last_health_check;
           await update(txDb, branches)
             .set({
               data: {
                 ...data,
-                environment_instance: {
-                  ...environment,
-                  source_sync: nextState,
-                  last_command: {
-                    action: 'sync',
-                    status: 'succeeded',
-                    timestamp: now.toISOString(),
-                    message: `Applied source revision ${appliedRevision.slice(0, 12)}`,
-                  },
-                },
+                environment_instance: nextEnvironment,
               },
               updated_at: now,
+              // A probe may also have started after Sync claimed ownership.
+              // Fence it at successful settlement so downtime observed before
+              // the acknowledgement cannot arrive afterward and demote the
+              // newly synchronized environment.
+              ...CLEAR_ENVIRONMENT_HEALTH_COORDINATION,
             })
             .where(eq(branches.branch_id, input.branchId))
             .run();
@@ -352,12 +374,16 @@ export class EnvironmentSyncRepository {
           if (state.desired_revision !== revision) {
             const nextState: SourceSyncState = { ...state };
             delete nextState.active_attempt;
+            const nextEnvironment = { ...environment, source_sync: nextState };
+            delete nextEnvironment.last_health_check;
             await update(txDb, branches)
               .set({
                 data: {
                   ...data,
-                  environment_instance: { ...environment, source_sync: nextState },
+                  environment_instance: nextEnvironment,
                 },
+                updated_at: now,
+                ...CLEAR_ENVIRONMENT_HEALTH_COORDINATION,
               })
               .where(eq(branches.branch_id, input.branchId))
               .run();
@@ -386,22 +412,25 @@ export class EnvironmentSyncRepository {
               message: sanitizeSyncError(input.message),
             },
           };
+          const nextEnvironment = {
+            ...environment,
+            source_sync: nextState,
+            last_command: {
+              action: 'sync' as const,
+              status: 'failed' as const,
+              timestamp: now.toISOString(),
+              message: sanitizeSyncError(input.message),
+            },
+          };
+          delete nextEnvironment.last_health_check;
           await update(txDb, branches)
             .set({
               data: {
                 ...data,
-                environment_instance: {
-                  ...environment,
-                  source_sync: nextState,
-                  last_command: {
-                    action: 'sync',
-                    status: 'failed',
-                    timestamp: now.toISOString(),
-                    message: sanitizeSyncError(input.message),
-                  },
-                },
+                environment_instance: nextEnvironment,
               },
               updated_at: now,
+              ...CLEAR_ENVIRONMENT_HEALTH_COORDINATION,
             })
             .where(eq(branches.branch_id, input.branchId))
             .run();
