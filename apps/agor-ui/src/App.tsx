@@ -2170,6 +2170,7 @@ function AppContent() {
             setOpenUserSettings(true);
           }}
           onOpenWorkspaceSettings={(tab) => setSettingsTabToOpen(tab)}
+          onOpenCatalog={() => navigate(MARKETPLACE_CATALOG_PATH)}
           onCheckAuth={handleCheckAuth}
           credentialVersion={credentialVersion}
           connectionReady={connected && !connecting}

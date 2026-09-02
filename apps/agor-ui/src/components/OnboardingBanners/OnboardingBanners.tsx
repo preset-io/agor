@@ -46,6 +46,8 @@ export interface OnboardingBannersProps {
   onOpenUserSettings: (tab: string) => void;
   /** Opens workspace settings at the given tab key (used for MCP). */
   onOpenWorkspaceSettings: (tab: string) => void;
+  /** Opens the MCP catalog (browse + one-click connect) — the integrations CTA target. */
+  onOpenCatalog: () => void;
   /** Server-side credential probe — resolves creds exactly as the executor, including executor-filesystem auth (`claude /login`). */
   onCheckAuth: (tool: AgenticToolName, apiKey?: string) => Promise<AuthCheckResult>;
   /** Bumped by the parent whenever credentials are saved — forces a re-probe even if key presence is unchanged (e.g. key rotation). */
@@ -111,6 +113,7 @@ export function OnboardingBanners({
   canManageMcp,
   onOpenUserSettings,
   onOpenWorkspaceSettings,
+  onOpenCatalog,
   onCheckAuth,
   credentialVersion,
   connectionReady,
@@ -382,8 +385,8 @@ export function OnboardingBanners({
               <Button type="text" size="small" onClick={() => setIntegrationsBannerDismissed(true)}>
                 Maybe later
               </Button>
-              <Button type="primary" size="small" onClick={() => onOpenWorkspaceSettings('mcp')}>
-                Connect tools
+              <Button type="primary" size="small" onClick={onOpenCatalog}>
+                Browse the catalog
               </Button>
             </Space>
           }

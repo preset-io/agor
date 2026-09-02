@@ -33,6 +33,7 @@ describe('OnboardingBanners real-browser UX', () => {
           canManageMcp={false}
           onOpenUserSettings={vi.fn()}
           onOpenWorkspaceSettings={vi.fn()}
+          onOpenCatalog={vi.fn()}
           onCheckAuth={vi.fn(async () => ({
             status: 'unauthenticated',
             authenticated: false,
