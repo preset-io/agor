@@ -133,6 +133,26 @@ describe('TasksService executor patches', () => {
   );
 
   it.each([TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'preserves controlled failure executor %s patches for non-workload sessions',
+    async (status) => {
+      const task = makeTask('{"schemaVersion":1,"profile":"controlled-failure","delayMs":10}');
+      const { service, updateFromExecutor } = makePatchHarness(task, 'codex');
+
+      await expect(
+        service.patch(
+          task.task_id,
+          { status, completed_at: '2026-01-01T00:00:05.000Z' },
+          { provider: 'rest' }
+        )
+      ).resolves.toMatchObject({ status });
+      expect(updateFromExecutor).toHaveBeenCalledWith(
+        task.task_id,
+        expect.objectContaining({ status, completed_at: '2026-01-01T00:00:05.000Z' })
+      );
+    }
+  );
+
+  it.each([TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
     'preserves wait workload executor %s patches',
     async (status) => {
       const task = makeTask('{"schemaVersion":1,"profile":"wait","durationMs":1000}');
@@ -149,6 +169,7 @@ describe('TasksService executor patches', () => {
         task.task_id,
         expect.objectContaining({ status, completed_at: '2026-01-01T00:00:05.000Z' })
       );
+      expect(SessionRepository.prototype.findById).not.toHaveBeenCalled();
     }
   );
 
