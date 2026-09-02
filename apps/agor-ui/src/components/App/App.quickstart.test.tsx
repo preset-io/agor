@@ -85,7 +85,7 @@ vi.mock('../EventStreamPanel', () => ({ EventStreamPanel: () => null }));
 vi.mock('../NewSessionButton', () => ({ NewSessionButton: () => null }));
 vi.mock('../SettingsModal', () => ({ SettingsModal: () => null, UserSettingsModal: () => null }));
 vi.mock('../BranchModal', () => ({ BranchModal: () => null }));
-vi.mock('../CreateDialog', () => ({ CreateDialog: () => null }));
+vi.mock('../CreateModals', () => ({ CreateModals: () => null }));
 vi.mock('../NewSessionModal', () => ({
   NewSessionModal: ({ onCreate }: { onCreate: (config: unknown) => Promise<unknown> }) => (
     <button type="button" data-testid="modal-create" onClick={() => void onCreate({})}>
