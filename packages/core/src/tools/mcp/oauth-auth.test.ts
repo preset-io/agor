@@ -1,19 +1,34 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
+import { MCPExternalError } from './external-error';
 import { clearOAuthCache, fetchOAuthToken } from './oauth-auth';
+
+async function expectOAuthConfigurationRequired(operation: Promise<unknown>): Promise<void> {
+  const error = await operation.catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(MCPExternalError);
+  expect(error).toMatchObject({
+    category: 'configuration_required',
+    action: 'review_configuration',
+    diagnostic: {
+      stage: 'oauth',
+      type: 'ConfigurationError',
+      code: 'unsafe_outbound_url',
+    },
+  });
+}
 
 describe('OAuth client-credentials egress and cache isolation', () => {
   afterEach(() => clearOAuthCache());
 
   it('rejects loopback HTTP unless the standalone development exception is explicit', async () => {
-    await expect(
+    await expectOAuthConfigurationRequired(
       fetchOAuthToken({
         token_url: 'http://127.0.0.1:1/token',
         client_id: 'client',
         client_secret: 'secret',
       })
-    ).rejects.toThrow('The MCP operation failed');
+    );
   });
 
   it('namespaces cached bearers and allows PostgreSQL callers to bypass the cache', async () => {
