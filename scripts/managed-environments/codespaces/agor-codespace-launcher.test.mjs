@@ -415,15 +415,17 @@ test('destructive actions refetch and freeze on identity drift', async (t) => {
   assert.deepEqual(client.deleted, []);
 });
 
-test('logs never wake a stopped Codespace', async (t) => {
-  const { store } = await fixture(t);
-  const existing = resource({ state: 'Shutdown' });
-  const client = new FakeClient([existing]);
-  const output = await controller(client, store).logs();
-  assert.match(output, /GitHub CLI uses SSH and could resume the stopped Codespace/);
-  assert.deepEqual(client.creationLogCalls, []);
-  assert.deepEqual(client.runtimeLogCalls, []);
-});
+for (const state of ['ShuttingDown', 'Shutdown']) {
+  test(`logs never use SSH while a Codespace is ${state}`, async (t) => {
+    const { store } = await fixture(t);
+    const existing = resource({ state });
+    const client = new FakeClient([existing]);
+    const output = await controller(client, store).logs();
+    assert.match(output, /GitHub CLI uses SSH and could resume or delay/);
+    assert.deepEqual(client.creationLogCalls, []);
+    assert.deepEqual(client.runtimeLogCalls, []);
+  });
+}
 
 test('logs expose creation progress while the Codespace is starting', async (t) => {
   const { store } = await fixture(t);

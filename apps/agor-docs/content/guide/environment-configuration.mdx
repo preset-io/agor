@@ -201,10 +201,10 @@ Codespace checkout, applies exactly that commit, restarts the stack when needed,
 waits for health, and verifies the applied commit before reporting success.
 Stop shuts down the Codespace but preserves its disk and nested SQLite data.
 Logs returns bounded creation diagnostics and, once available, nested Compose
-logs. When GitHub reports the Codespace fully shut down, Logs skips SSH-backed
-calls so reading logs does not wake billable compute. Nuke revalidates and
-deletes only the bound Codespace; use it when the disposable disk and credentials
-must be recreated.
+logs. While GitHub reports the Codespace shutting down or fully stopped, Logs
+skips SSH-backed calls so reading logs cannot delay shutdown or wake billable
+compute. Nuke revalidates and deletes only the bound Codespace; use it when the
+disposable disk and credentials must be recreated.
 
 If GitHub cannot find the ref, push it before retrying. If the launcher reports
 a missing SSH server, rebuild the managed devcontainer or Nuke and recreate the

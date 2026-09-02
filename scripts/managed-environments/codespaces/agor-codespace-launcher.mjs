@@ -1077,8 +1077,8 @@ export class CodespaceController {
     // `gh codespace logs` uses the same SSH transport as runtime logs for a
     // custom devcontainer. Do not call either command for a stopped resource:
     // establishing that tunnel can resume billable compute.
-    if (resource.state === 'Shutdown') {
-      return `${summary}\nCodespace logs were skipped because GitHub CLI uses SSH and could resume the stopped Codespace. Press Play before requesting Logs.\n`;
+    if (resource.state === 'Shutdown' || resource.state === 'ShuttingDown') {
+      return `${summary}\nCodespace logs were skipped because GitHub CLI uses SSH and could resume or delay the stopping/stopped Codespace. Press Play before requesting Logs.\n`;
     }
 
     let creationSection;
