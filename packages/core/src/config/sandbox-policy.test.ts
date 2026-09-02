@@ -70,7 +70,7 @@ describe('resolveBwrapArgs', () => {
     it('is INERT by default: no branch SDK home bind when unset (per_user mode)', () => {
       const args = resolveBwrapArgs(
         { home_mode: 'per_user' },
-        { ...CTX, ownerHomeStore: '/home/agor/.agor/homes/owner' }
+        { ...CTX, ownerHomeStore: '/home/agor/.agor/homes/owner', ownerTmpBindFd: 9 }
       );
       expect(args.some((a) => a.includes('branch-homes'))).toBe(false);
     });
@@ -84,7 +84,12 @@ describe('resolveBwrapArgs', () => {
       const ownerStore = '/home/agor/.agor/homes/owner';
       const args = resolveBwrapArgs(
         { home_mode: 'per_user' },
-        { ...CTX, ownerHomeStore: ownerStore, branchSdkHomeDir: BRANCH_HOME }
+        {
+          ...CTX,
+          ownerHomeStore: ownerStore,
+          ownerTmpBindFd: 9,
+          branchSdkHomeDir: BRANCH_HOME,
+        }
       );
       expect(hasTriple(args, '--bind', BRANCH_HOME, BRANCH_HOME)).toBe(true);
       const overlayIdx = args.findIndex((a, i) => a === '--bind' && args[i + 1] === ownerStore);
@@ -104,6 +109,7 @@ describe('resolveBwrapArgs', () => {
         {
           ...CTX,
           ownerHomeStore: '/home/agor/.agor/homes/owner',
+          ownerTmpBindFd: 9,
           branchSdkHomeDir: BRANCH_HOME,
           branchSdkCredentialBinds: [{ fd: 3, destination }],
         }
@@ -238,6 +244,7 @@ describe('resolveBwrapArgs — RBAC-aware branch mount', () => {
         ...CTX,
         branchAccess: 'read',
         ownerHomeStore: '/home/agor/.agor/tenants/default/homes/o',
+        ownerTmpBindFd: 9,
       }
     );
     expect(hasTriple(args, '--ro-bind', CTX.branchPath, CTX.branchPath)).toBe(true);
@@ -250,6 +257,7 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
   const PER_USER_CTX: SandboxPathContext = {
     ...CTX,
     ownerHomeStore: STORE,
+    ownerTmpBindFd: 9,
     agenticToolsPath: '/home/agor/.agor/agentic-tools',
   };
 
@@ -620,10 +628,17 @@ describe('resolveBwrapArgs — home_mode: per_user', () => {
 
   it('binds /tmp to <store>/tmp (on-disk, per-user), keeps /var/tmp ephemeral, pins TMPDIR', () => {
     const args = resolveBwrapArgs({ home_mode: 'per_user' }, PER_USER_CTX);
-    expect(hasTriple(args, '--bind', `${STORE}/tmp`, '/tmp')).toBe(true);
+    expect(hasTriple(args, '--bind-fd', '9', '/tmp')).toBe(true);
+    expect(args).not.toContain(`${STORE}/tmp`);
     expect(hasPair(args, '--tmpfs', '/var/tmp')).toBe(true);
     expect(hasPair(args, '--tmpfs', '/tmp')).toBe(false); // NOT a RAM tmpfs
     expect(hasTriple(args, '--setenv', 'TMPDIR', '/tmp')).toBe(true);
+  });
+
+  it('fails closed when persistent tmp has no validated directory descriptor', () => {
+    expect(() =>
+      resolveBwrapArgs({ home_mode: 'per_user' }, { ...PER_USER_CTX, ownerTmpBindFd: undefined })
+    ).toThrow(/validated directory bind fd/);
   });
 
   it('wipes the homes-parent (sibling-home leak fix) BEFORE overlaying the owner store', () => {

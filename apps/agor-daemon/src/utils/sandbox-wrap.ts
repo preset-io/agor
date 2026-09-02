@@ -111,6 +111,8 @@ export function buildSandboxWrap(params: {
   args: string[];
   baseRepoPath?: string;
   ownerHomeStore?: string;
+  /** Child fd for the no-follow-preflighted per-user tmp directory. */
+  ownerTmpBindFd?: number;
   /** Tenant-scoped worktrees root resolved from the immutable config. */
   worktreesRoot?: string;
   /** RBAC-resolved fs access of the current prompt actor. Default 'write'. */
@@ -132,6 +134,7 @@ export function buildSandboxWrap(params: {
     args,
     baseRepoPath,
     ownerHomeStore,
+    ownerTmpBindFd,
     worktreesRoot,
     branchAccess,
     branchSdkHomeDir,
@@ -161,22 +164,6 @@ export function buildSandboxWrap(params: {
   const dataHome = runtimePaths.dataHome;
 
   const perUser = sandbox.home_mode === 'per_user' && !!ownerHomeStore;
-  if (perUser) {
-    // The overlay `--bind`s the store over the passwd home; bwrap aborts if the
-    // source is missing, so guarantee it exists (a fresh owner gets an empty
-    // home; tools seed their own state, and migration pre-populates it).
-    try {
-      mkdirSync(ownerHomeStore as string, { recursive: true });
-      // /tmp is bound to <store>/tmp (on-disk, per-user). bwrap `--bind` aborts
-      // if the source is missing, so ensure it exists alongside the store.
-      mkdirSync(join(ownerHomeStore as string, 'tmp'), { recursive: true });
-    } catch (err) {
-      throw new Error(
-        `execution.sandbox.home_mode=per_user but the owner home store ` +
-          `${ownerHomeStore} could not be created: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
 
   if (branchSdkHomeDir) {
     // The branch home is `--bind`ed at its own real path; bwrap aborts on a
@@ -207,6 +194,7 @@ export function buildSandboxWrap(params: {
     worktreesRoot: worktreesRoot ?? runtimePaths.worktreesRoot,
     baseRepoPath,
     ownerHomeStore: perUser ? ownerHomeStore : undefined,
+    ownerTmpBindFd: perUser ? ownerTmpBindFd : undefined,
     canonicalOwnerHomeStore: perUser
       ? canonicalizeExistingPath(ownerHomeStore as string)
       : undefined,

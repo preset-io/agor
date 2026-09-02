@@ -32,6 +32,12 @@ interface CredentialDirectory {
   path: string;
 }
 
+/** An opened directory inode suitable for a race-safe local sandbox bind. */
+export interface SyncDirectoryBindSource {
+  fd: number;
+  close(): void;
+}
+
 interface CredentialDirectoryTestOptions {
   /** Deterministic race-test seam; production callers must omit. */
   afterDirectoryOpenForTest?: () => Promise<void>;
@@ -417,23 +423,9 @@ export function ensureCredentialAuthorityLayoutSync(target: string): void {
   }
 
   const absoluteDirectory = resolve(dirname(resolve(target)));
-  const root = parse(absoluteDirectory).root;
-  let directoryFd = openSync(root, linuxDirectoryFlags());
+  const directory = openOrCreatePrivateDirectoryForBindSync(absoluteDirectory);
   try {
-    for (const component of absoluteDirectory.slice(root.length).split(sep).filter(Boolean)) {
-      const child = join('/proc/self/fd', String(directoryFd), component);
-      try {
-        mkdirSync(child, { mode: 0o700 });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-      }
-      const nextFd = openSync(child, linuxDirectoryFlags());
-      closeSync(directoryFd);
-      directoryFd = nextFd;
-    }
-    fchmodSync(directoryFd, 0o700);
-
-    const directoryPath = `/proc/self/fd/${directoryFd}`;
+    const directoryPath = `/proc/self/fd/${directory.fd}`;
     for (const name of [basename(resolve(target)), ...CREDENTIAL_AUTHORITY_SIDECAR_FILENAMES]) {
       const leafFd = openSync(
         join(directoryPath, name),
@@ -451,12 +443,60 @@ export function ensureCredentialAuthorityLayoutSync(target: string): void {
       }
     }
     try {
-      fsyncSync(directoryFd);
+      fsyncSync(directory.fd);
     } catch {
       // Match the async arm: not every local filesystem permits directory fsync.
     }
   } finally {
+    directory.close();
+  }
+}
+
+/**
+ * Create and open a private directory without following any path component.
+ *
+ * The walk is rooted at an already-open filesystem root and advances only via
+ * `/proc/self/fd/<fd>/<component>` plus `O_DIRECTORY | O_NOFOLLOW`. Existing
+ * symlink and non-directory components therefore fail closed. The returned fd
+ * pins the validated terminal inode across later pathname replacement and is
+ * suitable for bubblewrap's `--bind-fd`; the caller must close it after spawn.
+ */
+export function openOrCreatePrivateDirectoryForBindSync(
+  targetDirectory: string
+): SyncDirectoryBindSource {
+  if (process.platform !== 'linux') {
+    throw new Error('No-follow directory bind sources require Linux');
+  }
+
+  const absoluteDirectory = resolve(targetDirectory);
+  const root = parse(absoluteDirectory).root;
+  let directoryFd = openSync(root, linuxDirectoryFlags());
+  try {
+    for (const component of absoluteDirectory.slice(root.length).split(sep).filter(Boolean)) {
+      const child = join('/proc/self/fd', String(directoryFd), component);
+      try {
+        mkdirSync(child, { mode: 0o700 });
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+      const nextFd = openSync(child, linuxDirectoryFlags());
+      closeSync(directoryFd);
+      directoryFd = nextFd;
+    }
+    fchmodSync(directoryFd, 0o700);
+
+    let closed = false;
+    return {
+      fd: directoryFd,
+      close: () => {
+        if (closed) return;
+        closed = true;
+        closeSync(directoryFd);
+      },
+    };
+  } catch (error) {
     closeSync(directoryFd);
+    throw error;
   }
 }
 

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Writable } from 'node:stream';
@@ -9,6 +9,7 @@ const {
   buildSandboxWrapMock,
   containMock,
   ensureAuthorityMock,
+  openDirectoryBindMock,
   spawnMock,
   trackMock,
   untrackMock,
@@ -16,6 +17,7 @@ const {
   buildSandboxWrapMock: vi.fn(() => null),
   containMock: vi.fn(),
   ensureAuthorityMock: vi.fn(),
+  openDirectoryBindMock: vi.fn(),
   spawnMock: vi.fn(),
   trackMock: vi.fn(),
   untrackMock: vi.fn(),
@@ -44,9 +46,11 @@ vi.mock('../executor-tracking.js', () => ({
 
 vi.mock('@agor/core/codex/credential-file', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@agor/core/codex/credential-file')>();
+  openDirectoryBindMock.mockImplementation(actual.openOrCreatePrivateDirectoryForBindSync);
   return {
     ...actual,
     ensureCredentialAuthorityLayoutSync: ensureAuthorityMock,
+    openOrCreatePrivateDirectoryForBindSync: openDirectoryBindMock,
   };
 });
 
@@ -182,6 +186,7 @@ describe('configured executor spawning', () => {
     containMock.mockReset();
     containMock.mockResolvedValue({ status: 'verified_absent' });
     ensureAuthorityMock.mockClear();
+    openDirectoryBindMock.mockClear();
     trackMock.mockReset();
     untrackMock.mockReset();
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -200,7 +205,7 @@ describe('configured executor spawning', () => {
   });
 
   it.runIf(process.platform === 'linux')(
-    'prepares the real Claude authority layout synchronously before a per-user sandbox spawn',
+    'prepares credential authority and a real fresh tmp source before a per-user sandbox spawn',
     async () => {
       const installed = installMockExecutor('agor-executor-authority-layout-');
       const root = mkdtempSync(path.join(tmpdir(), 'agor-sandbox-runtime-'));
@@ -232,10 +237,19 @@ describe('configured executor spawning', () => {
         path.join(ownerStore, '.claude', '.credentials.json')
       );
       expect(ensureAuthorityMock.mock.invocationCallOrder[0]).toBeLessThan(
+        openDirectoryBindMock.mock.invocationCallOrder[0] as number
+      );
+      expect(openDirectoryBindMock).toHaveBeenCalledWith(path.join(ownerStore, 'tmp'));
+      expect(lstatSync(path.join(ownerStore, 'tmp')).isDirectory()).toBe(true);
+      expect(openDirectoryBindMock.mock.invocationCallOrder[0]).toBeLessThan(
         buildSandboxWrapMock.mock.invocationCallOrder[0] as number
       );
       expect(buildSandboxWrapMock).toHaveBeenCalledWith(
-        expect.objectContaining({ ownerHomeStore: ownerStore, branchPath: branch })
+        expect.objectContaining({
+          ownerHomeStore: ownerStore,
+          ownerTmpBindFd: 3,
+          branchPath: branch,
+        })
       );
 
       installed.restore();
@@ -740,6 +754,7 @@ describe('configured executor spawning', () => {
         stdio: ['pipe', 'pipe', 'pipe'],
       })
     );
+    expect(openDirectoryBindMock).not.toHaveBeenCalled();
   });
 
   it('carries the per-user home store through local request handoff into bubblewrap', async () => {
@@ -824,24 +839,124 @@ describe('configured executor spawning', () => {
       );
       const tmpBindIndex = bwrapArgs.findIndex(
         (arg, index) =>
-          arg === '--bind' &&
-          bwrapArgs[index + 1] === path.join(ownerHomeStore, 'tmp') &&
-          bwrapArgs[index + 2] === '/tmp'
+          arg === '--bind-fd' && bwrapArgs[index + 1] === '3' && bwrapArgs[index + 2] === '/tmp'
       );
       expect(homeBindIndex).toBeGreaterThanOrEqual(0);
       expect(tmpBindIndex).toBeGreaterThan(homeBindIndex);
+      expect(bwrapArgs).not.toContain(path.join(ownerHomeStore, 'tmp'));
+      expect(lstatSync(path.join(ownerHomeStore, 'tmp')).isDirectory()).toBe(true);
       expect(spawnMock).toHaveBeenCalledWith(
         'bwrap',
         expect.any(Array),
         expect.objectContaining({
           env: expect.objectContaining({ AGOR_OUTER_SANDBOX: '1' }),
-          stdio: ['pipe', 'pipe', 'pipe'],
+          stdio: ['pipe', 'pipe', 'pipe', expect.any(Number)],
         })
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform === 'linux')(
+    'rejects a symlinked per-user tmp before an autonomous sandbox spawn',
+    async () => {
+      const installed = installMockExecutor('agor-executor-tmp-symlink-');
+      const root = mkdtempSync(path.join(tmpdir(), 'agor-owner-tmp-symlink-'));
+      const ownerHomeStore = path.join(root, 'owner');
+      const outside = path.join(root, 'outside');
+      mkdirSync(ownerHomeStore, { recursive: true });
+      mkdirSync(outside, { recursive: true });
+      symlinkSync(outside, path.join(ownerHomeStore, 'tmp'));
+
+      try {
+        const actualSandboxWrap =
+          await vi.importActual<typeof import('./sandbox-wrap.js')>('./sandbox-wrap.js');
+        sandboxWrapMock.mockImplementation(actualSandboxWrap.buildSandboxWrap);
+        const onExit = vi.fn();
+        const { configureExecutor, spawnExecutor } = await import('./spawn-executor');
+        configureExecutor(
+          { sandbox: { enabled: true, fail_if_unavailable: true, home_mode: 'per_user' } },
+          {
+            ...LOCAL_RESPONSE_OPTIONS,
+            sandboxRuntimePaths: {
+              homeDir: path.join(root, 'home'),
+              dataHome: path.join(root, 'data'),
+              protectedDataRoots: [path.join(root, 'data')],
+              worktreesRoot: path.join(root, 'worktrees'),
+              agenticToolsPath: path.join(root, 'agentic-tools'),
+              agorConfigPath: path.join(root, 'config.yaml'),
+            },
+          }
+        );
+
+        spawnExecutor(
+          {
+            command: 'prompt',
+            params: { cwd: path.join(root, 'branch'), sandboxHomeStore: ownerHomeStore },
+          },
+          { onExit }
+        );
+
+        expect(openDirectoryBindMock).toHaveBeenCalledWith(path.join(ownerHomeStore, 'tmp'));
+        expect(sandboxWrapMock).not.toHaveBeenCalled();
+        expect(spawnMock).not.toHaveBeenCalled();
+        expect(onExit).toHaveBeenCalledWith(126, { mode: 'local' });
+      } finally {
+        installed.restore();
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
+    'rejects a file at per-user tmp before a request-mode sandbox spawn',
+    async () => {
+      const root = mkdtempSync(path.join(tmpdir(), 'agor-owner-tmp-file-'));
+      const ownerHomeStore = path.join(root, 'owner');
+      mkdirSync(ownerHomeStore, { recursive: true });
+      writeFileSync(path.join(ownerHomeStore, 'tmp'), 'not-a-directory');
+
+      try {
+        const actualSandboxWrap =
+          await vi.importActual<typeof import('./sandbox-wrap.js')>('./sandbox-wrap.js');
+        sandboxWrapMock.mockImplementation(actualSandboxWrap.buildSandboxWrap);
+        const { configureExecutor, requestExecutor } = await import('./spawn-executor');
+        configureExecutor(
+          { sandbox: { enabled: true, fail_if_unavailable: true, home_mode: 'per_user' } },
+          {
+            ...LOCAL_RESPONSE_OPTIONS,
+            sandboxRuntimePaths: {
+              homeDir: path.join(root, 'home'),
+              dataHome: path.join(root, 'data'),
+              protectedDataRoots: [path.join(root, 'data')],
+              worktreesRoot: path.join(root, 'worktrees'),
+              agenticToolsPath: path.join(root, 'agentic-tools'),
+              agorConfigPath: path.join(root, 'config.yaml'),
+            },
+          }
+        );
+
+        await expect(
+          requestExecutor({
+            command: 'branch.files.browse',
+            params: { cwd: path.join(root, 'branch'), sandboxHomeStore: ownerHomeStore },
+          })
+        ).resolves.toMatchObject({
+          success: false,
+          error: {
+            code: 'EXECUTOR_SPAWN_ERROR',
+            message: expect.stringContaining('Executor sandbox setup failed'),
+          },
+        });
+        expect(openDirectoryBindMock).toHaveBeenCalledWith(path.join(ownerHomeStore, 'tmp'));
+        expect(sandboxWrapMock).not.toHaveBeenCalled();
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
 
   it('maps a pinned credential source onto child fd 3 without serializing it', async () => {
     const proc = createMockProcess();
