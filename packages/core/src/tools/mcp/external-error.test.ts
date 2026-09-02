@@ -1,3 +1,4 @@
+import { BadRequest, Conflict, Forbidden } from '@feathersjs/errors';
 import { describe, expect, it, vi } from 'vitest';
 import {
   asMCPExternalError,
@@ -88,6 +89,18 @@ describe('MCP external error boundary', () => {
       Object.assign(new Error('SENTINEL_JSON_RPC'), { code: -32603 }),
       { stage: 'discovery' }
     );
+
+    expect(safe).toMatchObject({ category: 'unknown', diagnostic: { type: 'Error' } });
+    expect(safe.diagnostic.status).toBeUndefined();
+    expect(JSON.stringify(safe)).not.toContain('SENTINEL');
+  });
+
+  it.each([
+    new BadRequest('SENTINEL_BAD_REQUEST'),
+    new Forbidden('SENTINEL_FORBIDDEN'),
+    new Conflict('SENTINEL_CONFLICT'),
+  ])('does not reinterpret the trusted Feathers control error %# as provider HTTP', (failure) => {
+    const safe = sanitizeMCPExternalError(failure, { stage: 'discovery' });
 
     expect(safe).toMatchObject({ category: 'unknown', diagnostic: { type: 'Error' } });
     expect(safe.diagnostic.status).toBeUndefined();

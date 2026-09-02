@@ -1,9 +1,23 @@
+import { Conflict, Forbidden } from '@agor/core/feathers';
 import { asMCPExternalError } from '@agor/core/mcp';
 import { OAuthConfigurationError, OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import { describe, expect, it, vi } from 'vitest';
 import { classifyMCPAuthRecovery, recoveryForOAuthAttemptFailure } from './mcp-auth-recovery';
 
 describe('MCP auth recovery contract', () => {
+  it.each([
+    [new Forbidden('SENTINEL_FORBIDDEN'), 'permission_changed', 'retry'],
+    [new Conflict('SENTINEL_CONFLICT'), 'configuration_changed', 'save_and_retry'],
+  ] as const)(
+    'preserves public recovery for trusted control error %#',
+    (error, category, action) => {
+      const recovery = classifyMCPAuthRecovery(error);
+
+      expect(recovery).toMatchObject({ category, action });
+      expect(JSON.stringify(recovery)).not.toContain('SENTINEL');
+    }
+  );
+
   it('maps DCR diagnostics to actionable public state without provider text', () => {
     const recovery = classifyMCPAuthRecovery(
       new OAuthDCRFailure('provider leaked secret=abc', {

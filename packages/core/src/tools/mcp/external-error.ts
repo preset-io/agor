@@ -1,3 +1,5 @@
+import { FeathersError } from '@feathersjs/errors';
+
 /**
  * Closed, value-free classification for failures originating outside Agor's
  * MCP trust boundary. Provider and library exceptions are untrusted input:
@@ -162,7 +164,7 @@ function safeReason(reason: unknown): MCPExternalErrorReason | undefined {
 
 function safeInstanceOf(
   error: unknown,
-  errorClass: typeof Error | typeof TypeError | typeof DOMException
+  errorClass: typeof Error | typeof TypeError | typeof DOMException | typeof FeathersError
 ): boolean {
   try {
     return error instanceof errorClass;
@@ -199,6 +201,11 @@ function safeOwnDataValue(error: unknown, property: string): unknown {
  * JSON-RPC codes and arbitrary provider strings remain untrusted.
  */
 function safeHTTPStatus(error: unknown): number | undefined {
+  // Feathers control-plane errors use the same own numeric `code` shape as
+  // StreamableHTTPError. Their nominal identity is trusted; do not reinterpret
+  // Agor authorization or configuration failures as provider responses.
+  if (safeInstanceOf(error, FeathersError)) return undefined;
+
   for (const field of ['status', 'statusCode', 'code']) {
     const value = safeOwnDataValue(error, field);
     if (typeof value === 'number' && Number.isInteger(value) && value >= 300 && value <= 599) {
