@@ -160,13 +160,58 @@ variant. It creates or rediscovers one GitHub Codespace for the branch binding,
 starts the SQLite Compose stack there, and publishes the real app and health
 URLs only after the remote health check succeeds. `sync` accepts only a full
 Git object ID already pushed to the configured GitHub branch, applies exactly
-that revision to a clean checkout, rebuilds, waits for health, and re-verifies
-the remote HEAD before acknowledging success.
+that revision to a clean checkout, reconciles the Compose stack, waits for
+health, and re-verifies the remote HEAD before acknowledging success. The
+development image is rebuilt only when its verified build inputs changed.
 
 The variant uses the current user's authenticated `gh` CLI session. Its ports
 3000 and 5000 are deliberately made public, subject to repository and
 organization policy. Stop preserves the Codespace; Nuke deletes it. This is a
 single-actor development preview, not an Agor Cloud or production topology.
+
+#### Operating the Codespaces example
+
+Before pressing Start, push the branch ref to GitHub, register the repository
+from a `github.com` remote, and authenticate the Agor host's current user with
+`gh` and Codespaces access. The checked-in managed devcontainer installs the SSH
+server required by the launcher's health, Logs, and Sync operations. A Codespace
+created from an older devcontainer may need a devcontainer rebuild or a Nuke and
+fresh Start before those operations can connect.
+
+This example deliberately makes ports 3000 and 5000 public after the remote
+health check succeeds. GitHub's forwarding tunnel adds no authentication to a
+public port, and port 3000 exposes the complete Agor daemon rather than only its
+health endpoint. The bootstrap therefore creates a unique admin password in the
+Codespace. Retrieve it from a Codespace terminal, use it for the first login,
+and change it when prompted:
+
+```bash
+cat ~/.agor-managed/bootstrap-admin-password
+```
+
+Start reconciles the branch's existing bound Codespace: it creates or resumes
+one when necessary, revalidates its owner, repository, ref, and binding, repairs
+an unhealthy nested Agor stack, and republishes current URLs after health is
+ready. Pressing Start again after an interrupted attempt reuses that resource
+rather than creating another one.
+
+Sync is the explicit source-update operation. It accepts a full commit ID that
+has already been pushed to the configured ref, refuses to overwrite a dirty
+Codespace checkout, applies exactly that commit, restarts the stack when needed,
+waits for health, and verifies the applied commit before reporting success.
+Stop shuts down the Codespace but preserves its disk and nested SQLite data.
+Logs returns bounded creation diagnostics and, once available, nested Compose
+logs. When GitHub reports the Codespace fully shut down, Logs skips SSH-backed
+calls so reading logs does not wake billable compute. Nuke revalidates and
+deletes only the bound Codespace; use it when the disposable disk and credentials
+must be recreated.
+
+If GitHub cannot find the ref, push it before retrying. If the launcher reports
+a missing SSH server, rebuild the managed devcontainer or Nuke and recreate the
+Codespace. A public-port policy error means the repository or organization does
+not allow the visibility requested by this example. If Sync reports a dirty
+checkout, preserve or remove those in-Codespace changes yourself before retrying;
+Agor will not overwrite them.
 
 ### `extends` (single-level only)
 
