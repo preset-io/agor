@@ -18,6 +18,7 @@ import {
   type Database,
   eq,
   RepoRepository,
+  runWithTenantContext,
   SessionRepository,
   shortId,
   UsersRepository,
@@ -84,7 +85,11 @@ async function seedBoard(db: Database) {
   });
 }
 
-async function seedRepoAndBranch(db: Database, branchPath: string) {
+async function seedRepoAndBranch(
+  db: Database,
+  branchPath: string,
+  options: { storageMode?: 'worktree' | 'clone' } = {}
+) {
   const repo = await new RepoRepository(db).create({
     repo_id: generateId() as UUID,
     slug: `artifact-test-${generateId()}`,
@@ -101,6 +106,7 @@ async function seedRepoAndBranch(db: Database, branchPath: string) {
     ref: 'refs/heads/artifact-branch',
     branch_unique_id: 1,
     path: branchPath,
+    storage_mode: options.storageMode,
     created_by: 'user-owner' as UUID,
     others_can: 'session',
   });
@@ -309,6 +315,61 @@ describe('ArtifactsService executor sandbox ownership', () => {
       expect(requestExecutor).not.toHaveBeenCalled();
     }
   );
+
+  dbTest('rejects conflicting authenticated and ambient tenant identities', async ({ db }) => {
+    await seedUser(db, 'user-owner');
+    const branch = await seedRepoAndBranch(
+      db,
+      '/srv/agor-tenants/tenant-a/worktrees/conflicting-tenant-artifact-branch'
+    );
+    const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
+    vi.mocked(requestExecutor).mockReset();
+
+    await expect(
+      runWithTenantContext('tenant-b', () =>
+        service.publishArtifact(
+          { branch_id: branch.branch_id, subpath: 'artifact', name: 'test' },
+          {
+            user: { user_id: 'user-owner', role: 'member' },
+            tenant,
+          } as never
+        )
+      )
+    ).rejects.toThrow(/tenant identity mismatch/i);
+
+    expect(requestExecutor).not.toHaveBeenCalled();
+  });
+
+  dbTest('omits the base-repository mount for clone-mode branches', async ({ db }) => {
+    await seedUser(db, 'user-owner');
+    const branch = await seedRepoAndBranch(
+      db,
+      '/srv/agor-tenants/tenant-a/worktrees/clone-artifact-branch',
+      { storageMode: 'clone' }
+    );
+    const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
+    vi.mocked(requestExecutor).mockReset();
+    vi.mocked(requestExecutor).mockResolvedValue({
+      success: false,
+      error: { code: 'TEST_STOP', message: 'captured executor request' },
+    });
+
+    await expect(
+      service.publishArtifact({ branch_id: branch.branch_id, subpath: 'artifact', name: 'test' }, {
+        user: { user_id: 'user-owner', role: 'member' },
+        tenant,
+      } as never)
+    ).rejects.toThrow('captured executor request');
+
+    const payload = vi.mocked(requestExecutor).mock.calls[0]?.[0];
+    expect(payload?.params).toEqual(
+      expect.objectContaining({
+        sandboxHomeStore: '/srv/agor-tenants/tenant-a/homes/user-owner',
+        sandboxWorktreesRoot: '/srv/agor-tenants/tenant-a/worktrees',
+      })
+    );
+    expect(payload?.params).not.toHaveProperty('sandboxBaseRepoPath');
+  });
 });
 
 describe('ArtifactRepository URL fields', () => {

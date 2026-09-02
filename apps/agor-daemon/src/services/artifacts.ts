@@ -308,10 +308,14 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
    * artifact executor commands. Artifact publish/validate/land all run in the
    * authenticated actor's filesystem sandbox, not the branch owner's home.
    *
-   * The tenant comes only from authenticated request/ALS context, and an
-   * invalid filesystem_home override throws in resolveOwnerHomeStore. There is
-   * deliberately no shared-home fallback: omitting sandboxHomeStore under a
-   * per-user sandbox makes buildSandboxWrap fail closed.
+   * Request and ambient tenant identities are both trusted boundaries, but
+   * they must agree when both are present. Unsafe filesystem_home overrides,
+   * missing tenant ownership, and credential-authority preflight failures all
+   * throw before launch; there is deliberately no shared-home fallback.
+   *
+   * Architecture follow-up: register-services and BranchesService compose the
+   * same mount family. Keep this caller-specific resolver local until a shared
+   * helper can preserve each path's DB/tenant contract with integration tests.
    */
   private async resolveExecutorSandboxMounts(
     branch: Branch,
@@ -326,7 +330,13 @@ export class ArtifactsService extends DrizzleService<Artifact, Partial<Artifact>
     const sandbox = config.execution?.sandbox;
     if (sandbox?.enabled !== true || sandbox.home_mode !== 'per_user') return {};
 
-    const tenantId = params.tenant?.tenant_id ?? getCurrentTenantId();
+    const requestTenantId = params.tenant?.tenant_id ? String(params.tenant.tenant_id) : undefined;
+    const ambientTenantId = getCurrentTenantId();
+    const ambientTenant = ambientTenantId ? String(ambientTenantId) : undefined;
+    if (requestTenantId && ambientTenant && requestTenantId !== ambientTenant) {
+      throw new Forbidden('Artifact executor tenant identity mismatch');
+    }
+    const tenantId = ambientTenant ?? requestTenantId;
     const filesystemHome =
       (await this.usersRepo.findById(userId))?.filesystem_home?.trim() || undefined;
     const mounts: {

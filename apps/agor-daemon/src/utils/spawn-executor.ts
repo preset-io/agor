@@ -529,6 +529,8 @@ function sandboxLocalExecutorCommand(
     return command;
   }
 
+  prepareLocalSandboxCredentialAuthority(params);
+
   const inheritedFds = localSandboxFileBinds?.map((bind) => bind.sourceFd) ?? [];
   const childCredentialBinds = localSandboxFileBinds?.map((bind, index) => ({
     // Node maps extra stdio entries to child descriptors starting at 3.
@@ -572,48 +574,39 @@ function sandboxLocalExecutorCommand(
   };
 }
 
-function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
-  const params = payload.params as { cwd?: unknown; sandboxHomeStore?: unknown } | undefined;
-  const sandboxWorkdir =
-    typeof payload.cwd === 'string' && payload.cwd.length > 0
-      ? payload.cwd
-      : typeof params?.cwd === 'string' && params.cwd.length > 0
-        ? params.cwd
-        : undefined;
-  const sandboxHomeStore =
-    typeof params?.sandboxHomeStore === 'string' ? params.sandboxHomeStore : undefined;
+/**
+ * Materialize and validate the credential-authority mount source used by a
+ * local per-user sandbox. Both autonomous and request-mode launches must pass
+ * through this preflight immediately before bubblewrap argument construction.
+ */
+function prepareLocalSandboxCredentialAuthority(
+  params: { sandboxHomeStore?: unknown } | undefined
+): void {
   const sandbox = configuredExecutorDefaults.sandbox;
+  if (sandbox?.enabled !== true || sandbox.home_mode !== 'per_user') return;
 
-  if (
-    process.platform === 'linux' &&
-    sandboxWorkdir &&
-    sandboxHomeStore &&
-    sandbox?.enabled === true &&
-    sandbox.home_mode === 'per_user'
-  ) {
-    // Materialize the immutable-parent mount source and all authority leaves
-    // immediately before argument construction. The shared credential-file
-    // primitive walks directories without following symlinks and preserves
-    // existing bytes/inodes, so a malformed owner store fails before bwrap can
-    // create an empty mountpoint or follow a task-controlled `.claude` symlink.
-    try {
-      ensureCredentialAuthorityLayoutSync(
-        path.join(sandboxHomeStore, '.claude', '.credentials.json')
-      );
-    } catch (error) {
-      const logPrefix = options.logPrefix ?? '[Executor]';
-      console.error(
-        `${logPrefix} Sandbox credential authority preparation failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-      observeExitCallback(options.onExit, 126, { mode: 'local' }, logPrefix);
-      return;
-    }
-    spawnExecutorLocalPrepared(payload, options);
-    return;
+  const sandboxHomeStore =
+    typeof params?.sandboxHomeStore === 'string' && params.sandboxHomeStore.length > 0
+      ? params.sandboxHomeStore
+      : undefined;
+  if (!sandboxHomeStore) {
+    // Defense in depth before the pure sandbox-policy resolver performs the
+    // same fail-closed check. A per-user launch must never reach a shared-home
+    // or empty-source fallback.
+    throw new Error(
+      'sandbox home_mode=per_user requires an owner home store before credential authority preparation'
+    );
   }
 
+  if (process.platform !== 'linux') return;
+  // Materialize the immutable-parent mount source and all authority leaves.
+  // The shared credential-file primitive walks directories without following
+  // symlinks and preserves existing bytes/inodes, so a malformed owner store
+  // fails before bwrap can follow an actor-controlled `.claude` symlink.
+  ensureCredentialAuthorityLayoutSync(path.join(sandboxHomeStore, '.claude', '.credentials.json'));
+}
+
+function spawnExecutorLocal(payload: Record<string, unknown>, options: SpawnExecutorOptions): void {
   spawnExecutorLocalPrepared(payload, options);
 }
 
