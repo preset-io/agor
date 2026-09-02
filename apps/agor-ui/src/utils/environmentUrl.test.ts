@@ -1,6 +1,10 @@
 import type { Branch } from '@agor-live/client';
 import { describe, expect, it } from 'vitest';
-import { getEnvironmentAccessUrl, getEnvironmentAccessUrls } from './environmentUrl';
+import {
+  getEnvironmentAccessUrl,
+  getEnvironmentAccessUrls,
+  hasEnvironmentHealthTarget,
+} from './environmentUrl';
 
 const base = { branch_id: 'branch-id', repo_id: 'repo-id', name: 'branch' } as Branch;
 
@@ -49,5 +53,47 @@ describe('getEnvironmentAccessUrls', () => {
         },
       } as Branch)
     ).toEqual([{ name: 'App', url: 'https://static.example.test/path?tab=1' }]);
+  });
+});
+
+describe('hasEnvironmentHealthTarget', () => {
+  it('recognizes static, typed runtime, and transitional runtime health targets', () => {
+    expect(
+      hasEnvironmentHealthTarget({ ...base, health_check_url: 'http://localhost:3030/health' })
+    ).toBe(true);
+    expect(
+      hasEnvironmentHealthTarget({
+        ...base,
+        environment_instance: {
+          status: 'running',
+          lifecycle_result: {
+            version: 1,
+            health_url: 'https://runtime.example.test/health',
+          },
+        },
+      } as Branch)
+    ).toBe(true);
+    expect(
+      hasEnvironmentHealthTarget({
+        ...base,
+        environment_instance: {
+          status: 'running',
+          facts: { health: 'https://legacy.example.test/health' },
+        },
+      } as Branch)
+    ).toBe(true);
+  });
+
+  it('rejects missing and unsafe health targets', () => {
+    expect(hasEnvironmentHealthTarget(base)).toBe(false);
+    expect(
+      hasEnvironmentHealthTarget({
+        ...base,
+        environment_instance: {
+          status: 'running',
+          lifecycle_result: { version: 1, health_url: 'javascript:alert(1)' },
+        },
+      } as Branch)
+    ).toBe(false);
   });
 });

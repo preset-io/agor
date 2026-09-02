@@ -37,3 +37,13 @@ export function getEnvironmentAccessUrls(branch: Branch): Array<{ name: string; 
 export function getEnvironmentAccessUrl(branch: Branch): string | undefined {
   return getEnvironmentAccessUrls(branch)[0]?.url;
 }
+
+/** Whether the daemon has a configured or discovered target to probe. */
+export function hasEnvironmentHealthTarget(branch: Branch): boolean {
+  const environment = branch.environment_instance;
+  return Boolean(
+    safeHttpUrl(branch.health_check_url, true) ??
+      safeHttpUrl(environment?.lifecycle_result?.health_url, true) ??
+      safeHttpUrl(environment?.facts?.health, true)
+  );
+}

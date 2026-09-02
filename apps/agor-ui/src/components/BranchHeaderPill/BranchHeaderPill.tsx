@@ -17,7 +17,11 @@ import { Link } from 'react-router-dom';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
-import { getEnvironmentAccessUrl, getEnvironmentAccessUrls } from '../../utils/environmentUrl';
+import {
+  getEnvironmentAccessUrl,
+  getEnvironmentAccessUrls,
+  hasEnvironmentHealthTarget,
+} from '../../utils/environmentUrl';
 import type { BranchModalTab } from '../BranchModal/BranchModal';
 import { EnvironmentStatusIcon } from '../EnvironmentPill';
 import { ENTITY_PILL_COLORS } from '../Pill/Pill';
@@ -97,6 +101,7 @@ export function BranchHeaderPill({
   const inferredState = getEnvironmentState(env);
   const environmentUrls = getEnvironmentAccessUrls(branch);
   const environmentUrl = getEnvironmentAccessUrl(branch);
+  const hasHealthTarget = hasEnvironmentHealthTarget(branch);
   // Surface the active environment variant name on the label instead of the
   // generic "env" — only when the repo defines more than one variant to
   // distinguish (single-variant / v1 repos stay quiet as "env"). Mirrors
@@ -204,7 +209,14 @@ export function BranchHeaderPill({
           ? `Unhealthy - ${environmentUrl}${healthMessage}`
           : `Unhealthy${healthMessage}`;
       case 'running':
-        return environmentUrl ? `Running - ${environmentUrl}` : 'Running (no health check)';
+        if (hasHealthTarget) {
+          return environmentUrl
+            ? `Running - ${environmentUrl} (checking health)`
+            : 'Running (checking health)';
+        }
+        return environmentUrl
+          ? `Running - ${environmentUrl} (health check not configured)`
+          : 'Running (health check not configured)';
       case 'starting':
         return 'Starting...';
       case 'stopping':

@@ -11,7 +11,11 @@ import { Button, Space, Tooltip, theme } from 'antd';
 import { useConfirmNukeEnvironment } from '../../hooks/useConfirmNukeEnvironment';
 import { getEffectiveEnv } from '../../utils/environmentConfig';
 import { getEnvironmentState } from '../../utils/environmentState';
-import { getEnvironmentAccessUrl, getEnvironmentAccessUrls } from '../../utils/environmentUrl';
+import {
+  getEnvironmentAccessUrl,
+  getEnvironmentAccessUrls,
+  hasEnvironmentHealthTarget,
+} from '../../utils/environmentUrl';
 import { Tag } from '../Tag';
 import { EnvironmentStatusIcon } from './EnvironmentStatusIcon';
 
@@ -57,6 +61,7 @@ export function EnvironmentPill({
 
   const environmentUrls = getEnvironmentAccessUrls(branch);
   const environmentUrl = getEnvironmentAccessUrl(branch);
+  const hasHealthTarget = hasEnvironmentHealthTarget(branch);
 
   // Surface the active environment variant name on the pill instead of the
   // generic "env" label — but only when the repo actually defines more than one
@@ -147,6 +152,11 @@ export function EnvironmentPill({
           ? `Unhealthy - ${environmentUrl}${healthMessage}`
           : `Unhealthy - check failed${healthMessage}`;
       case 'running':
+        if (hasHealthTarget) {
+          return environmentUrl
+            ? `Running - ${environmentUrl} (checking health)`
+            : 'Running (checking health)';
+        }
         return environmentUrl
           ? `Running - ${environmentUrl} (health check not configured)`
           : 'Running (health check not configured)';
