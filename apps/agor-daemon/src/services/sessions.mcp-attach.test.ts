@@ -9,7 +9,7 @@ import {
   UsersRepository,
 } from '@agor/core/db';
 import type { Application } from '@agor/core/feathers';
-import { MCPServerNotUsableError } from '@agor/core/mcp';
+import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
 import { SessionStatus } from '@agor/core/types';
 import { describe, expect } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
@@ -20,11 +20,19 @@ import { SessionsService } from './sessions';
 // a best-effort follow-up loop that could silently drop servers. It now attaches
 // inside the same create call.
 
-function appStub(): Application {
+interface EmittedEvent {
+  path: string;
+  event: string;
+  data: unknown;
+}
+
+function appStub(events: EmittedEvent[] = []): Application {
   const config = { execution: { unix_user_mode: 'simple' } } as AgorConfig;
   return {
     get: (key: string) => (key === 'config' ? config : undefined),
-    service: () => ({ emit: () => {} }),
+    service: (path: string) => ({
+      emit: (event: string, data: unknown) => events.push({ path, event, data }),
+    }),
   } as unknown as Application;
 }
 
@@ -65,9 +73,10 @@ async function fixture(db: TenantScopeAwareDatabase) {
 }
 
 describe('SessionsService create-time MCP attachment', () => {
-  dbTest('attaches explicit mcpServerIds in the same create call', async ({ db }) => {
+  dbTest('deduplicates explicit mcpServerIds for persistence and events', async ({ db }) => {
     const { user, branch, sharedServer } = await fixture(db);
-    const service = new SessionsService(db, appStub());
+    const events: EmittedEvent[] = [];
+    const service = new SessionsService(db, appStub(events));
 
     const session = await service.create(
       {
@@ -75,16 +84,51 @@ describe('SessionsService create-time MCP attachment', () => {
         created_by: user.user_id,
         agentic_tool: 'claude-code',
         status: SessionStatus.IDLE,
-        mcpServerIds: [sharedServer.mcp_server_id],
+        mcpServerIds: [sharedServer.mcp_server_id, sharedServer.mcp_server_id],
       },
       { _agenticConfigResolved: true } as never
     );
 
     const attached = await new SessionMCPServerRepository(db).listServers(session.session_id);
     expect(attached.map((server) => server.mcp_server_id)).toEqual([sharedServer.mcp_server_id]);
+    expect(events).toEqual([
+      {
+        path: 'session-mcp-servers',
+        event: 'created',
+        data: expect.objectContaining({
+          session_id: session.session_id,
+          mcp_server_id: sharedServer.mcp_server_id,
+          enabled: true,
+        }),
+      },
+    ]);
   });
 
-  dbTest('rejects a server private to another user and creates no session', async ({ db }) => {
+  dbTest('rejects malformed mcpServerIds as typed bad requests', async ({ db }) => {
+    const service = new SessionsService(db, appStub());
+    const base = {
+      branch_id: generateId(),
+      created_by: generateId(),
+      agentic_tool: 'claude-code',
+      status: SessionStatus.IDLE,
+    } as const;
+
+    for (const mcpServerIds of [null, 'not-an-array', [generateId(), 42], [' ']]) {
+      await expect(
+        service.create(
+          { ...base, mcpServerIds } as never,
+          { _agenticConfigResolved: true } as never
+        )
+      ).rejects.toMatchObject({
+        name: BadRequest.name,
+        code: 400,
+      });
+    }
+
+    await expect(new SessionRepository(db).findAll()).resolves.toHaveLength(0);
+  });
+
+  dbTest('maps an inaccessible server to Forbidden and rolls the session back', async ({ db }) => {
     const { user, branch, servers } = await fixture(db);
     const otherUser = await new UsersRepository(db).create({
       email: `${generateId()}-other-owner@example.com`,
@@ -100,7 +144,8 @@ describe('SessionsService create-time MCP attachment', () => {
       enabled: true,
       owner_user_id: otherUser.user_id,
     });
-    const service = new SessionsService(db, appStub());
+    const events: EmittedEvent[] = [];
+    const service = new SessionsService(db, appStub(events));
 
     await expect(
       service.create(
@@ -113,8 +158,39 @@ describe('SessionsService create-time MCP attachment', () => {
         },
         { _agenticConfigResolved: true } as never
       )
-    ).rejects.toBeInstanceOf(MCPServerNotUsableError);
+    ).rejects.toMatchObject({
+      name: Forbidden.name,
+      code: 403,
+      message: 'That MCP server is private to another user',
+    });
 
     await expect(new SessionRepository(db).findAll()).resolves.toHaveLength(0);
+    expect(events).toEqual([]);
+  });
+
+  dbTest('maps a missing server to NotFound and rolls the session back', async ({ db }) => {
+    const { user, branch } = await fixture(db);
+    const events: EmittedEvent[] = [];
+    const service = new SessionsService(db, appStub(events));
+
+    await expect(
+      service.create(
+        {
+          branch_id: branch.branch_id,
+          created_by: user.user_id,
+          agentic_tool: 'claude-code',
+          status: SessionStatus.IDLE,
+          mcpServerIds: [generateId()],
+        },
+        { _agenticConfigResolved: true } as never
+      )
+    ).rejects.toMatchObject({
+      name: NotFound.name,
+      code: 404,
+      message: 'That MCP server was not found',
+    });
+
+    await expect(new SessionRepository(db).findAll()).resolves.toHaveLength(0);
+    expect(events).toEqual([]);
   });
 });

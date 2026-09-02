@@ -1,5 +1,4 @@
 import type {
-  AgenticToolName,
   AgorClient,
   Board,
   BoardComment,
@@ -107,6 +106,7 @@ import {
 import { getValidZoneParentId, sanitizeOrphanedNodeParents } from './canvas/utils/nodeParentUtils';
 import { ZoneTriggerModal } from './canvas/ZoneTriggerModal';
 import { DEFAULT_BOARD_OBJECT_Z_INDEX, selectedZIndex } from './canvas/zOrder';
+import { createZoneTriggerSession } from './canvas/zoneTriggerSessionCreation';
 
 interface SessionCanvasProps {
   board: Board | null;
@@ -579,24 +579,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
 
           // Attach MCP in the create call so failures reject here, not silently dropped (#2629).
           if (sessionId === 'new') {
-            const newSession = await client.service('sessions').create({
-              branch_id: triggerModal.branchId,
-              agentic_tool: (agent || 'claude-code') as AgenticToolName,
-              agentic_tool_preset_id: agenticToolPresetId,
-              description: `Session from zone "${triggerModal.zoneName}"`,
-              status: 'idle',
-              mcpServerIds: mcpServerIds?.length ? mcpServerIds : undefined,
-              model_config: modelConfig
-                ? {
-                    ...modelConfig,
-                    updated_at: new Date().toISOString(),
-                  }
-                : undefined,
-              permission_config: permissionMode
-                ? {
-                    mode: permissionMode,
-                  }
-                : undefined,
+            const newSession = await createZoneTriggerSession(client, {
+              branchId: triggerModal.branchId,
+              zoneName: triggerModal.zoneName,
+              agent,
+              agenticToolPresetId,
+              modelConfig,
+              permissionMode,
+              mcpServerIds,
             });
             targetSessionId = newSession.session_id;
           }
