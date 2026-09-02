@@ -1,3 +1,4 @@
+import { resolveEnvironmentHealthTarget } from '@agor/core/environment/lifecycle-result';
 import type { Branch } from '@agor-live/client';
 
 function safeHttpUrl(value: string | undefined, allowQueryAndFragment = false): string | undefined {
@@ -42,8 +43,10 @@ export function getEnvironmentAccessUrl(branch: Branch): string | undefined {
 export function hasEnvironmentHealthTarget(branch: Branch): boolean {
   const environment = branch.environment_instance;
   return Boolean(
-    safeHttpUrl(branch.health_check_url, true) ??
-      safeHttpUrl(environment?.lifecycle_result?.health_url, true) ??
-      safeHttpUrl(environment?.facts?.health, true)
+    resolveEnvironmentHealthTarget({
+      configuredHealthUrl: branch.health_check_url,
+      lifecycleResultHealthUrl: environment?.lifecycle_result?.health_url,
+      legacyFactHealthUrl: environment?.facts?.health,
+    }).healthUrl
   );
 }

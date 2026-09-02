@@ -1,4 +1,4 @@
-import { isPublicHttpUrl } from '../utils/url';
+import { isAllowedFactProbeUrl, isPublicHttpUrl } from '../utils/url';
 
 export const ENVIRONMENT_LIFECYCLE_RESULT_VERSION = 1 as const;
 export const ENVIRONMENT_LIFECYCLE_RESULT_PREFIX = 'AGOR_ENVIRONMENT_RESULT=';
@@ -198,14 +198,50 @@ export function validateEnvironmentLifecycleResult(value: unknown): EnvironmentL
 /** Dynamic health is provider output, so it must be public before DNS pinning at connect time. */
 export function isAllowedDynamicEnvironmentHealthUrl(value: string): boolean {
   try {
-    const normalized = validateEnvironmentLifecycleResult({
-      version: ENVIRONMENT_LIFECYCLE_RESULT_VERSION,
-      health_url: value,
-    }).health_url;
-    return Boolean(normalized && isPublicHttpUrl(normalized));
+    return isPublicHttpUrl(normalizeLifecycleUrl(value, 'environment result health_url'));
   } catch {
     return false;
   }
+}
+
+export interface EnvironmentHealthTargetInput {
+  /** Operator-authored target; local/private destinations are allowed. */
+  configuredHealthUrl?: string;
+  /** Current typed provider result. This deliberately shadows legacy output. */
+  lifecycleResultHealthUrl?: string;
+  /** Transitional provider output retained for already-running environments. */
+  legacyFactHealthUrl?: string;
+}
+
+export interface EnvironmentHealthTargetSelection {
+  /** Present even when rejected, so callers can explain why health is unobservable. */
+  rawDynamicHealthUrl?: string;
+  /** Target the daemon will actually evaluate. */
+  healthUrl?: string;
+  /** Whether the selected target requires the DNS-pinned public fetch path. */
+  isDynamicHealth: boolean;
+}
+
+/** Shared daemon/UI selection rules for configured and provider-reported health targets. */
+export function resolveEnvironmentHealthTarget(
+  input: EnvironmentHealthTargetInput
+): EnvironmentHealthTargetSelection {
+  const rawDynamicHealthUrl = input.lifecycleResultHealthUrl ?? input.legacyFactHealthUrl;
+  // A typed result is authoritative when present. Never fall back to legacy
+  // facts merely because the typed value fails validation.
+  const dynamicHealthUrl = input.lifecycleResultHealthUrl
+    ? isAllowedDynamicEnvironmentHealthUrl(input.lifecycleResultHealthUrl)
+      ? input.lifecycleResultHealthUrl
+      : undefined
+    : input.legacyFactHealthUrl && isAllowedFactProbeUrl(input.legacyFactHealthUrl)
+      ? input.legacyFactHealthUrl
+      : undefined;
+  const healthUrl = input.configuredHealthUrl || dynamicHealthUrl;
+  return {
+    rawDynamicHealthUrl,
+    healthUrl,
+    isDynamicHealth: !input.configuredHealthUrl && dynamicHealthUrl !== undefined,
+  };
 }
 
 /**

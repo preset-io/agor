@@ -44,8 +44,8 @@ import { resolveEnvironmentStartupTimeoutMs } from '@agor/core/environment/healt
 import {
   ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
   type EnvironmentLifecycleResult,
-  isAllowedDynamicEnvironmentHealthUrl,
   lifecycleResultTemplateFacts,
+  resolveEnvironmentHealthTarget,
   validateEnvironmentLifecycleResult,
   validateEnvironmentSourceRevision,
 } from '@agor/core/environment/lifecycle-result';
@@ -93,7 +93,7 @@ import {
 } from '@agor/core/types';
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
-import { isAllowedFactProbeUrl, isAllowedHealthCheckUrl } from '@agor/core/utils/url';
+import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
 import { matchesExecutorCommandRuntimeScope } from '../auth/executor-runtime-scope.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
@@ -3379,18 +3379,11 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     // public-destination guard before the DNS-pinned request path uses it.
     // The facts fallback is transitional for instances started by the older
     // lifecycle output protocol and can be removed after adapters migrate.
-    const rawResultHealthUrl = branch.environment_instance?.lifecycle_result?.health_url;
-    const rawFactsHealthUrl = branch.environment_instance?.facts?.health;
-    const rawDynamicHealthUrl = rawResultHealthUrl ?? rawFactsHealthUrl;
-    const dynamicHealthUrl = rawResultHealthUrl
-      ? isAllowedDynamicEnvironmentHealthUrl(rawResultHealthUrl)
-        ? rawResultHealthUrl
-        : undefined
-      : rawFactsHealthUrl && isAllowedFactProbeUrl(rawFactsHealthUrl)
-        ? rawFactsHealthUrl
-        : undefined;
-    const healthUrl = branch.health_check_url || dynamicHealthUrl;
-    const isDynamicHealth = !branch.health_check_url && dynamicHealthUrl !== undefined;
+    const { rawDynamicHealthUrl, healthUrl, isDynamicHealth } = resolveEnvironmentHealthTarget({
+      configuredHealthUrl: branch.health_check_url,
+      lifecycleResultHealthUrl: branch.environment_instance?.lifecycle_result?.health_url,
+      legacyFactHealthUrl: branch.environment_instance?.facts?.health,
+    });
     if (!healthUrl) {
       const managedProcess = this.processes.get(branch.branch_id);
       const isProcessAlive = Boolean(managedProcess?.process && !managedProcess.process.killed);

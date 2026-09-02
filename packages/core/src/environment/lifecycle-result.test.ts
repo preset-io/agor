@@ -3,6 +3,7 @@ import {
   ENVIRONMENT_LIFECYCLE_RESULT_MAX_ACCESS_URLS,
   isAllowedDynamicEnvironmentHealthUrl,
   lifecycleResultTemplateFacts,
+  resolveEnvironmentHealthTarget,
   validateEnvironmentLifecycleResult,
 } from './lifecycle-result';
 
@@ -124,5 +125,61 @@ describe('isAllowedDynamicEnvironmentHealthUrl', () => {
     expect(isAllowedDynamicEnvironmentHealthUrl('http://127.0.0.1:3000/health')).toBe(false);
     expect(isAllowedDynamicEnvironmentHealthUrl('http://169.254.169.254/latest')).toBe(false);
     expect(isAllowedDynamicEnvironmentHealthUrl('https://example.test/health?token=x')).toBe(false);
+  });
+});
+
+describe('resolveEnvironmentHealthTarget', () => {
+  it('selects configured, typed, and legacy targets with the daemon security rules', () => {
+    expect(
+      resolveEnvironmentHealthTarget({
+        configuredHealthUrl: 'http://localhost:3030/health',
+        lifecycleResultHealthUrl: 'https://space-3000.app.github.dev/health',
+      })
+    ).toEqual({
+      rawDynamicHealthUrl: 'https://space-3000.app.github.dev/health',
+      healthUrl: 'http://localhost:3030/health',
+      isDynamicHealth: false,
+    });
+    expect(
+      resolveEnvironmentHealthTarget({
+        lifecycleResultHealthUrl: 'https://space-3000.app.github.dev/health',
+      })
+    ).toEqual({
+      rawDynamicHealthUrl: 'https://space-3000.app.github.dev/health',
+      healthUrl: 'https://space-3000.app.github.dev/health',
+      isDynamicHealth: true,
+    });
+    expect(
+      resolveEnvironmentHealthTarget({
+        legacyFactHealthUrl: 'https://legacy.example.com/health',
+      })
+    ).toEqual({
+      rawDynamicHealthUrl: 'https://legacy.example.com/health',
+      healthUrl: 'https://legacy.example.com/health',
+      isDynamicHealth: true,
+    });
+  });
+
+  it('rejects unsafe dynamic targets and never falls through an authoritative typed result', () => {
+    expect(
+      resolveEnvironmentHealthTarget({
+        lifecycleResultHealthUrl: 'http://127.0.0.1:3000/health',
+        legacyFactHealthUrl: 'https://legacy.example.com/health',
+      })
+    ).toEqual({
+      rawDynamicHealthUrl: 'http://127.0.0.1:3000/health',
+      healthUrl: undefined,
+      isDynamicHealth: false,
+    });
+    expect(
+      resolveEnvironmentHealthTarget({
+        lifecycleResultHealthUrl: 'https://example.com/health?token=secret',
+      }).healthUrl
+    ).toBeUndefined();
+    expect(
+      resolveEnvironmentHealthTarget({
+        legacyFactHealthUrl: 'http://127.0.0.1:3000/health',
+      }).healthUrl
+    ).toBeUndefined();
   });
 });

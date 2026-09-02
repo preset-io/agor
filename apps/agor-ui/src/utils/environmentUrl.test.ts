@@ -84,14 +84,36 @@ describe('hasEnvironmentHealthTarget', () => {
     ).toBe(true);
   });
 
-  it('rejects missing and unsafe health targets', () => {
+  it('rejects missing and unsafe health targets without falling through typed output', () => {
     expect(hasEnvironmentHealthTarget(base)).toBe(false);
     expect(
       hasEnvironmentHealthTarget({
         ...base,
         environment_instance: {
           status: 'running',
-          lifecycle_result: { version: 1, health_url: 'javascript:alert(1)' },
+          lifecycle_result: { version: 1, health_url: 'http://127.0.0.1:3000/health' },
+          facts: { health: 'https://legacy.example.com/health' },
+        },
+      } as Branch)
+    ).toBe(false);
+    expect(
+      hasEnvironmentHealthTarget({
+        ...base,
+        environment_instance: {
+          status: 'running',
+          lifecycle_result: {
+            version: 1,
+            health_url: 'https://example.com/health?token=secret',
+          },
+        },
+      } as Branch)
+    ).toBe(false);
+    expect(
+      hasEnvironmentHealthTarget({
+        ...base,
+        environment_instance: {
+          status: 'running',
+          facts: { health: 'http://127.0.0.1:3000/health' },
         },
       } as Branch)
     ).toBe(false);

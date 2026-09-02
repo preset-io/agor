@@ -21,11 +21,11 @@ import {
   runWithTenantDatabaseScope,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
-import { isAllowedDynamicEnvironmentHealthUrl } from '@agor/core/environment/lifecycle-result';
+import { resolveEnvironmentHealthTarget } from '@agor/core/environment/lifecycle-result';
 import type { Application } from '@agor/core/feathers';
 import type { Branch, BranchID, TenantID } from '@agor/core/types';
 import { createPinnedFetch } from '@agor/core/utils/pinned-fetch';
-import { isAllowedFactProbeUrl, isAllowedHealthCheckUrl } from '@agor/core/utils/url';
+import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { emitServiceEvent } from '../utils/emit-service-event.js';
 
 export interface DistributedHealthMonitorOptions {
@@ -492,18 +492,11 @@ export class DistributedHealthMonitor {
     // provider output must pass the public-destination guard before use. The
     // facts fallback is transitional for instances started by the older output
     // protocol and can be removed after adapters migrate.
-    const rawResultHealthUrl = branch.environment_instance?.lifecycle_result?.health_url;
-    const rawFactsHealthUrl = branch.environment_instance?.facts?.health;
-    const rawDynamicHealthUrl = rawResultHealthUrl ?? rawFactsHealthUrl;
-    const dynamicHealthUrl = rawResultHealthUrl
-      ? isAllowedDynamicEnvironmentHealthUrl(rawResultHealthUrl)
-        ? rawResultHealthUrl
-        : undefined
-      : rawFactsHealthUrl && isAllowedFactProbeUrl(rawFactsHealthUrl)
-        ? rawFactsHealthUrl
-        : undefined;
-    const healthUrl = branch.health_check_url || dynamicHealthUrl;
-    const isDynamicHealth = !branch.health_check_url && dynamicHealthUrl !== undefined;
+    const { rawDynamicHealthUrl, healthUrl, isDynamicHealth } = resolveEnvironmentHealthTarget({
+      configuredHealthUrl: branch.health_check_url,
+      lifecycleResultHealthUrl: branch.environment_instance?.lifecycle_result?.health_url,
+      legacyFactHealthUrl: branch.environment_instance?.facts?.health,
+    });
     if (!healthUrl) {
       return {
         status: 'unknown',
