@@ -90,6 +90,39 @@ environment:
       logs: docker compose -p agor-{{branch.name}} logs --tail=100
       health: http://localhost:{{add 3000 branch.unique_id}}/health
       app: http://{{host.ip_address}}:{{add 5000 branch.unique_id}}
+    codespaces-sqlite:
+      startup_timeout_ms: 1500000
+      start: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs start
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+        --devcontainer-path .devcontainer/agor-managed/devcontainer.json
+        --idle-timeout-minutes 30 --retention-period-minutes 1440
+        --wait-seconds 1200
+        --app-port 5000 --health-port 3000 --health-path /health
+        --port-visibility public --emit-health public-only
+      stop: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs stop
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      sync: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs sync
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}} --revision {{shellQuote sync.revision}}
+        --wait-seconds 1200
+      nuke: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs nuke
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      logs: >-
+        node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs logs
+        --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}
+        --binding {{shellQuote branch.id}}
+      app: https://github.com/codespaces
+      description: >-
+        EXPERIMENTAL, opt-in, single-GitHub-actor Codespaces preview. The remote Agor daemon uses
+        SQLite; ports 3000/5000 are deliberately public after readiness, subject to GitHub policy.
+        Requires gh Codespaces access and a pushed branch ref. Not for Cloud/HA or production use.
     sandbox:
       start: >-
         env UID=$(id -u) GID=$(stat -c %g . 2>/dev/null || id -g) INSTANCE_LABEL={{branch.name}} DAEMON_PORT={{add 3000 branch.unique_id}} UI_PORT={{add 5000

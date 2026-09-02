@@ -5,7 +5,7 @@ description: Define named environment variants per repo, layer deployment-local 
 
 # Environment Configuration
 
-Agor's managed environments let a repo ship a **library of named variants** (`lean`, `postgres`, `full`, …) that every branch can pick from. Variants are Handlebars-templated and get **rendered into a per-branch snapshot** that the Start/Stop/Nuke/Logs buttons execute against.
+Agor's managed environments let a repo ship a **library of named variants** (`lean`, `postgres`, `full`, …) that every branch can pick from. Variants are Handlebars-templated and get **rendered into a per-branch snapshot** that the Start/Stop/Sync/Nuke/Logs controls execute against.
 
 This page documents the data model, the template vars, deployment-local overrides, and the permission rules.
 
@@ -38,8 +38,9 @@ Managed environments are built out of three layers, precedence **low → high**:
                               ▼
   ┌────────────────────────────────────────────────────────┐
   │ 3. branch rendered snapshot — plain strings          │
-  │    start_command, stop_command, nuke_command,          │
-  │    logs_command, health_check_url, app_url             │
+  │    start_command, stop_command, sync_command,          │
+  │    nuke_command, logs_command, health_check_url,       │
+  │    app_url                                             │
   └────────────────────────────────────────────────────────┘
 ```
 
@@ -151,6 +152,21 @@ startup timeout defaults to one hour and may be set from 1 second through 24
 hours. Agor persists an exact deadline for every attempt, so a daemon restart
 or a pause in health monitoring does not restart the clock. The corresponding
 optional UI buttons simply hide or no-op when absent.
+
+### GitHub Codespaces example in this repository
+
+Agor's own `.agor.yml` includes an experimental, opt-in `codespaces-sqlite`
+variant. It creates or rediscovers one GitHub Codespace for the branch binding,
+starts the SQLite Compose stack there, and publishes the real app and health
+URLs only after the remote health check succeeds. `sync` accepts only a full
+Git object ID already pushed to the configured GitHub branch, applies exactly
+that revision to a clean checkout, rebuilds, waits for health, and re-verifies
+the remote HEAD before acknowledging success.
+
+The variant uses the current user's authenticated `gh` CLI session. Its ports
+3000 and 5000 are deliberately made public, subject to repository and
+organization policy. Stop preserves the Codespace; Nuke deletes it. This is a
+single-actor development preview, not an Agor Cloud or production topology.
 
 ### `extends` (single-level only)
 

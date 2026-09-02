@@ -266,6 +266,28 @@ describe('parseAgorYml — misc', () => {
 });
 
 describe('parseAgorYml — repo .agor.yml demo variants', () => {
+  it('keeps the Codespaces provider opt-in and wires exact revision Sync', () => {
+    const env = parseAgorYml(REPO_ROOT_AGOR_YML);
+    expect(env).not.toBeNull();
+    expect(env!.default).toBe('sqlite');
+
+    const codespaces = resolveVariant(env!, 'codespaces-sqlite');
+    if (codespaces === null) throw new Error('codespaces-sqlite variant must resolve');
+
+    expect(codespaces.startup_timeout_ms).toBe(1_500_000);
+    expect(codespaces.start).toMatch(/agor-codespace-launcher\.mjs start/);
+    expect(codespaces.start).toContain('--repository {{shellQuote repo.github_slug}}');
+    expect(codespaces.start).toContain('--port-visibility public');
+    expect(codespaces.sync).toMatch(/agor-codespace-launcher\.mjs sync/);
+    expect(codespaces.sync).toContain('--revision {{shellQuote sync.revision}}');
+    expect(codespaces.stop).toMatch(/agor-codespace-launcher\.mjs stop/);
+    expect(codespaces.nuke).toMatch(/agor-codespace-launcher\.mjs nuke/);
+    expect(codespaces.logs).toMatch(/agor-codespace-launcher\.mjs logs/);
+    // Start publishes the actual dynamic app/health URLs in its typed result.
+    expect(codespaces.health).toBeUndefined();
+    expect(codespaces.app).toBe('https://github.com/codespaces');
+  });
+
   it('renders HA as the auth-resolved multi-tenant development profile', () => {
     const env = parseAgorYml(REPO_ROOT_AGOR_YML);
     expect(env).not.toBeNull();
