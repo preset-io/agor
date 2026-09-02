@@ -882,9 +882,14 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       );
       return currentTask;
     }
-    if (params?.provider && currentTask && isTerminalTaskStatus(nextStatus)) {
+    if (
+      params?.provider &&
+      currentTask &&
+      isTerminalTaskStatus(nextStatus) &&
+      isControlledFailureWorkload(currentTask)
+    ) {
       const session = await new SessionRepository(this.db).findById(currentTask.session_id);
-      if (session?.agentic_tool === 'workload' && isControlledFailureWorkload(currentTask)) {
+      if (session?.agentic_tool === 'workload') {
         throw new BadRequest('Controlled workload failures must complete through completeWorkload');
       }
     }
