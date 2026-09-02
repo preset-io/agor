@@ -48,6 +48,7 @@
     "check:image-publication-policy": "node scripts/check-image-publication-policy.mjs",
     "test:daemon-filesystem-boundaries": "node --test scripts/check-daemon-filesystem-boundaries.test.mjs",
     "test:sandbox-migration": "node --test scripts/strict-to-sandbox-migration.test.mjs",
+    "test:codespaces-launcher": "node --test scripts/managed-environments/codespaces/agor-codespace-launcher.test.mjs",
     "check:agentic-tool-packages": "node scripts/check-agentic-tool-packages.mjs",
     "test:ha:docker": "node --test docker/ha/dev-launcher.test.mjs && node scripts/test-daemon-ha.mjs && node scripts/test-ha-mcp-branch-create.mjs"
   },

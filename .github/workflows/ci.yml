@@ -69,6 +69,7 @@ jobs:
       - run: pnpm check:multitenancy-boundaries
       - run: pnpm check:daemon-filesystem-boundaries
       - run: pnpm check:realtime-boundaries
+      - run: pnpm test:codespaces-launcher
       - run: pnpm lint
 
   # Build and typecheck intentionally share one Turbo invocation. Turbo's
