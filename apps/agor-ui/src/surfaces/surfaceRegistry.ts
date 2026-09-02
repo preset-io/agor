@@ -78,6 +78,13 @@ export const MARKETPLACE_ROUTE_PATHS = [
   '/marketplace/credentials',
 ] as const;
 
+/**
+ * Canonical deep link to the catalog (browse + one-click connect). Kept as a
+ * single constant so callers never hardcode the string — a route-family rename
+ * (e.g. `/marketplace` → `/catalog`) updates every entry point at once.
+ */
+export const MARKETPLACE_CATALOG_PATH = '/marketplace/catalog';
+
 export const MARKETPLACE_SURFACE = defineSurface({
   id: 'marketplace',
   label: 'Marketplace',

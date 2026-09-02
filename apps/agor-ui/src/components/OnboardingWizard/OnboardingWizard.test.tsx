@@ -1,7 +1,7 @@
 /**
- * Tests for the redesigned 4-step OnboardingWizard (goals → workspace [name +
- * template gallery] → llm → done). The in-wizard recommendations step was
- * dropped; routed goal-tailored suggestions still flow through onComplete.
+ * Tests for the 5-step OnboardingWizard (goals → workspace [name + template
+ * gallery] → llm → tools → done). The revived tools step curates the
+ * goal-tailored Connect kit and threads the selection through onComplete.
  *
  * The wizard no longer clones a "framework" repo, auto-creates a branch/session,
  * or offers "continue without key" / codex-cli-auth / provider-combobox affordances
@@ -293,6 +293,7 @@ describe('OnboardingWizard', () => {
     clickButton(/^continue/i);
     await findAndClickButton(/skip for now/i); // workspace
     clickButton(/skip for now/i); // llm
+    clickButton(/skip for now/i); // tools
     clickButton(/open my board/i);
 
     // Completion is async (board creation, then onComplete), so wait for it.
@@ -319,6 +320,7 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
     await findAndClickButton(/skip for now/i); // workspace
     clickButton(/skip for now/i); // llm
+    clickButton(/skip for now/i); // tools
     clickButton(/open my board/i);
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
@@ -355,6 +357,7 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
     await findAndClickButton(/skip for now/i); // workspace
     clickButton(/skip for now/i); // llm
+    clickButton(/skip for now/i); // tools
     clickButton(/open my board/i);
 
     // Completion is async (board creation, then onComplete), so wait for it.
@@ -421,6 +424,7 @@ describe('OnboardingWizard', () => {
         })
       );
     });
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 
@@ -443,6 +447,7 @@ describe('OnboardingWizard', () => {
         })
       );
     });
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 
@@ -562,6 +567,7 @@ describe('OnboardingWizard', () => {
 
     clickButton(/^continue/i);
 
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
     // Continuing with an already-verified key does not re-save it.
     expect(onUpdateUser).not.toHaveBeenCalled();
@@ -604,7 +610,8 @@ describe('OnboardingWizard', () => {
 
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     clickButton(/^continue →/i); // workspace → llm (no board yet)
-    await findAndClickButton(/skip for now/i); // llm → done
+    await findAndClickButton(/skip for now/i); // llm → tools
+    await findAndClickButton(/skip for now/i); // tools → done
     // The board is created only now, at completion; its rejection surfaces as an
     // inline Alert on the final step and the wizard stays there so the user retries.
     clickButton(/meet rusty/i);
@@ -818,7 +825,8 @@ describe('OnboardingWizard', () => {
     expect(screen.getByLabelText('Teammate name')).toHaveValue('Rusty');
 
     clickButton(/^continue →/i); // workspace → llm
-    await findAndClickButton(/skip for now/i); // llm
+    await findAndClickButton(/skip for now/i); // llm → tools
+    await findAndClickButton(/skip for now/i); // tools → done
     clickButton(/meet rusty/i); // named teammate → verb-first primary CTA
 
     // Board creation now precedes onComplete (both at completion), so await it.
@@ -843,7 +851,8 @@ describe('OnboardingWizard', () => {
     fireEvent.change(screen.getByLabelText('Teammate name'), { target: { value: 'Rusty' } });
     fireEvent.click(screen.getByText('Legal Analyst').closest('[role="button"]') as HTMLElement);
     clickButton(/skip for now/i);
-    await findAndClickButton(/skip for now/i); // llm
+    await findAndClickButton(/skip for now/i); // llm → tools
+    await findAndClickButton(/skip for now/i); // tools → done
     clickButton(/open my board/i);
 
     await waitFor(() =>
@@ -879,7 +888,8 @@ describe('OnboardingWizard', () => {
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     expect(boardsService.create).not.toHaveBeenCalled();
 
-    await findAndClickButton(/skip for now/i); // llm → done
+    await findAndClickButton(/skip for now/i); // llm → tools
+    await findAndClickButton(/skip for now/i); // tools → done
     clickButton(/meet rusty/i); // completion → create the brand-new board now
 
     await waitFor(() => {
@@ -911,7 +921,8 @@ describe('OnboardingWizard', () => {
     });
     clickButton(/^connect →/i);
 
-    // done — teammate-centric adaptive headline; the primary CTA is verb-first + named.
+    // tools — curate step skipped, then the teammate-centric done hero.
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     clickButton(/meet rusty/i);
 
@@ -969,8 +980,9 @@ describe('OnboardingWizard', () => {
     });
     clickButton(/^connect →/i);
 
-    // done — teammate-centric: name heroes the headline, the template is the role
-    // pill, and one warm "it's yours; shape it by chatting" subline — nothing else.
+    // tools — curate step skipped, then the teammate-centric done hero: name heroes
+    // the headline, the template is the role pill, and one warm subline — nothing else.
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     expect(screen.getByText('Product Manager')).toBeInTheDocument(); // role pill
     expect(
@@ -997,6 +1009,7 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i); // workspace — no name, no template
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
     clickButton(/skip for now/i); // llm
+    await findAndClickButton(/skip for now/i); // tools
 
     // No teammate to hero → the warm generic headline + board-open subcopy, and the
     // old skip-hint checklist is gone entirely.
@@ -1020,6 +1033,9 @@ describe('OnboardingWizard', () => {
     clickButton(/skip for now/i);
 
     expect(await screen.findByText('Connect your AI')).toBeInTheDocument();
+    clickButton(/skip for now/i);
+
+    expect(await screen.findByText('Connect your tools')).toBeInTheDocument();
     clickButton(/skip for now/i);
 
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
@@ -1254,14 +1270,18 @@ describe('OnboardingWizard', () => {
 
     // Recovery clears the derived validation error immediately rather than
     // leaving a stale copy in the independent board-creation error state.
-    clickButton('Back');
+    clickButton('Back'); // done → tools
+    await screen.findByText('Connect your tools');
+    clickButton('Back'); // tools → llm
     await screen.findByText('Connect your AI');
-    clickButton('Back');
+    clickButton('Back'); // llm → workspace
     await screen.findByText('Build your teammate');
     fireEvent.click(screen.getByText('Start blank').closest('[role="button"]') as HTMLElement);
     clickButton(/^continue →$/i);
     await screen.findByText('Connect your AI');
-    clickButton(/skip for now/i);
+    clickButton(/skip for now/i); // llm → tools
+    await screen.findByText('Connect your tools');
+    clickButton(/skip for now/i); // tools → done
 
     expect(await screen.findByText('Rusty is ready.')).toBeInTheDocument();
     expect(screen.queryByText(/removed-template.*no longer available/i)).not.toBeInTheDocument();
@@ -1282,7 +1302,7 @@ describe('OnboardingWizard', () => {
     renderWizard({ initialStep: 'goals' });
 
     const progress = screen.getByRole('list', { name: 'Onboarding progress' });
-    expect(progress).toHaveTextContent('Step 1 of 4: Goals. Current step.');
+    expect(progress).toHaveTextContent('Step 1 of 5: Goals. Current step.');
     expect(progress.querySelector('[aria-current="step"]')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText(/what do you want to get done/i)).toHaveFocus());
 
@@ -1348,6 +1368,63 @@ describe('OnboardingWizard', () => {
     );
     expect(attempt.isCurrent()).toBe(false);
   });
+
+  it('tools step lets an admin drop a Connect tool while Ask tools always flow to the first session', async () => {
+    const onComplete = vi.fn();
+    renderWizard({
+      onComplete,
+      initialStep: 'tools',
+      user: makeUser({ role: 'admin' }),
+    });
+
+    expect(screen.getByText('Connect your tools')).toBeInTheDocument();
+    // Default (no-goal) kit: Connect [Linear, Notion, Firecrawl] + Ask [Slack, GitHub].
+    const notion = screen.getByText('Notion').closest('button');
+    expect(notion).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(notion as HTMLButtonElement);
+    expect(notion).toHaveAttribute('aria-pressed', 'false');
+
+    clickButton(/^continue →/i); // tools → done
+    clickButton(/open my board/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    const emitted = (onComplete.mock.calls[0][0].suggestedIntegrations ?? []).map(
+      (rec: { name: string }) => rec.name
+    );
+    // The deselected Connect tool is gone; the others stay.
+    expect(emitted).not.toContain('Notion');
+    expect(emitted).toContain('Linear');
+    // Ask tools are extras — never removable, always threaded through.
+    expect(emitted).toEqual(expect.arrayContaining(['Slack', 'GitHub']));
+  });
+
+  it('keeps Ask tools in the first session even when the admin toggles the Ask row off', async () => {
+    const onComplete = vi.fn();
+    renderWizard({ onComplete, initialStep: 'tools', user: makeUser({ role: 'admin' }) });
+
+    const askRow = screen.getByText(/ask your teammate to set up/i).closest('button');
+    fireEvent.click(askRow as HTMLButtonElement);
+
+    clickButton(/^continue →/i); // tools → done
+    clickButton(/open my board/i);
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    const emitted = (onComplete.mock.calls[0][0].suggestedIntegrations ?? []).map(
+      (rec: { name: string }) => rec.name
+    );
+    expect(emitted).toEqual(expect.arrayContaining(['Slack', 'GitHub']));
+  });
+
+  it('shows non-admins a read-only kit with the browse-catalog link and no Connect toggles', () => {
+    renderWizard({ initialStep: 'tools', user: makeUser({ role: 'member' }) });
+
+    expect(screen.getByText('Connect your tools')).toBeInTheDocument();
+    // Read-only teaser: the tool cards are not interactive toggle buttons.
+    expect(screen.getByText('Linear').closest('button')).toBeNull();
+    // The action is the catalog link, so it never reads as the old dead list.
+    const link = screen.getByText(/browse the full catalog/i).closest('a');
+    expect(link?.getAttribute('href')).toContain('/marketplace/catalog');
+  });
 });
 
 describe('Codex ChatGPT login import', () => {
@@ -1399,6 +1476,7 @@ describe('Codex ChatGPT login import', () => {
     clickButton('Import login');
 
     await waitFor(() => expect(importCreate).toHaveBeenCalledWith({ authJson: pasted }));
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 
@@ -1548,6 +1626,7 @@ describe('Codex ChatGPT device sign-in', () => {
     await waitFor(() => expect(screen.getByText(/^connect →/i).closest('button')).toBeEnabled());
     const connect = screen.getByText(/^connect →/i).closest('button');
     fireEvent.click(connect as HTMLButtonElement);
+    await findAndClickButton(/skip for now/i); // tools → done
     expect(await screen.findByText("You're ready to build.")).toBeInTheDocument();
   });
 

@@ -90,58 +90,93 @@ describe('ONBOARDING_GOALS', () => {
   });
 });
 
+// Connect items (non-`ask`) are the ones counted against the cap of four.
+const connectNames = (goalIds: string[]) =>
+  mergeGoalIntegrationRecs(goalIds)
+    .filter((rec) => rec.connectMode !== 'ask')
+    .map((rec) => rec.name);
+const askNames = (goalIds: string[]) =>
+  mergeGoalIntegrationRecs(goalIds)
+    .filter((rec) => rec.connectMode === 'ask')
+    .map((rec) => rec.name);
+
 describe('mergeGoalIntegrationRecs', () => {
-  it('falls back to the default set when no goal is picked', () => {
-    expect(names([])).toEqual(['Slack', 'GitHub', 'Linear', 'Notion']);
+  it('falls back to the default set when no goal is picked (Connect items first, then Ask extras)', () => {
+    expect(names([])).toEqual(['Linear', 'Notion', 'Firecrawl', 'Slack', 'GitHub']);
   });
 
   it('ignores unknown goal ids', () => {
-    expect(names(['not-a-goal'])).toEqual(['Slack', 'GitHub', 'Linear', 'Notion']);
+    expect(names(['not-a-goal'])).toEqual(['Linear', 'Notion', 'Firecrawl', 'Slack', 'GitHub']);
   });
 
-  it('shows a single goal rec list verbatim (no merge, no padding to four)', () => {
-    // hand-off-build has only two recs — the list stays two long.
-    expect(names(['hand-off-build'])).toEqual(['GitHub', 'Figma']);
-    // status-updates already has four.
-    expect(names(['status-updates'])).toEqual(['Linear', 'Atlassian', 'Notion', 'Slack']);
-  });
-
-  it('merges two goals: first two of primary, first two of secondary', () => {
-    // primary ship-without-busywork [GitHub, Sentry, Datadog], secondary dig-into-anything [Amplitude, Firecrawl]
-    expect(names(['ship-without-busywork', 'dig-into-anything'])).toEqual([
+  it('shows a single goal Connect kit, then its Ask extra', () => {
+    // hand-off-build: Connect [GitLab, Supabase, Figma, Context7] + Ask [GitHub].
+    expect(names(['hand-off-build'])).toEqual([
+      'GitLab',
+      'Supabase',
+      'Figma',
+      'Context7',
       'GitHub',
+    ]);
+    // status-updates: Connect [Linear, Notion, Atlassian, Asana] + Ask [Slack].
+    expect(names(['status-updates'])).toEqual(['Linear', 'Notion', 'Atlassian', 'Asana', 'Slack']);
+  });
+
+  it('merges two goals: first two Connect items of primary, then first two of secondary', () => {
+    // primary ship [Sentry, GitLab, Linear, Semgrep] + Ask GitHub;
+    // secondary dig [Exa, Firecrawl, Tavily, Amplitude], no Ask.
+    expect(names(['ship-without-busywork', 'dig-into-anything'])).toEqual([
       'Sentry',
-      'Amplitude',
+      'GitLab',
+      'Exa',
       'Firecrawl',
+      'GitHub',
     ]);
   });
 
-  it('dedups across goals then refills from primary remaining before secondary remaining', () => {
-    // primary team-teammate [Slack, Notion, Linear, Datadog], secondary personal-teammate [Slack]
-    // step1+2: Slack, Notion, (Slack deduped) → [Slack, Notion]
-    // refill from primary remaining: Linear, Datadog → [Slack, Notion, Linear, Datadog]
+  it('dedups Connect items across goals then refills from primary remaining before secondary', () => {
+    // primary team [Notion, Linear, Atlassian, Miro] + Ask Slack;
+    // secondary personal [Notion, Linear, Firecrawl] + Ask Slack.
+    // 2+2: Notion, Linear, (both dupes) → refill primary remaining: Atlassian, Miro.
+    // Ask extras deduped to a single Slack.
     expect(names(['team-teammate', 'personal-teammate'])).toEqual([
-      'Slack',
       'Notion',
       'Linear',
-      'Datadog',
+      'Atlassian',
+      'Miro',
+      'Slack',
     ]);
   });
 
   it('respects selection order (primary vs secondary is swap-sensitive)', () => {
     expect(names(['dig-into-anything', 'ship-without-busywork'])).toEqual([
-      'Amplitude',
+      'Exa',
       'Firecrawl',
-      'GitHub',
       'Sentry',
+      'GitLab',
+      'GitHub',
     ]);
   });
 
-  it('caps the merged list at four even when both goals are rec-rich', () => {
-    const merged = names(['status-updates', 'team-teammate']);
-    expect(merged).toHaveLength(4);
-    // first two of each: Linear, Atlassian, Slack, Notion
-    expect(merged).toEqual(['Linear', 'Atlassian', 'Slack', 'Notion']);
+  it('caps Connect items at four; Ask extras are separate and never counted in the four', () => {
+    // Both goals are Connect-rich, so the Connect kit fills exactly four.
+    expect(connectNames(['status-updates', 'team-teammate'])).toEqual([
+      'Linear',
+      'Notion',
+      'Atlassian',
+      'Asana',
+    ]);
+    // Slack (Ask) still flows through as an extra beyond the four.
+    expect(askNames(['status-updates', 'team-teammate'])).toEqual(['Slack']);
+  });
+
+  it('discriminates connectMode: oauth / none / ask', () => {
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.linear.connectMode).toBe('oauth');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.firecrawl.connectMode).toBe('none');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.context7.connectMode).toBe('none');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.exa.connectMode).toBe('none');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.slack.connectMode).toBe('ask');
+    expect(ONBOARDING_INTEGRATION_RECOMMENDATIONS.github.connectMode).toBe('ask');
   });
 
   it('flags only the first rec as featured', () => {
