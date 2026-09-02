@@ -113,6 +113,11 @@ import { issueExecutorCommandToken } from './session-token-service.js';
 import type { InternalEnrichmentParams } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
 
+// The executor must still have authority to commit the typed lifecycle result
+// after the start process reaches its own deadline. Keep this settlement window
+// small and derive the rest from the branch's existing bounded startup policy.
+const ENVIRONMENT_START_TOKEN_SETTLEMENT_MARGIN_MS = 60_000;
+
 /**
  * Branch service params
  */
@@ -696,15 +701,18 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
         'write',
         options.executionUserIdOverride
       );
+    const commandId =
+      action === 'sync' && options.syncClaimToken
+        ? `environment-sync:${options.syncClaimToken}`
+        : `environment-${action}`;
     const sessionToken = await this.withTenantDatabase(params, () =>
-      issueExecutorCommandToken(
-        this.app,
-        action === 'sync' && options.syncClaimToken
-          ? `environment-sync:${options.syncClaimToken}`
-          : `environment-${action}`,
-        executionUserId,
-        branch.branch_id
-      )
+      action === 'start'
+        ? issueExecutorCommandToken(this.app, commandId, executionUserId, branch.branch_id, {
+            expirationMs:
+              resolveEnvironmentStartupTimeoutMs(branch.startup_timeout_ms) +
+              ENVIRONMENT_START_TOKEN_SETTLEMENT_MARGIN_MS,
+          })
+        : issueExecutorCommandToken(this.app, commandId, executionUserId, branch.branch_id)
     );
 
     return {

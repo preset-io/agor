@@ -43,12 +43,14 @@ const CLEANUP_TENANT_LIMIT = 1_000;
 export const EXECUTOR_SESSION_TOKEN_AUTHORITY_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Maximum lifetime for taskless, fire-and-forget executor commands.
+ * Default lifetime for taskless, fire-and-forget executor commands.
  *
  * These credentials delegate the initiating user's normal tenant authority,
  * but have no task lifecycle that can reliably revoke them when a remote
  * launcher exits. Keep that bearer window bounded independently of the longer
- * task-executor session configured by the operator.
+ * task-executor session configured by the operator. A caller that owns a
+ * stricter server-side command deadline may request that exact bounded window;
+ * the configured session-token maximum remains authoritative.
  */
 const EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS = 15 * 60 * 1000;
 
@@ -257,14 +259,24 @@ export class SessionTokenService {
    * `session_id` slot carries this opaque command ID. It is never resolved as
    * a Session: only exact command-capability guards interpret it.
    */
-  generateCommandToken(commandId: string, userId: string, branchId?: string): Promise<string> {
+  generateCommandToken(
+    commandId: string,
+    userId: string,
+    branchId?: string,
+    options: { expirationMs?: number } = {}
+  ): Promise<string> {
+    if (options.expirationMs !== undefined && options.expirationMs > this.config.expiration_ms) {
+      throw new Error(
+        `Executor command requires a ${options.expirationMs}ms credential, which exceeds execution.session_token_expiration_ms (${this.config.expiration_ms}ms)`
+      );
+    }
     return this.generateTokenWithPurpose(
       commandId,
       userId,
       {
         branchId,
         maxUses: -1,
-        expirationMs: EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
+        expirationMs: options.expirationMs ?? EXECUTOR_COMMAND_TOKEN_EXPIRATION_MS,
       },
       EXECUTOR_COMMAND_TOKEN_PURPOSE
     );
@@ -654,9 +666,12 @@ export async function issueExecutorCommandToken(
   app: object,
   commandId: string,
   userId: string,
-  branchId?: string
+  branchId?: string,
+  options?: { expirationMs?: number }
 ): Promise<string> {
   const service = (app as { sessionTokenService?: SessionTokenService }).sessionTokenService;
   if (!service) throw new Error('Session token service unavailable');
-  return service.generateCommandToken(commandId, userId, branchId);
+  return options
+    ? service.generateCommandToken(commandId, userId, branchId, options)
+    : service.generateCommandToken(commandId, userId, branchId);
 }

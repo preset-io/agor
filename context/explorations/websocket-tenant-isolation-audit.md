@@ -370,9 +370,14 @@ task lifecycle/result mutation, private task-control rooms, streaming and
 permission-result publication, provider-failure classification, plaintext SDK
 credential resolution, session MCP/OAuth secret material, and the running
 session's execution-identity exemption. Taskless branch/environment command
-credentials cannot satisfy those boundaries and use a maximum 15-minute
-lifetime because their fire-and-forget launcher has no reliable task lifecycle
-on which to revoke them.
+credentials cannot satisfy those boundaries and use a 15-minute lifetime by
+default because their fire-and-forget launcher has no reliable task lifecycle
+on which to revoke them. Environment Start is the narrow exception: its
+branch-scoped command credential lasts only for the already-persisted startup
+deadline plus a one-minute result-settlement margin. The configured
+session-token maximum remains authoritative; an insufficient maximum rejects
+the launch instead of silently issuing a credential that expires mid-start.
+Lifecycle-generation CAS still rejects a stale completion.
 
 There is deliberately no polling authorization coordinator. Starting a task
 establishes its execution lease. Ordinary daemon calls made during that lease

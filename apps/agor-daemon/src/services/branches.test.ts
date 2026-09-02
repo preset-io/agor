@@ -381,7 +381,7 @@ function createFindHarness(opts: {
 
 describe('BranchesService environment start async behavior', () => {
   function createStartHarness() {
-    const { service } = createServiceHarness();
+    const { service, sessionTokenService } = createServiceHarness();
     const branch = {
       branch_id: 'wt-start' as BranchID,
       repo_id: 'repo-1',
@@ -390,6 +390,7 @@ describe('BranchesService environment start async behavior', () => {
       created_by: 'user-1' as UUID,
       branch_unique_id: 1,
       start_command: 'docker compose up -d --build',
+      startup_timeout_ms: 1_500_000,
       app_url: 'http://localhost:3000',
       environment_instance: { status: 'stopped' },
       environment_generation: 0,
@@ -443,11 +444,13 @@ describe('BranchesService environment start async behavior', () => {
       environmentUpdates,
       lifecycleOptions,
       resolveEnvironmentCommand,
+      sessionTokenService,
     };
   }
 
   it('returns after dispatching shell start commands to the executor', async () => {
-    const { service, branch, environmentUpdates, lifecycleOptions } = createStartHarness();
+    const { service, branch, environmentUpdates, lifecycleOptions, sessionTokenService } =
+      createStartHarness();
 
     const result = await Promise.race([
       runInTestTenantScope(() => service.startEnvironment(branch.branch_id)),
@@ -473,7 +476,7 @@ describe('BranchesService environment start async behavior', () => {
           principalBranchAccess: 'write',
           startCommand: branch.start_command,
           appUrl: branch.app_url,
-          startupTimeoutMs: 60 * 60 * 1_000,
+          startupTimeoutMs: 1_500_000,
           lifecycleGeneration: 1,
         }),
       }),
@@ -486,6 +489,12 @@ describe('BranchesService environment start async behavior', () => {
           branch_fs_access: 'write',
         },
       })
+    );
+    expect(sessionTokenService.generateCommandToken).toHaveBeenCalledWith(
+      'environment-start',
+      'user-1',
+      branch.branch_id,
+      { expirationMs: 1_560_000 }
     );
     expect(environmentUpdates).toEqual(
       expect.arrayContaining([
@@ -502,7 +511,7 @@ describe('BranchesService environment start async behavior', () => {
     );
     const deadlineAt = Date.parse((startUpdate?.startup_deadline_at as string | undefined) ?? '');
     expect(Number.isFinite(startedAt)).toBe(true);
-    expect(deadlineAt - startedAt).toBe(60 * 60 * 1_000);
+    expect(deadlineAt - startedAt).toBe(1_500_000);
     expect(lifecycleOptions[0]).toMatchObject({
       beginLifecycle: true,
       expectedEnvironmentGeneration: 0,
