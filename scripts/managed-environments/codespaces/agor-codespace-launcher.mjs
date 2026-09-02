@@ -73,6 +73,10 @@ const REMOTE_SYNC_SCRIPT = `${[
   'git fetch --no-tags -- origin "$expected_ref"',
   'git cat-file -e "$revision^{commit}" 2>/dev/null || fail "Requested revision is not available from GitHub"',
   'git merge-base --is-ancestor "$revision" FETCH_HEAD || fail "Requested revision is not reachable from the configured ref"',
+  // Compose down intentionally preserves named data, but it also strands every
+  // anonymous dependency volume. Remove the service first with -v, which
+  // deletes only its anonymous volumes, then remove the project network.
+  'docker compose -p agor-codespaces-sqlite rm -sfv agor-dev',
   'docker compose -p agor-codespaces-sqlite down',
   'git reset --hard "$revision"',
   'env CODESPACE_NAME="$codespace_name" bash .devcontainer/agor-managed/start-agor-sqlite.sh',
@@ -450,7 +454,7 @@ export class GitHubCodespacesClient {
     return redact(result.stdout);
   }
 
-  async runBootstrap(name, repository, { force = false, timeout = 600 } = {}) {
+  async runBootstrap(name, repository, { force = false, recreate = false, timeout = 600 } = {}) {
     assertResourceName(name);
     const repoName = repository.split('/', 2)[1];
     const workspace = `/workspaces/${repoName}`;
@@ -460,6 +464,7 @@ export class GitHubCodespacesClient {
       'env',
       `CODESPACE_NAME=${shellQuote(name)}`,
       `AGOR_FORCE_REBUILD=${shellQuote(force ? 'true' : 'false')}`,
+      `AGOR_FORCE_RECREATE=${shellQuote(recreate ? 'true' : 'false')}`,
       'bash',
       shellQuote('.devcontainer/agor-managed/start-agor-sqlite.sh'),
     ].join(' ');
@@ -862,7 +867,10 @@ export class CodespaceController {
         if (repairUnhealthy && probe.repairable && !repairAttempted) {
           repairAttempted = true;
           try {
-            await this.client.runBootstrap(name, this.repository, { timeout: this.waitSeconds });
+            await this.client.runBootstrap(name, this.repository, {
+              recreate: true,
+              timeout: this.waitSeconds,
+            });
           } catch (error) {
             const detail = error instanceof LauncherError ? `: ${error.message}` : '';
             throw new LauncherError(`Codespace bootstrap repair failed${detail}`, { cause: error });

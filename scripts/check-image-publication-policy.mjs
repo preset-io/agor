@@ -197,10 +197,78 @@ if (codespacesWorktreeBuildStarts > 0) {
   );
   assert.match(
     codespacesBootstrap,
-    /docker compose -p agor-codespaces-sqlite up -d "\$@"/,
+    /docker compose -p agor-codespaces-sqlite up -d/,
     'the Codespaces bootstrap must reuse a valid existing development image'
   );
+  assert.match(
+    codespacesBootstrap,
+    /docker compose -p agor-codespaces-sqlite rm -sfv agor-dev/,
+    'Codespaces reconciliation must remove only obsolete anonymous dependency volumes'
+  );
+  assert.match(
+    codespacesBootstrap,
+    /docker inspect --format '\{\{\.Image\}\}'/,
+    'Codespaces reconciliation must detect a service container left on an older image'
+  );
   const developmentDockerfile = await readFile(path.join(root, 'docker/Dockerfile'), 'utf8');
+  const developmentImageStages = developmentDockerfile.match(
+    /^([\s\S]*?)^FROM base AS production/m
+  )?.[1];
+  assert.ok(
+    developmentImageStages,
+    'the development Dockerfile stage ancestry must remain discoverable'
+  );
+  assert.doesNotMatch(
+    developmentImageStages,
+    /^COPY .*\\$/m,
+    'multiline development-image COPY needs matching fingerprint-policy parser support'
+  );
+  const fingerprintInputs = codespacesBootstrap
+    .match(/development_image_input_files=\(\n([\s\S]*?)\n\)/)?.[1]
+    ?.split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  assert.ok(fingerprintInputs, 'the development image fingerprint input list must be readable');
+  for (const requiredInput of [
+    '.dockerignore',
+    'docker/Dockerfile',
+    'docker-compose.yml',
+    'docker-compose.override.yml',
+  ]) {
+    assert.ok(
+      fingerprintInputs.includes(requiredInput),
+      `Codespaces fingerprint is missing required build input: ${requiredInput}`
+    );
+  }
+  assert.match(
+    codespacesBootstrap,
+    /printf 'UID=%s\\nGID=%s\\n'/,
+    'Codespaces fingerprint must include both development-image user build arguments'
+  );
+  const fingerprintCovers = (source) =>
+    fingerprintInputs.some((pattern) => {
+      const expression = pattern
+        .split('*')
+        .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        .join('[^/]*');
+      return new RegExp(`^${expression}$`).test(source);
+    });
+  const developmentCopySources = [...developmentImageStages.matchAll(/^COPY\s+(.+)$/gm)].flatMap(
+    ([, operands]) => {
+      if (/(?:^|\s)--from=/.test(operands)) return [];
+      const paths = operands
+        .trim()
+        .split(/\s+/)
+        .filter((item) => !item.startsWith('--'));
+      return paths.slice(0, -1);
+    }
+  );
+  for (const source of developmentCopySources) {
+    assert.ok(
+      fingerprintCovers(source),
+      `development Dockerfile COPY source is missing from the Codespaces fingerprint: ${source}`
+    );
+  }
   assert.match(
     developmentDockerfile,
     /ARG AGOR_DEV_IMAGE_INPUT_FINGERPRINT=untracked/,
@@ -211,10 +279,36 @@ if (codespacesWorktreeBuildStarts > 0) {
     /LABEL io\.agor\.dev-image-input-fingerprint=/,
     'the development image must persist the fingerprint used for safe reuse'
   );
+  const developmentCompose = await readFile(path.join(root, 'docker-compose.yml'), 'utf8');
   assert.match(
-    await readFile(path.join(root, 'docker-compose.yml'), 'utf8'),
+    developmentCompose,
     /AGOR_DEV_IMAGE_INPUT_FINGERPRINT: \$\{AGOR_DEV_IMAGE_INPUT_FINGERPRINT:-untracked\}/,
     'Compose must forward the bootstrap fingerprint into the development image build'
+  );
+  const agorDevVolumes = developmentCompose.match(
+    /^ {4}volumes:\n([\s\S]*?)^ {4}stdin_open:/m
+  )?.[1];
+  assert.ok(agorDevVolumes, 'the agor-dev volume contract must remain discoverable');
+  assert.doesNotMatch(
+    agorDevVolumes,
+    /^ {6}-\s+type:/m,
+    'long-form agor-dev volumes need matching anonymous-volume policy parser support'
+  );
+  const agorDevVolumeEntries = [...agorDevVolumes.matchAll(/^ {6}-\s+(.+)$/gm)].map((match) =>
+    match[1].trim().replace(/^['"]|['"]$/g, '')
+  );
+  const anonymousVolumeTargets = agorDevVolumeEntries.filter((entry) => !entry.includes(':'));
+  assert.ok(anonymousVolumeTargets.length > 0, 'the development dependency volumes must exist');
+  for (const target of anonymousVolumeTargets) {
+    assert.match(
+      target,
+      /^\/app(?:\/.+)?\/node_modules$/,
+      `compose rm -v must never target anonymous persisted data: ${target}`
+    );
+  }
+  assert.ok(
+    agorDevVolumeEntries.includes('agor-home:/home/agor'),
+    'the managed Agor home must remain a named volume that compose rm -v preserves'
   );
   assert.doesNotMatch(codespacesBootstrap, imageReference);
   assert.doesNotMatch(codespacesBootstrap, /docker (?:compose )?pull\b/);

@@ -231,7 +231,7 @@ test('Start repairs an already-Available Codespace whose Agor stack is unhealthy
 
   assert.equal(result.resource.name, existing.name);
   assert.deepEqual(client.bootstrapCalls, [
-    { name: existing.name, repository: REPOSITORY, options: { timeout: 30 } },
+    { name: existing.name, repository: REPOSITORY, options: { recreate: true, timeout: 30 } },
   ]);
   assert.deepEqual(client.events.slice(0, 3), ['health', 'bootstrap', 'health']);
 });
@@ -705,6 +705,25 @@ test('the gh adapter distinguishes an unhealthy app from a broken SSH transport'
   assert.match(calls[0].argv.at(-1), /exit 42/);
 });
 
+test('the gh adapter explicitly recreates a remotely unhealthy Compose service', async () => {
+  const calls = [];
+  const runner = async (argv, options) => {
+    calls.push({ argv: [...argv], ...options });
+    return { returncode: 0, stdout: '', stderr: '' };
+  };
+  const client = new GitHubCodespacesClient({ runner, callTimeout: 17 });
+
+  await client.runBootstrap('octocat-agor-new123', REPOSITORY, {
+    recreate: true,
+    timeout: 99,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].argv.at(-1), /AGOR_FORCE_REBUILD='false'/);
+  assert.match(calls[0].argv.at(-1), /AGOR_FORCE_RECREATE='true'/);
+  assert.equal(calls[0].timeout, 99);
+});
+
 test('the gh adapter sends exact Sync logic over stdin with shell-quoted arguments', async () => {
   const calls = [];
   const revision = 'b'.repeat(40);
@@ -743,6 +762,7 @@ test('the gh adapter sends exact Sync logic over stdin with shell-quoted argumen
   assert.match(calls[0].argv.at(-1), /feature\/quote'"'"'\$\(touch nope\)/);
   assert.match(calls[0].inputText, /checkout is dirty; refusing to overwrite developer work/);
   assert.match(calls[0].inputText, /merge-base --is-ancestor/);
+  assert.match(calls[0].inputText, /docker compose -p agor-codespaces-sqlite rm -sfv agor-dev/);
   assert.match(calls[0].inputText, /docker compose -p agor-codespaces-sqlite down/);
   assert.doesNotMatch(calls[0].inputText, /AGOR_FORCE_REBUILD=true/);
   assert.equal(calls[0].timeout, 99);
@@ -846,18 +866,44 @@ test('the Codespaces bootstrap persists a non-default secret without logging it'
     `#!/bin/sh
 printf '%s\\n' "$*" >> "$HOME/docker-calls"
 case "$*" in
-  image\\ inspect\\ --format*agor-dev:latest)
+  image\\ inspect\\ --format*Config.Labels*agor-dev:latest)
     [ -f "$HOME/image-fingerprint" ] || exit 1
     cat "$HOME/image-fingerprint"
     exit
     ;;
-  "compose -p agor-codespaces-sqlite up -d"|"compose -p agor-codespaces-sqlite up -d --build")
+  image\\ inspect\\ --format*agor-dev:latest)
+    [ -f "$HOME/tag-image-id" ] || exit 1
+    cat "$HOME/tag-image-id"
+    exit
+    ;;
+  "compose -p agor-codespaces-sqlite ps -aq agor-dev")
+    [ "\${FAIL_PS:-false}" != "true" ] || exit 96
+    if [ -f "$HOME/container-image-id" ]; then printf '%s\\n' 'fake-container'; fi
+    exit 0
+    ;;
+  inspect\\ --format*.Image*fake-container)
+    cat "$HOME/container-image-id"
+    exit
+    ;;
+  "compose -p agor-codespaces-sqlite build agor-dev")
+    [ -n "\${AGOR_DEV_IMAGE_INPUT_FINGERPRINT:-}" ] || exit 94
+    [ "\${FAIL_COMPOSE:-false}" != "true" ] || exit 95
+    [ "\${BUILD_WITHOUT_TAG_UPDATE:-false}" != "true" ] || exit 0
+    image_generation="$(cat "$HOME/image-generation" 2>/dev/null || printf '%s' 0)"
+    image_generation="$((image_generation + 1))"
+    printf '%s\\n' "$image_generation" > "$HOME/image-generation"
+    printf 'fake-image-%s\\n' "$image_generation" > "$HOME/tag-image-id"
+    printf '%s\\n' "$AGOR_DEV_IMAGE_INPUT_FINGERPRINT" > "$HOME/image-fingerprint"
+    ;;
+  "compose -p agor-codespaces-sqlite rm -sfv agor-dev")
+    rm -f "$HOME/healthy" "$HOME/container-image-id"
+    ;;
+  "compose -p agor-codespaces-sqlite up -d")
     [ "\${AGOR_ADMIN_PASSWORD:-}" != "admin" ] || exit 91
     [ "\${AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN:-}" = "false" ] || exit 92
     [ "\${SEED:-}" = "false" ] || exit 93
-    [ "\${FAIL_COMPOSE:-false}" != "true" ] || exit 95
+    cp "$HOME/tag-image-id" "$HOME/container-image-id"
     touch "$HOME/healthy"
-    printf '%s\n' "$AGOR_DEV_IMAGE_INPUT_FINGERPRINT" > "$HOME/image-fingerprint"
     ;;
   "compose -p agor-codespaces-sqlite ps")
     ;;
@@ -889,15 +935,41 @@ printf '%s\\n' 'fake docker ok'
   assert.doesNotMatch(`${first.stdout}${first.stderr}`, new RegExp(password));
   assert.doesNotMatch(`${first.stdout}${first.stderr}`, /SEED=true/);
 
+  await assert.rejects(
+    execFileAsync('bash', [script], { env: { ...env, FAIL_PS: 'true' } }),
+    (error) => error.code === 96,
+    'container inventory failures must stop reconciliation instead of risking stale dependencies'
+  );
+
   const second = await execFileAsync('bash', [script], { env });
   assert.equal((await readFile(passwordPath, 'utf8')).trim(), password);
-  assert.match(second.stdout, /already healthy; skipping rebuild/);
+  assert.match(second.stdout, /existing development image/);
   let dockerCalls = await readFile(join(directory, 'docker-calls'), 'utf8');
   let dockerCallLines = dockerCalls.trim().split('\n');
   assert.equal(
-    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite up -d --build')
+    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite build agor-dev')
       .length,
     1
+  );
+  assert.equal(
+    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite up -d').length,
+    2,
+    'a matching healthy image still reconciles the actual Compose container'
+  );
+
+  await writeFile(join(directory, 'tag-image-id'), 'interrupted-new-image\n');
+  await execFileAsync('bash', [script], { env });
+  dockerCalls = await readFile(join(directory, 'docker-calls'), 'utf8');
+  dockerCallLines = dockerCalls.trim().split('\n');
+  assert.equal(
+    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite rm -sfv agor-dev')
+      .length,
+    2,
+    'a current tag with an old service container must replace its anonymous dependencies'
+  );
+  assert.equal(
+    await readFile(join(directory, 'container-image-id'), 'utf8'),
+    await readFile(join(directory, 'tag-image-id'), 'utf8')
   );
 
   await rm(join(directory, 'healthy'));
@@ -907,10 +979,33 @@ printf '%s\\n' 'fake docker ok'
   dockerCallLines = dockerCalls.trim().split('\n');
   assert.equal(
     dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite up -d').length,
-    1
+    4
   );
 
   await writeFile(join(directory, 'image-fingerprint'), 'stale\n');
+  const removeCallsBeforeInvalidBuild = dockerCallLines.filter(
+    (call) => call === 'compose -p agor-codespaces-sqlite rm -sfv agor-dev'
+  ).length;
+  const upCallsBeforeInvalidBuild = dockerCallLines.filter(
+    (call) => call === 'compose -p agor-codespaces-sqlite up -d'
+  ).length;
+  await assert.rejects(
+    execFileAsync('bash', [script], { env: { ...env, BUILD_WITHOUT_TAG_UPDATE: 'true' } }),
+    /Built development image did not retain the expected input fingerprint/
+  );
+  dockerCalls = await readFile(join(directory, 'docker-calls'), 'utf8');
+  dockerCallLines = dockerCalls.trim().split('\n');
+  assert.equal(
+    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite rm -sfv agor-dev')
+      .length,
+    removeCallsBeforeInvalidBuild
+  );
+  assert.equal(
+    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite up -d').length,
+    upCallsBeforeInvalidBuild
+  );
+  assert.equal(await readFile(join(directory, 'healthy'), 'utf8'), '');
+
   await assert.rejects(
     execFileAsync('bash', [script], {
       env: { ...env, FAIL_COMPOSE: 'true' },
@@ -924,9 +1019,9 @@ printf '%s\\n' 'fake docker ok'
   dockerCalls = await readFile(join(directory, 'docker-calls'), 'utf8');
   dockerCallLines = dockerCalls.trim().split('\n');
   assert.equal(
-    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite up -d --build')
+    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite build agor-dev')
       .length,
-    3,
+    4,
     'a failed rebuild must leave a stale label so its retry builds again'
   );
 
@@ -937,8 +1032,8 @@ printf '%s\\n' 'fake docker ok'
   dockerCalls = await readFile(join(directory, 'docker-calls'), 'utf8');
   dockerCallLines = dockerCalls.trim().split('\n');
   assert.equal(
-    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite up -d --build')
+    dockerCallLines.filter((call) => call === 'compose -p agor-codespaces-sqlite build agor-dev')
       .length,
-    4
+    5
   );
 });

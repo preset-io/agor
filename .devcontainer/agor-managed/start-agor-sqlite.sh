@@ -112,18 +112,17 @@ existing_image_fingerprint="$(
     --format '{{ index .Config.Labels "io.agor.dev-image-input-fingerprint" }}' \
     agor-dev:latest 2>/dev/null || true
 )"
-
-# Start recovery may arrive while GitHub's postStart hook is still building.
-# After it acquires the same lock, avoid a second launch if that first launch
-# already made the stack healthy with the exact current development image.
-# Exact source Sync stops Compose before selecting its revision, so it cannot
-# take this short-circuit.
-if [[ "${AGOR_FORCE_REBUILD:-false}" != "true" ]] &&
-  [[ "$existing_image_fingerprint" == "$development_image_fingerprint" ]] &&
-  command -v curl >/dev/null 2>&1 &&
-  curl -fsS --max-time 5 http://127.0.0.1:3000/health >/dev/null 2>&1; then
-  echo "[agor-codespaces] Existing Compose stack is already healthy; skipping rebuild."
-  exit 0
+existing_image_id="$(
+  docker image inspect --format '{{.Id}}' agor-dev:latest 2>/dev/null || true
+)"
+compose_container_id="$(
+  docker compose -p agor-codespaces-sqlite ps -aq agor-dev
+)"
+compose_container_image_id=""
+if [[ -n "$compose_container_id" ]]; then
+  compose_container_image_id="$(
+    docker inspect --format '{{.Image}}' "$compose_container_id" 2>/dev/null || true
+  )"
 fi
 
 if [[ ! -s "$admin_password_file" ]]; then
@@ -151,10 +150,31 @@ if [[ "${AGOR_FORCE_REBUILD:-false}" == "true" ]] ||
 else
   echo "[agor-codespaces] Starting the SQLite Compose stack from the existing development image..."
 fi
+compose_needs_recreate="$compose_needs_build"
+if [[ "${AGOR_FORCE_RECREATE:-false}" == "true" ]]; then
+  compose_needs_recreate=true
+fi
+if [[ -n "$compose_container_id" ]]; then
+  if [[ -z "$existing_image_id" ]] ||
+    [[ -z "$compose_container_image_id" ]] ||
+    [[ "$compose_container_image_id" != "$existing_image_id" ]]; then
+    # A previous build may have updated the tag and then been interrupted before
+    # Compose recreated the service. Its anonymous dependencies still came from
+    # the old image, so remove that exact service container before starting.
+    compose_needs_recreate=true
+  fi
+fi
 
 # The nested Compose project owns a SQLite volume inside this Codespace. Ports
 # begin GitHub-private. The launcher may publish them only after its SSH health
 # probe succeeds, and repeats that reconciliation after every provider restart.
+build_compose() {
+  env \
+    UID="$(id -u)" \
+    GID="$(id -g)" \
+    AGOR_DEV_IMAGE_INPUT_FINGERPRINT="$development_image_fingerprint" \
+    docker compose -p agor-codespaces-sqlite build agor-dev
+}
 start_compose() {
   env \
     UID="$(id -u)" \
@@ -170,13 +190,27 @@ start_compose() {
     AGOR_ALLOW_DEVELOPMENT_DEFAULT_ADMIN=false \
     AGOR_MIGRATION_OFFLINE_CUTOVER=true \
     SEED=false \
-    docker compose -p agor-codespaces-sqlite up -d "$@"
+    docker compose -p agor-codespaces-sqlite up -d
 }
 if [[ "$compose_needs_build" == "true" ]]; then
-  start_compose --build
-else
-  start_compose
+  build_compose
+  built_image_fingerprint="$(
+    docker image inspect \
+      --format '{{ index .Config.Labels "io.agor.dev-image-input-fingerprint" }}' \
+      agor-dev:latest 2>/dev/null || true
+  )"
+  if [[ "$built_image_fingerprint" != "$development_image_fingerprint" ]]; then
+    echo "Built development image did not retain the expected input fingerprint" >&2
+    exit 1
+  fi
 fi
+if [[ "$compose_needs_recreate" == "true" ]]; then
+  # `compose rm -v` removes only anonymous dependency volumes; the named
+  # ~/.agor data volume survives. This prevents each reconciliation from
+  # stranding another multi-gigabyte node_modules volume set.
+  docker compose -p agor-codespaces-sqlite rm -sfv agor-dev
+fi
+start_compose
 unset admin_password
 
 echo "[agor-codespaces] Compose launch finished. Current service state:"
