@@ -83,9 +83,10 @@ import type { BoardTeammatePanelTab } from '../BoardTeammatePanel';
 import { BoardTeammatePanel, TeammatePanelRail } from '../BoardTeammatePanel';
 import { BranchModal, type BranchModalTab } from '../BranchModal';
 import type { BranchUpdate } from '../BranchModal/tabs/GeneralTab';
-import { CreateDialog, type CreateDialogProgress } from '../CreateDialog';
 import type { BranchTabConfig } from '../CreateDialog/tabs/BranchTab';
 import type { TeammateTabResult } from '../CreateDialog/tabs/TeammateTab';
+import type { CreateModalKind } from '../CreateMenu';
+import { CreateModals, type TeammateProgress } from '../CreateModals';
 import { EnvironmentLogsModal } from '../EnvironmentLogsModal';
 import { EventStreamPanel } from '../EventStreamPanel';
 import { HomePage } from '../HomePage';
@@ -404,10 +405,9 @@ export const App: React.FC<AppProps> = ({
   // the drawer straight away in a "pick a tool" empty state rather than the
   // old blocking modal — see `chooseAgenticTool` / `handleQuickStartSession`.
   const [pendingToolChoiceBranchId, setPendingToolChoiceBranchId] = useState<string | null>(null);
-  const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const [createDialogDefaultTab, setCreateDialogDefaultTab] = useState<
-    'branch' | 'teammate' | 'board' | 'repository'
-  >('teammate');
+  // Which focused create modal is open (null = none). Replaces the old tabbed
+  // CreateDialog's open+defaultTab pair.
+  const [activeCreateModal, setActiveCreateModal] = useState<CreateModalKind | null>(null);
   const [newBranchDefaultPosition, setNewBranchDefaultPosition] = useState<{
     x: number;
     y: number;
@@ -745,15 +745,12 @@ export const App: React.FC<AppProps> = ({
     [navigation]
   );
 
-  const handleHomeOpenCreateDialog = useCallback(
-    (tab?: 'branch' | 'teammate' | 'board' | 'repository', boardId?: string) => {
-      if (boardId) navigation.goToBoard(boardId);
-      setNewBranchDefaultPosition(null);
-      setCreateDialogDefaultTab(tab || 'teammate');
-      setCreateDialogOpen(true);
-    },
-    [navigation]
-  );
+  const handleHomeOpenCreateDialog = useCallback((kind: CreateModalKind) => {
+    // Board placement is a field within the branch modal now, so the homepage
+    // no longer needs a board pre-selection step — open the modal directly.
+    setNewBranchDefaultPosition(null);
+    setActiveCreateModal(kind);
+  }, []);
 
   // Wrapper to update board ID (updates both state and URL via hook)
   // Also closes conversation panel when switching to a different board
@@ -793,11 +790,11 @@ export const App: React.FC<AppProps> = ({
   // This ensures branches spawn at the center of the new board's viewport
   // biome-ignore lint/correctness/useExhaustiveDependencies: currentBoardId is intentionally included to trigger recalculation on board switch
   useEffect(() => {
-    if (createDialogOpen) {
+    if (activeCreateModal) {
       const center = sessionCanvasRef.current?.getViewportCenter();
       setNewBranchDefaultPosition(center || null);
     }
-  }, [currentBoardId, createDialogOpen]);
+  }, [currentBoardId, activeCreateModal]);
 
   // Update favicon based on session activity on current board
   useFaviconStatus(currentBoardId);
@@ -1004,8 +1001,6 @@ export const App: React.FC<AppProps> = ({
       ...(config.clone_depth !== undefined ? { clone_depth: config.clone_depth } : {}),
     });
 
-    setCreateDialogOpen(false);
-
     // Mirror handleCreateSession: route through the URL so useUrlState
     // owns selection. The just-created branch may not be in branchById
     // yet (socket `created` event still in flight) — goToBranch pushes
@@ -1029,10 +1024,7 @@ export const App: React.FC<AppProps> = ({
     }
   };
 
-  const handleCreateTeammate = async (
-    result: TeammateTabResult,
-    progress?: CreateDialogProgress
-  ) => {
+  const handleCreateTeammate = async (result: TeammateTabResult, progress?: TeammateProgress) => {
     const repoId = result.repoId;
     if (!repoId || !onCreateBranch || !onUpdateBranch) {
       throw new Error('Missing repository or branch creation handler for AI teammate creation.');
@@ -1681,11 +1673,10 @@ export const App: React.FC<AppProps> = ({
                     )}
                     {!isHomeSurface && (
                       <NewSessionButton
-                        onClick={() => {
+                        onSelect={(kind) => {
                           const center = sessionCanvasRef.current?.getViewportCenter();
                           setNewBranchDefaultPosition(center || null);
-                          setCreateDialogDefaultTab('teammate');
-                          setCreateDialogOpen(true);
+                          setActiveCreateModal(kind);
                         }}
                       />
                     )}
@@ -1833,8 +1824,7 @@ export const App: React.FC<AppProps> = ({
             closeSettings();
             onSettingsClose?.();
             setNewBranchDefaultPosition(null);
-            setCreateDialogDefaultTab('teammate');
-            setCreateDialogOpen(true);
+            setActiveCreateModal('teammate');
           }}
           branchStorageConfig={branchStorageConfig}
         />
@@ -1880,14 +1870,12 @@ export const App: React.FC<AppProps> = ({
           branchId={terminalBranchId}
           initialCommands={terminalCommands}
         />
-        <CreateDialog
-          open={createDialogOpen}
+        <CreateModals
+          active={activeCreateModal}
           onClose={() => {
-            setCreateDialogOpen(false);
-            setCreateDialogDefaultTab('teammate');
+            setActiveCreateModal(null);
             setNewBranchDefaultPosition(null);
           }}
-          defaultTab={createDialogDefaultTab}
           currentBoardId={currentBoardId}
           defaultPosition={newBranchDefaultPosition || undefined}
           onCreateBranch={handleCreateBranch}

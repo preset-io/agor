@@ -18,12 +18,18 @@ import { slugify } from '@/utils/repoSlug';
 import { useEnsureFrameworkRepo } from '../../../hooks/useEnsureFrameworkRepo';
 import { useTeammateForm } from '../../../hooks/useTeammateForm';
 import type { AgenticToolOption } from '../../../types';
+import {
+  BLANK_TEMPLATE_ID,
+  getTeammateTemplate,
+  type TeammateGalleryCardId,
+} from '../../../utils/teammateTemplates';
 import { buildConfigFromFormValues, getFormValuesFromConfig } from '../../AgenticToolConfigForm';
 import {
   AgenticToolConfigurationPicker,
   INLINE_AGENTIC_CONFIGURATION,
 } from '../../AgenticToolConfigurationPicker';
 import { AgentSelectionGrid } from '../../AgentSelectionGrid';
+import { TeammateTemplatePicker } from '../../CreateModals/TeammateTemplatePicker';
 import { TeammateFormFields } from '../../forms/TeammateFormFields';
 import type { ModelConfig } from '../../ModelSelector';
 
@@ -69,6 +75,7 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
   const repos = Array.from(repoById.values());
   const { frameworkRepo, isCloning } = useEnsureFrameworkRepo(repos, onCreateRepo);
   const [selectedAgent, setSelectedAgent] = useState<AgenticToolName>('claude-code');
+  const [templateId, setTemplateId] = useState<TeammateGalleryCardId | null>(null);
 
   const {
     form,
@@ -76,8 +83,29 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
     customRepoSelected,
     setCustomRepoSelected,
     validateForm,
+    applyDisplayName,
     handleDisplayNameChange,
   } = useTeammateForm(frameworkRepo);
+
+  // Selecting a template prefills the editable fields live. Blank (or clearing)
+  // leaves user input untouched and just resets the source branch to default.
+  const handleTemplateChange = (id: TeammateGalleryCardId | null) => {
+    setTemplateId(id);
+    const template = id ? getTeammateTemplate(id) : undefined;
+    if (!id || id === BLANK_TEMPLATE_ID || !template) {
+      form.setFieldValue('sourceBranch', 'main');
+      validateForm();
+      return;
+    }
+    form.setFieldsValue({
+      displayName: template.title,
+      emoji: template.emoji || '🤖',
+      description: template.description,
+      sourceBranch: template.sourceBranch,
+      repoId: frameworkRepo?.repo_id,
+    });
+    applyDisplayName(template.title);
+  };
 
   useEffect(() => {
     if (!availableAgents.some((agent) => agent.id === selectedAgent) && availableAgents[0]?.id) {
@@ -165,77 +193,80 @@ export const TeammateTab: React.FC<TeammateTabProps> = ({
   };
 
   return (
-    <Form
-      form={form}
-      layout="vertical"
-      onFieldsChange={validateForm}
-      initialValues={{ sourceBranch: 'main' }}
-    >
-      <TeammateFormFields
+    <>
+      <TeammateTemplatePicker value={templateId} onChange={handleTemplateChange} />
+      <Form
         form={form}
-        repos={repos}
-        frameworkRepo={frameworkRepo}
-        isCloning={isCloning}
-        onDisplayNameChange={handleDisplayNameChange}
-        customRepoSelected={customRepoSelected}
-        onCustomRepoChange={setCustomRepoSelected}
-        extraBeforeAdvanced={
-          <Collapse
-            ghost
-            size="small"
-            defaultActiveKey={['first-session']}
-            destroyOnHidden={false}
-            expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-            items={[
-              {
-                key: 'first-session',
-                label: <Typography.Text strong>First Session Configuration</Typography.Text>,
-                children: (
-                  <>
-                    <Form.Item label="Agentic Tool" required>
-                      <AgentSelectionGrid
-                        agents={availableAgents}
-                        selectedAgentId={selectedAgent}
-                        onSelect={(agentId) => setSelectedAgent(agentId as AgenticToolName)}
-                        variant="select"
-                        showComparisonLink
-                        fallbackToFirstVisibleAgent
-                      />
-                    </Form.Item>
+        layout="vertical"
+        onFieldsChange={validateForm}
+        initialValues={{ sourceBranch: 'main' }}
+      >
+        <TeammateFormFields
+          form={form}
+          repos={repos}
+          frameworkRepo={frameworkRepo}
+          isCloning={isCloning}
+          onDisplayNameChange={handleDisplayNameChange}
+          customRepoSelected={customRepoSelected}
+          onCustomRepoChange={setCustomRepoSelected}
+          extraBeforeAdvanced={
+            <Collapse
+              ghost
+              size="small"
+              defaultActiveKey={['first-session']}
+              destroyOnHidden={false}
+              expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+              items={[
+                {
+                  key: 'first-session',
+                  label: <Typography.Text strong>First Session Configuration</Typography.Text>,
+                  children: (
+                    <>
+                      <Form.Item label="Agentic Tool" required>
+                        <AgentSelectionGrid
+                          agents={availableAgents}
+                          selectedAgentId={selectedAgent}
+                          onSelect={(agentId) => setSelectedAgent(agentId as AgenticToolName)}
+                          variant="select"
+                          showComparisonLink
+                          fallbackToFirstVisibleAgent
+                        />
+                      </Form.Item>
 
-                    <Collapse
-                      ghost
-                      size="small"
-                      destroyOnHidden={false}
-                      expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-                      items={[
-                        {
-                          key: 'session-config',
-                          label: (
-                            <Typography.Text type="secondary">
-                              Session Configuration
-                            </Typography.Text>
-                          ),
-                          children: (
-                            <AgenticToolConfigurationPicker
-                              tool={selectedAgent}
-                              mcpServerById={mcpServerById}
-                              showHelpText={false}
-                              client={client ?? null}
-                              currentUser={currentUser}
-                            />
-                          ),
-                        },
-                      ]}
-                    />
-                  </>
-                ),
-              },
-            ]}
-            style={{ marginBottom: 8 }}
-          />
-        }
-      />
-    </Form>
+                      <Collapse
+                        ghost
+                        size="small"
+                        destroyOnHidden={false}
+                        expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+                        items={[
+                          {
+                            key: 'session-config',
+                            label: (
+                              <Typography.Text type="secondary">
+                                Session Configuration
+                              </Typography.Text>
+                            ),
+                            children: (
+                              <AgenticToolConfigurationPicker
+                                tool={selectedAgent}
+                                mcpServerById={mcpServerById}
+                                showHelpText={false}
+                                client={client ?? null}
+                                currentUser={currentUser}
+                              />
+                            ),
+                          },
+                        ]}
+                      />
+                    </>
+                  ),
+                },
+              ]}
+              style={{ marginBottom: 8 }}
+            />
+          }
+        />
+      </Form>
+    </>
   );
 };
