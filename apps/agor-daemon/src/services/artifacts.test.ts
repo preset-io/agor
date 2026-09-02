@@ -27,6 +27,7 @@ import type { Application } from '@agor/core/feathers';
 import type { Artifact, BoardID, BranchID, SessionID, UUID } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import { dbTest } from '../../../../packages/core/src/db/test-helpers';
+import { requestExecutor } from '../utils/spawn-executor';
 import { ArtifactsService, escapeEnvValue } from './artifacts';
 
 vi.mock('@agor/core/config', async (importOriginal) => {
@@ -35,6 +36,11 @@ vi.mock('@agor/core/config', async (importOriginal) => {
     ...actual,
     getDaemonBaseUrl: vi.fn(async () => 'http://localhost:3030'),
   };
+});
+
+vi.mock('../utils/spawn-executor.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/spawn-executor.js')>();
+  return { ...actual, requestExecutor: vi.fn() };
 });
 
 it('quotes dotenv values without permitting CR/LF record injection', () => {
@@ -50,12 +56,19 @@ it('quotes dotenv values without permitting CR/LF record injection', () => {
  * under test only calls `app.service(name).emit(event, payload)` for
  * WebSocket broadcasts, which we don't care about in unit tests.
  */
-function makeFakeApp(): Application {
+function makeFakeApp(config: Record<string, unknown> = {}): Application {
   const service = () => ({ emit: () => {} });
   return {
     service,
     get: (key: string) =>
-      key === 'authentication' ? { secret: 'artifact-test-secret' } : undefined,
+      key === 'authentication'
+        ? { secret: 'artifact-test-secret' }
+        : key === 'config'
+          ? config
+          : undefined,
+    sessionTokenService: {
+      generateCommandToken: vi.fn(async () => 'artifact-test-command-token'),
+    },
   } as unknown as Application;
 }
 
@@ -158,6 +171,145 @@ async function seedArtifact(
 
   return created;
 }
+
+describe('ArtifactsService executor sandbox ownership', () => {
+  const perUserSandboxConfig = {
+    paths: { data_home: '/srv/agor-data' },
+    multi_tenancy: {
+      mode: 'required_from_auth',
+      filesystem_isolation_enabled: true,
+      tenants_base_folder: '/srv/agor-tenants',
+    },
+    execution: {
+      unix_user_mode: 'sandbox',
+      branch_rbac: false,
+      sandbox: { enabled: true, home_mode: 'per_user' },
+    },
+  };
+  const tenant = { tenant_id: 'tenant-a', source: 'auth_claim' } as const;
+
+  dbTest(
+    'passes the authenticated actor home and tenant mounts to publish, validate, and land',
+    async ({ db }) => {
+      const actorId = generateId();
+      await seedUser(db, actorId);
+      await new UsersRepository(db).update(actorId, {
+        filesystem_home: '/srv/external-homes/artifact-collaborator',
+      });
+      await seedUser(db, 'user-owner');
+      const branchPath = '/srv/agor-tenants/tenant-a/worktrees/artifact-branch';
+      const branch = await seedRepoAndBranch(db, branchPath);
+      const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
+      const serviceBranchRepo = (service as unknown as { branchRepo: BranchRepository }).branchRepo;
+      vi.spyOn(serviceBranchRepo, 'resolveUserAccess').mockResolvedValue({
+        can: 'all',
+        fs_access: 'write',
+        is_owner: false,
+        source: 'direct',
+      });
+      vi.mocked(requestExecutor).mockReset();
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: false,
+        error: { code: 'TEST_STOP', message: 'captured executor request' },
+      });
+      const params = {
+        user: { user_id: actorId, role: 'admin' },
+        tenant,
+      } as never;
+
+      await expect(
+        service.publishArtifact(
+          { branch_id: branch.branch_id, subpath: 'artifact', name: 'test' },
+          params
+        )
+      ).rejects.toThrow('captured executor request');
+      await expect(
+        service.checkBuildFromFolder({ branch_id: branch.branch_id, subpath: 'artifact' }, params)
+      ).rejects.toThrow('captured executor request');
+      await expect(
+        service.land(generateId(), branch.branch_id, { subpath: 'artifact-copy' }, params)
+      ).rejects.toThrow('captured executor request');
+
+      expect(requestExecutor).toHaveBeenCalledTimes(3);
+      for (const [payload, options] of vi.mocked(requestExecutor).mock.calls) {
+        expect(payload).toEqual(
+          expect.objectContaining({
+            params: expect.objectContaining({
+              sandboxHomeStore: '/srv/external-homes/artifact-collaborator',
+              sandboxWorktreesRoot: '/srv/agor-tenants/tenant-a/worktrees',
+              sandboxBaseRepoPath: path.dirname(branchPath),
+            }),
+          })
+        );
+        expect(options).toEqual(
+          expect.objectContaining({
+            templateVariables: expect.objectContaining({ user_id: actorId }),
+          })
+        );
+        expect(JSON.stringify(payload)).not.toContain('user-owner');
+      }
+    }
+  );
+
+  dbTest(
+    'derives a canonical home from trusted tenant context without a shared fallback',
+    async ({ db }) => {
+      await seedUser(db, 'user-owner');
+      const branch = await seedRepoAndBranch(
+        db,
+        '/srv/agor-tenants/tenant-a/worktrees/canonical-artifact-branch'
+      );
+      const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
+      vi.mocked(requestExecutor).mockReset();
+      vi.mocked(requestExecutor).mockResolvedValue({
+        success: false,
+        error: { code: 'TEST_STOP', message: 'captured executor request' },
+      });
+
+      await expect(
+        service.publishArtifact(
+          { branch_id: branch.branch_id, subpath: 'artifact', name: 'test' },
+          {
+            user: { user_id: 'user-owner', role: 'member' },
+            tenant,
+          } as never
+        )
+      ).rejects.toThrow('captured executor request');
+
+      expect(requestExecutor).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            sandboxHomeStore: '/srv/agor-tenants/tenant-a/homes/user-owner',
+            sandboxWorktreesRoot: '/srv/agor-tenants/tenant-a/worktrees',
+          }),
+        }),
+        expect.any(Object)
+      );
+    }
+  );
+
+  dbTest(
+    'fails closed before executor spawn when tenant ownership is unavailable',
+    async ({ db }) => {
+      await seedUser(db, 'user-owner');
+      const branch = await seedRepoAndBranch(
+        db,
+        '/srv/agor-tenants/tenant-a/worktrees/missing-tenant-artifact-branch'
+      );
+      const service = new ArtifactsService(db, makeFakeApp(perUserSandboxConfig));
+      vi.mocked(requestExecutor).mockReset();
+
+      await expect(
+        service.publishArtifact(
+          { branch_id: branch.branch_id, subpath: 'artifact', name: 'test' },
+          { user: { user_id: 'user-owner', role: 'member' } } as never
+        )
+      ).rejects.toThrow(/tenant/i);
+
+      expect(requestExecutor).not.toHaveBeenCalled();
+    }
+  );
+});
 
 describe('ArtifactRepository URL fields', () => {
   dbTest('returns both board url and fullscreen_url from repository reads', async ({ db }) => {
