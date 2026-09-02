@@ -66,6 +66,7 @@ describe('constrained HA support profile', () => {
     ['gemini', { mode: 'yolo' }],
     ['copilot', { mode: 'bypassPermissions' }],
     ['cursor', { mode: 'default' }],
+    ['workload', { mode: 'auto' }],
   ] as const)('admits noninteractive %s execution', (agenticTool, permission_config) => {
     expect(
       isHaNonInteractivePermission({
