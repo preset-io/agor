@@ -96,4 +96,3 @@ allowBuilds:
   'unix-dgram@2.0.7': false
 patchedDependencies:
   streamdown@2.5.0: patches/streamdown@2.5.0.patch
-fetchTimeout: 600000

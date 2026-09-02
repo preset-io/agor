@@ -161,20 +161,8 @@ COPY patches/streamdown@2.5.0.patch ./patches/streamdown@2.5.0.patch
 # Install dependencies as agor user (cached in Docker layer)
 # This creates node_modules with correct platform binaries for container
 # An anonymous volume at /app/node_modules shadows the bind mount, preserving these deps
-#
-# Keep the content-addressed store outside the disposable image layer. Some
-# agent SDKs ship very large platform packages (notably GitHub Copilot), so a
-# transient registry timeout must not discard every package that was fetched
-# before it. The locked cache is shared safely by concurrent branch builds.
-# Longer fetch timeouts also give those platform tarballs enough time to finish
-# on slower connections; pnpm still verifies their lockfile integrity.
-RUN --mount=type=cache,id=agor-development-pnpm-store,target=/home/agor/.pnpm-store,sharing=locked \
-    sudo chown -R agor:agor /app /home/agor/.pnpm-store && \
-    pnpm config set fetch-retries 5 && \
-    pnpm config set fetch-retry-maxtimeout 120000 && \
-    pnpm config set fetch-timeout 600000 && \
-    pnpm install --frozen-lockfile --network-concurrency=1 \
-      --store-dir=/home/agor/.pnpm-store
+RUN sudo chown -R agor:agor /app && \
+    pnpm install --frozen-lockfile
 
 # Copy entrypoint scripts
 COPY docker/docker-entrypoint.sh /usr/local/bin/
