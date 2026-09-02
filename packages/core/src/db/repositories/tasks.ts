@@ -21,14 +21,21 @@ import type {
   UUID,
   WorkloadCompletionInput,
   WorkloadCompletionResult,
+  WorkloadRequest,
 } from '@agor/core/types';
 import {
+  assertValidWorkloadCompletionInput,
+  assertWorkloadCompletionMatchesRequest,
   EXECUTING_TASK_STATUSES,
   isTerminalTaskStatus,
   NONTERMINAL_TASK_STATUSES,
+  parseWorkloadRequest,
   SessionStatus,
   sessionCanStartTask,
   TaskStatus,
+  WORKLOAD_CONTROLLED_FAILURE_CODE,
+  WORKLOAD_RESULT_MAX_BYTES,
+  workloadResultFromCompletion,
 } from '@agor/core/types';
 import {
   and,
@@ -84,8 +91,6 @@ import {
 import { ExecutorSessionTokenAuthorityRepository } from './executor-session-token-authorities';
 import { deepMerge } from './merge-utils';
 import type { MessageCreateTransactionHook } from './messages';
-
-const WORKLOAD_RESULT_MAX_BYTES = 4 * 1024;
 
 function workloadResultMessage(row: MessageRow): Message {
   return {
@@ -1718,6 +1723,13 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
    * result Message, or attach that success result after Stop owns the Task.
    */
   async completeWorkload(input: WorkloadCompletionInput): Promise<WorkloadCompletionResult> {
+    try {
+      assertValidWorkloadCompletionInput(input);
+    } catch (error) {
+      throw new RepositoryError(
+        error instanceof Error ? error.message : 'WORKLOAD_COMPLETION_INVALID'
+      );
+    }
     return this.mutateLockedSessionTask(
       input.task_id,
       async (txDb, taskRow, sessionRow, fullId) => {
@@ -1726,14 +1738,23 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         }
 
         const current = this.rowToTask(taskRow);
-        const content = JSON.stringify({
-          schemaVersion: 1,
-          profile: 'wait',
-          outcome: 'completed',
-          taskId: current.task_id,
-          requested: { durationMs: input.requested_duration_ms },
-          observed: { elapsedMs: input.observed_elapsed_ms },
-        });
+        let request: WorkloadRequest;
+        try {
+          request = parseWorkloadRequest(current.full_prompt);
+        } catch {
+          throw new RepositoryError('WORKLOAD_REQUEST_INVALID');
+        }
+        try {
+          assertWorkloadCompletionMatchesRequest(request, input);
+        } catch {
+          throw new RepositoryError('Workload completion does not match its durable request');
+        }
+
+        const terminalStatus =
+          request.profile === 'controlled-failure' ? TaskStatus.FAILED : TaskStatus.COMPLETED;
+        const content = JSON.stringify(
+          workloadResultFromCompletion(current.task_id, request, input)
+        );
         if (Buffer.byteLength(content, 'utf8') > WORKLOAD_RESULT_MAX_BYTES) {
           throw new RepositoryError('Workload result exceeded its bounded contract');
         }
@@ -1752,7 +1773,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
             existing.content === content &&
             existing.metadata?.is_meta === true &&
             existing.metadata?.workload_result === true;
-          if (current.status === TaskStatus.COMPLETED && exactResult) {
+          if (current.status === terminalStatus && exactResult) {
             return { outcome: 'idempotent', task: current, message: existing };
           }
           throw new RepositoryError('Workload result identity is already in use');
@@ -1763,11 +1784,14 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         }
 
         const now = await this.mutationNow(txDb, fullId);
-        const terminal = withTerminalTiming(current, { status: TaskStatus.COMPLETED }, now);
+        const terminal = withTerminalTiming(current, { status: terminalStatus }, now);
         const settled = {
           ...deepMerge(current, terminal),
-          status: TaskStatus.COMPLETED,
+          status: terminalStatus,
           tool_use_count: 0,
+          ...(terminalStatus === TaskStatus.FAILED
+            ? { error_message: WORKLOAD_CONTROLLED_FAILURE_CODE }
+            : {}),
           task_id: current.task_id,
           session_id: current.session_id,
           created_by: current.created_by,
@@ -1804,7 +1828,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
 
         await update(txDb, tasks)
           .set({
-            status: TaskStatus.COMPLETED,
+            status: terminalStatus,
             completed_at: taskInsert.completed_at,
             data: {
               ...taskInsert.data,
@@ -1819,7 +1843,8 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           .run();
         await update(txDb, sessions)
           .set({
-            status: SessionStatus.IDLE,
+            status:
+              terminalStatus === TaskStatus.FAILED ? SessionStatus.FAILED : SessionStatus.IDLE,
             ready_for_prompt: true,
             updated_at: now,
           })

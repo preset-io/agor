@@ -40,3 +40,4 @@ export * from './upload';
 export * from './user';
 export * from './utils';
 export * from './widget';
+export * from './workload';

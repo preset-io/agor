@@ -8,11 +8,19 @@ import type {
   MessageID,
   Session,
   Task,
+  TaskID,
   TaskPendingDispatchStatus,
   UserID,
   UUID,
+  WorkloadCompletionInput,
 } from '@agor/core/types';
-import { MessageRole, SessionStatus, TaskStatus } from '@agor/core/types';
+import {
+  MessageRole,
+  SessionStatus,
+  TaskStatus,
+  WORKLOAD_CONTROLLED_FAILURE_CODE,
+  WORKLOAD_RESULT_MAX_BYTES,
+} from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
 import { generateId, toShortId } from '../../lib/ids';
 import type { Database } from '../client';
@@ -107,6 +115,7 @@ describe('TaskRepository.completeWorkload', () => {
         session_id: sessionId,
         status: TaskStatus.RUNNING,
         executor_connected_at: new Date().toISOString(),
+        full_prompt: '{"schemaVersion":1,"profile":"wait","durationMs":1000}',
       })
     );
     const resultMessageId = generateId() as MessageID;
@@ -141,6 +150,276 @@ describe('TaskRepository.completeWorkload', () => {
     });
   });
 
+  dbTest('publishes canonical structured results for every non-wait profile', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const cases: Array<{
+      prompt: string;
+      input: WorkloadCompletionInput;
+      expectedProfile: string;
+    }> = [
+      {
+        prompt: '{"schemaVersion":1,"profile":"cpu","durationMs":10,"seed":7}',
+        input: {
+          task_id: 'placeholder-task',
+          result_message_id: 'placeholder-message',
+          profile: 'cpu',
+          requested_duration_ms: 10,
+          seed: 7,
+          observed_elapsed_ms: 12,
+          iterations: 100,
+          checksum: '0123abcd',
+        },
+        expectedProfile: 'cpu',
+      },
+      {
+        prompt: '{"schemaVersion":1,"profile":"temporary-io","bytes":32,"seed":7}',
+        input: {
+          task_id: 'placeholder-task',
+          result_message_id: 'placeholder-message',
+          profile: 'temporary-io',
+          requested_bytes: 32,
+          seed: 7,
+          observed_elapsed_ms: 2,
+          bytes_written: 32,
+          bytes_read: 32,
+          sha256: 'a'.repeat(64),
+        },
+        expectedProfile: 'temporary-io',
+      },
+      {
+        prompt: '{"schemaVersion":1,"profile":"compile-test","repetitions":3,"totalTimeMs":100}',
+        input: {
+          task_id: 'placeholder-task',
+          result_message_id: 'placeholder-message',
+          profile: 'compile-test',
+          requested_repetitions: 3,
+          requested_total_time_ms: 100,
+          observed_elapsed_ms: 4,
+          observed_repetitions: 3,
+        },
+        expectedProfile: 'compile-test',
+      },
+    ];
+
+    for (const testCase of cases) {
+      const sessionId = await createSessionWithDeps(db, 'workload');
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: new Date().toISOString(),
+          full_prompt: testCase.prompt,
+        })
+      );
+      const result = await taskRepo.completeWorkload({
+        ...testCase.input,
+        task_id: task.task_id,
+        result_message_id: generateId() as MessageID,
+      });
+
+      expect(JSON.parse(result.message.content as string)).toMatchObject({
+        schemaVersion: 1,
+        profile: testCase.expectedProfile,
+        outcome: 'completed',
+        taskId: task.task_id,
+      });
+      expect(result.message.metadata).toEqual({ is_meta: true, workload_result: true });
+    }
+  });
+
+  dbTest('rejects malformed completion fields before publishing a result', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db, 'workload');
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: new Date().toISOString(),
+        full_prompt: '{"schemaVersion":1,"profile":"cpu","durationMs":10,"seed":7}',
+      })
+    );
+    const invalid = {
+      task_id: task.task_id,
+      result_message_id: generateId() as MessageID,
+      profile: 'cpu',
+      requested_duration_ms: 10,
+      seed: 7,
+      observed_elapsed_ms: 1,
+      iterations: 1,
+      checksum: '0123abcd',
+      command: 'not-allowed',
+    } as unknown as WorkloadCompletionInput;
+
+    await expect(taskRepo.completeWorkload(invalid)).rejects.toThrow('WORKLOAD_COMPLETION_INVALID');
+    await expect(
+      taskRepo.completeWorkload({ ...invalid, profile: null } as unknown as WorkloadCompletionInput)
+    ).rejects.toThrow('WORKLOAD_COMPLETION_INVALID');
+    expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
+  });
+
+  dbTest(
+    'rejects a completion whose profile or requested fields differ from the durable prompt',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const cases: Array<{
+        prompt: string;
+        input: (taskId: TaskID) => WorkloadCompletionInput;
+      }> = [
+        {
+          prompt: '{"schemaVersion":1,"profile":"cpu","durationMs":10,"seed":7}',
+          input: (taskId) => ({
+            task_id: taskId,
+            result_message_id: generateId() as MessageID,
+            requested_duration_ms: 100,
+            observed_elapsed_ms: 100,
+          }),
+        },
+        {
+          prompt: '{"schemaVersion":1,"profile":"cpu","durationMs":10,"seed":7}',
+          input: (taskId) => ({
+            task_id: taskId,
+            result_message_id: generateId() as MessageID,
+            profile: 'cpu',
+            requested_duration_ms: 11,
+            seed: 7,
+            observed_elapsed_ms: 10,
+            iterations: 1,
+            checksum: '0123abcd',
+          }),
+        },
+        {
+          prompt: '{"schemaVersion":1,"profile":"temporary-io","bytes":32,"seed":7}',
+          input: (taskId) => ({
+            task_id: taskId,
+            result_message_id: generateId() as MessageID,
+            profile: 'temporary-io',
+            requested_bytes: 33,
+            seed: 7,
+            observed_elapsed_ms: 1,
+            bytes_written: 33,
+            bytes_read: 33,
+            sha256: 'a'.repeat(64),
+          }),
+        },
+        {
+          prompt: '{"schemaVersion":1,"profile":"compile-test","repetitions":3,"totalTimeMs":100}',
+          input: (taskId) => ({
+            task_id: taskId,
+            result_message_id: generateId() as MessageID,
+            profile: 'compile-test',
+            requested_repetitions: 3,
+            requested_total_time_ms: 101,
+            observed_elapsed_ms: 1,
+            observed_repetitions: 3,
+          }),
+        },
+        {
+          prompt: '{"schemaVersion":1,"profile":"controlled-failure","delayMs":10}',
+          input: (taskId) => ({
+            task_id: taskId,
+            result_message_id: generateId() as MessageID,
+            profile: 'controlled-failure',
+            requested_delay_ms: 11,
+          }),
+        },
+      ];
+
+      for (const testCase of cases) {
+        const sessionId = await createSessionWithDeps(db, 'workload');
+        const task = await taskRepo.create(
+          createTaskData({
+            session_id: sessionId,
+            status: TaskStatus.RUNNING,
+            executor_connected_at: new Date().toISOString(),
+            full_prompt: testCase.prompt,
+          })
+        );
+
+        await expect(taskRepo.completeWorkload(testCase.input(task.task_id))).rejects.toThrow(
+          'durable request'
+        );
+        expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.RUNNING);
+        expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
+      }
+    }
+  );
+
+  dbTest(
+    'settles controlled failure with a daemon-authored result and exact retry',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db, 'workload');
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: new Date().toISOString(),
+          full_prompt: '{"schemaVersion":1,"profile":"controlled-failure","delayMs":10}',
+        })
+      );
+      const input: WorkloadCompletionInput = {
+        task_id: task.task_id,
+        result_message_id: generateId() as MessageID,
+        profile: 'controlled-failure',
+        requested_delay_ms: 10,
+      };
+
+      const first = await taskRepo.completeWorkload(input);
+      const retry = await taskRepo.completeWorkload(input);
+      const messages = await new MessagesRepository(db).findByTaskId(task.task_id);
+      const result = JSON.parse(messages[0]!.content as string);
+
+      expect(first.outcome).toBe('transitioned');
+      expect(retry.outcome).toBe('idempotent');
+      expect(result).toEqual({
+        schemaVersion: 1,
+        profile: 'controlled-failure',
+        outcome: 'failed',
+        taskId: task.task_id,
+        requested: { delayMs: 10 },
+        errorCode: WORKLOAD_CONTROLLED_FAILURE_CODE,
+      });
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({
+        session_id: sessionId,
+        task_id: task.task_id,
+      });
+      expect(Buffer.byteLength(messages[0]!.content as string, 'utf8')).toBeLessThanOrEqual(
+        WORKLOAD_RESULT_MAX_BYTES
+      );
+      expect((await taskRepo.findById(task.task_id))?.error_message).toBe(
+        WORKLOAD_CONTROLLED_FAILURE_CODE
+      );
+      expect((await new SessionRepository(db).findById(sessionId))?.status).toBe(
+        SessionStatus.FAILED
+      );
+    }
+  );
+
+  dbTest('does not publish controlled failure after Stop owns the Task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db, 'workload');
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.STOPPING,
+        executor_connected_at: new Date().toISOString(),
+        full_prompt: '{"schemaVersion":1,"profile":"controlled-failure","delayMs":0}',
+      })
+    );
+
+    await expect(
+      taskRepo.completeWorkload({
+        task_id: task.task_id,
+        result_message_id: generateId() as MessageID,
+        profile: 'controlled-failure',
+        requested_delay_ms: 0,
+      })
+    ).rejects.toThrow(/active Task fence/);
+    expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.STOPPING);
+    expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
+  });
+
   dbTest('does not publish a success result after Stop owns the Task', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db, 'workload');
@@ -149,6 +428,7 @@ describe('TaskRepository.completeWorkload', () => {
         session_id: sessionId,
         status: TaskStatus.STOPPING,
         executor_connected_at: new Date().toISOString(),
+        full_prompt: '{"schemaVersion":1,"profile":"wait","durationMs":1000}',
       })
     );
 
@@ -177,6 +457,7 @@ describe('TaskRepository.completeWorkload', () => {
           session_id: sessionId,
           status: TaskStatus.RUNNING,
           executor_connected_at: new Date().toISOString(),
+          full_prompt: '{"schemaVersion":1,"profile":"wait","durationMs":1000}',
         })
       );
 
