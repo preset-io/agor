@@ -281,7 +281,9 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
     expect(codespaces.sync).toMatch(/agor-codespace-launcher\.mjs sync/);
     expect(codespaces.sync).toContain('--revision {{shellQuote sync.revision}}');
     expect(codespaces.stop).toMatch(/agor-codespace-launcher\.mjs stop/);
+    expect(codespaces.stop).toContain('--wait-seconds 1200');
     expect(codespaces.nuke).toMatch(/agor-codespace-launcher\.mjs nuke/);
+    expect(codespaces.nuke).toContain('--wait-seconds 1200');
     expect(codespaces.logs).toMatch(/agor-codespace-launcher\.mjs logs/);
     // Start publishes the actual dynamic app/health URLs in its typed result.
     expect(codespaces.health).toBeUndefined();
