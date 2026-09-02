@@ -194,8 +194,10 @@ one when necessary, revalidates its owner, repository, ref, and binding, repairs
 an unhealthy nested Agor stack, and republishes current URLs after health is
 ready. Pressing Start again after an interrupted attempt reuses that resource
 rather than creating another one. GitHub state transitions can take several
-minutes; the checked-in lifecycle commands keep a bounded 20-minute provider
-wait instead of reporting completion before GitHub reaches the requested state.
+minutes. Start keeps a bounded 24-minute provider wait inside Agor's 25-minute
+lifecycle deadline, leaving a minute for the result to settle. Stop and Nuke
+keep bounded 20-minute waits instead of reporting completion before GitHub
+reaches the requested state.
 
 Sync is the explicit source-update operation. It accepts a full commit ID that
 has already been pushed to the configured ref, refuses to overwrite a dirty

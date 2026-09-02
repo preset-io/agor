@@ -276,6 +276,7 @@ describe('parseAgorYml — repo .agor.yml demo variants', () => {
 
     expect(codespaces.startup_timeout_ms).toBe(1_500_000);
     expect(codespaces.start).toMatch(/agor-codespace-launcher\.mjs start/);
+    expect(codespaces.start).toContain('--wait-seconds 1440');
     expect(codespaces.start).toContain('--repository {{shellQuote repo.github_slug}}');
     expect(codespaces.start).toContain('--port-visibility public');
     expect(codespaces.sync).toMatch(/agor-codespace-launcher\.mjs sync/);

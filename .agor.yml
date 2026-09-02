@@ -98,7 +98,7 @@ environment:
         --binding {{shellQuote branch.id}}
         --devcontainer-path .devcontainer/agor-managed/devcontainer.json
         --idle-timeout-minutes 30 --retention-period-minutes 1440
-        --wait-seconds 1200
+        --wait-seconds 1440
         --app-port 5000 --health-port 3000 --health-path /health
         --port-visibility public --emit-health public-only
       stop: >-
