@@ -546,6 +546,8 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
       const branches = new BranchRepository(db);
       const health = new EnvironmentHealthRepository(db);
       const revision = 'a'.repeat(40);
+      const branchGeneration = branch.environment_generation;
+      if (branchGeneration === undefined) throw new Error('Expected environment generation');
       await branches.update(branch.branch_id, {
         environment_instance: {
           status: 'running',
@@ -555,7 +557,7 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
             active_attempt: {
               token: 'live-sync-attempt',
               revision,
-              environment_generation: branch.environment_generation,
+              environment_generation: branchGeneration,
               started_at: new Date().toISOString(),
               lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
               instance_id: 'daemon-a',
@@ -595,6 +597,10 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
       // It is lease-bounded too. A dead Sync worker cannot keep an actually dead
       // environment green after its ownership expires.
       const expiredBranch = await seedStartingBranch(db, 'running');
+      const expiredBranchGeneration = expiredBranch.environment_generation;
+      if (expiredBranchGeneration === undefined) {
+        throw new Error('Expected expired branch environment generation');
+      }
       await branches.update(expiredBranch.branch_id, {
         environment_instance: {
           status: 'running',
@@ -604,7 +610,7 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
             active_attempt: {
               token: 'expired-sync-attempt',
               revision,
-              environment_generation: expiredBranch.environment_generation,
+              environment_generation: expiredBranchGeneration,
               started_at: new Date(Date.now() - 120_000).toISOString(),
               lease_expires_at: new Date(Date.now() - 60_000).toISOString(),
               instance_id: 'dead-daemon',
@@ -618,6 +624,10 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
       ).toBe('error');
 
       const malformedBranch = await seedStartingBranch(db, 'running');
+      const malformedBranchGeneration = malformedBranch.environment_generation;
+      if (malformedBranchGeneration === undefined) {
+        throw new Error('Expected malformed branch environment generation');
+      }
       await branches.update(malformedBranch.branch_id, {
         environment_instance: {
           status: 'running',
@@ -627,7 +637,7 @@ describe('EnvironmentHealthRepository shared transition rules', () => {
             active_attempt: {
               token: 'malformed-sync-attempt',
               revision,
-              environment_generation: malformedBranch.environment_generation,
+              environment_generation: malformedBranchGeneration,
               started_at: new Date().toISOString(),
               lease_expires_at: 'not-a-timestamp',
               instance_id: 'malformed-daemon',
