@@ -505,6 +505,101 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
     ).resolves.toMatchObject({ outcome: 'committed', environmentStatus: 'running' });
   });
 
+  dbTest(
+    'rejects expired and malformed settlements without erasing newer health evidence',
+    async ({ db }) => {
+      for (const settlement of ['complete', 'fail'] as const) {
+        for (const [leaseCase, leaseExpiresAt] of [
+          ['expired', '2000-01-01T00:00:00.000Z'],
+          ['malformed', 'not-a-timestamp'],
+        ] as const) {
+          const { branch } = await seedRunningBranch(db);
+          const branches = new BranchRepository(db);
+          const health = new EnvironmentHealthRepository(db);
+          const sync = new EnvironmentSyncRepository(db);
+          await sync.request({ branchId: branch.branch_id, desiredRevision: REVISION_A });
+          const syncClaim = await sync.claim({
+            branchId: branch.branch_id,
+            claimToken: `${settlement}-${leaseCase}-sync`,
+            leaseDurationMs: 60_000,
+            identity: { instanceId: 'sync-a', bootId: 'sync-boot-a' },
+          });
+          if (syncClaim.outcome !== 'claimed') throw new Error('Expected Sync claim');
+          await branches.update(branch.branch_id, {
+            environment_instance: {
+              status: 'running',
+              source_sync: {
+                desired_revision: REVISION_A,
+                desired_at: new Date().toISOString(),
+                active_attempt: {
+                  ...syncClaim.attempt,
+                  lease_expires_at: leaseExpiresAt,
+                },
+              },
+            },
+          });
+
+          const healthClaim = await health.claim({
+            branchId: branch.branch_id,
+            claimToken: `${settlement}-${leaseCase}-health`,
+            leaseDurationMs: 60_000,
+            identity: { instanceId: 'health-a', bootId: 'health-boot-a' },
+          });
+          if (healthClaim.outcome !== 'claimed') throw new Error('Expected health claim');
+          await expect(
+            health.commit({
+              branchId: branch.branch_id,
+              claimToken: healthClaim.claim.claim_token,
+              environmentGeneration: healthClaim.claim.environment_generation,
+              observation: {
+                status: 'healthy',
+                message: 'Fresh evidence after the Sync lease ended',
+                recordWhileStarting: true,
+              },
+            })
+          ).resolves.toMatchObject({ outcome: 'committed', environmentStatus: 'running' });
+
+          const result =
+            settlement === 'complete'
+              ? await sync.complete({
+                  branchId: branch.branch_id,
+                  claimToken: syncClaim.attempt.token,
+                  appliedRevision: REVISION_A,
+                  environmentGeneration: syncClaim.attempt.environment_generation,
+                })
+              : await sync.fail({
+                  branchId: branch.branch_id,
+                  claimToken: syncClaim.attempt.token,
+                  revision: REVISION_A,
+                  environmentGeneration: syncClaim.attempt.environment_generation,
+                  message: 'Late failure from an owner whose lease ended',
+                });
+          expect(result).toEqual({ outcome: 'stale' });
+
+          const current = await branches.findById(branch.branch_id);
+          expect(current?.environment_instance).toMatchObject({
+            status: 'running',
+            last_health_check: {
+              status: 'healthy',
+              message: 'Fresh evidence after the Sync lease ended',
+            },
+            source_sync: {
+              desired_revision: REVISION_A,
+              active_attempt: { token: syncClaim.attempt.token, lease_expires_at: leaseExpiresAt },
+            },
+          });
+          await expect(
+            health.claimIsCurrent({
+              branchId: branch.branch_id,
+              claimToken: healthClaim.claim.claim_token,
+              environmentGeneration: healthClaim.claim.environment_generation,
+            })
+          ).resolves.toBe(true);
+        }
+      }
+    }
+  );
+
   dbTest('rejects abbreviated, dirty, and unknown revisions', async ({ db }) => {
     const { branch } = await seedRunningBranch(db);
     const sync = new EnvironmentSyncRepository(db);

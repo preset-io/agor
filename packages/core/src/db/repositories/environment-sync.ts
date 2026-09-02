@@ -271,6 +271,7 @@ export class EnvironmentSyncRepository {
           const state = environment?.source_sync;
           const attempt = state?.active_attempt;
           const now = row ? await this.mutationNow(txDb, input.branchId) : new Date();
+          const leaseExpiresAt = Date.parse(attempt?.lease_expires_at ?? '');
           if (
             !row ||
             row.archived ||
@@ -281,7 +282,8 @@ export class EnvironmentSyncRepository {
             attempt.environment_generation !== input.environmentGeneration ||
             attempt.token !== input.claimToken ||
             attempt.revision !== appliedRevision ||
-            Date.parse(attempt.lease_expires_at) <= now.getTime()
+            !Number.isFinite(leaseExpiresAt) ||
+            leaseExpiresAt <= now.getTime()
           ) {
             return { outcome: 'stale' };
           }
@@ -359,18 +361,23 @@ export class EnvironmentSyncRepository {
           const environment = data?.environment_instance;
           const state = environment?.source_sync;
           const attempt = state?.active_attempt;
+          const now = row ? await this.mutationNow(txDb, input.branchId) : new Date();
+          const leaseExpiresAt = Date.parse(attempt?.lease_expires_at ?? '');
           if (
             !row ||
+            row.archived ||
             !state ||
             !attempt ||
+            environment?.status !== 'running' ||
             row.environment_generation !== input.environmentGeneration ||
             attempt.environment_generation !== input.environmentGeneration ||
             attempt.token !== input.claimToken ||
-            attempt.revision !== revision
+            attempt.revision !== revision ||
+            !Number.isFinite(leaseExpiresAt) ||
+            leaseExpiresAt <= now.getTime()
           ) {
             return { outcome: 'stale' };
           }
-          const now = await this.mutationNow(txDb, input.branchId);
           if (state.desired_revision !== revision) {
             const nextState: SourceSyncState = { ...state };
             delete nextState.active_attempt;

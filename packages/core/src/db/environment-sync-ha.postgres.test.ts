@@ -377,5 +377,122 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       });
       expect(current?.environment_instance?.last_health_check).toBeUndefined();
     });
+
+    it('rejects stale settlement leases without clearing another daemon health claim', async () => {
+      for (const settlement of ['complete', 'fail'] as const) {
+        for (const [leaseCase, leaseExpiresAt] of [
+          ['expired', '2000-01-01T00:00:00.000Z'],
+          ['malformed', 'not-a-timestamp'],
+        ] as const) {
+          const tenantId = `env-sync-stale-${settlement}-${leaseCase}-${generateId()}` as TenantID;
+          const { branch } = await seedRunningBranch(dbA, tenantId);
+          await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+            new EnvironmentSyncRepository(scoped).request({
+              branchId: branch.branch_id,
+              desiredRevision: REVISION_A,
+            })
+          );
+          const syncClaim = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) =>
+            new EnvironmentSyncRepository(scoped).claim({
+              branchId: branch.branch_id,
+              claimToken: `${settlement}-${leaseCase}-sync`,
+              leaseDurationMs: 60_000,
+              identity: { instanceId: 'sync-a', bootId: 'sync-boot-a' },
+            })
+          );
+          if (syncClaim.outcome !== 'claimed') throw new Error('Expected Sync claim');
+          await runWithTenantDatabaseScope(dbA, tenantId, async (scoped) => {
+            const branchesRepo = new BranchRepository(scoped);
+            const current = await branchesRepo.findById(branch.branch_id);
+            const sourceSync = current?.environment_instance?.source_sync;
+            if (!sourceSync?.active_attempt) throw new Error('Expected active Sync attempt');
+            await branchesRepo.update(branch.branch_id, {
+              environment_instance: {
+                status: 'running',
+                source_sync: {
+                  ...sourceSync,
+                  active_attempt: {
+                    ...sourceSync.active_attempt,
+                    lease_expires_at: leaseExpiresAt,
+                  },
+                },
+              },
+            });
+          });
+
+          const healthClaim = await runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+            new EnvironmentHealthRepository(scoped).claim({
+              branchId: branch.branch_id,
+              claimToken: `${settlement}-${leaseCase}-health`,
+              leaseDurationMs: 60_000,
+              identity: { instanceId: 'health-b', bootId: 'health-boot-b' },
+            })
+          );
+          if (healthClaim.outcome !== 'claimed') throw new Error('Expected health claim');
+          await expect(
+            runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+              new EnvironmentHealthRepository(scoped).commit({
+                branchId: branch.branch_id,
+                claimToken: healthClaim.claim.claim_token,
+                environmentGeneration: healthClaim.claim.environment_generation,
+                observation: {
+                  status: 'healthy',
+                  message: 'Fresh evidence after the Sync lease ended',
+                  recordWhileStarting: true,
+                },
+              })
+            )
+          ).resolves.toMatchObject({ outcome: 'committed', environmentStatus: 'running' });
+
+          const result = await runWithTenantDatabaseScope(dbA, tenantId, (scoped) => {
+            const sync = new EnvironmentSyncRepository(scoped);
+            return settlement === 'complete'
+              ? sync.complete({
+                  branchId: branch.branch_id,
+                  claimToken: syncClaim.attempt.token,
+                  appliedRevision: REVISION_A,
+                  environmentGeneration: syncClaim.attempt.environment_generation,
+                })
+              : sync.fail({
+                  branchId: branch.branch_id,
+                  claimToken: syncClaim.attempt.token,
+                  revision: REVISION_A,
+                  environmentGeneration: syncClaim.attempt.environment_generation,
+                  message: 'Late failure from an owner whose lease ended',
+                });
+          });
+          expect(result).toEqual({ outcome: 'stale' });
+
+          await expect(
+            runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+              new BranchRepository(scoped).findById(branch.branch_id)
+            )
+          ).resolves.toMatchObject({
+            environment_instance: {
+              status: 'running',
+              last_health_check: {
+                status: 'healthy',
+                message: 'Fresh evidence after the Sync lease ended',
+              },
+              source_sync: {
+                active_attempt: {
+                  token: syncClaim.attempt.token,
+                  lease_expires_at: leaseExpiresAt,
+                },
+              },
+            },
+          });
+          await expect(
+            runWithTenantDatabaseScope(dbB, tenantId, (scoped) =>
+              new EnvironmentHealthRepository(scoped).claimIsCurrent({
+                branchId: branch.branch_id,
+                claimToken: healthClaim.claim.claim_token,
+                environmentGeneration: healthClaim.claim.environment_generation,
+              })
+            )
+          ).resolves.toBe(true);
+        }
+      }
+    });
   }
 );
