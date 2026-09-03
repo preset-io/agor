@@ -2211,6 +2211,7 @@ function AppContent() {
       onUpdateUser={(userId, updates, shouldApply) =>
         handleUpdateUser(userId, updates, { shouldApply })
       }
+      onRefreshCurrentUser={refreshCurrentUserForAuthorityCycle}
       onDeleteUser={handleDeleteUser}
       onCreateMCPServer={handleCreateMCPServer}
       onDeleteMCPServer={handleDeleteMCPServer}
