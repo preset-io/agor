@@ -39,13 +39,43 @@ export async function installCursor(page: Page): Promise<void> {
       ].join(';');
       cursor.innerHTML = svg;
       document.documentElement.appendChild(cursor);
+      // The overlay INTERPOLATES toward the latest real mouse position at
+      // render rate. Synthetic mousemove events arrive at protocol cadence,
+      // which craters on repaint-heavy screens (the wizard's backdrop
+      // blur) — snapping the overlay to sparse events reads as stutter.
+      // A critically-damped chase at rAF rate stays glassy regardless of
+      // how few events arrive, and hugs the target closely enough that
+      // clicks land where the cursor appears to be.
+      let targetX = 0;
+      let targetY = 0;
+      let curX = 0;
+      let curY = 0;
+      let seeded = false;
       window.addEventListener(
         'mousemove',
         (e) => {
-          cursor.style.transform = `translate(${e.clientX}px,${e.clientY}px)`;
+          targetX = e.clientX;
+          targetY = e.clientY;
+          if (!seeded) {
+            curX = targetX;
+            curY = targetY;
+            seeded = true;
+          }
         },
         true
       );
+      let last = performance.now();
+      const tick = (now: number) => {
+        const dt = Math.min(0.1, (now - last) / 1000);
+        last = now;
+        // Time-based exponential approach: ~90% of the gap closed per 80ms.
+        const k = 1 - Math.exp(-dt * 28);
+        curX += (targetX - curX) * k;
+        curY += (targetY - curY) * k;
+        cursor.style.transform = `translate(${curX}px,${curY}px)`;
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
     },
     { id: CURSOR_ID, svg: CURSOR_SVG }
   );
