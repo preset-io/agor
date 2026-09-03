@@ -175,8 +175,10 @@ export interface TaskMetadata {
   }>;
   /**
    * Marks a task whose prompt was authored by the daemon (not typed by a
-   * human). Used by widget auto-resume so the UI can label the queued
-   * prompt appropriately.
+   * human). This is a security-relevant provenance marker: MCP, widget,
+   * zone, spawn, and other synthesized prompt paths set it so provider SDKs
+   * do not grant the prompt human authority. The UI may also use it to label
+   * the queued prompt appropriately.
    */
   system_authored?: boolean;
   /**
