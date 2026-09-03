@@ -93,6 +93,7 @@ import type {
   UUID,
 } from '@agor/core/types';
 import {
+  BRANCH_FILESYSTEM_OBSERVATION_CAPABILITY,
   boardCommentZoneParentObjectKey,
   hasMinimumRole,
   isBranchArchiveOrDeleteOptions,
@@ -170,6 +171,7 @@ import {
   type PermissionDecisionSubmission,
 } from './permissions/deliver-permission-decision.js';
 import { publicBoardCommentRepositionInput } from './services/board-comments.js';
+import { createBranchFilesystemStatusService } from './services/branch-filesystem-status.js';
 import type { GatewayService } from './services/gateway.js';
 import { createMCPCatalogConnectService } from './services/mcp-catalog-connect.js';
 import { isMCPOAuthGrantAuthorizedForServer } from './services/mcp-oauth-grant-authority.js';
@@ -4117,6 +4119,17 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     requireAuth
   );
 
+  registerLongAuthenticatedRoute(
+    app,
+    '/branches/:id/filesystem-status',
+    createBranchFilesystemStatusService(branchRepository, db, app),
+    {
+      // Exact Branch and filesystem-read authorization is enforced by the service.
+      find: { role: ROLES.VIEWER, action: 'observe branch filesystem status' },
+    },
+    requireAuth
+  );
+
   // Archive/delete branch
   app.use('/branches/:id/archive-or-delete', {
     async create(data: unknown, params: RouteParams) {
@@ -5439,6 +5452,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           ? { required: true, ready: realtimeRuntime.isReady() }
           : { required: false, ready: true },
         features: {
+          branchFilesystemObservation: BRANCH_FILESYSTEM_OBSERVATION_CAPABILITY,
           teammateFrameworkRepoUrl: resolveTeammateFrameworkRepoUrl(config),
           // Web terminal availability: UI should hide terminal buttons when false.
           // Server-side gate in register-hooks.ts is the source of truth; this

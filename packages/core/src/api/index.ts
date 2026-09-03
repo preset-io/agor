@@ -18,6 +18,7 @@ import type {
   Branch,
   BranchCapabilityPolicy,
   BranchEnvironmentUpdate,
+  BranchFilesystemObservation,
   CapabilityPolicyWorkspacePreferences,
   CardType,
   CardWithType,
@@ -246,6 +247,11 @@ export interface BranchPermissionsService {
     data: ClientInput<BranchCapabilityPolicy>,
     params?: Params
   ): Promise<BranchCapabilityPolicy>;
+}
+
+/** Read-only, path-free observation of a Branch's server-owned filesystem root. */
+export interface BranchFilesystemStatusService {
+  find(params?: Params): Promise<BranchFilesystemObservation>;
 }
 
 export interface WorkspacePreferencesService {
@@ -843,6 +849,7 @@ export interface AgorClient
   service(path: 'boards'): BoardsService;
   service(path: 'boards/:id/permissions'): BoardPermissionsService;
   service(path: 'branches/:id/permissions'): BranchPermissionsService;
+  service(path: `branches/${string}/filesystem-status`): BranchFilesystemStatusService;
   service(path: 'workspace-preferences'): WorkspacePreferencesService;
   service(path: 'schedules'): SchedulesService;
   service(path: 'gateway-channels'): GatewayChannelsService;

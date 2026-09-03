@@ -387,6 +387,7 @@ export const REALTIME_PUBLISH_POLICY = {
   'branches/:id/restart': { audience: 'none', why: `${NO_CONSUMER} Lands as branches.patched.` },
   'branches/:id/nuke': { audience: 'none', why: `${NO_CONSUMER} Lands as branches.patched.` },
   'branches/:id/health': { audience: 'none', why: NO_CONSUMER },
+  'branches/:id/filesystem-status': { audience: 'none', why: NO_CONSUMER },
   'branches/:id/render-environment': {
     audience: 'none',
     why: 'Renders the environment template, which can interpolate secrets.',
