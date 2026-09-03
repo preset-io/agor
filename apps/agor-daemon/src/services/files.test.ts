@@ -1,7 +1,9 @@
 import {
   BranchRepository,
   getCurrentTenantDatabaseScope,
+  RepoRepository,
   runWithTenantContext,
+  UsersRepository,
 } from '@agor/core/db';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { requestExecutor } from '../utils/spawn-executor.js';
@@ -16,21 +18,74 @@ vi.mock('../utils/spawn-executor.js', () => ({
   requestExecutor: vi.fn(),
 }));
 
-const app = {
-  get: () => ({}),
-  sessionTokenService: { generateCommandToken: vi.fn(async () => 'user-token') },
-  settings: { authentication: { secret: 'test' } },
-} as never;
+function createApp(config = {}) {
+  return {
+    get: () => config,
+    sessionTokenService: { generateCommandToken: vi.fn(async () => 'user-token') },
+    settings: { authentication: { secret: 'test' } },
+  } as never;
+}
+
+const app = createApp();
 
 describe('FilesService tenant scope', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     vi.spyOn(BranchRepository.prototype, 'resolveUserAccess').mockResolvedValue({
       can: 'view',
       fs_access: 'read',
       is_owner: false,
       source: 'others',
     });
+  });
+
+  it('passes the authenticated caller home into sandboxed autocomplete requests', async () => {
+    vi.spyOn(UsersRepository.prototype, 'findById').mockResolvedValue({
+      user_id: 'user-1',
+      filesystem_home: '/home/user-1',
+    } as never);
+    vi.spyOn(RepoRepository.prototype, 'findById').mockResolvedValue({
+      local_path: '/srv/agor/repos/org/repo',
+    } as never);
+    vi.mocked(requestExecutor).mockResolvedValue({ success: true, data: { results: [] } });
+    const service = new FilesService(
+      { run: vi.fn() } as never,
+      createApp({
+        paths: { data_home: '/srv/agor' },
+        execution: { sandbox: { enabled: true, home_mode: 'per_user' } },
+      })
+    );
+
+    await runWithTenantContext('tenant-a', () =>
+      service.find({
+        query: { sessionId: 'session-1' as never, search: 'readme' },
+        session: { session_id: 'session-1', branch_id: 'branch-1' },
+        branch: {
+          branch_id: 'branch-1',
+          path: '/tenant-a/branch-1',
+          repo_id: 'repo-1',
+          storage_mode: 'worktree',
+          primary_owner_user_id: 'owner-2',
+        },
+        user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
+      } as never)
+    );
+
+    expect(requestExecutor).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'branch.files.list',
+        params: expect.objectContaining({
+          sandboxHomeStore: '/home/user-1',
+          sandboxWorktreesRoot: '/srv/agor/worktrees',
+          sandboxBaseRepoPath: '/srv/agor/repos/org/repo',
+        }),
+      }),
+      expect.objectContaining({
+        templateVariables: expect.objectContaining({ user_id: 'user-1' }),
+      })
+    );
+    expect(JSON.stringify(vi.mocked(requestExecutor).mock.calls[0])).not.toContain('owner-2');
   });
 
   it('fails before repository access when tenant identity is missing', async () => {
