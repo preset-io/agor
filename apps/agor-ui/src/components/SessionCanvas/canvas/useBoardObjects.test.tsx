@@ -1,4 +1,4 @@
-import type { Board } from '@agor-live/client';
+import type { Board, BoardObject } from '@agor-live/client';
 import { renderHook } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactNode } from 'react';
@@ -84,6 +84,32 @@ describe('zone toolbar metadata', () => {
       overlappingZoneCount: 0,
       layerAvailability: { front: false, forward: false, backward: true, back: true },
     });
+  });
+});
+
+describe('updateObject', () => {
+  it('returns false when the board patch rejects so modal callers stay open', async () => {
+    const { client, patch } = makeRejectingClient();
+    const zone = {
+      type: 'zone',
+      x: 0,
+      y: 0,
+      width: 200,
+      height: 200,
+      label: 'Review',
+    } as BoardObject;
+    const board = makeBoard({ a: zone });
+    const { result } = renderReorder(board, client);
+    const node = result.current.getBoardObjectNodes().find(({ id }) => id === 'a');
+    const onUpdate = node?.data.onUpdate as (
+      objectId: string,
+      objectData: BoardObject
+    ) => Promise<boolean>;
+
+    await expect(onUpdate('a', { ...zone, label: 'Updated' })).resolves.toBe(false);
+
+    expect(patch).toHaveBeenCalledTimes(1);
+    expect(showError).toHaveBeenCalledWith('Failed to save board object');
   });
 });
 

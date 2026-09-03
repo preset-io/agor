@@ -191,4 +191,37 @@ describe('ZoneConfigModal historical tool migration', () => {
       backgroundColor: 'rgba(255, 0, 0, 0.1)',
     });
   });
+
+  it('keeps automation edits open when persistence reports failure', async () => {
+    const onCancel = vi.fn();
+    const onUpdate = vi.fn().mockResolvedValue(false);
+    render(
+      <AntdApp>
+        <ZoneConfigModal
+          open
+          onCancel={onCancel}
+          zoneName="Review"
+          objectId="zone-1"
+          onUpdate={onUpdate}
+          zoneData={{
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 100,
+            label: 'Review',
+          }}
+        />
+      </AntdApp>
+    );
+
+    const template = screen.getByLabelText('Prompt template');
+    fireEvent.change(template, { target: { value: 'Review this branch carefully' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(template).toHaveValue('Review this branch carefully');
+  });
 });

@@ -38,7 +38,10 @@ interface ZoneConfigModalProps {
   onCancel: () => void;
   zoneName: string;
   objectId: string;
-  onUpdate: (objectId: string, objectData: BoardObject) => void | Promise<void>;
+  onUpdate: (
+    objectId: string,
+    objectData: BoardObject
+  ) => boolean | undefined | Promise<boolean | undefined>;
   zoneData: BoardObject;
   canEdit?: boolean;
 }
@@ -197,7 +200,7 @@ export const ZoneConfigModal = ({
         triggerAgent !== (zone.trigger?.agent || 'claude-code');
 
       if (hasChanges) {
-        await onUpdate(objectId, {
+        const saved = await onUpdate(objectId, {
           ...zone,
           label: values.name,
           locked: Boolean(values.locked),
@@ -207,6 +210,7 @@ export const ZoneConfigModal = ({
           color: clearLegacyColor ? undefined : zone.color,
           trigger: nextTrigger,
         });
+        if (saved === false) return;
       }
       onCancel();
     } catch {

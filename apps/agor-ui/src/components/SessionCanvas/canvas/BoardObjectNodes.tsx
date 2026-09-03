@@ -48,6 +48,7 @@ const getColorPalette = (token: ReturnType<typeof theme.useToken>['token']) => [
 ];
 
 type ZoneBoardObject = Extract<BoardObject, { type: 'zone' }>;
+type BoardObjectUpdateResult = boolean | undefined | Promise<boolean | undefined>;
 
 /**
  * ZoneNode - Resizable rectangle for organizing sessions visually
@@ -55,7 +56,7 @@ type ZoneBoardObject = Extract<BoardObject, { type: 'zone' }>;
 interface ZoneNodeData extends Omit<ZoneBoardObject, 'type'> {
   objectId: string;
   pinnedItemCount?: number;
-  onUpdate?: (objectId: string, objectData: BoardObject) => void;
+  onUpdate?: (objectId: string, objectData: BoardObject) => BoardObjectUpdateResult;
   onDelete?: (objectId: string, deleteAssociatedSessions: boolean) => void;
   onReorder?: (objectId: string, op: LayerOp) => void;
   /** Effective board.edit capability. Omitted only by isolated tests/fixtures. */
@@ -634,7 +635,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           onCancel={() => setConfigModalOpen(false)}
           zoneName={data.label}
           objectId={data.objectId}
-          onUpdate={data.onUpdate || (() => {})}
+          onUpdate={data.onUpdate || (() => undefined)}
           zoneData={zoneData}
           canEdit={data.canEdit !== false}
         />
@@ -651,6 +652,7 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           }}
           zoneName={data.label}
           pinnedItemCount={data.pinnedItemCount || 0}
+          canEdit={data.canEdit !== false}
         />
       )}
     </>

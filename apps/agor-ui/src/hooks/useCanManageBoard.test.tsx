@@ -1,8 +1,13 @@
 import type { AgorClient, Board, User } from '@agor-live/client';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { __resetAuthConfigForTests, __setAuthConfigForTests } from './useAuthConfig';
 import { useCanManageBoard } from './useCanManageBoard';
+
+const connectionState = vi.hoisted(() => ({ authGeneration: 1 }));
+vi.mock('../contexts/ConnectionContext', () => ({
+  useConnectionState: () => connectionState,
+}));
 
 const member = {
   user_id: 'user-2',
@@ -17,6 +22,7 @@ const board = {
 } as Board;
 
 afterEach(() => {
+  connectionState.authGeneration = 1;
   __resetAuthConfigForTests();
 });
 
@@ -34,9 +40,16 @@ describe('useCanManageBoard', () => {
     expect(service).not.toHaveBeenCalled();
   });
 
-  it('uses effective access once and ignores ordinary board object patches', async () => {
+  it('ignores object patches but refetches effective access after authenticated reconnect', async () => {
     __setAuthConfigForTests({ requireAuth: true }, { branchRbac: true });
-    const find = vi.fn().mockResolvedValue({ capabilities: ['board.view', 'board.edit'] });
+    let resolveReconnect: ((access: { capabilities: string[] }) => void) | undefined;
+    const reconnectAccess = new Promise<{ capabilities: string[] }>((resolve) => {
+      resolveReconnect = resolve;
+    });
+    const find = vi
+      .fn()
+      .mockResolvedValueOnce({ capabilities: ['board.view', 'board.edit'] })
+      .mockReturnValueOnce(reconnectAccess);
     const service = vi.fn((path: string) => {
       expect(path).toBe('boards/:id/effective-access');
       return { find };
@@ -69,5 +82,16 @@ describe('useCanManageBoard', () => {
 
     expect(result.current).toBe(true);
     expect(find).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      connectionState.authGeneration += 1;
+      rerender({ currentBoard: board });
+    });
+
+    await waitFor(() => expect(find).toHaveBeenCalledTimes(2));
+    expect(result.current).toBe(false);
+
+    resolveReconnect?.({ capabilities: ['board.view'] });
+    await waitFor(() => expect(result.current).toBe(false));
   });
 });

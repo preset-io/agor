@@ -440,9 +440,9 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
     boardId: string,
     objectId: string,
     _deleteAssociatedSessions: boolean,
-    _params?: BoardParams
+    params?: BoardParams
   ): Promise<{ board: Board; affectedSessions: string[] }> {
-    const board = await this.removeBoardObject(boardId, objectId);
+    const board = await this.removeBoardObject(boardId, objectId, params);
     return {
       board,
       affectedSessions: [],

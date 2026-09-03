@@ -64,7 +64,7 @@ export const useBoardObjects = ({
   const handleUpdateObject = useCallback(
     async (objectId: string, objectData: BoardObject) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client) return;
+      if (!currentBoard || !client) return false;
 
       try {
         await client.service('boards').patch(currentBoard.board_id, {
@@ -72,11 +72,14 @@ export const useBoardObjects = ({
           objectId,
           objectData,
         } as unknown as Partial<Board>);
+        return true;
       } catch (error) {
         console.error('Failed to update object:', error);
+        showError('Failed to save board object');
+        return false;
       }
     },
-    [client] // Only depend on client, not board
+    [client, showError] // Only depend on stable services, not board
   );
 
   /**

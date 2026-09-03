@@ -11,6 +11,7 @@ interface DeleteZoneModalProps {
   onConfirm: () => void;
   zoneName: string;
   pinnedItemCount: number;
+  canEdit: boolean;
 }
 
 export const DeleteZoneModal = ({
@@ -19,11 +20,12 @@ export const DeleteZoneModal = ({
   onConfirm,
   zoneName,
   pinnedItemCount,
+  canEdit,
 }: DeleteZoneModalProps) => {
   const mutationGate = useMutationGate();
 
   const handleOk = () => {
-    if (!mutationGate.canMutate) return;
+    if (!mutationGate.canMutate || !canEdit) return;
     onConfirm();
   };
 
@@ -36,7 +38,7 @@ export const DeleteZoneModal = ({
       okText="Delete zone"
       okButtonProps={{
         danger: true,
-        disabled: !mutationGate.canMutate,
+        disabled: !mutationGate.canMutate || !canEdit,
       }}
       cancelText="Cancel"
       width={480}
