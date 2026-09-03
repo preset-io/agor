@@ -62,8 +62,10 @@ describe('ZoneConfigModal historical tool migration', () => {
       </AntdApp>
     );
 
-    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
-    fireEvent.click(screen.getByRole('tab', { name: /Automation/ }));
+    expect(screen.getByRole('tab', { name: /Automation/ })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
     expect(await screen.findByText('This zone uses a removed agentic tool')).toBeInTheDocument();
     const save = screen.getByRole('button', { name: 'Save' });
     expect(save).toBeDisabled();
@@ -83,7 +85,7 @@ describe('ZoneConfigModal historical tool migration', () => {
     });
   });
 
-  it('moves appearance and label size into General without changing automation defaults', async () => {
+  it('prioritizes automation and keeps appearance settings in a secondary tab', async () => {
     const onUpdate = vi.fn();
     render(
       <AntdApp>
@@ -105,11 +107,17 @@ describe('ZoneConfigModal historical tool migration', () => {
       </AntdApp>
     );
 
-    expect(screen.getByText('Appearance')).toBeInTheDocument();
+    expect(screen.getByText('No prompt configured')).toBeInTheDocument();
+    expect(screen.getByLabelText('Prompt template')).toBeInTheDocument();
+    expect(screen.getByLabelText('Trigger behavior')).toBeInTheDocument();
+    expect(screen.queryByText('Appearance')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance & placement' }));
+    expect(await screen.findByText('Appearance')).toBeInTheDocument();
     expect(screen.getByLabelText('Zone border color')).toBeInTheDocument();
     expect(screen.getByLabelText('Zone fill color')).toBeInTheDocument();
     expect(screen.getByLabelText('Zone label size')).toHaveValue('14');
-    expect(screen.queryByLabelText('Trigger behavior')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Prompt template')).not.toBeVisible();
 
     fireEvent.change(screen.getByLabelText('Zone label size'), { target: { value: '20' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));

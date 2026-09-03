@@ -75,6 +75,8 @@ export const ZoneConfigModal = ({
   const mutationGate = useMutationGate();
 
   const triggerBehavior = Form.useWatch('triggerBehavior', form);
+  const triggerTemplate = Form.useWatch('triggerTemplate', form);
+  const automationActive = Boolean(triggerTemplate?.trim());
   const zone = zoneData.type === 'zone' ? zoneData : undefined;
   const zoneTrigger = zone?.trigger;
   const hasZoneTrigger = Boolean(zoneTrigger);
@@ -334,18 +336,21 @@ export const ZoneConfigModal = ({
 
   const automationContent = (
     <>
-      <Form.Item name="triggerBehavior" label="Trigger behavior">
-        <Select
-          style={{ width: '100%' }}
-          options={[
-            {
-              value: 'show_picker',
-              label: 'Show picker — choose session and action when dropped',
-            },
-            { value: 'always_new', label: 'Always new — auto-create a new root session' },
-          ]}
-        />
-      </Form.Item>
+      <Typography.Paragraph>
+        Configure the prompt that runs when a branch enters this zone and how Agor starts it.
+      </Typography.Paragraph>
+
+      <Alert
+        type={automationActive ? 'success' : 'info'}
+        showIcon
+        title={automationActive ? 'Automation active' : 'No prompt configured'}
+        description={
+          automationActive
+            ? 'Dropping a branch into this zone will use the prompt below.'
+            : 'This zone is organizational only until you add a prompt.'
+        }
+        style={{ marginBottom: token.margin }}
+      />
 
       {requiresSupportedToolSelection && (
         <Alert
@@ -357,26 +362,10 @@ export const ZoneConfigModal = ({
         />
       )}
 
-      {(triggerBehavior === 'always_new' || requiresSupportedToolSelection) && (
-        <Form.Item
-          label="Agent"
-          help="New sessions will use the dropping user's default configuration for this agent."
-        >
-          <AgentSelectionGrid
-            agents={AVAILABLE_AGENTS}
-            selectedAgentId={triggerAgent}
-            onSelect={(id) => setTriggerAgent(id as AgenticToolName)}
-            columns={2}
-            showHelperText={false}
-            showComparisonLink={false}
-          />
-        </Form.Item>
-      )}
-
       <Form.Item
         name="triggerTemplate"
-        label="Trigger template"
-        help="Leave empty for an organizational-only zone (no trigger fires on drop)."
+        label="Prompt template"
+        help="Leave empty to keep this as an organizational-only zone."
         extra={
           <ExpandableAlert
             key={`${objectId}:${open}`}
@@ -428,6 +417,36 @@ export const ZoneConfigModal = ({
           rows={6}
         />
       </Form.Item>
+
+      <Form.Item name="triggerBehavior" label="When a branch enters this zone">
+        <Select
+          aria-label="Trigger behavior"
+          style={{ width: '100%' }}
+          options={[
+            {
+              value: 'show_picker',
+              label: 'Show picker — choose session and action when dropped',
+            },
+            { value: 'always_new', label: 'Always new — auto-create a new root session' },
+          ]}
+        />
+      </Form.Item>
+
+      {(triggerBehavior === 'always_new' || requiresSupportedToolSelection) && (
+        <Form.Item
+          label="Agent"
+          help="New sessions will use the dropping user's default configuration for this agent."
+        >
+          <AgentSelectionGrid
+            agents={AVAILABLE_AGENTS}
+            selectedAgentId={triggerAgent}
+            onSelect={(id) => setTriggerAgent(id as AgenticToolName)}
+            columns={2}
+            showHelperText={false}
+            showComparisonLink={false}
+          />
+        </Form.Item>
+      )}
     </>
   );
 
@@ -446,13 +465,17 @@ export const ZoneConfigModal = ({
     >
       <Form form={form} layout="vertical">
         <Tabs
-          defaultActiveKey="general"
+          defaultActiveKey="automation"
           items={[
-            { key: 'general', label: 'General', children: generalContent },
             {
               key: 'automation',
               label: requiresSupportedToolSelection ? 'Automation (action required)' : 'Automation',
               children: automationContent,
+            },
+            {
+              key: 'appearance',
+              label: 'Appearance & placement',
+              children: generalContent,
             },
           ]}
         />

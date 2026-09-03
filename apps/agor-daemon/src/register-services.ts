@@ -550,7 +550,15 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           id: boardObject.object_id,
         });
       },
-      (event) => emitServiceEvent(app, { path: 'boards', ...event })
+      (event) => emitServiceEvent(app, { path: 'boards', ...event }),
+      (comment, params) =>
+        emitServiceEvent(app, {
+          path: 'board-comments',
+          event: 'patched',
+          data: comment,
+          params,
+          id: comment.comment_id,
+        })
     ),
     {
       methods: [

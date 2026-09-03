@@ -7,6 +7,7 @@
 
 import { PAGINATION } from '@agor/core/config';
 import {
+  BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
   mapBoardExportBlobToCreateData,
@@ -18,15 +19,17 @@ import {
   buildTeammateWelcomeNoteObject,
   TEAMMATE_WELCOME_NOTE_OBJECT_ID,
 } from '@agor/core/templates/teammate-welcome-note';
-import type {
-  AuthenticatedParams,
-  Board,
-  BoardExportBlob,
-  BoardID,
-  BoardObject,
-  QueryParams,
-  TeammateWelcomeNoteRequest,
-  UUID,
+import {
+  type AuthenticatedParams,
+  type Board,
+  type BoardComment,
+  type BoardExportBlob,
+  type BoardID,
+  type BoardObject,
+  boardCommentZoneParentObjectKey,
+  type QueryParams,
+  type TeammateWelcomeNoteRequest,
+  type UUID,
 } from '@agor/core/types';
 import { NotFoundError } from '@agor/core/utils/errors';
 import { DrizzleService, type Query } from '../adapters/drizzle';
@@ -90,11 +93,13 @@ function shouldSqlPageBoardQuery(query?: Record<string, unknown>): boolean {
 export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardParams> {
   private boardRepo: BoardRepository;
   private boardObjectRepo: BoardObjectRepository;
+  private boardCommentsRepo: BoardCommentsRepository;
   private emitBoardObjectPatched?: (
     boardObject: BoardObjectPatchedEventPayload,
     params?: BoardParams
   ) => void;
   private emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void;
+  private emitBoardCommentPatched?: (comment: BoardComment, params?: BoardParams) => void;
 
   constructor(
     db: TenantScopeAwareDatabase,
@@ -102,7 +107,8 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
       boardObject: BoardObjectPatchedEventPayload,
       params?: BoardParams
     ) => void,
-    emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void
+    emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void,
+    emitBoardCommentPatched?: (comment: BoardComment, params?: BoardParams) => void
   ) {
     const boardRepo = new BoardRepository(db);
     super(boardRepo, {
@@ -116,8 +122,10 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
 
     this.boardRepo = boardRepo;
     this.boardObjectRepo = new BoardObjectRepository(db);
+    this.boardCommentsRepo = new BoardCommentsRepository(db);
     this.emitBoardObjectPatched = emitBoardObjectPatched;
     this.emitBoardEvent = emitBoardEvent;
+    this.emitBoardCommentPatched = emitBoardCommentPatched;
   }
 
   /**
@@ -300,6 +308,31 @@ export class BoardsService extends DrizzleService<Board, Partial<Board>, BoardPa
         const payload = toBoardObjectPatchedEventPayload(boardObject);
         if (_params) this.emitBoardObjectPatched?.(payload, _params);
         else this.emitBoardObjectPatched?.(payload);
+      }
+
+      // Spatial comments can also be pinned to a zone. Keep them visible by
+      // converting their relative offsets to absolute board coordinates before
+      // the parent zone disappears. Replies have no position and are unaffected.
+      const comments = await this.boardCommentsRepo.findByBoard(board.board_id);
+      for (const comment of comments) {
+        const relative = comment.position?.relative;
+        if (
+          relative?.parent_type !== 'zone' ||
+          boardCommentZoneParentObjectKey(relative.parent_id) !== objectId
+        ) {
+          continue;
+        }
+
+        const updated = await this.boardCommentsRepo.update(comment.comment_id, {
+          position: {
+            absolute: {
+              x: object.x + relative.offset_x,
+              y: object.y + relative.offset_y,
+            },
+          },
+        });
+        if (_params) this.emitBoardCommentPatched?.(updated, _params);
+        else this.emitBoardCommentPatched?.(updated);
       }
     }
 
@@ -597,7 +630,8 @@ export function createBoardsService(
     boardObject: BoardObjectPatchedEventPayload,
     params?: BoardParams
   ) => void,
-  emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void
+  emitBoardEvent?: (event: Omit<ManualServiceEvent, 'path'>) => void,
+  emitBoardCommentPatched?: (comment: BoardComment, params?: BoardParams) => void
 ): BoardsService {
-  return new BoardsService(db, emitBoardObjectPatched, emitBoardEvent);
+  return new BoardsService(db, emitBoardObjectPatched, emitBoardEvent, emitBoardCommentPatched);
 }

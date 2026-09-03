@@ -4,6 +4,7 @@
 
 import type { BoardComment, BoardObject, User } from '@agor-live/client';
 import {
+  BgColorsOutlined,
   CaretDownOutlined,
   CaretUpOutlined,
   CommentOutlined,
@@ -435,14 +436,25 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
                   <span
                     aria-hidden="true"
                     style={{
-                      width: 16,
-                      height: 16,
-                      borderRadius: token.borderRadiusSM,
-                      border: `2px solid ${borderColor}`,
-                      background: backgroundColor,
-                      display: 'inline-block',
+                      position: 'relative',
+                      display: 'inline-flex',
+                      fontSize: token.fontSizeLG,
                     }}
-                  />
+                  >
+                    <BgColorsOutlined />
+                    <span
+                      style={{
+                        position: 'absolute',
+                        right: -4,
+                        bottom: -2,
+                        width: 9,
+                        height: 9,
+                        borderRadius: '50%',
+                        border: `1px solid ${token.colorBorder}`,
+                        background: backgroundColor,
+                      }}
+                    />
+                  </span>
                 }
                 style={{ width: 32, height: 32 }}
               />
@@ -645,10 +657,10 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
         <DeleteZoneModal
           open={deleteModalOpen}
           onCancel={() => setDeleteModalOpen(false)}
-          onConfirm={(deleteAssociatedSessions) => {
+          onConfirm={() => {
             setDeleteModalOpen(false);
             if (data.onDelete) {
-              data.onDelete(data.objectId, deleteAssociatedSessions);
+              data.onDelete(data.objectId, false);
             }
           }}
           zoneName={data.label}

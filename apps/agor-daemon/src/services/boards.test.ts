@@ -5,6 +5,7 @@
  */
 
 import {
+  BoardCommentsRepository,
   BoardObjectRepository,
   BoardRepository,
   BranchRepository,
@@ -240,13 +241,20 @@ describe('BoardsService - Custom Methods', () => {
   });
 
   dbTest(
-    'removeBoardObject clears zone-pinned entities with absolute positions',
+    'deleteZone keeps pinned entities and comments at their absolute board positions',
     async ({ db }) => {
       const emitBoardObjectPatched = vi.fn();
-      const service = new BoardsService(db, emitBoardObjectPatched);
+      const emitBoardCommentPatched = vi.fn();
+      const service = new BoardsService(
+        db,
+        emitBoardObjectPatched,
+        undefined,
+        emitBoardCommentPatched
+      );
       const repoRepo = new RepoRepository(db);
       const branchRepo = new BranchRepository(db);
       const boardObjectRepo = new BoardObjectRepository(db);
+      const commentsRepo = new BoardCommentsRepository(db);
 
       const repo = await repoRepo.create(createRepoData());
       const branch = await branchRepo.create(createBranchData({ repo_id: repo.repo_id }));
@@ -272,17 +280,42 @@ describe('BoardsService - Custom Methods', () => {
         position: { x: 10, y: 20 },
         zone_id: 'zone-review',
       });
+      const comment = await commentsRepo.create({
+        board_id: board.board_id,
+        created_by: TEST_USER,
+        content: 'Keep this comment',
+        position: {
+          relative: {
+            parent_id: 'review',
+            parent_type: 'zone',
+            offset_x: 7,
+            offset_y: 8,
+          },
+        },
+      });
 
-      await service.removeBoardObject(board.board_id, 'zone-review');
+      const result = await service.deleteZone(board.board_id, 'zone-review', false);
 
       const updatedBoardObject = await boardObjectRepo.findByObjectId(boardObject.object_id);
+      const updatedComment = await commentsRepo.findById(comment.comment_id);
+      const preservedBranch = await branchRepo.findById(branch.branch_id);
+      expect(result.board.objects?.['zone-review']).toBeUndefined();
+      expect(result.affectedSessions).toEqual([]);
+      expect(preservedBranch?.branch_id).toBe(branch.branch_id);
       expect(updatedBoardObject?.zone_id).toBeUndefined();
       expect(updatedBoardObject?.position).toEqual({ x: 110, y: 220 });
+      expect(updatedComment?.position).toEqual({ absolute: { x: 107, y: 208 } });
       expect(emitBoardObjectPatched).toHaveBeenCalledWith(
         expect.objectContaining({
           object_id: boardObject.object_id,
           position: { x: 110, y: 220 },
           zone_id: null,
+        })
+      );
+      expect(emitBoardCommentPatched).toHaveBeenCalledWith(
+        expect.objectContaining({
+          comment_id: comment.comment_id,
+          position: { absolute: { x: 107, y: 208 } },
         })
       );
     }
