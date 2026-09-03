@@ -143,7 +143,7 @@ describe('FileService executor failures', () => {
   );
 
   it('passes the caller-scoped canonical home and tenant mounts to the per-user sandbox', async () => {
-    vi.spyOn(UsersRepository.prototype, 'findById').mockResolvedValue({
+    vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection').mockResolvedValue({
       user_id: 'user-1',
       filesystem_home: null,
     } as never);
@@ -184,7 +184,7 @@ describe('FileService executor failures', () => {
         templateVariables: expect.objectContaining({ user_id: 'user-1' }),
       })
     );
-    expect(UsersRepository.prototype.findById).toHaveBeenCalledWith('user-1');
+    expect(UsersRepository.prototype.getFilesystemHomeProjection).toHaveBeenCalledWith('user-1');
     expect(JSON.stringify(vi.mocked(requestExecutor).mock.calls[0])).not.toContain('branch-owner');
   });
 
@@ -192,7 +192,17 @@ describe('FileService executor failures', () => {
     const db = { run: vi.fn() } as never;
     const findById = vi.fn(async () => {
       expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
-      return { branch_id: 'branch-1' };
+      return branch;
+    });
+    vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection').mockImplementation(
+      async (userId) => {
+        expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+        return { user_id: userId as never, filesystem_home: null };
+      }
+    );
+    vi.spyOn(RepoRepository.prototype, 'findById').mockImplementation(async () => {
+      expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+      return { local_path: '/srv/agor/repos/org/repo' } as never;
     });
     impersonationMocks.resolveDelegatedExecutionHomeKey.mockImplementation(async () => {
       expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
@@ -202,7 +212,14 @@ describe('FileService executor failures', () => {
       expect(getCurrentTenantDatabaseScope()).toBeUndefined();
       return { success: true, data: { files: [] } };
     });
-    const service = new FileService(createBranchRepo(findById), db, createApp());
+    const service = new FileService(
+      createBranchRepo(findById),
+      db,
+      createApp({
+        paths: { data_home: '/srv/agor' },
+        execution: { sandbox: { enabled: true, home_mode: 'per_user' } },
+      })
+    );
 
     await runWithTenantContext('tenant-a', () =>
       service.find({
@@ -212,6 +229,8 @@ describe('FileService executor failures', () => {
     );
 
     expect(findById).toHaveBeenCalledOnce();
+    expect(UsersRepository.prototype.getFilesystemHomeProjection).toHaveBeenCalledOnce();
+    expect(RepoRepository.prototype.findById).toHaveBeenCalledOnce();
     expect(requestExecutor).toHaveBeenCalledOnce();
   });
 

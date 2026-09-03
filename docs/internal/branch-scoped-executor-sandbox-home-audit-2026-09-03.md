@@ -151,7 +151,8 @@ file services. While the trusted tenant DB scope is active it:
    supported delegated execution).
 
 The service leaves the database scope before waiting for the executor response.
-No secret bytes are read, logged, copied, or returned.
+The user lookup selects only the nonsecret user ID and filesystem-home fields;
+no credential material is decrypted, logged, copied, or returned.
 
 ### Follow-up
 

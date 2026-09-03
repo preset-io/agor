@@ -2,9 +2,10 @@
  * Resolve the local filesystem-sandbox mounts for a short-lived branch command.
  *
  * Callers must invoke this while their trusted tenant database scope is active
- * and must pass the authenticated execution actor, not the branch or Session
- * owner. The returned paths are daemon-derived payload fields consumed only by
- * the local bubblewrap launch path; delegated launchers receive identity and
+ * and select the authoritative execution principal for the operation. This
+ * helper deliberately does not infer that principal from the Branch or a
+ * Session. The returned paths are daemon-derived payload fields consumed only
+ * by the local bubblewrap launch path; delegated launchers receive identity and
  * filesystem access through template variables instead.
  */
 
@@ -42,7 +43,7 @@ export async function resolveBranchExecutorSandboxMounts(params: {
   }
 
   if (sandbox.home_mode === 'per_user') {
-    const user = await new UsersRepository(db).findById(executionUserId);
+    const user = await new UsersRepository(db).getFilesystemHomeProjection(executionUserId);
     if (!user) {
       throw new Error(
         `Cannot resolve per-user sandbox home: execution user ${executionUserId} was not found`

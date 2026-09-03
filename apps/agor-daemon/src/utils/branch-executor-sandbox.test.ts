@@ -25,7 +25,7 @@ describe('resolveBranchExecutorSandboxMounts', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('does not resolve local mounts in simple or delegated execution', async () => {
-    const userLookup = vi.spyOn(UsersRepository.prototype, 'findById');
+    const userLookup = vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection');
     const repoLookup = vi.spyOn(RepoRepository.prototype, 'findById');
 
     await expect(resolve({ execution: { unix_user_mode: 'simple' } })).resolves.toEqual({});
@@ -45,7 +45,7 @@ describe('resolveBranchExecutorSandboxMounts', () => {
     vi.spyOn(RepoRepository.prototype, 'findById').mockResolvedValue({
       local_path: '/srv/agor/repos/org/repo',
     } as never);
-    const userLookup = vi.spyOn(UsersRepository.prototype, 'findById');
+    const userLookup = vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection');
 
     await expect(
       resolve({
@@ -63,7 +63,7 @@ describe('resolveBranchExecutorSandboxMounts', () => {
     vi.spyOn(RepoRepository.prototype, 'findById').mockResolvedValue({
       local_path: '/srv/agor-tenants/tenant-a/repos/org/repo',
     } as never);
-    vi.spyOn(UsersRepository.prototype, 'findById').mockImplementation(
+    vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection').mockImplementation(
       async (userId) =>
         ({
           user_id: userId,
@@ -89,11 +89,13 @@ describe('resolveBranchExecutorSandboxMounts', () => {
       sandboxWorktreesRoot: '/srv/agor-tenants/tenant-a/worktrees',
       sandboxBaseRepoPath: '/srv/agor-tenants/tenant-a/repos/org/repo',
     });
-    expect(UsersRepository.prototype.findById).toHaveBeenCalledWith('user-caller');
+    expect(UsersRepository.prototype.getFilesystemHomeProjection).toHaveBeenCalledWith(
+      'user-caller'
+    );
   });
 
   it('honors a validated filesystem_home override and omits a base-repo mount for clones', async () => {
-    vi.spyOn(UsersRepository.prototype, 'findById').mockResolvedValue({
+    vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection').mockResolvedValue({
       user_id: executionUserId,
       filesystem_home: '/home/caller',
     } as never);
@@ -116,7 +118,7 @@ describe('resolveBranchExecutorSandboxMounts', () => {
 
   it('fails closed when the execution caller no longer has a tenant user row', async () => {
     vi.spyOn(RepoRepository.prototype, 'findById').mockResolvedValue(null);
-    vi.spyOn(UsersRepository.prototype, 'findById').mockResolvedValue(null);
+    vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection').mockResolvedValue(null);
 
     await expect(
       resolve({

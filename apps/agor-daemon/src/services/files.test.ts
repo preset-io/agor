@@ -41,7 +41,7 @@ describe('FilesService tenant scope', () => {
   });
 
   it('passes the authenticated caller home into sandboxed autocomplete requests', async () => {
-    vi.spyOn(UsersRepository.prototype, 'findById').mockResolvedValue({
+    vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection').mockResolvedValue({
       user_id: 'user-1',
       filesystem_home: '/home/user-1',
     } as never);
@@ -101,17 +101,38 @@ describe('FilesService tenant scope', () => {
   });
 
   it('uses RBAC-preloaded records in a short database scope and executes afterward', async () => {
+    vi.spyOn(UsersRepository.prototype, 'getFilesystemHomeProjection').mockImplementation(
+      async (userId) => {
+        expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+        return { user_id: userId as never, filesystem_home: null };
+      }
+    );
+    vi.spyOn(RepoRepository.prototype, 'findById').mockImplementation(async () => {
+      expect(getCurrentTenantDatabaseScope()?.tenantId).toBe('tenant-a');
+      return { local_path: '/srv/agor/repos/org/repo' } as never;
+    });
     vi.mocked(requestExecutor).mockImplementation(async () => {
       expect(getCurrentTenantDatabaseScope()).toBeUndefined();
       return { success: true, data: { results: [] } };
     });
-    const service = new FilesService({ run: vi.fn() } as never, app);
+    const service = new FilesService(
+      { run: vi.fn() } as never,
+      createApp({
+        paths: { data_home: '/srv/agor' },
+        execution: { sandbox: { enabled: true, home_mode: 'per_user' } },
+      })
+    );
 
     await runWithTenantContext('tenant-a', () =>
       service.find({
         query: { sessionId: 'session-1' as never, search: 'readme' },
         session: { session_id: 'session-1', branch_id: 'branch-1' },
-        branch: { branch_id: 'branch-1', path: '/tenant-a/branch-1' },
+        branch: {
+          branch_id: 'branch-1',
+          path: '/tenant-a/branch-1',
+          repo_id: 'repo-1',
+          storage_mode: 'worktree',
+        },
         user: { user_id: 'user-1', email: 'member@example.com', role: 'member' },
       } as never)
     );
@@ -132,6 +153,8 @@ describe('FilesService tenant scope', () => {
         },
       })
     );
+    expect(UsersRepository.prototype.getFilesystemHomeProjection).toHaveBeenCalledOnce();
+    expect(RepoRepository.prototype.findById).toHaveBeenCalledOnce();
   });
 
   it('does not swallow a conflicting tenant scope as empty autocomplete', async () => {
