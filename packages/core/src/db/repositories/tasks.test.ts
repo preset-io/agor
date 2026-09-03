@@ -20,6 +20,7 @@ import {
   SessionStatus,
   TaskStatus,
   WORKLOAD_CONTROLLED_FAILURE_CODE,
+  WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE,
   WORKLOAD_RESULT_MAX_BYTES,
 } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
@@ -125,6 +126,42 @@ describe('TaskRepository.completeWorkload', () => {
     repositoryMarkerPresent: true,
   } satisfies WorkloadWorkspaceInspection;
 
+  const fixtureCommandSuccess: Extract<WorkloadCompletionInput, { profile: 'fixture-command' }> = {
+    task_id: 'placeholder-task',
+    result_message_id: 'placeholder-message',
+    profile: 'fixture-command',
+    requested_repetitions: 2,
+    fixture_id: 'node-compile-test-v1',
+    outcome: 'completed',
+    observed_elapsed_ms: 25,
+    completed_command_count: 4,
+    commands: [
+      {
+        command: 'node-check',
+        attempted: 2,
+        completed: 2,
+        outcome: 'passed',
+        exit_code: 0,
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_sha256: 'a'.repeat(64),
+        stderr_sha256: 'b'.repeat(64),
+      },
+      {
+        command: 'node-test',
+        attempted: 2,
+        completed: 2,
+        outcome: 'passed',
+        exit_code: 0,
+        stdout_bytes: 256,
+        stderr_bytes: 0,
+        stdout_sha256: 'c'.repeat(64),
+        stderr_sha256: 'd'.repeat(64),
+      },
+    ],
+    cleanup_confirmed: true,
+  };
+
   dbTest('atomically publishes one result and settles the workload Task', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db, 'workload');
@@ -226,6 +263,11 @@ describe('TaskRepository.completeWorkload', () => {
           inspection: workspaceInspection,
         },
         expectedProfile: 'workspace-inspection',
+      },
+      {
+        prompt: '{"schemaVersion":1,"profile":"fixture-command","repetitions":2}',
+        input: fixtureCommandSuccess,
+        expectedProfile: 'fixture-command',
       },
     ];
 
@@ -384,6 +426,21 @@ describe('TaskRepository.completeWorkload', () => {
             requested_delay_ms: 11,
           }),
         },
+        {
+          prompt: '{"schemaVersion":1,"profile":"fixture-command","repetitions":2}',
+          input: (taskId) => ({
+            ...fixtureCommandSuccess,
+            task_id: taskId,
+            result_message_id: generateId() as MessageID,
+            requested_repetitions: 3,
+            completed_command_count: 6,
+            commands: fixtureCommandSuccess.commands.map((command) => ({
+              ...command,
+              attempted: 3,
+              completed: 3,
+            })) as typeof fixtureCommandSuccess.commands,
+          }),
+        },
       ];
 
       for (const testCase of cases) {
@@ -481,6 +538,95 @@ describe('TaskRepository.completeWorkload', () => {
     expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.STOPPING);
     expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
   });
+
+  dbTest(
+    'settles a fixed command failure through the canonical seam with bounded proof',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db, 'workload');
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: new Date().toISOString(),
+          full_prompt: '{"schemaVersion":1,"profile":"fixture-command","repetitions":2}',
+        })
+      );
+      const failed: Extract<WorkloadCompletionInput, { profile: 'fixture-command' }> = {
+        ...fixtureCommandSuccess,
+        task_id: task.task_id,
+        result_message_id: generateId() as MessageID,
+        outcome: 'failed',
+        completed_command_count: 1,
+        commands: [
+          { ...fixtureCommandSuccess.commands[0], attempted: 1, completed: 1 },
+          {
+            ...fixtureCommandSuccess.commands[1],
+            attempted: 1,
+            completed: 0,
+            outcome: 'failed',
+            exit_code: 7,
+          },
+        ],
+      };
+
+      const result = await taskRepo.completeWorkload(failed);
+      const content = JSON.parse(result.message.content as string);
+
+      expect(result.task).toMatchObject({
+        status: TaskStatus.FAILED,
+        error_message: WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE,
+      });
+      expect(content).toMatchObject({
+        schemaVersion: 1,
+        profile: 'fixture-command',
+        outcome: 'failed',
+        taskId: task.task_id,
+        requested: { repetitions: 2, fixtureId: 'node-compile-test-v1' },
+        observed: {
+          completedCommandCount: 1,
+          cleanupConfirmed: true,
+          commands: [
+            { command: 'node-check', outcome: 'passed', exitCode: 0 },
+            { command: 'node-test', outcome: 'failed', exitCode: 7 },
+          ],
+        },
+        errorCode: WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE,
+      });
+      expect(JSON.stringify(content)).not.toContain('subject.mjs');
+      expect(Buffer.byteLength(result.message.content as string, 'utf8')).toBeLessThanOrEqual(
+        WORKLOAD_RESULT_MAX_BYTES
+      );
+    }
+  );
+
+  dbTest(
+    'rejects inconsistent fixed command proof and preserves the active Task',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db, 'workload');
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: new Date().toISOString(),
+          full_prompt: '{"schemaVersion":1,"profile":"fixture-command","repetitions":2}',
+        })
+      );
+
+      await expect(
+        taskRepo.completeWorkload({
+          ...fixtureCommandSuccess,
+          task_id: task.task_id,
+          result_message_id: generateId() as MessageID,
+          completed_command_count: 3,
+          absolute_path: '/must-not-pass',
+        } as unknown as WorkloadCompletionInput)
+      ).rejects.toThrow('WORKLOAD_COMPLETION_INVALID');
+      expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.RUNNING);
+      expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
+    }
+  );
 
   dbTest('does not publish a success result after Stop owns the Task', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
