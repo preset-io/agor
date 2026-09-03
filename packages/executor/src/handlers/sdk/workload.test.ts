@@ -3,7 +3,6 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  WORKLOAD_CONTROLLED_FAILURE_CODE,
   WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
   WORKLOAD_TEMP_IO_MAX_BYTES,
 } from '@agor/core/types';
@@ -51,6 +50,9 @@ vi.mock('@google/genai', () => {
 function clientHarness() {
   const taskPatch = vi.fn().mockResolvedValue({ status: 'failed' });
   const taskGet = vi.fn().mockResolvedValue({ status: 'running' });
+  const reconcileWorkloadCompletion = vi
+    .fn()
+    .mockRejectedValue(new Error('reconciliation unavailable'));
   const completeWorkload = vi.fn().mockResolvedValue({
     outcome: 'transitioned',
     task: { status: 'completed' },
@@ -59,13 +61,16 @@ function clientHarness() {
   return {
     client: {
       service(name: string) {
-        if (name === 'tasks') return { patch: taskPatch, get: taskGet, completeWorkload };
+        if (name === 'tasks') {
+          return { patch: taskPatch, get: taskGet, completeWorkload, reconcileWorkloadCompletion };
+        }
         throw new Error(`unexpected service ${name}`);
       },
     } as never,
     taskPatch,
     taskGet,
     completeWorkload,
+    reconcileWorkloadCompletion,
   };
 }
 
@@ -210,7 +215,11 @@ describe('deterministic workload runner', () => {
     vi.useFakeTimers();
     const harness = clientHarness();
     harness.completeWorkload.mockRejectedValueOnce(new Error('response lost'));
-    harness.taskGet.mockResolvedValueOnce({ status: 'completed' });
+    harness.reconcileWorkloadCompletion.mockResolvedValueOnce({
+      outcome: 'idempotent',
+      task: { status: 'completed' },
+      message: { role: 'assistant' },
+    });
     const execution = executeWorkloadTask({
       client: harness.client,
       sessionId: 'session-1' as never,
@@ -223,7 +232,8 @@ describe('deterministic workload runner', () => {
     await execution;
 
     expect(harness.completeWorkload).toHaveBeenCalledOnce();
-    expect(harness.taskGet).toHaveBeenCalledWith('task-1');
+    expect(harness.reconcileWorkloadCompletion).toHaveBeenCalledOnce();
+    expect(harness.taskGet).not.toHaveBeenCalled();
     expect(harness.taskPatch).not.toHaveBeenCalled();
   });
 
@@ -292,9 +302,10 @@ describe('deterministic workload runner', () => {
   it('reconciles a controlled failure whose settlement response was lost', async () => {
     const harness = clientHarness();
     harness.completeWorkload.mockRejectedValueOnce(new Error('response lost'));
-    harness.taskGet.mockResolvedValueOnce({
-      status: 'failed',
-      error_message: WORKLOAD_CONTROLLED_FAILURE_CODE,
+    harness.reconcileWorkloadCompletion.mockResolvedValueOnce({
+      outcome: 'idempotent',
+      task: { status: 'failed' },
+      message: { role: 'assistant' },
     });
 
     await executeWorkloadTask({
@@ -306,7 +317,8 @@ describe('deterministic workload runner', () => {
     });
 
     expect(harness.completeWorkload).toHaveBeenCalledOnce();
-    expect(harness.taskGet).toHaveBeenCalledWith('task-1');
+    expect(harness.reconcileWorkloadCompletion).toHaveBeenCalledOnce();
+    expect(harness.taskGet).not.toHaveBeenCalled();
     expect(harness.taskPatch).not.toHaveBeenCalled();
   });
 
@@ -518,7 +530,7 @@ describe('deterministic workload runner', () => {
       sessionId: 'session-1' as never,
       taskId: 'task-1' as never,
       prompt: '{"schemaVersion":1,"profile":"workspace-inspection"}',
-      workspaceCwd: join(process.cwd(), '../..'),
+      workspaceCwd: process.cwd(),
       abortController: new AbortController(),
     });
 
@@ -583,6 +595,11 @@ describe('deterministic workload runner', () => {
       process.env.PATH = `${root}:/usr/bin:/bin`;
       const harness = clientHarness();
       harness.completeWorkload.mockRejectedValueOnce(new Error('response lost'));
+      harness.reconcileWorkloadCompletion.mockResolvedValueOnce({
+        outcome: 'idempotent',
+        task: { status: 'failed' },
+        message: { role: 'assistant' },
+      });
       harness.taskGet.mockResolvedValueOnce({
         status: 'failed',
         error_message: WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
@@ -604,7 +621,8 @@ describe('deterministic workload runner', () => {
           cleanup_confirmed: true,
         })
       );
-      expect(harness.taskGet).toHaveBeenCalledWith('task-1');
+      expect(harness.reconcileWorkloadCompletion).toHaveBeenCalledOnce();
+      expect(harness.taskGet).not.toHaveBeenCalled();
       expect(harness.taskPatch).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });

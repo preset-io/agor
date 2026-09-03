@@ -118,6 +118,7 @@ describe('offline install fixture runner', () => {
       expect(options.env).not.toHaveProperty('NODE_AUTH_TOKEN');
       expect(options.env).toMatchObject({
         COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+        COREPACK_ENABLE_NETWORK: '0',
         NPM_CONFIG_IGNORE_SCRIPTS: 'true',
         NPM_CONFIG_OFFLINE: 'true',
       });
@@ -126,6 +127,7 @@ describe('offline install fixture runner', () => {
           ...(process.env.PATH || process.env.Path ? ['PATH'] : []),
           'CI',
           'COREPACK_ENABLE_DOWNLOAD_PROMPT',
+          'COREPACK_ENABLE_NETWORK',
           'HOME',
           'LANG',
           'LC_ALL',
@@ -178,12 +180,17 @@ describe('offline install fixture runner', () => {
 
   it('returns a canonical install failure and cleans private storage', async () => {
     const root = await temporaryRoot();
+    const environments: Array<Readonly<NodeJS.ProcessEnv> | undefined> = [];
     const spawnChild = vi
       .fn()
-      .mockImplementationOnce(() =>
-        closedChild(0, `${WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER_VERSION}\n`)
-      )
-      .mockImplementationOnce(() => closedChild(7, '', 'registry-like raw failure'));
+      .mockImplementationOnce((_executable, _argv, options) => {
+        environments.push(options.env as Readonly<NodeJS.ProcessEnv> | undefined);
+        return closedChild(0, `${WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER_VERSION}\n`);
+      })
+      .mockImplementationOnce((_executable, _argv, options) => {
+        environments.push(options.env as Readonly<NodeJS.ProcessEnv> | undefined);
+        return closedChild(7, '', 'registry-like raw failure');
+      });
     const runner = createOfflineInstallRunner({ temporaryRoot: root, spawnChild });
 
     const result = await runner({
@@ -191,6 +198,40 @@ describe('offline install fixture runner', () => {
       repetitions: 3,
       signal: new AbortController().signal,
     });
+
+    expect(environments).toHaveLength(2);
+    for (const environment of environments) {
+      expect(environment).toMatchObject({
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+        COREPACK_ENABLE_NETWORK: '0',
+        NPM_CONFIG_IGNORE_SCRIPTS: 'true',
+        NPM_CONFIG_OFFLINE: 'true',
+      });
+      expect(Object.keys(environment ?? {}).sort()).toEqual(
+        [
+          ...(process.env.PATH || process.env.Path ? ['PATH'] : []),
+          'CI',
+          'COREPACK_ENABLE_DOWNLOAD_PROMPT',
+          'COREPACK_ENABLE_NETWORK',
+          'HOME',
+          'LANG',
+          'LC_ALL',
+          'NO_UPDATE_NOTIFIER',
+          'NPM_CONFIG_AUDIT',
+          'NPM_CONFIG_CACHE',
+          'NPM_CONFIG_FUND',
+          'NPM_CONFIG_GLOBALCONFIG',
+          'NPM_CONFIG_IGNORE_SCRIPTS',
+          'NPM_CONFIG_OFFLINE',
+          'NPM_CONFIG_UPDATE_NOTIFIER',
+          'NPM_CONFIG_USERCONFIG',
+          'TMPDIR',
+          'TZ',
+          'XDG_CACHE_HOME',
+          'XDG_CONFIG_HOME',
+        ].sort()
+      );
+    }
 
     expect(result).toMatchObject({
       outcome: 'failed',

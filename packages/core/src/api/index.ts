@@ -534,6 +534,11 @@ export interface TasksService extends AgorService<Task> {
     data: WorkloadCompletionInput,
     params?: Params
   ): Promise<WorkloadCompletionResult>;
+  /** Replay an already-committed workload settlement after token retirement. */
+  reconcileWorkloadCompletion(
+    data: WorkloadCompletionInput,
+    params?: Params
+  ): Promise<WorkloadCompletionResult>;
   /**
    * Mark a task as completed
    */
@@ -1364,7 +1369,8 @@ function extendTasksService(client: AgorClient): void {
       'reportTerminationComplete',
       'reportRuntimeTelemetry',
       'reportSdkHealthFailure',
-      'completeWorkload'
+      'completeWorkload',
+      'reconcileWorkloadCompletion'
     );
   }
   tasksService[TASKS_SERVICE_EXTENDED] = true;
@@ -1555,6 +1561,8 @@ export interface SocketConnectionAuthentication {
    * latest value.
    */
   accessToken: string | (() => string | null | undefined);
+  /** Narrow, transport-only handshake metadata such as a workload receipt. */
+  authData?: () => Record<string, unknown>;
 }
 
 /**
@@ -1610,10 +1618,11 @@ export function createClient(
     closeOnBeforeunload: true, // Close socket when page unloads
     ...(socketAuthentication
       ? {
-          auth: (authorize: (data: Record<string, string>) => void) => {
+          auth: (authorize: (data: Record<string, unknown>) => void) => {
             const configured = socketAuthentication.accessToken;
             const accessToken = typeof configured === 'function' ? configured() : configured;
-            authorize(accessToken ? { token: accessToken } : {});
+            const authData = socketAuthentication.authData?.() ?? {};
+            authorize(accessToken ? { ...authData, token: accessToken } : authData);
           },
         }
       : {}),

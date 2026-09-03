@@ -88,6 +88,12 @@ export function authenticatedTaskExecutorRuntimeScope(
   params?: Params
 ): TaskExecutorRuntimeScope | null {
   const scope = authenticatedExecutorDelegationContext(params);
+  if (
+    getAuthenticatedConnectionAuthority(params?.connection)?.principal.kind ===
+    'executor-completion-receipt'
+  ) {
+    return null;
+  }
   return scope?.purpose === EXECUTOR_SESSION_TOKEN_PURPOSE && scope.taskId && scope.sessionId
     ? { sessionId: scope.sessionId, taskId: scope.taskId, branchId: scope.branchId }
     : null;
@@ -120,6 +126,7 @@ export function authenticatedTaskExecutorRuntimeAuthority(
   }
 
   const connectionAuthority = getAuthenticatedConnectionAuthority(params?.connection);
+  if (connectionAuthority?.principal.kind === 'executor-completion-receipt') return null;
   let tokenFingerprint: string;
   if (connectionAuthority) {
     if (
@@ -235,6 +242,41 @@ export function requireTaskScopedExecutorRuntimeToken() {
     const taskId = executorOperationTaskId(context);
     if (!taskId || !isTaskScopedExecutorRequest(context, taskId)) {
       throw new Forbidden('A token scoped to this executor task is required');
+    }
+    return context;
+  };
+}
+
+/** Allow only the immutable receipt authority to replay one committed result. */
+export function requireWorkloadCompletionReceipt() {
+  return async (context: HookContext): Promise<HookContext> => {
+    const authority = getAuthenticatedConnectionAuthority(context.params.connection);
+    const data = asRecord(context.data);
+    if (
+      context.path !== 'tasks' ||
+      context.method !== 'reconcileWorkloadCompletion' ||
+      authority?.principal.kind !== 'executor-completion-receipt' ||
+      !data ||
+      data.task_id !== authority.principal.taskId ||
+      data.result_message_id !== authority.principal.resultMessageId
+    ) {
+      throw new Forbidden('An exact workload completion receipt is required');
+    }
+    const payload = context.params.authentication?.payload as
+      | ExecutorSessionTokenPayload
+      | undefined;
+    if (
+      !payload ||
+      payload.type !== EXECUTOR_SESSION_TOKEN_TYPE ||
+      payload.purpose !== EXECUTOR_SESSION_TOKEN_PURPOSE ||
+      payload.task_id !== authority.principal.taskId ||
+      getExecutorSessionTokenSessionId(payload) !== authority.principal.sessionId ||
+      payload.branch_id === undefined ||
+      payload.sub !== context.params.user?.user_id ||
+      payload.tenant_id === undefined ||
+      context.params.tenant?.tenant_id !== payload.tenant_id
+    ) {
+      throw new Forbidden('Workload completion receipt scope is invalid');
     }
     return context;
   };

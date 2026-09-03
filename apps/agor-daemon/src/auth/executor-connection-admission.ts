@@ -16,6 +16,12 @@ export interface ExecutorConnectionCandidate {
   taskId?: string;
   tokenFingerprint: string;
   revocationGeneration: number;
+  /** Present only for a retained, exact workload-completion receipt login. */
+  completionReceipt?: {
+    taskId: string;
+    sessionId: string;
+    resultMessageId: string;
+  };
 }
 
 type CandidateCarrier = { [CANDIDATE]?: ExecutorConnectionCandidate };

@@ -13,6 +13,7 @@ import {
   ensureCanPromptInSession,
   hasBranchPermission,
   isSuperAdmin,
+  loadBranch,
   loadBranchFromSession,
   loadSession,
   loadSessionBranch,
@@ -40,6 +41,55 @@ function makeBranch(overrides: Partial<Branch> = {}): Branch {
 }
 
 const USER_ID = 'user-test-0001' as import('@agor/core/types').UUID;
+
+describe('loadBranch executor command scope', () => {
+  it('rejects a Branch A command before probing Branch B and preserves A/branchless access', async () => {
+    const branchA = makeBranch({ branch_id: 'branch-a' as Branch['branch_id'] });
+    const branchB = makeBranch({ branch_id: 'branch-b' as Branch['branch_id'] });
+    const findById = vi.fn(async (id: string) => (id === 'branch-a' ? branchA : branchB));
+    const branchRepository = {
+      findById,
+      isOwner: vi.fn().mockResolvedValue(false),
+      resolveUserPermission: vi.fn().mockResolvedValue('view'),
+    } as unknown as BranchRepository;
+    const hook = loadBranch(branchRepository);
+    const commandParams = {
+      provider: 'socketio',
+      user: { user_id: 'executor-service', role: 'service', _isServiceAccount: true },
+      authentication: {
+        strategy: 'jwt',
+        payload: {
+          type: 'executor-session',
+          purpose: 'executor-command',
+          session_id: 'command-a',
+          branch_id: 'branch-a',
+        },
+      },
+    } as never;
+
+    await expect(
+      hook({ path: 'branches', method: 'get', id: 'branch-b', params: commandParams } as never)
+    ).rejects.toThrow(/another Branch/);
+    expect(findById).not.toHaveBeenCalled();
+
+    await expect(
+      hook({ path: 'branches', method: 'get', id: 'branch-a', params: commandParams } as never)
+    ).resolves.toMatchObject({ id: 'branch-a' });
+    expect(findById).not.toHaveBeenCalled();
+
+    const branchlessParams = {
+      ...commandParams,
+      authentication: {
+        ...commandParams.authentication,
+        payload: { ...commandParams.authentication.payload, branch_id: undefined },
+      },
+    } as never;
+    await expect(
+      hook({ path: 'branches', method: 'get', id: 'branch-b', params: branchlessParams } as never)
+    ).resolves.toMatchObject({ id: 'branch-b' });
+    expect(findById).not.toHaveBeenCalled();
+  });
+});
 
 describe('isSuperAdmin', () => {
   it('returns true for superadmin role', () => {

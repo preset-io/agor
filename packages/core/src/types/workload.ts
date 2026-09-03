@@ -327,6 +327,17 @@ export type WorkloadCompletionInput =
       cleanup_confirmed: boolean;
     };
 
+/**
+ * Narrow replay receipt carried only while reconciling a lost workload reply.
+ * The completion is revalidated against the durable Task and canonical Message;
+ * this is not a second task credential or a caller-authored terminal result.
+ */
+export interface WorkloadCompletionReceipt {
+  task_id: string;
+  session_id: string;
+  completion: WorkloadCompletionInput;
+}
+
 export type WorkloadResult =
   | {
       schemaVersion: 1;

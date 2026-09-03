@@ -79,7 +79,7 @@ describe('workspace inspection', () => {
     await writeFile(join(root, 'pnpm-lock.yaml'), lockBytes);
     await writeFile(join(root, '.git'), 'gitdir: deliberately-not-returned\n');
     const toolScript = [
-      'if [ "$#" -ne 1 ] || [ "$1" != "--version" ] || [ -n "$' +
+      'if [ "$#" -ne 1 ] || [ "$1" != "--version" ] || [ "$COREPACK_ENABLE_NETWORK" != "0" ] || [ -n "$' +
         '{WORKLOAD_TEST_SECRET:-}" ]; then',
       '  exit 9',
       'fi',
@@ -123,6 +123,39 @@ describe('workspace inspection', () => {
     expect(serialized).not.toContain('fixture');
     expect(serialized).not.toContain('do-not-forward-or-return');
     expect(serialized).not.toContain('deliberately-not-returned');
+  });
+
+  it('keeps Corepack networking disabled when fixed version lookup fails', async () => {
+    const root = await fixture();
+    await writeFile(
+      join(root, 'package.json'),
+      JSON.stringify({ name: 'fixture', packageManager: 'pnpm@11.17.0' })
+    );
+    const expectedFixedEnvironment = [
+      'COREPACK_ENABLE_NETWORK',
+      'COREPACK_ENABLE_DOWNLOAD_PROMPT',
+      'NO_UPDATE_NOTIFIER',
+      'NPM_CONFIG_AUDIT',
+      'NPM_CONFIG_FUND',
+      'NPM_CONFIG_IGNORE_SCRIPTS',
+    ];
+    const failureScript = [
+      'if [ "$#" -ne 1 ] || [ "$1" != "--version" ] ||',
+      ...expectedFixedEnvironment.map((name) => `   [ "$${name}" = "" ] ||`),
+      '   [ "$COREPACK_ENABLE_NETWORK" != "0" ] ||',
+      '   [ -n "$' + '{WORKLOAD_TEST_SECRET:-}" ]; then',
+      '  exit 9',
+      'fi',
+      'exit 7',
+    ].join('\n');
+    await installTool(root, 'npm', failureScript);
+    await installTool(root, 'pnpm', "printf '11.17.0\\n'");
+    process.env.WORKLOAD_TEST_SECRET = 'must-not-cross-the-process-boundary';
+
+    const result = await inspectWorkspace(root, new AbortController().signal);
+
+    expect(result?.npm).toEqual({ state: 'failed' });
+    expect(result?.pnpm).toEqual({ state: 'available', version: '11.17.0' });
   });
 
   it('reports inspected symlinks without following targets outside the workspace', async () => {

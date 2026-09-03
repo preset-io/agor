@@ -27,6 +27,7 @@ import {
   assertValidWorkloadCompletionInput,
   assertWorkloadCompletionMatchesRequest,
   EXECUTING_TASK_STATUSES,
+  isCanonicalFullUuid,
   isTerminalTaskStatus,
   NONTERMINAL_TASK_STATUSES,
   parseWorkloadRequest,
@@ -343,6 +344,14 @@ export interface TaskFindPageOptions {
   selectTaskIdOnly?: boolean;
   limit?: number;
   skip?: number;
+}
+
+/** Server-derived binding retained by the one post-revocation receipt path. */
+export interface WorkloadCompletionReceiptScope {
+  userId: string;
+  sessionId: string;
+  taskId: string;
+  branchId: string;
 }
 
 /**
@@ -1872,6 +1881,106 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
         return { outcome: 'transitioned', task: settled, message };
       }
     );
+  }
+
+  /**
+   * Replay only an already-committed workload settlement after its executor
+   * bearer was retired. No insert or Task/Session mutation is permitted here;
+   * the exact completion still has to reproduce the daemon-owned Message.
+   */
+  async reconcileWorkloadCompletion(
+    input: WorkloadCompletionInput,
+    scope: WorkloadCompletionReceiptScope
+  ): Promise<WorkloadCompletionResult> {
+    if (
+      !scope.userId ||
+      !scope.sessionId ||
+      !scope.taskId ||
+      !scope.branchId ||
+      input.task_id !== scope.taskId
+    ) {
+      throw new RepositoryError('Workload completion receipt scope does not match its Task');
+    }
+    try {
+      assertValidWorkloadCompletionInput(input);
+    } catch (error) {
+      throw new RepositoryError(
+        error instanceof Error ? error.message : 'WORKLOAD_COMPLETION_INVALID'
+      );
+    }
+    if (!isCanonicalFullUuid(input.task_id) || !isCanonicalFullUuid(input.result_message_id)) {
+      throw new RepositoryError('Workload completion requires canonical Task and Message IDs');
+    }
+
+    const fullId = await this.resolveId(input.task_id);
+    return runDatabaseTransaction(this.db, async (txDb) => {
+      const taskRow = await select(txDb).from(tasks).where(eq(tasks.task_id, fullId)).one();
+      if (!taskRow) throw new EntityNotFoundError('Task', input.task_id);
+      const sessionRow = await select(txDb)
+        .from(sessions)
+        .where(eq(sessions.session_id, taskRow.session_id))
+        .one();
+      if (!sessionRow) throw new EntityNotFoundError('Session', taskRow.session_id);
+      if (sessionRow.agentic_tool !== 'workload') {
+        throw new RepositoryError('Workload completion requires a workload Session');
+      }
+      if (
+        taskRow.task_id !== scope.taskId ||
+        taskRow.session_id !== scope.sessionId ||
+        taskRow.created_by !== scope.userId ||
+        sessionRow.created_by !== scope.userId ||
+        sessionRow.branch_id !== scope.branchId
+      ) {
+        throw new RepositoryError('Workload completion receipt scope does not match its Task');
+      }
+
+      const current = this.rowToTask(taskRow);
+      let request: WorkloadRequest;
+      try {
+        request = parseWorkloadRequest(current.full_prompt);
+        assertWorkloadCompletionMatchesRequest(request, input);
+      } catch {
+        throw new RepositoryError('Workload completion does not match its durable request');
+      }
+
+      const fixtureCommandFailed =
+        request.profile === 'fixture-command' &&
+        input.profile === 'fixture-command' &&
+        input.outcome === 'failed';
+      const offlineInstallFailed =
+        request.profile === 'offline-install' &&
+        input.profile === 'offline-install' &&
+        input.outcome === 'failed';
+      const terminalStatus =
+        request.profile === 'controlled-failure' || fixtureCommandFailed || offlineInstallFailed
+          ? TaskStatus.FAILED
+          : TaskStatus.COMPLETED;
+      const content = JSON.stringify(workloadResultFromCompletion(current.task_id, request, input));
+      if (Buffer.byteLength(content, 'utf8') > WORKLOAD_RESULT_MAX_BYTES) {
+        throw new RepositoryError('Workload result exceeded its bounded contract');
+      }
+
+      const existingMessageRow = await select(txDb)
+        .from(messages)
+        .where(eq(messages.message_id, input.result_message_id))
+        .one();
+      if (!existingMessageRow) {
+        throw new RepositoryError('Workload completion settlement is not committed');
+      }
+      const existing = workloadResultMessage(existingMessageRow);
+      const exactResult =
+        existing.session_id === current.session_id &&
+        existing.task_id === current.task_id &&
+        existing.type === 'assistant' &&
+        existing.role === 'assistant' &&
+        existing.content === content &&
+        existing.metadata?.is_meta === true &&
+        existing.metadata?.workload_result === true;
+      if (current.status !== terminalStatus || !exactResult) {
+        throw new RepositoryError('Workload completion settlement does not match its receipt');
+      }
+      return { outcome: 'idempotent', task: current, message: existing };
+    });
   }
 
   /**

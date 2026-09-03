@@ -33,7 +33,11 @@ import { BranchRepository } from './branches';
 import { MessagesRepository } from './messages';
 import { RepoRepository } from './repos';
 import { SessionRepository } from './sessions';
-import { MISSING_TASK_ACTOR_ERROR, TaskRepository } from './tasks';
+import {
+  MISSING_TASK_ACTOR_ERROR,
+  TaskRepository,
+  type WorkloadCompletionReceiptScope,
+} from './tasks';
 import { UsersRepository } from './users';
 
 /**
@@ -107,6 +111,20 @@ async function createSessionWithDeps(
   });
 
   return session.session_id;
+}
+
+async function workloadReceiptScope(
+  db: Database,
+  task: Task
+): Promise<WorkloadCompletionReceiptScope> {
+  const session = await new SessionRepository(db).findById(task.session_id);
+  if (!session) throw new Error('Expected workload test Session');
+  return {
+    userId: task.created_by,
+    sessionId: task.session_id,
+    taskId: task.task_id,
+    branchId: session.branch_id,
+  };
 }
 
 describe('TaskRepository.completeWorkload', () => {
@@ -250,12 +268,59 @@ describe('TaskRepository.completeWorkload', () => {
       requested_duration_ms: 1_000,
       observed_elapsed_ms: 1_012,
     };
+    const receiptScope = await workloadReceiptScope(db, task);
 
     const first = await taskRepo.completeWorkload(input);
     const retry = await taskRepo.completeWorkload(input);
+    const receiptReplay = await taskRepo.reconcileWorkloadCompletion(input, receiptScope);
 
     expect(first.outcome).toBe('transitioned');
     expect(retry.outcome).toBe('idempotent');
+    expect(receiptReplay.outcome).toBe('idempotent');
+    await expect(
+      taskRepo.reconcileWorkloadCompletion(
+        {
+          ...input,
+          result_message_id: generateId() as MessageID,
+        },
+        receiptScope
+      )
+    ).rejects.toThrow(/settlement is not committed/);
+    await expect(
+      taskRepo.reconcileWorkloadCompletion({ ...input, observed_elapsed_ms: 1_013 }, receiptScope)
+    ).rejects.toThrow(/does not match its receipt/);
+    await expect(
+      taskRepo.reconcileWorkloadCompletion(
+        { ...input, task_id: generateId() as TaskID },
+        receiptScope
+      )
+    ).rejects.toThrow(/scope/);
+    await expect(
+      taskRepo.reconcileWorkloadCompletion({ ...input, requested_duration_ms: 999 }, receiptScope)
+    ).rejects.toThrow(/does not match its durable request/);
+    await expect(
+      taskRepo.reconcileWorkloadCompletion(
+        {
+          task_id: input.task_id,
+          result_message_id: input.result_message_id,
+          profile: 'controlled-failure',
+          requested_delay_ms: 0,
+        },
+        receiptScope
+      )
+    ).rejects.toThrow(/does not match its durable request/);
+    await expect(
+      taskRepo.reconcileWorkloadCompletion(input, { ...receiptScope, userId: 'different-user' })
+    ).rejects.toThrow(/scope/);
+    await expect(
+      taskRepo.reconcileWorkloadCompletion(input, {
+        ...receiptScope,
+        sessionId: 'different-session',
+      })
+    ).rejects.toThrow(/scope/);
+    await expect(
+      taskRepo.reconcileWorkloadCompletion(input, { ...receiptScope, branchId: 'different-branch' })
+    ).rejects.toThrow(/scope/);
     expect(retry.message.message_id).toBe(resultMessageId);
     expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.COMPLETED);
     const messages = await new MessagesRepository(db).findByTaskId(task.task_id);
@@ -619,6 +684,7 @@ describe('TaskRepository.completeWorkload', () => {
         full_prompt: '{"schemaVersion":1,"profile":"controlled-failure","delayMs":0}',
       })
     );
+    const receiptScope = await workloadReceiptScope(db, task);
 
     await expect(
       taskRepo.completeWorkload({
@@ -628,8 +694,43 @@ describe('TaskRepository.completeWorkload', () => {
         requested_delay_ms: 0,
       })
     ).rejects.toThrow(/active Task fence/);
+    await expect(
+      taskRepo.reconcileWorkloadCompletion(
+        {
+          task_id: task.task_id,
+          result_message_id: generateId() as MessageID,
+          profile: 'controlled-failure',
+          requested_delay_ms: 0,
+        },
+        receiptScope
+      )
+    ).rejects.toThrow(/settlement is not committed/);
     expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.STOPPING);
     expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
+  });
+
+  dbTest('does not reconcile a non-workload Session', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db);
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.COMPLETED,
+        full_prompt: '{"schemaVersion":1,"profile":"wait","durationMs":1000}',
+      })
+    );
+
+    await expect(
+      taskRepo.reconcileWorkloadCompletion(
+        {
+          task_id: task.task_id,
+          result_message_id: generateId() as MessageID,
+          requested_duration_ms: 1_000,
+          observed_elapsed_ms: 1_012,
+        },
+        await workloadReceiptScope(db, task)
+      )
+    ).rejects.toThrow(/workload Session/);
   });
 
   dbTest(

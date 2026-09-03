@@ -242,6 +242,40 @@ export class ExecutorSessionTokenAuthorityRepository {
     }
   }
 
+  /**
+   * Read one retained revoked Task authority for the dedicated workload
+   * completion receipt path. This deliberately never authenticates a generic
+   * Task read/write and never changes the tombstone.
+   */
+  async findRevoked(
+    input: ExecutorSessionTokenAuthorityClaim
+  ): Promise<ConsumedExecutorSessionTokenAuthority | null> {
+    assertFingerprint(input.tokenFingerprint);
+    try {
+      const result = await executeRaw(
+        this.db,
+        sql`
+          SELECT session_id, task_id, branch_id, user_id
+          FROM ${executorSessionTokenAuthorities}
+          WHERE tenant_id = ${input.tenantId}
+            AND token_fingerprint = ${input.tokenFingerprint}
+            AND token_type = ${input.tokenType}
+            AND purpose = ${input.purpose}
+            AND session_id = ${input.sessionId}
+            AND task_id IS NOT DISTINCT FROM ${input.taskId}
+            AND branch_id IS NOT DISTINCT FROM ${input.branchId}
+            AND user_id = ${input.userId}
+            AND revoked_at IS NOT NULL
+            AND expires_at > CURRENT_TIMESTAMP
+          LIMIT 1
+        `
+      );
+      return mapConsumed(rowsOf(result)[0] ?? {});
+    } catch (error) {
+      throw databaseFailure('revoked receipt lookup', error);
+    }
+  }
+
   async revoke(tokenFingerprint: string, tenantId: string): Promise<boolean> {
     assertFingerprint(tokenFingerprint);
     try {

@@ -280,7 +280,27 @@ export class RuntimeJWTStrategy extends JWTStrategy {
         branchId: payload.branch_id,
       });
       if (!sessionInfo) {
-        throw new Error('Invalid or expired executor token');
+        const completionReceipt =
+          params?.provider === 'socketio' && params.connection
+            ? params._executorCompletionReceipt
+            : undefined;
+        const receipt = await this.sessionTokenService.validateRevokedWorkloadCompletionReceipt(
+          token,
+          completionReceipt
+        );
+        if (!receipt) throw new Error('Invalid or expired executor token');
+        attachExecutorConnectionCandidate(result, {
+          tenantId,
+          taskId: receipt.taskId,
+          tokenFingerprint: fingerprintExecutorSessionToken(token),
+          revocationGeneration,
+          completionReceipt: {
+            taskId: receipt.taskId,
+            sessionId: receipt.sessionId,
+            resultMessageId: receipt.resultMessageId,
+          },
+        });
+        return result;
       }
       attachExecutorConnectionCandidate(result, {
         tenantId,

@@ -787,7 +787,8 @@ describe('createClient', () => {
         'reportTerminationComplete',
         'reportRuntimeTelemetry',
         'reportSdkHealthFailure',
-        'completeWorkload'
+        'completeWorkload',
+        'reconcileWorkloadCompletion'
       );
     });
 
