@@ -1,6 +1,7 @@
 import {
   BranchRepository,
   createDatabase,
+  createTenantScopedDatabaseProxy,
   type Database,
   generateId,
   initializeDatabase,
@@ -66,13 +67,17 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
     });
 
     function subject() {
+      const tenantScopedDb = createTenantScopedDatabaseProxy(db, {
+        requireScope: true,
+        label: 'branch-filesystem-status-test',
+      });
       const request = vi.fn().mockResolvedValue({
         success: true,
         data: { branchId: branch.branch_id, exists: false, kind: 'missing' },
       });
       const service = new BranchFilesystemStatusService(
-        new BranchRepository(db),
-        db as TenantScopeAwareDatabase,
+        new BranchRepository(tenantScopedDb),
+        tenantScopedDb as TenantScopeAwareDatabase,
         {
           get: vi.fn().mockReturnValue({ execution: { unix_user_mode: 'simple' } }),
         } as unknown as Application,
