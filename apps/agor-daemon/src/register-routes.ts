@@ -16,7 +16,6 @@ import {
   type ResolvedDeploymentConfig,
   type ResolvedExternalLaunchProvider,
   requireDeploymentId,
-  resolveBranchStorageConfig,
   resolveIdentityAuthority,
   resolveMultiTenancyConfig,
   resolvePasswordPolicyRequirements,
@@ -217,6 +216,7 @@ import {
 } from './utils/branch-authorization.js';
 import { buildInitialUserMessage } from './utils/build-initial-user-message.js';
 import { buildPrompterPrefixedPrompt } from './utils/build-prompter-prefix.js';
+import { resolveBranchStorageHealthConfig } from './utils/clone-reference.js';
 import { buildDatabaseHealthInfo } from './utils/database-health-diagnostics.js';
 import { emitServiceEvent } from './utils/emit-service-event.js';
 import {
@@ -5475,7 +5475,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
           // Resolved branch storage policy. The daemon still enforces this at
           // create time; the UI uses it to pick the right default and disable
           // unavailable storage modes before submit.
-          branchStorage: resolveBranchStorageConfig(config),
+          branchStorage: resolveBranchStorageHealthConfig(config),
           uploadPolicy: getUploadLimits(),
           // Normalized board/branch policies are independently feature-gated.
           // This is safe to advertise before login so the UI can avoid

@@ -24,5 +24,6 @@ describe('Branch filesystem status route registration', () => {
     expect(source).toContain(
       'branchFilesystemObservation: BRANCH_FILESYSTEM_OBSERVATION_CAPABILITY'
     );
+    expect(source).toContain('branchStorage: resolveBranchStorageHealthConfig(config)');
   });
 });

@@ -1,3 +1,6 @@
+/** The only branch-read command that may intentionally omit a Branch claim. */
+export const BRANCH_FILESYSTEM_STATUS_EXECUTOR_COMMAND_ID = 'branch-filesystem-status';
+
 /**
  * Canonical identities for taskless executor commands whose bearer also
  * authorizes one raw HTTP data-plane callback.

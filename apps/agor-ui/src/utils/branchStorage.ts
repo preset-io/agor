@@ -1,12 +1,13 @@
 import {
   BRANCH_STORAGE_MODES,
+  type BranchStorageHealthConfig,
   type BranchStorageMode,
   DEFAULT_BRANCH_STORAGE_MODE,
   type ResolvedBranchStorageConfig,
 } from '@agor/core/config/browser';
 
 export { BRANCH_STORAGE_MODES, type BranchStorageMode };
-export type BranchStorageConfig = Partial<ResolvedBranchStorageConfig>;
+export type BranchStorageConfig = Partial<BranchStorageHealthConfig>;
 
 export function isBranchStorageMode(value: unknown): value is BranchStorageMode {
   return typeof value === 'string' && (BRANCH_STORAGE_MODES as readonly string[]).includes(value);

@@ -16,6 +16,7 @@ import { computeZoneRelativePosition } from '@agor/core/utils/board-placement';
 import { normalizeOptionalHttpUrl } from '@agor/core/utils/url';
 import type { McpServer, ServerContext } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { BRANCH_FILESYSTEM_STATUS_EXECUTOR_COMMAND_ID } from '../../auth/executor-command-ids.js';
 import type {
   BoardsServiceImpl,
   BranchesServiceImpl,
@@ -494,7 +495,7 @@ export function registerBranchTools(server: McpServer, ctx: McpContext): void {
           command: 'branch.filesystem.status',
           sessionToken: await issueExecutorCommandToken(
             ctx.app,
-            'branch-filesystem-status',
+            BRANCH_FILESYSTEM_STATUS_EXECUTOR_COMMAND_ID,
             ctx.userId
           ),
           daemonUrl: getDaemonUrl(),

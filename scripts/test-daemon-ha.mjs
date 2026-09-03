@@ -677,6 +677,7 @@ try {
     defaultMode: 'clone',
     allowedModes: ['clone'],
     allowShallowClones: true,
+    borrowBaseObjects: false,
   });
   console.log('ok - authenticated health exposes constrained support capabilities');
   const boardEvents = [];

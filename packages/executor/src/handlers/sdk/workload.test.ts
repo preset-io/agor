@@ -1,5 +1,5 @@
 import { readdirSync } from 'node:fs';
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -72,6 +72,13 @@ function clientHarness() {
     completeWorkload,
     reconcileWorkloadCompletion,
   };
+}
+
+async function createWorkspaceInspectionFixture(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), 'agor-workspace-inspection-workload-'));
+  await writeFile(join(root, 'package.json'), '{"name":"workspace-inspection-fixture"}\n');
+  await writeFile(join(root, '.git'), 'deterministic repository marker\n');
+  return root;
 }
 
 describe('deterministic workload runner', () => {
@@ -524,29 +531,35 @@ describe('deterministic workload runner', () => {
   });
 
   it('publishes workspace inspection through the normal bounded completion path', async () => {
+    const workspaceCwd = await createWorkspaceInspectionFixture();
     const harness = clientHarness();
-    await executeWorkloadTask({
-      client: harness.client,
-      sessionId: 'session-1' as never,
-      taskId: 'task-1' as never,
-      prompt: '{"schemaVersion":1,"profile":"workspace-inspection"}',
-      workspaceCwd: process.cwd(),
-      abortController: new AbortController(),
-    });
+    try {
+      await executeWorkloadTask({
+        client: harness.client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: '{"schemaVersion":1,"profile":"workspace-inspection"}',
+        workspaceCwd,
+        abortController: new AbortController(),
+      });
 
-    expect(harness.completeWorkload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        task_id: 'task-1',
-        profile: 'workspace-inspection',
-        inspection: expect.objectContaining({
-          node: expect.objectContaining({ state: 'available' }),
-          repositoryMarkerPresent: true,
-        }),
-      })
-    );
-    expect(
-      Buffer.byteLength(JSON.stringify(harness.completeWorkload.mock.calls[0]?.[0]))
-    ).toBeLessThan(4 * 1024);
+      expect(harness.completeWorkload).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task_id: 'task-1',
+          profile: 'workspace-inspection',
+          inspection: expect.objectContaining({
+            node: expect.objectContaining({ state: 'available' }),
+            repositoryMarkerPresent: true,
+          }),
+        })
+      );
+      const completion = JSON.stringify(harness.completeWorkload.mock.calls[0]?.[0]);
+      expect(completion).not.toContain(workspaceCwd);
+      expect(Buffer.byteLength(completion)).toBeLessThan(4 * 1024);
+    } finally {
+      await rm(workspaceCwd, { recursive: true, force: true });
+      await expect(access(workspaceCwd)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
   });
 
   it('runs the strict offline install fixture through the bounded completion path', async () => {
@@ -644,16 +657,25 @@ describe('deterministic workload runner', () => {
   ] as const)('does not use public network access for the %s profile', async (_profile, prompt) => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network denied'));
     const harness = clientHarness();
-    await executeWorkloadTask({
-      client: harness.client,
-      sessionId: 'session-1' as never,
-      taskId: 'task-1' as never,
-      prompt,
-      ...(_profile === 'workspace-inspection' ? { workspaceCwd: process.cwd() } : {}),
-      abortController: new AbortController(),
-    });
+    const workspaceCwd =
+      _profile === 'workspace-inspection' ? await createWorkspaceInspectionFixture() : undefined;
+    try {
+      await executeWorkloadTask({
+        client: harness.client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt,
+        ...(workspaceCwd ? { workspaceCwd } : {}),
+        abortController: new AbortController(),
+      });
 
-    expect(fetch).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      if (workspaceCwd) {
+        await rm(workspaceCwd, { recursive: true, force: true });
+        await expect(access(workspaceCwd)).rejects.toMatchObject({ code: 'ENOENT' });
+      }
+    }
   });
 
   it('fails invalid input with a stable code and no raw parser details', async () => {
