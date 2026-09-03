@@ -51,7 +51,7 @@ import {
 } from 'reactflow';
 import 'reactflow/dist/style.css';
 import './SessionCanvas.css';
-import { boardCommentZoneParentObjectKey, shortId } from '@agor-live/client';
+import { boardCommentZoneParentObjectKey, hasMinimumRole, ROLES, shortId } from '@agor-live/client';
 import { mapToArray } from '@/utils/mapHelpers';
 import { DEFAULT_BACKGROUNDS } from '../../constants/ui';
 import {
@@ -93,6 +93,7 @@ import { RemoteCursorLayer, type StaticRemoteCursor } from './canvas/RemoteCurso
 import { useBoardObjects } from './canvas/useBoardObjects';
 import { findIntersectingObjects, findZoneAtPosition } from './canvas/utils/collisionDetection';
 import {
+  canRepositionBoardComment,
   getBranchParentInfo,
   getZoneParentInfo,
   planBoardCommentReposition,
@@ -471,9 +472,17 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
     const canEditBoard = useCanManageBoard(client, board ?? undefined, currentUser);
     const canMutateBoard = canEditBoard && mutationGate.canMutate;
+    // Board Viewers may collaborate through comments even though structural
+    // canvas mutations require board.edit. The daemon applies the same global
+    // member floor plus board-view authorization on comment creation.
+    const canComment = Boolean(currentUser && hasMinimumRole(currentUser.role, ROLES.MEMBER));
+    const canMutateComments = canComment && mutationGate.canMutate;
     const boardMutationMessage = canEditBoard
       ? mutationGate.message
       : 'You do not have permission to edit this board';
+    const commentMutationMessage = canComment
+      ? mutationGate.message
+      : 'You do not have permission to comment on this board';
 
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
@@ -885,7 +894,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           type: 'branchNode',
           dragHandle: REACT_FLOW_DRAG_HANDLE_SELECTOR,
           position, // When pinned (parentId set), this is relative to zone; otherwise absolute
-          // draggable inherits from canvas-level nodesDraggable (canMutateBoard)
+          draggable: canMutateBoard,
           zIndex: 500, // Above zones, below comments
           // Set dimensions for collision detection (matches BranchCard size)
           width: 500,
@@ -953,6 +962,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       zoneLabels,
       warnInvalidZoneRef,
       client,
+      canMutateBoard,
     ]);
 
     // Handler to open card modal. Identity-stabilized so card-map churn does
@@ -1020,7 +1030,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           type: 'cardNode',
           dragHandle: REACT_FLOW_DRAG_HANDLE_SELECTOR,
           position,
-          // draggable inherits from canvas-level nodesDraggable (canMutateBoard)
+          draggable: canMutateBoard,
           zIndex: 500, // Same level as branches
           width: 380,
           height: 120,
@@ -1046,6 +1056,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       handleCardClick,
       handleUnpinCard,
       warnInvalidZoneRef,
+      canMutateBoard,
     ]);
 
     // No edges needed for branch-centric boards
@@ -1315,7 +1326,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           position,
           parentId, // Set parent for relative positioning (moves with parent)
           // No extent constraint - comments can be dragged anywhere and re-pinned
-          // draggable inherits from canvas-level nodesDraggable (canMutateBoard)
+          draggable: mutationGate.canMutate && canRepositionBoardComment(comment, currentUser),
           selectable: true,
           zIndex: 1000, // Always on top (elevateNodesOnSelect is disabled)
           data: {
@@ -1350,6 +1361,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       onOpenCommentsPanel,
       onCommentHover,
       onCommentSelect,
+      currentUser,
+      mutationGate.canMutate,
     ]);
 
     // Helper: Apply local position overrides to a set of incoming nodes (branches or cards).
@@ -2254,7 +2267,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               id: objectId,
               type: 'zone',
               position,
-              // draggable inherits from canvas-level nodesDraggable (canMutateBoard)
+              draggable: canMutateBoard,
               zIndex: DEFAULT_BOARD_OBJECT_Z_INDEX.zone, // Zones behind branches and comments
               style: { width, height },
               data: {
@@ -2330,7 +2343,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Pane click handler for comment placement
     const handlePaneClick = useCallback(
       (event: React.MouseEvent) => {
-        if (activeTool === 'comment' && reactFlowInstanceRef.current) {
+        if (activeTool === 'comment' && canMutateComments && reactFlowInstanceRef.current) {
           // Use screenToFlowPosition which automatically handles all offsets (including CommentsPanel)
           const position = reactFlowInstanceRef.current.screenToFlowPosition({
             x: event.clientX,
@@ -2348,7 +2361,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           openMarkdownPlacementModal(event);
         }
       },
-      [activeTool, openMarkdownPlacementModal]
+      [activeTool, canMutateComments, openMarkdownPlacementModal]
     );
 
     // Handler to create spatial comment
@@ -2356,7 +2369,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       if (!commentPlacement || !board || !client || !currentUserId || !commentInput.trim()) {
         return;
       }
-      if (!canMutateBoard) {
+      if (!canMutateComments) {
         return;
       }
 
@@ -2415,7 +2428,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       } catch (error) {
         console.error('Failed to create spatial comment:', error);
       }
-    }, [commentPlacement, board, client, currentUserId, commentInput, canMutateBoard]);
+    }, [commentPlacement, board, client, currentUserId, commentInput, canMutateComments]);
 
     // Handler to create/update markdown note
     const handleCreateMarkdownNote = useCallback(async () => {
@@ -2454,7 +2467,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             id: objectId,
             type: 'markdown',
             position,
-            // draggable inherits from canvas-level nodesDraggable (canMutateBoard)
+            draggable: canMutateBoard,
             zIndex: 300, // Above zones (100), below branches (500)
             data: {
               objectId,
@@ -2531,7 +2544,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           return;
         }
 
-        if (activeTool === 'comment' && reactFlowInstanceRef.current) {
+        if (activeTool === 'comment' && canMutateComments && reactFlowInstanceRef.current) {
           // Allow comment placement on sessions and zones
           if (node.type === 'branchNode' || node.type === 'zone') {
             // Use screenToFlowPosition which automatically handles all offsets (including CommentsPanel)
@@ -2573,7 +2586,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           });
         }
       },
-      [activeTool, deleteObject, canMutateBoard, openMarkdownPlacementModal, setNodes]
+      [
+        activeTool,
+        deleteObject,
+        canMutateBoard,
+        canMutateComments,
+        openMarkdownPlacementModal,
+        setNodes,
+      ]
     );
 
     // Clear comment placement state when switching away from comment tool
@@ -2588,14 +2608,17 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // half-engaged mode (e.g. mid-drag zone) doesn't sit armed during the
     // disconnect/grace/out-of-sync window.
     useEffect(() => {
-      if (!canMutateBoard && activeTool !== 'select') {
+      const toolIsUnavailable =
+        (activeTool === 'comment' && !canMutateComments) ||
+        (activeTool !== 'select' && activeTool !== 'comment' && !canMutateBoard);
+      if (toolIsUnavailable) {
         setActiveTool('select');
         setDrawingZone(null);
         setCommentPlacement(null);
         setCommentInput('');
         setMarkdownModal(null);
       }
-    }, [canMutateBoard, activeTool]);
+    }, [canMutateBoard, canMutateComments, activeTool]);
 
     return (
       <div
@@ -2654,11 +2677,10 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             snapGrid={[20, 20]}
             minZoom={0.1}
             maxZoom={1.5}
-            // Disconnected: gate node dragging only. Drag is the only
-            // canvas gesture that mutates server state (zone/branch
-            // position). Selection/focus stay enabled so click handlers
-            // and keyboard a11y keep working in read-only mode.
-            nodesDraggable={canMutateBoard}
+            // The connection gate is global; each node carries its narrower
+            // authorization (board.edit for structure, author/admin for
+            // comments). Selection/focus remain available in read-only mode.
+            nodesDraggable={mutationGate.canMutate}
             nodesConnectable={false}
             elementsSelectable={true}
             elevateNodesOnSelect={false}
@@ -2749,6 +2771,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               >
                 <span>
                   <ControlButton
+                    aria-label="Add Zone"
                     disabled={!canMutateBoard}
                     onClick={(e) => {
                       e.stopPropagation();
@@ -2768,13 +2791,16 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 </span>
               </Tooltip>
               <Tooltip
-                title={canMutateBoard ? 'Add Comment' : (boardMutationMessage ?? 'Add Comment')}
+                title={
+                  canMutateComments ? 'Add Comment' : (commentMutationMessage ?? 'Add Comment')
+                }
                 placement="right"
                 mouseEnterDelay={0.3}
               >
                 <span>
                   <ControlButton
-                    disabled={!canMutateBoard}
+                    aria-label="Add Comment"
+                    disabled={!canMutateComments}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveTool('comment');
@@ -2784,8 +2810,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                         activeTool === 'comment'
                           ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
                           : 'none',
-                      opacity: canMutateBoard ? 1 : 0.4,
-                      cursor: canMutateBoard ? 'pointer' : 'not-allowed',
+                      opacity: canMutateComments ? 1 : 0.4,
+                      cursor: canMutateComments ? 'pointer' : 'not-allowed',
                     }}
                   >
                     <CommentOutlined style={{ fontSize: '16px' }} />
@@ -2831,6 +2857,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               >
                 <span>
                   <ControlButton
+                    aria-label="Eraser"
                     disabled={!canMutateBoard}
                     onClick={(e) => {
                       e.stopPropagation();

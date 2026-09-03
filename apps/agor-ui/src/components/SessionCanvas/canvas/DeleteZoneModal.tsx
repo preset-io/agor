@@ -50,7 +50,7 @@ export const DeleteZoneModal = ({
         <Alert
           type="info"
           showIcon
-          title={`${pinnedItemCount} pinned ${pinnedItemCount === 1 ? 'item' : 'items'} will be unpinned`}
+          title={`${pinnedItemCount} pinned ${pinnedItemCount === 1 ? 'branch/card' : 'branches/cards'} will be unpinned`}
           description="They will remain on the board at the same visible positions. Their content and session history are not changed."
         />
       ) : (

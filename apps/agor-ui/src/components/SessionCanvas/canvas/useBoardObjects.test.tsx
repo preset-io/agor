@@ -79,6 +79,7 @@ describe('zone toolbar metadata', () => {
       overlappingZoneCount: 1,
       layerAvailability: { front: true, forward: true, backward: false, back: false },
     });
+    expect(a?.draggable).toBe(false);
     expect(c?.data).toMatchObject({
       overlappingZoneCount: 0,
       layerAvailability: { front: false, forward: false, backward: true, back: true },

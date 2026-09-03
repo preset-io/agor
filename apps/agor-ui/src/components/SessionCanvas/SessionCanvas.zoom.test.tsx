@@ -1,13 +1,15 @@
 // biome-ignore-all lint/plugin/noHardcodedColorLiteral: persisted zone palette fixtures verify canvas creation behavior
-import type { AgorClient, Board } from '@agor-live/client';
+import type { AgorClient, Board, BoardComment, User } from '@agor-live/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ButtonHTMLAttributes, MouseEventHandler, ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
+import { agorStore } from '../../store/agorStore';
 import SessionCanvas from './SessionCanvas';
 
+const permissionState = vi.hoisted(() => ({ canEdit: true }));
 vi.mock('../../hooks/useCanManageBoard', () => ({
-  useCanManageBoard: () => true,
+  useCanManageBoard: () => permissionState.canEdit,
 }));
 
 let reactFlowProps: Record<string, unknown> | null = null;
@@ -58,9 +60,11 @@ vi.mock('./canvas/ArtifactNode', () => ({
 }));
 
 beforeEach(() => {
+  permissionState.canEdit = true;
   reactFlowProps = null;
   onNodesChangeInternalSpy.mockClear();
   setNodesUnsafeSpy.mockClear();
+  agorStore.setState({ userById: new Map(), commentById: new Map() });
 });
 
 describe('SessionCanvas zoom shortcuts', () => {
@@ -69,6 +73,73 @@ describe('SessionCanvas zoom shortcuts', () => {
 
     expect(reactFlowProps?.panOnScroll).toBe(true);
     expect(reactFlowProps?.zoomActivationKeyCode).toEqual(['Meta', 'Control']);
+  });
+
+  it('lets a board Viewer add and move their own comments without unlocking structure', async () => {
+    permissionState.canEdit = false;
+    const viewer = { user_id: 'viewer-1', role: 'member', username: 'viewer' } as User;
+    const ownComment = {
+      comment_id: 'comment-own',
+      board_id: 'board-1',
+      created_by: viewer.user_id,
+      content: 'Mine',
+      position: { absolute: { x: 20, y: 30 } },
+      resolved: false,
+    } as BoardComment;
+    const foreignComment = {
+      ...ownComment,
+      comment_id: 'comment-foreign',
+      created_by: 'user-elsewhere',
+      content: 'Not mine',
+      position: { absolute: { x: 40, y: 50 } },
+    } as BoardComment;
+    agorStore.setState({
+      userById: new Map([[viewer.user_id, viewer]]),
+      commentById: new Map([
+        [ownComment.comment_id, ownComment],
+        [foreignComment.comment_id, foreignComment],
+      ]),
+    });
+
+    render(
+      <ConnectionProvider
+        value={{
+          connected: true,
+          connecting: false,
+          outOfSync: false,
+          capturedSha: null,
+          currentSha: null,
+        }}
+      >
+        <SessionCanvas
+          board={
+            {
+              board_id: 'board-1',
+              name: 'Board',
+              slug: 'board',
+              objects: {
+                'zone-1': {
+                  type: 'zone',
+                  x: 0,
+                  y: 0,
+                  width: 500,
+                  height: 300,
+                  label: 'Review',
+                },
+              },
+              archived: false,
+            } as Board
+          }
+          client={null}
+          branches={[]}
+          currentUserId={viewer.user_id}
+        />
+      </ConnectionProvider>
+    );
+
+    expect(screen.getByRole('button', { name: 'Add Comment' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add Zone' })).toBeDisabled();
+    expect(reactFlowProps?.nodesDraggable).toBe(true);
   });
 
   it('opens the markdown note modal when the markdown tool clicks a board node', async () => {

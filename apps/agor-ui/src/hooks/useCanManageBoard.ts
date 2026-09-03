@@ -1,6 +1,7 @@
-import type { AgorClient, Board, GroupMembership, User } from '@agor-live/client';
-import { hasMinimumRole, ROLES, resolveCapabilityPolicyAccess } from '@agor-live/client';
+import type { AgorClient, Board, EffectiveCapabilityPolicyAccess, User } from '@agor-live/client';
+import { hasMinimumRole, ROLES } from '@agor-live/client';
 import { useEffect, useState } from 'react';
+import { useAuthConfig } from './useAuthConfig';
 
 /**
  * Resolve board-management capability from the same normalized policy used by
@@ -12,31 +13,43 @@ export function useCanManageBoard(
   user: User | null | undefined
 ) {
   const [canManage, setCanManage] = useState(false);
+  const { featuresConfig, loading: authConfigLoading } = useAuthConfig();
+  const branchRbacEnabled = featuresConfig?.branchRbac === true;
+  const boardId = board?.board_id;
+  const boardArchived = Boolean(board?.archived);
+  const primaryOwnerUserId = board?.primary_owner_user_id;
+  const userId = user?.user_id;
+  const userRole = user?.role;
 
   useEffect(() => {
     let cancelled = false;
     setCanManage(false);
-    if (!board || !user || !client || board.archived) return;
-    if (hasMinimumRole(user.role, ROLES.ADMIN) || board.primary_owner_user_id === user.user_id) {
+    if (authConfigLoading || !boardId || !userId || !userRole || !client || boardArchived) return;
+    if (!hasMinimumRole(userRole, ROLES.MEMBER)) return;
+
+    // Preserve the daemon's intentionally open member-level editing behavior
+    // while normalized board/branch RBAC is disabled.
+    if (!branchRbacEnabled) {
       setCanManage(true);
       return;
     }
-    if (!hasMinimumRole(user.role, ROLES.MEMBER)) return;
 
-    void Promise.all([
-      client.service('boards/:id/permissions').find({ route: { id: board.board_id } }),
-      client.service('group-memberships').findAll({ query: { user_id: user.user_id } }),
-    ])
-      .then(([permissions, memberships]) => {
+    if (hasMinimumRole(userRole, ROLES.ADMIN) || primaryOwnerUserId === userId) {
+      setCanManage(true);
+      return;
+    }
+
+    // The daemon owns policy, group-membership, and principal precedence. Use
+    // its effective-access projection instead of reimplementing that resolver
+    // in the browser.
+    void client
+      .service('boards/:id/effective-access')
+      .find({ route: { id: boardId } })
+      .then((access: unknown) => {
         if (cancelled) return;
-        const access = resolveCapabilityPolicyAccess({
-          policy: permissions.board_access,
-          primary_owner_user_id: permissions.primary_owner_user_id,
-          user_id: user.user_id,
-          user_status: 'active',
-          active_group_ids: (memberships as GroupMembership[]).map((item) => item.group_id),
-        });
-        setCanManage(access.capabilities.includes('board.edit'));
+        setCanManage(
+          (access as EffectiveCapabilityPolicyAccess).capabilities.includes('board.edit')
+        );
       })
       .catch(() => {
         if (!cancelled) setCanManage(false);
@@ -45,7 +58,16 @@ export function useCanManageBoard(
     return () => {
       cancelled = true;
     };
-  }, [board, client, user]);
+  }, [
+    boardArchived,
+    boardId,
+    branchRbacEnabled,
+    authConfigLoading,
+    client,
+    primaryOwnerUserId,
+    userId,
+    userRole,
+  ]);
 
   return canManage;
 }

@@ -274,7 +274,7 @@ export const useBoardObjects = ({
             id: objectId,
             type: 'appNode',
             position: { x: objectData.x, y: objectData.y },
-            // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+            draggable: canEdit,
             selectable: true,
             // Above markdown (300), below branches (500) by default.
             zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.app),
@@ -304,9 +304,7 @@ export const useBoardObjects = ({
             id: objectId,
             type: 'artifactNode',
             position: { x: objectData.x, y: objectData.y },
-            // Locked artifacts are never draggable. Unlocked artifacts inherit
-            // from canvas-level nodesDraggable (mutationGate.canMutate).
-            ...(isLocked ? { draggable: false } : {}),
+            draggable: canEdit && !isLocked,
             selectable: true,
             zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.artifact),
             className: eraserMode ? 'eraser-mode' : undefined,
@@ -331,7 +329,7 @@ export const useBoardObjects = ({
             id: objectId,
             type: 'markdown',
             position: { x: objectData.x, y: objectData.y },
-            // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+            draggable: canEdit,
             selectable: true,
             // Above zones (100), below branches (500) by default.
             zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.markdown),
@@ -367,9 +365,7 @@ export const useBoardObjects = ({
           id: objectId,
           type: 'zone',
           position: { x: objectData.x, y: objectData.y },
-          // Locked zones are never draggable. Unlocked zones inherit from
-          // canvas-level nodesDraggable (mutationGate.canMutate).
-          ...(isLocked ? { draggable: false } : {}),
+          draggable: canEdit && !isLocked,
           // Zones behind branches and comments by default; honor explicit order.
           zIndex: sanitizeZIndex(objectData.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
           className: eraserMode ? 'eraser-mode' : undefined,
@@ -455,7 +451,7 @@ export const useBoardObjects = ({
           id: objectId,
           type: 'zone',
           position: { x, y },
-          // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+          draggable: canEdit,
           zIndex: DEFAULT_BOARD_OBJECT_Z_INDEX.zone, // Zones behind branches and comments
           style: {
             width,
@@ -493,7 +489,7 @@ export const useBoardObjects = ({
         setNodes((nodes) => nodes.filter((n) => n.id !== objectId));
       }
     },
-    [client, setNodes, handleUpdateObject] // Removed board dependency
+    [canEdit, client, setNodes, handleUpdateObject] // Removed board dependency
   );
 
   /**

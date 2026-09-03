@@ -26,7 +26,7 @@ describe('DeleteZoneModal', () => {
     expect(
       screen.getByText(/Branches, cards, comments, notes, and sessions are kept/)
     ).toBeInTheDocument();
-    expect(screen.getByText('2 pinned items will be unpinned')).toBeInTheDocument();
+    expect(screen.getByText('2 pinned branches/cards will be unpinned')).toBeInTheDocument();
     expect(screen.queryByText(/Delete pinned items too/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete zone' }));

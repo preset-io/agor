@@ -1,8 +1,39 @@
+// biome-ignore-all lint/plugin/noHardcodedColorLiteral: persisted color fixtures verify legacy zone migration
 import type { BoardObject } from '@agor-live/client';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntdApp } from 'antd';
 import { describe, expect, it, vi } from 'vitest';
 import { ZoneConfigModal } from './ZoneConfigModal';
+
+vi.mock('antd', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('antd')>();
+  const React = await import('react');
+  return {
+    ...actual,
+    ColorPicker: ({
+      children,
+      onChange,
+    }: {
+      children?: React.ReactNode;
+      onChange?: (color: { toHexString: () => string }) => void;
+    }) => {
+      const childProps = React.isValidElement(children)
+        ? (children.props as { 'aria-label'?: string })
+        : undefined;
+      const label = childProps?.['aria-label'] ?? 'color';
+      return (
+        <div>
+          {children}
+          <button
+            type="button"
+            aria-label={`Set ${label}`}
+            onClick={() => onChange?.({ toHexString: () => '#123456' })}
+          />
+        </div>
+      );
+    },
+  };
+});
 
 vi.mock('../../../contexts/ConnectionContext', () => ({
   useMutationGate: () => ({ canMutate: true }),
@@ -125,5 +156,39 @@ describe('ZoneConfigModal historical tool migration', () => {
     await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
     expect(onUpdate.mock.calls[0][1]).toMatchObject({ fontSize: 20 });
     expect(onUpdate.mock.calls[0][1].trigger).toBeUndefined();
+  });
+
+  it('preserves a legacy translucent fill when the Appearance tab changes its border', async () => {
+    const onUpdate = vi.fn();
+    render(
+      <AntdApp>
+        <ZoneConfigModal
+          open
+          onCancel={vi.fn()}
+          zoneName="Legacy"
+          objectId="zone-legacy"
+          onUpdate={onUpdate}
+          zoneData={{
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 100,
+            label: 'Legacy',
+            color: '#ff0000',
+          }}
+        />
+      </AntdApp>
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Appearance & placement' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Set Zone border color' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({
+      borderColor: '#123456',
+      backgroundColor: 'rgba(255, 0, 0, 0.1)',
+    });
   });
 });

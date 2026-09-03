@@ -19,7 +19,6 @@ import {
 } from '@ant-design/icons';
 import { Button, ColorPicker, Dropdown, Flex, Popover, Space, Typography, theme } from 'antd';
 import type { Color } from 'antd/es/color-picker';
-import { AggregationColor } from 'antd/es/color-picker/color';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { NodeResizer, useViewport } from 'reactflow';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
@@ -28,7 +27,7 @@ import { getUserInitials } from '../../UserIdentityAvatar';
 import { DeleteZoneModal } from './DeleteZoneModal';
 import { ZoneConfigModal } from './ZoneConfigModal';
 import type { LayerOp } from './zOrder';
-import { ZONE_CONTENT_OPACITY } from './zoneAppearance';
+import { toTranslucentZoneFill, ZONE_CONTENT_OPACITY } from './zoneAppearance';
 import { effectiveLabelFontSize, statusFontSizeFor } from './zoneFontSize';
 
 // Preserve the existing import surface for CommentsPanel and external callers.
@@ -196,7 +195,9 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
           // before introducing borderColor, whose historical fallback is
           // opaque, so changing only the border has no surprise side effect.
           ...(data.color && !data.borderColor && !data.backgroundColor
-            ? { backgroundColor: colorToRgba(data.color, ZONE_CONTENT_OPACITY) }
+            ? {
+                backgroundColor: toTranslucentZoneFill(data.color, `${token.colorBgContainer}40`),
+              }
             : {}),
         })
       );
@@ -238,28 +239,13 @@ const ZoneNodeComponent = ({ data, selected }: { data: ZoneNodeData; selected?: 
   // Backwards compatibility: fall back to `color` if new fields not set
   const borderColor = data.borderColor || data.color || token.colorBorder;
 
-  // Helper to convert color to rgba with custom alpha (for backwards compatibility with old `color` field)
-  const colorToRgba = (colorStr: string, alpha: number): string => {
-    try {
-      const color = new AggregationColor(colorStr);
-      const rgb = color.toRgb();
-      // If the color already has alpha, multiply it with the requested alpha
-      const finalAlpha = rgb.a * alpha;
-      // biome-ignore lint/plugin/noHardcodedColorLiteral: persisted user color resolver emits CSS syntax from parsed channels
-      return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${finalAlpha})`;
-    } catch {
-      // Fallback to token if parsing fails
-      return `${token.colorBgContainer}40`;
-    }
-  };
-
   // Backwards compatibility: derive background from border if backgroundColor not set
   const backgroundColor =
     data.backgroundColor ||
     (data.borderColor
       ? data.borderColor // Use borderColor directly if set (supports alpha)
       : data.color
-        ? colorToRgba(data.color, ZONE_CONTENT_OPACITY) // Old behavior for backwards compat
+        ? toTranslucentZoneFill(data.color, `${token.colorBgContainer}40`)
         : `${token.colorBgContainer}40`);
 
   const getTextColor = (background: string): string => getContrastingTextColor(background, token);

@@ -21,12 +21,11 @@ import {
   theme,
 } from 'antd';
 import type { Color } from 'antd/es/color-picker';
-import { AggregationColor } from 'antd/es/color-picker/color';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { AgentSelectionGrid, AVAILABLE_AGENTS } from '../../AgentSelectionGrid';
 import { ExpandableAlert } from '../../ExpandableAlert';
-import { ZONE_CONTENT_OPACITY } from './zoneAppearance';
+import { toTranslucentZoneFill, ZONE_CONTENT_OPACITY } from './zoneAppearance';
 import {
   sanitizeZoneFontSize,
   ZONE_FONT_SIZE_MAX,
@@ -100,16 +99,6 @@ export const ZoneConfigModal = ({
     [token]
   );
 
-  const colorToRgba = (value: string, alpha: number): string => {
-    try {
-      const rgb = new AggregationColor(value).toRgb();
-      // biome-ignore lint/plugin/noHardcodedColorLiteral: user color resolver emits CSS syntax from parsed channels
-      return `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${rgb.a * alpha})`;
-    } catch {
-      return `${token.colorBgContainer}40`;
-    }
-  };
-
   const legacyColor = clearLegacyColor ? undefined : zone?.color;
   const effectiveBorderColor = borderColor ?? legacyColor ?? token.colorBorder;
   const effectiveBackgroundColor =
@@ -117,7 +106,7 @@ export const ZoneConfigModal = ({
     (borderColor
       ? borderColor
       : legacyColor
-        ? colorToRgba(legacyColor, ZONE_CONTENT_OPACITY)
+        ? toTranslucentZoneFill(legacyColor, `${token.colorBgContainer}40`)
         : `${token.colorBgContainer}40`);
 
   // Reset only when the modal opens. Live board patches must not erase edits in
@@ -161,7 +150,19 @@ export const ZoneConfigModal = ({
     form,
   ]);
 
-  const handleBorderColorChange = (color: Color) => setBorderColor(color.toHexString());
+  const handleBorderColorChange = (color: Color) => {
+    // Introducing borderColor changes the renderer's fallback semantics. Keep
+    // the legacy `color` fill translucent by materializing it before saving.
+    if (
+      zone?.color &&
+      !zone.borderColor &&
+      !zone.backgroundColor &&
+      backgroundColor === undefined
+    ) {
+      setBackgroundColor(toTranslucentZoneFill(zone.color, `${token.colorBgContainer}40`));
+    }
+    setBorderColor(color.toHexString());
+  };
   const handleBackgroundColorChange = (color: Color) => setBackgroundColor(color.toHexString());
 
   const handleSave = async () => {
@@ -244,7 +245,9 @@ export const ZoneConfigModal = ({
               disabled={borderColor === undefined && legacyColor === undefined}
               onClick={() => {
                 if (legacyColor && backgroundColor === undefined) {
-                  setBackgroundColor(colorToRgba(legacyColor, ZONE_CONTENT_OPACITY));
+                  setBackgroundColor(
+                    toTranslucentZoneFill(legacyColor, `${token.colorBgContainer}40`)
+                  );
                 }
                 setBorderColor(undefined);
                 setClearLegacyColor(true);

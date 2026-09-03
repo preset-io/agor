@@ -539,9 +539,8 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
   } as any);
   app.use(
     '/boards',
-    createBoardsService(
-      db,
-      (boardObject, params) => {
+    createBoardsService(db, {
+      emitBoardObjectPatched: (boardObject, params) => {
         emitServiceEvent(app, {
           path: 'board-objects',
           event: 'patched',
@@ -550,16 +549,16 @@ export async function registerServices(ctx: RegisterServicesContext): Promise<Re
           id: boardObject.object_id,
         });
       },
-      (event) => emitServiceEvent(app, { path: 'boards', ...event }),
-      (comment, params) =>
+      emitBoardEvent: (event) => emitServiceEvent(app, { path: 'boards', ...event }),
+      emitBoardCommentPatched: (comment, params) =>
         emitServiceEvent(app, {
           path: 'board-comments',
           event: 'patched',
           data: comment,
           params,
           id: comment.comment_id,
-        })
-    ),
+        }),
+    }),
     {
       methods: [
         'find',
