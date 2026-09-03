@@ -274,6 +274,7 @@ async function handlePromptPayload(
     sessionId: payload.params.sessionId,
     taskId: payload.params.taskId,
     prompt: payload.params.prompt,
+    workspaceCwd: payload.params.cwd,
     tool: payload.params.tool,
     permissionMode: payload.params.permissionMode,
     daemonUrl: resolvedDaemonUrl,

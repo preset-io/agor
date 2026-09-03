@@ -102,6 +102,7 @@ describe('AgorExecutor watchdog handoff', () => {
       sessionId: 'session-1',
       taskId: 'task-1',
       prompt: '{"schemaVersion":1,"profile":"wait","durationMs":100}',
+      workspaceCwd: '/daemon/workspace',
       tool: 'workload',
       daemonUrl: 'http://daemon',
     }) as unknown as {
@@ -116,7 +117,10 @@ describe('AgorExecutor watchdog handoff', () => {
     expect(runtime.initialize).toHaveBeenCalledWith('workload');
     expect(runtime.execute).toHaveBeenCalledWith(
       'workload',
-      expect.objectContaining({ prompt: expect.stringContaining('"profile":"wait"') })
+      expect.objectContaining({
+        prompt: expect.stringContaining('"profile":"wait"'),
+        workspaceCwd: '/daemon/workspace',
+      })
     );
   });
 

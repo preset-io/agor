@@ -8,6 +8,7 @@ export const WORKLOAD_PROFILES = [
   'cpu',
   'temporary-io',
   'compile-test',
+  'workspace-inspection',
 ] as const;
 
 export type WorkloadProfile = (typeof WORKLOAD_PROFILES)[number];
@@ -22,6 +23,38 @@ export const WORKLOAD_COMPILE_MAX_REPETITIONS = 1_000;
 export const WORKLOAD_COMPILE_MAX_TOTAL_TIME_MS = 120_000;
 export const WORKLOAD_SEED_MAX = 0xffff_ffff;
 export const WORKLOAD_CONTROLLED_FAILURE_CODE = 'WORKLOAD_CONTROLLED_FAILURE';
+export const WORKLOAD_LOCKFILES = [
+  'pnpm-lock.yaml',
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'yarn.lock',
+  'bun.lock',
+  'bun.lockb',
+] as const;
+
+export type WorkloadLockfile = (typeof WORKLOAD_LOCKFILES)[number];
+
+export type WorkloadToolVersionObservation =
+  | { state: 'available'; version: string }
+  | { state: 'unavailable' | 'failed' | 'timed-out' | 'invalid-output' };
+
+export type WorkloadFileObservation =
+  | { state: 'present'; sha256: string }
+  | { state: 'absent' | 'unsafe-symlink' | 'not-regular' | 'too-large' | 'unreadable' };
+
+export type WorkloadPackageManagerObservation =
+  | { state: 'valid'; name: 'npm' | 'pnpm' | 'yarn' | 'bun'; version: string }
+  | { state: 'absent' | 'invalid' | 'unavailable' };
+
+export interface WorkloadWorkspaceInspection {
+  node: WorkloadToolVersionObservation;
+  npm: WorkloadToolVersionObservation;
+  pnpm: WorkloadToolVersionObservation;
+  packageJson: WorkloadFileObservation;
+  packageManager: WorkloadPackageManagerObservation;
+  lockfiles: Array<{ name: WorkloadLockfile; file: WorkloadFileObservation }>;
+  repositoryMarkerPresent: boolean;
+}
 
 const WORKLOAD_REQUEST_BASE = { schemaVersion: z.literal(1) };
 
@@ -68,12 +101,20 @@ const CompileTestRequestSchema = z
   })
   .strict();
 
+const WorkspaceInspectionRequestSchema = z
+  .object({
+    ...WORKLOAD_REQUEST_BASE,
+    profile: z.literal('workspace-inspection'),
+  })
+  .strict();
+
 export const WorkloadRequestSchema = z.discriminatedUnion('profile', [
   WaitRequestSchema,
   ControlledFailureRequestSchema,
   CpuRequestSchema,
   TemporaryIoRequestSchema,
   CompileTestRequestSchema,
+  WorkspaceInspectionRequestSchema,
 ]);
 
 export type WorkloadRequest = z.infer<typeof WorkloadRequestSchema>;
@@ -148,6 +189,12 @@ export type WorkloadCompletionInput =
       requested_total_time_ms: number;
       observed_elapsed_ms: number;
       observed_repetitions: number;
+    }
+  | {
+      task_id: string;
+      result_message_id: string;
+      profile: 'workspace-inspection';
+      inspection: WorkloadWorkspaceInspection;
     };
 
 export type WorkloadResult =
@@ -190,6 +237,13 @@ export type WorkloadResult =
       taskId: TaskID;
       requested: { repetitions: number; totalTimeMs: number };
       observed: { elapsedMs: number; repetitions: number; bundle: 'fixed-v1' };
+    }
+  | {
+      schemaVersion: 1;
+      profile: 'workspace-inspection';
+      outcome: 'completed';
+      taskId: TaskID;
+      inspection: WorkloadWorkspaceInspection;
     };
 
 export class WorkloadContractError extends Error {
@@ -232,6 +286,7 @@ const COMPILE_TEST_COMPLETION_FIELDS = [
   'observed_elapsed_ms',
   'observed_repetitions',
 ] as const;
+const WORKSPACE_INSPECTION_COMPLETION_FIELDS = ['inspection'] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -245,6 +300,99 @@ function requireFields(input: Record<string, unknown>, fields: readonly string[]
   for (const field of fields) {
     if (!(field in input)) throw new WorkloadContractError();
   }
+}
+
+function hasOnlyFields(input: Record<string, unknown>, fields: readonly string[]): boolean {
+  const allowed = new Set(fields);
+  return Object.keys(input).every((field) => allowed.has(field));
+}
+
+function isVersion(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= 64 &&
+    /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value)
+  );
+}
+
+function isToolVersionObservation(value: unknown): value is WorkloadToolVersionObservation {
+  if (!isRecord(value) || typeof value.state !== 'string') return false;
+  if (value.state === 'available') {
+    return hasOnlyFields(value, ['state', 'version']) && isVersion(value.version);
+  }
+  return (
+    ['unavailable', 'failed', 'timed-out', 'invalid-output'].includes(value.state) &&
+    hasOnlyFields(value, ['state'])
+  );
+}
+
+function isFileObservation(value: unknown): value is WorkloadFileObservation {
+  if (!isRecord(value) || typeof value.state !== 'string') return false;
+  if (value.state === 'present') {
+    return (
+      hasOnlyFields(value, ['state', 'sha256']) &&
+      typeof value.sha256 === 'string' &&
+      /^[0-9a-f]{64}$/.test(value.sha256)
+    );
+  }
+  return (
+    ['absent', 'unsafe-symlink', 'not-regular', 'too-large', 'unreadable'].includes(value.state) &&
+    hasOnlyFields(value, ['state'])
+  );
+}
+
+function isPackageManagerObservation(value: unknown): value is WorkloadPackageManagerObservation {
+  if (!isRecord(value) || typeof value.state !== 'string') return false;
+  if (value.state === 'valid') {
+    return (
+      hasOnlyFields(value, ['state', 'name', 'version']) &&
+      ['npm', 'pnpm', 'yarn', 'bun'].includes(value.name as string) &&
+      isVersion(value.version)
+    );
+  }
+  return (
+    ['absent', 'invalid', 'unavailable'].includes(value.state) && hasOnlyFields(value, ['state'])
+  );
+}
+
+function isWorkspaceInspection(value: unknown): value is WorkloadWorkspaceInspection {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      'node',
+      'npm',
+      'pnpm',
+      'packageJson',
+      'packageManager',
+      'lockfiles',
+      'repositoryMarkerPresent',
+    ]) ||
+    !isToolVersionObservation(value.node) ||
+    value.node.state !== 'available' ||
+    !isToolVersionObservation(value.npm) ||
+    !isToolVersionObservation(value.pnpm) ||
+    !isFileObservation(value.packageJson) ||
+    !isPackageManagerObservation(value.packageManager) ||
+    typeof value.repositoryMarkerPresent !== 'boolean' ||
+    !Array.isArray(value.lockfiles) ||
+    value.lockfiles.length !== WORKLOAD_LOCKFILES.length
+  ) {
+    return false;
+  }
+
+  if (
+    (value.packageJson.state === 'absent' && value.packageManager.state !== 'absent') ||
+    (value.packageJson.state === 'present' && value.packageManager.state === 'unavailable') ||
+    (!['absent', 'present'].includes(value.packageJson.state) &&
+      value.packageManager.state !== 'unavailable')
+  ) {
+    return false;
+  }
+
+  return value.lockfiles.every((entry, index) => {
+    if (!isRecord(entry) || !hasOnlyFields(entry, ['name', 'file'])) return false;
+    return entry.name === WORKLOAD_LOCKFILES[index] && isFileObservation(entry.file);
+  });
 }
 
 /**
@@ -358,6 +506,13 @@ export function assertValidWorkloadCompletionInput(
     return;
   }
 
+  if (profile === 'workspace-inspection') {
+    assertOnlyFields(value, WORKSPACE_INSPECTION_COMPLETION_FIELDS);
+    requireFields(value, ['inspection']);
+    if (!isWorkspaceInspection(value.inspection)) throw new WorkloadContractError();
+    return;
+  }
+
   throw new WorkloadContractError();
 }
 
@@ -418,6 +573,8 @@ export function assertWorkloadCompletionMatchesRequest(
         throw new WorkloadContractError();
       return;
     }
+    case 'workspace-inspection':
+      return;
   }
 }
 
@@ -498,6 +655,19 @@ export function workloadResultFromCompletion(
           repetitions: completion.observed_repetitions,
           bundle: 'fixed-v1',
         },
+      };
+    }
+    case 'workspace-inspection': {
+      const completion = input as Extract<
+        WorkloadCompletionInput,
+        { profile: 'workspace-inspection' }
+      >;
+      return {
+        schemaVersion: 1,
+        profile: 'workspace-inspection',
+        outcome: 'completed',
+        taskId,
+        inspection: completion.inspection,
       };
     }
   }

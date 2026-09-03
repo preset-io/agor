@@ -13,6 +13,7 @@ import type {
   UserID,
   UUID,
   WorkloadCompletionInput,
+  WorkloadWorkspaceInspection,
 } from '@agor/core/types';
 import {
   MessageRole,
@@ -107,6 +108,23 @@ async function createSessionWithDeps(
 }
 
 describe('TaskRepository.completeWorkload', () => {
+  const workspaceInspection = {
+    node: { state: 'available', version: '22.18.0' },
+    npm: { state: 'available', version: '10.9.3' },
+    pnpm: { state: 'unavailable' },
+    packageJson: { state: 'present', sha256: 'a'.repeat(64) },
+    packageManager: { state: 'valid', name: 'pnpm', version: '11.17.0' },
+    lockfiles: [
+      { name: 'pnpm-lock.yaml', file: { state: 'present', sha256: 'b'.repeat(64) } },
+      { name: 'package-lock.json', file: { state: 'absent' } },
+      { name: 'npm-shrinkwrap.json', file: { state: 'absent' } },
+      { name: 'yarn.lock', file: { state: 'absent' } },
+      { name: 'bun.lock', file: { state: 'absent' } },
+      { name: 'bun.lockb', file: { state: 'absent' } },
+    ],
+    repositoryMarkerPresent: true,
+  } satisfies WorkloadWorkspaceInspection;
+
   dbTest('atomically publishes one result and settles the workload Task', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db, 'workload');
@@ -199,6 +217,16 @@ describe('TaskRepository.completeWorkload', () => {
         },
         expectedProfile: 'compile-test',
       },
+      {
+        prompt: '{"schemaVersion":1,"profile":"workspace-inspection"}',
+        input: {
+          task_id: 'placeholder-task',
+          result_message_id: 'placeholder-message',
+          profile: 'workspace-inspection',
+          inspection: workspaceInspection,
+        },
+        expectedProfile: 'workspace-inspection',
+      },
     ];
 
     for (const testCase of cases) {
@@ -217,12 +245,19 @@ describe('TaskRepository.completeWorkload', () => {
         result_message_id: generateId() as MessageID,
       });
 
-      expect(JSON.parse(result.message.content as string)).toMatchObject({
+      const content = JSON.parse(result.message.content as string);
+      expect(content).toMatchObject({
         schemaVersion: 1,
         profile: testCase.expectedProfile,
         outcome: 'completed',
         taskId: task.task_id,
       });
+      if (testCase.expectedProfile === 'workspace-inspection') {
+        expect(content.inspection).toEqual(workspaceInspection);
+      }
+      expect(Buffer.byteLength(result.message.content as string, 'utf8')).toBeLessThanOrEqual(
+        WORKLOAD_RESULT_MAX_BYTES
+      );
       expect(result.message.metadata).toEqual({ is_meta: true, workload_result: true });
     }
   });
@@ -254,6 +289,33 @@ describe('TaskRepository.completeWorkload', () => {
     await expect(
       taskRepo.completeWorkload({ ...invalid, profile: null } as unknown as WorkloadCompletionInput)
     ).rejects.toThrow('WORKLOAD_COMPLETION_INVALID');
+    expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
+  });
+
+  dbTest('rejects malformed or reordered workspace inspection facts', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db, 'workload');
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: new Date().toISOString(),
+        full_prompt: '{"schemaVersion":1,"profile":"workspace-inspection"}',
+      })
+    );
+
+    const invalid = {
+      task_id: task.task_id,
+      result_message_id: generateId() as MessageID,
+      profile: 'workspace-inspection',
+      inspection: {
+        ...workspaceInspection,
+        lockfiles: [...workspaceInspection.lockfiles].reverse(),
+        absolutePath: '/must-not-pass',
+      },
+    } as unknown as WorkloadCompletionInput;
+
+    await expect(taskRepo.completeWorkload(invalid)).rejects.toThrow('WORKLOAD_COMPLETION_INVALID');
     expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
   });
 

@@ -64,6 +64,8 @@ export interface ExecutorConfig {
   sessionId: string;
   taskId: string;
   prompt: string;
+  /** Daemon-authored Task cwd. Absent only in the legacy CLI compatibility path. */
+  workspaceCwd?: string;
   tool: AgenticToolName;
   permissionMode?: PermissionMode;
   daemonUrl: string;
@@ -371,6 +373,7 @@ export class AgorExecutor {
         sessionId: this.config.sessionId as SessionID,
         taskId: this.config.taskId as TaskID,
         prompt: this.config.prompt,
+        workspaceCwd: this.config.workspaceCwd,
         permissionMode: this.config.permissionMode,
         abortController: this.abortController,
         messageSource: this.config.messageSource,

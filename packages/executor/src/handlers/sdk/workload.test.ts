@@ -1,6 +1,7 @@
 import { readdirSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { WORKLOAD_CONTROLLED_FAILURE_CODE, WORKLOAD_TEMP_IO_MAX_BYTES } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -94,6 +95,10 @@ describe('deterministic workload runner', () => {
       repetitions: 2,
       totalTimeMs: 100,
     });
+    expect(parseWorkloadRequest('{"schemaVersion":1,"profile":"workspace-inspection"}')).toEqual({
+      schemaVersion: 1,
+      profile: 'workspace-inspection',
+    });
 
     for (const prompt of [
       '{"schemaVersion":1,"profile":"controlled-failure","delayMs":120001}',
@@ -104,6 +109,9 @@ describe('deterministic workload runner', () => {
       '{"schemaVersion":1,"profile":"compile-test","repetitions":2,"totalTimeMs":9}',
       '{"schemaVersion":1,"profile":"cpu","durationMs":10,"seed":7,"path":"/tmp"}',
       '{"schemaVersion":1,"profile":"cpu","durationMs":10,"seed":7,"bytes":8}',
+      '{"schemaVersion":1,"profile":"workspace-inspection","path":"/tmp"}',
+      '{"schemaVersion":1,"profile":"workspace-inspection","command":"npm test"}',
+      '{"schemaVersion":1,"profile":"workspace-inspection","env":{"TOKEN":"secret"}}',
     ]) {
       expect(() => parseWorkloadRequest(prompt)).toThrow('WORKLOAD_REQUEST_INVALID');
     }
@@ -409,6 +417,32 @@ describe('deterministic workload runner', () => {
     );
   });
 
+  it('publishes workspace inspection through the normal bounded completion path', async () => {
+    const harness = clientHarness();
+    await executeWorkloadTask({
+      client: harness.client,
+      sessionId: 'session-1' as never,
+      taskId: 'task-1' as never,
+      prompt: '{"schemaVersion":1,"profile":"workspace-inspection"}',
+      workspaceCwd: join(process.cwd(), '../..'),
+      abortController: new AbortController(),
+    });
+
+    expect(harness.completeWorkload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task_id: 'task-1',
+        profile: 'workspace-inspection',
+        inspection: expect.objectContaining({
+          node: expect.objectContaining({ state: 'available' }),
+          repositoryMarkerPresent: true,
+        }),
+      })
+    );
+    expect(
+      Buffer.byteLength(JSON.stringify(harness.completeWorkload.mock.calls[0]?.[0]))
+    ).toBeLessThan(4 * 1024);
+  });
+
   it.each([
     ['wait', '{"schemaVersion":1,"profile":"wait","durationMs":100}'],
     ['controlled-failure', '{"schemaVersion":1,"profile":"controlled-failure"}'],
@@ -418,6 +452,7 @@ describe('deterministic workload runner', () => {
       'compile-test',
       '{"schemaVersion":1,"profile":"compile-test","repetitions":1,"totalTimeMs":100}',
     ],
+    ['workspace-inspection', '{"schemaVersion":1,"profile":"workspace-inspection"}'],
   ] as const)('does not use public network access for the %s profile', async (_profile, prompt) => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network denied'));
     const harness = clientHarness();
@@ -426,6 +461,7 @@ describe('deterministic workload runner', () => {
       sessionId: 'session-1' as never,
       taskId: 'task-1' as never,
       prompt,
+      ...(_profile === 'workspace-inspection' ? { workspaceCwd: process.cwd() } : {}),
       abortController: new AbortController(),
     });
 
