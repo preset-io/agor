@@ -6,7 +6,7 @@
  * - Zone border color when pinned to a zone (matching BranchCard pattern)
  * - CardType emoji + title (with optional URL link)
  * - Pin icon when in a zone (click to unpin)
- * - Description (collapsed after ~100 chars)
+ * - Description (markdown, collapsed after ~4 lines)
  * - Note (always shown in full, distinct background)
  */
 
@@ -23,14 +23,16 @@ function isSafeUrl(url: string): boolean {
   }
 }
 
-import React, { useMemo, useState } from 'react';
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
 } from '../../utils/reactFlowDragClasses';
 import { ensureColorVisible, isDarkTheme } from '../../utils/theme';
+import { MarkdownRenderer } from '../MarkdownRenderer';
 
-const DESCRIPTION_MAX_CHARS = 100;
+// ~4 lines of compact markdown (12px / 1.5 line-height) before offering "more".
+const DESCRIPTION_COLLAPSED_MAX_HEIGHT = 72;
 const CARD_WIDTH = 380;
 
 export interface CardNodeData {
@@ -46,6 +48,8 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
   const { token } = theme.useToken();
   const { card, isPinned, zoneName, zoneColor, onClick, onUnpin } = data;
   const [descExpanded, setDescExpanded] = useState(false);
+  const [canExpandDesc, setCanExpandDesc] = useState(false);
+  const descRef = useRef<HTMLDivElement>(null);
 
   const borderColor = card.effective_color || token.colorBorder;
   const emoji = card.effective_emoji;
@@ -57,15 +61,19 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
     return ensureColorVisible(zoneColor, isDarkMode, 50, 50);
   }, [zoneColor, isDarkMode]);
 
-  const truncatedDesc = useMemo(() => {
-    if (!card.description) return '';
-    if (card.description.length <= DESCRIPTION_MAX_CHARS || descExpanded) return card.description;
-    const truncated = card.description.slice(0, DESCRIPTION_MAX_CHARS);
-    const lastSpace = truncated.lastIndexOf(' ');
-    return `${lastSpace > DESCRIPTION_MAX_CHARS * 0.7 ? truncated.slice(0, lastSpace) : truncated}...`;
+  // Measure against the collapsed height cap to decide whether "more" is
+  // needed. Only measured while collapsed: the rendered markdown (not a raw
+  // char count) is the source of truth, so we never cut off mid-syntax like
+  // `**bo` the old char-slicing truncation could.
+  useLayoutEffect(() => {
+    if (descExpanded || !card.description) {
+      if (!card.description) setCanExpandDesc(false);
+      return;
+    }
+    const el = descRef.current;
+    if (!el) return;
+    setCanExpandDesc(el.scrollHeight - el.clientHeight > 1);
   }, [card.description, descExpanded]);
-
-  const needsTruncation = (card.description?.length ?? 0) > DESCRIPTION_MAX_CHARS;
 
   return (
     <div
@@ -162,19 +170,25 @@ const CardNodeComponent = ({ data }: { data: CardNodeData }) => {
             padding: '8px 12px',
             borderBottom: card.note ? `1px solid ${token.colorBorderSecondary}` : 'none',
           }}
+          onClick={(e) => {
+            // Let interactive markdown elements (links, copy buttons) act on
+            // their own instead of also opening the card.
+            if ((e.target as HTMLElement).closest('a, button')) {
+              e.stopPropagation();
+            }
+          }}
         >
-          <Typography.Text
+          <div
+            ref={descRef}
             style={{
-              fontSize: 12,
+              maxHeight: descExpanded ? undefined : DESCRIPTION_COLLAPSED_MAX_HEIGHT,
+              overflow: descExpanded ? 'visible' : 'hidden',
               color: token.colorTextSecondary,
-              lineHeight: '1.5',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
             }}
           >
-            {truncatedDesc}
-          </Typography.Text>
-          {needsTruncation && (
+            <MarkdownRenderer content={card.description} compact showControls={false} />
+          </div>
+          {canExpandDesc && (
             <Button
               type="link"
               size="small"
