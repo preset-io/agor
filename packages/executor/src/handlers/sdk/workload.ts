@@ -291,6 +291,8 @@ export async function executeWorkloadTask(params: {
   abortController: AbortController;
   /** Daemon-authored Task cwd; never derived from request content. */
   workspaceCwd?: string;
+  /** Test-only override for the process-boundary runner. */
+  offlineInstallRunner?: typeof runOfflineInstallFixture;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
 }): Promise<void> {
   const startedAtMs = Date.now();
@@ -408,7 +410,7 @@ export async function executeWorkloadTask(params: {
       break;
     }
     case 'offline-install': {
-      const observed = await runOfflineInstallFixture({
+      const observed = await (params.offlineInstallRunner ?? runOfflineInstallFixture)({
         taskId: params.taskId,
         repetitions: request.repetitions,
         signal,
