@@ -198,7 +198,9 @@ describe('ClaudePromptService background task query lifetime', () => {
     expect(query.releaseInput).toHaveBeenCalledTimes(1);
     const terminalResult = events.filter((event) => event.type === 'result').at(-1);
     expect(terminalResult?.raw_sdk_message).toMatchObject({
-      total_cost_usd: 0.02,
+      // Newer Claude SDKs report this cumulatively on each result. Keep the
+      // terminal value instead of double-counting the parent result.
+      total_cost_usd: 0.01,
       num_turns: 2,
       usage: { input_tokens: 20, output_tokens: 10 },
     });

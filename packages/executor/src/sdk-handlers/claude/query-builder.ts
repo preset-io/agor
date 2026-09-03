@@ -636,6 +636,11 @@ export async function setupQuery(
       type: 'user' as const,
       message: { role: 'user' as const, content: [{ type: 'text' as const, text }] },
       parent_tool_use_id: null,
+      // Agent SDK 0.3.259 treats an omitted origin as unattributed at strict
+      // human-trust gates. Every entry into this iterable is an authenticated
+      // Agor user prompt (including prompts relayed from a gateway), so retain
+      // that provenance explicitly instead of relying on the legacy default.
+      origin: { kind: 'human' as const },
     };
     // Hold the iterable open until releaseInput() is called, keeping stdin alive
     await inputHeldPromise;

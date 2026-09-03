@@ -172,6 +172,9 @@ describe('PKCE + pure helpers', () => {
     expect(url.searchParams.get('code_challenge')).toBe(challenge);
     expect(url.searchParams.get('code')).toBe('true');
     expect(url.searchParams.get('state')).toBe('STATE123');
+    expect(url.searchParams.get('scope')).toBe(
+      'user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload'
+    );
     // The PKCE verifier is the secret half — it must never appear in the URL.
     expect(url.toString()).not.toContain(verifier);
   });

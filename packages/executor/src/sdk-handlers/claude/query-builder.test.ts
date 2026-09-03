@@ -132,6 +132,7 @@ describe('setupQuery - Local Settings Support', () => {
       const promptIterator = callArgs.prompt[Symbol.asyncIterator]();
       const firstMessage = await promptIterator.next();
       expect(firstMessage.value.message.content).toEqual([{ type: 'text', text: prompt }]);
+      expect(firstMessage.value.origin).toEqual({ kind: 'human' });
     } finally {
       logSpy.mockRestore();
     }

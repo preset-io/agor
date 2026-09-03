@@ -390,12 +390,12 @@ If you continue to see authentication errors, please contact your Agor administr
         ) {
           clearBackgroundTaskActivity();
         }
-        if (lifecycleTransition.taskTransition === 'started') {
+        for (let index = 0; index < (lifecycleTransition.tasksStarted ?? 0); index++) {
           // Keep the SDK watchdog paused for the documented lifetime of the
           // background task, not merely the Agent/Workflow launch tool call.
           onActivity?.('progress', 'background_task.start');
         }
-        if (lifecycleTransition.taskTransition === 'settled') {
+        for (let index = 0; index < (lifecycleTransition.tasksSettled ?? 0); index++) {
           onActivity?.('progress', 'background_task.complete');
         }
         // Process message through processor

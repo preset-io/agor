@@ -1,6 +1,6 @@
 {
   "name": "@agor-live/claude",
-  "version": "0.26.0",
+  "version": "0.26.1",
   "description": "Version-aligned claude agentic tool integration for Agor",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,7 +22,7 @@
     "check:pack": "npm pack --dry-run"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.197"
+    "@anthropic-ai/claude-agent-sdk": "0.3.259"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
