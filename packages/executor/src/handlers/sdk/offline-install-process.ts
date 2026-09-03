@@ -67,6 +67,7 @@ export function createOfflineInstallEnvironment(directory: string): Readonly<Nod
     ...(pathValue ? { PATH: pathValue } : {}),
     CI: '1',
     COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+    COREPACK_ENABLE_NETWORK: '0',
     HOME: home,
     LANG: 'C',
     LC_ALL: 'C',

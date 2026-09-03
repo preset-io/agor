@@ -102,6 +102,7 @@ import {
 import {
   isTaskScopedExecutorRequest,
   requireTaskScopedExecutorRuntimeToken,
+  requireWorkloadCompletionReceipt,
 } from './auth/executor-runtime-scope.js';
 import type {
   BoardsServiceImpl,
@@ -3341,6 +3342,9 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       // pair, but it is still a registered transport method on TasksService.
       // @ts-expect-error -- custom atomic result method is omitted by HookTypeMap
       completeWorkload: [requireTaskScopedExecutorRuntimeToken()],
+      // Receipt authority is accepted only for read-only replay of the exact
+      // canonical settlement already committed before token retirement.
+      reconcileWorkloadCompletion: [requireWorkloadCompletionReceipt()],
       remove: [
         requireMinimumRole(ROLES.MEMBER, 'delete tasks'),
         // RBAC: deleting a task requires 'all' permission on the branch

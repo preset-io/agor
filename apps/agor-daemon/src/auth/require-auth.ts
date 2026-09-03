@@ -13,6 +13,7 @@ import {
 } from '@agor/core/config';
 import { NotAuthenticated } from '@agor/core/feathers';
 import type { HookContext } from '@agor/core/types';
+import { getAuthenticatedConnectionAuthority } from './authenticated-connection-authority.js';
 import { rejectTerminalExecutorIdentity } from './terminal-executor-guard.js';
 
 export type AuthHook = (context: HookContext) => Promise<HookContext>;
@@ -23,6 +24,13 @@ export function createRequireAuthHook(
 ): AuthHook {
   return async (context: HookContext): Promise<HookContext> => {
     const authed = await authenticatedHook(context);
+    const authority = getAuthenticatedConnectionAuthority(authed.params.connection);
+    if (
+      authority?.principal.kind === 'executor-completion-receipt' &&
+      !(authed.path === 'tasks' && authed.method === 'reconcileWorkloadCompletion')
+    ) {
+      throw new NotAuthenticated('Completion receipt authority is limited to reconciliation');
+    }
     // A terminal-executor identity is valid ONLY for the Socket.IO terminal
     // channel (handled outside Feathers); reject it from every REST/Feathers
     // service call here so it can't ride the RBAC rank table's viewer-rank

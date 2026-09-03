@@ -167,6 +167,7 @@ async function fixedToolVersion(
       env: {
         ...(pathValue ? { PATH: pathValue } : {}),
         COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+        COREPACK_ENABLE_NETWORK: '0',
         NO_UPDATE_NOTIFIER: '1',
         NPM_CONFIG_AUDIT: 'false',
         NPM_CONFIG_FUND: 'false',

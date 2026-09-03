@@ -37,6 +37,7 @@ import {
   type TerminationClaimResult,
   type TerminationSettlementInput,
   type TerminationSettlementResult,
+  type WorkloadCompletionReceiptScope,
 } from '@agor/core/db';
 import { type Application, BadRequest, Conflict, Forbidden } from '@agor/core/feathers';
 import { deriveTitleFromPrompt } from '@agor/core/sessions';
@@ -73,6 +74,7 @@ import {
   TaskStatus,
 } from '@agor/core/types';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { getAuthenticatedConnectionAuthority } from '../auth/authenticated-connection-authority.js';
 import { authenticatedTaskExecutorRuntimeAuthority } from '../auth/executor-runtime-scope.js';
 import { getDaemonMetrics } from '../metrics/index.js';
 import {
@@ -160,6 +162,7 @@ export const TASKS_SERVICE_TRANSPORT_METHODS = [
   'reportRuntimeTelemetry',
   'reportSdkHealthFailure',
   'completeWorkload',
+  'reconcileWorkloadCompletion',
 ] as const;
 
 export type TaskParams = QueryParams<{
@@ -868,6 +871,52 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       true
     );
     return result;
+  }
+
+  /** Replay one canonical workload settlement using the retired-token receipt. */
+  async reconcileWorkloadCompletion(
+    data: WorkloadCompletionInput,
+    params?: TaskParams
+  ): Promise<WorkloadCompletionResult> {
+    const authority = getAuthenticatedConnectionAuthority(params?.connection);
+    const payload = params?.authentication?.payload;
+    const payloadRecord =
+      payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? (payload as Record<string, unknown>)
+        : undefined;
+    const scope = {
+      userId: params?.user?.user_id,
+      sessionId: payloadRecord?.session_id,
+      taskId: payloadRecord?.task_id,
+      branchId: payloadRecord?.branch_id,
+    };
+    if (
+      authority?.principal.kind !== 'executor-completion-receipt' ||
+      authority.principal.taskId !== data.task_id ||
+      authority.principal.resultMessageId !== data.result_message_id ||
+      typeof scope.userId !== 'string' ||
+      typeof scope.sessionId !== 'string' ||
+      typeof scope.taskId !== 'string' ||
+      typeof scope.branchId !== 'string' ||
+      authority.principal.sessionId !== scope.sessionId ||
+      payloadRecord?.type !== 'executor-session' ||
+      payloadRecord?.purpose !== 'executor-task' ||
+      payloadRecord?.sub !== scope.userId ||
+      typeof payloadRecord?.tenant_id !== 'string' ||
+      payloadRecord.tenant_id !== params?.tenant?.tenant_id ||
+      scope.taskId !== data.task_id
+    ) {
+      throw new Forbidden('Workload completion receipt scope is unavailable');
+    }
+    try {
+      return await this.taskRepo.reconcileWorkloadCompletion(
+        data,
+        scope as WorkloadCompletionReceiptScope
+      );
+    } catch (error) {
+      if (error instanceof RepositoryError) throw new Conflict(error.message);
+      throw error;
+    }
   }
 
   /**

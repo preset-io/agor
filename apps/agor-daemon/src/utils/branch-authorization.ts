@@ -30,7 +30,10 @@ import type {
 } from '@agor/core/types';
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
 import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
-import { executorRuntimeScopeSessionId } from '../auth/executor-runtime-scope.js';
+import {
+  authenticatedExecutorCommandRuntimeScope,
+  executorRuntimeScopeSessionId,
+} from '../auth/executor-runtime-scope.js';
 
 /**
  * Check if a user has the superadmin role (or deprecated 'owner' alias).
@@ -422,7 +425,22 @@ export function loadBranch(branchRepo: BranchRepository, branchIdField = 'branch
       return context;
     }
 
-    // Service accounts (executor) bypass RBAC
+    // Branch-scoped command credentials are still service-account transport
+    // identities, but their Branch scope is an authorization boundary. Check
+    // it before the branchless bulk-cleanup bypass so an A-scoped command can
+    // never resolve or probe Branch B.
+    const commandScope = authenticatedExecutorCommandRuntimeScope(context.params);
+    if (
+      context.path === 'branches' &&
+      context.method === 'get' &&
+      commandScope?.branchId &&
+      String(context.id) !== commandScope.branchId
+    ) {
+      throw new Forbidden('Executor command is scoped to another Branch');
+    }
+
+    // Service accounts (executor) bypass RBAC. A taskless command without a
+    // Branch claim retains the existing branchless bulk-cleanup behavior.
     if (context.params.user?._isServiceAccount) {
       return context;
     }

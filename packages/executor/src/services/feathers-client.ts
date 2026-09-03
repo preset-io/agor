@@ -12,7 +12,7 @@ import {
   EXECUTOR_FEATHERS_ACK_TIMEOUT_MS,
   SOCKET_IO_MAX_BUFFER_SIZE_BYTES,
 } from '@agor/core/config';
-import { isTerminalTaskStatus } from '@agor/core/types';
+import { isTerminalTaskStatus, type WorkloadCompletionReceipt } from '@agor/core/types';
 
 // Re-export AgorClient type for use in other executor files
 export type { AgorClient } from '@agor/core/api';
@@ -104,6 +104,42 @@ export interface ExecutorClientHooks {
   onReconnected?: () => void | Promise<void>;
 }
 
+const completionReceiptSetters = new WeakMap<
+  AgorClient,
+  (receipt: WorkloadCompletionReceipt | null) => void
+>();
+
+/** Arm the next authenticated handshake with one exact workload receipt. */
+export function setExecutorWorkloadCompletionReceipt(
+  client: AgorClient,
+  receipt: WorkloadCompletionReceipt | null
+): void {
+  completionReceiptSetters.get(client)?.(receipt);
+}
+
+/** Reopen the socket so the next handshake carries the exact receipt. */
+export function reconnectExecutorClientForCompletionReceipt(client: AgorClient): Promise<void> {
+  const socket = (client as AgorClient & { io?: typeof client.io }).io;
+  if (!socket) return Promise.resolve();
+  if (socket.connected) socket.disconnect();
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Executor completion receipt reconnect timed out'));
+    }, 5_000);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off('connect', onConnect);
+    };
+    const onConnect = () => {
+      cleanup();
+      resolve();
+    };
+    socket.once('connect', onConnect);
+    socket.connect();
+  });
+}
+
 export async function createExecutorClient(
   daemonUrl: string,
   sessionToken: string,
@@ -116,6 +152,8 @@ export async function createExecutorClient(
       detail === undefined ? '' : `: ${detail instanceof Error ? detail.message : String(detail)}`;
     console.log(`[executor] Socket ${event} after ${elapsedSeconds}s${suffix}`);
   };
+
+  let completionReceipt: WorkloadCompletionReceipt | null = null;
 
   // The credential is available before the transport exists. Present it on
   // every namespace handshake so the daemon installs immutable principal and
@@ -133,7 +171,13 @@ export async function createExecutorClient(
     // authenticated handshake with the same bearer.
     reconnectionAttempts: Number.POSITIVE_INFINITY,
     ackTimeout: EXECUTOR_FEATHERS_ACK_TIMEOUT_MS,
-    socketAuthentication: { accessToken: sessionToken },
+    socketAuthentication: {
+      accessToken: sessionToken,
+      authData: () => (completionReceipt ? { completionReceipt } : {}),
+    },
+  });
+  completionReceiptSetters.set(client, (receipt) => {
+    completionReceipt = receipt;
   });
   let terminalTaskAcknowledged = false;
   registerExecutorRequestSizeGuard(client);

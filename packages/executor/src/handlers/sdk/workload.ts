@@ -14,11 +14,8 @@ import {
   TaskStatus,
   WORKLOAD_COMPILE_MAX_REPETITIONS,
   WORKLOAD_COMPILE_MAX_TOTAL_TIME_MS,
-  WORKLOAD_CONTROLLED_FAILURE_CODE,
-  WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE,
   WORKLOAD_FIXTURE_COMMAND_ID,
   WORKLOAD_OFFLINE_INSTALL_ARTIFACT_SHA256,
-  WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
   WORKLOAD_OFFLINE_INSTALL_ID,
   WORKLOAD_OFFLINE_INSTALL_LOCKFILE_SHA256,
   WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER,
@@ -33,7 +30,11 @@ import {
   WorkloadRequestError,
   workloadResultFromCompletion,
 } from '@agor/core/types';
-import type { AgorClient } from '../../services/feathers-client.js';
+import {
+  type AgorClient,
+  reconnectExecutorClientForCompletionReceipt,
+  setExecutorWorkloadCompletionReceipt,
+} from '../../services/feathers-client.js';
 import { runFixedCommandFixture } from './fixture-command.js';
 import { runOfflineInstallFixture } from './offline-install.js';
 import { inspectWorkspace } from './workspace-inspection.js';
@@ -226,6 +227,7 @@ async function failInvalidRequest(
 
 async function settleControlledFailure(
   client: AgorClient,
+  sessionId: SessionID,
   taskId: TaskID,
   request: Extract<WorkloadRequest, { profile: 'controlled-failure' }>
 ): Promise<void> {
@@ -235,12 +237,7 @@ async function settleControlledFailure(
     profile: 'controlled-failure',
     requested_delay_ms: request.delayMs,
   };
-  await completeWorkloadWithResponseLossReconciliation(
-    client,
-    completion,
-    TaskStatus.FAILED,
-    WORKLOAD_CONTROLLED_FAILURE_CODE
-  );
+  await completeWorkloadWithResponseLossReconciliation(client, sessionId, completion);
 }
 
 function boundedResultContent(
@@ -258,28 +255,30 @@ function boundedResultContent(
 
 async function completeWorkloadWithResponseLossReconciliation(
   client: AgorClient,
-  completion: WorkloadCompletionInput,
-  terminalStatus: typeof TaskStatus.COMPLETED | typeof TaskStatus.FAILED,
-  failureCode?: string
+  sessionId: SessionID,
+  completion: WorkloadCompletionInput
 ): Promise<void> {
+  setExecutorWorkloadCompletionReceipt(client, {
+    task_id: completion.task_id,
+    session_id: sessionId,
+    completion,
+  });
   try {
     await client.service('tasks').completeWorkload(completion);
+    setExecutorWorkloadCompletionReceipt(client, null);
   } catch (error) {
-    // The daemon commits the result and terminal Task state together. If only
-    // the response was lost, a durable read acknowledges that exact outcome
-    // without reopening a generic terminal patch path.
+    // The daemon commits the result and terminal Task state together, then
+    // retires the Task bearer. Reconnect with the one exact receipt capability;
+    // the daemon can only replay the already-committed canonical pair.
     try {
-      const task = await client.service('tasks').get(completion.task_id);
-      if (
-        !Array.isArray(task) &&
-        task.status === terminalStatus &&
-        (terminalStatus !== TaskStatus.FAILED || task.error_message === failureCode)
-      ) {
-        return;
-      }
+      await reconnectExecutorClientForCompletionReceipt(client);
+      await client.service('tasks').reconcileWorkloadCompletion(completion);
+      setExecutorWorkloadCompletionReceipt(client, null);
+      return;
     } catch {
       // Preserve the original completion error.
     }
+    setExecutorWorkloadCompletionReceipt(client, null);
     throw error;
   }
 }
@@ -331,7 +330,7 @@ export async function executeWorkloadTask(params: {
         params.onPulse
       );
       if (!completed || signal.aborted) return;
-      await settleControlledFailure(params.client, params.taskId, request);
+      await settleControlledFailure(params.client, params.sessionId, params.taskId, request);
       return;
     }
     case 'cpu': {
@@ -438,17 +437,5 @@ export async function executeWorkloadTask(params: {
   // Serialize once locally so the executor enforces the same bounded result
   // contract before asking the daemon to publish its server-authored copy.
   boundedResultContent(params.taskId, request, completion);
-  const fixtureFailed = completion.profile === 'fixture-command' && completion.outcome === 'failed';
-  const offlineInstallFailed =
-    completion.profile === 'offline-install' && completion.outcome === 'failed';
-  await completeWorkloadWithResponseLossReconciliation(
-    params.client,
-    completion,
-    fixtureFailed || offlineInstallFailed ? TaskStatus.FAILED : TaskStatus.COMPLETED,
-    fixtureFailed
-      ? WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE
-      : offlineInstallFailed
-        ? WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE
-        : undefined
-  );
+  await completeWorkloadWithResponseLossReconciliation(params.client, params.sessionId, completion);
 }
