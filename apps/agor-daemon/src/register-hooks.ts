@@ -157,6 +157,7 @@ import {
   loadScheduleAndBranch,
   loadSession,
   loadSessionBranch,
+  protectGatewaySourceMetadata,
   resolveSessionContext,
   scopeFindToAccessibleBoardsSql,
   scopeFindToAccessibleBranchesSql,
@@ -691,6 +692,7 @@ export function protectExternalTaskCreate(context: HookContext): HookContext {
   }
 
   data.status = TaskStatus.CREATED;
+  data.metadata = { source: 'agor' };
   return context;
 }
 
@@ -2996,6 +2998,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   // SessionsService.update delegates straight to patch, so both verbs mutate a
   // session the same way and must clear the same authorization chain.
   const sessionWriteGuards = [
+    protectGatewaySourceMetadata,
     // created_by and unix_username remain immutable identity/history stamps.
     // unix_username is load-bearing for delegated execution-home Sessions;
     // branch-home Sessions deliberately use the current prompt actor instead.
@@ -3066,6 +3069,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
       ],
       create: [
         requireMinimumRole(ROLES.MEMBER, 'create sessions'),
+        protectGatewaySourceMetadata,
         // Stamp session with creator's unix_username (MUST run first). Also
         // registered without RBAC when delegated mode makes
         // unix_username load-bearing — otherwise sessions would be stamped

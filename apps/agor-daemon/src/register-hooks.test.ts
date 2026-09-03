@@ -25,7 +25,7 @@ import {
   getCurrentTenantId,
   runWithTenantContext,
 } from '@agor/core/db';
-import { type Branch, type HookContext, TaskStatus } from '@agor/core/types';
+import { type Branch, type HookContext, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -53,6 +53,7 @@ import {
   validateBranchEnvPolicyHook,
 } from './register-hooks';
 import { canReceiveMcpTokenForSession } from './utils/mcp-token-authorization';
+import { resolvePromptOrigin } from './utils/prompt-origin';
 
 const makeSession = (sessionId: string): import('@agor/core/types').Session =>
   ({
@@ -327,7 +328,11 @@ describe('protectExternalTaskCreate', () => {
       session_id: 'session-1',
       full_prompt: 'hello',
       status: TaskStatus.CREATED,
+      metadata: { source: 'agor' },
     });
+    expect(
+      resolvePromptOrigin(hook.data as Pick<Task, 'metadata'>, { custom_context: undefined })
+    ).toEqual({ kind: 'human' });
   });
 
   it.each(['running', 'queued', 'completed'])('rejects externally forged status %s', (status) => {

@@ -81,6 +81,7 @@ import type {
   GatewayOutboundMessage,
   GatewayOutboundMessageID,
   GatewayOutboundReplyAdmission,
+  GatewaySource,
   MCPServerID,
   Message,
   MessageSource,
@@ -2790,7 +2791,7 @@ export class GatewayService {
       );
 
       // Build custom_context with gateway metadata + platform-specific fields
-      const gatewaySource: Record<string, unknown> = {
+      const gatewaySource: GatewaySource & Record<string, unknown> = {
         channel_id: channel.id,
         channel_name: channel.name,
         channel_type: channel.channel_type,
@@ -2931,7 +2932,7 @@ export class GatewayService {
           typeof priorGatewaySourceValue === 'object' &&
           priorGatewaySourceValue !== null &&
           !Array.isArray(priorGatewaySourceValue)
-            ? (priorGatewaySourceValue as Record<string, unknown>)
+            ? (priorGatewaySourceValue as unknown as GatewaySource & Record<string, unknown>)
             : null;
         const currentTenantId = getCurrentTenantId();
         const priorSeedId = priorGatewaySource?.outbound_seed_id;

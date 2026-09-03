@@ -2815,7 +2815,9 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             authentication: params.authentication,
             tenant: params.tenant,
           };
-          await promptService.create({ prompt: promptText }, promptParams);
+          // This provider-less nested service call represents text submitted
+          // by the authenticated uploader, not daemon-authored automation.
+          await promptService.create({ prompt: promptText, messageSource: 'agor' }, promptParams);
         } catch (_error) {
           console.error('❌ [Upload Handler] Failed to notify agent');
           notificationError = 'Failed to send notification to agent';

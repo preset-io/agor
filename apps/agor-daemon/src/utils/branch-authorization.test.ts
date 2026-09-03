@@ -17,11 +17,60 @@ import {
   loadSession,
   loadSessionBranch,
   paginateClientSide,
+  protectGatewaySourceMetadata,
   resolveBranchPermission,
   resolveSessionContext,
   scopeSessionQuery,
   setSessionUnixUsername,
 } from './branch-authorization';
+
+describe('protectGatewaySourceMetadata', () => {
+  const context = (
+    data: unknown,
+    provider: string | null = 'rest',
+    method: 'create' | 'patch' = 'patch'
+  ) => ({ data, method, params: { provider } }) as HookContext;
+
+  it.each(['create', 'patch'] as const)(
+    'rejects external %s writes of gateway provenance',
+    (method) => {
+      expect(() =>
+        protectGatewaySourceMetadata(
+          context(
+            {
+              custom_context: {
+                gateway_source: {
+                  channel_id: 'channel-1',
+                  channel_name: 'general',
+                  channel_type: 'slack',
+                  thread_id: 'thread-1',
+                },
+              },
+            },
+            'rest',
+            method
+          )
+        )
+      ).toThrow('gateway_source is server-managed');
+    }
+  );
+
+  it('allows external user context that omits the reserved key', () => {
+    const hook = context({ custom_context: { project: 'agor' } });
+    expect(protectGatewaySourceMetadata(hook)).toBe(hook);
+  });
+
+  it('rejects clearing the context through a non-object patch', () => {
+    expect(() => protectGatewaySourceMetadata(context({ custom_context: null }))).toThrow(
+      'custom_context must be an object'
+    );
+  });
+
+  it('allows trusted gateway service writes', () => {
+    const hook = context({ custom_context: { gateway_source: { channel_type: 'slack' } } }, null);
+    expect(protectGatewaySourceMetadata(hook)).toBe(hook);
+  });
+});
 
 /** Minimal branch fixture for permission tests */
 function makeBranch(overrides: Partial<Branch> = {}): Branch {
