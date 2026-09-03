@@ -246,7 +246,7 @@ importers:
         version: 4.8.3(supports-color@8.1.1)
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.3.259
+        specifier: 0.3.259
         version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
       '@anthropic-ai/sdk':
         specifier: ^0.109.0
@@ -1105,7 +1105,7 @@ importers:
         version: 4.4.3
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.3.259
+        specifier: 0.3.259
         version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
       '@google/gemini-cli-core':
         specifier: ^0.40.0
@@ -1120,7 +1120,7 @@ importers:
         specifier: ^22.0.1
         version: 22.0.1
       '@openai/codex-sdk':
-        specifier: ^0.153.0
+        specifier: 0.153.0
         version: 0.153.0
       '@types/bcryptjs':
         specifier: ^2.4.6
@@ -1187,7 +1187,7 @@ importers:
         version: 4.4.3
     devDependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: ^0.3.259
+        specifier: 0.3.259
         version: 0.3.259(@anthropic-ai/sdk@0.109.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(supports-color@8.1.1)(zod@4.4.3))(zod@4.4.3)
       '@cursor/sdk':
         specifier: ^1.0.26
@@ -1205,7 +1205,7 @@ importers:
         specifier: '>=1.29.0 <2'
         version: 1.29.0(supports-color@8.1.1)(zod@4.4.3)
       '@openai/codex-sdk':
-        specifier: ^0.153.0
+        specifier: 0.153.0
         version: 0.153.0
       '@types/diff':
         specifier: ^6.0.0

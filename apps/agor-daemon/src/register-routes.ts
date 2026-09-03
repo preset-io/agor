@@ -224,6 +224,7 @@ import {
 } from './utils/mcp-header-secrets.js';
 import { canConfigureMcpServers } from './utils/mcp-server-authorization.js';
 import { patchUnlessRemoved } from './utils/patch-unless-removed.js';
+import { resolvePromptOrigin } from './utils/prompt-origin.js';
 import {
   buildPromptTaskMetadata,
   type InternalPromptTaskMetadataInput,
@@ -1823,6 +1824,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
     const useStreaming = options.stream !== false;
     const sessionId = task.session_id;
     const taskId = task.task_id;
+    const promptOrigin = resolvePromptOrigin(updatedTask, session);
 
     // Background spawn + failure handling. Returning the patched Task to the
     // caller before this resolves matches the previous behavior — the HTTP
@@ -1843,6 +1845,7 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
             permissionMode: options.permissionMode,
             stream: useStreaming,
             messageSource: runtimeMessageSource,
+            promptOrigin,
           },
           params
         );
@@ -2433,8 +2436,13 @@ export async function registerRoutes(ctx: RegisterRoutesContext): Promise<void> 
 
         const promptService = app.service('/sessions/:id/prompt');
         return promptService.create(
-          { prompt: metaPrompt, permissionMode: parentPermissionMode, messageSource: 'agor' },
-          { ...params, route: { id } }
+          {
+            prompt: metaPrompt,
+            permissionMode: parentPermissionMode,
+            messageSource: 'agor',
+            metadata: { system_authored: true },
+          },
+          { ...params, provider: undefined, route: { id } }
         );
       },
     },

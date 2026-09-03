@@ -367,8 +367,8 @@ export interface Task {
       inputTokens: number;
       outputTokens: number;
       totalTokens: number;
-      cacheReadTokens?: number; // Claude-specific: prompt caching reads
-      cacheCreationTokens?: number; // Claude-specific: prompt caching writes
+      cacheReadTokens?: number; // Provider-reported prompt cache reads
+      cacheCreationTokens?: number; // Provider-reported prompt cache writes
     };
     contextWindowLimit?: number; // Model's max context window (e.g., 200k for Claude)
     costUsd?: number; // Estimated cost in USD (if pricing available)

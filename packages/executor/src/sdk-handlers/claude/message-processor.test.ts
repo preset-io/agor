@@ -200,6 +200,19 @@ describe('SDKMessageProcessor system event suppression', () => {
     expect(events.filter((e) => e.type === 'sdk_event')).toHaveLength(0);
   });
 
+  it('suppresses background task membership snapshots', async () => {
+    const processor = createProcessor();
+    const events = await processor.process(
+      systemMsg({
+        subtype: 'background_tasks_changed',
+        tasks: [{ task_id: 't1', description: 'implementation detail' }],
+        session_id: 's',
+        uuid: 'u',
+      })
+    );
+    expect(events.filter((event) => event.type === 'sdk_event')).toHaveLength(0);
+  });
+
   it('suppresses hook lifecycle telemetry', async () => {
     const processor = createProcessor();
 

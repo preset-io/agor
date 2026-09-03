@@ -166,6 +166,12 @@ export const PromptPayloadSchema = BasePayloadSchema.extend({
     permissionMode: PermissionModeSchema.optional(),
     cwd: z.string(),
     messageSource: z.enum(['gateway', 'agor']).optional(),
+    promptOrigin: z
+      .discriminatedUnion('kind', [
+        z.object({ kind: z.literal('human') }),
+        z.object({ kind: z.literal('channel'), server: z.string().min(1) }),
+      ])
+      .optional(),
   }),
 });
 

@@ -94,6 +94,7 @@ import type {
   MCPServerID,
   MessageSource,
   Params,
+  PromptOrigin,
   SessionID,
   UserID,
   UUID,
@@ -1131,6 +1132,7 @@ function createExecuteHandler(
       permissionMode?: import('@agor/core/types').PermissionMode;
       stream?: boolean;
       messageSource?: MessageSource;
+      promptOrigin?: PromptOrigin;
     },
     // biome-ignore lint/suspicious/noExplicitAny: FeathersJS params type varies by context
     params: any
@@ -1558,6 +1560,7 @@ function createExecuteHandler(
         permissionMode: permissionModeForPayload as 'ask' | 'auto' | 'allow-all' | undefined,
         cwd,
         messageSource: data.messageSource,
+        promptOrigin: data.promptOrigin,
         // Authoritative sandbox mount inputs (consumed in spawn-executor →
         // buildSandboxWrap). Undefined when the sandbox / per_user home is off.
         sandboxBaseRepoPath,

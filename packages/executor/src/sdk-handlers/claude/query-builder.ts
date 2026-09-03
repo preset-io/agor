@@ -11,7 +11,7 @@ import { shortId } from '@agor/core/db';
 import { validateDirectory } from '@agor/core/lib/validation';
 import { renderAgorSystemPrompt } from '@agor/core/templates/session-context';
 import { mergeMCPRemoteHeaders } from '@agor/core/tools/mcp/http-headers';
-import { isGatewaySession } from '@agor/core/types';
+import { isGatewaySession, type PromptOrigin } from '@agor/core/types';
 import type * as ClaudeSdk from '@anthropic-ai/claude-agent-sdk';
 import { McpAuthDiagnosticAccumulator } from '../../diagnostics/mcp-auth-diagnostic-accumulator.js';
 
@@ -127,13 +127,14 @@ export async function setupQuery(
     permissionMode?: PermissionMode;
     resume?: boolean;
     abortController?: AbortController;
+    promptOrigin?: PromptOrigin;
   } = {}
 ): Promise<{
   query: InterruptibleQuery;
   resolvedModel: string;
   getStderrMetadata: () => { hasStderr: boolean; byteLength: number };
 }> {
-  const { taskId, permissionMode, resume = true, abortController } = options;
+  const { taskId, permissionMode, resume = true, abortController, promptOrigin } = options;
 
   const session = await deps.sessionsRepo.findById(sessionId);
   if (!session) {
@@ -637,10 +638,9 @@ export async function setupQuery(
       message: { role: 'user' as const, content: [{ type: 'text' as const, text }] },
       parent_tool_use_id: null,
       // Agent SDK 0.3.259 treats an omitted origin as unattributed at strict
-      // human-trust gates. Every entry into this iterable is an authenticated
-      // Agor user prompt (including prompts relayed from a gateway), so retain
-      // that provenance explicitly instead of relying on the legacy default.
-      origin: { kind: 'human' as const },
+      // human-trust gates. The daemon derives this value from durable Task and
+      // Session state; synthesized prompts deliberately leave it undefined.
+      ...(promptOrigin ? { origin: promptOrigin } : {}),
     };
     // Hold the iterable open until releaseInput() is called, keeping stdin alive
     await inputHeldPromise;

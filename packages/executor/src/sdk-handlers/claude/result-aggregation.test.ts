@@ -92,4 +92,19 @@ describe('aggregateClaudeResults', () => {
       costBasis: 'list',
     });
   });
+
+  it('does not let a zeroed terminal error erase prior cumulative accounting', () => {
+    const success = result('parent', 10, 10, 2, 0.01);
+    const crash = result('crash', 0, 0, 0, 0);
+    crash.subtype = 'error_during_execution';
+    crash.is_error = true;
+    crash.modelUsage = {};
+
+    const aggregate = aggregateClaudeResults([success, crash]);
+
+    expect(aggregate.uuid).toBe('crash');
+    expect(aggregate.subtype).toBe('error_during_execution');
+    expect(aggregate.total_cost_usd).toBe(0.01);
+    expect(aggregate.modelUsage.sonnet).toMatchObject({ inputTokens: 10, outputTokens: 2 });
+  });
 });

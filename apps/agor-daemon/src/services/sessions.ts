@@ -257,6 +257,7 @@ export type ExecuteTaskData = {
   permissionMode?: import('@agor/core/types').PermissionMode;
   stream?: boolean;
   messageSource?: import('@agor/core/types').MessageSource;
+  promptOrigin?: import('@agor/core/types').PromptOrigin;
 };
 
 export type SessionArchiveOptions = {

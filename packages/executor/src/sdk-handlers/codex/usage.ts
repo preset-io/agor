@@ -70,7 +70,8 @@ export function codexUsedPercentage(usedTokens: number, contextWindow: number): 
  * - We map cached_input_tokens → cache_read_tokens so downstream utilities
  *   (cost + context window) can treat Codex like Claude/Gemini.
  * - We map cache_write_input_tokens → cache_creation_tokens. This field was
- *   added in Codex SDK 0.153 and is independent from input_tokens.
+ *   added in Codex SDK 0.153 and is a breakdown already included in
+ *   input_tokens, so it must not be added to total token arithmetic.
  * - reasoning_output_tokens is intentionally NOT added to totals because
  *   per the OpenAI Responses API it is already included in output_tokens.
  *   It is preserved on the raw SDK response for debugging/UI surfacing.

@@ -99,6 +99,31 @@ describe('setupQuery - Local Settings Support', () => {
     );
   });
 
+  it.each([
+    [{ kind: 'human' as const }, { kind: 'human' }],
+    [
+      { kind: 'channel' as const, server: 'slack' },
+      { kind: 'channel', server: 'slack' },
+    ],
+    [undefined, undefined],
+  ])('passes only daemon-derived prompt origin to the SDK (%j)', async (promptOrigin, expected) => {
+    const setup = await setupQuery('test-session' as SessionID, 'test prompt', createMockDeps(), {
+      promptOrigin,
+    });
+    const prompt = vi.mocked(Claude.query).mock.calls[0][0].prompt;
+    expect(typeof prompt).not.toBe('string');
+
+    const first = await (prompt as AsyncIterable<Record<string, unknown>>)
+      [Symbol.asyncIterator]()
+      .next();
+    if (expected) {
+      expect(first.value).toMatchObject({ origin: expected });
+    } else {
+      expect(first.value).not.toHaveProperty('origin');
+    }
+    setup.query.releaseInput();
+  });
+
   it('logs only the generic prompt start and passes resume and prompt data to the SDK', async () => {
     const prompt = 'sk-ant-SECRET_QUERY_SENTINEL\r\nsecond line\nDATABASE_URL=do-not-log';
     const deps = createMockDeps();
@@ -122,7 +147,9 @@ describe('setupQuery - Local Settings Support', () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
     try {
-      await setupQuery('test-session' as SessionID, prompt, deps);
+      await setupQuery('test-session' as SessionID, prompt, deps, {
+        promptOrigin: { kind: 'human' },
+      });
 
       expect(logSpy.mock.calls).toEqual([['🤖 Prompting Claude for session test-session...']]);
 
