@@ -233,13 +233,12 @@ import {
   deferWithSessionQueueTenantScope,
   runWithSessionQueueTenantScope,
 } from './utils/session-queue-tenant-scope.js';
-import { findHostTaskForSession } from './utils/session-tasks.js';
 import { stopSessionPreserveQueue } from './utils/session-stop.js';
 import {
   sessionCanStartTask,
   shouldReconcileSessionPromptState,
 } from './utils/session-task-state.js';
-import { findActiveTasksForSession } from './utils/session-tasks.js';
+import { findActiveTasksForSession, findHostTaskForSession } from './utils/session-tasks.js';
 import { type SessionTurnLocks, withSessionTurnLock } from './utils/session-turn-lock.js';
 import { bindStopRouteRepositories } from './utils/stop-route-repositories.js';
 import { formatStructuredLog, structuredLogErrorCode } from './utils/structured-log.js';

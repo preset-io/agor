@@ -1320,50 +1320,6 @@ export const App: React.FC<AppProps> = ({
   // terminal buttons via `{onOpenTerminal && ...}`.
   const canOpenTerminal = webTerminalEnabled && hasMinimumRole(user?.role, WEB_TERMINAL_MIN_ROLE);
 
-<<<<<<< HEAD
-=======
-  // Memoize AppActionsContext value with useCallback-wrapped handlers
-  const appActionsValue = useMemo(
-    () => ({
-      onSendPrompt,
-      onSendPing,
-      onFork: onForkSession,
-      onBtwFork: onBtwForkSession,
-      onSubsession: onSpawnSession,
-      onUpdateSession,
-      onDeleteSession,
-      onPermissionDecision: handlePermissionDecision,
-      onStartEnvironment,
-      onStopEnvironment,
-      onNukeEnvironment,
-      onViewLogs: (branchId: string) => setLogsModalBranchId(branchId),
-      onOpenSettings: (sessionId: string) => setSessionSettingsId(sessionId),
-      onSessionClick: handleSessionClick,
-      onOpenBranch: (branchId: string, tab?: BranchModalTab) => {
-        setBranchModalBranchId(branchId);
-        setBranchModalTab(tab);
-      },
-      onOpenTerminal: canOpenTerminal ? handleOpenTerminal : undefined,
-    }),
-    [
-      onSendPrompt,
-      onSendPing,
-      onForkSession,
-      onBtwForkSession,
-      onSpawnSession,
-      onUpdateSession,
-      onDeleteSession,
-      handlePermissionDecision,
-      onStartEnvironment,
-      onStopEnvironment,
-      onNukeEnvironment,
-      handleSessionClick,
-      handleOpenTerminal,
-      canOpenTerminal,
-    ]
-  );
-
->>>>>>> 25fbfd852 (feat(ui): add Ping compose action to session composer)
   // Stabilize the passthrough action props before they reach the memoized
   // SessionCanvas and the AppActions context value. These arrive from
   // AppContent as plain consts (fresh identity on every store-driven
@@ -1371,6 +1327,7 @@ export const App: React.FC<AppProps> = ({
   // AppActions consumer — would re-render whenever the parent re-renders,
   // even when nothing they draw changed.
   const stableOnSendPrompt = useStableCallback(onSendPrompt);
+  const stableOnSendPing = useStableCallback(onSendPing);
   const stableOnBtwForkSession = useStableCallback(onBtwForkSession);
   const stableOnSessionUpdate = useStableCallback(onUpdateSession);
   const stableOnSessionDelete = useStableCallback(onDeleteSession);
@@ -1400,6 +1357,7 @@ export const App: React.FC<AppProps> = ({
   const appActionsValue = useMemo(
     () => ({
       onSendPrompt: stableOnSendPrompt,
+      onSendPing: stableOnSendPing,
       onFork: stableOnForkSession,
       onBtwFork: stableOnBtwForkSession,
       onSubsession: stableOnSpawnSession,
@@ -1423,6 +1381,7 @@ export const App: React.FC<AppProps> = ({
     }),
     [
       stableOnSendPrompt,
+      stableOnSendPing,
       stableOnForkSession,
       stableOnBtwForkSession,
       stableOnSpawnSession,

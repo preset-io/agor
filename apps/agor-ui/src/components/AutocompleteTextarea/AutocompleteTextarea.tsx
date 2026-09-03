@@ -121,10 +121,8 @@ interface AutocompleteTextareaProps {
   kbLinkTarget?: KbLinkTarget;
   /** Draw attention to the textarea while it is empty. */
   highlightWhenEmpty?: boolean;
-<<<<<<< HEAD
   /** Style overrides for the underlying Ant Design textarea control. */
   textareaStyle?: React.CSSProperties;
-=======
   /**
    * Fires when a user is chosen from the `@` autocomplete, with the userId
    * and the exact `@name` / `@"name"` text inserted into the textarea. Lets
@@ -132,7 +130,6 @@ interface AutocompleteTextareaProps {
    * re-parsing free text.
    */
   onMentionSelect?: (userId: string, insertedText: string) => void;
->>>>>>> 25fbfd852 (feat(ui): add Ping compose action to session composer)
 }
 
 // Minimum characters required after : before showing emoji picker (like Slack)
@@ -392,11 +389,8 @@ export const AutocompleteTextarea = React.forwardRef<
       kbDocs,
       kbLinkTarget = 'stable-uri',
       highlightWhenEmpty = false,
-<<<<<<< HEAD
       textareaStyle,
-=======
       onMentionSelect,
->>>>>>> 25fbfd852 (feat(ui): add Ping compose action to session composer)
     },
     ref
   ) => {
