@@ -93,7 +93,10 @@ describe('ClaudeAuthSettings', () => {
     expect(await screen.findByPlaceholderText('sk-ant-oat01-...')).toBeInTheDocument();
 
     rerender(<Harness {...common} initialSource="managed_file" />);
-    expect(await screen.findByText(/Agor stores the login on the server/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/refreshable login in your private per-user execution home/i)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/not shared with other Agor users/i)).toBeInTheDocument();
     expect(screen.queryByPlaceholderText('sk-ant-oat01-...')).not.toBeInTheDocument();
   });
 

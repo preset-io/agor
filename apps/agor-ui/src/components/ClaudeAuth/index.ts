@@ -1,2 +1,6 @@
 export { ClaudeAuthSettings, type ClaudeAuthSettingsProps } from './ClaudeAuthSettings';
-export { ClaudeOAuthSignIn, type ClaudeOAuthSignInProps } from './ClaudeOAuthSignIn';
+export {
+  CLAUDE_OAUTH_STORAGE_DESCRIPTION,
+  ClaudeOAuthSignIn,
+  type ClaudeOAuthSignInProps,
+} from './ClaudeOAuthSignIn';

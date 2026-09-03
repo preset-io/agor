@@ -551,9 +551,28 @@ describe('OnboardingWizard', () => {
     clickButton('Claude');
     expect(screen.getByText('API key')).toBeInTheDocument();
     expect(screen.getByText('Subscription token')).toBeInTheDocument();
+    const methodGroup = screen.getByRole('group', {
+      name: 'Claude authentication method',
+    });
+    expect(methodGroup.querySelector('button[aria-pressed="true"]')).toHaveTextContent('API key');
+    expect(methodGroup.querySelectorAll('button[aria-pressed]')).toHaveLength(3);
+    expect(
+      screen.getByText('Encrypted at rest and not added to prompt transcripts or logs.')
+    ).toBeInTheDocument();
     clickButton('Sign in with Claude');
 
     await waitFor(() => expect(create).toHaveBeenCalledWith({}));
+    expect(methodGroup.querySelector('button[aria-pressed="true"]')).toHaveTextContent(
+      'Sign in with Claude'
+    );
+    expect(
+      screen.getByText(
+        /stores the resulting refreshable login in your private per-user execution home/i
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Encrypted at rest and not added to prompt transcripts or logs.')
+    ).not.toBeInTheDocument();
     expect((await screen.findByText('Open the Claude sign-in page')).closest('a')).toHaveAttribute(
       'href',
       'https://claude.example/authorize'
@@ -654,7 +673,40 @@ describe('OnboardingWizard', () => {
     expect(onUpdateUser).not.toHaveBeenCalled();
   });
 
-  it('keeps a managed Claude login usable after a wizard remount when its cheap probe is inconclusive', async () => {
+  it.each([
+    ['missing', undefined],
+    ['false', false],
+  ] as const)(
+    'fails closed for a managed Claude login when the runtime capability is %s',
+    async (_label, allowClaudeOAuthSignIn) => {
+      const onCheckAuth = vi.fn(async () => ({
+        status: 'unknown' as const,
+        authenticated: false,
+        method: 'none' as const,
+      }));
+      renderWizard({
+        initialStep: 'llm',
+        user: makeUser({
+          agentic_auth_methods: { 'claude-code': 'subscription' },
+          agentic_credential_sources: { 'claude-code': 'managed_file' },
+        } as Partial<User>),
+        onCheckAuth,
+        ...(allowClaudeOAuthSignIn === undefined ? {} : { allowClaudeOAuthSignIn }),
+      });
+
+      await waitFor(() => expect(onCheckAuth).not.toHaveBeenCalled());
+      expect(screen.queryByText('Connected')).not.toBeInTheDocument();
+      expect(screen.queryByText('Sign in with Claude')).not.toBeInTheDocument();
+      expect(screen.getByText('Connect →').closest('button')).toBeDisabled();
+
+      clickButton('Claude');
+      expect(screen.getByLabelText('Anthropic API key')).toBeInTheDocument();
+      expect(screen.getByText('Subscription token')).toBeInTheDocument();
+      expect(screen.getByText('Connect →').closest('button')).toBeDisabled();
+    }
+  );
+
+  it('keeps a managed Claude login usable after a wizard remount when its cheap probe is inconclusive and the runtime capability is available', async () => {
     const onCheckAuth = vi.fn(async () => ({
       status: 'unknown' as const,
       authenticated: false,
@@ -667,6 +719,7 @@ describe('OnboardingWizard', () => {
         agentic_credential_sources: { 'claude-code': 'managed_file' },
       } as Partial<User>),
       onCheckAuth,
+      allowClaudeOAuthSignIn: true,
     });
 
     await waitFor(() => expect(onCheckAuth).toHaveBeenCalledWith('claude-code'));
