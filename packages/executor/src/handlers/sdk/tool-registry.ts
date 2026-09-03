@@ -30,6 +30,8 @@ export type ToolRunner = (params: {
   sessionId: SessionID;
   taskId: TaskID;
   prompt: string;
+  /** Daemon-authored Task cwd from the authenticated prompt payload. */
+  workspaceCwd?: string;
   permissionMode?: PermissionMode;
   abortController: AbortController;
   messageSource?: MessageSource;
@@ -133,6 +135,8 @@ export class ToolRegistry {
       sessionId: SessionID;
       taskId: TaskID;
       prompt: string;
+      /** Daemon-authored Task cwd from the authenticated prompt payload. */
+      workspaceCwd?: string;
       permissionMode?: PermissionMode;
       abortController: AbortController;
       messageSource?: MessageSource;

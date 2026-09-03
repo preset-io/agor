@@ -24,6 +24,7 @@ import {
   workloadResultFromCompletion,
 } from '@agor/core/types';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { inspectWorkspace } from './workspace-inspection.js';
 
 export {
   WORKLOAD_COMPILE_MAX_REPETITIONS,
@@ -272,6 +273,8 @@ export async function executeWorkloadTask(params: {
   taskId: TaskID;
   prompt: string;
   abortController: AbortController;
+  /** Daemon-authored Task cwd; never derived from request content. */
+  workspaceCwd?: string;
   onPulse?: (kind: ExecutorPulseKind, detail?: string) => void;
 }): Promise<void> {
   const startedAtMs = Date.now();
@@ -353,6 +356,19 @@ export async function executeWorkloadTask(params: {
         requested_total_time_ms: request.totalTimeMs,
         observed_elapsed_ms: Math.max(0, Date.now() - startedAtMs),
         observed_repetitions: observedRepetitions,
+      };
+      break;
+    }
+    case 'workspace-inspection': {
+      if (!params.workspaceCwd) throw new Error('WORKLOAD_WORKSPACE_UNAVAILABLE');
+      const inspection = await inspectWorkspace(params.workspaceCwd, signal);
+      if (!inspection || signal.aborted) return;
+      params.onPulse?.('progress', 'workload.workspace-inspection');
+      completion = {
+        task_id: params.taskId,
+        result_message_id: generateId() as MessageID,
+        profile: 'workspace-inspection',
+        inspection,
       };
       break;
     }

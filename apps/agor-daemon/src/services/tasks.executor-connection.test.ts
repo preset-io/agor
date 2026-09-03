@@ -1,5 +1,5 @@
 import { getCurrentTenantId, SessionRepository } from '@agor/core/db';
-import type { Message, Session, Task } from '@agor/core/types';
+import type { Message, Session, Task, WorkloadCompletionInput } from '@agor/core/types';
 import { TaskStatus } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { TasksService } from './tasks';
@@ -223,6 +223,30 @@ describe('TasksService executor patches', () => {
       expect.objectContaining({ provider: undefined }),
       true
     );
+  });
+
+  it('rejects non-canonical workspace inspection fields before repository mutation', async () => {
+    const completeWorkload = vi.fn();
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', { completeWorkload });
+    const invalid = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      result_message_id: '018f0000-0000-7000-8000-000000000004',
+      profile: 'workspace-inspection',
+      inspection: {
+        node: { state: 'available', version: '22.18.0' },
+        npm: { state: 'unavailable' },
+        pnpm: { state: 'unavailable' },
+        packageJson: { state: 'absent' },
+        packageManager: { state: 'unavailable' },
+        lockfiles: [],
+        repositoryMarkerPresent: false,
+        cwd: '/private/workspace',
+      },
+    } as unknown as WorkloadCompletionInput;
+
+    await expect(service.completeWorkload(invalid)).rejects.toThrow('WORKLOAD_COMPLETION_INVALID');
+    expect(completeWorkload).not.toHaveBeenCalled();
   });
 });
 
