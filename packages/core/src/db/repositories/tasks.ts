@@ -35,6 +35,7 @@ import {
   TaskStatus,
   WORKLOAD_CONTROLLED_FAILURE_CODE,
   WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE,
+  WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
   WORKLOAD_RESULT_MAX_BYTES,
   workloadResultFromCompletion,
 } from '@agor/core/types';
@@ -1755,13 +1756,19 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           request.profile === 'fixture-command' &&
           input.profile === 'fixture-command' &&
           input.outcome === 'failed';
+        const offlineInstallFailed =
+          request.profile === 'offline-install' &&
+          input.profile === 'offline-install' &&
+          input.outcome === 'failed';
         const terminalStatus =
-          request.profile === 'controlled-failure' || fixtureCommandFailed
+          request.profile === 'controlled-failure' || fixtureCommandFailed || offlineInstallFailed
             ? TaskStatus.FAILED
             : TaskStatus.COMPLETED;
-        const failureCode = fixtureCommandFailed
-          ? WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE
-          : WORKLOAD_CONTROLLED_FAILURE_CODE;
+        const failureCode = offlineInstallFailed
+          ? WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE
+          : fixtureCommandFailed
+            ? WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE
+            : WORKLOAD_CONTROLLED_FAILURE_CODE;
         const content = JSON.stringify(
           workloadResultFromCompletion(current.task_id, request, input)
         );

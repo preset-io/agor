@@ -149,6 +149,23 @@ describe('TasksService executor patches', () => {
     }
   );
 
+  it.each([TaskStatus.FAILED, TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'rejects an executor-originated %s patch for an offline install workload',
+    async (status) => {
+      const task = makeTask('{"schemaVersion":1,"profile":"offline-install"}');
+      const { service, updateFromExecutor } = makePatchHarness(task, 'workload');
+
+      await expect(
+        service.patch(
+          task.task_id,
+          { status, completed_at: '2026-01-01T00:00:05.000Z' },
+          { provider: 'rest' }
+        )
+      ).rejects.toThrow('Offline install workloads must settle through completeWorkload');
+      expect(updateFromExecutor).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
     'preserves controlled failure executor %s patches for non-workload sessions',
     async (status) => {
@@ -296,6 +313,70 @@ describe('TasksService executor patches', () => {
           stderr_sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
         },
       ],
+      cleanup_confirmed: true,
+    };
+
+    await service.completeWorkload(completion);
+
+    expect(completeWorkload).toHaveBeenCalledWith(completion);
+    expect(processCompletionSideEffects).toHaveBeenCalledWith(
+      task,
+      TaskStatus.FAILED,
+      expect.objectContaining({ provider: undefined }),
+      true
+    );
+  });
+
+  it('uses the canonical offline install failure for daemon completion side effects', async () => {
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      created_by: '018f0000-0000-7000-8000-000000000003',
+      full_prompt: '{"schemaVersion":1,"profile":"offline-install"}',
+      status: TaskStatus.FAILED,
+      error_message: 'WORKLOAD_OFFLINE_INSTALL_FAILED',
+    } as Task;
+    const completeWorkload = vi.fn().mockResolvedValue({
+      outcome: 'transitioned',
+      task,
+      message: {} as Message,
+    });
+    const processCompletionSideEffects = vi.fn().mockResolvedValue(true);
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', { completeWorkload });
+    Reflect.set(service, 'app', { service: () => ({ emit: vi.fn() }) });
+    Reflect.set(service, 'retireTaskExecutorCredentials', vi.fn());
+    Reflect.set(service, 'processCompletionSideEffects', processCompletionSideEffects);
+    Reflect.set(service, 'trackTaskCompleted', vi.fn());
+    const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+    const completion: WorkloadCompletionInput = {
+      task_id: task.task_id,
+      result_message_id: '018f0000-0000-7000-8000-000000000004',
+      profile: 'offline-install',
+      requested_repetitions: 1,
+      fixture_id: 'node-offline-install-v1',
+      package_manager: 'pnpm',
+      package_manager_version: '11.17.0',
+      package_name: '@agor/offline-fixture-dependency',
+      package_version: '1.0.0',
+      artifact_sha256: '8e4e8ff60b13149ad2b13ce261a16040bd964ed2fe1014458d6c6be2b4745373',
+      lockfile_sha256: '54a155804466627cf95c7326e808e3a4be1a36b0b60628eee00952088f130e40',
+      outcome: 'failed',
+      failure_stage: 'prepare',
+      observed_elapsed_ms: 20,
+      completed_step_count: 0,
+      steps: ['package-manager-version', 'install', 'compile', 'test'].map((step) => ({
+        step,
+        attempted: 0,
+        completed: 0,
+        outcome: 'not-run',
+        exit_code: null,
+        elapsed_ms: 0,
+        stdout_bytes: 0,
+        stderr_bytes: 0,
+        stdout_sha256: emptyHash,
+        stderr_sha256: emptyHash,
+      })) as Extract<WorkloadCompletionInput, { profile: 'offline-install' }>['steps'],
       cleanup_confirmed: true,
     };
 

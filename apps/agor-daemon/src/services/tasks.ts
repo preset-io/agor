@@ -135,6 +135,14 @@ function isFixtureCommandWorkload(task: Task): boolean {
   }
 }
 
+function isOfflineInstallWorkload(task: Task): boolean {
+  try {
+    return parseWorkloadRequest(task.full_prompt).profile === 'offline-install';
+  } catch {
+    return false;
+  }
+}
+
 const TASK_SORT_FIELDS = new Set(['task_id', 'session_id', 'status', 'created_at', 'created_by']);
 
 /**
@@ -910,6 +918,17 @@ export class TasksService extends DrizzleService<Task, Partial<Task>, TaskParams
       const session = await new SessionRepository(this.db).findById(currentTask.session_id);
       if (session?.agentic_tool === 'workload') {
         throw new BadRequest('Fixture command workloads must settle through completeWorkload');
+      }
+    }
+    if (
+      params?.provider &&
+      currentTask &&
+      isTerminalTaskStatus(nextStatus) &&
+      isOfflineInstallWorkload(currentTask)
+    ) {
+      const session = await new SessionRepository(this.db).findById(currentTask.session_id);
+      if (session?.agentic_tool === 'workload') {
+        throw new BadRequest('Offline install workloads must settle through completeWorkload');
       }
     }
     if (currentTask && isTerminalTaskStatus(currentTask.status) && nextStatus !== undefined) {

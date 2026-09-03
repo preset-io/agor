@@ -21,6 +21,7 @@ import {
   TaskStatus,
   WORKLOAD_CONTROLLED_FAILURE_CODE,
   WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE,
+  WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
   WORKLOAD_RESULT_MAX_BYTES,
 } from '@agor/core/types';
 import { describe, expect, vi } from 'vitest';
@@ -162,6 +163,75 @@ describe('TaskRepository.completeWorkload', () => {
     cleanup_confirmed: true,
   };
 
+  const offlineInstallSuccess: Extract<WorkloadCompletionInput, { profile: 'offline-install' }> = {
+    task_id: 'placeholder-task',
+    result_message_id: 'placeholder-message',
+    profile: 'offline-install',
+    requested_repetitions: 2,
+    fixture_id: 'node-offline-install-v1',
+    package_manager: 'pnpm',
+    package_manager_version: '11.17.0',
+    package_name: '@agor/offline-fixture-dependency',
+    package_version: '1.0.0',
+    artifact_sha256: '8e4e8ff60b13149ad2b13ce261a16040bd964ed2fe1014458d6c6be2b4745373',
+    lockfile_sha256: '54a155804466627cf95c7326e808e3a4be1a36b0b60628eee00952088f130e40',
+    outcome: 'completed',
+    failure_stage: null,
+    observed_elapsed_ms: 900,
+    completed_step_count: 7,
+    steps: [
+      {
+        step: 'package-manager-version',
+        attempted: 1,
+        completed: 1,
+        outcome: 'passed',
+        exit_code: 0,
+        elapsed_ms: 100,
+        stdout_bytes: 8,
+        stderr_bytes: 0,
+        stdout_sha256: 'a'.repeat(64),
+        stderr_sha256: 'b'.repeat(64),
+      },
+      {
+        step: 'install',
+        attempted: 2,
+        completed: 2,
+        outcome: 'passed',
+        exit_code: 0,
+        elapsed_ms: 200,
+        stdout_bytes: 32,
+        stderr_bytes: 0,
+        stdout_sha256: 'c'.repeat(64),
+        stderr_sha256: 'd'.repeat(64),
+      },
+      {
+        step: 'compile',
+        attempted: 2,
+        completed: 2,
+        outcome: 'passed',
+        exit_code: 0,
+        elapsed_ms: 200,
+        stdout_bytes: 32,
+        stderr_bytes: 0,
+        stdout_sha256: 'c'.repeat(64),
+        stderr_sha256: 'd'.repeat(64),
+      },
+      {
+        step: 'test',
+        attempted: 2,
+        completed: 2,
+        outcome: 'passed',
+        exit_code: 0,
+        elapsed_ms: 200,
+        stdout_bytes: 32,
+        stderr_bytes: 0,
+        stdout_sha256: 'c'.repeat(64),
+        stderr_sha256: 'd'.repeat(64),
+      },
+    ],
+    cleanup_confirmed: true,
+  };
+
   dbTest('atomically publishes one result and settles the workload Task', async ({ db }) => {
     const taskRepo = new TaskRepository(db);
     const sessionId = await createSessionWithDeps(db, 'workload');
@@ -268,6 +338,11 @@ describe('TaskRepository.completeWorkload', () => {
         prompt: '{"schemaVersion":1,"profile":"fixture-command","repetitions":2}',
         input: fixtureCommandSuccess,
         expectedProfile: 'fixture-command',
+      },
+      {
+        prompt: '{"schemaVersion":1,"profile":"offline-install","repetitions":2}',
+        input: offlineInstallSuccess,
+        expectedProfile: 'offline-install',
       },
     ];
 
@@ -439,6 +514,24 @@ describe('TaskRepository.completeWorkload', () => {
               attempted: 3,
               completed: 3,
             })) as typeof fixtureCommandSuccess.commands,
+          }),
+        },
+        {
+          prompt: '{"schemaVersion":1,"profile":"offline-install","repetitions":2}',
+          input: (taskId) => ({
+            ...offlineInstallSuccess,
+            task_id: taskId,
+            result_message_id: generateId() as MessageID,
+            requested_repetitions: 3,
+            completed_step_count: 10,
+            steps: [
+              offlineInstallSuccess.steps[0],
+              ...offlineInstallSuccess.steps.slice(1).map((step) => ({
+                ...step,
+                attempted: 3,
+                completed: 3,
+              })),
+            ] as typeof offlineInstallSuccess.steps,
           }),
         },
       ];
@@ -627,6 +720,148 @@ describe('TaskRepository.completeWorkload', () => {
       expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
     }
   );
+
+  dbTest(
+    'settles an offline install failure canonically and idempotently with bounded proof',
+    async ({ db }) => {
+      const taskRepo = new TaskRepository(db);
+      const sessionId = await createSessionWithDeps(db, 'workload');
+      const task = await taskRepo.create(
+        createTaskData({
+          session_id: sessionId,
+          status: TaskStatus.RUNNING,
+          executor_connected_at: new Date().toISOString(),
+          full_prompt: '{"schemaVersion":1,"profile":"offline-install","repetitions":2}',
+        })
+      );
+      const emptyHash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+      const failed: Extract<WorkloadCompletionInput, { profile: 'offline-install' }> = {
+        ...offlineInstallSuccess,
+        task_id: task.task_id,
+        result_message_id: generateId() as MessageID,
+        outcome: 'failed',
+        failure_stage: 'install',
+        completed_step_count: 1,
+        steps: [
+          offlineInstallSuccess.steps[0],
+          {
+            ...offlineInstallSuccess.steps[1],
+            attempted: 1,
+            completed: 0,
+            outcome: 'failed',
+            exit_code: 7,
+          },
+          {
+            ...offlineInstallSuccess.steps[2],
+            attempted: 0,
+            completed: 0,
+            outcome: 'not-run',
+            exit_code: null,
+            elapsed_ms: 0,
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+            stdout_sha256: emptyHash,
+            stderr_sha256: emptyHash,
+          },
+          {
+            ...offlineInstallSuccess.steps[3],
+            attempted: 0,
+            completed: 0,
+            outcome: 'not-run',
+            exit_code: null,
+            elapsed_ms: 0,
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+            stdout_sha256: emptyHash,
+            stderr_sha256: emptyHash,
+          },
+        ],
+      };
+
+      const first = await taskRepo.completeWorkload(failed);
+      const retry = await taskRepo.completeWorkload(failed);
+      const content = JSON.parse(first.message.content as string);
+
+      expect(first.outcome).toBe('transitioned');
+      expect(retry.outcome).toBe('idempotent');
+      expect(first.task).toMatchObject({
+        status: TaskStatus.FAILED,
+        error_message: WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
+      });
+      expect(content).toMatchObject({
+        schemaVersion: 1,
+        profile: 'offline-install',
+        outcome: 'failed',
+        taskId: task.task_id,
+        requested: { repetitions: 2, fixtureId: 'node-offline-install-v1' },
+        observed: {
+          completedStepCount: 1,
+          packageManager: { name: 'pnpm', version: '11.17.0' },
+          installedPackage: {
+            name: '@agor/offline-fixture-dependency',
+            version: '1.0.0',
+            artifactSha256: '8e4e8ff60b13149ad2b13ce261a16040bd964ed2fe1014458d6c6be2b4745373',
+          },
+          lockfileSha256: '54a155804466627cf95c7326e808e3a4be1a36b0b60628eee00952088f130e40',
+          failureStage: 'install',
+          cleanupConfirmed: true,
+        },
+        errorCode: WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
+      });
+      expect(JSON.stringify(content)).not.toContain('node_modules');
+      expect(Buffer.byteLength(first.message.content as string, 'utf8')).toBeLessThanOrEqual(
+        WORKLOAD_RESULT_MAX_BYTES
+      );
+      expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(1);
+    }
+  );
+
+  dbTest('does not publish an offline install result after Stop owns the Task', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db, 'workload');
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.STOPPING,
+        executor_connected_at: new Date().toISOString(),
+        full_prompt: '{"schemaVersion":1,"profile":"offline-install","repetitions":2}',
+      })
+    );
+
+    await expect(
+      taskRepo.completeWorkload({
+        ...offlineInstallSuccess,
+        task_id: task.task_id,
+        result_message_id: generateId() as MessageID,
+      })
+    ).rejects.toThrow(/active Task fence/);
+    expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.STOPPING);
+    expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
+  });
+
+  dbTest('rejects tampered offline fixture identity before publishing a result', async ({ db }) => {
+    const taskRepo = new TaskRepository(db);
+    const sessionId = await createSessionWithDeps(db, 'workload');
+    const task = await taskRepo.create(
+      createTaskData({
+        session_id: sessionId,
+        status: TaskStatus.RUNNING,
+        executor_connected_at: new Date().toISOString(),
+        full_prompt: '{"schemaVersion":1,"profile":"offline-install","repetitions":2}',
+      })
+    );
+
+    await expect(
+      taskRepo.completeWorkload({
+        ...offlineInstallSuccess,
+        task_id: task.task_id,
+        result_message_id: generateId() as MessageID,
+        artifact_sha256: 'f'.repeat(64),
+      } as unknown as WorkloadCompletionInput)
+    ).rejects.toThrow('WORKLOAD_COMPLETION_INVALID');
+    expect((await taskRepo.findById(task.task_id))?.status).toBe(TaskStatus.RUNNING);
+    expect(await new MessagesRepository(db).findByTaskId(task.task_id)).toHaveLength(0);
+  });
 
   dbTest('does not publish a success result after Stop owns the Task', async ({ db }) => {
     const taskRepo = new TaskRepository(db);

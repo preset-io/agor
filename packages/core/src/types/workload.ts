@@ -10,6 +10,7 @@ export const WORKLOAD_PROFILES = [
   'compile-test',
   'workspace-inspection',
   'fixture-command',
+  'offline-install',
 ] as const;
 
 export type WorkloadProfile = (typeof WORKLOAD_PROFILES)[number];
@@ -26,6 +27,18 @@ export const WORKLOAD_FIXTURE_COMMAND_MAX_REPETITIONS = 10;
 export const WORKLOAD_FIXTURE_COMMAND_OUTPUT_MAX_BYTES = 16 * 1024;
 export const WORKLOAD_FIXTURE_COMMAND_ID = 'node-compile-test-v1';
 export const WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE = 'WORKLOAD_FIXTURE_COMMAND_FAILED';
+export const WORKLOAD_OFFLINE_INSTALL_MAX_REPETITIONS = 5;
+export const WORKLOAD_OFFLINE_INSTALL_OUTPUT_MAX_BYTES = 16 * 1024;
+export const WORKLOAD_OFFLINE_INSTALL_ID = 'node-offline-install-v1';
+export const WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER = 'pnpm';
+export const WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER_VERSION = '11.17.0';
+export const WORKLOAD_OFFLINE_INSTALL_PACKAGE_NAME = '@agor/offline-fixture-dependency';
+export const WORKLOAD_OFFLINE_INSTALL_PACKAGE_VERSION = '1.0.0';
+export const WORKLOAD_OFFLINE_INSTALL_ARTIFACT_SHA256 =
+  '8e4e8ff60b13149ad2b13ce261a16040bd964ed2fe1014458d6c6be2b4745373';
+export const WORKLOAD_OFFLINE_INSTALL_LOCKFILE_SHA256 =
+  '54a155804466627cf95c7326e808e3a4be1a36b0b60628eee00952088f130e40';
+export const WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE = 'WORKLOAD_OFFLINE_INSTALL_FAILED';
 export const WORKLOAD_SEED_MAX = 0xffff_ffff;
 export const WORKLOAD_CONTROLLED_FAILURE_CODE = 'WORKLOAD_CONTROLLED_FAILURE';
 export const WORKLOAD_LOCKFILES = [
@@ -77,6 +90,29 @@ export interface WorkloadFixtureCommandObservation {
   completed: number;
   outcome: WorkloadFixtureCommandOutcome;
   exit_code: number | null;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  stdout_sha256: string;
+  stderr_sha256: string;
+}
+
+export const WORKLOAD_OFFLINE_INSTALL_STEPS = [
+  'package-manager-version',
+  'install',
+  'compile',
+  'test',
+] as const;
+export type WorkloadOfflineInstallStep = (typeof WORKLOAD_OFFLINE_INSTALL_STEPS)[number];
+export type WorkloadOfflineInstallStepOutcome = WorkloadFixtureCommandOutcome | 'version-mismatch';
+export type WorkloadOfflineInstallFailureStage = 'prepare' | 'cleanup' | WorkloadOfflineInstallStep;
+
+export interface WorkloadOfflineInstallStepObservation {
+  step: WorkloadOfflineInstallStep;
+  attempted: number;
+  completed: number;
+  outcome: WorkloadOfflineInstallStepOutcome;
+  exit_code: number | null;
+  elapsed_ms: number;
   stdout_bytes: number;
   stderr_bytes: number;
   stdout_sha256: string;
@@ -150,6 +186,20 @@ const FixtureCommandRequestSchema = z
   })
   .strict();
 
+const OfflineInstallRequestSchema = z
+  .object({
+    ...WORKLOAD_REQUEST_BASE,
+    profile: z.literal('offline-install'),
+    repetitions: z
+      .number()
+      .int()
+      .min(1)
+      .max(WORKLOAD_OFFLINE_INSTALL_MAX_REPETITIONS)
+      .optional()
+      .default(1),
+  })
+  .strict();
+
 export const WorkloadRequestSchema = z.discriminatedUnion('profile', [
   WaitRequestSchema,
   ControlledFailureRequestSchema,
@@ -158,6 +208,7 @@ export const WorkloadRequestSchema = z.discriminatedUnion('profile', [
   CompileTestRequestSchema,
   WorkspaceInspectionRequestSchema,
   FixtureCommandRequestSchema,
+  OfflineInstallRequestSchema,
 ]);
 
 export type WorkloadRequest = z.infer<typeof WorkloadRequestSchema>;
@@ -250,6 +301,30 @@ export type WorkloadCompletionInput =
       completed_command_count: number;
       commands: [WorkloadFixtureCommandObservation, WorkloadFixtureCommandObservation];
       cleanup_confirmed: true;
+    }
+  | {
+      task_id: string;
+      result_message_id: string;
+      profile: 'offline-install';
+      requested_repetitions: number;
+      fixture_id: typeof WORKLOAD_OFFLINE_INSTALL_ID;
+      package_manager: typeof WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER;
+      package_manager_version: typeof WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER_VERSION;
+      package_name: typeof WORKLOAD_OFFLINE_INSTALL_PACKAGE_NAME;
+      package_version: typeof WORKLOAD_OFFLINE_INSTALL_PACKAGE_VERSION;
+      artifact_sha256: typeof WORKLOAD_OFFLINE_INSTALL_ARTIFACT_SHA256;
+      lockfile_sha256: typeof WORKLOAD_OFFLINE_INSTALL_LOCKFILE_SHA256;
+      outcome: 'completed' | 'failed';
+      failure_stage: WorkloadOfflineInstallFailureStage | null;
+      observed_elapsed_ms: number;
+      completed_step_count: number;
+      steps: [
+        WorkloadOfflineInstallStepObservation,
+        WorkloadOfflineInstallStepObservation,
+        WorkloadOfflineInstallStepObservation,
+        WorkloadOfflineInstallStepObservation,
+      ];
+      cleanup_confirmed: boolean;
     };
 
 export type WorkloadResult =
@@ -326,6 +401,45 @@ export type WorkloadResult =
         cleanupConfirmed: true;
       };
       errorCode?: typeof WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE;
+    }
+  | {
+      schemaVersion: 1;
+      profile: 'offline-install';
+      outcome: 'completed' | 'failed';
+      taskId: TaskID;
+      requested: {
+        repetitions: number;
+        fixtureId: typeof WORKLOAD_OFFLINE_INSTALL_ID;
+      };
+      observed: {
+        elapsedMs: number;
+        completedStepCount: number;
+        packageManager: {
+          name: typeof WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER;
+          version: typeof WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER_VERSION;
+        };
+        installedPackage: {
+          name: typeof WORKLOAD_OFFLINE_INSTALL_PACKAGE_NAME;
+          version: typeof WORKLOAD_OFFLINE_INSTALL_PACKAGE_VERSION;
+          artifactSha256: typeof WORKLOAD_OFFLINE_INSTALL_ARTIFACT_SHA256;
+        };
+        lockfileSha256: typeof WORKLOAD_OFFLINE_INSTALL_LOCKFILE_SHA256;
+        failureStage: WorkloadOfflineInstallFailureStage | null;
+        steps: Array<{
+          step: WorkloadOfflineInstallStep;
+          attempted: number;
+          completed: number;
+          outcome: WorkloadOfflineInstallStepOutcome;
+          exitCode: number | null;
+          elapsedMs: number;
+          stdoutBytes: number;
+          stderrBytes: number;
+          stdoutSha256: string;
+          stderrSha256: string;
+        }>;
+        cleanupConfirmed: boolean;
+      };
+      errorCode?: typeof WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE;
     };
 
 export class WorkloadContractError extends Error {
@@ -376,6 +490,22 @@ const FIXTURE_COMMAND_COMPLETION_FIELDS = [
   'observed_elapsed_ms',
   'completed_command_count',
   'commands',
+  'cleanup_confirmed',
+] as const;
+const OFFLINE_INSTALL_COMPLETION_FIELDS = [
+  'requested_repetitions',
+  'fixture_id',
+  'package_manager',
+  'package_manager_version',
+  'package_name',
+  'package_version',
+  'artifact_sha256',
+  'lockfile_sha256',
+  'outcome',
+  'failure_stage',
+  'observed_elapsed_ms',
+  'completed_step_count',
+  'steps',
   'cleanup_confirmed',
 ] as const;
 
@@ -557,6 +687,107 @@ function isFixtureCommandObservation(
   return value.attempted > 0 && value.completed === value.attempted - 1 && value.exit_code === null;
 }
 
+function isOfflineInstallStepObservation(
+  value: unknown,
+  step: WorkloadOfflineInstallStep,
+  maximumAttempts: number
+): value is WorkloadOfflineInstallStepObservation {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      'step',
+      'attempted',
+      'completed',
+      'outcome',
+      'exit_code',
+      'elapsed_ms',
+      'stdout_bytes',
+      'stderr_bytes',
+      'stdout_sha256',
+      'stderr_sha256',
+    ]) ||
+    value.step !== step ||
+    !isBoundedInteger(value.attempted, 0, maximumAttempts) ||
+    !isBoundedInteger(value.completed, 0, value.attempted) ||
+    ![
+      'not-run',
+      'passed',
+      'failed',
+      'timed-out',
+      'output-limit-exceeded',
+      'spawn-failed',
+      'version-mismatch',
+    ].includes(value.outcome as string) ||
+    !isBoundedInteger(value.elapsed_ms, 0, Number.MAX_SAFE_INTEGER) ||
+    !isBoundedInteger(
+      value.stdout_bytes,
+      0,
+      maximumAttempts * WORKLOAD_OFFLINE_INSTALL_OUTPUT_MAX_BYTES
+    ) ||
+    !isBoundedInteger(
+      value.stderr_bytes,
+      0,
+      maximumAttempts * WORKLOAD_OFFLINE_INSTALL_OUTPUT_MAX_BYTES
+    ) ||
+    value.stdout_bytes + value.stderr_bytes >
+      maximumAttempts * WORKLOAD_OFFLINE_INSTALL_OUTPUT_MAX_BYTES ||
+    !isSha256(value.stdout_sha256) ||
+    !isSha256(value.stderr_sha256)
+  ) {
+    return false;
+  }
+
+  if (value.outcome === 'not-run') {
+    return (
+      value.attempted === 0 &&
+      value.completed === 0 &&
+      value.exit_code === null &&
+      value.elapsed_ms === 0 &&
+      value.stdout_bytes === 0 &&
+      value.stderr_bytes === 0 &&
+      value.stdout_sha256 === WORKLOAD_EMPTY_SHA256 &&
+      value.stderr_sha256 === WORKLOAD_EMPTY_SHA256
+    );
+  }
+  if (value.outcome === 'passed') {
+    return value.attempted > 0 && value.completed === value.attempted && value.exit_code === 0;
+  }
+  if (value.outcome === 'version-mismatch') {
+    return (
+      step === 'package-manager-version' &&
+      value.attempted === 1 &&
+      value.completed === 0 &&
+      value.exit_code === 0
+    );
+  }
+  if (value.outcome === 'failed') {
+    return (
+      value.attempted > 0 &&
+      value.completed === value.attempted - 1 &&
+      (value.exit_code === null || isBoundedInteger(value.exit_code, 1, 255))
+    );
+  }
+  return value.attempted > 0 && value.completed === value.attempted - 1 && value.exit_code === null;
+}
+
+function isPassedOfflineInstallStep(
+  observation: WorkloadOfflineInstallStepObservation,
+  attempts: number
+): boolean {
+  if (attempts === 0) {
+    return (
+      observation.attempted === 0 &&
+      observation.completed === 0 &&
+      observation.outcome === 'not-run'
+    );
+  }
+  return (
+    observation.attempted === attempts &&
+    observation.completed === attempts &&
+    observation.outcome === 'passed'
+  );
+}
+
 /**
  * Validate the executor-to-daemon completion seam independently of TypeScript.
  * This keeps a malformed or hand-crafted Feathers call from widening the
@@ -733,6 +964,112 @@ export function assertValidWorkloadCompletionInput(
     return;
   }
 
+  if (profile === 'offline-install') {
+    assertOnlyFields(value, OFFLINE_INSTALL_COMPLETION_FIELDS);
+    requireFields(value, OFFLINE_INSTALL_COMPLETION_FIELDS);
+    if (
+      !isBoundedInteger(value.requested_repetitions, 1, WORKLOAD_OFFLINE_INSTALL_MAX_REPETITIONS) ||
+      value.fixture_id !== WORKLOAD_OFFLINE_INSTALL_ID ||
+      value.package_manager !== WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER ||
+      value.package_manager_version !== WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER_VERSION ||
+      value.package_name !== WORKLOAD_OFFLINE_INSTALL_PACKAGE_NAME ||
+      value.package_version !== WORKLOAD_OFFLINE_INSTALL_PACKAGE_VERSION ||
+      value.artifact_sha256 !== WORKLOAD_OFFLINE_INSTALL_ARTIFACT_SHA256 ||
+      value.lockfile_sha256 !== WORKLOAD_OFFLINE_INSTALL_LOCKFILE_SHA256 ||
+      !['completed', 'failed'].includes(value.outcome as string) ||
+      !isBoundedInteger(value.observed_elapsed_ms, 0, Number.MAX_SAFE_INTEGER) ||
+      !isBoundedInteger(value.completed_step_count, 0, 1 + value.requested_repetitions * 3) ||
+      !Array.isArray(value.steps) ||
+      value.steps.length !== WORKLOAD_OFFLINE_INSTALL_STEPS.length ||
+      typeof value.cleanup_confirmed !== 'boolean' ||
+      (value.failure_stage !== null &&
+        !['prepare', 'cleanup', ...WORKLOAD_OFFLINE_INSTALL_STEPS].includes(
+          value.failure_stage as WorkloadOfflineInstallFailureStage
+        ))
+    ) {
+      throw new WorkloadContractError();
+    }
+
+    const [version, install, compile, test] = value.steps;
+    if (
+      !isOfflineInstallStepObservation(version, 'package-manager-version', 1) ||
+      !isOfflineInstallStepObservation(install, 'install', value.requested_repetitions) ||
+      !isOfflineInstallStepObservation(compile, 'compile', value.requested_repetitions) ||
+      !isOfflineInstallStepObservation(test, 'test', value.requested_repetitions) ||
+      value.completed_step_count !==
+        version.completed + install.completed + compile.completed + test.completed
+    ) {
+      throw new WorkloadContractError();
+    }
+
+    const completed = value.outcome === 'completed';
+    const successfulShape =
+      value.failure_stage === null &&
+      value.cleanup_confirmed &&
+      isPassedOfflineInstallStep(version, 1) &&
+      isPassedOfflineInstallStep(install, value.requested_repetitions) &&
+      isPassedOfflineInstallStep(compile, value.requested_repetitions) &&
+      isPassedOfflineInstallStep(test, value.requested_repetitions);
+    const prepareFailure =
+      value.failure_stage === 'prepare' && value.steps.every((step) => step.outcome === 'not-run');
+    const versionFailure =
+      value.failure_stage === 'package-manager-version' &&
+      version.attempted === 1 &&
+      version.completed === 0 &&
+      version.outcome !== 'passed' &&
+      version.outcome !== 'not-run' &&
+      install.outcome === 'not-run' &&
+      compile.outcome === 'not-run' &&
+      test.outcome === 'not-run';
+    const installFailure =
+      value.failure_stage === 'install' &&
+      isPassedOfflineInstallStep(version, 1) &&
+      install.attempted === compile.attempted + 1 &&
+      install.attempted === test.attempted + 1 &&
+      install.completed === install.attempted - 1 &&
+      install.outcome !== 'passed' &&
+      install.outcome !== 'not-run' &&
+      isPassedOfflineInstallStep(compile, install.completed) &&
+      isPassedOfflineInstallStep(test, install.completed);
+    const compileFailure =
+      value.failure_stage === 'compile' &&
+      isPassedOfflineInstallStep(version, 1) &&
+      isPassedOfflineInstallStep(install, compile.attempted) &&
+      compile.attempted === test.attempted + 1 &&
+      compile.completed === compile.attempted - 1 &&
+      compile.outcome !== 'passed' &&
+      compile.outcome !== 'not-run' &&
+      isPassedOfflineInstallStep(test, compile.completed);
+    const testFailure =
+      value.failure_stage === 'test' &&
+      isPassedOfflineInstallStep(version, 1) &&
+      isPassedOfflineInstallStep(install, test.attempted) &&
+      isPassedOfflineInstallStep(compile, test.attempted) &&
+      test.completed === test.attempted - 1 &&
+      test.outcome !== 'passed' &&
+      test.outcome !== 'not-run';
+    const cleanupFailure =
+      value.failure_stage === 'cleanup' &&
+      !value.cleanup_confirmed &&
+      isPassedOfflineInstallStep(version, 1) &&
+      isPassedOfflineInstallStep(install, value.requested_repetitions) &&
+      isPassedOfflineInstallStep(compile, value.requested_repetitions) &&
+      isPassedOfflineInstallStep(test, value.requested_repetitions);
+    if (
+      (completed && !successfulShape) ||
+      (!completed &&
+        !prepareFailure &&
+        !versionFailure &&
+        !installFailure &&
+        !compileFailure &&
+        !testFailure &&
+        !cleanupFailure)
+    ) {
+      throw new WorkloadContractError();
+    }
+    return;
+  }
+
   throw new WorkloadContractError();
 }
 
@@ -800,6 +1137,22 @@ export function assertWorkloadCompletionMatchesRequest(
       if (
         completion.requested_repetitions !== request.repetitions ||
         completion.fixture_id !== WORKLOAD_FIXTURE_COMMAND_ID
+      ) {
+        throw new WorkloadContractError();
+      }
+      return;
+    }
+    case 'offline-install': {
+      const completion = input as Extract<WorkloadCompletionInput, { profile: 'offline-install' }>;
+      if (
+        completion.requested_repetitions !== request.repetitions ||
+        completion.fixture_id !== WORKLOAD_OFFLINE_INSTALL_ID ||
+        completion.package_manager !== WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER ||
+        completion.package_manager_version !== WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER_VERSION ||
+        completion.package_name !== WORKLOAD_OFFLINE_INSTALL_PACKAGE_NAME ||
+        completion.package_version !== WORKLOAD_OFFLINE_INSTALL_PACKAGE_VERSION ||
+        completion.artifact_sha256 !== WORKLOAD_OFFLINE_INSTALL_ARTIFACT_SHA256 ||
+        completion.lockfile_sha256 !== WORKLOAD_OFFLINE_INSTALL_LOCKFILE_SHA256
       ) {
         throw new WorkloadContractError();
       }
@@ -929,6 +1282,50 @@ export function workloadResultFromCompletion(
         },
         ...(completion.outcome === 'failed'
           ? { errorCode: WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE }
+          : {}),
+      };
+    }
+    case 'offline-install': {
+      const completion = input as Extract<WorkloadCompletionInput, { profile: 'offline-install' }>;
+      return {
+        schemaVersion: 1,
+        profile: 'offline-install',
+        outcome: completion.outcome,
+        taskId,
+        requested: {
+          repetitions: request.repetitions,
+          fixtureId: WORKLOAD_OFFLINE_INSTALL_ID,
+        },
+        observed: {
+          elapsedMs: completion.observed_elapsed_ms,
+          completedStepCount: completion.completed_step_count,
+          packageManager: {
+            name: WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER,
+            version: WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER_VERSION,
+          },
+          installedPackage: {
+            name: WORKLOAD_OFFLINE_INSTALL_PACKAGE_NAME,
+            version: WORKLOAD_OFFLINE_INSTALL_PACKAGE_VERSION,
+            artifactSha256: WORKLOAD_OFFLINE_INSTALL_ARTIFACT_SHA256,
+          },
+          lockfileSha256: WORKLOAD_OFFLINE_INSTALL_LOCKFILE_SHA256,
+          failureStage: completion.failure_stage,
+          steps: completion.steps.map((step) => ({
+            step: step.step,
+            attempted: step.attempted,
+            completed: step.completed,
+            outcome: step.outcome,
+            exitCode: step.exit_code,
+            elapsedMs: step.elapsed_ms,
+            stdoutBytes: step.stdout_bytes,
+            stderrBytes: step.stderr_bytes,
+            stdoutSha256: step.stdout_sha256,
+            stderrSha256: step.stderr_sha256,
+          })),
+          cleanupConfirmed: completion.cleanup_confirmed,
+        },
+        ...(completion.outcome === 'failed'
+          ? { errorCode: WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE }
           : {}),
       };
     }
