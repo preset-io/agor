@@ -45,6 +45,7 @@ import { copyToClipboard } from '@/utils/clipboard';
 import { useThemedMessage } from '@/utils/message';
 import { ensureSandpackCryptoSubtle } from '@/utils/sandpackCrypto';
 import { uiRouteHref } from '@/utils/uiRoutes';
+import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { ArtifactConsentModal } from '../../ArtifactConsentModal/ArtifactConsentModal';
 import { useStableSandpackProviderInputs } from './utils/sandpackDefaults';
 
@@ -55,6 +56,7 @@ export interface ArtifactNodeData {
   artifactId: string;
   width: number;
   height: number;
+  canEdit: boolean;
   /** True when this artifact is the deep-link target of the current URL
    *  (`/a/<artifactShort>/`). Renders the same dashed "selected"
    *  outline used on BranchCard, layered on top of React Flow's
@@ -173,6 +175,8 @@ export const ArtifactNode = ({
   selected?: boolean;
 }) => {
   const { token } = theme.useToken();
+  const mutationGate = useMutationGate();
+  const layoutMutationDisabled = !mutationGate.canMutate || !data.canEdit;
   const [interactMode, setInteractMode] = useState(false);
   const [payload, setPayload] = useState<ArtifactPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -233,6 +237,7 @@ export const ArtifactNode = ({
 
   const handleResize = useCallback(
     (_event: unknown, params: { x: number; y: number; width: number; height: number }) => {
+      if (layoutMutationDisabled) return;
       const objectData: ArtifactBoardObject = {
         type: 'artifact',
         x: params.x,
@@ -244,7 +249,7 @@ export const ArtifactNode = ({
       };
       data.onUpdate(data.objectId, objectData);
     },
-    [data]
+    [data, layoutMutationDisabled]
   );
 
   // The actual form-POST work happens inside <CodeSandboxExporter/>, which
@@ -256,6 +261,7 @@ export const ArtifactNode = ({
   // sandbox boots empty (no entry, no DOM root).
 
   const handleToggleLock = useCallback(() => {
+    if (layoutMutationDisabled) return;
     const objectData: ArtifactBoardObject = {
       type: 'artifact',
       x: data.x,
@@ -266,7 +272,7 @@ export const ArtifactNode = ({
       locked: !data.locked,
     };
     data.onUpdate(data.objectId, objectData);
-  }, [data]);
+  }, [data, layoutMutationDisabled]);
 
   const handleOpenInCodeSandbox = useCallback(() => {
     window.dispatchEvent(new CustomEvent(`agor:export-codesandbox-${data.artifactId}`));
@@ -341,7 +347,9 @@ export const ArtifactNode = ({
           <Button
             type="text"
             size="small"
+            aria-label={data.locked ? 'Unlock artifact card' : 'Lock artifact card'}
             icon={data.locked ? <LockOutlined /> : <UnlockOutlined />}
+            disabled={layoutMutationDisabled}
             onClick={(e) => {
               e.stopPropagation();
               handleToggleLock();
@@ -432,6 +440,7 @@ export const ArtifactNode = ({
                 size="small"
                 danger
                 icon={<DeleteOutlined />}
+                aria-label="Delete artifact"
                 onClick={(e) => e.stopPropagation()}
               />
             </Tooltip>
@@ -474,7 +483,7 @@ export const ArtifactNode = ({
   // Shared resizer — same across loading / error / normal states.
   const resizer = (
     <NodeResizer
-      isVisible={selected && !data.locked}
+      isVisible={selected && !data.locked && !layoutMutationDisabled}
       minWidth={MIN_WIDTH}
       minHeight={MIN_HEIGHT}
       onResize={handleResize}

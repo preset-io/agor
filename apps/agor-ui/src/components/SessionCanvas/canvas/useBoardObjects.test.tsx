@@ -47,16 +47,16 @@ const wrapper = ({ children }: { children: ReactNode }) => <AntApp>{children}</A
 
 function renderReorder(board: Board, client: unknown, canEdit = true) {
   return renderHook(
-    () =>
+    ({ effectiveCanEdit }) =>
       useBoardObjects({
         board,
         client: client as never,
         boardObjectsForBoard: [],
         setNodes: vi.fn(),
         deletedObjectsRef: { current: new Set<string>() },
-        canEdit,
+        canEdit: effectiveCanEdit,
       }),
-    { wrapper }
+    { wrapper, initialProps: { effectiveCanEdit: canEdit } }
   );
 }
 
@@ -85,20 +85,50 @@ describe('zone toolbar metadata', () => {
       layerAvailability: { front: false, forward: false, backward: true, back: true },
     });
   });
+
+  it('passes effective edit permission to every structural object component', () => {
+    const { client } = makeClient();
+    const board = makeBoard({
+      app: {
+        type: 'app',
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 200,
+        title: 'App',
+        template: 'react',
+        files: {},
+      },
+      artifact: {
+        type: 'artifact',
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 200,
+        artifact_id: 'artifact-1',
+      },
+      note: { type: 'markdown', x: 0, y: 0, width: 300, content: 'Note' },
+    });
+    const { result } = renderReorder(board, client, false);
+
+    for (const node of result.current.getBoardObjectNodes()) {
+      expect(node.data.canEdit).toBe(false);
+      expect(node.draggable).toBe(false);
+    }
+  });
 });
 
 describe('updateObject', () => {
   it('returns false when the board patch rejects so modal callers stay open', async () => {
     const { client, patch } = makeRejectingClient();
-    const zone = {
-      type: 'zone',
+    const note = {
+      type: 'markdown',
       x: 0,
       y: 0,
-      width: 200,
-      height: 200,
-      label: 'Review',
+      width: 300,
+      content: 'Review',
     } as BoardObject;
-    const board = makeBoard({ a: zone });
+    const board = makeBoard({ a: note });
     const { result } = renderReorder(board, client);
     const node = result.current.getBoardObjectNodes().find(({ id }) => id === 'a');
     const onUpdate = node?.data.onUpdate as (
@@ -106,10 +136,48 @@ describe('updateObject', () => {
       objectData: BoardObject
     ) => Promise<boolean>;
 
-    await expect(onUpdate('a', { ...zone, label: 'Updated' })).resolves.toBe(false);
+    await expect(onUpdate('a', { ...note, content: 'Updated' })).resolves.toBe(false);
 
     expect(patch).toHaveBeenCalledTimes(1);
     expect(showError).toHaveBeenCalledWith('Failed to save board object');
+  });
+
+  it('blocks stale update and delete callbacks after permission revocation', async () => {
+    const { client, patch } = makeClient();
+    const setNodes = vi.fn();
+    const note = {
+      type: 'markdown',
+      x: 0,
+      y: 0,
+      width: 300,
+      content: 'Review',
+    } as BoardObject;
+    const board = makeBoard({ a: note });
+    const { result, rerender } = renderHook(
+      ({ canEdit }) =>
+        useBoardObjects({
+          board,
+          client,
+          boardObjectsForBoard: [],
+          setNodes,
+          deletedObjectsRef: { current: new Set<string>() },
+          canEdit,
+        }),
+      { wrapper, initialProps: { canEdit: true } }
+    );
+    const data = result.current.getBoardObjectNodes()[0]?.data;
+    const onUpdate = data.onUpdate as (
+      objectId: string,
+      objectData: BoardObject
+    ) => Promise<boolean>;
+    const onDelete = data.onDelete as (objectId: string) => Promise<void>;
+
+    rerender({ canEdit: false });
+    await expect(onUpdate('a', { ...note, content: 'Updated' })).resolves.toBe(false);
+    await onDelete('a');
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(setNodes).not.toHaveBeenCalled();
   });
 });
 

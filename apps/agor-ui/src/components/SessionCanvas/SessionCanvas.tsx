@@ -727,6 +727,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // Handler to open edit modal for existing markdown note
     const handleEditMarkdownNote = useCallback(
       (objectId: string, content: string, width: number) => {
+        if (!canMutateBoard) return;
         const node = reactFlowInstanceRef.current?.getNode(objectId);
         if (!node) return;
 
@@ -738,7 +739,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         });
         setActiveTool('markdown');
       },
-      []
+      [canMutateBoard]
     );
 
     // Board objects hook
@@ -2277,6 +2278,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 height,
                 borderColor: defaultBorderColor,
                 backgroundColor: defaultBackgroundColor,
+                canEdit: canEditBoard,
                 onUpdate: (id: string, data: BoardObject) => {
                   if (board && client) {
                     client
@@ -2321,7 +2323,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         setDrawingZone(null);
         setActiveTool('select');
       }
-    }, [activeTool, drawingZone, board, client, setNodes, canMutateBoard]);
+    }, [activeTool, drawingZone, board, client, setNodes, canMutateBoard, canEditBoard]);
 
     const openMarkdownPlacementModal = useCallback(
       (event: Pick<React.MouseEvent, 'clientX' | 'clientY'>): boolean => {
@@ -2473,6 +2475,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               objectId,
               content: markdownContent,
               width: markdownWidth,
+              canEdit: canEditBoard,
               onUpdate: (id: string, data: BoardObject) => {
                 if (board && client) {
                   client
@@ -2528,6 +2531,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       handleEditMarkdownNote,
       deleteObject,
       canMutateBoard,
+      canEditBoard,
     ]);
 
     // Node click handler for eraser mode and comment placement
@@ -2616,7 +2620,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         setDrawingZone(null);
         setCommentPlacement(null);
         setCommentInput('');
-        setMarkdownModal(null);
+        // Preserve an already-open Markdown editor and its draft. Its Save
+        // action is permission-gated below until editing becomes available.
       }
     }, [canMutateBoard, canMutateComments, activeTool]);
 
@@ -2976,7 +2981,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             }}
             onOk={handleCreateMarkdownNote}
             okText={markdownModal.objectId ? 'Save' : 'Create'}
-            okButtonProps={{ disabled: !markdownContent.trim() }}
+            okButtonProps={{ disabled: !markdownContent.trim() || !canMutateBoard }}
             width={1000}
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 16 }}>

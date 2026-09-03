@@ -50,6 +50,8 @@ export const useBoardObjects = ({
   // Use ref to avoid recreating callbacks when board changes
   const boardRef = useRef(board);
   boardRef.current = board;
+  const canEditRef = useRef(canEdit);
+  canEditRef.current = canEdit;
 
   const { showError } = useThemedMessage();
 
@@ -64,7 +66,7 @@ export const useBoardObjects = ({
   const handleUpdateObject = useCallback(
     async (objectId: string, objectData: BoardObject) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client) return false;
+      if (!canEditRef.current || !currentBoard || !client) return false;
 
       try {
         await client.service('boards').patch(currentBoard.board_id, {
@@ -107,7 +109,7 @@ export const useBoardObjects = ({
   const reorderObject = useCallback(
     async (objectId: string, op: LayerOp) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client) return;
+      if (!canEditRef.current || !currentBoard || !client) return;
 
       const objects = currentBoard.objects ?? {};
       const target = objects[objectId];
@@ -148,7 +150,7 @@ export const useBoardObjects = ({
    */
   const deleteZone = useCallback(
     async (objectId: string, _deleteAssociatedSessions: boolean) => {
-      if (!board || !client) return;
+      if (!canEditRef.current || !board || !client) return;
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
@@ -184,7 +186,7 @@ export const useBoardObjects = ({
   const deleteObject = useCallback(
     async (objectId: string) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client) return;
+      if (!canEditRef.current || !currentBoard || !client) return;
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);
@@ -294,6 +296,7 @@ export const useBoardObjects = ({
               showConsole: objectData.showConsole,
               width: objectData.width,
               height: objectData.height,
+              canEdit,
               onUpdate: handleUpdateObject,
               onDelete: deleteObject,
             },
@@ -319,6 +322,7 @@ export const useBoardObjects = ({
               locked: isLocked,
               x: objectData.x,
               y: objectData.y,
+              canEdit,
               isActiveUrlTarget: objectData.artifact_id === activeUrlTargetArtifactId,
               onUpdate: handleUpdateObject,
               onDeleteArtifact: deleteArtifact,
@@ -341,6 +345,7 @@ export const useBoardObjects = ({
               objectId,
               content: objectData.content,
               width: objectData.width,
+              canEdit,
               onUpdate: handleUpdateObject,
               onEdit: onEditMarkdown,
               onDelete: deleteObject,
@@ -441,7 +446,7 @@ export const useBoardObjects = ({
   const addZoneNode = useCallback(
     async (x: number, y: number) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client) return;
+      if (!canEditRef.current || !currentBoard || !client) return;
 
       const objectId = `zone-${Date.now()}`;
       const width = 400;
@@ -466,6 +471,7 @@ export const useBoardObjects = ({
             width,
             height,
             color: undefined, // Will use theme default (colorBorder)
+            canEdit,
             onUpdate: handleUpdateObject,
           },
         },
@@ -501,7 +507,8 @@ export const useBoardObjects = ({
   const batchUpdateObjectPositions = useCallback(
     async (updates: Record<string, { x: number; y: number }>) => {
       const currentBoard = boardRef.current;
-      if (!currentBoard || !client || Object.keys(updates).length === 0) return;
+      if (!canEditRef.current || !currentBoard || !client || Object.keys(updates).length === 0)
+        return;
 
       try {
         // Build objects payload with full object data + new positions

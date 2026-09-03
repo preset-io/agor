@@ -143,7 +143,7 @@ describe('SessionCanvas zoom shortcuts', () => {
   });
 
   it('opens the markdown note modal when the markdown tool clicks a board node', async () => {
-    render(
+    const canvas = () => (
       <ConnectionProvider
         value={{
           connected: true,
@@ -183,6 +183,7 @@ describe('SessionCanvas zoom shortcuts', () => {
         />
       </ConnectionProvider>
     );
+    const { rerender } = render(canvas());
 
     act(() => {
       (reactFlowProps?.onInit as (instance: unknown) => void)?.({
@@ -201,6 +202,17 @@ describe('SessionCanvas zoom shortcuts', () => {
     });
 
     expect(await screen.findByText('Add Markdown Note')).toBeInTheDocument();
+
+    const draft = screen.getByPlaceholderText(/# Title/);
+    fireEvent.change(draft, { target: { value: 'Keep this draft' } });
+    expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled();
+
+    permissionState.canEdit = false;
+    rerender(canvas());
+
+    expect(screen.getByText('Add Markdown Note')).toBeInTheDocument();
+    expect(draft).toHaveValue('Keep this draft');
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
   });
 
   describe('onNodesChange zone resize via O(1) getNode lookup', () => {
