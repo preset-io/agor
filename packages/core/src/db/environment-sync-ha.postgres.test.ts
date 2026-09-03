@@ -92,7 +92,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           new EnvironmentSyncRepository(scoped).claim({
             branchId: branch.branch_id,
             claimToken: 'daemon-a',
-            leaseDurationMs: 60_000,
             identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
           })
         ),
@@ -100,7 +99,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           new EnvironmentSyncRepository(scoped).claim({
             branchId: branch.branch_id,
             claimToken: 'daemon-b',
-            leaseDurationMs: 60_000,
             identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
           })
         ),
@@ -145,7 +143,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           new EnvironmentSyncRepository(scoped).claim({
             branchId: branch.branch_id,
             claimToken: 'wrong-tenant',
-            leaseDurationMs: 60_000,
             identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
           })
         )
@@ -202,7 +199,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         new EnvironmentSyncRepository(scoped).claim({
           branchId: branch.branch_id,
           claimToken: 'sync-on-daemon-b',
-          leaseDurationMs: 60_000,
           identity: { instanceId: 'sync-b', bootId: 'sync-boot-b' },
         })
       );
@@ -296,7 +292,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         new EnvironmentSyncRepository(scoped).claim({
           branchId: branch.branch_id,
           claimToken: 'tenant-a-sync',
-          leaseDurationMs: 60_000,
           identity: { instanceId: 'sync-a', bootId: 'sync-boot-a' },
         })
       );
@@ -396,7 +391,6 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             new EnvironmentSyncRepository(scoped).claim({
               branchId: branch.branch_id,
               claimToken: `${settlement}-${leaseCase}-sync`,
-              leaseDurationMs: 60_000,
               identity: { instanceId: 'sync-a', bootId: 'sync-boot-a' },
             })
           );

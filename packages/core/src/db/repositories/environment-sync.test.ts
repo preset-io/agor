@@ -1,5 +1,6 @@
 import type { BranchID, UserID } from '@agor/core/types';
 import { describe, expect } from 'vitest';
+import { resolveEnvironmentLifecycleBudget } from '../../environment/health-transition';
 import { generateId } from '../../lib/ids';
 import type { Database } from '../client';
 import { dbTest } from '../test-helpers';
@@ -15,7 +16,8 @@ let uniqueId = 9_910_000;
 
 async function seedRunningBranch(
   db: Database,
-  status: 'starting' | 'running' | 'stopped' = 'running'
+  status: 'starting' | 'running' | 'stopped' = 'running',
+  lifecycleTimeoutMs?: number
 ) {
   const user = await new UsersRepository(db).create({
     email: `${generateId()}@example.test`,
@@ -37,6 +39,7 @@ async function seedRunningBranch(
     path: `/tmp/${generateId()}`,
     created_by: user.user_id,
     environment_instance: { status },
+    ...(lifecycleTimeoutMs !== undefined ? { lifecycle_timeout_ms: lifecycleTimeoutMs } : {}),
   });
   return { branch, user };
 }
@@ -57,13 +60,11 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
         sync.claim({
           branchId: branch.branch_id,
           claimToken: 'claim-a',
-          leaseDurationMs: 60_000,
           identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
         }),
         sync.claim({
           branchId: branch.branch_id,
           claimToken: 'claim-b',
-          leaseDurationMs: 60_000,
           identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
         }),
       ]);
@@ -72,6 +73,59 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
       expect(claims.filter((claim) => claim.outcome === 'held')).toHaveLength(1);
     }
   );
+
+  dbTest('leases the claim for the branch’s own snapshotted command budget', async ({ db }) => {
+    // A lease shorter than the attempt is not a mild inefficiency: `complete`
+    // and `fail` discard a settlement whose lease has expired, so a provider
+    // that legitimately takes 20 minutes would have every successful sync
+    // silently thrown away.
+    const slow = await seedRunningBranch(db, 'running', 1_260_000);
+    const fast = await seedRunningBranch(db);
+    const sync = new EnvironmentSyncRepository(db);
+
+    const leaseFor = async (seed: Awaited<ReturnType<typeof seedRunningBranch>>) => {
+      await sync.request({
+        branchId: seed.branch.branch_id,
+        desiredRevision: REVISION_A,
+        requestedByUserId: seed.user.user_id as UserID,
+      });
+      const claim = await sync.claim({
+        branchId: seed.branch.branch_id,
+        claimToken: generateId(),
+        identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+      });
+      if (claim.outcome !== 'claimed') throw new Error('Expected claim');
+      return Date.parse(claim.attempt.lease_expires_at) - Date.parse(claim.attempt.started_at);
+    };
+
+    expect(await leaseFor(slow)).toBe(resolveEnvironmentLifecycleBudget(1_260_000).claimLeaseMs);
+    expect(await leaseFor(fast)).toBe(resolveEnvironmentLifecycleBudget().claimLeaseMs);
+  });
+
+  dbTest('reports the budget the lease was sized from, for the runner', async ({ db }) => {
+    // The runner must bound the executor with THIS value rather than a fresh
+    // read: a re-render between claim and dispatch could otherwise hand the
+    // command a deadline outliving the lease its settlement is checked against,
+    // and a successful sync would be discarded as stale.
+    const { branch, user } = await seedRunningBranch(db, 'running', 1_260_000);
+    const sync = new EnvironmentSyncRepository(db);
+    await sync.request({
+      branchId: branch.branch_id,
+      desiredRevision: REVISION_A,
+      requestedByUserId: user.user_id as UserID,
+    });
+
+    const claim = await sync.claim({
+      branchId: branch.branch_id,
+      claimToken: 'budget-report',
+      identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
+    });
+    if (claim.outcome !== 'claimed') throw new Error('Expected claim');
+    expect(claim.lifecycle_timeout_ms).toBe(1_260_000);
+    expect(Date.parse(claim.attempt.lease_expires_at) - Date.parse(claim.attempt.started_at)).toBe(
+      resolveEnvironmentLifecycleBudget(claim.lifecycle_timeout_ms).claimLeaseMs
+    );
+  });
 
   dbTest(
     'never mistakes an older acknowledgement for the newest desired revision',
@@ -90,7 +144,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
       const first = await sync.claim({
         branchId: branch.branch_id,
         claimToken: 'revision-a',
-        leaseDurationMs: 60_000,
         identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
       });
       if (first.outcome !== 'claimed') throw new Error('Expected first claim');
@@ -119,7 +172,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
       const second = await sync.claim({
         branchId: branch.branch_id,
         claimToken: 'revision-b',
-        leaseDurationMs: 60_000,
         identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
       });
       expect(second).toMatchObject({
@@ -143,7 +195,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
       sync.claim({
         branchId: branch.branch_id,
         claimToken: 'while-starting',
-        leaseDurationMs: 60_000,
         identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
       })
     ).resolves.toEqual({ outcome: 'unavailable' });
@@ -153,7 +204,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
       sync.claim({
         branchId: branch.branch_id,
         claimToken: 'after-readiness',
-        leaseDurationMs: 60_000,
         identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
       })
     ).resolves.toMatchObject({
@@ -213,7 +263,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
       const claim = await sync.claim({
         branchId: branch.branch_id,
         claimToken: 'old-revision',
-        leaseDurationMs: 60_000,
         identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
       });
       if (claim.outcome !== 'claimed') throw new Error('Expected claim');
@@ -268,7 +317,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
     const claim = await sync.claim({
       branchId: branch.branch_id,
       claimToken: 'before-stop',
-      leaseDurationMs: 60_000,
       identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
     });
     if (claim.outcome !== 'claimed') throw new Error('Expected claim');
@@ -287,7 +335,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
     const retry = await sync.claim({
       branchId: branch.branch_id,
       claimToken: 'after-restart',
-      leaseDurationMs: 60_000,
       identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
     });
     expect(retry).toMatchObject({ outcome: 'claimed', attempt: { revision: REVISION_A } });
@@ -301,7 +348,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
     const claim = await sync.claim({
       branchId: branch.branch_id,
       claimToken: 'failed-attempt',
-      leaseDurationMs: 60_000,
       identity: { instanceId: 'daemon-a', bootId: 'boot-a' },
     });
     if (claim.outcome !== 'claimed') throw new Error('Expected claim');
@@ -333,7 +379,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
       sync.claim({
         branchId: branch.branch_id,
         claimToken: 'too-soon',
-        leaseDurationMs: 60_000,
         identity: { instanceId: 'daemon-b', bootId: 'boot-b' },
       })
     ).resolves.toMatchObject({ outcome: 'not_due' });
@@ -367,7 +412,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
     const syncClaim = await sync.claim({
       branchId: branch.branch_id,
       claimToken: 'source-sync',
-      leaseDurationMs: 60_000,
       identity: { instanceId: 'sync-a', bootId: 'sync-boot-a' },
     });
     if (syncClaim.outcome !== 'claimed') throw new Error('Expected Sync claim');
@@ -442,7 +486,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
     const syncClaim = await sync.claim({
       branchId: branch.branch_id,
       claimToken: 'failed-source-sync',
-      leaseDurationMs: 60_000,
       identity: { instanceId: 'sync-a', bootId: 'sync-boot-a' },
     });
     if (syncClaim.outcome !== 'claimed') throw new Error('Expected Sync claim');
@@ -521,7 +564,6 @@ describe('EnvironmentSyncRepository desired/applied reconciliation', () => {
           const syncClaim = await sync.claim({
             branchId: branch.branch_id,
             claimToken: `${settlement}-${leaseCase}-sync`,
-            leaseDurationMs: 60_000,
             identity: { instanceId: 'sync-a', bootId: 'sync-boot-a' },
           });
           if (syncClaim.outcome !== 'claimed') throw new Error('Expected Sync claim');

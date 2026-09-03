@@ -84,6 +84,9 @@ export interface Branch {
   /** Maximum wall-clock time allowed for one start attempt. */
   startup_timeout_ms?: number;
 
+  /** Maximum wall-clock time allowed for one stop/nuke/sync command. */
+  lifecycle_timeout_ms?: number;
+
   /**
    * Name of the environment variant this branch is currently rendered from.
    *
@@ -806,6 +809,15 @@ export interface RepoEnvironmentVariant {
    * Defaults to one hour and is inherited through `extends`.
    */
   startup_timeout_ms?: number;
+
+  /**
+   * Maximum wall-clock time for one `stop` / `nuke` / `sync` command, in
+   * milliseconds. Inherited through `extends`. The default is sized to fit
+   * inside the default executor command credential; raise it only for a
+   * provider whose state transitions legitimately take longer (the credential,
+   * the daemon's waiter, and the durable Sync claim all grow with it).
+   */
+  lifecycle_timeout_ms?: number;
 
   /**
    * Command to start the environment (Handlebars template).

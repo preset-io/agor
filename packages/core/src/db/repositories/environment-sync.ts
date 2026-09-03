@@ -1,5 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import type { DistributedWorkIdentity } from '../../coordination';
+import { resolveEnvironmentLifecycleBudget } from '../../environment/health-transition';
 import { validateEnvironmentSourceRevision } from '../../environment/lifecycle-result';
 import type { BranchEnvironmentInstance, BranchID, UserID } from '../../types';
 import type { Database } from '../client';
@@ -35,7 +36,18 @@ export type EnvironmentSyncRequestResult = {
 };
 
 export type EnvironmentSyncClaimResult =
-  | { outcome: 'claimed'; attempt: SourceSyncAttempt }
+  | {
+      outcome: 'claimed';
+      attempt: SourceSyncAttempt;
+      /**
+       * The snapshotted command budget this lease was sized from. The runner
+       * must bound the executor with THIS value, not with a fresh read of the
+       * branch: a re-render between the claim and the dispatch could otherwise
+       * grant a deadline that outlives the lease its settlement is checked
+       * against, and a successful sync would be discarded as stale.
+       */
+      lifecycle_timeout_ms: number;
+    }
   | { outcome: 'held'; lease_expires_at: string }
   | { outcome: 'not_due'; retry_at: string }
   | { outcome: 'up_to_date' }
@@ -161,19 +173,25 @@ export class EnvironmentSyncRepository {
     );
   }
 
+  /**
+   * Claim the branch's pending sync attempt.
+   *
+   * The lease is derived here rather than supplied by the caller because it has
+   * to match the branch's own snapshotted command budget: `complete`/`fail`
+   * discard a settlement whose lease has expired, so a lease shorter than the
+   * attempt would silently throw away the sync result. The row is already read
+   * inside this transaction, so deriving it costs nothing and cannot drift from
+   * the budget the daemon will actually grant the executor.
+   */
   async claim(input: {
     branchId: BranchID;
     claimToken: string;
-    leaseDurationMs: number;
     identity: DistributedWorkIdentity;
   }): Promise<EnvironmentSyncClaimResult> {
     if (!input.claimToken.trim())
       throw new RepositoryError('Environment sync claim token required');
     if (!input.identity.instanceId.trim() || !input.identity.bootId.trim()) {
       throw new RepositoryError('Environment sync identity required');
-    }
-    if (!Number.isSafeInteger(input.leaseDurationMs) || input.leaseDurationMs <= 0) {
-      throw new RepositoryError('Environment sync lease must be a positive integer');
     }
     return this.runMutation(() =>
       runDatabaseTransaction(
@@ -210,12 +228,16 @@ export class EnvironmentSyncRepository {
             return { outcome: 'held', lease_expires_at: new Date(activeLease).toISOString() };
           }
 
+          const leasedBudget = resolveEnvironmentLifecycleBudget(
+            (data as { lifecycle_timeout_ms?: unknown } | undefined)?.lifecycle_timeout_ms
+          );
+          const leaseDurationMs = leasedBudget.claimLeaseMs;
           const attempt: SourceSyncAttempt = {
             token: input.claimToken,
             revision: state.desired_revision,
             environment_generation: row.environment_generation,
             started_at: now.toISOString(),
-            lease_expires_at: new Date(now.getTime() + input.leaseDurationMs).toISOString(),
+            lease_expires_at: new Date(now.getTime() + leaseDurationMs).toISOString(),
             instance_id: input.identity.instanceId,
             boot_id: input.identity.bootId,
             ...(state.requested_by_user_id
@@ -241,7 +263,11 @@ export class EnvironmentSyncRepository {
             })
             .where(eq(branches.branch_id, input.branchId))
             .run();
-          return { outcome: 'claimed', attempt };
+          return {
+            outcome: 'claimed',
+            attempt,
+            lifecycle_timeout_ms: leasedBudget.commandTimeoutMs,
+          };
         },
         { sqliteImmediate: true }
       )

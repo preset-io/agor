@@ -127,6 +127,7 @@ environment:
       description: "Human-readable one-liner"
       extends: <base-variant>      # optional, single-level only
       startup_timeout_ms: 3600000 # optional; one hour by default
+      lifecycle_timeout_ms: 775000 # optional; budget for one stop/nuke/sync
       start:  "<shell command template>"
       stop:   "<shell command template>"
       sync:   "<shell command template>"   # optional; exact source reconciliation
@@ -147,11 +148,39 @@ always URL templates, not shell commands.
 - `environment.default` must reference a variant that exists in `environment.variants`.
 - Each variant (after `extends` resolution) needs at least `start` and `stop`.
 
-`startup_timeout_ms`, `sync`, `nuke`, `logs`, `health`, and `app` are optional. The
-startup timeout defaults to one hour and may be set from 1 second through 24
-hours. Agor persists an exact deadline for every attempt, so a daemon restart
-or a pause in health monitoring does not restart the clock. The corresponding
-optional UI buttons simply hide or no-op when absent.
+`startup_timeout_ms`, `lifecycle_timeout_ms`, `sync`, `nuke`, `logs`, `health`,
+and `app` are optional. The startup timeout defaults to one hour and may be set
+from 1 second through 24 hours. Agor persists an exact deadline for every
+attempt, so a daemon restart or a pause in health monitoring does not restart
+the clock. The corresponding optional UI buttons simply hide or no-op when
+absent.
+
+`lifecycle_timeout_ms` is the separate budget for one `stop`, `nuke`, or `sync`
+command; Start is governed by `startup_timeout_ms` instead. It ranges from 1
+second to 1 hour and inherits through `extends`.
+
+Leave it unset unless a variant genuinely needs longer. The default is not a
+round number picked by hand: it is the largest command deadline whose executor
+credential still fits inside the 15 minutes Agor gives a taskless executor
+command by default, so an ordinary local `docker compose down` asks for no more
+authority than it already had. Raising it raises three things together — the
+credential that command is issued, how long the daemon waits for its result, and
+the durable Sync claim lease. That last one is why the ceiling is an hour rather
+than the 24 hours `startup_timeout_ms` allows: the lease is how long a peer
+daemon must wait before it may retry a sync whose owner died.
+
+Two operator settings bound this from outside, and Agor applies both when it
+dispatches rather than letting the command discover them later:
+
+- `execution.session_token_expiration_ms` (24 hours by default) caps any
+  executor credential.
+- `execution.executor_response.timeout_ms.by_command['environment.lifecycle']`,
+  if set, caps how long the daemon waits for the command's result.
+
+If either is tighter than the variant asks for, the **command deadline is
+shortened** to fit — the command still runs, and still ends before its authority
+and its waiter do. Agor only refuses outright when a ceiling leaves no room for
+any command at all.
 
 ### GitHub Codespaces example in this repository
 
@@ -197,7 +226,12 @@ rather than creating another one. GitHub state transitions can take several
 minutes. Start keeps a bounded 24-minute provider wait inside Agor's 25-minute
 lifecycle deadline, leaving a minute for the result to settle. Stop and Nuke
 keep bounded 20-minute waits instead of reporting completion before GitHub
-reaches the requested state.
+reaches the requested state. The variant therefore sets `lifecycle_timeout_ms`
+to 21 minutes, which gives Stop, Nuke, and Sync a process deadline just past
+that provider wait; the credential, the daemon's wait for the result, and the
+Sync claim lease are all derived from it. Restart runs that bounded Stop first
+and starts again only after the Stop has actually settled, so a slow provider
+transition never needs one long-lived credential covering both phases.
 
 Sync is the explicit source-update operation. It accepts a full commit ID that
 has already been pushed to the configured ref, refuses to overwrite a dirty

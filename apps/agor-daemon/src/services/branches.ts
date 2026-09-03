@@ -40,7 +40,12 @@ import {
   type TenantScopedDatabase,
   UsersRepository,
 } from '@agor/core/db';
-import { resolveEnvironmentStartupTimeoutMs } from '@agor/core/environment/health-transition';
+import {
+  type EnvironmentLifecycleBudget,
+  resolveEnvironmentLifecycleBudget,
+  resolveEnvironmentStartBudget,
+  resolveEnvironmentStartupTimeoutMs,
+} from '@agor/core/environment/health-transition';
 import {
   ENVIRONMENT_LIFECYCLE_SUPERSEDED_CODE,
   type EnvironmentLifecycleResult,
@@ -106,17 +111,20 @@ import { emitServiceEvent } from '../utils/emit-service-event.js';
 import { resolveDelegatedExecutionHomeKey } from '../utils/executor-delegated-home.js';
 import { parseLastMessageTruncationLength } from '../utils/query-params.js';
 import { resolveOwnerHomeStore, resolveSandboxStoragePaths } from '../utils/sandbox-context.js';
-import { getDaemonUrl, requestExecutor, spawnExecutor } from '../utils/spawn-executor.js';
+import {
+  getDaemonUrl,
+  requestExecutor,
+  resolveExecutorResponseCommandCeilingMs,
+  spawnExecutor,
+} from '../utils/spawn-executor.js';
 import { deferWithTenantContext } from '../utils/tenant-db-scope.js';
 import { isKnowledgeAdmin } from './knowledge-access.js';
-import { issueExecutorCommandToken } from './session-token-service.js';
+import {
+  issueExecutorCommandToken,
+  resolveExecutorCommandTokenCeilingMs,
+} from './session-token-service.js';
 import type { InternalEnrichmentParams } from './sessions';
 import { ensureTeammateKnowledgeNamespace as ensureTeammateKnowledgeNamespaceForBranch } from './teammate-knowledge.js';
-
-// The executor must still have authority to commit the typed lifecycle result
-// after the start process reaches its own deadline. Keep this settlement window
-// small and derive the rest from the branch's existing bounded startup policy.
-const ENVIRONMENT_START_TOKEN_SETTLEMENT_MARGIN_MS = 60_000;
 
 /**
  * Branch service params
@@ -180,10 +188,14 @@ function shouldSqlPageBranchQuery(query?: Record<string, unknown>): boolean {
   return true;
 }
 
-type EnvironmentLifecycleAction = 'start' | 'stop' | 'restart' | 'nuke' | 'sync';
+/**
+ * Restart is not an executor verb. It is a bounded Stop whose exact settled
+ * generation authorizes a separate, normally-credentialed Start.
+ */
+type EnvironmentLifecycleAction = 'start' | 'stop' | 'nuke' | 'sync';
 
-const ENVIRONMENT_SYNC_EXECUTOR_TIMEOUT_MS = 15 * 60_000;
-const ENVIRONMENT_SYNC_CLAIM_LEASE_MS = ENVIRONMENT_SYNC_EXECUTOR_TIMEOUT_MS + 60_000;
+/** Executor command name, also the key an operator can override a deadline under. */
+const ENVIRONMENT_LIFECYCLE_COMMAND = 'environment.lifecycle';
 
 interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
   command: 'environment.lifecycle';
@@ -203,6 +215,7 @@ interface EnvironmentLifecycleExecutorPayload extends Record<string, unknown> {
     appUrl?: string;
     healthCheckUrl?: string;
     startupTimeoutMs?: number;
+    commandTimeoutMs?: number;
     lifecycleGeneration?: number;
     desiredRevision?: string;
     syncClaimToken?: string;
@@ -686,12 +699,23 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     executionUserIdOverride?: UserID;
     /** Exact lifecycle boundary that owns every executor callback. */
     lifecycleGeneration?: number;
+    /**
+     * Budget the caller is already committed to, instead of the branch's
+     * current snapshot. Sync passes the value its durable claim leased so a
+     * re-render mid-attempt cannot give the executor a deadline that outlives
+     * the lease its settlement will be checked against.
+     */
+    lifecycleTimeoutMsOverride?: number;
+    /** The daemon awaits this command's result, so its waiter also bounds it. */
+    awaitsResponse?: boolean;
   }): Promise<{
     payload: EnvironmentLifecycleExecutorPayload;
     delegatedHomeKey?: string;
     env: Record<string, string>;
     executionUserId: UserID;
     branchFsAccess: Exclude<BranchFsAccessLevel, 'none'>;
+    /** Present for every non-Start action; Start is bounded by its own deadline. */
+    lifecycleBudget?: EnvironmentLifecycleBudget;
   }> {
     const { branch, action, params } = options;
     const { delegatedHomeKey, env, executionUserId, branchFsAccess, sandboxMounts } =
@@ -705,21 +729,49 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       action === 'sync' && options.syncClaimToken
         ? `environment-sync:${options.syncClaimToken}`
         : `environment-${action}`;
-    const sessionToken = await this.withTenantDatabase(params, () =>
+    // One snapshotted budget decides the shell deadline, the credential, the
+    // daemon's waiter, and (for Sync) the durable claim lease. Start keeps its
+    // own persisted startup policy; every other verb is bounded per variant so
+    // a provider that needs 20 minutes cannot force every ordinary local
+    // command to demand a credential the operator's configured maximum refuses.
+    //
+    // Both operator ceilings are applied HERE rather than left to surprise the
+    // command later: the token service refuses a credential longer than its
+    // configured maximum, and a `by_command` response override outranks the
+    // waiter this call would otherwise pass. Either one tighter than the
+    // variant asked for shortens the command deadline instead of inverting the
+    // nesting.
+    const startBudget = resolveEnvironmentStartBudget(branch.startup_timeout_ms);
+    const lifecycleBudget =
       action === 'start'
-        ? issueExecutorCommandToken(this.app, commandId, executionUserId, branch.branch_id, {
-            expirationMs:
-              resolveEnvironmentStartupTimeoutMs(branch.startup_timeout_ms) +
-              ENVIRONMENT_START_TOKEN_SETTLEMENT_MARGIN_MS,
-          })
-        : issueExecutorCommandToken(this.app, commandId, executionUserId, branch.branch_id)
+        ? undefined
+        : resolveEnvironmentLifecycleBudget(
+            options.lifecycleTimeoutMsOverride ?? branch.lifecycle_timeout_ms,
+            {
+              credentialCeilingMs: resolveExecutorCommandTokenCeilingMs(this.app),
+              ...(options.awaitsResponse
+                ? {
+                    requestCeilingMs: resolveExecutorResponseCommandCeilingMs(
+                      ENVIRONMENT_LIFECYCLE_COMMAND
+                    ),
+                  }
+                : {}),
+            }
+          );
+    const credentialLifetimeMs =
+      lifecycleBudget?.credentialLifetimeMs ?? startBudget.credentialLifetimeMs;
+    const sessionToken = await this.withTenantDatabase(params, () =>
+      issueExecutorCommandToken(this.app, commandId, executionUserId, branch.branch_id, {
+        expirationMs: credentialLifetimeMs,
+      })
     );
 
     return {
       delegatedHomeKey,
       env,
+      lifecycleBudget,
       payload: {
-        command: 'environment.lifecycle',
+        command: ENVIRONMENT_LIFECYCLE_COMMAND,
         sessionToken,
         daemonUrl: getDaemonUrl(),
         env,
@@ -736,9 +788,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           nukeCommand: branch.nuke_command,
           appUrl: branch.app_url,
           healthCheckUrl: branch.health_check_url,
-          ...((action === 'start' || action === 'restart') && {
-            startupTimeoutMs: resolveEnvironmentStartupTimeoutMs(branch.startup_timeout_ms),
-          }),
+          ...(action === 'start'
+            ? { startupTimeoutMs: startBudget.startupTimeoutMs }
+            : { commandTimeoutMs: lifecycleBudget?.commandTimeoutMs }),
           lifecycleGeneration: options.lifecycleGeneration,
           ...(options.syncCommand ? { syncCommand: options.syncCommand } : {}),
           ...(options.desiredRevision ? { desiredRevision: options.desiredRevision } : {}),
@@ -756,15 +808,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     params?: BranchParams;
     syncCommand?: string;
     lifecycleGeneration?: number;
-    /**
-     * Invoked when the executor PROCESS exits, not when it is spawned.
-     *
-     * Both dispatch and spawnExecutor return as soon as the process exists —
-     * the lifecycle verbs deliberately answer early and let callers observe
-     * `environment_instance` — so anything that must not overlap the real work
-     * has to hang off this, not off either return value.
-     */
-    onSettled?: () => void;
   }): Promise<void> {
     const { branch, action, params } = options;
     const { payload, delegatedHomeKey, env, executionUserId, branchFsAccess } =
@@ -782,10 +825,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
             user_id: executionUserId,
             branch_fs_access: branchFsAccess,
           },
-          // spawnExecutor returns as soon as the process exists, so the only
-          // truthful completion signal is the process exiting. Chaining on the
-          // spawn instead reports "done" immediately and serializes nothing.
-          ...(options.onSettled ? { onExit: () => options.onSettled?.() } : {}),
         });
       } catch (error) {
         const message =
@@ -815,8 +854,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
 
     deferWithTenantContext(params, spawnLifecycleExecutor, (error) => {
       console.error(`${logPrefix} Failed to dispatch executor:`, error);
-      // Never strand a caller waiting on a run that never started.
-      options.onSettled?.();
     });
   }
 
@@ -829,20 +866,22 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     desiredRevision?: string;
     syncClaimToken?: string;
     executionUserIdOverride?: UserID;
-    timeoutMs?: number;
+    lifecycleTimeoutMsOverride?: number;
   }): Promise<Record<string, unknown> | undefined> {
     const { branch, action } = options;
-    const { payload, delegatedHomeKey, env, executionUserId, branchFsAccess } =
-      await this.createEnvironmentExecutorPayload(options);
+    const { payload, delegatedHomeKey, env, executionUserId, branchFsAccess, lifecycleBudget } =
+      await this.createEnvironmentExecutorPayload({ ...options, awaitsResponse: true });
 
     const result = await requestExecutor(payload, {
       logPrefix: `[Environment.${action} ${branch.name}]`,
       delegatedHomeKey,
       preparedEnv: env,
-      // Mixed webhook/shell restart needs the daemon to wait for shell stop
-      // before it invokes the daemon-owned webhook start. Keep this generous
-      // enough for docker compose down while still bounding the request.
-      timeoutMs: options.timeoutMs ?? 10 * 60_000,
+      // Restart and Sync need the daemon to observe the command's real outcome.
+      // The waiter outlives the shell deadline AND the credential, so an
+      // executor that fails at its own deadline still gets to record the fenced
+      // failure the daemon is waiting to read. The budget above already
+      // accounts for a `by_command` override that outranks this value.
+      timeoutMs: lifecycleBudget?.requestTimeoutMs,
       templateVariables: {
         branch_id: branch.branch_id,
         user_id: executionUserId,
@@ -2871,26 +2910,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       return await this.startEnvironment(id, params);
     }
 
-    if (startExecution.kind === 'webhook') {
-      const stoppingBranch = await this.updateEnvironment(
-        id,
-        { status: 'stopping', startup_deadline_at: undefined },
-        params,
-        {
-          beginLifecycle: true,
-          expectedEnvironmentGeneration: this.requireEnvironmentGeneration(branch),
-          expectedEnvironmentStatus: branch.environment_instance?.status,
-        }
-      );
-      await this.runEnvironmentExecutor({
-        branch,
-        action: 'stop',
-        params,
-        lifecycleGeneration: this.requireEnvironmentGeneration(stoppingBranch),
-      });
-      return await this.startEnvironment(id, params);
-    }
-
     const stoppingBranch = await this.updateEnvironment(
       id,
       { status: 'stopping', startup_deadline_at: undefined },
@@ -2903,33 +2922,117 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     );
     const lifecycleGeneration = this.requireEnvironmentGeneration(stoppingBranch);
 
+    // A mixed shell-Stop → webhook-Start restart answers synchronously, because
+    // the daemon itself owns the webhook call. A shell-to-shell restart answers
+    // immediately and finishes in the background. Both run the SAME verified
+    // hand-off: the Stop phase must prove it settled before a Start credential
+    // is minted for the second phase.
+    if (startExecution.kind === 'webhook') {
+      const stopped = await this.runRestartStopPhase({ branch, params, lifecycleGeneration });
+      if (!stopped) return await this.withTenantDatabase(params, () => this.get(id, params));
+      return await this.startEnvironment(id, params);
+    }
+
+    deferWithTenantContext(
+      params,
+      async () => {
+        const stopped = await this.runRestartStopPhase({ branch, params, lifecycleGeneration });
+        if (!stopped) return;
+        try {
+          await this.startEnvironment(id, params);
+        } catch {
+          // startEnvironment claims its own lifecycle boundary and records its
+          // own failure. Keep executor credentials and provider diagnostics out
+          // of this process-level safety log.
+          console.error(`[Environment.restart ${branch.name}] Start phase failed`);
+        }
+      },
+      (error) => {
+        console.error(
+          `[Environment.restart ${branch.name}] Stop phase failed:`,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    );
+    return await this.withTenantDatabase(params, () => this.get(id, params));
+  }
+
+  /**
+   * Run Restart's Stop phase and decide whether a Start phase is authorized.
+   *
+   * Process exit is NOT completion: a delegated launcher may exit as soon as it
+   * has handed the work off, so the Stop phase runs in request mode and is
+   * judged on its authenticated result. Three facts must all hold before the
+   * branch may be started again — the result is not superseded, the branch is
+   * exactly `stopped`, and its generation is exactly the one that Stop settled.
+   * Anything else means another lifecycle action owns the branch now, and its
+   * recorded state stays authoritative.
+   */
+  private async runRestartStopPhase(options: {
+    branch: Branch;
+    params?: BranchParams;
+    lifecycleGeneration: number;
+  }): Promise<boolean> {
+    const { branch, params, lifecycleGeneration } = options;
+    let result: Record<string, unknown> | undefined;
     try {
-      await this.dispatchEnvironmentExecutor({
+      result = await this.runEnvironmentExecutor({
         branch,
-        action: 'restart',
+        action: 'stop',
         params,
         lifecycleGeneration,
       });
-      return await this.withTenantDatabase(params, () => this.get(id, params));
     } catch (error) {
-      const committed = await this.commitEnvironmentLifecycle(
-        id,
+      // The executor records its own fenced failure when it got far enough to
+      // reach the daemon. A request, spawn, or pre-executor setup failure
+      // records nothing at all, so settle the exact generation this restart
+      // claimed rather than leaving the branch stuck in `stopping`. A settlement
+      // the executor already wrote advanced the generation and makes this a
+      // no-op.
+      await this.commitEnvironmentLifecycle(
+        branch.branch_id,
         {
           status: 'error',
+          startup_deadline_at: undefined,
           last_health_check: {
             timestamp: new Date().toISOString(),
             status: 'unhealthy',
             message: error instanceof Error ? error.message : 'Unknown error during restart',
           },
+          last_error: error instanceof Error ? error.message : 'Unknown error during restart',
         },
         lifecycleGeneration,
         params
       );
-      if (!committed) {
-        return await this.withTenantDatabase(params, () => this.get(id, params));
-      }
-      throw error;
+      return false;
     }
+
+    const logPrefix = `[Environment.restart ${branch.name}]`;
+    if (result?.superseded === true) {
+      console.warn(`${logPrefix} Stop was superseded; another lifecycle action owns this branch`);
+      return false;
+    }
+    const stoppedGeneration = result?.lifecycleGeneration;
+    if (!Number.isSafeInteger(stoppedGeneration)) {
+      // The Stop may well have settled — its response just never proved it. Say
+      // so, because the branch is now stopped and the user's Restart quietly
+      // will not finish.
+      console.warn(`${logPrefix} Stop reported no settled generation; not starting`);
+      return false;
+    }
+
+    const settled = await this.withTenantDatabase(params, () => this.get(branch.branch_id, params));
+    if (
+      settled.environment_instance?.status !== 'stopped' ||
+      this.requireEnvironmentGeneration(settled) !== stoppedGeneration
+    ) {
+      console.warn(
+        `${logPrefix} Branch is ${settled.environment_instance?.status} at generation ` +
+          `${settled.environment_generation}, not the stopped generation ${stoppedGeneration}; not starting`
+      );
+      return false;
+    }
+    return true;
   }
 
   /**
@@ -3156,7 +3259,6 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
       this.environmentSyncRepo.claim({
         branchId: id,
         claimToken: generateId(),
-        leaseDurationMs: ENVIRONMENT_SYNC_CLAIM_LEASE_MS,
         identity,
       })
     );
@@ -3165,7 +3267,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const current = await this.publishEnvironmentSyncState(id, params);
     deferWithTenantContext(
       params,
-      () => this.runClaimedEnvironmentSync(id, claim.attempt, params),
+      () => this.runClaimedEnvironmentSync(id, claim.attempt, params, claim.lifecycle_timeout_ms),
       (error) => {
         console.error(`[Environment.sync ${current.name}] Reconciliation worker failed:`, error);
       }
@@ -3175,7 +3277,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
   private async runClaimedEnvironmentSync(
     id: BranchID,
     attempt: EnvironmentSyncAttempt,
-    params?: BranchParams
+    params?: BranchParams,
+    /** Exact budget the durable claim leased; see EnvironmentSyncClaimResult. */
+    leasedLifecycleTimeoutMs?: number
   ): Promise<void> {
     let needsReconcile = false;
     try {
@@ -3220,7 +3324,9 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
           syncClaimToken: attempt.token,
           lifecycleGeneration: attempt.environment_generation,
           executionUserIdOverride: attempt.requested_by_user_id as UserID,
-          timeoutMs: ENVIRONMENT_SYNC_EXECUTOR_TIMEOUT_MS,
+          ...(leasedLifecycleTimeoutMs !== undefined
+            ? { lifecycleTimeoutMsOverride: leasedLifecycleTimeoutMs }
+            : {}),
         });
         appliedRevision = validateEnvironmentSourceRevision(
           result?.appliedRevision,
@@ -3573,12 +3679,25 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const currentVariant = branch.environment_variant;
     const variantChanged = requestedVariant !== currentVariant;
 
+    const envStatus = branch.environment_instance?.status;
+
+    // Re-rendering rewrites the command strings AND bumps the lifecycle
+    // generation, which supersedes any executor currently holding that
+    // boundary. During `stopping` that executor is the one settling the branch:
+    // its Stop returns superseded, nothing else writes, and the branch is left
+    // in `stopping` with no health monitoring, no deadline, and Start refused.
+    // A stop in flight is as unsafe to re-render under as a running one.
+    if (envStatus === 'stopping') {
+      throw new Error(
+        'Cannot re-render the environment while it is stopping. Wait for the stop to settle first.'
+      );
+    }
+
     if (variantChanged) {
       // Refuse to swap variants while the env is live. The current process
       // was started with the old command strings; replacing them out from
       // under it would leave us unable to stop/restart cleanly. This guard
       // is the authoritative invariant for ALL callers (REST, UI, MCP).
-      const envStatus = branch.environment_instance?.status;
       if (envStatus === 'running' || envStatus === 'starting') {
         throw new Error(
           `Cannot change environment variant to "${requestedVariant}" while the environment is ${envStatus} ` +
@@ -3639,6 +3758,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const renderedUpdate = {
       environment_variant: snapshot.variant,
       startup_timeout_ms: snapshot.startup_timeout_ms,
+      lifecycle_timeout_ms: snapshot.lifecycle_timeout_ms,
       start_command: snapshot.start || undefined,
       stop_command: snapshot.stop || undefined,
       // Coerce absent optional fields to null (not undefined) so switching

@@ -10,6 +10,8 @@
 
 import { type ResolvedConfigSlice, ResolvedConfigSliceSchema } from '@agor/core/config';
 import {
+  ENVIRONMENT_LIFECYCLE_TIMEOUT_MAX_MS,
+  ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS,
   ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS,
   ENVIRONMENT_STARTUP_TIMEOUT_MIN_MS,
 } from '@agor/core/environment/health-transition';
@@ -579,7 +581,7 @@ export type BranchAgorYmlExportPayload = z.infer<typeof BranchAgorYmlExportPaylo
 // ═══════════════════════════════════════════════════════════
 
 /**
- * Environment lifecycle payload - run shell-based start/stop/restart/nuke
+ * Environment lifecycle payload - run shell-based start/stop/nuke/sync
  * commands from the executor. Webhook lifecycle commands stay daemon-owned.
  */
 export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
@@ -597,12 +599,18 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
       branchPath: z.string().optional(),
 
       /** Lifecycle action */
-      action: z.enum(['start', 'stop', 'restart', 'nuke', 'sync']),
+      /**
+       * Restart is deliberately absent. It is a daemon-owned sequence of a
+       * bounded Stop and, once that Stop has verifiably settled, an ordinary
+       * Start with its own credential — not a single executor process holding
+       * one credential across both phases.
+       */
+      action: z.enum(['start', 'stop', 'nuke', 'sync']),
 
-      /** Shell start command. Required for start/restart. */
+      /** Shell start command. Required for start. */
       startCommand: z.string().optional(),
 
-      /** Shell stop command. Required for stop and used before restart when present. */
+      /** Shell stop command. Required for stop. */
       stopCommand: z.string().optional(),
 
       /** Shell nuke command. Required for nuke. */
@@ -635,15 +643,23 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
         .max(ENVIRONMENT_STARTUP_TIMEOUT_MAX_MS)
         .optional(),
 
+      /** Daemon-owned wall-clock budget for a non-Start shell phase. */
+      commandTimeoutMs: z
+        .number()
+        .int()
+        .min(ENVIRONMENT_LIFECYCLE_TIMEOUT_MIN_MS)
+        .max(ENVIRONMENT_LIFECYCLE_TIMEOUT_MAX_MS)
+        .optional(),
+
       /** Monotonic lifecycle boundary that must still own every state update. */
       lifecycleGeneration: z.number().int().nonnegative().optional(),
     })
     .superRefine((params, ctx) => {
-      if ((params.action === 'start' || params.action === 'restart') && !params.startCommand) {
+      if (params.action === 'start' && !params.startCommand) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['startCommand'],
-          message: 'startCommand is required for start/restart',
+          message: 'startCommand is required for start',
         });
       }
       if (params.action === 'stop' && !params.stopCommand) {
@@ -670,6 +686,13 @@ export const EnvironmentLifecyclePayloadSchema = BasePayloadSchema.extend({
             });
           }
         }
+      }
+      if (params.action !== 'start' && params.commandTimeoutMs === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['commandTimeoutMs'],
+          message: 'commandTimeoutMs is required for non-start lifecycle commands',
+        });
       }
     }),
 });

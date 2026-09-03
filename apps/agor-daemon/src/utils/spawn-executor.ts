@@ -146,6 +146,17 @@ export function configureExecutor(
   }
 }
 
+/**
+ * The operator's hard per-command response deadline, if one is configured.
+ *
+ * `resolveExecutorResponseTimeoutMs` ranks `by_command` ABOVE the value a call
+ * site passes, so a caller whose own budget must nest inside the waiter has to
+ * see this override before it sizes anything.
+ */
+export function resolveExecutorResponseCommandCeilingMs(command: string): number | undefined {
+  return configuredExecutorDefaults.executorResponse.timeoutByCommand[command];
+}
+
 export interface ExecutorTemplateVariables {
   task_id?: string;
   command?: string;

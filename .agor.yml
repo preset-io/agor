@@ -92,6 +92,9 @@ environment:
       app: http://{{host.ip_address}}:{{add 5000 branch.unique_id}}
     codespaces-sqlite:
       startup_timeout_ms: 1500000
+      # Stop/nuke/sync each wait up to 1200s for GitHub to reach the requested
+      # state; leave a minute for the launcher to finish reporting.
+      lifecycle_timeout_ms: 1260000
       start: >-
         node scripts/managed-environments/codespaces/agor-codespace-launcher.mjs start
         --repository {{shellQuote repo.github_slug}} --ref {{shellQuote branch.ref}}

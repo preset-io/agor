@@ -327,6 +327,7 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         syncCommand: 'bridge sync',
         desiredRevision: 'a'.repeat(40),
         syncClaimToken: 'claim-a',
+        commandTimeoutMs: 21 * 60_000,
       },
     };
 
@@ -345,6 +346,12 @@ describe('EnvironmentLifecyclePayloadSchema', () => {
         params: { branchId: valid.params.branchId, action: 'sync' },
       })
     ).toThrow();
+    expect(() =>
+      EnvironmentLifecyclePayloadSchema.parse({
+        ...valid,
+        params: { ...valid.params, commandTimeoutMs: undefined },
+      })
+    ).toThrow('commandTimeoutMs');
   });
 });
 

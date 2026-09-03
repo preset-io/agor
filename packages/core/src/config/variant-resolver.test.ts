@@ -195,4 +195,32 @@ describe('resolveVariant', () => {
       ).toThrow(/startup_timeout_ms/);
     }
   });
+
+  it('inherits, overrides, and validates lifecycle_timeout_ms independently of startup', () => {
+    const environment = validateRepoEnvironment({
+      version: 2,
+      default: 'child',
+      variants: {
+        parent: { start: 'up', stop: 'down', lifecycle_timeout_ms: 1_260_000 },
+        child: { extends: 'parent' },
+        faster: { extends: 'parent', lifecycle_timeout_ms: 60_000 },
+        // A long provider Start must not drag the Stop budget along with it.
+        slowStart: { start: 'up', stop: 'down', startup_timeout_ms: 2_700_000 },
+      },
+    });
+
+    expect(resolveVariant(environment, 'child')?.lifecycle_timeout_ms).toBe(1_260_000);
+    expect(resolveVariant(environment, 'faster')?.lifecycle_timeout_ms).toBe(60_000);
+    expect(resolveVariant(environment, 'slowStart')?.lifecycle_timeout_ms).toBeUndefined();
+
+    for (const lifecycle_timeout_ms of [0, 999, 1.5, 24 * 60 * 60 * 1_000 + 1]) {
+      expect(() =>
+        validateRepoEnvironment({
+          version: 2,
+          default: 'dev',
+          variants: { dev: { start: 'up', stop: 'down', lifecycle_timeout_ms } },
+        })
+      ).toThrow(/lifecycle_timeout_ms/);
+    }
+  });
 });
