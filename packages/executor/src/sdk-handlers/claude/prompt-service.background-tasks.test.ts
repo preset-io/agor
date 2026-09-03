@@ -294,7 +294,11 @@ describe('ClaudePromptService background task query lifetime', () => {
       });
       const activity = vi.fn();
 
-      const events: Array<{ type: string; raw_sdk_message?: { uuid?: string } }> = [];
+      const events: Array<{
+        type: string;
+        raw_sdk_message?: { uuid?: string };
+        sdkSubtype?: string;
+      }> = [];
       const drained = (async () => {
         for await (const event of service().promptSessionStreaming(
           sessionId,
@@ -309,11 +313,12 @@ describe('ClaudePromptService background task query lifetime', () => {
         }
       })();
 
-      // Advance past the bounded idle budget; without the timeout the held read
-      // would never resolve. No separate close-budget advance is needed: the
-      // Query's cleanup() closes the transport, which resolves the held read and
-      // lets teardown converge — that is exactly what this test proves.
-      await vi.advanceTimersByTimeAsync(ClaudePromptService.POST_RESULT_IDLE_TIMEOUT_MS + 10);
+      // A background task is still active, so the generous active-task budget
+      // applies. Advance past it; without the timeout the held read would never
+      // resolve. No separate close-budget advance is needed: the Query's
+      // cleanup() closes the transport, which resolves the held read and lets
+      // teardown converge — that is exactly what this test proves.
+      await vi.advanceTimersByTimeAsync(ClaudePromptService.BACKGROUND_TASK_ACTIVE_TIMEOUT_MS + 10);
       await drained;
 
       // The parent turn's success result is the terminal response; the turn
@@ -334,6 +339,13 @@ describe('ClaudePromptService background task query lifetime', () => {
       expect(query.return).toHaveBeenCalledTimes(1);
       expect(query.cleanup).toHaveBeenCalledTimes(1);
       expect(finalized).toBe(true);
+      // Because a background task was still active (its work was stopped by the
+      // teardown), a clear, queryable notice is surfaced into the conversation
+      // for the user and the agent.
+      const notice = events.find(
+        (event) => event.type === 'sdk_event' && event.sdkSubtype === 'background_task_timeout'
+      );
+      expect(notice).toBeDefined();
       // The paused SDK watchdog is rebalanced for the abandoned background task.
       expect(activity).toHaveBeenCalledWith('progress', 'background_task.start');
       expect(activity).toHaveBeenCalledWith('progress', 'background_task.complete');
@@ -386,7 +398,11 @@ describe('ClaudePromptService background task query lifetime', () => {
       });
       const activity = vi.fn();
 
-      const events: Array<{ type: string; raw_sdk_message?: { uuid?: string } }> = [];
+      const events: Array<{
+        type: string;
+        raw_sdk_message?: { uuid?: string };
+        sdkSubtype?: string;
+      }> = [];
       const drained = (async () => {
         for await (const event of service().promptSessionStreaming(
           sessionId,
@@ -401,7 +417,10 @@ describe('ClaudePromptService background task query lifetime', () => {
         }
       })();
 
-      await vi.advanceTimersByTimeAsync(ClaudePromptService.POST_RESULT_IDLE_TIMEOUT_MS + 10);
+      // All tasks have settled, so only the short continuation grace applies —
+      // not the generous active-task budget. Advancing just past the grace
+      // settles the turn.
+      await vi.advanceTimersByTimeAsync(ClaudePromptService.POST_RESULT_CONTINUATION_GRACE_MS + 10);
       await drained;
 
       expect(
@@ -410,6 +429,13 @@ describe('ClaudePromptService background task query lifetime', () => {
           .map((event) => event.raw_sdk_message?.uuid)
       ).toEqual(['parent-result']);
       expect(events.some((event) => event.type === 'stopped')).toBe(false);
+      // The work finished (all tasks settled) — this is a clean settle, so NO
+      // background-task-timeout notice is surfaced.
+      expect(
+        events.some(
+          (event) => event.type === 'sdk_event' && event.sdkSubtype === 'background_task_timeout'
+        )
+      ).toBe(false);
       expect(query.releaseInput).toHaveBeenCalledTimes(1);
       expect(query.interrupt).toHaveBeenCalledTimes(1);
       expect(query.return).toHaveBeenCalledTimes(1);
