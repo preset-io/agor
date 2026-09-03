@@ -132,6 +132,23 @@ describe('TasksService executor patches', () => {
     }
   );
 
+  it.each([TaskStatus.FAILED, TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
+    'rejects an executor-originated %s patch for a fixed command workload',
+    async (status) => {
+      const task = makeTask('{"schemaVersion":1,"profile":"fixture-command"}');
+      const { service, updateFromExecutor } = makePatchHarness(task, 'workload');
+
+      await expect(
+        service.patch(
+          task.task_id,
+          { status, completed_at: '2026-01-01T00:00:05.000Z' },
+          { provider: 'rest' }
+        )
+      ).rejects.toThrow('Fixture command workloads must settle through completeWorkload');
+      expect(updateFromExecutor).not.toHaveBeenCalled();
+    }
+  );
+
   it.each([TaskStatus.STOPPED, TaskStatus.TIMED_OUT])(
     'preserves controlled failure executor %s patches for non-workload sessions',
     async (status) => {
@@ -217,6 +234,74 @@ describe('TasksService executor patches', () => {
     });
 
     expect(trackTaskCompleted).toHaveBeenCalledWith(task);
+    expect(processCompletionSideEffects).toHaveBeenCalledWith(
+      task,
+      TaskStatus.FAILED,
+      expect.objectContaining({ provider: undefined }),
+      true
+    );
+  });
+
+  it('uses the canonical fixed command failure for daemon completion side effects', async () => {
+    const task = {
+      task_id: '018f0000-0000-7000-8000-000000000001',
+      session_id: '018f0000-0000-7000-8000-000000000002',
+      created_by: '018f0000-0000-7000-8000-000000000003',
+      full_prompt: '{"schemaVersion":1,"profile":"fixture-command"}',
+      status: TaskStatus.FAILED,
+      error_message: 'WORKLOAD_FIXTURE_COMMAND_FAILED',
+    } as Task;
+    const completeWorkload = vi.fn().mockResolvedValue({
+      outcome: 'transitioned',
+      task,
+      message: {} as Message,
+    });
+    const processCompletionSideEffects = vi.fn().mockResolvedValue(true);
+    const service = Object.create(TasksService.prototype) as TasksService;
+    Reflect.set(service, 'taskRepo', { completeWorkload });
+    Reflect.set(service, 'app', { service: () => ({ emit: vi.fn() }) });
+    Reflect.set(service, 'retireTaskExecutorCredentials', vi.fn());
+    Reflect.set(service, 'processCompletionSideEffects', processCompletionSideEffects);
+    Reflect.set(service, 'trackTaskCompleted', vi.fn());
+    const completion: WorkloadCompletionInput = {
+      task_id: task.task_id,
+      result_message_id: '018f0000-0000-7000-8000-000000000004',
+      profile: 'fixture-command',
+      requested_repetitions: 1,
+      fixture_id: 'node-compile-test-v1',
+      outcome: 'failed',
+      observed_elapsed_ms: 20,
+      completed_command_count: 0,
+      commands: [
+        {
+          command: 'node-check',
+          attempted: 1,
+          completed: 0,
+          outcome: 'failed',
+          exit_code: 1,
+          stdout_bytes: 0,
+          stderr_bytes: 12,
+          stdout_sha256: 'a'.repeat(64),
+          stderr_sha256: 'b'.repeat(64),
+        },
+        {
+          command: 'node-test',
+          attempted: 0,
+          completed: 0,
+          outcome: 'not-run',
+          exit_code: null,
+          stdout_bytes: 0,
+          stderr_bytes: 0,
+          stdout_sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+          stderr_sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        },
+      ],
+      cleanup_confirmed: true,
+    };
+
+    await service.completeWorkload(completion);
+
+    expect(completeWorkload).toHaveBeenCalledWith(completion);
     expect(processCompletionSideEffects).toHaveBeenCalledWith(
       task,
       TaskStatus.FAILED,

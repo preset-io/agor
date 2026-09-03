@@ -99,6 +99,14 @@ describe('deterministic workload runner', () => {
       schemaVersion: 1,
       profile: 'workspace-inspection',
     });
+    expect(parseWorkloadRequest('{"schemaVersion":1,"profile":"fixture-command"}')).toEqual({
+      schemaVersion: 1,
+      profile: 'fixture-command',
+      repetitions: 1,
+    });
+    expect(
+      parseWorkloadRequest('{"schemaVersion":1,"profile":"fixture-command","repetitions":10}')
+    ).toEqual({ schemaVersion: 1, profile: 'fixture-command', repetitions: 10 });
 
     for (const prompt of [
       '{"schemaVersion":1,"profile":"controlled-failure","delayMs":120001}',
@@ -112,6 +120,18 @@ describe('deterministic workload runner', () => {
       '{"schemaVersion":1,"profile":"workspace-inspection","path":"/tmp"}',
       '{"schemaVersion":1,"profile":"workspace-inspection","command":"npm test"}',
       '{"schemaVersion":1,"profile":"workspace-inspection","env":{"TOKEN":"secret"}}',
+      '{"schemaVersion":1,"profile":"fixture-command","repetitions":0}',
+      '{"schemaVersion":1,"profile":"fixture-command","repetitions":11}',
+      '{"schemaVersion":1,"profile":"fixture-command","command":"node"}',
+      '{"schemaVersion":1,"profile":"fixture-command","argv":["--check"]}',
+      '{"schemaVersion":1,"profile":"fixture-command","path":"/tmp"}',
+      '{"schemaVersion":1,"profile":"fixture-command","source":"unsafe"}',
+      '{"schemaVersion":1,"profile":"fixture-command","env":{"TOKEN":"secret"}}',
+      '{"schemaVersion":1,"profile":"fixture-command","output":"raw"}',
+      '{"schemaVersion":1,"profile":"fixture-command","package":"unsafe"}',
+      '{"schemaVersion":1,"profile":"fixture-command","url":"https://example.com"}',
+      '{"schemaVersion":1,"profile":"fixture-command","repo":"owner/name"}',
+      '{"schemaVersion":1,"profile":"fixture-command","concurrency":2}',
     ]) {
       expect(() => parseWorkloadRequest(prompt)).toThrow('WORKLOAD_REQUEST_INVALID');
     }
@@ -417,6 +437,38 @@ describe('deterministic workload runner', () => {
     );
   });
 
+  it('runs the disposable fixed command fixture through the bounded completion seam', async () => {
+    const harness = clientHarness();
+    await executeWorkloadTask({
+      client: harness.client,
+      sessionId: 'session-1' as never,
+      taskId: 'task-1' as never,
+      prompt: '{"schemaVersion":1,"profile":"fixture-command","repetitions":2}',
+      workspaceCwd: process.cwd(),
+      abortController: new AbortController(),
+    });
+
+    const completion = harness.completeWorkload.mock.calls[0]?.[0];
+    expect(completion).toMatchObject({
+      task_id: 'task-1',
+      profile: 'fixture-command',
+      requested_repetitions: 2,
+      fixture_id: 'node-compile-test-v1',
+      outcome: 'completed',
+      completed_command_count: 4,
+      cleanup_confirmed: true,
+      commands: [
+        { command: 'node-check', attempted: 2, completed: 2, outcome: 'passed', exit_code: 0 },
+        { command: 'node-test', attempted: 2, completed: 2, outcome: 'passed', exit_code: 0 },
+      ],
+    });
+    expect(JSON.stringify(completion)).not.toContain(process.cwd());
+    expect(JSON.stringify(completion)).not.toContain('subject.mjs');
+    expect(JSON.stringify(completion)).not.toContain('process.env');
+    expect(Buffer.byteLength(JSON.stringify(completion))).toBeLessThan(4 * 1024);
+    expect(harness.taskPatch).not.toHaveBeenCalled();
+  });
+
   it('publishes workspace inspection through the normal bounded completion path', async () => {
     const harness = clientHarness();
     await executeWorkloadTask({
@@ -453,6 +505,7 @@ describe('deterministic workload runner', () => {
       '{"schemaVersion":1,"profile":"compile-test","repetitions":1,"totalTimeMs":100}',
     ],
     ['workspace-inspection', '{"schemaVersion":1,"profile":"workspace-inspection"}'],
+    ['fixture-command', '{"schemaVersion":1,"profile":"fixture-command"}'],
   ] as const)('does not use public network access for the %s profile', async (_profile, prompt) => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network denied'));
     const harness = clientHarness();

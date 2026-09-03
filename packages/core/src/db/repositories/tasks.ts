@@ -34,6 +34,7 @@ import {
   sessionCanStartTask,
   TaskStatus,
   WORKLOAD_CONTROLLED_FAILURE_CODE,
+  WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE,
   WORKLOAD_RESULT_MAX_BYTES,
   workloadResultFromCompletion,
 } from '@agor/core/types';
@@ -1750,8 +1751,17 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           throw new RepositoryError('Workload completion does not match its durable request');
         }
 
+        const fixtureCommandFailed =
+          request.profile === 'fixture-command' &&
+          input.profile === 'fixture-command' &&
+          input.outcome === 'failed';
         const terminalStatus =
-          request.profile === 'controlled-failure' ? TaskStatus.FAILED : TaskStatus.COMPLETED;
+          request.profile === 'controlled-failure' || fixtureCommandFailed
+            ? TaskStatus.FAILED
+            : TaskStatus.COMPLETED;
+        const failureCode = fixtureCommandFailed
+          ? WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE
+          : WORKLOAD_CONTROLLED_FAILURE_CODE;
         const content = JSON.stringify(
           workloadResultFromCompletion(current.task_id, request, input)
         );
@@ -1789,9 +1799,7 @@ export class TaskRepository implements BaseRepository<Task, Partial<Task>> {
           ...deepMerge(current, terminal),
           status: terminalStatus,
           tool_use_count: 0,
-          ...(terminalStatus === TaskStatus.FAILED
-            ? { error_message: WORKLOAD_CONTROLLED_FAILURE_CODE }
-            : {}),
+          ...(terminalStatus === TaskStatus.FAILED ? { error_message: failureCode } : {}),
           task_id: current.task_id,
           session_id: current.session_id,
           created_by: current.created_by,

@@ -15,6 +15,8 @@ import {
   WORKLOAD_COMPILE_MAX_REPETITIONS,
   WORKLOAD_COMPILE_MAX_TOTAL_TIME_MS,
   WORKLOAD_CONTROLLED_FAILURE_CODE,
+  WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE,
+  WORKLOAD_FIXTURE_COMMAND_ID,
   WORKLOAD_REQUEST_MAX_BYTES,
   WORKLOAD_RESULT_MAX_BYTES,
   WORKLOAD_TEMP_IO_MAX_BYTES,
@@ -24,6 +26,7 @@ import {
   workloadResultFromCompletion,
 } from '@agor/core/types';
 import type { AgorClient } from '../../services/feathers-client.js';
+import { runFixedCommandFixture } from './fixture-command.js';
 import { inspectWorkspace } from './workspace-inspection.js';
 
 export {
@@ -223,7 +226,12 @@ async function settleControlledFailure(
     profile: 'controlled-failure',
     requested_delay_ms: request.delayMs,
   };
-  await completeWorkloadWithResponseLossReconciliation(client, completion, TaskStatus.FAILED);
+  await completeWorkloadWithResponseLossReconciliation(
+    client,
+    completion,
+    TaskStatus.FAILED,
+    WORKLOAD_CONTROLLED_FAILURE_CODE
+  );
 }
 
 function boundedResultContent(
@@ -242,7 +250,8 @@ function boundedResultContent(
 async function completeWorkloadWithResponseLossReconciliation(
   client: AgorClient,
   completion: WorkloadCompletionInput,
-  terminalStatus: typeof TaskStatus.COMPLETED | typeof TaskStatus.FAILED
+  terminalStatus: typeof TaskStatus.COMPLETED | typeof TaskStatus.FAILED,
+  failureCode?: string
 ): Promise<void> {
   try {
     await client.service('tasks').completeWorkload(completion);
@@ -255,8 +264,7 @@ async function completeWorkloadWithResponseLossReconciliation(
       if (
         !Array.isArray(task) &&
         task.status === terminalStatus &&
-        (terminalStatus !== TaskStatus.FAILED ||
-          task.error_message === WORKLOAD_CONTROLLED_FAILURE_CODE)
+        (terminalStatus !== TaskStatus.FAILED || task.error_message === failureCode)
       ) {
         return;
       }
@@ -372,14 +380,35 @@ export async function executeWorkloadTask(params: {
       };
       break;
     }
+    case 'fixture-command': {
+      const observed = await runFixedCommandFixture({
+        taskId: params.taskId,
+        repetitions: request.repetitions,
+        signal,
+        onPulse: params.onPulse,
+      });
+      if (!observed || signal.aborted) return;
+      completion = {
+        task_id: params.taskId,
+        result_message_id: generateId() as MessageID,
+        profile: 'fixture-command',
+        requested_repetitions: request.repetitions,
+        fixture_id: WORKLOAD_FIXTURE_COMMAND_ID,
+        observed_elapsed_ms: Math.max(0, Date.now() - startedAtMs),
+        ...observed,
+      };
+      break;
+    }
   }
 
   // Serialize once locally so the executor enforces the same bounded result
   // contract before asking the daemon to publish its server-authored copy.
   boundedResultContent(params.taskId, request, completion);
+  const fixtureFailed = completion.profile === 'fixture-command' && completion.outcome === 'failed';
   await completeWorkloadWithResponseLossReconciliation(
     params.client,
     completion,
-    TaskStatus.COMPLETED
+    fixtureFailed ? TaskStatus.FAILED : TaskStatus.COMPLETED,
+    fixtureFailed ? WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE : undefined
   );
 }

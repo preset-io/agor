@@ -9,6 +9,7 @@ export const WORKLOAD_PROFILES = [
   'temporary-io',
   'compile-test',
   'workspace-inspection',
+  'fixture-command',
 ] as const;
 
 export type WorkloadProfile = (typeof WORKLOAD_PROFILES)[number];
@@ -21,6 +22,10 @@ export const WORKLOAD_CPU_MIN_DURATION_MS = 10;
 export const WORKLOAD_TEMP_IO_MAX_BYTES = 64 * 1024;
 export const WORKLOAD_COMPILE_MAX_REPETITIONS = 1_000;
 export const WORKLOAD_COMPILE_MAX_TOTAL_TIME_MS = 120_000;
+export const WORKLOAD_FIXTURE_COMMAND_MAX_REPETITIONS = 10;
+export const WORKLOAD_FIXTURE_COMMAND_OUTPUT_MAX_BYTES = 16 * 1024;
+export const WORKLOAD_FIXTURE_COMMAND_ID = 'node-compile-test-v1';
+export const WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE = 'WORKLOAD_FIXTURE_COMMAND_FAILED';
 export const WORKLOAD_SEED_MAX = 0xffff_ffff;
 export const WORKLOAD_CONTROLLED_FAILURE_CODE = 'WORKLOAD_CONTROLLED_FAILURE';
 export const WORKLOAD_LOCKFILES = [
@@ -56,7 +61,30 @@ export interface WorkloadWorkspaceInspection {
   repositoryMarkerPresent: boolean;
 }
 
+export const WORKLOAD_FIXTURE_COMMANDS = ['node-check', 'node-test'] as const;
+export type WorkloadFixtureCommand = (typeof WORKLOAD_FIXTURE_COMMANDS)[number];
+export type WorkloadFixtureCommandOutcome =
+  | 'not-run'
+  | 'passed'
+  | 'failed'
+  | 'timed-out'
+  | 'output-limit-exceeded'
+  | 'spawn-failed';
+
+export interface WorkloadFixtureCommandObservation {
+  command: WorkloadFixtureCommand;
+  attempted: number;
+  completed: number;
+  outcome: WorkloadFixtureCommandOutcome;
+  exit_code: number | null;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  stdout_sha256: string;
+  stderr_sha256: string;
+}
+
 const WORKLOAD_REQUEST_BASE = { schemaVersion: z.literal(1) };
+const WORKLOAD_EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 const WaitRequestSchema = z
   .object({
@@ -108,6 +136,20 @@ const WorkspaceInspectionRequestSchema = z
   })
   .strict();
 
+const FixtureCommandRequestSchema = z
+  .object({
+    ...WORKLOAD_REQUEST_BASE,
+    profile: z.literal('fixture-command'),
+    repetitions: z
+      .number()
+      .int()
+      .min(1)
+      .max(WORKLOAD_FIXTURE_COMMAND_MAX_REPETITIONS)
+      .optional()
+      .default(1),
+  })
+  .strict();
+
 export const WorkloadRequestSchema = z.discriminatedUnion('profile', [
   WaitRequestSchema,
   ControlledFailureRequestSchema,
@@ -115,6 +157,7 @@ export const WorkloadRequestSchema = z.discriminatedUnion('profile', [
   TemporaryIoRequestSchema,
   CompileTestRequestSchema,
   WorkspaceInspectionRequestSchema,
+  FixtureCommandRequestSchema,
 ]);
 
 export type WorkloadRequest = z.infer<typeof WorkloadRequestSchema>;
@@ -195,6 +238,18 @@ export type WorkloadCompletionInput =
       result_message_id: string;
       profile: 'workspace-inspection';
       inspection: WorkloadWorkspaceInspection;
+    }
+  | {
+      task_id: string;
+      result_message_id: string;
+      profile: 'fixture-command';
+      requested_repetitions: number;
+      fixture_id: typeof WORKLOAD_FIXTURE_COMMAND_ID;
+      outcome: 'completed' | 'failed';
+      observed_elapsed_ms: number;
+      completed_command_count: number;
+      commands: [WorkloadFixtureCommandObservation, WorkloadFixtureCommandObservation];
+      cleanup_confirmed: true;
     };
 
 export type WorkloadResult =
@@ -244,6 +299,33 @@ export type WorkloadResult =
       outcome: 'completed';
       taskId: TaskID;
       inspection: WorkloadWorkspaceInspection;
+    }
+  | {
+      schemaVersion: 1;
+      profile: 'fixture-command';
+      outcome: 'completed' | 'failed';
+      taskId: TaskID;
+      requested: {
+        repetitions: number;
+        fixtureId: typeof WORKLOAD_FIXTURE_COMMAND_ID;
+      };
+      observed: {
+        elapsedMs: number;
+        completedCommandCount: number;
+        commands: Array<{
+          command: WorkloadFixtureCommand;
+          attempted: number;
+          completed: number;
+          outcome: WorkloadFixtureCommandOutcome;
+          exitCode: number | null;
+          stdoutBytes: number;
+          stderrBytes: number;
+          stdoutSha256: string;
+          stderrSha256: string;
+        }>;
+        cleanupConfirmed: true;
+      };
+      errorCode?: typeof WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE;
     };
 
 export class WorkloadContractError extends Error {
@@ -287,6 +369,15 @@ const COMPILE_TEST_COMPLETION_FIELDS = [
   'observed_repetitions',
 ] as const;
 const WORKSPACE_INSPECTION_COMPLETION_FIELDS = ['inspection'] as const;
+const FIXTURE_COMMAND_COMPLETION_FIELDS = [
+  'requested_repetitions',
+  'fixture_id',
+  'outcome',
+  'observed_elapsed_ms',
+  'completed_command_count',
+  'commands',
+  'cleanup_confirmed',
+] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -393,6 +484,77 @@ function isWorkspaceInspection(value: unknown): value is WorkloadWorkspaceInspec
     if (!isRecord(entry) || !hasOnlyFields(entry, ['name', 'file'])) return false;
     return entry.name === WORKLOAD_LOCKFILES[index] && isFileObservation(entry.file);
   });
+}
+
+function isSha256(value: unknown): value is string {
+  return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
+}
+
+function isFixtureCommandObservation(
+  value: unknown,
+  command: WorkloadFixtureCommand,
+  repetitions: number
+): value is WorkloadFixtureCommandObservation {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, [
+      'command',
+      'attempted',
+      'completed',
+      'outcome',
+      'exit_code',
+      'stdout_bytes',
+      'stderr_bytes',
+      'stdout_sha256',
+      'stderr_sha256',
+    ]) ||
+    value.command !== command ||
+    !isBoundedInteger(value.attempted, 0, repetitions) ||
+    !isBoundedInteger(value.completed, 0, value.attempted) ||
+    !WORKLOAD_FIXTURE_COMMANDS.includes(value.command as WorkloadFixtureCommand) ||
+    !['not-run', 'passed', 'failed', 'timed-out', 'output-limit-exceeded', 'spawn-failed'].includes(
+      value.outcome as string
+    ) ||
+    !isBoundedInteger(
+      value.stdout_bytes,
+      0,
+      repetitions * WORKLOAD_FIXTURE_COMMAND_OUTPUT_MAX_BYTES
+    ) ||
+    !isBoundedInteger(
+      value.stderr_bytes,
+      0,
+      repetitions * WORKLOAD_FIXTURE_COMMAND_OUTPUT_MAX_BYTES
+    ) ||
+    value.stdout_bytes + value.stderr_bytes >
+      repetitions * WORKLOAD_FIXTURE_COMMAND_OUTPUT_MAX_BYTES ||
+    !isSha256(value.stdout_sha256) ||
+    !isSha256(value.stderr_sha256)
+  ) {
+    return false;
+  }
+
+  if (value.outcome === 'not-run') {
+    return (
+      value.attempted === 0 &&
+      value.completed === 0 &&
+      value.exit_code === null &&
+      value.stdout_bytes === 0 &&
+      value.stderr_bytes === 0 &&
+      value.stdout_sha256 === WORKLOAD_EMPTY_SHA256 &&
+      value.stderr_sha256 === WORKLOAD_EMPTY_SHA256
+    );
+  }
+  if (value.outcome === 'passed') {
+    return value.attempted > 0 && value.completed === value.attempted && value.exit_code === 0;
+  }
+  if (value.outcome === 'failed') {
+    return (
+      value.attempted > 0 &&
+      value.completed === value.attempted - 1 &&
+      (value.exit_code === null || isBoundedInteger(value.exit_code, 1, 255))
+    );
+  }
+  return value.attempted > 0 && value.completed === value.attempted - 1 && value.exit_code === null;
 }
 
 /**
@@ -513,6 +675,64 @@ export function assertValidWorkloadCompletionInput(
     return;
   }
 
+  if (profile === 'fixture-command') {
+    assertOnlyFields(value, FIXTURE_COMMAND_COMPLETION_FIELDS);
+    requireFields(value, FIXTURE_COMMAND_COMPLETION_FIELDS);
+    if (
+      !isBoundedInteger(value.requested_repetitions, 1, WORKLOAD_FIXTURE_COMMAND_MAX_REPETITIONS) ||
+      value.fixture_id !== WORKLOAD_FIXTURE_COMMAND_ID ||
+      !['completed', 'failed'].includes(value.outcome as string) ||
+      !isBoundedInteger(value.observed_elapsed_ms, 0, Number.MAX_SAFE_INTEGER) ||
+      !isBoundedInteger(
+        value.completed_command_count,
+        0,
+        value.requested_repetitions * WORKLOAD_FIXTURE_COMMANDS.length
+      ) ||
+      !Array.isArray(value.commands) ||
+      value.commands.length !== WORKLOAD_FIXTURE_COMMANDS.length ||
+      value.cleanup_confirmed !== true
+    ) {
+      throw new WorkloadContractError();
+    }
+
+    const [nodeCheck, nodeTest] = value.commands;
+    if (
+      !isFixtureCommandObservation(nodeCheck, 'node-check', value.requested_repetitions) ||
+      !isFixtureCommandObservation(nodeTest, 'node-test', value.requested_repetitions) ||
+      value.completed_command_count !== nodeCheck.completed + nodeTest.completed
+    ) {
+      throw new WorkloadContractError();
+    }
+
+    const completed = value.outcome === 'completed';
+    const successfulShape =
+      nodeCheck.attempted === value.requested_repetitions &&
+      nodeCheck.completed === value.requested_repetitions &&
+      nodeCheck.outcome === 'passed' &&
+      nodeTest.attempted === value.requested_repetitions &&
+      nodeTest.completed === value.requested_repetitions &&
+      nodeTest.outcome === 'passed';
+    const failedCheckShape =
+      nodeCheck.attempted === nodeTest.attempted + 1 &&
+      nodeCheck.completed === nodeCheck.attempted - 1 &&
+      nodeCheck.outcome !== 'passed' &&
+      nodeCheck.outcome !== 'not-run' &&
+      nodeTest.completed === nodeTest.attempted &&
+      (nodeTest.attempted === 0 ? nodeTest.outcome === 'not-run' : nodeTest.outcome === 'passed');
+    const failedTestShape =
+      nodeCheck.attempted === nodeTest.attempted &&
+      nodeCheck.completed === nodeCheck.attempted &&
+      nodeCheck.outcome === 'passed' &&
+      nodeTest.attempted > 0 &&
+      nodeTest.completed === nodeTest.attempted - 1 &&
+      nodeTest.outcome !== 'passed' &&
+      nodeTest.outcome !== 'not-run';
+    if ((completed && !successfulShape) || (!completed && !failedCheckShape && !failedTestShape)) {
+      throw new WorkloadContractError();
+    }
+    return;
+  }
+
   throw new WorkloadContractError();
 }
 
@@ -575,6 +795,16 @@ export function assertWorkloadCompletionMatchesRequest(
     }
     case 'workspace-inspection':
       return;
+    case 'fixture-command': {
+      const completion = input as Extract<WorkloadCompletionInput, { profile: 'fixture-command' }>;
+      if (
+        completion.requested_repetitions !== request.repetitions ||
+        completion.fixture_id !== WORKLOAD_FIXTURE_COMMAND_ID
+      ) {
+        throw new WorkloadContractError();
+      }
+      return;
+    }
   }
 }
 
@@ -668,6 +898,38 @@ export function workloadResultFromCompletion(
         outcome: 'completed',
         taskId,
         inspection: completion.inspection,
+      };
+    }
+    case 'fixture-command': {
+      const completion = input as Extract<WorkloadCompletionInput, { profile: 'fixture-command' }>;
+      return {
+        schemaVersion: 1,
+        profile: 'fixture-command',
+        outcome: completion.outcome,
+        taskId,
+        requested: {
+          repetitions: request.repetitions,
+          fixtureId: WORKLOAD_FIXTURE_COMMAND_ID,
+        },
+        observed: {
+          elapsedMs: completion.observed_elapsed_ms,
+          completedCommandCount: completion.completed_command_count,
+          commands: completion.commands.map((command) => ({
+            command: command.command,
+            attempted: command.attempted,
+            completed: command.completed,
+            outcome: command.outcome,
+            exitCode: command.exit_code,
+            stdoutBytes: command.stdout_bytes,
+            stderrBytes: command.stderr_bytes,
+            stdoutSha256: command.stdout_sha256,
+            stderrSha256: command.stderr_sha256,
+          })),
+          cleanupConfirmed: true,
+        },
+        ...(completion.outcome === 'failed'
+          ? { errorCode: WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE }
+          : {}),
       };
     }
   }
