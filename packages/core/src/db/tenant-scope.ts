@@ -36,7 +36,17 @@ const tenantScopedProxyTargets = new WeakMap<object, RawDatabase | Database>();
 const tenantScopedProxyOptions = new WeakMap<object, TenantScopedDatabaseProxyOptions>();
 
 export interface TenantScopedDatabaseProxyOptions {
-  /** Throw on DB access unless a tenant or explicit system DB scope is active. */
+  /**
+   * Throw on DB access unless a tenant or explicit system DB scope is active.
+   *
+   * Defaults to `true`: the guard is armed in EVERY mode — SQLite, tests, dev,
+   * and production — so that "touch tenant data without declaring tenancy
+   * intent" fails in the cheapest environment rather than only under HA
+   * `required_from_auth`. On non-Postgres a scope is a cheap AsyncLocalStorage
+   * store (`runWithTenantDatabaseScope` opens no transaction), so arming it
+   * everywhere costs nothing at runtime. Pass `false` only for a deliberate,
+   * documented raw-access path.
+   */
   requireScope?: boolean;
   /** Human-readable label included in guard errors. */
   label?: string;
@@ -105,7 +115,11 @@ export function createTenantScopedDatabaseProxy(
     },
   }) as TenantScopeAwareDatabase;
   tenantScopedProxyTargets.set(proxy as unknown as object, base);
-  tenantScopedProxyOptions.set(base as unknown as object, options);
+  // Arm the guard by default (opt-out only). See TenantScopedDatabaseProxyOptions.
+  tenantScopedProxyOptions.set(base as unknown as object, {
+    ...options,
+    requireScope: options.requireScope !== false,
+  });
   return proxy;
 }
 

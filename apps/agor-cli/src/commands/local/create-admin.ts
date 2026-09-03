@@ -14,6 +14,7 @@ import {
   DEVELOPMENT_DEFAULT_ADMIN_USER,
   getUserByEmail,
   runMigrations,
+  runWithSystemDatabaseScope,
   runWithTenantDatabaseScope,
   sanitizeDbError,
   shortId,
@@ -76,8 +77,11 @@ export default class LocalCreateAdmin extends Command {
 
       // Ensure migrations are run (idempotent, safe to run multiple times)
       // This is critical for Docker environments where init --skip-if-exists
-      // might skip migrations if the directory already exists
-      await runMigrations(db);
+      // might skip migrations if the directory already exists. Migrations are
+      // schema DDL, not tenant data, so they run under an explicit system
+      // scope — the armed DB guard requires either a tenant or system scope for
+      // any access to the guarded proxy.
+      await runWithSystemDatabaseScope(db, 'cli create-admin migrations', () => runMigrations(db));
 
       const config = await loadConfig();
       const multiTenancy = resolveMultiTenancyConfig(config);

@@ -108,7 +108,12 @@ describe('tenant-scoped database proxy', () => {
       transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) => callback(tx)),
       marker: vi.fn(() => 'base'),
     };
-    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+    // Opt out of the guard: this test asserts the proxy's routing target
+    // (base vs. active transaction) by reading it OUTSIDE a scope, which is
+    // exactly what the armed guard forbids. The guard itself is covered below.
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database, {
+      requireScope: false,
+    });
 
     expect((db as unknown as { marker(): string }).marker()).toBe('base');
 
@@ -264,7 +269,13 @@ describe('tenant-scoped database proxy', () => {
       transaction: vi.fn(),
       marker: vi.fn(() => 'base'),
     };
-    const db = createTenantScopedDatabaseProxy(base as unknown as Database);
+    // Opt out of the guard: a tenant scope with an undefined tenantId is
+    // deliberately NOT sufficient for the armed guard (fail-closed: in HA that
+    // would mean no RLS tenant filter). This test only asserts the routing
+    // target for the undefined-tenant case, so it isolates from the guard.
+    const db = createTenantScopedDatabaseProxy(base as unknown as Database, {
+      requireScope: false,
+    });
 
     await runWithTenantDatabaseScope(db, undefined, async () => {
       expect((db as unknown as { marker(): string }).marker()).toBe('base');

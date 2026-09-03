@@ -1215,14 +1215,17 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   };
 
   // Without tenant columns (SQLite / single-tenant), tenant-owned services skip
-  // the full RLS-transaction hooks — but they must still carry ambient tenant
-  // identity for tenant-aware call sites. MCP session-token issuance can
-  // resolve the configured tenant without ambient identity in static mode,
-  // while required_from_auth remains fail-closed. Identity only: no data
-  // stamping or DB transaction, which are Postgres tenant-column mechanics.
-  const registerTenantIdentityForOwnedServices = (): void => {
+  // the Postgres RLS/tenant-column mechanics (data stamping, transaction-local
+  // RLS GUC) — but they must still enter a tenant DATABASE scope, not merely
+  // tenant identity. The scope guard is armed in every mode now, so a
+  // tenant-owned request that touched `this.db` with identity alone would trip
+  // `MissingTenantDatabaseScopeError`. On SQLite `runWithTenantDatabaseScope`
+  // opens no transaction — the scope is a cheap AsyncLocalStorage store — so
+  // this satisfies the guard at zero runtime cost and stamps/writes nothing.
+  // (`required_from_auth` still runs the full `registerTenantHooks` path.)
+  const registerTenantDatabaseScopeForOwnedServices = (): void => {
     for (const path of tenantOwnedServicePaths) {
-      safeService(path)?.hooks({ around: { all: [tenantIdentityAround] } });
+      safeService(path)?.hooks({ around: { all: [tenantDatabaseScopeAround] } });
     }
   };
 
@@ -3877,7 +3880,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
   if (tenantColumnsEnabled) {
     registerTenantHooks();
   } else {
-    registerTenantIdentityForOwnedServices();
+    registerTenantDatabaseScopeForOwnedServices();
   }
   registerTenantIdentityHooks();
 }

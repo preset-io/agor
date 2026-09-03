@@ -59,6 +59,15 @@ export const dbTest = test.extend<{ db: Database }>({
     // which breaks any code under test that starts a transaction after
     // creating schema on the initial connection. A unique file path per
     // test gives us identical isolation with a single shared DB.
+    //
+    // The handle is deliberately RAW (unguarded): repository unit tests
+    // exercise the callee in isolation, and the armed tenant-scope guard is a
+    // CALLER concern (services / MCP tools / request hooks). Tests that verify
+    // scope-presence do so at that layer — wrap the handle in
+    // `createTenantScopedDatabaseProxy` and enter a scope INSIDE the test body
+    // (see `mcp/tools/guard-regression.test.ts`). Yielding a guarded proxy as a
+    // fixture value does not work: Vitest probes the value (thenable check)
+    // outside our scope, tripping the guard during fixture plumbing.
     const dir = mkdtempSync(join(tmpdir(), 'agor-core-test-'));
     const dbPath = join(dir, 'test.db');
     const db = createDatabase({ url: `file:${dbPath}` });

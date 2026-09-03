@@ -751,7 +751,6 @@ async function startDaemonWithOwnedMetrics(
 
   const { db } = await initializeDatabase(databaseUrl, {
     tenantId: multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined,
-    requireTenantScope: multiTenancy.mode === 'required_from_auth',
     skipFirstRunAdminBootstrap:
       !resolveIdentityAuthority(effectiveConfig).capabilities.users.create,
     // The URL may come from DATABASE_URL, but operators still need to size the
