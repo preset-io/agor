@@ -8,11 +8,11 @@ import {
   selectSessionById,
   selectSessionMcpServerIds,
 } from '../../../store/selectors';
-import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
 } from '../../../utils/reactFlowDragClasses';
+import { getSessionDisplayTitle } from '../../../utils/sessionTitle';
 import SessionPanel from '../../SessionPanel/SessionPanel';
 import { ToolIcon } from '../../ToolIcon';
 

@@ -23,8 +23,7 @@ export function useEjectedSessions(
   redockSession: (sessionId: string) => void;
   closeEjectedSession: (sessionId: string) => void;
 } {
-  const storageKey =
-    userId && boardId ? `agor:ejected:${userId}:${boardId}` : 'agor:ejected:anon:';
+  const storageKey = userId && boardId ? `agor:ejected:${userId}:${boardId}` : 'agor:ejected:anon:';
 
   const [ejectedSessions, setEjectedSessions] = useLocalStorage<EjectedSessionPositions>(
     storageKey,

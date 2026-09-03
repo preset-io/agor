@@ -1613,7 +1613,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       if (isDraggingRef.current) return;
 
       setNodes((currentNodes) => {
-        const { zones, markdown, branches, cards, apps, ejected } = partitionNodesByType(currentNodes);
+        const { zones, markdown, branches, cards, apps, ejected } =
+          partitionNodesByType(currentNodes);
 
         // Comment parents are branches or zones; branches take precedence on id
         // collision (insertion order below makes them overwrite).
@@ -1666,7 +1667,15 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           return newNode;
         });
 
-        return applyZOrder(zones, markdown, branches, cards, commentsWithLocalPositions, apps, ejected);
+        return applyZOrder(
+          zones,
+          markdown,
+          branches,
+          cards,
+          commentsWithLocalPositions,
+          apps,
+          ejected
+        );
       });
     }, [commentNodes, setNodes, applyZOrder, partitionNodesByType]);
 

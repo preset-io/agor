@@ -77,13 +77,13 @@ import {
   type MarketplacePromptSuggestionState,
   subscribeMarketplacePromptState,
 } from '../../utils/marketplaceOAuthPrompt';
+import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
+import { useThemedMessage } from '../../utils/message';
+import { deletePromptDraft, getPromptDraft, savePromptDraft } from '../../utils/promptDrafts';
 import {
   REACT_FLOW_DRAG_HANDLE_CLASS,
   REACT_FLOW_NO_DRAG_CLASS,
 } from '../../utils/reactFlowDragClasses';
-import { mcpServerNeedsAuth } from '../../utils/mcpAuth';
-import { useThemedMessage } from '../../utils/message';
-import { deletePromptDraft, getPromptDraft, savePromptDraft } from '../../utils/promptDrafts';
 import { getSessionDisplayTitle, getSessionTitleStyles } from '../../utils/sessionTitle';
 import { AgentSelectionGrid } from '../AgentSelectionGrid/AgentSelectionGrid';
 import { AutocompleteTextarea } from '../AutocompleteTextarea';
