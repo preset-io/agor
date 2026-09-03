@@ -37,6 +37,20 @@ Type: `packages/core/src/types/branch.ts`.
 - **Sessions reference branches**, not the other way around. Cascading from branch → sessions, not sessions → branch.
 - **RBAC is feature-flagged.** Code paths must work whether `execution.branch_rbac` is on or off. See AGENTS.md "Feature Flags" section.
 
+## Exact filesystem observation
+
+Clients that need to confirm asynchronous cleanup may call
+``client.service(`branches/${branchId}/filesystem-status`).find()``. The daemon advertises this
+contract through `health.features.branchFilesystemObservation` and returns only
+`{ branch_id, exists, kind, observed_at }`, where `kind` is `directory`, `file`, `other`, or
+`missing`.
+
+The route resolves the Branch in the active tenant, requires Branch view and filesystem-read
+access, and delegates the observation to the executor. It accepts no path or query input and works
+while the Branch is archived, so callers can archive, request filesystem cleanup, and observe
+confirmed absence before deleting metadata. Executor failures and malformed or mismatched replies
+are errors; they are never reported as `missing`.
+
 ## Where the UI lives
 
 - Card on board: `apps/agor-ui/src/components/BranchCard/`
