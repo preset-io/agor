@@ -1,7 +1,15 @@
 import type { SDKMessage } from '@agor/core/sdk';
 
 type ResultDisposition = 'not-result' | 'await-background-tasks' | 'terminal';
-const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'stopped']);
+
+// Terminal background-task states across BOTH documented settlement signals.
+// `task_notification.status` reports `completed | failed | stopped`;
+// `task_updated.patch.status` reports `completed | failed | killed` (plus the
+// non-terminal `pending | running | paused`). The union covers either message —
+// each only ever emits its own subset — so a task that settles as `killed` and
+// is reported only via `task_updated` still drains instead of waiting out the
+// active-task timeout.
+const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'stopped', 'killed']);
 
 /**
  * Stable identifier for the rare "the agent ended its turn with background work

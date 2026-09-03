@@ -40,7 +40,10 @@ describe('ClaudeBackgroundTaskLifecycle', () => {
     }
   );
 
-  it.each(['completed', 'failed', 'stopped'] as const)(
+  // `killed` is task_updated-only (not a task_notification status) and must
+  // still drain the task — otherwise a killed background task reported only via
+  // task_updated would wait out the whole active-task timeout.
+  it.each(['completed', 'failed', 'killed'] as const)(
     'settles a task from a terminal task_updated patch when no notification follows (%s)',
     (status) => {
       const lifecycle = new ClaudeBackgroundTaskLifecycle();
