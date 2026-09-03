@@ -147,6 +147,12 @@ export interface BaseTool {
      * `sdk-handlers/base/model-recording.ts`.
      */
     model?: string;
+    /**
+     * True when the turn was settled because the agent ended it with background
+     * work still running that never reported completion in time. base-executor
+     * records it on the terminal Task so the daemon can flag and count it.
+     */
+    backgroundTaskTimeout?: boolean;
   }>;
 
   // Optional stopTask method for tools that support interruption
@@ -625,6 +631,14 @@ export async function executeToolTask(params: {
         ref_at_end: gitStateAtEnd.ref,
         sha_at_end: gitStateAtEnd.sha,
       };
+    }
+
+    // Flag the rare "agent ended its turn with background work still running that
+    // timed out" case on the Task. Metadata is deep-merged by the repository, so
+    // this preserves the existing bag (source, queued_by_user_id, …). The daemon
+    // reads it to count the occurrence at settlement.
+    if (result.backgroundTaskTimeout) {
+      patchData.metadata = { background_task_timeout: true };
     }
 
     // Add SDK response data for token accounting

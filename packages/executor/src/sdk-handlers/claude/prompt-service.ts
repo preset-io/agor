@@ -23,7 +23,10 @@ import { reportSdkActivity, type SdkActivityCallback } from '../../sdk-watchdog.
 import type { SessionID, TaskID } from '../../types.js';
 import { MessageRole } from '../../types.js';
 import type { MessagesService, SessionsPatchClient, TasksService } from '../base/index.js';
-import { ClaudeBackgroundTaskLifecycle } from './background-task-lifecycle.js';
+import {
+  BACKGROUND_TASK_TIMEOUT_EVENT,
+  ClaudeBackgroundTaskLifecycle,
+} from './background-task-lifecycle.js';
 import { AWAIT_TIMEOUT, awaitWithTimeout } from './bounded-await.js';
 import { type ProcessedEvent, SDKMessageProcessor } from './message-processor.js';
 import { setupQuery } from './query-builder.js';
@@ -319,20 +322,22 @@ If you continue to see authentication errors, please contact your Agor administr
             // here tears down the subprocess (stopping that work), so surface a
             // clear, identifiable notice into the conversation — visible to the
             // user and the agent, and queryable via its `sdkSubtype` for tuning.
-            const minutes = Math.round(
-              ClaudePromptService.BACKGROUND_TASK_ACTIVE_TIMEOUT_MS / 60_000
-            );
+            const timeoutMs = ClaudePromptService.BACKGROUND_TASK_ACTIVE_TIMEOUT_MS;
+            const minutes = Math.round(timeoutMs / 60_000);
+            // Stable, greppable operational event for the rare timeout — one line
+            // with a fixed event name + bounded key=value fields (no per-turn
+            // chatter; the normal held/settled paths log at most once each).
             console.warn(
-              `⚠️  Turn ended with ${abandonedTaskCount} background task(s) still running; none reported completion within ${minutes}m — settling the turn and stopping the background work`
+              `⚠️  event=${BACKGROUND_TASK_TIMEOUT_EVENT} tasks=${abandonedTaskCount} timeout_ms=${timeoutMs} — agent ended its turn with background work still running; none reported completion in time, so the turn was settled and the background work was stopped`
             );
             yield {
               type: 'sdk_event',
               sdkType: 'agor',
-              sdkSubtype: 'background_task_timeout',
+              sdkSubtype: BACKGROUND_TASK_TIMEOUT_EVENT,
               summary: `The agent ended its turn with ${abandonedTaskCount} background task(s) still running. Agor waited ${minutes} minutes for them to report completion; they did not, so the turn was settled and the background work was stopped.`,
               rawMessage: {
                 abandonedBackgroundTasks: abandonedTaskCount,
-                timeoutMs: ClaudePromptService.BACKGROUND_TASK_ACTIVE_TIMEOUT_MS,
+                timeoutMs,
               },
             } as ProcessedEvent;
           } else {
