@@ -50,7 +50,6 @@ import type {
   TasksStreamingService,
   ToolCapabilities,
 } from '../base/index.js';
-import { BACKGROUND_TASK_TIMEOUT_EVENT } from './background-task-lifecycle.js';
 import {
   createAssistantMessage,
   createSystemMessage,
@@ -274,12 +273,6 @@ export class ClaudeTool implements ITool {
     hadError?: boolean;
     /** Fixed, value-free error detail when the SDK reports an error result. */
     errorDetails?: string[];
-    /**
-     * True when the turn was settled because the agent ended it with background
-     * work still running that never reported completion in time. Surfaced so the
-     * daemon can flag the Task and count the occurrence.
-     */
-    backgroundTaskTimeout?: boolean;
   }> {
     if (!this.promptService || !this.messagesRepo) {
       throw new Error('ClaudeTool not initialized with repositories for live execution');
@@ -356,7 +349,6 @@ export class ClaudeTool implements ITool {
     let errorDetails: string[] | undefined;
     let errorSubtype: string | undefined;
     let classifiedProviderFailureKind: ClassifiedProviderFailureKind | undefined;
-    let backgroundTaskTimeout = false;
 
     // Map our permission mode to Claude SDK's permission mode
     const mappedPermissionMode = permissionMode
@@ -616,11 +608,6 @@ export class ClaudeTool implements ITool {
       // Handle sdk_event — surface unhandled SDK messages as system messages
       if (event.type === 'sdk_event') {
         const sdkEvent = event as Extract<ProcessedEvent, { type: 'sdk_event' }>;
-        // Flag the background-task-timeout notice so the terminal Task patch can
-        // record it (queryable) and the daemon can count it.
-        if (sdkEvent.sdkSubtype === BACKGROUND_TASK_TIMEOUT_EVENT) {
-          backgroundTaskTimeout = true;
-        }
         const content: Array<{
           type: string;
           text?: string;
@@ -897,7 +884,6 @@ export class ClaudeTool implements ITool {
       wasStopped,
       hadError,
       errorDetails,
-      backgroundTaskTimeout,
     };
   }
 

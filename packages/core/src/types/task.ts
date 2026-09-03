@@ -186,14 +186,6 @@ export interface TaskMetadata {
   /** Provider reply target captured for this gateway Task (for example an editable ack ID). */
   gateway_reply_metadata?: Record<string, unknown>;
   /**
-   * Set when the turn was settled because the agent ended it with background
-   * work still running that never reported completion within the executor's
-   * bound (the background work was then stopped). Rare; surfaced as a
-   * conversation notice, counted by the daemon at settlement, and queryable for
-   * tuning. The identifier is `background_task_timeout` across all three legs.
-   */
-  background_task_timeout?: boolean;
-  /**
    * Durable identity of the Task's first transcript row. Internal
    * idempotent producers persist this alongside the Task so any daemon that
    * later drains the queue can reconcile the same row instead of inventing a

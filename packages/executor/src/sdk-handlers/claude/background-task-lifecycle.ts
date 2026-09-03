@@ -5,11 +5,10 @@ const TERMINAL_TASK_STATUSES = new Set(['completed', 'failed', 'stopped']);
 
 /**
  * Stable identifier for the rare "the agent ended its turn with background work
- * still running, and it never reported completion within the budget" event. It
- * is the `sdkSubtype` of the surfaced system message, the token the executor
- * uses to flag the settled Task, and how the daemon counts the occurrence — one
- * shared string so those three stay in lock-step. Grep `background_task_timeout`
- * to find every leg.
+ * still running, and it never reported completion within the budget" event.
+ * Shared by the executor's structured operational log (`event=…`) and the
+ * `sdkSubtype` of the conversation notice it surfaces, so the greppable token
+ * and the queryable message subtype stay in lock-step.
  */
 export const BACKGROUND_TASK_TIMEOUT_EVENT = 'background_task_timeout';
 

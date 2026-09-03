@@ -41,13 +41,6 @@ export function recordTaskSettlement(metrics: DaemonMetrics, task: Task): void {
   const tags = { status: task.status, mode: executorMode(task) } as const;
   metrics.increment('task.settlements', 1, tags);
 
-  // Rare, worth tracking: the agent ended its turn with background work still
-  // running that never reported completion in time, so the turn was settled and
-  // the background work stopped. Flagged on the Task by the executor.
-  if (task.metadata?.background_task_timeout) {
-    metrics.increment('task.background_task_timeout', 1, { mode: executorMode(task) });
-  }
-
   const executionDuration = durationBetween(task.started_at, task.completed_at);
   if (executionDuration !== undefined) {
     metrics.distribution('task.dispatch_to_settlement.duration_ms', executionDuration, tags);
