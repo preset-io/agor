@@ -116,6 +116,15 @@ handful of service-level scope tests replace per-tool proof.
 
 ## Staging
 
+> **Note:** the subsections below are the ORIGINAL plan. Where they differ from
+> the **Progress (2026-08-30)** section above, Progress is authoritative — it
+> records the as-built outcome. Specifically: A2's "arm the `dbTest` fixture" and
+> "convert every CLI/dev entry point" did NOT land as written (arming the
+> repo-layer fixture proved infeasible; only the guarded-proxy entry points
+> needed scoping — raw-handle CLIs are unaffected). Bootstrap tools
+> (`create-admin`, dev-fixtures, `get-admin-id`) now resolve a single tenant via
+> `resolveBootstrapTenantId` and fail closed in `required_from_auth`.
+
 Each stage lands as its own PR. A is independently valuable and mergeable alone.
 
 ### Stage A — Arm the guard universally (dev + tests first)
@@ -203,7 +212,3 @@ methods keep the short-unit / admission pattern.
 - Verify against the branch's HA env (variant `ha`) via
   `scripts/test-ha-mcp-branch-create.mjs` and the minted-MCP-token technique.
 - Guard local `pnpm install` (shared host disk ~97% full) — prefer Docker/HA.
-
-```
-
-```

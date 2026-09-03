@@ -6,6 +6,7 @@ import {
 } from '@agor/core/db';
 import type { HookContext } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
+import { type RegisterHooksContext, registerHooks } from './register-hooks.js';
 import { createTenantDatabaseScopeAroundHook } from './utils/tenant-db-scope.js';
 
 /**
@@ -67,5 +68,88 @@ describe('static-mode tenant DB scope for owned services', () => {
         (db as unknown as { run(): void }).run();
       })
     ).rejects.toBeInstanceOf(MissingTenantDatabaseScopeError);
+  });
+});
+
+/**
+ * End-to-end wiring guard: prove `registerHooks` actually installs the
+ * DB-scope around hook (not the identity-only variant) for tenant-owned
+ * services in static/SQLite mode. The factory-level tests above would still
+ * pass if `registerHooks` were reverted to `tenantIdentityAround`, so this test
+ * captures the around hook the real registration installs and runs it.
+ */
+describe('registerHooks static-mode owned-service scope wiring', () => {
+  type AroundHook = (ctx: HookContext, next: () => Promise<void>) => Promise<void>;
+
+  /** Run registerHooks against a recorder app and return around hooks per path. */
+  function captureAroundHooks(): Map<string, AroundHook[]> {
+    const captured = new Map<string, AroundHook[]>();
+    const app = {
+      service(path: string) {
+        return {
+          hooks(hooks: { around?: { all?: AroundHook[] } }) {
+            const key = path.replace(/^\//, '');
+            const chain = hooks?.around?.all ?? [];
+            captured.set(key, [...(captured.get(key) ?? []), ...chain]);
+          },
+        };
+      },
+      use() {},
+      publish() {},
+      io: { to: () => ({ emit() {} }) },
+    };
+
+    registerHooks({
+      // Unguarded stub: registerHooks constructs repositories over this db at
+      // registration time, which must not trip the guard. The scope assertion
+      // below uses a SEPARATE guarded probe. `run` marks it as SQLite
+      // (isPostgresDatabase keys off the absence of `.run`), so the around hook
+      // opens a no-op scope rather than a native transaction.
+      db: { run: () => undefined } as unknown as RegisterHooksContext['db'],
+      app: app as unknown as RegisterHooksContext['app'],
+      config: {
+        database: { dialect: 'sqlite' },
+        multi_tenancy: { mode: 'static', static_tenant_id: 'static-scope-test' },
+        execution: { branch_rbac: false },
+      } as RegisterHooksContext['config'],
+      jwtSecret: 'static-scope-test-secret',
+      deployment: { mode: 'standalone' },
+      requireAuth: async (context) => context,
+      superadminOpts: { allowSuperadmin: true },
+      sessionsService: {} as RegisterHooksContext['sessionsService'],
+      messagesService: {} as RegisterHooksContext['messagesService'],
+      boardsService: undefined,
+      branchRepository: {
+        findById: async () => null,
+      } as unknown as RegisterHooksContext['branchRepository'],
+      usersRepository: {} as unknown as RegisterHooksContext['usersRepository'],
+      sessionsRepository: {} as RegisterHooksContext['sessionsRepository'],
+    });
+
+    return captured;
+  }
+
+  it('installs an around hook that enters a DB scope for a tenant-owned service', async () => {
+    const around = captureAroundHooks().get('boards') ?? [];
+    expect(around.length).toBeGreaterThan(0);
+
+    // A guarded probe touched inside the composed around chain: it succeeds only
+    // if a tenant DB scope is active. A revert to identity-only would leave no
+    // scope, so this touch would throw MissingTenantDatabaseScopeError.
+    const probe = createTenantScopedDatabaseProxy({ run: () => undefined } as never, {
+      label: 'wiring probe db',
+    });
+    let scopeKind: string | undefined;
+    const innermost = async () => {
+      scopeKind = getCurrentTenantDatabaseScope()?.kind;
+      (probe as unknown as { run(): void }).run();
+    };
+    const composed = around.reduceRight<() => Promise<void>>(
+      (next, hook) => () => hook({ params: {} } as unknown as HookContext, next),
+      innermost
+    );
+
+    await expect(composed()).resolves.toBeUndefined();
+    expect(scopeKind).toBe('tenant');
   });
 });

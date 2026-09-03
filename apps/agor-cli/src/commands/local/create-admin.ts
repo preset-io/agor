@@ -3,7 +3,7 @@
  */
 
 import { join } from 'node:path';
-import { getConfigPath, loadConfig, resolveMultiTenancyConfig } from '@agor/core/config';
+import { getConfigPath, loadConfig, resolveBootstrapTenantId } from '@agor/core/config';
 import {
   assertDevelopmentDefaultAdminEnvironment,
   assertUsableBootstrapAdminPassword,
@@ -84,8 +84,10 @@ export default class LocalCreateAdmin extends Command {
       await runWithSystemDatabaseScope(db, 'cli create-admin migrations', () => runMigrations(db));
 
       const config = await loadConfig();
-      const multiTenancy = resolveMultiTenancyConfig(config);
-      const tenantId = multiTenancy.mode === 'static' ? multiTenancy.static_tenant_id : undefined;
+      // Bootstrap admin creation is single-tenant: use the static tenant, or
+      // fail closed with a clear message in required_from_auth (rather than
+      // entering an undefined-tenant scope that would trip the armed guard).
+      const tenantId = resolveBootstrapTenantId(config);
 
       await runWithTenantDatabaseScope(db, tenantId, async () => {
         // Check if admin user already exists in the active tenant.
