@@ -17,6 +17,14 @@ import {
   WORKLOAD_CONTROLLED_FAILURE_CODE,
   WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE,
   WORKLOAD_FIXTURE_COMMAND_ID,
+  WORKLOAD_OFFLINE_INSTALL_ARTIFACT_SHA256,
+  WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
+  WORKLOAD_OFFLINE_INSTALL_ID,
+  WORKLOAD_OFFLINE_INSTALL_LOCKFILE_SHA256,
+  WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER,
+  WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER_VERSION,
+  WORKLOAD_OFFLINE_INSTALL_PACKAGE_NAME,
+  WORKLOAD_OFFLINE_INSTALL_PACKAGE_VERSION,
   WORKLOAD_REQUEST_MAX_BYTES,
   WORKLOAD_RESULT_MAX_BYTES,
   WORKLOAD_TEMP_IO_MAX_BYTES,
@@ -27,6 +35,7 @@ import {
 } from '@agor/core/types';
 import type { AgorClient } from '../../services/feathers-client.js';
 import { runFixedCommandFixture } from './fixture-command.js';
+import { runOfflineInstallFixture } from './offline-install.js';
 import { inspectWorkspace } from './workspace-inspection.js';
 
 export {
@@ -399,16 +408,47 @@ export async function executeWorkloadTask(params: {
       };
       break;
     }
+    case 'offline-install': {
+      const observed = await runOfflineInstallFixture({
+        taskId: params.taskId,
+        repetitions: request.repetitions,
+        signal,
+        onPulse: params.onPulse,
+      });
+      if (!observed || signal.aborted) return;
+      completion = {
+        task_id: params.taskId,
+        result_message_id: generateId() as MessageID,
+        profile: 'offline-install',
+        requested_repetitions: request.repetitions,
+        fixture_id: WORKLOAD_OFFLINE_INSTALL_ID,
+        package_manager: WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER,
+        package_manager_version: WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER_VERSION,
+        package_name: WORKLOAD_OFFLINE_INSTALL_PACKAGE_NAME,
+        package_version: WORKLOAD_OFFLINE_INSTALL_PACKAGE_VERSION,
+        artifact_sha256: WORKLOAD_OFFLINE_INSTALL_ARTIFACT_SHA256,
+        lockfile_sha256: WORKLOAD_OFFLINE_INSTALL_LOCKFILE_SHA256,
+        observed_elapsed_ms: Math.max(0, Date.now() - startedAtMs),
+        ...observed,
+      };
+      break;
+    }
   }
 
   // Serialize once locally so the executor enforces the same bounded result
   // contract before asking the daemon to publish its server-authored copy.
   boundedResultContent(params.taskId, request, completion);
   const fixtureFailed = completion.profile === 'fixture-command' && completion.outcome === 'failed';
+  const offlineInstallFailed =
+    completion.profile === 'offline-install' && completion.outcome === 'failed';
   await completeWorkloadWithResponseLossReconciliation(
     params.client,
     completion,
-    fixtureFailed ? TaskStatus.FAILED : TaskStatus.COMPLETED,
-    fixtureFailed ? WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE : undefined
+    fixtureFailed || offlineInstallFailed ? TaskStatus.FAILED : TaskStatus.COMPLETED,
+    fixtureFailed
+      ? WORKLOAD_FIXTURE_COMMAND_FAILURE_CODE
+      : offlineInstallFailed
+        ? WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE
+        : undefined
   );
 }

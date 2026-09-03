@@ -1,8 +1,12 @@
 import { readdirSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { WORKLOAD_CONTROLLED_FAILURE_CODE, WORKLOAD_TEMP_IO_MAX_BYTES } from '@agor/core/types';
+import {
+  WORKLOAD_CONTROLLED_FAILURE_CODE,
+  WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
+  WORKLOAD_TEMP_IO_MAX_BYTES,
+} from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   executeWorkloadTask,
@@ -10,6 +14,8 @@ import {
   WORKLOAD_REQUEST_MAX_BYTES,
   WORKLOAD_TEMP_PREFIX,
 } from './workload.js';
+
+const originalPath = process.env.PATH;
 
 vi.mock('node:http', () => {
   throw new Error('network module imported by workload: node:http');
@@ -20,11 +26,26 @@ vi.mock('node:https', () => {
 vi.mock('node:net', () => {
   throw new Error('network module imported by workload: node:net');
 });
+vi.mock('node:tls', () => {
+  throw new Error('network module imported by workload: node:tls');
+});
+vi.mock('node:dgram', () => {
+  throw new Error('network module imported by workload: node:dgram');
+});
 vi.mock('node:dns', () => {
   throw new Error('network module imported by workload: node:dns');
 });
 vi.mock('node:dns/promises', () => {
   throw new Error('network module imported by workload: node:dns/promises');
+});
+vi.mock('@anthropic-ai/claude-agent-sdk', () => {
+  throw new Error('provider SDK imported by workload: anthropic');
+});
+vi.mock('@openai/codex-sdk', () => {
+  throw new Error('provider SDK imported by workload: openai');
+});
+vi.mock('@google/genai', () => {
+  throw new Error('provider SDK imported by workload: google');
 });
 
 function clientHarness() {
@@ -52,6 +73,7 @@ describe('deterministic workload runner', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    process.env.PATH = originalPath;
   });
 
   it('accepts only the strict bounded wait contract', () => {
@@ -107,6 +129,14 @@ describe('deterministic workload runner', () => {
     expect(
       parseWorkloadRequest('{"schemaVersion":1,"profile":"fixture-command","repetitions":10}')
     ).toEqual({ schemaVersion: 1, profile: 'fixture-command', repetitions: 10 });
+    expect(parseWorkloadRequest('{"schemaVersion":1,"profile":"offline-install"}')).toEqual({
+      schemaVersion: 1,
+      profile: 'offline-install',
+      repetitions: 1,
+    });
+    expect(
+      parseWorkloadRequest('{"schemaVersion":1,"profile":"offline-install","repetitions":5}')
+    ).toEqual({ schemaVersion: 1, profile: 'offline-install', repetitions: 5 });
 
     for (const prompt of [
       '{"schemaVersion":1,"profile":"controlled-failure","delayMs":120001}',
@@ -132,6 +162,18 @@ describe('deterministic workload runner', () => {
       '{"schemaVersion":1,"profile":"fixture-command","url":"https://example.com"}',
       '{"schemaVersion":1,"profile":"fixture-command","repo":"owner/name"}',
       '{"schemaVersion":1,"profile":"fixture-command","concurrency":2}',
+      '{"schemaVersion":1,"profile":"offline-install","repetitions":0}',
+      '{"schemaVersion":1,"profile":"offline-install","repetitions":6}',
+      '{"schemaVersion":1,"profile":"offline-install","command":"pnpm"}',
+      '{"schemaVersion":1,"profile":"offline-install","argv":["install"]}',
+      '{"schemaVersion":1,"profile":"offline-install","path":"/tmp"}',
+      '{"schemaVersion":1,"profile":"offline-install","source":"unsafe"}',
+      '{"schemaVersion":1,"profile":"offline-install","env":{"TOKEN":"secret"}}',
+      '{"schemaVersion":1,"profile":"offline-install","output":"raw"}',
+      '{"schemaVersion":1,"profile":"offline-install","package":"unsafe"}',
+      '{"schemaVersion":1,"profile":"offline-install","url":"https://example.com"}',
+      '{"schemaVersion":1,"profile":"offline-install","repo":"owner/name"}',
+      '{"schemaVersion":1,"profile":"offline-install","concurrency":2}',
     ]) {
       expect(() => parseWorkloadRequest(prompt)).toThrow('WORKLOAD_REQUEST_INVALID');
     }
@@ -495,6 +537,80 @@ describe('deterministic workload runner', () => {
     ).toBeLessThan(4 * 1024);
   });
 
+  it('runs the strict offline install fixture through the bounded completion path', async () => {
+    const harness = clientHarness();
+    await executeWorkloadTask({
+      client: harness.client,
+      sessionId: 'session-1' as never,
+      taskId: 'task-1' as never,
+      prompt: '{"schemaVersion":1,"profile":"offline-install","repetitions":2}',
+      abortController: new AbortController(),
+    });
+
+    const completion = harness.completeWorkload.mock.calls[0]?.[0];
+    expect(completion).toMatchObject({
+      task_id: 'task-1',
+      profile: 'offline-install',
+      requested_repetitions: 2,
+      fixture_id: 'node-offline-install-v1',
+      package_manager: 'pnpm',
+      package_manager_version: '11.17.0',
+      package_name: '@agor/offline-fixture-dependency',
+      package_version: '1.0.0',
+      artifact_sha256: '8e4e8ff60b13149ad2b13ce261a16040bd964ed2fe1014458d6c6be2b4745373',
+      lockfile_sha256: '54a155804466627cf95c7326e808e3a4be1a36b0b60628eee00952088f130e40',
+      outcome: 'completed',
+      failure_stage: null,
+      completed_step_count: 7,
+      cleanup_confirmed: true,
+    });
+    expect(JSON.stringify(completion)).not.toContain(process.cwd());
+    expect(JSON.stringify(completion)).not.toContain('node_modules');
+    expect(JSON.stringify(completion)).not.toContain('verify.test.mjs');
+    expect(Buffer.byteLength(JSON.stringify(completion))).toBeLessThan(4 * 1024);
+    expect(harness.taskPatch).not.toHaveBeenCalled();
+  }, 15_000);
+
+  it('reconciles a canonical offline install failure whose response was lost', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'agor-offline-install-path-'));
+    try {
+      const pnpm = join(root, 'pnpm');
+      await writeFile(
+        pnpm,
+        `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 11.17.0; exit 0; fi\nexit 9\n`,
+        { mode: 0o755 }
+      );
+      process.env.PATH = `${root}:/usr/bin:/bin`;
+      const harness = clientHarness();
+      harness.completeWorkload.mockRejectedValueOnce(new Error('response lost'));
+      harness.taskGet.mockResolvedValueOnce({
+        status: 'failed',
+        error_message: WORKLOAD_OFFLINE_INSTALL_FAILURE_CODE,
+      });
+
+      await executeWorkloadTask({
+        client: harness.client,
+        sessionId: 'session-1' as never,
+        taskId: 'task-1' as never,
+        prompt: '{"schemaVersion":1,"profile":"offline-install"}',
+        abortController: new AbortController(),
+      });
+
+      expect(harness.completeWorkload).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profile: 'offline-install',
+          outcome: 'failed',
+          failure_stage: 'install',
+          cleanup_confirmed: true,
+        })
+      );
+      expect(harness.taskGet).toHaveBeenCalledWith('task-1');
+      expect(harness.taskPatch).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     ['wait', '{"schemaVersion":1,"profile":"wait","durationMs":100}'],
     ['controlled-failure', '{"schemaVersion":1,"profile":"controlled-failure"}'],
@@ -506,6 +622,7 @@ describe('deterministic workload runner', () => {
     ],
     ['workspace-inspection', '{"schemaVersion":1,"profile":"workspace-inspection"}'],
     ['fixture-command', '{"schemaVersion":1,"profile":"fixture-command"}'],
+    ['offline-install', '{"schemaVersion":1,"profile":"offline-install"}'],
   ] as const)('does not use public network access for the %s profile', async (_profile, prompt) => {
     const fetch = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('network denied'));
     const harness = clientHarness();
