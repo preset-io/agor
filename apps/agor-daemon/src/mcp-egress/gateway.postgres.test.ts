@@ -192,7 +192,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       );
       releaseDns();
 
-      await expect(pending).rejects.toMatchObject({ code: 'stale_capability' });
+      await expect(pending).rejects.toMatchObject({ code: 'tool_permission_changed' });
       expect(providerRequests).toBe(0);
 
       const wrongTenantCapability = issueMCPEgressCapability(

@@ -44,6 +44,10 @@ const checks = [
       // HA fork/spawn now use the tenant-aware Feathers event helper instead
       // of raw global Socket.IO broadcasts.
       'apps/agor-daemon/src/register-routes.ts': 4,
+      // Minimal real-transport contract harness: one local authenticated
+      // channel proves executor control events are registered by Feathers and
+      // cross Socket.IO rather than only exercising the publisher directly.
+      'apps/agor-daemon/src/register-services.tasks-events.test.ts': 4,
       'apps/agor-daemon/src/startup.ts': 1,
       'apps/agor-daemon/src/services/artifacts.test.ts': 1,
       'apps/agor-daemon/src/services/artifacts.ts': 1,
@@ -57,6 +61,9 @@ const checks = [
       // connection to its verified tenant before asserting hard-delete
       // publication containment.
       'apps/agor-daemon/src/utils/branch-removal-realtime.integration.test.ts': 2,
+      // Two authenticated principals share one local test channel so the
+      // production publisher can prove per-recipient MCP topology projection.
+      'apps/agor-daemon/src/utils/mcp-recovery-realtime.integration.test.ts': 1,
       // The tenant-aware realtime facade: session/task channel joins, the
       // publish handler, and existence-gated lookups live here on purpose.
       // Executor control rooms are tenant-namespaced and joined only from an

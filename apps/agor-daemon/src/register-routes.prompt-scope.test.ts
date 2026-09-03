@@ -106,14 +106,14 @@ describe('prompt and widget transaction scopes', () => {
     const scopedAuthorization = initialization.indexOf(
       'await inCurrentTenantDatabaseScope(async () => {'
     );
-    const ownerCheck = initialization.indexOf(
-      'requireSessionScopedConfigOwnerOrAdmin(id, params)',
+    const mutationAuthorization = initialization.indexOf(
+      'authorizeAndLoadSessionForMcpConfig(id, params)',
       scopedAuthorization
     );
     const stagedInitialization = initialization.indexOf('runSessionInitializationStages({');
     expect(scopedAuthorization).toBeGreaterThan(0);
-    expect(ownerCheck).toBeGreaterThan(scopedAuthorization);
-    expect(stagedInitialization).toBeGreaterThan(ownerCheck);
+    expect(mutationAuthorization).toBeGreaterThan(scopedAuthorization);
+    expect(stagedInitialization).toBeGreaterThan(mutationAuthorization);
     const mcpSetup = initialization.indexOf('sessionMCPServersService.setServers(');
     const envSetup = initialization.indexOf('sessionEnvSelectionsService.setAll(');
     const promptAdmission = initialization.indexOf("service('/sessions/:id/prompt').create(");

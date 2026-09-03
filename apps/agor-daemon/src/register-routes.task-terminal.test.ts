@@ -1,10 +1,12 @@
-import { BadRequest, Forbidden } from '@agor/core/feathers';
-import { type Task, TaskStatus } from '@agor/core/types';
+import { BadRequest, Forbidden, NotFound } from '@agor/core/feathers';
+import { type MCPRuntimeRecovery, type Session, type Task, TaskStatus } from '@agor/core/types';
 import { describe, expect, it, vi } from 'vitest';
 import {
   authorizeForceFailRoute,
+  authorizeMcpReconnectRoute,
   authorizeTaskTerminalRoute,
   findMatchingUnverifiedTerminationTask,
+  projectMcpReconnectRecoveryForViewer,
   rejectRemovedClaudeCliRestart,
 } from './register-routes.js';
 import { REMOVED_AGENTIC_TOOL_RUNTIME_MESSAGE } from './utils/agentic-tool-runtime.js';
@@ -42,6 +44,63 @@ describe('task complete/fail route authorization', () => {
         provider: undefined,
       }
     );
+  });
+});
+
+describe('MCP reconnect route authorization', () => {
+  it('does not distinguish a missing Task from a foreign Task', async () => {
+    const foreign = authorizeMcpReconnectRoute(harness('other-user'));
+    const missing = authorizeMcpReconnectRoute({
+      ...harness(),
+      tasksService: { get: vi.fn().mockRejectedValue(new NotFound('missing')) } as never,
+    });
+
+    await expect(foreign).rejects.toBeInstanceOf(Forbidden);
+    await expect(missing).rejects.toBeInstanceOf(Forbidden);
+  });
+
+  it('redacts attached-server topology from a collaborator who created the prompted task', () => {
+    const task = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      created_by: 'collaborator',
+    } as Task;
+    const recovery = {
+      generation: 4,
+      message: 'Reconnect affected MCP authority.',
+      mcp_server_id: 'private-server-id',
+      mcp_server_name: 'Private CRM',
+      server_states: [
+        {
+          mcp_server_id: 'private-server-id',
+          name: 'Private CRM',
+          code: 'oauth_reauth_required',
+          action: 'reauthenticate',
+          message: 'Sign in again.',
+        },
+      ],
+    } as MCPRuntimeRecovery;
+    const session = { session_id: 'session-1', created_by: 'owner' } as Session;
+
+    const projected = projectMcpReconnectRecoveryForViewer({
+      task,
+      recovery,
+      session,
+      params: { user: { user_id: 'collaborator', role: 'member' } } as never,
+    });
+    expect(projected.mcp_server_id).toBeUndefined();
+    expect(projected.mcp_server_name).toBeUndefined();
+    expect(projected.server_states).toBeUndefined();
+    expect(projected.message).not.toContain('Private CRM');
+
+    expect(
+      projectMcpReconnectRecoveryForViewer({
+        task,
+        recovery,
+        session,
+        params: { user: { user_id: 'owner', role: 'member' } } as never,
+      })
+    ).toBe(recovery);
   });
 });
 

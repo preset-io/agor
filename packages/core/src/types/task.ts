@@ -198,6 +198,36 @@ export interface TaskMetadata {
    */
   initial_message_id?: MessageID;
 
+  /** Latest secret-free MCP recovery projection. Hints may be missed; this row is authoritative. */
+  mcp_recovery?: import('./mcp').MCPRuntimeRecovery;
+
+  /** Monotonic tombstone retained after a successful MCP recovery is cleared. */
+  mcp_recovery_generation?: number;
+
+  /** Exact refresh request settled at the tombstone generation. */
+  mcp_recovery_settled_request_id?: string;
+
+  /** Daemon time at which the last refresh tombstone became authoritative. */
+  mcp_recovery_settled_at?: string;
+
+  /** Bounded keyed hashes of the per-server authority installed by the last refresh. */
+  mcp_recovery_settled_authority_fingerprints?: string[];
+
+  /** Immutable digest attesting the complete ready-server projection last installed. */
+  mcp_recovery_settled_projection_fingerprint?: string;
+
+  /** Exact durable claim fencing one live MCP reprojection across daemons. */
+  mcp_reprojection_claim?: {
+    request_id: string;
+    recovery_generation: number;
+    fingerprint: string;
+    claimed_at: string;
+    /** Immutable digest of the complete ready-server authority projection. */
+    projection_fingerprint?: string;
+    /** Bounded keyed hashes of the exact projection returned for this claim. */
+    authority_fingerprints?: string[];
+  };
+
   /**
    * Immutable one-shot completion callback requested for this exact task.
    * The MCP prompt tool derives both identities from trusted request context;

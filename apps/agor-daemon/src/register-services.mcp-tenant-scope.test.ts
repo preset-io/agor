@@ -64,4 +64,131 @@ describe('register-services MCP tenant unit of work', () => {
       unscoped.map((match) => `${owningServicePath(match.index)}: unscoped authorization read`)
     ).toEqual([]);
   });
+
+  it('runs OAuth authority-change fanout in an explicit PostgreSQL RLS scope', () => {
+    const hintSource = readFileSync(join(__dirname, 'utils/mcp-runtime-hints.ts'), 'utf8');
+    expect(hintSource).toContain('runWithTenantContext(exactTenantId, work)');
+    expect(hintSource).not.toContain('runWithTenantDatabaseScope(db, exactTenantId');
+    const routeSource = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
+    expect(routeSource).toContain('withFreshTenantWrite(db, tenantId, () => visitor(task))');
+    const completionStart = codeOnly.indexOf("app.use('/mcp-servers/oauth-complete'");
+    const disconnectStart = codeOnly.indexOf(
+      "app.use('/mcp-servers/oauth-disconnect'",
+      completionStart
+    );
+    const statusStart = codeOnly.indexOf("app.use('/mcp-servers/oauth-status'", disconnectStart);
+    const completion = codeOnly.slice(completionStart, disconnectStart);
+    const disconnect = codeOnly.slice(disconnectStart, statusStart);
+
+    expect(completion).toContain('scheduleMcpRuntimeHint(');
+    expect(completion).toMatch(/runWithTenantDatabaseScope\(\s*db,\s*completedTenantId,/);
+    expect(completion).toContain(
+      'const completedTenantId = completedFlow.tenantId ?? tenantIdFromParams(params)'
+    );
+    expect(disconnect).toContain('scheduleMcpRuntimeHint(');
+    expect(disconnect).toMatch(/scheduleMcpRuntimeHint\(\s*db,\s*tenantId,/);
+  });
+
+  it('loads the completed OAuth server only inside the authoritative tenant scope', () => {
+    const completionStart = codeOnly.indexOf("app.use('/mcp-servers/oauth-complete'");
+    const disconnectStart = codeOnly.indexOf(
+      "app.use('/mcp-servers/oauth-disconnect'",
+      completionStart
+    );
+    const completion = codeOnly.slice(completionStart, disconnectStart);
+    const lookup = completion.indexOf('new MCPServerRepository(tenantDb).findById(');
+    const explicitScope = completion.lastIndexOf('runWithTenantDatabaseScope(', lookup);
+
+    expect(completionStart).toBeGreaterThan(-1);
+    expect(lookup).toBeGreaterThan(-1);
+    expect(explicitScope).toBeGreaterThan(-1);
+    expect(explicitScope).toBeLessThan(lookup);
+    expect(completion.slice(explicitScope, lookup)).not.toContain('MCPServerRepository(db)');
+  });
+
+  it('gates automatic runtime recovery before all task fanout in direct modes', () => {
+    const routeSource = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
+    for (const marker of [
+      'const signalSessionMcpAuthorityChange = async',
+      ').signalMcpServerAuthorityChange = async',
+      ').signalMcpPrincipalAuthorityChange = async',
+    ]) {
+      const start = routeSource.indexOf(marker);
+      expect(start).toBeGreaterThan(-1);
+      const entry = routeSource.slice(start, start + 500);
+      expect(entry).toContain(
+        'withFreshTenantWrite(db, tenantId, () => isMcpRuntimeRecoveryEnabled(db))'
+      );
+    }
+  });
+
+  it('uses captured removal targets without a second active-task scan', () => {
+    const routeSource = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
+    const hookSource = readFileSync(join(__dirname, 'register-hooks.ts'), 'utf8');
+    const start = routeSource.indexOf(').signalMcpServerAuthorityChange = async');
+    const end = routeSource.indexOf(').signalMcpPrincipalAuthorityChange = async', start);
+    const body = routeSource.slice(start, end);
+    const exactStart = body.indexOf('if (exactTasks)');
+    const scanStart = body.indexOf('await visitActiveMcpTasks(', exactStart);
+    const exactTargetPath = body.slice(exactStart, scanStart);
+
+    expect(exactTargetPath).not.toContain('visitActiveMcpTasks');
+    expect(exactStart).toBeGreaterThan(-1);
+    expect(exactStart).toBeLessThan(scanStart);
+
+    const captureStart = hookSource.indexOf('const captureMcpRemovalTargets = async');
+    const captureEntry = hookSource.slice(captureStart, captureStart + 500);
+    expect(captureEntry).toContain('if (!(await isMcpRuntimeRecoveryEnabled(db)))');
+    expect(captureEntry.indexOf('isMcpRuntimeRecoveryEnabled')).toBeLessThan(
+      captureEntry.indexOf("app.service('mcp-servers').get")
+    );
+  });
+
+  it('authorizes reconnect before loading the requested task', () => {
+    const routeSource = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
+    const start = routeSource.indexOf("'/tasks/:id/mcp-reconnect'");
+    const end = routeSource.indexOf("'/mcp-egress/rollout'", start);
+    const body = routeSource.slice(start, end);
+
+    expect(body.indexOf('authorizeMcpReconnectRoute')).toBeGreaterThan(-1);
+    expect(body.indexOf('authorizeMcpReconnectRoute')).toBeLessThan(
+      body.indexOf('new TaskRepository(db).findById')
+    );
+  });
+
+  it('fences refresh projection and acknowledgement by generation plus request identity', () => {
+    const routeSource = readFileSync(join(__dirname, 'register-routes.ts'), 'utf8');
+    const projectionStart = routeSource.indexOf("'/tasks/:id/mcp-reprojection'");
+    const validationStart = routeSource.indexOf("'/tasks/:id/mcp-reprojection-validate'");
+    const resultStart = routeSource.indexOf("'/tasks/:id/mcp-refresh-result'");
+    const reconnectStart = routeSource.indexOf("'/tasks/:id/mcp-reconnect'");
+    const projection = routeSource.slice(projectionStart, validationStart);
+    const validation = routeSource.slice(validationStart, resultStart);
+    const result = routeSource.slice(resultStart, reconnectStart);
+    const taskRepositorySource = readFileSync(
+      join(__dirname, '../../../packages/core/src/db/repositories/tasks.ts'),
+      'utf8'
+    );
+    const claimStart = taskRepositorySource.indexOf('async claimMCPReprojection');
+    const validationRepoStart = taskRepositorySource.indexOf(
+      'async validateMCPReprojectionClaim',
+      claimStart
+    );
+    const settleStart = taskRepositorySource.indexOf('async settleMCPReprojection', claimStart);
+    const clearStart = taskRepositorySource.indexOf('async clearMCPRecovery', settleStart);
+    const claim = taskRepositorySource.slice(claimStart, validationRepoStart);
+    const durableValidation = taskRepositorySource.slice(validationRepoStart, settleStart);
+    const settlement = taskRepositorySource.slice(settleStart, clearStart);
+
+    expect(projection).toContain('Number.isSafeInteger(data.expected_generation)');
+    expect(claim).toContain('recovery.generation !== input.expectedGeneration');
+    expect(claim).toContain('recovery.request_id !== input.requestId');
+    expect(validation).toContain('validateMCPReprojectionClaim');
+    expect(durableValidation).toContain('claim?.request_id === input.requestId');
+    expect(durableValidation).toContain('claim.recovery_generation === input.expectedGeneration');
+    expect(result).toContain('Number.isSafeInteger(data.expected_generation)');
+    expect(result).toContain('settleMCPReprojection');
+    expect(settlement).toContain('recovery.generation !== input.expectedGeneration');
+    expect(settlement).toContain('recovery.request_id !== input.requestId');
+  });
 });

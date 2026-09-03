@@ -1197,6 +1197,139 @@ describe('real Feathers Socket.IO request authority', () => {
 });
 
 describe('SQLite saved-row OAuth authority', () => {
+  it('keeps a committed OAuth completion successful when its runtime-hint lookup rejects', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+      authorizationUrl: string;
+    };
+    const state = new URL(started.authorizationUrl).searchParams.get('state')!;
+    const tokens = new UserMCPOAuthTokenRepository(harness.rawDb);
+    const originalFindById = MCPServerRepository.prototype.findById;
+    let lookupCalls = 0;
+    const lookup = vi
+      .spyOn(MCPServerRepository.prototype, 'findById')
+      .mockImplementation(async function (id) {
+        lookupCalls += 1;
+        const committed = await tokens.getToken(
+          harness.user.user_id as UserID,
+          harness.server.mcp_server_id as MCPServerID
+        );
+        if (committed && lookupCalls === 4) {
+          throw new Error('SECRET_POST_COMMIT_LOOKUP_FAILURE');
+        }
+        return originalFindById.call(this, id);
+      });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(
+        harness.app
+          .service('mcp-servers/oauth-complete')
+          .create({ code: 'authorization-code', state, iss: provider.baseUrl }, paramsFor(harness))
+      ).resolves.toMatchObject({ success: true, tokenObtained: true });
+      await expect(
+        tokens.getToken(harness.user.user_id as UserID, harness.server.mcp_server_id as MCPServerID)
+      ).resolves.toMatchObject({ oauth_access_token: 'sqlite-access-token' });
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          '[MCP Runtime] event=hint_failed code=oauth_authority_changed'
+        )
+      );
+      expect(lookupCalls).toBe(4);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain('SECRET_POST_COMMIT_LOOKUP_FAILURE');
+    } finally {
+      lookup.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
+  it('keeps a committed OAuth completion successful when Socket.IO throws synchronously', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    const started = (await harness.app
+      .service('mcp-servers/oauth-start')
+      .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))) as {
+      authorizationUrl: string;
+    };
+    const state = new URL(started.authorizationUrl).searchParams.get('state')!;
+    const io = harness.app.io as { to: (room: string) => { emit: () => unknown } };
+    const originalTo = io.to;
+    io.to = () => ({
+      emit: () => {
+        throw new Error('SECRET_SYNC_COMPLETION_SOCKET_FAILURE');
+      },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(
+        harness.app
+          .service('mcp-servers/oauth-complete')
+          .create({ code: 'authorization-code', state, iss: provider.baseUrl }, paramsFor(harness))
+      ).resolves.toMatchObject({ success: true, tokenObtained: true });
+      await expect(
+        new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+          harness.user.user_id as UserID,
+          harness.server.mcp_server_id as MCPServerID
+        )
+      ).resolves.toMatchObject({ oauth_access_token: 'sqlite-access-token' });
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          '[MCP Runtime] event=oauth_post_commit_tail_failed code=completion_notification'
+        )
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(
+        'SECRET_SYNC_COMPLETION_SOCKET_FAILURE'
+      );
+    } finally {
+      io.to = originalTo;
+      warn.mockRestore();
+    }
+  });
+
+  it('keeps a committed disconnect successful when Socket.IO rejects asynchronously', async () => {
+    const provider = await createTestProvider();
+    providers.push(provider);
+    const harness = await createHarness(provider, 'per_user');
+    databases.push(harness.rawDb);
+    await authorizeSavedServer(harness);
+    const io = harness.app.io as { to: (room: string) => { emit: () => unknown } };
+    const originalTo = io.to;
+    io.to = () => ({
+      emit: () => Promise.reject(new Error('SECRET_ASYNC_DISCONNECT_SOCKET_FAILURE')),
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      await expect(
+        harness.app
+          .service('mcp-servers/oauth-disconnect')
+          .create({ mcp_server_id: harness.server.mcp_server_id }, paramsFor(harness))
+      ).resolves.toMatchObject({ success: true });
+      await expect(
+        new UserMCPOAuthTokenRepository(harness.rawDb).getToken(
+          harness.user.user_id as UserID,
+          harness.server.mcp_server_id as MCPServerID
+        )
+      ).resolves.toBeNull();
+      await vi.waitFor(() =>
+        expect(warn).toHaveBeenCalledWith(
+          '[MCP Runtime] event=oauth_post_commit_tail_failed code=disconnect_notification'
+        )
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(
+        'SECRET_ASYNC_DISCONNECT_SOCKET_FAILURE'
+      );
+    } finally {
+      io.to = originalTo;
+      warn.mockRestore();
+    }
+  });
+
   it('authenticates REST mutations before the MCP OAuth around hook can read or write', async () => {
     const provider = await createTestProvider();
     providers.push(provider);

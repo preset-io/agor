@@ -660,6 +660,7 @@ export type MCPServersConfig = Record<
     url?: string;
     headers?: Record<string, string>;
     env?: Record<string, string>;
+    alwaysLoad?: boolean;
   }
 >;
 
@@ -696,6 +697,108 @@ export interface MCPEgressGatewayStatus {
   admission_available: boolean | null;
   operator: boolean;
   guarantee: string;
+}
+
+// ============================================================================
+// Live MCP runtime reprojection
+// ============================================================================
+
+export const MCP_RUNTIME_REFRESH_MODES = ['in_place', 'next_turn'] as const;
+export type MCPRuntimeRefreshMode = (typeof MCP_RUNTIME_REFRESH_MODES)[number];
+
+/**
+ * What Agor can truthfully do with the currently shipped provider adapter.
+ * `retries_unstarted_call` is deliberately independent from transport reload:
+ * an SDK may rebuild MCP clients without exposing the failed call boundary.
+ */
+export interface MCPRuntimeProviderCapability {
+  mode: MCPRuntimeRefreshMode;
+  transport_reload: boolean;
+  retries_unstarted_call: boolean;
+  reason?: string;
+}
+
+export type MCPRuntimeServerStateCode =
+  | 'ready'
+  | 'transport_not_mediated'
+  | 'template_configuration'
+  | 'oauth_reauth_required'
+  | 'approval_not_mediated';
+
+export interface MCPRuntimeServerState {
+  mcp_server_id: MCPServerID;
+  name: string;
+  code: MCPRuntimeServerStateCode;
+  action: 'none' | 'reauthenticate' | 'review_configuration' | 'reconnect_next_turn';
+  message: string;
+}
+
+/** Executor-only response. `servers` are gateway projections with opaque capabilities. */
+export interface MCPRuntimeReprojection {
+  task_id: string;
+  session_id: SessionID;
+  request_id: string;
+  recovery_generation: number;
+  provider: MCPRuntimeProviderCapability;
+  servers: MCPServer[];
+  states: MCPRuntimeServerState[];
+}
+
+export interface MCPRuntimeRefreshRequest {
+  request_id: string;
+  reason: 'authority_changed' | 'user_reconnect';
+  expected_generation: number;
+}
+
+export interface MCPRuntimeRefreshResultRequest {
+  request_id: string;
+  expected_generation: number;
+  ok: boolean;
+  /** Present only for a failed refresh whose SDK transport outcome is ambiguous. */
+  failure?: 'transport_outcome_uncertain';
+}
+
+export type MCPRuntimeRecoveryCode =
+  | 'stale_capability'
+  | 'grant_changed'
+  | 'credential_material_changed'
+  | 'server_detached'
+  | 'principal_revoked'
+  | 'branch_revoked'
+  | 'rollout_changed'
+  | 'oauth_reauth_required'
+  | 'transport_not_mediated'
+  | 'approval_not_mediated'
+  | 'template_configuration'
+  | 'tool_permission_changed'
+  | 'provider_refresh_failed'
+  | 'transport_refresh_uncertain';
+
+/** Secret-free durable state shown to every authorized tab for this Session. */
+export interface MCPRuntimeRecovery {
+  generation: number;
+  code: MCPRuntimeRecoveryCode;
+  status: 'action_required' | 'refresh_requested' | 'failed';
+  task_id: string;
+  session_id: SessionID;
+  mcp_server_id?: MCPServerID;
+  mcp_server_name?: string;
+  /** Bounded, secret-free non-ready states retained after a partial transport refresh. */
+  server_states?: MCPRuntimeServerState[];
+  provider: MCPRuntimeProviderCapability;
+  action:
+    | 'reconnect_mcp'
+    | 'reauthenticate'
+    | 'retry_next_turn'
+    | 'contact_admin'
+    | 'review_configuration';
+  message: string;
+  observed_at: string;
+  request_id?: string;
+  /** Bounds automatic refresh; expiry falls back to explicit user reconnect. */
+  refresh_deadline_at?: string;
+  /** Whether the rejected provider hop is proven unstarted or may have started. */
+  provider_dispatch: 'not_started' | 'ambiguous';
 }
 
 // ============================================================================

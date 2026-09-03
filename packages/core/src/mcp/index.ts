@@ -41,6 +41,10 @@ export {
   MCPServerNotUsableError,
 } from './ownership';
 export {
+  MCP_RUNTIME_PROVIDER_CAPABILITIES,
+  mcpRuntimeProviderCapability,
+} from './runtime-refresh';
+export {
   AGOR_MCP_SERVER_NAME,
   getMcpServersForSession,
   type MCPAuthHeadersRepository,

@@ -52,12 +52,12 @@ Failures after dispatch remain ambiguous and keep their stricter recovery state.
 
 Configure the per-tenant mode in **Settings → MCP Servers**.
 
-| Mode | Behavior |
-| --- | --- |
-| `off` | Direct MCP configuration and reusable credentials reach executors. No gateway guarantee. |
-| `observe` | Direct behavior remains, with secret-free observation logs. No gateway guarantee. |
-| `compatibility` | Eligible servers use opaque capabilities. Ineligible servers are omitted rather than receiving raw secrets. |
-| `enforced` | The same supported set is mediated and every raw-secret projection path fails closed. Enabling it requires an operator attestation that pre-gateway executors were terminated. |
+| Mode            | Behavior                                                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `off`           | Direct MCP configuration and reusable credentials reach executors. No gateway guarantee.                                                                                       |
+| `observe`       | Direct behavior remains, with secret-free observation logs. No gateway guarantee.                                                                                              |
+| `compatibility` | Eligible servers use opaque capabilities. Ineligible servers are omitted rather than receiving raw secrets.                                                                    |
+| `enforced`      | The same supported set is mediated and every raw-secret projection path fails closed. Enabling it requires an operator attestation that pre-gateway executors were terminated. |
 
 An administrator can always make an emergency downgrade to `observe` or `off`,
 even while local requests exist. The UI requires an explicit raw-secret-egress
@@ -81,10 +81,11 @@ This phase deliberately supports a small, reviewable set:
 - **Unbounded or non-JSON streaming:** refused. The gateway buffers a bounded
   response before releasing it so it never retains an indefinite unscanned
   tail.
-- **Servers with any `ask` tool rule:** omitted with the actionable
-  `approval_not_mediated` reason. The canonical permission flow does not yet
-  issue a one-shot task/server/tool receipt that the gateway can consume.
-  `deny` is independently checked at the gateway before egress.
+- **Servers with an `ask` tool rule:** omitted with the actionable
+  `approval_not_mediated` state in compatibility and enforced modes. Live
+  one-shot approval is deferred; the existing interactive approval behavior is
+  unchanged in off and observe modes. `deny` is independently checked before
+  mediated egress.
 - **Indeterminate templates:** omitted with `template_configuration`. Gateway
   templates may use absolute `user.env.KEY` references and registered static
   helpers (including nested/default fallback expressions). `@root`, `this`,
@@ -121,6 +122,52 @@ parses JSON and each JSON SSE `data` frame, inspects decoded string values, and
 releases only a bounded, validated body. Public MCP response headers are
 allowlisted and scanned. Provider bodies, URLs, and errors are never logged.
 
+## Active conversation recovery
+
+When an attachment, configuration, credential binding, OAuth grant, or tool
+permission changes, the gateway's next admission uses the new durable authority.
+An affected active Task receives a secret-free recovery notice instead of a
+generic MCP failure.
+
+Claude can rebuild only its MCP transports in place while retaining the provider
+conversation handle. **Reconnect MCP** requests a fresh task-scoped projection;
+it does not clear `sdk_session_id`, restart the conversation, or replay a tool
+call. Codex, Gemini, Copilot, OpenCode, Cursor, and legacy stored
+`claude-code-cli` sessions currently apply the new MCP projection on the next
+turn because their shipped Agor adapters do not expose a safe task-scoped
+current-turn replacement boundary. The UI says this explicitly rather than
+claiming hot reload.
+
+Claude transport replacement has a bounded timeout. An uncertain timeout
+blocks later live replacement in that executor for the turn, so a late SDK
+completion cannot overwrite a newer transport. Claude does not expose live
+replacement of the query's `disallowedTools` option: gateway permission
+admission changes immediately, while permission-driven tool visibility is
+truthfully marked for the next turn.
+
+No provider adapter currently exposes an exact retry operation for the failed
+model MCP invocation. Agor therefore never automatically retries it. Recovery
+state distinguishes a request proven not to have started from an ambiguous
+provider dispatch, where a side effect may already have happened.
+
+Routine OAuth access-token refresh is invisible because it retains the same
+grant authority. Grant replacement, disconnect, or changed binding requires new
+authority and may require sign-in. Mediated live reprojection does not turn an
+`ask` decision into capability authority; those servers remain excluded.
+When ready and excluded servers are attached together, ready mediated servers
+are still refreshed. The session owner/admin notice retains each excluded
+server's name and action; broader Task viewers receive a redacted count and the
+same required action.
+A permanent stdio, template, OAuth, or `ask` exclusion does not dead-end the
+ready subset.
+
+Automatic recovery signals and reprojection run only in `compatibility` and
+`enforced`. The pre-existing direct MCP behavior in `off` and `observe` is not
+turned into a reconnect path: configuration changes apply on the next turn.
+Downgrading to either direct mode converts pending mediated reconnect state into a
+new-generation, persistent next-turn notice, so an old reconnect warning does
+not loop or hide a later sign-in/configuration action.
+
 ## Operations and health
 
 `GET /mcp-egress/status` is tenant-scoped and available to members; only admins
@@ -136,6 +183,26 @@ rollout mode. Detail is bounded to 100 visible servers per response and reports
 when additional diagnostics were truncated. Non-admins do not see a noisy
 default-off banner when there are zero calls and zero exclusions; admins retain
 the compact rollout control.
+
+Reprojection rate limits are bounded, process-local, per-tenant availability controls; HA
+nodes do not share one aggregate rate-limit budget. The exact request ID,
+recovery generation, and reprojection claim are persisted and compared under the
+Task row lock. The local key budget leaves headroom above one bounded 500-Task
+hint fanout, and an exact durable claim retry bypasses that availability budget.
+Successful refresh retains a monotonic generation tombstone.
+It also retains the settlement time and bounded keyed hashes of the installed
+per-server authority. A late rejection is suppressed only when its refresh
+identity, captured authority, or observation time proves it predates that
+settlement; a newly stale capability can still recover after a missed hint.
+Claude serializes transport application and calls a durable, capability-free
+validation operation immediately before `setMcpServers`, so a delayed older
+response cannot replace a newer successful transport. A duplicate request after
+restart or on another HA daemon can continue only when current authority matches
+the immutable projection digest first bound to its durable claim; authority drift
+fails closed rather than changing what that request would attest. Executors
+derive a missed hint from durable Task recovery state when their refresh handler
+registers or reconnects. Gateway admission still rechecks current authority, and
+neither recovery handling nor idempotency replays a provider call.
 
 `GET /health` reports the rollout mode, database probe, local in-flight count,
 and oldest local request. Useful metrics are:

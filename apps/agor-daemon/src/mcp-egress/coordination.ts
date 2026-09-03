@@ -1,30 +1,57 @@
 import {
   getMCPEgressGatewayMode,
   MCPServerRepository,
+  SessionRepository,
   type TenantScopeAwareDatabase,
 } from '@agor/core/db';
 import type { HookContext, MCPServerID } from '@agor/core/types';
 import type { MCPEgressGateway } from './gateway.js';
 
-type GatewayAbortCoordinator = Pick<MCPEgressGateway, 'abortServer' | 'abortTenant'>;
+type GatewayAbortCoordinator = Pick<MCPEgressGateway, 'abortSessionServer'>;
 
 /** Durable session detach first, then a scoped local cancellation accelerator. */
 export async function coordinateSessionMCPRevocation<T>(input: {
   db: TenantScopeAwareDatabase;
   gateway: GatewayAbortCoordinator;
   tenantId?: string;
+  sessionId: string;
   serverIds: string[];
   mutate: () => Promise<T>;
 }): Promise<T> {
+  let abortTarget: { tenantId: string; sessionId: string; serverIds: MCPServerID[] } | undefined;
+  try {
+    const mode = await getMCPEgressGatewayMode(input.db);
+    if ((mode === 'compatibility' || mode === 'enforced') && input.tenantId) {
+      const session = await new SessionRepository(input.db).findById(input.sessionId);
+      if (session) {
+        const serverIds = (
+          await Promise.allSettled(
+            [...new Set(input.serverIds)].map((id) =>
+              new MCPServerRepository(input.db).resolveCanonicalId(id)
+            )
+          )
+        ).flatMap((resolved) => (resolved.status === 'fulfilled' ? [resolved.value] : []));
+        abortTarget = {
+          tenantId: input.tenantId,
+          sessionId: session.session_id,
+          serverIds,
+        };
+      }
+    }
+  } catch {
+    console.warn('[MCP Runtime] event=session_abort_skipped code=target_resolution_failed');
+  }
   const result = await input.mutate();
-  const mode = await getMCPEgressGatewayMode(input.db);
-  if (mode !== 'compatibility' && mode !== 'enforced') return result;
-  if (!input.tenantId) return result;
-  for (const requestedId of [...new Set(input.serverIds)]) {
-    const serverId = await new MCPServerRepository(input.db)
-      .resolveCanonicalId(requestedId)
-      .catch(() => requestedId as MCPServerID);
-    input.gateway.abortServer(input.tenantId, serverId, 'server_detached');
+  try {
+    if (abortTarget) {
+      for (const serverId of abortTarget.serverIds) {
+        input.gateway.abortSessionServer(abortTarget.tenantId, abortTarget.sessionId, serverId);
+      }
+    }
+  } catch {
+    // The session mutation is already authoritative. This local accelerator is
+    // availability-only and must never change its committed success response.
+    console.warn('[MCP Runtime] event=session_abort_failed code=post_commit_tail');
   }
   return result;
 }

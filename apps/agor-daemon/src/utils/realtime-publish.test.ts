@@ -31,12 +31,18 @@ import {
 import { isRealtimePublishAllowed, realtimePublishPolicyFor } from './realtime-publish-policy';
 
 class FakeChannel {
-  constructor(public connections: unknown[]) {}
+  constructor(
+    public connections: unknown[],
+    public data?: unknown
+  ) {}
   get length() {
     return this.connections.length;
   }
   filter(fn: (connection: unknown) => boolean) {
-    return new FakeChannel(this.connections.filter(fn));
+    return new FakeChannel(this.connections.filter(fn), this.data);
+  }
+  send(data: unknown) {
+    return new FakeChannel(this.connections, data);
   }
 }
 
@@ -969,6 +975,68 @@ function repos(options: {
 }
 
 describe('configureRealtimePublish', () => {
+  it('keeps recovery topology only in the session-owner/admin realtime audience', async () => {
+    const owner = { user: user('owner') };
+    const viewer = { user: user('viewer') };
+    const admin = { user: user('admin', ROLES.ADMIN) };
+    const service = { user: { _isServiceAccount: true, role: 'service' } };
+    const app = makeApp([owner, viewer, admin, service]);
+    configureRealtimePublish({
+      app,
+      branchRbacEnabled: false,
+      branchRepository: {} as never,
+      sessionsRepository: {
+        findCreatedByBySessionId: vi.fn().mockResolvedValue('owner'),
+      } as never,
+    });
+    const task = {
+      task_id: 'task-1',
+      session_id: 'session-1',
+      metadata: {
+        mcp_recovery: {
+          generation: 1,
+          code: 'oauth_reauth_required',
+          status: 'action_required',
+          task_id: 'task-1',
+          session_id: 'session-1',
+          mcp_server_id: 'private-server-id',
+          mcp_server_name: 'Private CRM',
+          provider: { mode: 'in_place', transport_reload: true, retries_unstarted_call: false },
+          action: 'reauthenticate',
+          message: 'Sign in again.',
+          observed_at: '2026-08-26T00:00:00.000Z',
+          provider_dispatch: 'not_started',
+        },
+      },
+    };
+
+    const channels = (await app.runPublish(task, {
+      path: 'tasks',
+      method: 'patch',
+      event: 'patched',
+      params: {},
+      // A collaborator initiated the mutation, so its direct dispatch was
+      // redacted by the Task after-hook. Audience publishing must still use
+      // the authoritative result for the owner/admin channel.
+      dispatch: {
+        ...task,
+        metadata: {
+          mcp_recovery: {
+            ...task.metadata.mcp_recovery,
+            mcp_server_id: undefined,
+            mcp_server_name: undefined,
+          },
+        },
+      },
+    })) as FakeChannel[];
+    expect(channels[0]?.connections).toEqual([owner, admin, service]);
+    expect(channels[1]?.connections).toEqual([viewer]);
+    expect(JSON.stringify(channels[0]?.data)).toContain('Private CRM');
+    expect(JSON.stringify(channels[0]?.data)).toContain('private-server-id');
+    expect(JSON.stringify(channels[1]?.data)).not.toContain('Private CRM');
+    expect(JSON.stringify(channels[1]?.data)).not.toContain('private-server-id');
+  });
+
   it('routes artifact runtime queries only to the requesting user', async () => {
     const requester = { user: user('requester') };
     const otherViewer = { user: user('other-viewer') };
