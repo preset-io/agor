@@ -94,6 +94,7 @@
     "js-yaml": "^5.2.3",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.2.0",
+    "pnpm": "11.17.0",
     "postgres": "^3.4.9",
     "proper-lockfile": "4.1.2",
     "simple-git": "^3.36.0",

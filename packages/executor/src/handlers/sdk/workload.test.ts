@@ -7,6 +7,7 @@ import {
   WORKLOAD_TEMP_IO_MAX_BYTES,
 } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createOfflineInstallRunner } from './offline-install.js';
 import {
   executeWorkloadTask,
   parseWorkloadRequest,
@@ -599,12 +600,15 @@ describe('deterministic workload runner', () => {
   it('reconciles a canonical offline install failure whose response was lost', async () => {
     const root = await mkdtemp(join(tmpdir(), 'agor-offline-install-path-'));
     try {
-      const pnpm = join(root, 'pnpm');
-      await writeFile(
-        pnpm,
-        `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 11.17.0; exit 0; fi\nexit 9\n`,
-        { mode: 0o755 }
-      );
+      const { spawn } = await import('node:child_process');
+      const offlineInstallRunner = createOfflineInstallRunner({
+        temporaryRoot: root,
+        spawnChild: (executable, argv, options) => {
+          if (argv.includes('install'))
+            return spawn(process.execPath, ['-e', 'process.exit(9)'], options);
+          return spawn(executable, [...argv], options);
+        },
+      });
       process.env.PATH = `${root}:/usr/bin:/bin`;
       const harness = clientHarness();
       harness.completeWorkload.mockRejectedValueOnce(new Error('response lost'));
@@ -624,6 +628,7 @@ describe('deterministic workload runner', () => {
         taskId: 'task-1' as never,
         prompt: '{"schemaVersion":1,"profile":"offline-install"}',
         abortController: new AbortController(),
+        offlineInstallRunner,
       });
 
       expect(harness.completeWorkload).toHaveBeenCalledWith(

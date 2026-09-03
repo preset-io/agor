@@ -24,6 +24,7 @@
     "@agor/core": "workspace:*",
     "@agor/git": "workspace:*",
     "diff": "^8.0.3",
+    "pnpm": "11.17.0",
     "zod": "^4.4.3"
   },
   "optionalDependencies": {

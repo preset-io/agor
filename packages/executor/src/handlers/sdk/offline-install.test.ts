@@ -13,7 +13,11 @@ import {
 } from '@agor/core/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createOfflineInstallRunner, OFFLINE_INSTALL_TEMP_PREFIX } from './offline-install.js';
-import { OFFLINE_INSTALL_COMMANDS, OFFLINE_INSTALL_FIXTURE } from './offline-install-fixture.js';
+import {
+  OFFLINE_INSTALL_COMMANDS,
+  OFFLINE_INSTALL_FIXTURE,
+  OFFLINE_INSTALL_PACKAGE_MANAGER_ENTRYPOINT,
+} from './offline-install-fixture.js';
 
 const roots: string[] = [];
 const originalSecret = process.env.OFFLINE_INSTALL_TEST_SECRET;
@@ -94,7 +98,10 @@ describe('offline install fixture runner', () => {
       ],
     });
     expect(calls.map(({ executable, argv }) => [executable, argv])).toEqual([
-      [OFFLINE_INSTALL_COMMANDS.packageManagerVersion.executable, ['--version']],
+      [
+        OFFLINE_INSTALL_COMMANDS.packageManagerVersion.executable,
+        OFFLINE_INSTALL_COMMANDS.packageManagerVersion.argv,
+      ],
       [OFFLINE_INSTALL_COMMANDS.install.executable, OFFLINE_INSTALL_COMMANDS.install.argv],
       [process.execPath, OFFLINE_INSTALL_COMMANDS.compile.argv],
       [process.execPath, OFFLINE_INSTALL_COMMANDS.test.argv],
@@ -151,6 +158,39 @@ describe('offline install fixture runner', () => {
     expect(await readdir(workspace)).toEqual(before);
     expect(await readFile(join(workspace, 'sentinel'), 'utf8')).toBe('unchanged');
     expect(await readdir(root)).toEqual(['workspace']);
+  }, 15_000);
+
+  it('completes with no ambient pnpm on PATH using the packaged manager', async () => {
+    const root = await temporaryRoot();
+    const previousPath = process.env.PATH;
+    const previousPathAlias = process.env.Path;
+    process.env.PATH = '/usr/bin:/bin';
+    delete process.env.Path;
+
+    try {
+      const runner = createOfflineInstallRunner({ temporaryRoot: root });
+      const result = await runner({
+        taskId: 'task-without-ambient-pnpm' as never,
+        repetitions: 1,
+        signal: new AbortController().signal,
+      });
+
+      expect(result).toMatchObject({
+        outcome: 'completed',
+        failure_stage: null,
+        completed_step_count: 4,
+        cleanup_confirmed: true,
+      });
+      expect(OFFLINE_INSTALL_PACKAGE_MANAGER_ENTRYPOINT).toContain(
+        '/node_modules/pnpm/bin/pnpm.mjs'
+      );
+      expect(result?.steps.every(({ outcome }) => outcome === 'passed')).toBe(true);
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+      if (previousPathAlias === undefined) delete process.env.Path;
+      else process.env.Path = previousPathAlias;
+    }
   }, 15_000);
 
   it('pins one immutable local artifact and a registry-free local-only lockfile', () => {

@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import {
   WORKLOAD_OFFLINE_INSTALL_ARTIFACT_SHA256,
   WORKLOAD_OFFLINE_INSTALL_ID,
@@ -7,6 +9,18 @@ import {
   WORKLOAD_OFFLINE_INSTALL_PACKAGE_NAME,
   WORKLOAD_OFFLINE_INSTALL_PACKAGE_VERSION,
 } from '@agor/core/types';
+
+const require = createRequire(import.meta.url);
+
+/**
+ * Resolve the exact package-owned pnpm runtime. The executor image may not
+ * retain the build-stage global pnpm binary, so offline workloads must not
+ * depend on PATH to find their package manager.
+ */
+export const OFFLINE_INSTALL_PACKAGE_MANAGER_ENTRYPOINT = join(
+  dirname(require.resolve('pnpm')),
+  'bin/pnpm.mjs'
+);
 
 const PACKAGE_JSON = `${JSON.stringify({
   name: 'agor-node-offline-install-v1',
@@ -98,13 +112,14 @@ export const OFFLINE_INSTALL_FIXTURE = Object.freeze({
 export const OFFLINE_INSTALL_COMMANDS = Object.freeze({
   packageManagerVersion: Object.freeze({
     step: 'package-manager-version' as const,
-    executable: WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER,
-    argv: ['--version'] as const,
+    executable: process.execPath,
+    argv: [OFFLINE_INSTALL_PACKAGE_MANAGER_ENTRYPOINT, '--version'] as const,
   }),
   install: Object.freeze({
     step: 'install' as const,
-    executable: WORKLOAD_OFFLINE_INSTALL_PACKAGE_MANAGER,
+    executable: process.execPath,
     argv: [
+      OFFLINE_INSTALL_PACKAGE_MANAGER_ENTRYPOINT,
       'install',
       '--offline',
       '--frozen-lockfile',
