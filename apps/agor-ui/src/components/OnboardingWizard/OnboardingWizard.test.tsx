@@ -26,7 +26,7 @@
  */
 
 import type { Board, User } from '@agor-live/client';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { EMPTY_MAPS } from '../../store/agorMaps';
 import { agorStore } from '../../store/agorStore';
@@ -694,7 +694,13 @@ describe('OnboardingWizard', () => {
         ...(allowClaudeOAuthSignIn === undefined ? {} : { allowClaudeOAuthSignIn }),
       });
 
-      await waitFor(() => expect(onCheckAuth).not.toHaveBeenCalled());
+      // Let the mount effects and one deferred task settle before checking the
+      // negative path; an immediate waitFor assertion can pass before the
+      // capability-gated auth check would have had a chance to run.
+      await act(async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      });
+      expect(onCheckAuth).not.toHaveBeenCalled();
       expect(screen.queryByText('Connected')).not.toBeInTheDocument();
       expect(screen.queryByText('Sign in with Claude')).not.toBeInTheDocument();
       expect(screen.getByText('Connect →').closest('button')).toBeDisabled();
