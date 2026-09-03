@@ -264,6 +264,12 @@ function assertDisclosureAcknowledged(entry: MCPCatalogEntry, acknowledged: unkn
  * from.
  */
 function logProbeDisagreement(entry: MCPCatalogEntry, probed: MCPCatalogProbedAuthType): void {
+  if (
+    probed === 'oauth' &&
+    entry.auth_type === 'credentials' &&
+    entry.credentials?.oauth_challenge_compatible
+  )
+    return;
   if (entry.auth_type === 'unknown' || probed === entry.auth_type) return;
   if (probed !== 'none' && probed !== 'oauth' && probed !== 'credentials') return;
   console.warn(
@@ -342,6 +348,19 @@ async function resolveAuthRequirement(
 ): Promise<MCPAuth> {
   const probed = await probeRemoteAuthType(entry.remote_url);
   logProbeDisagreement(entry, probed);
+
+  // Some vendors publish a first-class bearer route while their unauthenticated
+  // endpoint advertises an OAuth flow that Agor cannot safely enter (for
+  // example, no DCR and no public client). This exception is reviewed per
+  // catalog entry and never inferred from the challenge. The supplied token is
+  // still checked by a second pinned initialize before it is persisted.
+  if (
+    probed === 'oauth' &&
+    entry.credentials?.scheme === 'bearer' &&
+    entry.credentials.oauth_challenge_compatible
+  ) {
+    return resolveBearerTokenAuth(entry, bearerToken);
+  }
 
   if (probed === 'none' || probed === 'oauth') {
     if (bearerToken !== undefined) {

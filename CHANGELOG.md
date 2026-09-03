@@ -33,6 +33,10 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+### Features
+
+- **GitHub returns to the MCP Marketplace through a reviewed fine-grained-PAT exception** — GitHub's remote endpoint challenges for OAuth but does not publish Dynamic Client Registration, so Marketplace uses GitHub's documented bearer-token route and verifies each supplied PAT against the pinned catalog endpoint before storage. The 0.26.0 removal note below remains the historical state for that release. ([#2646](https://github.com/preset-io/agor/pull/2646))
+
 ## 0.26.0 (2026-08-30)
 
 ### Breaking

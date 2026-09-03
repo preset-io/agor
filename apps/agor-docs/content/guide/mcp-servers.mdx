@@ -8,10 +8,10 @@ Marketplace checks the live endpoint before installing it. An entry may be:
 
 - **Open:** Agor connects it and opens a session ready to use.
 - **OAuth:** Agor creates the server and session first. Complete **Sign in** in that session or in MCP Server settings before sending the starter prompt. OAuth grants are per user.
-- **Bearer token:** Marketplace accepts this only when the checked-in catalog explicitly prescribes the reviewed bearer scheme. The token is verified against the catalog endpoint before storage. A generic `401` or `403` is not proof that a bearer token will work.
+- **Bearer token:** Marketplace accepts this only when the checked-in catalog explicitly prescribes the reviewed bearer scheme. The token is verified against the catalog endpoint before storage. A generic `401` or `403` is not proof that a bearer token will work. A provider may advertise OAuth and separately document bearer tokens; that route is allowed only through the entry's explicit `oauth_challenge_compatible: true` review flag (GitHub is the current example), never inferred from the challenge.
 - **Unknown:** Agor checks the endpoint at connect time. If it has changed to OAuth or open access, the drawer updates. An unreviewed custom-header, Basic, multi-key, or signed scheme is refused.
 
-For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers support services such as Datadog API/application-key pairs; Marketplace's Datadog entry instead asks for the bearer PAT/SAT described in Datadog's MCP setup guide.
+For unsupported schemes, configure the server in **Settings → MCP Servers**. Custom headers still support alternatives such as Datadog API/application-key pairs; Marketplace's Datadog entry uses Datadog's recommended browser OAuth flow instead of asking users to manage a long-lived PAT or SAT. That card targets Datadog's US1 MCP endpoint. Other Datadog sites need their regional endpoint configured manually, and an organisation may need to allow-list the Agor callback under **MCP OAuth Redirect URLs** before sign-in completes.
 
 ### Local stdio servers
 
@@ -34,3 +34,5 @@ Connecting an entry again opens a new session but reuses the same owner-specific
 The public catalog is `packages/core/src/mcp-catalog/curated.yaml`. `auth_type` is presentation policy, while live probing remains authoritative. Every `credentials` entry must include a reviewed `credentials` block with `scheme: bearer`, an accurate vendor `acquisition_url`, and an optional user-facing label. Never put a secret in the catalog.
 
 Review the exact endpoint, redirect behavior, vendor authentication documentation, permission disclosure, and acquisition link. Do not classify a non-OAuth challenge as bearer support without that evidence. OAuth-specific compatibility fields are escape hatches and should be added only after reviewing the provider's discovery behavior.
+
+The `MCP catalog health` workflow runs daily and on catalog/audit pull requests. It repeats a read-only initialize/auth probe and the side-effect-free production OAuth metadata/client-readiness validation. Third-party reachability failures remain annotated advisories, while authentication contradictions, invalid OAuth contracts, and a newly usable OAuth path for a reviewed bearer exception fail with an actionable annotation. Credential/PAT entries are reported as requiring a credential rather than fully verified because the audit never holds a user's secret. Unit tests inject the network and OAuth discovery seams and never depend on public endpoints.
