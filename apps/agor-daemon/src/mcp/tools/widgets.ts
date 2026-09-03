@@ -210,7 +210,7 @@ export function registerWidgetTools(server: McpServer, ctx: McpContext): void {
                 widget_id: widgetId,
               },
             },
-            { ...ctx.baseServiceParams, route: { id: currentSessionId } }
+            { ...ctx.baseServiceParams, provider: undefined, route: { id: currentSessionId } }
           );
         }
         return textResult({ widget_id: widgetId, status: 'already_present' });

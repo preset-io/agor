@@ -1498,7 +1498,9 @@ describe('agor_sessions_prompt task callback', () => {
       callback: true,
     });
 
+    expect(promptCalls[0][0]).toMatchObject({ metadata: { system_authored: true } });
     expect(promptCalls[0][1]).toMatchObject({
+      provider: undefined,
       route: { id: 'sess-target' },
       _taskCompletionCallback: {
         target_session_id: 'sess-caller',
