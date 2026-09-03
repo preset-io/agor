@@ -33,6 +33,16 @@ Every release-version bump PR must include its finalized changelog section; a ve
 
 ## Unreleased
 
+## 0.26.1 (2026-09-03)
+
+### Fixes
+
+- **Claude and Codex integrations track current SDK contracts** — upgrades the managed runtimes to Claude Agent SDK 0.3.259 and Codex SDK 0.153.0, including cumulative Claude result accounting, background-task snapshots, prompt provenance, and Codex cache-write usage. Adds the verified `claude-fable-5-1` alias with native 1M context while deliberately retaining OpenCode 1.14.33 pending a dedicated event/API migration. ([#2667](https://github.com/preset-io/agor/pull/2667))
+
+### Chores
+
+- **Align the 0.26.1 release train** — `agor-live`, the CLI, client, and version-aligned agentic-tool packages now share the release version. ([#2667](https://github.com/preset-io/agor/pull/2667))
+
 ## 0.26.0 (2026-08-30)
 
 ### Breaking
