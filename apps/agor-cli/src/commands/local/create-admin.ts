@@ -3,7 +3,12 @@
  */
 
 import { join } from 'node:path';
-import { getConfigPath, loadConfig, resolveBootstrapTenantId } from '@agor/core/config';
+import {
+  BootstrapTenantUnsupportedError,
+  getConfigPath,
+  loadConfig,
+  resolveBootstrapTenantId,
+} from '@agor/core/config';
 import {
   assertDevelopmentDefaultAdminEnvironment,
   assertUsableBootstrapAdminPassword,
@@ -60,6 +65,15 @@ export default class LocalCreateAdmin extends Command {
     const { flags } = await this.parse(LocalCreateAdmin);
 
     try {
+      // Bootstrap admin creation is single-tenant. Resolve the target tenant
+      // FIRST (before opening the DB or running migrations): in
+      // required_from_auth this throws a typed BootstrapTenantUnsupportedError
+      // with a clear, actionable message. Doing it here — outside the DB work —
+      // keeps that message from being flattened by `sanitizeDbError` below, and
+      // avoids entering an undefined-tenant scope that would trip the armed guard.
+      const config = await loadConfig();
+      const tenantId = resolveBootstrapTenantId(config);
+
       // Get database connection URL
       // Priority: DATABASE_URL env var > default SQLite file path
       let databaseUrl = process.env.DATABASE_URL;
@@ -82,12 +96,6 @@ export default class LocalCreateAdmin extends Command {
       // scope — the armed DB guard requires either a tenant or system scope for
       // any access to the guarded proxy.
       await runWithSystemDatabaseScope(db, 'cli create-admin migrations', () => runMigrations(db));
-
-      const config = await loadConfig();
-      // Bootstrap admin creation is single-tenant: use the static tenant, or
-      // fail closed with a clear message in required_from_auth (rather than
-      // entering an undefined-tenant scope that would trip the armed guard).
-      const tenantId = resolveBootstrapTenantId(config);
 
       await runWithTenantDatabaseScope(db, tenantId, async () => {
         // Check if admin user already exists in the active tenant.
@@ -186,11 +194,23 @@ export default class LocalCreateAdmin extends Command {
     } catch (error) {
       this.log('');
       this.log(chalk.red('✗ Failed to create admin user'));
-      const safeError = sanitizeDbError(error);
-      this.log(chalk.red(`  ${safeError.message}`));
+      this.log(chalk.red(`  ${presentCreateAdminFailure(error)}`));
       process.exit(1);
     }
   }
+}
+
+/**
+ * Choose the user-facing failure message.
+ *
+ * A single-tenant-mode rejection ({@link BootstrapTenantUnsupportedError}) is an
+ * actionable configuration message and is surfaced verbatim. Everything else is
+ * assumed to be a database/driver error and is flattened through
+ * {@link sanitizeDbError} so no rejected values or driver internals leak.
+ */
+export function presentCreateAdminFailure(error: unknown): string {
+  if (error instanceof BootstrapTenantUnsupportedError) return error.message;
+  return sanitizeDbError(error).message;
 }
 
 /** Validate the CLI-specific shape, then delegate environment policy to core. */

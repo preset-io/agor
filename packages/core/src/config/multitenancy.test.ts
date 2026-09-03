@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MAX_TENANT_ID_LENGTH } from '../types/tenant';
 import {
   assertValidMultiTenancyConfig,
+  BootstrapTenantUnsupportedError,
   DEFAULT_STATIC_TENANT_ID,
   resolveBootstrapTenantId,
   resolveMultiTenancyConfig,
@@ -334,6 +335,11 @@ describe('multi-tenancy config and tenant resolution', () => {
       // The prior `mode === static ? id : undefined` shape produced an
       // undefined-tenant scope that trips the armed DB-scope guard mid-operation
       // with an opaque error. This must reject up front with a clear message.
+      expect(() =>
+        resolveBootstrapTenantId({
+          multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
+        })
+      ).toThrow(BootstrapTenantUnsupportedError);
       expect(() =>
         resolveBootstrapTenantId({
           multi_tenancy: { mode: 'required_from_auth', auth_claim: 'tenant_id' },
