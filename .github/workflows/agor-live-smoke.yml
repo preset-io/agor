@@ -1,6 +1,6 @@
 # Build the exact npm release artifacts once, then install and exercise those
-# bytes under the supported Node policy. Pull requests use one representative
-# lane; release/manual callers get the full matrix.
+# bytes under the supported Node policy. Pull requests cover the minimum and
+# one representative current-LTS lane; release/manual callers get the full matrix.
 name: agor-live packaged install smoke
 
 on:
@@ -112,7 +112,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","node":"24.19.0"}]' || '[{"os":"ubuntu-latest","node":"22.12.0"},{"os":"ubuntu-latest","node":"24.19.0"},{"os":"ubuntu-latest","node":"26"},{"os":"macos-latest","node":"24.19.0"}]') }}
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","node":"22.13.0"},{"os":"ubuntu-latest","node":"24.19.0"}]' || '[{"os":"ubuntu-latest","node":"22.13.0"},{"os":"ubuntu-latest","node":"24.19.0"},{"os":"ubuntu-latest","node":"26"},{"os":"macos-latest","node":"24.19.0"}]') }}
     steps:
       - uses: actions/checkout@v7
 
@@ -219,6 +219,59 @@ jobs:
             if (exitCode === 0 && output.includes(marker)) resolve();
             else reject(new Error(`PTY failed: exit=${exitCode}, output=${JSON.stringify(output)}`));
           }));
+          NODE
+
+      - name: Packaged offline-install manager runs at the Node floor
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '22.13.0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/plain-install"
+          PACKAGE_ROOT="$ROOT/prefix/lib/node_modules/agor-live"
+          mkdir -p "$ROOT/offline-home"
+          node --input-type=module - "$PACKAGE_ROOT" "$ROOT/offline-home" <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          import { realpath } from 'node:fs/promises';
+          import { isAbsolute, join, relative } from 'node:path';
+          import { pathToFileURL } from 'node:url';
+          const [packageRoot, home] = process.argv.slice(2);
+          const fixture = await import(
+            pathToFileURL(
+              `${packageRoot}/dist/executor/handlers/sdk/offline-install-fixture.js`
+            ).href
+          );
+          const { executable, argv } = fixture.OFFLINE_INSTALL_COMMANDS.packageManagerVersion;
+          const entrypoint = fixture.OFFLINE_INSTALL_PACKAGE_MANAGER_ENTRYPOINT;
+          if (executable !== process.execPath || argv[0] !== entrypoint || !isAbsolute(entrypoint)) {
+            throw new Error(`Offline-install did not use its absolute Node entrypoint: ${entrypoint}`);
+          }
+          const [canonicalPackageRoot, canonicalEntrypoint] = await Promise.all([
+            realpath(packageRoot),
+            realpath(entrypoint),
+          ]);
+          const packageManagerPath = relative(
+            join(canonicalPackageRoot, 'node_modules/pnpm'),
+            canonicalEntrypoint
+          );
+          if (packageManagerPath.startsWith('..') || isAbsolute(packageManagerPath)) {
+            throw new Error(`Offline-install pnpm escaped the package tree: ${entrypoint}`);
+          }
+          const result = spawnSync(executable, argv, {
+            cwd: packageRoot,
+            encoding: 'utf8',
+            env: {
+              CI: 'true',
+              COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+              COREPACK_ENABLE_NETWORK: '0',
+              HOME: home,
+              PATH: '/no-ambient-package-manager',
+            },
+          });
+          if (result.status !== 0 || result.stdout.trim() !== '11.17.0') {
+            throw new Error(
+              `Packaged pnpm failed: status=${result.status}, stdout=${JSON.stringify(result.stdout)}, stderr=${JSON.stringify(result.stderr)}`
+            );
+          }
           NODE
 
       - name: Optional StatsD peer works without lifecycle scripts

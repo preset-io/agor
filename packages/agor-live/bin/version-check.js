@@ -1,6 +1,6 @@
 /**
  * Node.js version check utility
- * Used by CLI and daemon entry points to ensure Node 22+ requirement
+ * Used by CLI and daemon entry points to ensure the minimum supported Node version
  */
 
 import chalk from 'chalk';
@@ -11,8 +11,8 @@ export function checkNodeVersion() {
   const major = parseInt(majorStr, 10);
   const minor = parseInt(minorStr, 10);
 
-  if (major < 22 || (major === 22 && minor < 12)) {
-    console.error(chalk.red('✖ Error: Agor requires Node.js v22.12.0 or higher'));
+  if (major < 22 || (major === 22 && minor < 13)) {
+    console.error(chalk.red('✖ Error: Agor requires Node.js v22.13.0 or higher'));
     console.error(chalk.yellow(`  Current version: v${nodeVersion}\n`));
     console.error('Please upgrade Node.js:');
     console.error(`  • Using nvm: ${chalk.cyan('nvm install 22 && nvm use 22')}`);

@@ -81,7 +81,7 @@ _The board: branches as cards, zones as regions, agent sessions, and — optiona
 
 ## Quick Start
 
-Requires **Node.js ≥ 22.12** ([install](https://nodejs.org)) and **Git** on `PATH`. HTTPS remotes also require a working system CA trust store; SSH remotes require an SSH client and configured keys or agent access.
+Requires **Node.js ≥ 22.13** ([install](https://nodejs.org)) and **Git** on `PATH`. HTTPS remotes also require a working system CA trust store; SSH remotes require an SSH client and configured keys or agent access.
 
 ```bash
 npm install -g agor-live
