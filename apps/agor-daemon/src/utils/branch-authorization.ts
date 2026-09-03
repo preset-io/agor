@@ -31,7 +31,7 @@ import type {
 import { BRANCH_PERMISSION_LEVELS, hasMinimumRole, ROLES } from '@agor/core/types';
 import { assertExecutionHomeKeySatisfiesMode } from '@agor/core/unix';
 import {
-  authenticatedExecutorCommandRuntimeScope,
+  assertExecutorBranchReadScope,
   executorRuntimeScopeSessionId,
 } from '../auth/executor-runtime-scope.js';
 
@@ -425,22 +425,12 @@ export function loadBranch(branchRepo: BranchRepository, branchIdField = 'branch
       return context;
     }
 
-    // Branch-scoped command credentials are still service-account transport
-    // identities, but their Branch scope is an authorization boundary. Check
-    // it before the branchless bulk-cleanup bypass so an A-scoped command can
-    // never resolve or probe Branch B.
-    const commandScope = authenticatedExecutorCommandRuntimeScope(context.params);
-    if (
-      context.path === 'branches' &&
-      context.method === 'get' &&
-      commandScope?.branchId &&
-      String(context.id) !== commandScope.branchId
-    ) {
-      throw new Forbidden('Executor command is scoped to another Branch');
-    }
+    // Keep the helper safe when called outside the registered service chain;
+    // register-hooks installs the same guard before this repository lookup.
+    assertExecutorBranchReadScope(context);
 
-    // Service accounts (executor) bypass RBAC. A taskless command without a
-    // Branch claim retains the existing branchless bulk-cleanup behavior.
+    // Service accounts (executor) bypass RBAC after the scope guard. Only the
+    // cleanup inventory command may intentionally be branchless.
     if (context.params.user?._isServiceAccount) {
       return context;
     }

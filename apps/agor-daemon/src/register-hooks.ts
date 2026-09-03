@@ -101,6 +101,7 @@ import {
 } from '@agor/core/types';
 import {
   isTaskScopedExecutorRequest,
+  requireExecutorBranchReadScope,
   requireTaskScopedExecutorRuntimeToken,
   requireWorkloadCompletionReceipt,
 } from './auth/executor-runtime-scope.js';
@@ -2203,6 +2204,7 @@ export function registerHooks(ctx: RegisterHooksContext): void {
         ...(executionMode.appRbacEnabled ? [scopeFindToAccessibleBranchesSql(superadminOpts)] : []),
       ],
       get: [
+        requireExecutorBranchReadScope(),
         ...(executionMode.appRbacEnabled
           ? [
               loadBranch(branchRepository),

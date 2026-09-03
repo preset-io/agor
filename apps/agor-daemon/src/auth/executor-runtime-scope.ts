@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { Forbidden } from '@agor/core/feathers';
 import type { AuthenticatedParams, HookContext, Params } from '@agor/core/types';
 import { getAuthenticatedConnectionAuthority } from './authenticated-connection-authority.js';
+import { BRANCH_FILESYSTEM_STATUS_EXECUTOR_COMMAND_ID } from './executor-command-ids.js';
 import {
   EXECUTOR_COMMAND_TOKEN_PURPOSE,
   EXECUTOR_SESSION_TOKEN_PURPOSE,
@@ -165,6 +166,50 @@ export function authenticatedExecutorCommandRuntimeScope(
         branchId: scope.branchId,
       }
     : null;
+}
+
+/**
+ * Enforce the executor runtime boundary before a Branch service can resolve a
+ * record. Branch-scoped command and task credentials may read only their
+ * exact Branch. The cleanup inventory is the one intentional branchless
+ * capability and is identified by its exact command ID.
+ */
+export function assertExecutorBranchReadScope(context: HookContext): void {
+  if (!context.params.provider || context.path !== 'branches' || context.method !== 'get') return;
+
+  const commandScope = authenticatedExecutorCommandRuntimeScope(context.params);
+  if (commandScope) {
+    if (commandScope.branchId && String(context.id) === commandScope.branchId) return;
+    if (
+      commandScope.branchId === undefined &&
+      commandScope.commandId === BRANCH_FILESYSTEM_STATUS_EXECUTOR_COMMAND_ID
+    ) {
+      return;
+    }
+    if (commandScope.branchId) {
+      throw new Forbidden('Executor command is scoped to another Branch');
+    }
+    throw new Forbidden('Executor runtime scope is not authorized to read this Branch');
+  }
+
+  const taskScope = authenticatedTaskExecutorRuntimeScope(context.params);
+  if (taskScope) {
+    if (taskScope.branchId && String(context.id) === taskScope.branchId) return;
+    throw new Forbidden('Executor runtime scope is not authorized to read this Branch');
+  }
+
+  const principal = getAuthenticatedConnectionAuthority(context.params.connection)?.principal;
+  if (principal?.kind === 'executor' || context.params.user?._isServiceAccount) {
+    throw new Forbidden('A valid executor runtime scope is required to read a Branch');
+  }
+}
+
+/** Registered before-hook adapter for the unconditional Branch get guard. */
+export function requireExecutorBranchReadScope() {
+  return async (context: HookContext): Promise<HookContext> => {
+    assertExecutorBranchReadScope(context);
+    return context;
+  };
 }
 
 /** Exact action/branch check for a one-purpose executor callback. */

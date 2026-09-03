@@ -1,7 +1,7 @@
 import type { AgorConfig } from '@agor/core/config';
 import type { DeepReadonly } from '@agor/core/types';
 import { describe, expect, it } from 'vitest';
-import { shouldUseCloneReferencePath } from './clone-reference';
+import { resolveBranchStorageHealthConfig, shouldUseCloneReferencePath } from './clone-reference';
 
 const asConfig = (config: AgorConfig): DeepReadonly<AgorConfig> =>
   config as DeepReadonly<AgorConfig>;
@@ -17,6 +17,51 @@ describe('shouldUseCloneReferencePath', () => {
         asConfig({ execution: { branch_storage: { default_mode: 'clone' } } })
       )
     ).toBe(true);
+  });
+
+  describe('public health facts', () => {
+    it('preserves resolved fields and reports the effective default borrow decision', () => {
+      expect(resolveBranchStorageHealthConfig({})).toEqual({
+        defaultMode: 'worktree',
+        allowedModes: ['worktree', 'clone'],
+        allowShallowClones: true,
+        borrowBaseObjects: true,
+      });
+    });
+
+    it('reports the same effective non-borrowing decision as branch creation', () => {
+      const config = {
+        execution: {
+          sandbox: { enabled: true, home_mode: 'per_user' as const },
+          branch_storage: { borrow_base_objects: true as const },
+        },
+      };
+      expect(resolveBranchStorageHealthConfig(config)).toMatchObject({
+        allowShallowClones: true,
+        borrowBaseObjects: true,
+      });
+      expect(
+        resolveBranchStorageHealthConfig({
+          execution: { sandbox: { enabled: true, home_mode: 'per_user' } },
+        })
+      ).toMatchObject({ borrowBaseObjects: false });
+    });
+
+    it('contains no path or raw configuration detail', () => {
+      const health = resolveBranchStorageHealthConfig({
+        execution: {
+          branch_storage: { borrow_base_objects: false },
+          executor_storage: { base_repository: 'unavailable' },
+        },
+      });
+      expect(health).toEqual({
+        defaultMode: 'worktree',
+        allowedModes: ['worktree', 'clone'],
+        allowShallowClones: true,
+        borrowBaseObjects: false,
+      });
+      expect(JSON.stringify(health)).not.toMatch(/borrow_base_objects|repos|secret|config/i);
+    });
   });
 
   it('still borrows when the operator explicitly opts in', () => {

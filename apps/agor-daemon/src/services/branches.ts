@@ -83,6 +83,7 @@ import {
 import { resolveHostIpAddress } from '@agor/core/utils/host-ip';
 import { isAllowedHealthCheckUrl } from '@agor/core/utils/url';
 import { DrizzleService, type Query } from '../adapters/drizzle';
+import { BRANCH_FILESYSTEM_STATUS_EXECUTOR_COMMAND_ID } from '../auth/executor-command-ids.js';
 import { buildBranchCreatedAnalyticsProperties } from '../utils/analytics-payloads.js';
 import { consumeBranchArchiveDeleteAuthorization } from '../utils/branch-archive-delete-authorization.js';
 import { ensureCanControlBranchEnvironment } from '../utils/branch-authorization.js';
@@ -1905,7 +1906,7 @@ export class BranchesService extends DrizzleService<Branch, Partial<Branch>, Bra
     const userId = requestUser.user_id;
     const statusToken = await issueExecutorCommandToken(
       this.app,
-      'branch-filesystem-status',
+      BRANCH_FILESYSTEM_STATUS_EXECUTOR_COMMAND_ID,
       userId,
       branch.branch_id
     );
