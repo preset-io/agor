@@ -6,6 +6,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionProvider } from '../../contexts/ConnectionContext';
 import SessionCanvas from './SessionCanvas';
 
+vi.mock('../../hooks/useCanManageBoard', () => ({
+  useCanManageBoard: () => true,
+}));
+
 let reactFlowProps: Record<string, unknown> | null = null;
 // Stable spy for the `useNodesState` setter (onNodesChangeInternal). Lets tests
 // assert that onNodesChange forwards changes to React Flow's internal handler.

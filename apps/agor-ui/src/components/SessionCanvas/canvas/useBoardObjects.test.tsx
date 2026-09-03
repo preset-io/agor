@@ -45,7 +45,7 @@ function makeBoard(objects: Record<string, unknown>): Board {
 
 const wrapper = ({ children }: { children: ReactNode }) => <AntApp>{children}</AntApp>;
 
-function renderReorder(board: Board, client: unknown) {
+function renderReorder(board: Board, client: unknown, canEdit = true) {
   return renderHook(
     () =>
       useBoardObjects({
@@ -54,10 +54,37 @@ function renderReorder(board: Board, client: unknown) {
         boardObjectsForBoard: [],
         setNodes: vi.fn(),
         deletedObjectsRef: { current: new Set<string>() },
+        canEdit,
       }),
     { wrapper }
   );
 }
+
+describe('zone toolbar metadata', () => {
+  it('reports geometric overlaps, layer no-ops, and effective edit permission', () => {
+    const { client } = makeClient();
+    const board = makeBoard({
+      a: { type: 'zone', x: 0, y: 0, width: 200, height: 200, label: 'A', zIndex: 100 },
+      b: { type: 'zone', x: 100, y: 100, width: 200, height: 200, label: 'B', zIndex: 110 },
+      c: { type: 'zone', x: 500, y: 500, width: 200, height: 200, label: 'C', zIndex: 120 },
+    });
+    const { result } = renderReorder(board, client, false);
+
+    const nodes = result.current.getBoardObjectNodes();
+    const a = nodes.find((node) => node.id === 'a');
+    const c = nodes.find((node) => node.id === 'c');
+
+    expect(a?.data).toMatchObject({
+      canEdit: false,
+      overlappingZoneCount: 1,
+      layerAvailability: { front: true, forward: true, backward: false, back: false },
+    });
+    expect(c?.data).toMatchObject({
+      overlappingZoneCount: 0,
+      layerAvailability: { front: false, forward: false, backward: true, back: true },
+    });
+  });
+});
 
 describe('reorderObject', () => {
   it('"front" sends a single mergeObjectFields patch with the clamped zIndex', async () => {

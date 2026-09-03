@@ -25,6 +25,15 @@ interface UseBoardObjectsProps {
    *  "selected" outline. */
   activeUrlTargetArtifactId?: string | null;
   onEditMarkdown?: (objectId: string, content: string, width: number) => void;
+  /** Effective board.edit permission, resolved by the canvas. */
+  canEdit?: boolean;
+}
+
+function zonesOverlap(
+  a: Extract<BoardObject, { type: 'zone' }>,
+  b: Extract<BoardObject, { type: 'zone' }>
+): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
 export const useBoardObjects = ({
@@ -36,6 +45,7 @@ export const useBoardObjects = ({
   eraserMode = false,
   activeUrlTargetArtifactId,
   onEditMarkdown,
+  canEdit = true,
 }: UseBoardObjectsProps) => {
   // Use ref to avoid recreating callbacks when board changes
   const boardRef = useRef(board);
@@ -234,6 +244,14 @@ export const useBoardObjects = ({
   const getBoardObjectNodes = useCallback((): Node[] => {
     if (!boardObjects) return [];
 
+    const zoneEntries = Object.entries(boardObjects).filter(
+      (entry): entry is [string, Extract<BoardObject, { type: 'zone' }>] => entry[1].type === 'zone'
+    );
+    const zonePeers = zoneEntries.map(([id, zone]) => ({
+      id,
+      zIndex: sanitizeZIndex(zone.zIndex, DEFAULT_BOARD_OBJECT_Z_INDEX.zone),
+    }));
+
     return Object.entries(boardObjects)
       .filter(([, objectData]) => {
         // Filter out objects with invalid positions (prevents NaN errors in React Flow)
@@ -381,6 +399,23 @@ export const useBoardObjects = ({
             y: objectData.y,
             trigger: objectData.type === 'zone' ? objectData.trigger : undefined,
             pinnedItemCount,
+            canEdit,
+            overlappingZoneCount:
+              objectData.type === 'zone'
+                ? zoneEntries.filter(
+                    ([peerId, peer]) => peerId !== objectId && zonesOverlap(objectData, peer)
+                  ).length
+                : 0,
+            layerAvailability:
+              objectData.type === 'zone'
+                ? (['front', 'forward', 'backward', 'back'] as const).reduce(
+                    (availability, op) => {
+                      availability[op] = computeLayerChanges(op, objectId, zonePeers).length > 0;
+                      return availability;
+                    },
+                    {} as Record<LayerOp, boolean>
+                  )
+                : undefined,
             onUpdate: handleUpdateObject,
             onDelete: deleteZone,
             onReorder: reorderObject,
@@ -398,6 +433,7 @@ export const useBoardObjects = ({
     eraserMode,
     activeUrlTargetArtifactId,
     onEditMarkdown,
+    canEdit,
   ]);
 
   /**

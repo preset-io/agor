@@ -59,6 +59,7 @@ import {
   useRegisterRecenter,
 } from '../../contexts/CanvasNavigationContext';
 import { useMutationGate } from '../../contexts/ConnectionContext';
+import { useCanManageBoard } from '../../hooks/useCanManageBoard';
 import { useCursorTracking } from '../../hooks/useCursorTracking';
 import { useStableCallback } from '../../hooks/useStableCallback';
 import { agorStore, useAgorStore } from '../../store/agorStore';
@@ -467,6 +468,12 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const commentById = useAgorStore(selectCommentById);
     const cardById = useAgorStore(selectCardById);
     const userById = useAgorStore(selectUserById);
+    const currentUser = currentUserId ? userById.get(currentUserId) : undefined;
+    const canEditBoard = useCanManageBoard(client, board ?? undefined, currentUser);
+    const canMutateBoard = canEditBoard && mutationGate.canMutate;
+    const boardMutationMessage = canEditBoard
+      ? mutationGate.message
+      : 'You do not have permission to edit this board';
 
     const isDarkMode = isDarkTheme(token);
     const defaultBackground = DEFAULT_BACKGROUNDS[isDarkMode ? 'dark' : 'light'];
@@ -735,6 +742,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       eraserMode: activeTool === 'eraser',
       activeUrlTargetArtifactId,
       onEditMarkdown: handleEditMarkdownNote,
+      canEdit: canEditBoard,
     });
 
     // Extract zone labels - memoized to only change when labels actually change
@@ -877,7 +885,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           type: 'branchNode',
           dragHandle: REACT_FLOW_DRAG_HANDLE_SELECTOR,
           position, // When pinned (parentId set), this is relative to zone; otherwise absolute
-          // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+          // draggable inherits from canvas-level nodesDraggable (canMutateBoard)
           zIndex: 500, // Above zones, below comments
           // Set dimensions for collision detection (matches BranchCard size)
           width: 500,
@@ -1012,7 +1020,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           type: 'cardNode',
           dragHandle: REACT_FLOW_DRAG_HANDLE_SELECTOR,
           position,
-          // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+          // draggable inherits from canvas-level nodesDraggable (canMutateBoard)
           zIndex: 500, // Same level as branches
           width: 380,
           height: 120,
@@ -1307,7 +1315,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           position,
           parentId, // Set parent for relative positioning (moves with parent)
           // No extent constraint - comments can be dragged anywhere and re-pinned
-          // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+          // draggable inherits from canvas-level nodesDraggable (canMutateBoard)
           selectable: true,
           zIndex: 1000, // Always on top (elevateNodesOnSelect is disabled)
           data: {
@@ -2205,7 +2213,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       if (activeTool === 'zone' && drawingZone && reactFlowInstanceRef.current) {
         // Bail out if the daemon isn't usable — the in-flight gesture is
         // discarded rather than persisted as a half-formed zone.
-        if (!mutationGate.canMutate) {
+        if (!canMutateBoard) {
           setDrawingZone(null);
           setActiveTool('select');
           return;
@@ -2246,7 +2254,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               id: objectId,
               type: 'zone',
               position,
-              // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+              // draggable inherits from canvas-level nodesDraggable (canMutateBoard)
               zIndex: DEFAULT_BOARD_OBJECT_Z_INDEX.zone, // Zones behind branches and comments
               style: { width, height },
               data: {
@@ -2300,11 +2308,11 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         setDrawingZone(null);
         setActiveTool('select');
       }
-    }, [activeTool, drawingZone, board, client, setNodes, mutationGate.canMutate]);
+    }, [activeTool, drawingZone, board, client, setNodes, canMutateBoard]);
 
     const openMarkdownPlacementModal = useCallback(
       (event: Pick<React.MouseEvent, 'clientX' | 'clientY'>): boolean => {
-        if (!mutationGate.canMutate || !reactFlowInstanceRef.current) {
+        if (!canMutateBoard || !reactFlowInstanceRef.current) {
           return false;
         }
 
@@ -2316,7 +2324,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         setMarkdownModal({ position });
         return true;
       },
-      [mutationGate.canMutate]
+      [canMutateBoard]
     );
 
     // Pane click handler for comment placement
@@ -2348,7 +2356,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       if (!commentPlacement || !board || !client || !currentUserId || !commentInput.trim()) {
         return;
       }
-      if (!mutationGate.canMutate) {
+      if (!canMutateBoard) {
         return;
       }
 
@@ -2407,14 +2415,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       } catch (error) {
         console.error('Failed to create spatial comment:', error);
       }
-    }, [commentPlacement, board, client, currentUserId, commentInput, mutationGate.canMutate]);
+    }, [commentPlacement, board, client, currentUserId, commentInput, canMutateBoard]);
 
     // Handler to create/update markdown note
     const handleCreateMarkdownNote = useCallback(async () => {
       if (!markdownModal || !board || !client || !markdownContent.trim()) {
         return;
       }
-      if (!mutationGate.canMutate) {
+      if (!canMutateBoard) {
         return;
       }
 
@@ -2446,7 +2454,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             id: objectId,
             type: 'markdown',
             position,
-            // draggable inherits from canvas-level nodesDraggable (mutationGate.canMutate)
+            // draggable inherits from canvas-level nodesDraggable (canMutateBoard)
             zIndex: 300, // Above zones (100), below branches (500)
             data: {
               objectId,
@@ -2506,14 +2514,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       setNodes,
       handleEditMarkdownNote,
       deleteObject,
-      mutationGate.canMutate,
+      canMutateBoard,
     ]);
 
     // Node click handler for eraser mode and comment placement
     const handleNodeClick = useCallback(
       (event: React.MouseEvent, node: Node) => {
         if (activeTool === 'eraser') {
-          if (!mutationGate.canMutate) {
+          if (!canMutateBoard) {
             return;
           }
           // Only delete board objects (zones, markdown), not branches
@@ -2565,7 +2573,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           });
         }
       },
-      [activeTool, deleteObject, mutationGate.canMutate, openMarkdownPlacementModal, setNodes]
+      [activeTool, deleteObject, canMutateBoard, openMarkdownPlacementModal, setNodes]
     );
 
     // Clear comment placement state when switching away from comment tool
@@ -2580,14 +2588,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     // half-engaged mode (e.g. mid-drag zone) doesn't sit armed during the
     // disconnect/grace/out-of-sync window.
     useEffect(() => {
-      if (!mutationGate.canMutate && activeTool !== 'select') {
+      if (!canMutateBoard && activeTool !== 'select') {
         setActiveTool('select');
         setDrawingZone(null);
         setCommentPlacement(null);
         setCommentInput('');
         setMarkdownModal(null);
       }
-    }, [mutationGate.canMutate, activeTool]);
+    }, [canMutateBoard, activeTool]);
 
     return (
       <div
@@ -2650,7 +2658,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
             // canvas gesture that mutates server state (zone/branch
             // position). Selection/focus stay enabled so click handlers
             // and keyboard a11y keep working in read-only mode.
-            nodesDraggable={mutationGate.canMutate}
+            nodesDraggable={canMutateBoard}
             nodesConnectable={false}
             elementsSelectable={true}
             elevateNodesOnSelect={false}
@@ -2735,13 +2743,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 </span>
               </Tooltip>
               <Tooltip
-                title={mutationGate.canMutate ? 'Add Zone' : (mutationGate.message ?? 'Add Zone')}
+                title={canMutateBoard ? 'Add Zone' : (boardMutationMessage ?? 'Add Zone')}
                 placement="right"
                 mouseEnterDelay={0.3}
               >
                 <span>
                   <ControlButton
-                    disabled={!mutationGate.canMutate}
+                    disabled={!canMutateBoard}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveTool('zone');
@@ -2751,8 +2759,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                         activeTool === 'zone'
                           ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
                           : 'none',
-                      opacity: mutationGate.canMutate ? 1 : 0.4,
-                      cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
+                      opacity: canMutateBoard ? 1 : 0.4,
+                      cursor: canMutateBoard ? 'pointer' : 'not-allowed',
                     }}
                   >
                     <BorderOutlined style={{ fontSize: '16px' }} />
@@ -2760,15 +2768,13 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 </span>
               </Tooltip>
               <Tooltip
-                title={
-                  mutationGate.canMutate ? 'Add Comment' : (mutationGate.message ?? 'Add Comment')
-                }
+                title={canMutateBoard ? 'Add Comment' : (boardMutationMessage ?? 'Add Comment')}
                 placement="right"
                 mouseEnterDelay={0.3}
               >
                 <span>
                   <ControlButton
-                    disabled={!mutationGate.canMutate}
+                    disabled={!canMutateBoard}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveTool('comment');
@@ -2778,8 +2784,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                         activeTool === 'comment'
                           ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
                           : 'none',
-                      opacity: mutationGate.canMutate ? 1 : 0.4,
-                      cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
+                      opacity: canMutateBoard ? 1 : 0.4,
+                      cursor: canMutateBoard ? 'pointer' : 'not-allowed',
                     }}
                   >
                     <CommentOutlined style={{ fontSize: '16px' }} />
@@ -2788,9 +2794,9 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               </Tooltip>
               <Tooltip
                 title={
-                  mutationGate.canMutate
+                  canMutateBoard
                     ? 'Add Markdown Note — click canvas to place'
-                    : (mutationGate.message ?? 'Add Markdown Note — click canvas to place')
+                    : (boardMutationMessage ?? 'Add Markdown Note — click canvas to place')
                 }
                 placement="right"
                 mouseEnterDelay={0.3}
@@ -2798,7 +2804,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                 <span>
                   <ControlButton
                     aria-label="Add Markdown Note"
-                    disabled={!mutationGate.canMutate}
+                    disabled={!canMutateBoard}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveTool('markdown');
@@ -2808,8 +2814,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                         activeTool === 'markdown'
                           ? `${token.lineWidth * 3}px ${token.lineType} ${token.colorPrimary}`
                           : 'none',
-                      opacity: mutationGate.canMutate ? 1 : 0.4,
-                      cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
+                      opacity: canMutateBoard ? 1 : 0.4,
+                      cursor: canMutateBoard ? 'pointer' : 'not-allowed',
                     }}
                   >
                     <FileMarkdownOutlined style={{ fontSize: '16px' }} />
@@ -2818,16 +2824,14 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
               </Tooltip>
               <Tooltip
                 title={
-                  mutationGate.canMutate
-                    ? 'Eraser - Click to toggle'
-                    : (mutationGate.message ?? 'Eraser')
+                  canMutateBoard ? 'Eraser - Click to toggle' : (boardMutationMessage ?? 'Eraser')
                 }
                 placement="right"
                 mouseEnterDelay={0.3}
               >
                 <span>
                   <ControlButton
-                    disabled={!mutationGate.canMutate}
+                    disabled={!canMutateBoard}
                     onClick={(e) => {
                       e.stopPropagation();
                       setActiveTool(activeTool === 'eraser' ? 'select' : 'eraser');
@@ -2838,8 +2842,8 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
                       color: activeTool === 'eraser' ? token.colorError : 'inherit',
                       backgroundColor:
                         activeTool === 'eraser' ? `${token.colorError}15` : 'transparent',
-                      opacity: mutationGate.canMutate ? 1 : 0.4,
-                      cursor: mutationGate.canMutate ? 'pointer' : 'not-allowed',
+                      opacity: canMutateBoard ? 1 : 0.4,
+                      cursor: canMutateBoard ? 'pointer' : 'not-allowed',
                     }}
                   >
                     <DeleteOutlined style={{ fontSize: '16px' }} />

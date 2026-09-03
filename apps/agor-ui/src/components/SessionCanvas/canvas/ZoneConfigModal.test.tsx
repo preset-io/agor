@@ -62,6 +62,8 @@ describe('ZoneConfigModal historical tool migration', () => {
       </AntdApp>
     );
 
+    expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: /Automation/ }));
     expect(await screen.findByText('This zone uses a removed agentic tool')).toBeInTheDocument();
     const save = screen.getByRole('button', { name: 'Save' });
     expect(save).toBeDisabled();
@@ -79,5 +81,41 @@ describe('ZoneConfigModal historical tool migration', () => {
         agent: 'codex',
       },
     });
+  });
+
+  it('moves appearance and label size into General without changing automation defaults', async () => {
+    const onUpdate = vi.fn();
+    render(
+      <AntdApp>
+        <ZoneConfigModal
+          open
+          onCancel={vi.fn()}
+          zoneName="Review"
+          objectId="zone-1"
+          onUpdate={onUpdate}
+          zoneData={{
+            type: 'zone',
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 100,
+            label: 'Review',
+          }}
+        />
+      </AntdApp>
+    );
+
+    expect(screen.getByText('Appearance')).toBeInTheDocument();
+    expect(screen.getByLabelText('Zone border color')).toBeInTheDocument();
+    expect(screen.getByLabelText('Zone fill color')).toBeInTheDocument();
+    expect(screen.getByLabelText('Zone label size')).toHaveValue('14');
+    expect(screen.queryByLabelText('Trigger behavior')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Zone label size'), { target: { value: '20' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+    expect(onUpdate.mock.calls[0][1]).toMatchObject({ fontSize: 20 });
+    expect(onUpdate.mock.calls[0][1].trigger).toBeUndefined();
   });
 });
