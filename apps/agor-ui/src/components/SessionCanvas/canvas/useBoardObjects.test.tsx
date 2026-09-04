@@ -157,6 +157,212 @@ describe('justifyZoneContents production path', () => {
   });
 });
 
+describe('stale layout recovery production path', () => {
+  const zoneId = 'zone-current';
+  const staleBoard = {
+    board_id: 'board-1',
+    objects: {
+      [zoneId]: {
+        type: 'zone',
+        x: 0,
+        y: 0,
+        width: 620,
+        height: 560,
+        label: 'Current',
+        layout: { mode: 'manual', preset: 'grid', columns: 1, gap: 12 },
+      },
+    },
+  } as unknown as Board;
+  const freshBoard = {
+    board_id: 'board-1',
+    objects: {
+      [zoneId]: {
+        type: 'zone',
+        x: 40,
+        y: 60,
+        width: 620,
+        height: 560,
+        label: 'Current',
+        layout: { mode: 'manual', preset: 'grid', columns: 1, gap: 12 },
+      },
+    },
+  } as unknown as Board;
+  const stalePlacement = {
+    object_id: 'placement-current',
+    board_id: 'board-1',
+    entity_type: 'branch',
+    branch_id: 'branch-current',
+    zone_id: zoneId,
+    position: { x: 180, y: 260 },
+    size: { width: 500, height: 220 },
+  };
+  const freshPlacement = {
+    ...stalePlacement,
+    position: { x: 120, y: 180 },
+    size: { width: 500, height: 240 },
+  };
+  const staleNodes: Node[] = [
+    {
+      id: zoneId,
+      type: 'zone',
+      position: { x: 0, y: 0 },
+      width: 620,
+      height: 560,
+      data: {},
+    },
+    {
+      id: 'branch-current',
+      type: 'branchNode',
+      parentId: zoneId,
+      position: { x: 180, y: 260 },
+      width: 500,
+      height: 220,
+      data: { branch: { name: 'Fictional branch' } },
+    },
+  ];
+
+  function renderStaleRecovery(options?: { auto?: boolean; staleAttempts?: number }) {
+    const board = options?.auto
+      ? makeBoard({
+          [zoneId]: {
+            ...staleBoard.objects?.[zoneId],
+            type: 'zone',
+            layout: { mode: 'auto', preset: 'grid', columns: 1, gap: 12 },
+          },
+        })
+      : staleBoard;
+    const authoritativeBoard = options?.auto
+      ? makeBoard({
+          [zoneId]: {
+            ...freshBoard.objects?.[zoneId],
+            type: 'zone',
+            layout: { mode: 'auto', preset: 'grid', columns: 1, gap: 12 },
+          },
+        })
+      : freshBoard;
+    const staleAttempts = options?.staleAttempts ?? 1;
+    let applyAttempts = 0;
+    const boardsPatch = vi.fn().mockImplementation((boardId, data) => {
+      if (data?._action !== 'applyLayout') return {};
+      applyAttempts += 1;
+      if (applyAttempts <= staleAttempts) {
+        return Promise.reject(new Error('RepositoryError: Board layout source snapshot is stale'));
+      }
+      return mockBoardPatchResult(boardId, data);
+    });
+    const boardsGet = vi.fn().mockResolvedValue(authoritativeBoard);
+    const placementsFindAll = vi.fn().mockResolvedValue([freshPlacement]);
+    const service = vi.fn((path: string) =>
+      path === 'boards'
+        ? { patch: boardsPatch, get: boardsGet }
+        : { patch: vi.fn(), findAll: placementsFindAll }
+    );
+    const setNodes = vi.fn();
+    const view = renderHook(
+      () =>
+        useBoardObjects({
+          board,
+          client: { service } as never,
+          boardObjectsForBoard: [stalePlacement] as never,
+          nodes: staleNodes,
+          setNodes,
+          deletedObjectsRef: { current: new Set<string>() },
+        }),
+      { wrapper }
+    );
+    return { ...view, boardsPatch, boardsGet, placementsFindAll, setNodes };
+  }
+
+  it('replans one stale explicit zone action from authoritative geometry without a stale optimistic write', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const view = renderStaleRecovery();
+    const zoneNode = view.result.current.getBoardObjectNodes().find((node) => node.id === zoneId);
+    expect(zoneNode).toBeDefined();
+
+    await act(async () => {
+      await (zoneNode!.data.onArrangeContents as (id: string) => Promise<void>)(zoneId);
+    });
+
+    const writes = layoutWrites(view.boardsPatch);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.expected).toMatchObject({
+      objects: { [zoneId]: { x: 40, y: 60, width: 620, height: 560 } },
+      placements: {
+        'placement-current': {
+          position: { x: 120, y: 180 },
+          size: { width: 500, height: 240 },
+        },
+      },
+    });
+    expect(view.boardsGet).toHaveBeenCalledTimes(1);
+    expect(view.placementsFindAll).toHaveBeenCalledTimes(1);
+    expect(view.setNodes).toHaveBeenCalledTimes(1);
+    expect(showError).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalledWith(
+      'Failed to arrange zone contents:',
+      expect.anything()
+    );
+    consoleError.mockRestore();
+  });
+
+  it('bounds a repeatedly stale background Auto Zone pass without logs, toasts, or feedback writes', async () => {
+    vi.useFakeTimers();
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const view = renderStaleRecovery({ auto: true, staleAttempts: 2 });
+
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
+
+    expect(layoutWrites(view.boardsPatch)).toHaveLength(2);
+    expect(view.boardsGet).toHaveBeenCalledTimes(1);
+    expect(view.setNodes).not.toHaveBeenCalled();
+    expect(showError).not.toHaveBeenCalled();
+    expect(consoleError).not.toHaveBeenCalledWith(
+      'Failed to arrange zone contents:',
+      expect.anything()
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(layoutWrites(view.boardsPatch)).toHaveLength(2);
+    consoleError.mockRestore();
+  });
+
+  it('reports one actionable failure when an explicit replan loses a second race', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const view = renderStaleRecovery({ staleAttempts: 2 });
+    const zoneNode = view.result.current.getBoardObjectNodes().find((node) => node.id === zoneId);
+    expect(zoneNode).toBeDefined();
+
+    await act(async () => {
+      await (zoneNode!.data.onArrangeContents as (id: string) => Promise<void>)(zoneId);
+    });
+
+    expect(layoutWrites(view.boardsPatch)).toHaveLength(2);
+    expect(showError).toHaveBeenCalledTimes(1);
+    expect(showError).toHaveBeenCalledWith('The board changed again while arranging. Try again.');
+    expect(consoleError).not.toHaveBeenCalledWith(
+      'Failed to arrange zone contents:',
+      expect.anything()
+    );
+    consoleError.mockRestore();
+  });
+
+  it('lets an explicit Auto Zone action supersede its scheduled observer pass', async () => {
+    vi.useFakeTimers();
+    const view = renderStaleRecovery({ auto: true });
+    const zoneNode = view.result.current.getBoardObjectNodes().find((node) => node.id === zoneId);
+    expect(zoneNode).toBeDefined();
+
+    await act(async () => {
+      await (zoneNode!.data.onArrangeContents as (id: string) => Promise<void>)(zoneId);
+    });
+    expect(layoutWrites(view.boardsPatch)).toHaveLength(2);
+
+    await act(async () => vi.advanceTimersByTimeAsync(10_000));
+    expect(layoutWrites(view.boardsPatch)).toHaveLength(2);
+    expect(view.setNodes).toHaveBeenCalledTimes(1);
+    expect(showError).not.toHaveBeenCalled();
+  });
+});
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -4151,6 +4357,8 @@ describe('arrangeBoardZones production path', () => {
     );
     act(() => result.current.preserveAutoZoneFrameOnce(zoneId));
     await act(async () => vi.advanceTimersByTimeAsync(400));
+    expect(boardsPatch).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTimeAsync(60_000));
     expect(boardsPatch).toHaveBeenCalledTimes(1);
     expect(layoutPlacements(boardsPatch)['placement-a']).toEqual({
       position: { x: 20, y: 100 },
@@ -4168,5 +4376,145 @@ describe('arrangeBoardZones production path', () => {
     expect(layoutWrites(boardsPatch)[0]?.objects).toEqual({
       'zone-auto': expect.objectContaining({ width: 540, height: 320 }),
     });
+  });
+});
+
+describe('whole-board stale layout recovery', () => {
+  const staleBoard = makeBoard({
+    zone: { type: 'zone', x: 1600, y: 900, width: 620, height: 500, label: 'Planning' },
+  });
+  const freshBoard = makeBoard({
+    zone: { type: 'zone', x: 1760, y: 980, width: 620, height: 500, label: 'Planning' },
+  });
+  const staleNodes: Node[] = [
+    {
+      id: 'zone',
+      type: 'zone',
+      position: { x: 1600, y: 900 },
+      width: 620,
+      height: 500,
+      data: {},
+    },
+  ];
+
+  function renderWholeBoardRecovery(firstWrite: Promise<unknown>) {
+    let attempts = 0;
+    const boardsPatch = vi.fn().mockImplementation((boardId, data) => {
+      attempts += 1;
+      if (attempts === 1) return firstWrite;
+      return mockBoardPatchResult(boardId, data);
+    });
+    const boardsGet = vi.fn().mockResolvedValue(freshBoard);
+    const placementsFindAll = vi.fn().mockResolvedValue([]);
+    const service = vi.fn((path: string) =>
+      path === 'boards'
+        ? { patch: boardsPatch, get: boardsGet }
+        : { patch: vi.fn(), findAll: placementsFindAll }
+    );
+    const setNodes = vi.fn();
+    const view = renderHook(
+      () =>
+        useBoardObjects({
+          board: staleBoard,
+          client: { service } as never,
+          boardObjectsForBoard: [],
+          nodes: staleNodes,
+          setNodes,
+          deletedObjectsRef: { current: new Set<string>() },
+        }),
+      { wrapper }
+    );
+    return { ...view, boardsPatch, boardsGet, placementsFindAll, setNodes };
+  }
+
+  it('replans Arrange Board once from a fresh complete source snapshot', async () => {
+    const view = renderWholeBoardRecovery(
+      Promise.reject(new Error('Board layout source snapshot is stale'))
+    );
+
+    await act(async () => view.result.current.arrangeWholeBoard());
+
+    expect(layoutWrites(view.boardsPatch)).toHaveLength(2);
+    expect(layoutWrites(view.boardsPatch)[1]?.expected.objects).toEqual({
+      zone: { x: 1760, y: 980, width: 620, height: 500 },
+    });
+    expect(view.boardsGet).toHaveBeenCalledTimes(1);
+    expect(view.placementsFindAll).toHaveBeenCalledTimes(1);
+    expect(view.setNodes).toHaveBeenCalledTimes(1);
+    expect(showError).not.toHaveBeenCalled();
+  });
+
+  it('cancels a stale replan when a newer drag/resize intent takes ownership', async () => {
+    let rejectFirst: ((error: Error) => void) | undefined;
+    const firstWrite = new Promise((_, reject) => {
+      rejectFirst = reject;
+    });
+    const view = renderWholeBoardRecovery(firstWrite);
+
+    let arrange: Promise<void> | undefined;
+    act(() => {
+      arrange = view.result.current.arrangeWholeBoard();
+    });
+    act(() => view.result.current.cancelPendingLayoutRecovery());
+    rejectFirst?.(new Error('Board layout source snapshot is stale'));
+    await act(async () => arrange);
+
+    expect(layoutWrites(view.boardsPatch)).toHaveLength(1);
+    expect(view.boardsGet).not.toHaveBeenCalled();
+    expect(view.setNodes).not.toHaveBeenCalled();
+    expect(showError).not.toHaveBeenCalled();
+  });
+});
+
+describe('board object finite-geometry node boundary', () => {
+  it('does not mis-render legacy text or non-finite objects as zones', () => {
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const board = makeBoard({
+      'legacy-text': { type: 'text', x: 20, y: 40, content: 'Fictional label' },
+      invalid: {
+        type: 'zone',
+        x: Number.POSITIVE_INFINITY,
+        y: 0,
+        width: 400,
+        height: 300,
+        label: 'Invalid',
+      },
+      'missing-size': {
+        type: 'zone',
+        x: 100,
+        y: 100,
+        label: 'Invalid runtime payload',
+      } as never,
+      valid: { type: 'zone', x: 0, y: 0, width: 400, height: 300, label: 'Valid' },
+    });
+    const { result } = renderHook(
+      () =>
+        useBoardObjects({
+          board,
+          client: makeClient().client,
+          boardObjectsForBoard: [],
+          nodes: [],
+          setNodes: vi.fn(),
+          deletedObjectsRef: { current: new Set<string>() },
+        }),
+      { wrapper }
+    );
+
+    expect(result.current.getBoardObjectNodes().map((node) => node.id)).toEqual(['valid']);
+    expect(consoleWarn).toHaveBeenCalledWith('Skipping board object with invalid geometry:', {
+      objectId: 'invalid',
+      type: 'zone',
+    });
+    expect(consoleWarn).toHaveBeenCalledWith('Skipping board object with invalid geometry:', {
+      objectId: 'missing-size',
+      type: 'zone',
+    });
+    expect(consoleWarn).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        content: 'Fictional label',
+      })
+    );
+    consoleWarn.mockRestore();
   });
 });

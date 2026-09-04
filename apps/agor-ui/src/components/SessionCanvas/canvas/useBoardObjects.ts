@@ -34,6 +34,12 @@ import {
   holdAutoZoneObserverLease,
 } from './autoZoneObserver';
 import {
+  type AuthoritativeLayoutSource,
+  fetchAuthoritativeLayoutSource,
+  isBoardLayoutSnapshotStale,
+  MAX_LAYOUT_STALE_REPLANS,
+} from './layoutConflictRecovery';
+import {
   createPostLayoutViewportIntent,
   type PostLayoutViewportIntent,
   type PostLayoutViewportMode,
@@ -362,11 +368,27 @@ interface ArrangeZoneContentsOptions {
   userInitiated?: boolean;
   /** Synchronous owner token required for background writes only. */
   observerLease?: AutoZoneObserverLease;
+  /** Internal bounded-conflict recovery state; never exposed by UI controls. */
+  recovery?: LayoutRecoveryState;
 }
 
 interface AutoZoneObserverLease {
   boardId: string | undefined;
   owned: boolean;
+}
+
+interface LayoutIntentToken {
+  epoch: number;
+  scope: 'board' | 'zone';
+  key: string;
+  generation: number;
+}
+
+interface LayoutRecoveryState {
+  attempt: number;
+  intent: LayoutIntentToken;
+  source: AuthoritativeLayoutSource;
+  viewportIntentToken?: number;
 }
 
 type ArrangeBoardZonesOptions = Omit<BoardZoneArrangementOptions, 'looseItems'> & {
@@ -379,6 +401,8 @@ type ArrangeBoardZonesOptions = Omit<BoardZoneArrangementOptions, 'looseItems'> 
   viewportMode?: PostLayoutViewportMode;
   /** Invocation-order fence reserved before the first asynchronous boundary. */
   viewportIntentToken?: number;
+  /** Internal bounded-conflict recovery state; never exposed by UI controls. */
+  recovery?: LayoutRecoveryState;
 };
 
 export const useBoardObjects = ({
@@ -448,6 +472,44 @@ export const useBoardObjects = ({
   calledOutNodeIdsRef.current = calledOutNodeIds;
   const boardArrangementInFlightRef = useRef(false);
   const [isBoardArrangementActive, setIsBoardArrangementActive] = useState(false);
+  const layoutIntentEpochRef = useRef(0);
+  const boardLayoutGenerationRef = useRef(0);
+  const zoneLayoutGenerationRef = useRef(new Map<string, number>());
+
+  const beginZoneLayoutIntent = useCallback((zoneId: string, userInitiated: boolean) => {
+    if (userInitiated) layoutIntentEpochRef.current += 1;
+    const generation = (zoneLayoutGenerationRef.current.get(zoneId) ?? 0) + 1;
+    zoneLayoutGenerationRef.current.set(zoneId, generation);
+    return {
+      epoch: layoutIntentEpochRef.current,
+      scope: 'zone' as const,
+      key: zoneId,
+      generation,
+    };
+  }, []);
+
+  const beginBoardLayoutIntent = useCallback(() => {
+    layoutIntentEpochRef.current += 1;
+    boardLayoutGenerationRef.current += 1;
+    return {
+      epoch: layoutIntentEpochRef.current,
+      scope: 'board' as const,
+      key: 'board',
+      generation: boardLayoutGenerationRef.current,
+    };
+  }, []);
+
+  const layoutIntentIsCurrent = useCallback((intent: LayoutIntentToken): boolean => {
+    if (intent.epoch !== layoutIntentEpochRef.current) return false;
+    return intent.scope === 'board'
+      ? intent.generation === boardLayoutGenerationRef.current
+      : intent.generation === zoneLayoutGenerationRef.current.get(intent.key);
+  }, []);
+
+  /** Direct manipulation supersedes any not-yet-committed layout or stale replan. */
+  const cancelPendingLayoutRecovery = useCallback(() => {
+    layoutIntentEpochRef.current += 1;
+  }, []);
 
   const acknowledgeExpectedAutoLayouts = useCallback((zoneIds: Iterable<string>) => {
     for (const zoneId of zoneIds) {
@@ -514,6 +576,9 @@ export const useBoardObjects = ({
   useEffect(() => {
     const boardId = board?.board_id;
     const locks = typeof navigator === 'undefined' ? undefined : navigator.locks;
+    layoutIntentEpochRef.current += 1;
+    boardLayoutGenerationRef.current = 0;
+    zoneLayoutGenerationRef.current.clear();
     lastAutoLayoutSignaturesRef.current = new Map();
     expectedAutoLayoutSignaturesRef.current.clear();
     if (!boardId || !locks) {
@@ -941,18 +1006,27 @@ export const useBoardObjects = ({
    */
   const arrangeZoneContents = useCallback(
     async (zoneId: string, options: ArrangeZoneContentsOptions = {}) => {
-      const currentBoard = boardRef.current;
+      const currentBoard = options.recovery?.source.board ?? boardRef.current;
       const persistedZone = currentBoard?.objects?.[zoneId];
       if (!currentBoard || !client || persistedZone?.type !== 'zone') return;
+      const intent =
+        options.recovery?.intent ?? beginZoneLayoutIntent(zoneId, options.userInitiated === true);
+      if (!options.recovery && options.userInitiated) {
+        autoZoneDeferralRef.current?.cancel(zoneId);
+      }
       if (
-        options.observerLease &&
-        (options.observerLease !== autoZoneObserverLeaseRef.current ||
-          !options.observerLease.owned ||
-          options.observerLease.boardId !== currentBoard.board_id)
+        !layoutIntentIsCurrent(intent) ||
+        (options.observerLease &&
+          (options.observerLease !== autoZoneObserverLeaseRef.current ||
+            !options.observerLease.owned ||
+            options.observerLease.boardId !== currentBoard.board_id))
       )
         return;
-      const viewportIntentToken = options.userInitiated ? onUserLayoutStart?.() : undefined;
-      const sourceNodes = nodesRef.current;
+      const viewportIntentToken =
+        options.recovery?.viewportIntentToken ??
+        (options.userInitiated ? onUserLayoutStart?.() : undefined);
+      const sourceNodes = options.recovery?.source.nodes ?? nodesRef.current;
+      const sourcePlacements = options.recovery?.source.placements ?? boardObjectsForBoard;
       const liveZoneNode = sourceNodes.find((node) => node.id === zoneId);
       // A toolbar click can race the debounced persistence of a drag/resize.
       // Plan and write from the visible frame so arranging children can never
@@ -1038,7 +1112,7 @@ export const useBoardObjects = ({
       }
 
       const placementByNodeId = new Map<string, BoardEntityObject>();
-      for (const placement of boardObjectsForBoard) {
+      for (const placement of sourcePlacements) {
         if (placement.branch_id) placementByNodeId.set(placement.branch_id, placement);
         if (placement.card_id) placementByNodeId.set(`card-${placement.card_id}`, placement);
       }
@@ -1445,9 +1519,6 @@ export const useBoardObjects = ({
           ];
         }),
       });
-      if (optimisticNodes.length > 0) {
-        onArrangeNodes?.(optimisticNodes, timing.totalMs);
-      }
       let expectedLayoutRegistered = false;
       if (policy.mode === 'auto') {
         // Match the exact normalized post-write target rather than blindly
@@ -1460,15 +1531,6 @@ export const useBoardObjects = ({
         expectedLayoutRegistered = true;
         skipNextAutoArrangeRef.current.delete(zoneId);
       }
-      setNodes((currentNodes) =>
-        currentNodes.map((node) => {
-          if (node.id === zoneId && (zoneHeightChanged || zoneWidthChanged)) {
-            return optimisticZone ?? node;
-          }
-          return reflowedById.get(node.id) ?? changedById.get(node.id) ?? node;
-        })
-      );
-
       try {
         const canvasObjects = Object.fromEntries(
           children.flatMap(({ node, isCanvasObject }) => {
@@ -1540,10 +1602,11 @@ export const useBoardObjects = ({
           // geometry snapshot. Publishing the existing atomic layout action
           // prevents partial placement echoes from re-arming the observer.
           if (
-            options.observerLease &&
-            (options.observerLease !== autoZoneObserverLeaseRef.current ||
-              !options.observerLease.owned ||
-              options.observerLease.boardId !== currentBoard.board_id)
+            !layoutIntentIsCurrent(intent) ||
+            (options.observerLease &&
+              (options.observerLease !== autoZoneObserverLeaseRef.current ||
+                !options.observerLease.owned ||
+                options.observerLease.boardId !== currentBoard.board_id))
           ) {
             if (expectedLayoutRegistered) clearExpectedAutoLayouts([zoneId]);
             return;
@@ -1553,7 +1616,7 @@ export const useBoardObjects = ({
             placements,
             expected: expectedLayoutSnapshot(
               currentBoard,
-              new Map(boardObjectsForBoard.map((placement) => [placement.object_id, placement]))
+              new Map(sourcePlacements.map((placement) => [placement.object_id, placement]))
             ),
           };
           const result = (await client.service('boards').patch(currentBoard.board_id, {
@@ -1566,6 +1629,18 @@ export const useBoardObjects = ({
           if (expectedLayoutRegistered) acknowledgeExpectedAutoLayouts([zoneId]);
         } else if (expectedLayoutRegistered) {
           clearExpectedAutoLayouts([zoneId]);
+        }
+        if (!layoutIntentIsCurrent(intent)) return;
+        if (optimisticNodes.length > 0) {
+          onArrangeNodes?.(optimisticNodes, timing.totalMs);
+          setNodes((currentNodes) =>
+            currentNodes.map((node) => {
+              if (node.id === zoneId && (zoneHeightChanged || zoneWidthChanged)) {
+                return optimisticZone ?? node;
+              }
+              return reflowedById.get(node.id) ?? changedById.get(node.id) ?? node;
+            })
+          );
         }
         if (overflowCount > 0 && !options.silent) {
           showWarning(
@@ -1594,16 +1669,59 @@ export const useBoardObjects = ({
         });
       } catch (error) {
         if (expectedLayoutRegistered) clearExpectedAutoLayouts([zoneId]);
+        if (isBoardLayoutSnapshotStale(error)) {
+          const attempt = options.recovery?.attempt ?? 0;
+          if (!layoutIntentIsCurrent(intent)) return;
+          if (attempt < MAX_LAYOUT_STALE_REPLANS) {
+            try {
+              const source = await fetchAuthoritativeLayoutSource(
+                client,
+                currentBoard.board_id,
+                nodesRef.current
+              );
+              if (!source || !layoutIntentIsCurrent(intent)) {
+                if (options.userInitiated && layoutIntentIsCurrent(intent)) {
+                  showError(
+                    'The board changed while arranging. Try again after it finishes loading.'
+                  );
+                }
+                return;
+              }
+              await arrangeZoneContentsRef.current?.(zoneId, {
+                ...options,
+                recovery: {
+                  attempt: attempt + 1,
+                  intent,
+                  source,
+                  viewportIntentToken,
+                },
+              });
+            } catch (refreshError) {
+              console.error('Failed to refresh current board layout:', refreshError);
+              if (options.userInitiated) showError('Failed to refresh the current board layout');
+            }
+            return;
+          }
+          // A second conflict means another writer won again. Background
+          // maintenance stops silently; explicit intent gets one actionable
+          // message and never enters an observer/toast loop.
+          if (options.userInitiated) {
+            showError('The board changed again while arranging. Try again.');
+          }
+          return;
+        }
         console.error('Failed to arrange zone contents:', error);
         showError('Failed to arrange zone contents');
       }
     },
     [
       acknowledgeExpectedAutoLayouts,
+      beginZoneLayoutIntent,
       boardObjectsForBoard,
       clearExpectedAutoLayouts,
       client,
       completeUserLayout,
+      layoutIntentIsCurrent,
       onUserLayoutStart,
       onArrangeNodes,
       restoreZoneCallouts,
@@ -1783,11 +1901,20 @@ export const useBoardObjects = ({
   );
 
   /** Keep an explicitly dragged/resized Auto Zone frame while its children re-pack. */
-  const preserveAutoZoneFrameOnce = useCallback((zoneId: string) => {
-    const zone = boardRef.current?.objects?.[zoneId];
-    if (zone?.type !== 'zone' || normalizeZoneLayoutPolicy(zone.layout).mode !== 'auto') return;
-    preserveNextAutoZoneFrameRef.current.add(zoneId);
-  }, []);
+  const preserveAutoZoneFrameOnce = useCallback(
+    (zoneId: string) => {
+      const zone = boardRef.current?.objects?.[zoneId];
+      if (zone?.type !== 'zone' || normalizeZoneLayoutPolicy(zone.layout).mode !== 'auto') return;
+      cancelPendingLayoutRecovery();
+      clearExpectedAutoLayouts([zoneId]);
+      preserveNextAutoZoneFrameRef.current.add(zoneId);
+      const lease = autoZoneObserverLeaseRef.current;
+      autoZoneDeferralRef.current?.defer(zoneId, () =>
+        runAutoZoneArrangeRef.current(zoneId, lease)
+      );
+    },
+    [cancelPendingLayoutRecovery, clearExpectedAutoLayouts]
+  );
 
   /**
    * Arrange selected zone containers and their measured children using the
@@ -1796,30 +1923,37 @@ export const useBoardObjects = ({
    */
   const arrangeBoardZones = useCallback(
     async (zoneIds: readonly string[], options: ArrangeBoardZonesOptions = {}) => {
-      const currentBoard = boardRef.current;
-      if (!currentBoard || !client || boardArrangementInFlightRef.current) return;
       const {
         userInitiated = false,
         layoutScope = 'board',
         selectedRootIds,
         viewportMode = 'smart',
         viewportIntentToken: suppliedViewportIntentToken,
+        recovery,
         ...arrangementOptions
       } = options;
-      const viewportIntentToken = userInitiated
-        ? (suppliedViewportIntentToken ?? onUserLayoutStart?.())
-        : undefined;
+      const currentBoard = recovery?.source.board ?? boardRef.current;
+      const ownsInFlight = !recovery;
+      if (!currentBoard || !client || (ownsInFlight && boardArrangementInFlightRef.current)) return;
+      const intent = recovery?.intent ?? beginBoardLayoutIntent();
+      if (!layoutIntentIsCurrent(intent)) return;
+      const viewportIntentToken =
+        recovery?.viewportIntentToken ??
+        (userInitiated ? (suppliedViewportIntentToken ?? onUserLayoutStart?.()) : undefined);
       const packZoneContents = arrangementOptions.packZoneContents !== false;
       const selected = new Set(zoneIds);
-      const currentNodes = nodesRef.current;
+      const currentNodes = recovery?.source.nodes ?? nodesRef.current;
+      const sourcePlacements = recovery?.source.placements ?? boardObjectsForBoard;
       const placementByNodeId = new Map<string, BoardEntityObject>();
-      for (const placement of boardObjectsForBoard) {
+      for (const placement of sourcePlacements) {
         if (placement.branch_id) placementByNodeId.set(placement.branch_id, placement);
         if (placement.card_id) placementByNodeId.set(`card-${placement.card_id}`, placement);
       }
 
-      boardArrangementInFlightRef.current = true;
-      setIsBoardArrangementActive(true);
+      if (ownsInFlight) {
+        boardArrangementInFlightRef.current = true;
+        setIsBoardArrangementActive(true);
+      }
       const explicitExpectationZoneIds = new Set<string>();
       try {
         const candidates = getBoardArrangementCandidates(
@@ -2072,9 +2206,6 @@ export const useBoardObjects = ({
           explicitExpectationZoneIds.add(arrangedZone.id);
           skipNextAutoArrangeRef.current.delete(arrangedZone.id);
         }
-        setNodes((nodes) => nodes.map((node) => arrangedNodeById.get(node.id) ?? node));
-        onArrangeNodes?.(arrangedNodes, dealTiming({ count: arrangedNodes.length }).totalMs);
-
         const plannedObjects = Object.fromEntries([
           ...plan.zones.map((zone) => {
             const existing = currentBoard.objects?.[zone.id];
@@ -2169,9 +2300,10 @@ export const useBoardObjects = ({
           placements,
           expected: expectedLayoutSnapshot(
             currentBoard,
-            new Map(boardObjectsForBoard.map((placement) => [placement.object_id, placement]))
+            new Map(sourcePlacements.map((placement) => [placement.object_id, placement]))
           ),
         };
+        if (!layoutIntentIsCurrent(intent)) return;
         const result = (await client.service('boards').patch(currentBoard.board_id, {
           _action: 'applyLayout',
           ...batch,
@@ -2180,6 +2312,9 @@ export const useBoardObjects = ({
           throw new Error('Board layout acknowledgement omitted committed geometry');
         }
         acknowledgeExpectedAutoLayouts(explicitExpectationZoneIds);
+        if (!layoutIntentIsCurrent(intent)) return;
+        setNodes((nodes) => nodes.map((node) => arrangedNodeById.get(node.id) ?? node));
+        onArrangeNodes?.(arrangedNodes, dealTiming({ count: arrangedNodes.length }).totalMs);
         completeUserLayout({
           userInitiated,
           viewportIntentToken,
@@ -2194,6 +2329,44 @@ export const useBoardObjects = ({
         );
       } catch (error) {
         clearExpectedAutoLayouts(explicitExpectationZoneIds);
+        if (isBoardLayoutSnapshotStale(error)) {
+          const attempt = recovery?.attempt ?? 0;
+          if (!layoutIntentIsCurrent(intent)) return;
+          if (attempt < MAX_LAYOUT_STALE_REPLANS) {
+            try {
+              const source = await fetchAuthoritativeLayoutSource(
+                client,
+                currentBoard.board_id,
+                nodesRef.current
+              );
+              if (!source || !layoutIntentIsCurrent(intent)) {
+                if (userInitiated && layoutIntentIsCurrent(intent)) {
+                  showError(
+                    'The board changed while arranging. Try again after it finishes loading.'
+                  );
+                }
+                return;
+              }
+              await arrangeBoardZones(zoneIds, {
+                ...options,
+                recovery: {
+                  attempt: attempt + 1,
+                  intent,
+                  source,
+                  viewportIntentToken,
+                },
+              });
+            } catch (refreshError) {
+              console.error('Failed to refresh current board layout:', refreshError);
+              if (userInitiated) showError('Failed to refresh the current board layout');
+            }
+            return;
+          }
+          if (userInitiated) {
+            showError('The board changed again while arranging. Try again.');
+          }
+          return;
+        }
         console.error('Failed to arrange board zones:', error);
         showError(
           error instanceof LayoutObstacleError
@@ -2201,16 +2374,20 @@ export const useBoardObjects = ({
             : 'Failed to arrange zones'
         );
       } finally {
-        boardArrangementInFlightRef.current = false;
-        setIsBoardArrangementActive(false);
+        if (ownsInFlight) {
+          boardArrangementInFlightRef.current = false;
+          setIsBoardArrangementActive(false);
+        }
       }
     },
     [
       acknowledgeExpectedAutoLayouts,
+      beginBoardLayoutIntent,
       boardObjectsForBoard,
       clearExpectedAutoLayouts,
       client,
       completeUserLayout,
+      layoutIntentIsCurrent,
       onUserLayoutStart,
       onArrangeNodes,
       restoreZoneCallouts,
@@ -2386,19 +2563,36 @@ export const useBoardObjects = ({
     if (!boardObjects) return [];
 
     return Object.entries(boardObjects)
-      .filter(([, objectData]) => {
-        // Filter out objects with invalid positions (prevents NaN errors in React Flow)
+      .filter(([objectId, objectData]) => {
+        // Legacy text annotations have no desktop renderer. Do not fall
+        // through to the zone renderer: their optional width previously made
+        // the portaled zone toolbar calculate `left: NaN`.
+        if (objectData.type === 'text') return false;
+        // Reject non-finite durable geometry at the React Flow node boundary.
+        // This is a source guard, not a CSS fallback: invalid objects never
+        // enter React Flow's transform or portal calculations.
         const hasValidPosition =
           typeof objectData.x === 'number' &&
           typeof objectData.y === 'number' &&
-          !Number.isNaN(objectData.x) &&
-          !Number.isNaN(objectData.y);
+          Number.isFinite(objectData.x) &&
+          Number.isFinite(objectData.y);
+        const width = 'width' in objectData ? objectData.width : undefined;
+        const height = 'height' in objectData ? objectData.height : undefined;
+        const hasPositiveFiniteWidth = Number.isFinite(width) && Number(width) > 0;
+        const hasPositiveFiniteHeight = Number.isFinite(height) && Number(height) > 0;
+        const hasValidSize =
+          objectData.type === 'markdown'
+            ? hasPositiveFiniteWidth
+            : hasPositiveFiniteWidth && hasPositiveFiniteHeight;
 
-        if (!hasValidPosition) {
-          console.warn(`Skipping board object with invalid position:`, objectData);
+        if (!hasValidPosition || !hasValidSize) {
+          console.warn('Skipping board object with invalid geometry:', {
+            objectId,
+            type: objectData.type,
+          });
         }
 
-        return hasValidPosition;
+        return hasValidPosition && hasValidSize;
       })
       .map(([objectId, objectData]) => {
         // App node (live Sandpack preview)
@@ -2709,6 +2903,7 @@ export const useBoardObjects = ({
     arrangeWholeBoard,
     canArrangeWholeBoard,
     isBoardArrangementActive,
+    cancelPendingLayoutRecovery,
     preserveAutoZoneFrameOnce,
     batchUpdateObjectPositions,
     zoneStackByNodeId,

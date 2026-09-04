@@ -207,6 +207,10 @@ export class BoardObjectsService {
         return existing;
     }
 
+    if (data.position && (!Number.isFinite(data.position.x) || !Number.isFinite(data.position.y))) {
+      throw new Error('position x and y must be finite numbers');
+    }
+
     if (data.size) {
       if (
         !Number.isFinite(data.size.width) ||

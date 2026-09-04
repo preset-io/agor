@@ -46,6 +46,23 @@ export interface BoardObjectFindOptions {
   offset?: number;
 }
 
+function validateFinitePosition(position: { x: number; y: number }, objectId: string): void {
+  if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) {
+    throw new RepositoryError(`Board object ${objectId} requires finite x/y geometry`);
+  }
+}
+
+function validateFiniteSize(size: { width: number; height: number }, objectId: string): void {
+  if (
+    !Number.isFinite(size.width) ||
+    size.width <= 0 ||
+    !Number.isFinite(size.height) ||
+    size.height <= 0
+  ) {
+    throw new RepositoryError(`Board object ${objectId} requires a positive finite size`);
+  }
+}
+
 /**
  * Board object repository implementation
  */
@@ -345,6 +362,8 @@ export class BoardObjectRepository {
     compact?: boolean;
   }): Promise<BoardEntityObject> {
     try {
+      validateFinitePosition(data.position, 'create');
+      if (data.size) validateFiniteSize(data.size, 'create');
       // Validate: exactly one of branch_id or card_id must be provided
       if (!data.branch_id && !data.card_id) {
         throw new RepositoryError('Either branch_id or card_id is required');
@@ -408,6 +427,7 @@ export class BoardObjectRepository {
     position: { x: number; y: number }
   ): Promise<BoardEntityObject> {
     try {
+      validateFinitePosition(position, objectId);
       const existing = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.object_id, objectId))
@@ -456,6 +476,7 @@ export class BoardObjectRepository {
     size: { width: number; height: number }
   ): Promise<BoardEntityObject> {
     try {
+      validateFiniteSize(size, objectId);
       const existing = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.object_id, objectId))
@@ -497,6 +518,8 @@ export class BoardObjectRepository {
     }
   ): Promise<BoardEntityObject> {
     try {
+      if (layout.position) validateFinitePosition(layout.position, objectId);
+      if (layout.size) validateFiniteSize(layout.size, objectId);
       const existing = await select(this.db)
         .from(boardObjects)
         .where(eq(boardObjects.object_id, objectId))
@@ -546,10 +569,12 @@ export class BoardObjectRepository {
         !Number.isFinite(layout.position.x) ||
         !Number.isFinite(layout.position.y) ||
         !Number.isFinite(layout.size.width) ||
-        !Number.isFinite(layout.size.height)
+        layout.size.width <= 0 ||
+        !Number.isFinite(layout.size.height) ||
+        layout.size.height <= 0
       ) {
         throw new RepositoryError(
-          `Board object ${objectId} requires complete finite position and size geometry`
+          `Board object ${objectId} requires complete finite position and positive size geometry`
         );
       }
       const condition = and(

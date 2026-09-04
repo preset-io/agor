@@ -170,6 +170,26 @@ describe('BoardObjectRepository.findVisibleToUser', () => {
 // ============================================================================
 
 describe('BoardObjectRepository.create', () => {
+  dbTest('rejects non-finite geometry before resolving entity references', async ({ db }) => {
+    const boRepo = new BoardObjectRepository(db);
+
+    await expect(
+      boRepo.create({
+        board_id: 'fictional-board' as BoardID,
+        branch_id: 'fictional-branch' as BranchID,
+        position: { x: Number.NaN, y: 20 },
+      })
+    ).rejects.toThrow('requires finite x/y geometry');
+    await expect(
+      boRepo.create({
+        board_id: 'fictional-board' as BoardID,
+        branch_id: 'fictional-branch' as BranchID,
+        position: { x: 10, y: 20 },
+        size: { width: 500, height: Number.POSITIVE_INFINITY },
+      })
+    ).rejects.toThrow('requires a positive finite size');
+  });
+
   dbTest('should create board object with position', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
@@ -742,6 +762,17 @@ describe('BoardObjectRepository.findByBranchId', () => {
 // ============================================================================
 
 describe('BoardObjectRepository.updatePosition', () => {
+  dbTest('rejects non-finite positions before reading or writing a row', async ({ db }) => {
+    const boRepo = new BoardObjectRepository(db);
+
+    await expect(
+      boRepo.updatePosition('fictional-object', { x: Number.NaN, y: 20 })
+    ).rejects.toThrow('requires finite x/y geometry');
+    await expect(
+      boRepo.updatePosition('fictional-object', { x: 10, y: Number.NEGATIVE_INFINITY })
+    ).rejects.toThrow('requires finite x/y geometry');
+  });
+
   dbTest('should update position', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
@@ -857,6 +888,17 @@ describe('BoardObjectRepository.updatePosition', () => {
 });
 
 describe('BoardObjectRepository.updateSize', () => {
+  dbTest('rejects non-finite and non-positive measured sizes', async ({ db }) => {
+    const boRepo = new BoardObjectRepository(db);
+
+    await expect(
+      boRepo.updateSize('fictional-object', { width: Number.POSITIVE_INFINITY, height: 100 })
+    ).rejects.toThrow('requires a positive finite size');
+    await expect(boRepo.updateSize('fictional-object', { width: 100, height: 0 })).rejects.toThrow(
+      'requires a positive finite size'
+    );
+  });
+
   dbTest('should update size while preserving position and zone', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const wtRepo = new BranchRepository(db);
@@ -890,6 +932,17 @@ describe('BoardObjectRepository.updateSize', () => {
 });
 
 describe('BoardObjectRepository.updateLayout', () => {
+  dbTest('rejects non-finite combined layout geometry atomically', async ({ db }) => {
+    const boardObjectRepo = new BoardObjectRepository(db);
+
+    await expect(
+      boardObjectRepo.updateLayout('fictional-object', {
+        position: { x: 10, y: Number.NaN },
+        size: { width: 500, height: 200 },
+      })
+    ).rejects.toThrow('requires finite x/y geometry');
+  });
+
   dbTest('commits position, size, and density in one row update', async ({ db }) => {
     const repoRepo = new RepoRepository(db);
     const branchRepo = new BranchRepository(db);
@@ -918,6 +971,17 @@ describe('BoardObjectRepository.updateLayout', () => {
 });
 
 describe('BoardObjectRepository.updateLayoutForBoard density capability', () => {
+  dbTest('rejects non-positive atomic layout sizes before resolving the row', async ({ db }) => {
+    const boardObjectRepo = new BoardObjectRepository(db);
+
+    await expect(
+      boardObjectRepo.updateLayoutForBoard('fictional-board' as BoardID, 'fictional-object', {
+        position: { x: 10, y: 20 },
+        size: { width: 500, height: 0 },
+      })
+    ).rejects.toThrow('requires complete finite position and positive size geometry');
+  });
+
   dbTest(
     'atomically persists compact geometry for a generic card with body content',
     async ({ db }) => {

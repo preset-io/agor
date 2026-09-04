@@ -155,6 +155,17 @@ describe('BoardObjectsService.get', () => {
 });
 
 describe('BoardObjectsService.patch', () => {
+  it.each([
+    { x: Number.NaN, y: 100 },
+    { x: 100, y: Number.POSITIVE_INFINITY },
+  ])('rejects invalid position $x x $y before persistence', async (position) => {
+    const service = new BoardObjectsService({} as Database);
+
+    await expect(service.patch('object-1', { position })).rejects.toThrow(
+      'position x and y must be finite numbers'
+    );
+  });
+
   it('persists a valid measured size through the repository boundary', async () => {
     const service = new BoardObjectsService({} as Database);
     const updateSize = vi.fn(async (_id, size) => ({ object_id: 'object-1', size }));

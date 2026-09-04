@@ -92,6 +92,40 @@ function boardObjectGeometry(object: BoardObject): BoardLayoutObjectUpdate {
   };
 }
 
+function validateBoardObjectGeometry(objectId: string, object: BoardObject): void {
+  if (!Number.isFinite(object.x) || !Number.isFinite(object.y)) {
+    throw new RepositoryError(`Board object ${objectId} requires finite x/y geometry`);
+  }
+  const requirePositiveFiniteDimension = (dimension: 'width' | 'height', value: number) => {
+    if (!Number.isFinite(value) || value <= 0) {
+      throw new RepositoryError(`Board object ${objectId} requires a positive finite ${dimension}`);
+    }
+  };
+  if (object.type === 'zone' || object.type === 'app' || object.type === 'artifact') {
+    requirePositiveFiniteDimension('width', object.width);
+    requirePositiveFiniteDimension('height', object.height);
+  } else if (object.type === 'markdown') {
+    requirePositiveFiniteDimension('width', object.width);
+  }
+  if (object.type === 'text') {
+    for (const dimension of ['width', 'height'] as const) {
+      const value = object[dimension];
+      if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
+        throw new RepositoryError(
+          `Board object ${objectId} requires a positive finite ${dimension} when provided`
+        );
+      }
+    }
+  }
+}
+
+function validateBoardObjectsGeometry(objects: Record<string, BoardObject> | undefined): void {
+  if (!objects) return;
+  for (const [objectId, object] of Object.entries(objects)) {
+    validateBoardObjectGeometry(objectId, object);
+  }
+}
+
 function validateBoardPermissionDefaults(board: Partial<Board>): void {
   if (board.access_mode !== undefined && !BOARD_ACCESS_MODES.includes(board.access_mode)) {
     throw new RepositoryError(`Invalid board access_mode: ${board.access_mode}`);
@@ -315,6 +349,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async create(data: Partial<Board>): Promise<Board> {
     try {
       this.rejectGenericPrimaryTeammateWrite(data, 'set');
+      validateBoardObjectsGeometry(data.objects);
       const boardId = data.board_id ?? generateId();
       const baseUrl = await getBaseUrl();
       let finalSlug: string | undefined;
@@ -707,6 +742,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
   async update(id: string, updates: Partial<Board>): Promise<Board> {
     try {
       this.rejectGenericPrimaryTeammateWrite(updates, 'set');
+      validateBoardObjectsGeometry(updates.objects);
       if (Object.hasOwn(updates, 'zone_layout_defaults')) {
         throw new RepositoryError(
           'Cannot set zone_layout_defaults via generic board writes; use setZoneLayoutDefaults()'
@@ -1042,6 +1078,7 @@ export class BoardRepository implements BaseRepository<Board, Partial<Board>> {
     objectData: BoardObject
   ): Promise<Board> {
     try {
+      validateBoardObjectGeometry(objectId, objectData);
       const fullId = await this.resolveId(boardId);
 
       const current = await this.findById(fullId);

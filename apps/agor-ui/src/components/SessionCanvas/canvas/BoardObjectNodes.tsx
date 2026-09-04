@@ -61,14 +61,17 @@ export function clampZoneToolbarCenter(
   toolbarWidth: number,
   hostWidth: number
 ): number {
-  if (hostWidth <= 0) return requestedLeft;
+  const finiteHostWidth = Number.isFinite(hostWidth) && hostWidth > 0 ? hostWidth : 0;
+  const finiteToolbarWidth = Number.isFinite(toolbarWidth) && toolbarWidth > 0 ? toolbarWidth : 0;
+  const finiteRequestedLeft = Number.isFinite(requestedLeft) ? requestedLeft : finiteHostWidth / 2;
+  if (finiteHostWidth <= 0) return finiteRequestedLeft;
   const halfWidth = Math.min(
-    toolbarWidth / 2,
-    Math.max(0, hostWidth - ZONE_TOOLBAR_VIEWPORT_PADDING * 2) / 2
+    finiteToolbarWidth / 2,
+    Math.max(0, finiteHostWidth - ZONE_TOOLBAR_VIEWPORT_PADDING * 2) / 2
   );
   const minLeft = ZONE_TOOLBAR_VIEWPORT_PADDING + halfWidth;
-  const maxLeft = Math.max(minLeft, hostWidth - ZONE_TOOLBAR_VIEWPORT_PADDING - halfWidth);
-  return Math.min(Math.max(requestedLeft, minLeft), maxLeft);
+  const maxLeft = Math.max(minLeft, finiteHostWidth - ZONE_TOOLBAR_VIEWPORT_PADDING - halfWidth);
+  return Math.min(Math.max(finiteRequestedLeft, minLeft), maxLeft);
 }
 
 /**
@@ -186,10 +189,25 @@ const ZoneNodeComponent = ({
   const layoutActionsId = `zone-layout-actions-${data.objectId}`;
 
   // Inverse scale keeps zone labels at a legible size regardless of zoom.
-  const scale = 1 / zoom;
+  const finiteZoom = Number.isFinite(zoom) && zoom > 0 ? zoom : 1;
+  const finiteViewportX = Number.isFinite(viewportX) ? viewportX : 0;
+  const finiteViewportY = Number.isFinite(viewportY) ? viewportY : 0;
+  const finiteNodeX = Number.isFinite(xPos)
+    ? (xPos as number)
+    : Number.isFinite(data.x)
+      ? data.x
+      : 0;
+  const finiteNodeY = Number.isFinite(yPos)
+    ? (yPos as number)
+    : Number.isFinite(data.y)
+      ? data.y
+      : 0;
+  const finiteNodeWidth = Number.isFinite(data.width) && data.width > 0 ? data.width : 0;
+  const scale = 1 / finiteZoom;
   const toolbarHost = reactFlowRoot ?? (typeof document === 'undefined' ? null : document.body);
-  const toolbarLeft = viewportX + (xPos ?? data.x) * zoom + (data.width * zoom) / 2;
-  const toolbarTop = viewportY + (yPos ?? data.y) * zoom - 8;
+  const toolbarLeft =
+    finiteViewportX + finiteNodeX * finiteZoom + (finiteNodeWidth * finiteZoom) / 2;
+  const toolbarTop = finiteViewportY + finiteNodeY * finiteZoom - 8;
   const clampedToolbarLeft = clampZoneToolbarCenter(
     toolbarLeft,
     toolbarBounds.toolbarWidth,
@@ -374,7 +392,12 @@ const ZoneNodeComponent = ({
     height: '20px',
     borderRadius: '3px',
     backgroundColor: token.colorBgContainer,
-    border: `1px solid ${token.colorBorder}`,
+    // Keep every border component longhand because active buttons update only
+    // the color. Mixing `border` with a conditional `borderColor` makes React
+    // warn while removing the active state during rerender.
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: token.colorBorder,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',

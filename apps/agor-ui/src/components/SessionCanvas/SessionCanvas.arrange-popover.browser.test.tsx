@@ -30,6 +30,84 @@ const geometry = (payload: Record<string, unknown>) =>
   );
 
 describe('SessionCanvas Arrange Board popover (real browser)', () => {
+  it('keeps legacy text and toolbar state changes free of product-owned style warnings', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const manualBoard = {
+      board_id: 'fictional-console-board',
+      objects: {
+        'legacy-text': {
+          type: 'text',
+          x: 20,
+          y: 40,
+          content: 'Fictional legacy annotation',
+        },
+        zone: {
+          type: 'zone',
+          x: 100,
+          y: 120,
+          width: 500,
+          height: 400,
+          label: 'Fictional review',
+          layout: { mode: 'manual' },
+        },
+      },
+    } as unknown as Board;
+    const patch = vi.fn();
+    const client = { service: vi.fn(() => ({ patch })) } as unknown as AgorClient;
+    const renderCanvas = (board: Board) => (
+      <AntApp>
+        <ConnectionProvider
+          value={{
+            connected: true,
+            connecting: false,
+            outOfSync: false,
+            capturedSha: null,
+            currentSha: null,
+          }}
+        >
+          <SessionCanvas board={board} client={client} branches={[]} height={700} />
+        </ConnectionProvider>
+      </AntApp>
+    );
+
+    const view = render(renderCanvas(manualBoard));
+    const zoneNode = await waitFor(() => {
+      const node = document.querySelector<HTMLElement>('.react-flow__node[data-id="zone"]');
+      if (!node) throw new Error('Fictional zone did not render.');
+      return node;
+    });
+    await act(async () => userEvent.setup().click(zoneNode));
+    expect(await screen.findByRole('button', { name: 'Enable Auto Zone' })).toBeInTheDocument();
+    const toolbar = screen.getByRole('toolbar', { name: 'Zone actions' });
+    expect(Number.isFinite(Number.parseFloat(toolbar.style.left))).toBe(true);
+    expect(document.querySelector('.react-flow__node[data-id="legacy-text"]')).toBeNull();
+
+    view.rerender(
+      renderCanvas({
+        ...manualBoard,
+        objects: {
+          ...manualBoard.objects,
+          zone: {
+            ...manualBoard.objects?.zone,
+            type: 'zone',
+            layout: { mode: 'auto' },
+          },
+        },
+      } as Board)
+    );
+    expect(await screen.findByRole('button', { name: 'Disable Auto Zone' })).toBeInTheDocument();
+
+    const productStyleWarnings = consoleError.mock.calls.filter((args) => {
+      const message = args.map(String).join(' ');
+      return (
+        /NaN is an invalid value for the [`']?left/i.test(message) ||
+        (/borderColor/i.test(message) && /shorthand|rerender|style property/i.test(message))
+      );
+    });
+    expect(productStyleWarnings).toEqual([]);
+    consoleError.mockRestore();
+  });
+
   it('keeps pointer and keyboard input inside the portal and applies the selected planner options', async () => {
     // This interaction regression needs enough space for React Flow's desktop
     // controls and the complete option surface. Narrow projects still import

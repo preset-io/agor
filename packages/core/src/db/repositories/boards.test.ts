@@ -125,6 +125,27 @@ async function getStoredBoardIcon(db: Database, boardId: UUID): Promise<string |
 // ============================================================================
 
 describe('BoardRepository.create', () => {
+  dbTest('rejects non-finite canvas geometry before persistence', async ({ db }) => {
+    const repo = new BoardRepository(db);
+
+    await expect(
+      repo.create(
+        createBoardData({
+          objects: {
+            zone: {
+              type: 'zone',
+              x: Number.NaN,
+              y: 20,
+              width: 500,
+              height: 400,
+              label: 'Fictional zone',
+            },
+          },
+        })
+      )
+    ).rejects.toThrow('requires finite x/y geometry');
+  });
+
   dbTest('leaves an omitted background unset (renders the themed default)', async ({ db }) => {
     const repo = new BoardRepository(db);
 
@@ -1149,6 +1170,33 @@ describe('BoardRepository.getDefault', () => {
 // ============================================================================
 
 describe('BoardRepository.upsertBoardObject', () => {
+  dbTest('rejects non-finite or non-positive owned dimensions', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(createBoardData());
+
+    await expect(
+      repo.upsertBoardObject(board.board_id, 'zone-invalid', {
+        type: 'zone',
+        x: 10,
+        y: 20,
+        width: Number.POSITIVE_INFINITY,
+        height: 400,
+        label: 'Fictional zone',
+      })
+    ).rejects.toThrow('requires a positive finite width');
+    await expect(
+      repo.upsertBoardObject(board.board_id, 'note-invalid', {
+        type: 'markdown',
+        x: 10,
+        y: 20,
+        width: 0,
+        content: 'Fictional note',
+      })
+    ).rejects.toThrow('requires a positive finite width');
+
+    expect((await repo.findById(board.board_id))?.objects).toBeUndefined();
+  });
+
   dbTest('should add new text object to empty board', async ({ db }) => {
     const repo = new BoardRepository(db);
     const board = await repo.create(createBoardData());
@@ -1827,6 +1875,31 @@ describe('BoardRepository.applyBoardLayout', () => {
       })
     ).rejects.toThrow('requires complete width geometry');
     expect((await repo.findById(board.board_id))?.objects?.note).toMatchObject({ y: 840 });
+  });
+
+  dbTest('rejects non-finite layout geometry without changing current state', async ({ db }) => {
+    const repo = new BoardRepository(db);
+    const board = await repo.create(
+      createBoardData({
+        objects: {
+          zone: { type: 'zone', x: 10, y: 20, width: 500, height: 400, label: 'Zone' },
+        },
+      })
+    );
+
+    await expect(
+      repo.applyBoardLayout(board.board_id, {
+        objects: { zone: { x: Number.NaN, y: 20, width: 500, height: 400 } },
+        placements: {},
+      })
+    ).rejects.toThrow('requires finite x/y geometry');
+
+    expect((await repo.findById(board.board_id))?.objects?.zone).toMatchObject({
+      x: 10,
+      y: 20,
+      width: 500,
+      height: 400,
+    });
   });
 
   dbTest('rolls back the frame when any placement belongs to another board', async ({ db }) => {

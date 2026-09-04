@@ -89,6 +89,11 @@ describe('clampZoneToolbarCenter', () => {
     expect(clampZoneToolbarCenter(700, 900, 700)).toBe(350);
     expect(clampZoneToolbarCenter(42, 0, 0)).toBe(42);
   });
+
+  it('never forwards a non-finite coordinate to the portaled toolbar style', () => {
+    expect(clampZoneToolbarCenter(Number.NaN, 400, 1_000)).toBe(500);
+    expect(clampZoneToolbarCenter(Number.POSITIVE_INFINITY, 400, 0)).toBe(0);
+  });
 });
 
 describe('ZoneNode layer toolbar', () => {
@@ -329,6 +334,9 @@ describe('ZoneNode Auto Zone toolbar toggle', () => {
     const disable = screen.getByRole('button', { name: 'Disable Auto Zone' });
     expect(disable).toHaveAttribute('aria-pressed', 'true');
     expect(disable.style.borderColor).not.toBe(inactiveBorderColor);
+    expect(disable.style.border).toBe('');
+    expect(disable.style.borderWidth).toBe('1px');
+    expect(disable.style.borderStyle).toBe('solid');
   });
 
   it('is keyboard operable without compounding the synthesized click and retains focus', () => {

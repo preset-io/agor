@@ -993,6 +993,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
       arrangeWholeBoard,
       canArrangeWholeBoard,
       isBoardArrangementActive,
+      cancelPendingLayoutRecovery,
       preserveAutoZoneFrameOnce,
       setPlacementCompact,
       zoneStackByNodeId,
@@ -2136,6 +2137,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
           )
         ) {
           cancelPendingPostLayoutViewport();
+          cancelPendingLayoutRecovery();
         }
         let effectiveChanges = changes;
         const incomingSelectChanges = changes.filter(
@@ -2332,6 +2334,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         board,
         boardObjectByBranch,
         boardObjectByCard,
+        cancelPendingLayoutRecovery,
         cancelPendingPostLayoutViewport,
         client,
         nodes,
@@ -2345,6 +2348,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
     const handleNodeDragStart: NodeDragHandler = useCallback(
       (_event, node, draggedNodes) => {
         cancelPendingPostLayoutViewport();
+        cancelPendingLayoutRecovery();
         // Auto-layout manages only cards/worktrees. Taking hold of one that is
         // already inside a zone is direct control of that zone's layout, so
         // demote immediately — before a pending auto pass can snap it back.
@@ -2370,7 +2374,7 @@ const SessionCanvasInner = forwardRef<SessionCanvasRef, SessionCanvasProps>(
         const viewport = reactFlowInstanceRef.current?.getViewport();
         if (viewport) setGuideViewport(viewport);
       },
-      [cancelPendingPostLayoutViewport, demoteAutoZone]
+      [cancelPendingLayoutRecovery, cancelPendingPostLayoutViewport, demoteAutoZone]
     );
 
     // Handle node drag - track local position changes
