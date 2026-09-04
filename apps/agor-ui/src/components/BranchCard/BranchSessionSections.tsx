@@ -34,10 +34,10 @@ import {
   theme,
 } from 'antd';
 import type React from 'react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useConnectionDisabled } from '../../contexts/ConnectionContext';
 import { useLocalStorage } from '../../hooks/useLocalStorage';
-import { useSessionActions } from '../../hooks/useSessionActions';
+import { type SessionArchiveOutcome, useSessionActions } from '../../hooks/useSessionActions';
 import {
   type BranchSectionKey,
   COLLAPSED_BRANCH_NODES_STORAGE_KEY,
@@ -62,6 +62,11 @@ import { ArchiveActionButton } from '../ArchiveButton';
 import { type ForkSpawnAction, ForkSpawnModal } from '../ForkSpawnModal';
 import { HighlightMatch } from '../HighlightMatch';
 import { ChannelPill } from '../Pill';
+import {
+  formatSessionArchiveOutcome,
+  isArchivePermissionDenial,
+  SessionArchiveConfirmContent,
+} from '../SessionArchiveConfirm';
 import { SessionRelationshipIcon } from '../SessionRelationshipIcon';
 import {
   SessionRelevanceLabel,
@@ -286,7 +291,8 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
 }) => {
   const { token } = theme.useToken();
   const { modal } = App.useApp();
-  const { showSuccess, showError } = useThemedMessage();
+  const { showSuccess, showError, showWarning } = useThemedMessage();
+  const includeRemoteChildrenRef = useRef(true);
   const connectionDisabled = useConnectionDisabled();
   const { archiveSession } = useSessionActions(client);
 
@@ -504,35 +510,99 @@ export const BranchSessionSections: React.FC<BranchSessionSectionsProps> = ({
   const unmountForkSpawnModal = () =>
     setForkSpawnModal({ open: false, action: 'fork', session: null });
 
-  const handleArchiveSession = useCallback(
-    (sessionId: string, e: React.MouseEvent) => {
-      e.stopPropagation();
+  const withArchiving = useCallback(async (sessionId: string, work: () => Promise<void>) => {
+    setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
+    try {
+      await work();
+    } finally {
+      setArchivingSessionIds((prev) => {
+        const next = new Set(prev);
+        next.delete(sessionId);
+        return next;
+      });
+    }
+  }, []);
 
+  const archiveRootOnly = useCallback(
+    (sessionId: string) => {
       modal.confirm({
-        title: 'Archive session and child sessions?',
-        content: 'Are you sure you want to archive this session and its child sessions?',
-        okText: 'Archive',
+        title: 'Archive only this session?',
+        content:
+          'A child session in this branch belongs to someone you cannot archive for. You can archive just this session and leave its children active.',
+        okText: 'Archive only this session',
         cancelText: 'Cancel',
-        onOk: async () => {
-          setArchivingSessionIds((prev) => new Set(prev).add(sessionId));
-          try {
-            const result = await archiveSession(sessionId as SessionID);
-            if (result) {
-              showSuccess('Session and child sessions archived');
-            } else {
-              showError('Failed to archive session');
+        onOk: () =>
+          withArchiving(sessionId, async () => {
+            try {
+              const outcome = await archiveSession(sessionId as SessionID, {
+                includeChildren: false,
+                includeRemoteChildren: false,
+              });
+              showSuccess(formatSessionArchiveOutcome(outcome).success);
+            } catch (err) {
+              showError(err instanceof Error ? err.message : 'Failed to archive session');
             }
-          } finally {
-            setArchivingSessionIds((prev) => {
-              const next = new Set(prev);
-              next.delete(sessionId);
-              return next;
-            });
-          }
-        },
+          }),
       });
     },
-    [archiveSession, modal, showSuccess, showError]
+    [archiveSession, modal, showSuccess, showError, withArchiving]
+  );
+
+  const handleArchiveSession = useCallback(
+    async (sessionId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+
+      // Preview first so the confirmation shows exactly what will change.
+      let preview: SessionArchiveOutcome;
+      try {
+        preview = await archiveSession(sessionId as SessionID, {
+          includeChildren: true,
+          includeRemoteChildren: true,
+          dryRun: true,
+        });
+      } catch (err) {
+        if (isArchivePermissionDenial(err)) {
+          archiveRootOnly(sessionId);
+          return;
+        }
+        showError(err instanceof Error ? err.message : 'Failed to prepare archive');
+        return;
+      }
+
+      includeRemoteChildrenRef.current = true;
+      modal.confirm({
+        title: 'Archive session and child sessions?',
+        content: (
+          <SessionArchiveConfirmContent
+            preview={preview}
+            onIncludeRemoteChildrenChange={(value) => {
+              includeRemoteChildrenRef.current = value;
+            }}
+          />
+        ),
+        okText: 'Archive',
+        cancelText: 'Cancel',
+        onOk: () =>
+          withArchiving(sessionId, async () => {
+            try {
+              const outcome = await archiveSession(sessionId as SessionID, {
+                includeChildren: true,
+                includeRemoteChildren: includeRemoteChildrenRef.current,
+              });
+              const { success, warning } = formatSessionArchiveOutcome(outcome);
+              showSuccess(success);
+              if (warning) showWarning(warning);
+            } catch (err) {
+              if (isArchivePermissionDenial(err)) {
+                archiveRootOnly(sessionId);
+                return;
+              }
+              showError(err instanceof Error ? err.message : 'Failed to archive session');
+            }
+          }),
+      });
+    },
+    [archiveSession, archiveRootOnly, modal, showSuccess, showError, showWarning, withArchiving]
   );
 
   const getGatewaySource = useCallback(
