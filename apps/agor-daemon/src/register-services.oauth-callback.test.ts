@@ -268,6 +268,23 @@ describe('register-services OAuth callback URL regression', () => {
     );
   });
 
+  it('never treats a browser error parameter as DCR invalidation evidence', () => {
+    const callbackBody = codeOnly.slice(
+      codeOnly.indexOf('const oauthCallbackHandler'),
+      codeOnly.indexOf("app.use('/mcp-servers',")
+    );
+    const frontChannelErrorBranch = callbackBody.slice(
+      callbackBody.indexOf('if (error)'),
+      callbackBody.indexOf('if (!code || !state)')
+    );
+
+    expect(frontChannelErrorBranch).toMatch(
+      /durableOAuthFlows\.failPendingCallback\s*\(\s*state\s*,\s*['"]authorization_denied['"]/
+    );
+    expect(frontChannelErrorBranch).not.toMatch(/invalidateTokenEndpointRejectedClient/);
+    expect(frontChannelErrorBranch).not.toMatch(/client_registration_invalidated/);
+  });
+
   it('uses one phase-aware failure classifier for callback and manual completion', () => {
     const classifications = codeOnly.match(/classifyMCPOAuthCompletionFailure\s*\(/g) ?? [];
     expect(classifications).toHaveLength(2);

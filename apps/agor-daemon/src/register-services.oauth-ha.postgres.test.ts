@@ -28,6 +28,7 @@ const oauthFixture = vi.hoisted(() => ({
   starts: 0,
   exchanges: 0,
   registrations: 0,
+  exchangeFailure: undefined as undefined | 'invalid_client',
   afterDcrResolved: undefined as undefined | ((registrationId: string) => Promise<void>),
   beforeGrantLock: undefined as undefined | (() => Promise<void>),
 }));
@@ -125,6 +126,14 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
       async (context: { state: string }, _code: string, state: string) => {
         if (context.state !== state) throw new Error('fixture state mismatch');
         oauthFixture.exchanges += 1;
+        if (oauthFixture.exchangeFailure === 'invalid_client') {
+          throw new original.OAuthCodeExchangeError(
+            'fixture token endpoint rejected client',
+            false,
+            'client_registration_invalidated',
+            true
+          );
+        }
         return {
           access_token: `fixture-access-token-${oauthFixture.exchanges}`,
           refresh_token: 'fixture-refresh-token',
@@ -246,6 +255,7 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
       oauthFixture.starts = 0;
       oauthFixture.exchanges = 0;
       oauthFixture.registrations = 0;
+      oauthFixture.exchangeFailure = undefined;
       oauthFixture.afterDcrResolved = undefined;
       oauthFixture.beforeGrantLock = undefined;
 
@@ -359,6 +369,217 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
             !JSON.stringify(value).includes('fixture-access-token')
         )
       ).toBe(true);
+    });
+
+    it('consumes a member private-server attempt without trusting front-channel invalid_client', async () => {
+      const seeded = await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        const member = await new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          name: 'Front-channel rejection member',
+          role: 'member',
+        });
+        const server = await new MCPServerRepository(scoped).create({
+          name: `ha-oauth-front-channel-member-${crypto.randomUUID()}`,
+          transport: 'http',
+          url: 'https://mcp.provider.example.test/mcp',
+          scope: 'session',
+          enabled: true,
+          source: 'user',
+          owner_user_id: member.user_id,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'per_user',
+            oauth_dcr_mode: 'advertised',
+            oauth_compatibility_mode: 'strict',
+          },
+        });
+        return { member, serverId: server.mcp_server_id as MCPServerID };
+      });
+      const exchangesBefore = oauthFixture.exchanges;
+      const started = (await replicaA.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: seeded.serverId }, params(seeded.member))) as {
+        success: boolean;
+        authorizationUrl: string;
+        attempt_id: string;
+      };
+      const state = new URL(started.authorizationUrl).searchParams.get('state');
+      expect(started.success).toBe(true);
+      expect(state).toBeTruthy();
+      const before = await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+        new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, seeded.serverId)
+      );
+      expect(before).toMatchObject({ status: 'registered', isCurrent: true });
+
+      await expect(
+        replicaB.app.service('mcp-servers/oauth-complete').create(
+          {
+            callback_url: `https://agor.example.test/mcp-servers/oauth-callback?error=invalid_client&state=${encodeURIComponent(state!)}`,
+          },
+          params(seeded.member)
+        )
+      ).resolves.toMatchObject({ success: false, tokenObtained: false });
+      expect(oauthFixture.exchanges).toBe(exchangesBefore);
+
+      await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        await expect(
+          new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, seeded.serverId)
+        ).resolves.toMatchObject({ registrationId: before?.registrationId, status: 'registered' });
+        const attempts = rawRows(
+          await executeRaw(
+            scoped,
+            sql`SELECT status, failure_code, sealed_material
+                FROM mcp_oauth_pending_flows
+                WHERE attempt_id = ${started.attempt_id}`
+          )
+        );
+        expect(attempts).toEqual([
+          expect.objectContaining({
+            status: 'failed',
+            failure_code: 'authorization_denied',
+            sealed_material: null,
+          }),
+        ]);
+      });
+    });
+
+    it('consumes a shared-server rejection after demotion without invalidating DCR', async () => {
+      const seeded = await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        const initiatingAdmin = await new UsersRepository(scoped).create({
+          email: `${crypto.randomUUID()}@example.test`,
+          name: 'Shared OAuth demotion admin',
+          role: 'admin',
+        });
+        const server = await new MCPServerRepository(scoped).create({
+          name: `ha-oauth-front-channel-shared-${crypto.randomUUID()}`,
+          transport: 'http',
+          url: 'https://mcp.provider.example.test/mcp',
+          scope: 'global',
+          enabled: true,
+          source: 'user',
+          owner_user_id: initiatingAdmin.user_id,
+          auth: {
+            type: 'oauth',
+            oauth_mode: 'shared',
+            oauth_dcr_mode: 'advertised',
+            oauth_compatibility_mode: 'strict',
+          },
+        });
+        return { initiatingAdmin, serverId: server.mcp_server_id as MCPServerID };
+      });
+      const started = (await replicaA.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: seeded.serverId }, params(seeded.initiatingAdmin))) as {
+        success: boolean;
+        authorizationUrl: string;
+        attempt_id: string;
+      };
+      const state = new URL(started.authorizationUrl).searchParams.get('state');
+      const before = await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        await new UsersRepository(scoped).update(seeded.initiatingAdmin.user_id, {
+          role: 'member',
+        });
+        return new MCPOAuthClientRegistrationRepository(scoped).getCurrent(
+          tenantId,
+          seeded.serverId
+        );
+      });
+
+      await expect(
+        replicaB.callback({
+          error: 'unauthorized_client',
+          state: state!,
+          iss: 'https://attacker.invalid',
+        })
+      ).resolves.toMatchObject({ status: 400 });
+      await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        await expect(
+          new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, seeded.serverId)
+        ).resolves.toMatchObject({ registrationId: before?.registrationId, status: 'registered' });
+        const attempts = rawRows(
+          await executeRaw(
+            scoped,
+            sql`SELECT status, failure_code
+                FROM mcp_oauth_pending_flows
+                WHERE attempt_id = ${started.attempt_id}`
+          )
+        );
+        expect(attempts).toEqual([
+          expect.objectContaining({ status: 'failed', failure_code: 'authorization_denied' }),
+        ]);
+      });
+    });
+
+    it('invalidates the exact DCR row only after a pinned token exchange proves invalid_client', async () => {
+      const tokenRejectedServerId = await runWithTenantDatabaseScope(
+        replicaA.db,
+        tenantId,
+        async (scoped) => {
+          const server = await new MCPServerRepository(scoped).create({
+            name: `ha-oauth-token-invalid-client-${crypto.randomUUID()}`,
+            transport: 'http',
+            url: 'https://mcp.provider.example.test/mcp',
+            scope: 'global',
+            enabled: true,
+            source: 'user',
+            owner_user_id: user.user_id,
+            auth: {
+              type: 'oauth',
+              oauth_mode: 'per_user',
+              oauth_dcr_mode: 'advertised',
+              oauth_compatibility_mode: 'strict',
+            },
+          });
+          return server.mcp_server_id as MCPServerID;
+        }
+      );
+      const started = (await replicaA.app
+        .service('mcp-servers/oauth-start')
+        .create({ mcp_server_id: tokenRejectedServerId }, params(user))) as {
+        authorizationUrl: string;
+      };
+      const state = new URL(started.authorizationUrl).searchParams.get('state');
+      const before = await runWithTenantDatabaseScope(replicaA.db, tenantId, (scoped) =>
+        new MCPOAuthClientRegistrationRepository(scoped).getCurrent(tenantId, tokenRejectedServerId)
+      );
+      expect(before).toMatchObject({ status: 'registered' });
+
+      oauthFixture.exchangeFailure = 'invalid_client';
+      try {
+        await expect(
+          replicaB.callback({
+            code: 'provider-code-for-invalid-client',
+            state: state!,
+            iss: 'https://provider.example.test',
+          })
+        ).resolves.toMatchObject({ status: 400 });
+      } finally {
+        oauthFixture.exchangeFailure = undefined;
+      }
+
+      await runWithTenantDatabaseScope(replicaA.db, tenantId, async (scoped) => {
+        await expect(
+          new MCPOAuthClientRegistrationRepository(scoped).getCurrent(
+            tenantId,
+            tokenRejectedServerId
+          )
+        ).resolves.toBeNull();
+        const rows = rawRows(
+          await executeRaw(
+            scoped,
+            sql`SELECT status, is_current, failure_code
+                FROM mcp_oauth_client_registrations
+                WHERE registration_id = ${before?.registrationId}`
+          )
+        );
+        expect(rows).toEqual([
+          expect.objectContaining({
+            status: 'superseded',
+            is_current: false,
+            failure_code: 'provider_invalidated_client',
+          }),
+        ]);
+      });
     });
 
     it('lets only a current-tenant admin reset DCR authority before callback completion', async () => {

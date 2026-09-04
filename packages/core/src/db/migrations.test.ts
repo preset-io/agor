@@ -176,6 +176,15 @@ describe('Postgres migrations', () => {
     ).toEqual([]);
   });
 
+  it('enforces the old-PR OAuth authority collision repair as an offline cohort cutover', () => {
+    expect(
+      pendingOfflineCutoverMigrations('postgresql', {
+        applied: ['0099_shared_session_prompting'],
+        pending: ['0102_oauth_authority_watermark_reconciliation'],
+      })
+    ).toEqual(['0102_oauth_authority_watermark_reconciliation']);
+  });
+
   it('assigns GitHub install state unique post-HA migration watermarks', async () => {
     const [postgresJournal, sqliteJournal] = await readJournals();
 
@@ -934,9 +943,13 @@ describe('MCP OAuth client-registration migrations', () => {
 
   it('follows current main and binds PostgreSQL authority to tenant/server UUID with forced RLS', async () => {
     const [postgresJournal] = await readJournals();
-    expect(postgresJournal.entries.slice(-2)).toEqual([
+    expect(postgresJournal.entries.slice(-3)).toEqual([
       expect.objectContaining({ idx: 100, tag: '0100_claude_oauth_attempts' }),
       expect.objectContaining({ idx: 101, tag: '0101_mcp_oauth_client_registrations' }),
+      expect.objectContaining({
+        idx: 102,
+        tag: '0102_oauth_authority_watermark_reconciliation',
+      }),
     ]);
     expect(postgresJournal.entries.at(-1)!.when).toBeGreaterThan(
       postgresJournal.entries.at(-2)!.when
@@ -961,6 +974,21 @@ describe('MCP OAuth client-registration migrations', () => {
     expect(migration).not.toContain('registration_generation');
     expect(migration).not.toMatch(/"client_id"\s/);
     expect(migration).not.toMatch(/"client_secret"\s/);
+
+    const reconciliation = await readFile(
+      new URL(
+        '../../drizzle/postgres/0102_oauth_authority_watermark_reconciliation.sql',
+        import.meta.url
+      ),
+      'utf8'
+    );
+    expect(reconciliation).toContain("column_name = 'registration_generation'");
+    expect(reconciliation).toContain(
+      'DROP SEQUENCE IF EXISTS "mcp_oauth_client_registration_generation_seq"'
+    );
+    expect(reconciliation).toContain('CREATE TABLE IF NOT EXISTS "claude_oauth_attempts"');
+    expect(reconciliation).toContain('CREATE TABLE IF NOT EXISTS "mcp_oauth_client_registrations"');
+    expect(reconciliation).toContain('unrecognized mcp_oauth_client_registrations schema');
   });
 });
 
