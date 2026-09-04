@@ -5,6 +5,7 @@
 import type { AgorClient, Board, BoardEntityObject, BoardObject } from '@agor-live/client';
 import { useCallback, useRef } from 'react';
 import type { Node } from 'reactflow';
+import { useMutationGate } from '../../../contexts/ConnectionContext';
 import { useThemedMessage } from '../../../utils/message';
 import {
   computeLayerChanges,
@@ -52,6 +53,9 @@ export const useBoardObjects = ({
   boardRef.current = board;
   const canEditRef = useRef(canEdit);
   canEditRef.current = canEdit;
+  const mutationGate = useMutationGate();
+  const canMutateRef = useRef(mutationGate.canMutate);
+  canMutateRef.current = mutationGate.canMutate;
 
   const { showError } = useThemedMessage();
 
@@ -220,7 +224,10 @@ export const useBoardObjects = ({
    */
   const deleteArtifact = useCallback(
     async (objectId: string, artifactId: string) => {
-      if (!client) return;
+      // Artifact lifecycle authorization is creator/admin based rather than
+      // board.edit based, but it still obeys the global connection/version
+      // mutation gate. The ref protects callbacks captured before reconnect.
+      if (!canMutateRef.current || !client) return;
 
       // Mark as deleted to prevent re-appearance during WebSocket updates
       deletedObjectsRef.current.add(objectId);

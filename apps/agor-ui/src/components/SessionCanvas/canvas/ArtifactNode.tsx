@@ -182,6 +182,7 @@ export const ArtifactNode = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [consentOpen, setConsentOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const lastHashRef = useRef<string | null>(null);
   const sandpackConfig = payload?.sandpack_config;
   const sandpackOptions = sandpackConfig?.options;
@@ -222,6 +223,10 @@ export const ArtifactNode = ({
   useEffect(() => {
     fetchPayload();
   }, [fetchPayload]);
+
+  useEffect(() => {
+    if (!mutationGate.canMutate) setDeleteConfirmOpen(false);
+  }, [mutationGate.canMutate]);
 
   // Re-fetch payload when the artifact is updated (via WebSocket 'patched' event)
   useEffect(() => {
@@ -423,16 +428,23 @@ export const ArtifactNode = ({
         )}
         {data.onDeleteArtifact && (
           <Popconfirm
+            open={deleteConfirmOpen}
+            destroyOnHidden
+            onOpenChange={(open) => {
+              if (!open || mutationGate.canMutate) setDeleteConfirmOpen(open);
+            }}
             title="Delete artifact?"
             description={`This will delete "${payload?.name ?? fallbackName}" and its files.`}
             onConfirm={(e) => {
               e?.stopPropagation();
+              if (!mutationGate.canMutate) return;
               data.onDeleteArtifact?.(data.objectId, data.artifactId);
             }}
             onCancel={(e) => e?.stopPropagation()}
             okText="Delete"
             cancelText="Cancel"
-            okButtonProps={{ danger: true }}
+            okButtonProps={{ danger: true, disabled: !mutationGate.canMutate }}
+            disabled={!mutationGate.canMutate}
           >
             <Tooltip title="Delete artifact">
               <Button
@@ -441,6 +453,7 @@ export const ArtifactNode = ({
                 danger
                 icon={<DeleteOutlined />}
                 aria-label="Delete artifact"
+                disabled={!mutationGate.canMutate}
                 onClick={(e) => e.stopPropagation()}
               />
             </Tooltip>

@@ -3,6 +3,7 @@ import { renderHook } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ConnectionProvider } from '../../../contexts/ConnectionContext';
 import { useBoardObjects } from './useBoardObjects';
 
 // Spy the themed error toast so the failure path of reorderObject is observable.
@@ -18,8 +19,20 @@ vi.mock('../../../utils/message', () => ({
   }),
 }));
 
+const connectionState = {
+  connected: true,
+  connecting: false,
+  authGeneration: 1,
+  outOfSync: false,
+  capturedSha: null,
+  currentSha: null,
+};
+
 beforeEach(() => {
   showError.mockClear();
+  connectionState.connected = true;
+  connectionState.connecting = false;
+  connectionState.outOfSync = false;
 });
 
 /**
@@ -28,8 +41,9 @@ beforeEach(() => {
  */
 function makeClient() {
   const patch = vi.fn().mockResolvedValue({});
-  const client = { service: vi.fn().mockReturnValue({ patch }) };
-  return { client: client as never, patch };
+  const service = vi.fn().mockReturnValue({ patch });
+  const client = { service };
+  return { client: client as never, patch, service };
 }
 
 /** Like makeClient but `patch` rejects, to exercise the error path. */
@@ -43,7 +57,11 @@ function makeBoard(objects: Record<string, unknown>): Board {
   return { board_id: 'board-1', objects } as unknown as Board;
 }
 
-const wrapper = ({ children }: { children: ReactNode }) => <AntApp>{children}</AntApp>;
+const wrapper = ({ children }: { children: ReactNode }) => (
+  <ConnectionProvider value={connectionState}>
+    <AntApp>{children}</AntApp>
+  </ConnectionProvider>
+);
 
 function renderReorder(board: Board, client: unknown, canEdit = true) {
   return renderHook(
@@ -178,6 +196,33 @@ describe('updateObject', () => {
 
     expect(patch).not.toHaveBeenCalled();
     expect(setNodes).not.toHaveBeenCalled();
+  });
+});
+
+describe('deleteArtifact', () => {
+  it('blocks a stale lifecycle-delete callback after the connection gate closes', async () => {
+    const { client, service } = makeClient();
+    const board = makeBoard({
+      artifact: {
+        type: 'artifact',
+        x: 0,
+        y: 0,
+        width: 300,
+        height: 200,
+        artifact_id: 'artifact-1',
+      },
+    });
+    const { result, rerender } = renderReorder(board, client);
+    const onDeleteArtifact = result.current.getBoardObjectNodes()[0]?.data.onDeleteArtifact as (
+      objectId: string,
+      artifactId: string
+    ) => Promise<void>;
+
+    connectionState.connecting = true;
+    rerender({ effectiveCanEdit: true });
+    await onDeleteArtifact('artifact', 'artifact-1');
+
+    expect(service).not.toHaveBeenCalled();
   });
 });
 

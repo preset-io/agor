@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { App as AntApp } from 'antd';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -43,6 +43,9 @@ const wrapper = ({ children }: { children: ReactNode }) => (
 
 beforeEach(() => {
   resizerSpy.mockClear();
+  connection.connected = true;
+  connection.connecting = false;
+  connection.outOfSync = false;
   vi.stubGlobal(
     'fetch',
     vi.fn(() => new Promise(() => undefined))
@@ -106,8 +109,9 @@ describe('structural board-object controls', () => {
     expect(onDelete).not.toHaveBeenCalled();
   });
 
-  it('hides the Artifact resizer and disables layout locking after revocation', () => {
+  it('keeps artifact deletion independent of board.edit but gates its open confirmation on connection state', async () => {
     const onUpdate = vi.fn();
+    const onDeleteArtifact = vi.fn();
     const data = {
       objectId: 'artifact-object-1',
       artifactId: 'artifact-1',
@@ -118,7 +122,7 @@ describe('structural board-object controls', () => {
       x: 10,
       y: 20,
       locked: false,
-      onDeleteArtifact: vi.fn(),
+      onDeleteArtifact,
     };
     const { container, rerender } = render(<ArtifactNode data={data} selected />, { wrapper });
 
@@ -138,5 +142,30 @@ describe('structural board-object controls', () => {
     expect(remove).toBeEnabled();
     fireEvent.click(lock!);
     expect(onUpdate).not.toHaveBeenCalled();
+
+    fireEvent.click(remove!);
+    await screen.findByText('Delete artifact?');
+    const findConfirm = () =>
+      Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent === 'Delete'
+      );
+    expect(findConfirm()).toBeEnabled();
+
+    connection.connecting = true;
+    rerender(<ArtifactNode data={{ ...data, canEdit: false }} selected />);
+
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Delete artifact"]')
+    ).toBeDisabled();
+    await waitFor(() => expect(screen.queryByText('Delete artifact?')).not.toBeInTheDocument());
+    expect(onDeleteArtifact).not.toHaveBeenCalled();
+
+    connection.connecting = false;
+    connection.outOfSync = true;
+    rerender(<ArtifactNode data={{ ...data, canEdit: false }} selected />);
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Delete artifact"]')
+    ).toBeDisabled();
+    expect(findConfirm()).toBeUndefined();
   });
 });
