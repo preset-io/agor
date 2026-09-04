@@ -26,9 +26,8 @@ reauthorization.
 
 Standalone/SQLite keeps the process-local attempt Map and performs DCR in the
 initiating daemon. It consumes an attempt before provider exchange and exposes
-the same non-replayable failed/ambiguous UI outcomes; the SQLite pending and
-client-registration tables are schema-history mirrors and are not runtime
-authorities.
+the same non-replayable failed/ambiguous UI outcomes. SQLite intentionally has
+no client-registration table: durable DCR authority is PostgreSQL/HA-only.
 
 ## Persisted contract
 
@@ -64,13 +63,13 @@ registration endpoint/source, metadata URL, protected resource, issuer,
 authorization/token endpoints, compatibility and DCR policies, requested
 scope, and registration request policy into an HMAC fingerprint. It stores
 client ID/secret only inside an OAuth-purpose AES-GCM envelope whose AAD also
-binds the row ID and monotonic registration generation. A partial unique index
+binds the UUIDv7 registration row ID. A partial unique index
 permits one current registration per tenant/server, and composite foreign keys
 prevent cross-tenant attachment.
 
 One database-time lease owner may dispatch DCR. It marks `dispatched_at` before
 the provider POST and publishes credentials only through an exact claim ID,
-claim generation, registration generation, current-row, and status CAS. An
+claim generation, exact registration ID, current-row, and status CAS. An
 expired undispatched lease is reclaimable without provider duplication. An
 expired dispatched lease is `ambiguous`—the provider may have allocated a
 client—and a new generation is created. Configuration changes supersede the
@@ -126,10 +125,20 @@ have consumed the code.
 
 For DCR, death before `dispatched_at` leaves a safely reclaimable lease. Death
 after dispatch produces an `ambiguous` tombstone after lease expiry; a peer
-registers a fresh generation and a late owner cannot publish. A well-formed
+registers a fresh UUIDv7 row and a late owner cannot publish. A well-formed
 provider HTTP rejection is `failed`. Transport/timeouts or malformed success
 after dispatch are `ambiguous`. Agor does not claim it can revoke an orphan
 registration when the provider offers no safe deletion contract.
+
+Each browser attempt records the exact UUIDv7 registration ID whose client it
+used. An exact `invalid_client` or `unauthorized_client` OAuth response on a
+400/401 token exchange (or the equivalent structured provider failure) CAS-
+invalidates only that current row, allowing the next start to register anew.
+Network errors and other ambiguous provider failures never invalidate a client.
+An administrator may invoke `mcp-servers/oauth-client-registration-reset` for a
+saved server before callback completion; the tenant-scoped operation rechecks
+admin and server authority under the grant-configuration lock, then retires
+pending attempts, grants, and the current registration.
 
 There is intentionally no “recover provider code” path. OAuth providers may
 consume authorization codes once, and Agor cannot prove whether an interrupted
@@ -161,6 +170,12 @@ responses must contain a nonempty client ID, the exact redirect URI, and a
 compatible token authentication method. PostgreSQL never uses the core
 process-global DCR cache: the durable registration authority is the only reuse
 path.
+
+DCR is a compatibility client-resolution method, not the lifecycle boundary.
+Configured clients and DCR both pass through `resolveOAuthClient` and then use
+the same PKCE, durable attempt, callback, exchange, grant, and refresh logic.
+A future standardized client-resolution method can join at that boundary; this
+change intentionally does not speculate about or implement CIMD.
 
 ## Token and UI behavior
 
@@ -238,7 +253,7 @@ or database error detail.
    `agor db migrate --offline-cutover`. It deletes legacy OAuth grant rows
    because plaintext/unfenced rows are structurally incompatible; users must
    reconnect.
-3. Apply additive migration `0100_mcp_oauth_client_registrations` before OAuth
+3. Apply additive PostgreSQL migration `0101_mcp_oauth_client_registrations` before OAuth
    activation. Do not canary or mix old/new cohorts: old constrained-HA daemons
    keep OAuth gated and do not implement the DCR authority. Start only the new
    cohort after migrations complete.
@@ -248,6 +263,14 @@ or database error detail.
 
 PostgreSQL OAuth requires a saved MCP server so tenant/server/mode binding is
 authoritative. Inline transient flows remain standalone/SQLite-only.
+
+The Catalog rename remains backward compatible at the browser and DTO
+boundaries. Exact `/marketplace`, `/marketplace/catalog`, `/marketplace/servers`,
+`/marketplace/sessions`, and `/marketplace/credentials` bookmarks redirect to
+their `/catalog*` equivalents without starting the Workspace runtime. The
+credential projection retains its original coarse `status` values and adds the
+optional `detail_status` field for refreshable/refreshing/reconnect UI states;
+older clients therefore do not receive an unknown status enum.
 
 ## Rollback
 

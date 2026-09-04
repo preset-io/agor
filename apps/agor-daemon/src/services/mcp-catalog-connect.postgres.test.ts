@@ -58,11 +58,14 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
           resolveDynamicClientRegistration?: (
             request: Record<string, unknown>,
             register: () => Promise<Record<string, unknown>>
-          ) => Promise<{ client_id: string; client_secret?: string }>;
+          ) => Promise<{
+            registration: { client_id: string; client_secret?: string };
+            registrationId?: string;
+          }>;
         }
       ) => {
-        const registration = clientId
-          ? { client_id: clientId }
+        const resolved = clientId
+          ? { registration: { client_id: clientId } }
           : await options.resolveDynamicClientRegistration?.(
               {
                 registrationEndpoint: 'https://provider.example.test/register',
@@ -87,7 +90,8 @@ vi.mock('@agor/core/tools/mcp/oauth-mcp-transport', async (importOriginal) => {
                 };
               }
             );
-        if (!registration) throw new Error('durable DCR resolver was not supplied');
+        if (!resolved) throw new Error('durable DCR resolver was not supplied');
+        const registration = resolved.registration;
         const state = `catalog-ha-state-${crypto.randomUUID()}`;
         const authorizationUrl = new URL('https://provider.example.test/authorize');
         authorizationUrl.searchParams.set('state', state);
@@ -527,7 +531,10 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
           branchRbacEnabled: false,
           allowSuperadmin: false,
           requireAuth: async (context) => context,
-          deployment: { mode: 'ha' } as RegisterServicesContext['deployment'],
+          deployment: {
+            mode: 'ha',
+            capabilities: { mcpOAuth: true },
+          } as RegisterServicesContext['deployment'],
           mcpOAuthFetch: async (_input, _init, assertCurrent) => {
             assertCurrent?.();
             return new Response('', {

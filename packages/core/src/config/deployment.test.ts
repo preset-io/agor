@@ -6,6 +6,7 @@ const secrets = {
   AGOR_JWT_SECRET: 'j'.repeat(32),
   AGOR_MASTER_SECRET: 'm'.repeat(32),
   AGOR_ADMIN_PASSWORD: 'bootstrap-admin-password',
+  AGOR_BASE_URL: 'https://agor.example.test',
 };
 
 const haConfig: AgorConfig = {
@@ -99,6 +100,42 @@ describe('resolveDeploymentConfig', () => {
         AGOR_HA_SUPPORT_PROFILE: 'constrained-active-active',
       })
     ).toMatchObject({ mode: 'ha', supportProfile: 'constrained-active-active' });
+  });
+
+  it('keeps HA MCP OAuth unavailable until a public HTTPS callback origin is configured', () => {
+    const { AGOR_BASE_URL: _omitted, ...withoutPublicOrigin } = secrets;
+    expect(resolveDeploymentConfig(haConfig, withoutPublicOrigin)).toMatchObject({
+      capabilities: { mcpOAuth: false },
+    });
+    expect(
+      resolveDeploymentConfig(
+        {
+          ...haConfig,
+          daemon: { public_url: 'http://agor-daemon.runtime.svc.cluster.local:3030' },
+        },
+        withoutPublicOrigin
+      )
+    ).toMatchObject({ capabilities: { mcpOAuth: false } });
+    expect(
+      resolveDeploymentConfig(
+        {
+          ...haConfig,
+          daemon: {
+            public_url: 'http://agor-daemon.runtime.svc.cluster.local:3030',
+            base_url: 'https://agor.example.test',
+          },
+        },
+        withoutPublicOrigin
+      )
+    ).toMatchObject({ capabilities: { mcpOAuth: true } });
+    for (const unsafeOrigin of ['https://localhost:3030', 'https://10.0.0.1']) {
+      expect(
+        resolveDeploymentConfig(haConfig, {
+          ...withoutPublicOrigin,
+          AGOR_BASE_URL: unsafeOrigin,
+        })
+      ).toMatchObject({ capabilities: { mcpOAuth: false } });
+    }
   });
 
   it.each([

@@ -123,6 +123,23 @@ describe('migration status introspection', () => {
     });
   });
 
+  it('reports MCP DCR authority as an offline, rollback-incompatible cohort cutover', () => {
+    const migration = introspectMigrationStatus('postgresql', {
+      applied: ['0100_claude_oauth_attempts'],
+      pending: ['0101_mcp_oauth_client_registrations'],
+      dbAheadOfBinary: false,
+    }).pendingMigrations[0];
+
+    expect(migration).toMatchObject({
+      requiresOfflineCutover: true,
+      impact: {
+        classification: 'protocol',
+        userAction: 'required',
+        rollbackCompatibility: 'incompatible',
+      },
+    });
+  });
+
   it('uses an explicit conservative representation for absent impact metadata', () => {
     expect(getMigrationImpact('9999_unregistered')).toEqual({
       classification: 'unknown',
@@ -142,10 +159,11 @@ describe('migration status introspection', () => {
         '0083_transcript_hydration_keysets',
         '0091_codex_device_auth_attempts',
         '0100_claude_oauth_attempts',
+        '0101_mcp_oauth_client_registrations',
       ],
     });
 
-    expect(offlineMigrations).toHaveLength(6);
+    expect(offlineMigrations).toHaveLength(7);
     for (const name of offlineMigrations) {
       expect(getMigrationImpact(name).classification).not.toBe('unknown');
     }
@@ -176,6 +194,7 @@ describe('migration status introspection', () => {
       '0083_transcript_hydration_keysets',
       '0091_codex_device_auth_attempts',
       '0100_claude_oauth_attempts',
+      '0101_mcp_oauth_client_registrations',
       'unregistered',
     ]) {
       expect(getMigrationImpact(name).summary.length).toBeLessThanOrEqual(

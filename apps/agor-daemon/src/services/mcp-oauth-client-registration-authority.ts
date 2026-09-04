@@ -16,6 +16,7 @@ import {
 import type {
   DynamicClientRegistrationResponse,
   MCPOAuthDynamicClientRegistrationRequest,
+  MCPOAuthResolvedDynamicClientRegistration,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import { OAuthDCRFailure } from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type {
@@ -39,14 +40,12 @@ function registrationBinding(material: {
   tenantId: string;
   registrationId: string;
   mcpServerId: string;
-  registrationGeneration: number;
   bindingFingerprint: string;
 }): string {
   return [
     material.tenantId,
     material.mcpServerId,
     material.registrationId,
-    String(material.registrationGeneration),
     material.bindingFingerprint,
   ].join('\0');
 }
@@ -90,7 +89,6 @@ function isMaterial(value: unknown): value is MCPOAuthClientRegistrationSealedMa
     typeof material.tenantId === 'string' &&
     typeof material.registrationId === 'string' &&
     typeof material.mcpServerId === 'string' &&
-    Number.isSafeInteger(material.registrationGeneration) &&
     material.bindingVersion === 1 &&
     typeof material.bindingFingerprint === 'string' &&
     Number.isSafeInteger(material.serverConfigVersion) &&
@@ -167,7 +165,6 @@ export class MCPOAuthClientRegistrationAuthority {
       parsed.tenantId !== record.tenantId ||
       parsed.registrationId !== record.registrationId ||
       parsed.mcpServerId !== record.mcpServerId ||
-      parsed.registrationGeneration !== record.registrationGeneration ||
       parsed.bindingVersion !== record.bindingVersion ||
       parsed.bindingFingerprint !== record.bindingFingerprint ||
       parsed.serverConfigVersion !== record.serverConfigVersion ||
@@ -209,7 +206,7 @@ export class MCPOAuthClientRegistrationAuthority {
       assertCurrent?: () => void;
       assertServerCurrent?: () => Promise<void>;
     } = {}
-  ): Promise<DynamicClientRegistrationResponse> {
+  ): Promise<MCPOAuthResolvedDynamicClientRegistration> {
     const fingerprint = bindingFingerprint(this.masterSecret!, input);
     const deadline = Date.now() + REGISTRATION_WAIT_LIMIT_MS;
 
@@ -245,7 +242,7 @@ export class MCPOAuthClientRegistrationAuthority {
         }
         options.assertCurrent?.();
         await options.assertServerCurrent?.();
-        return registered;
+        return { registration: registered, registrationId: claim.registration.registrationId };
       }
 
       if (claim.outcome === 'waiting') {
@@ -280,7 +277,6 @@ export class MCPOAuthClientRegistrationAuthority {
           tenantId: input.tenantId,
           registrationId: owned.registrationId,
           mcpServerId: input.mcpServerId,
-          registrationGeneration: owned.registrationGeneration,
           bindingVersion: 1,
           bindingFingerprint: fingerprint,
           serverConfigVersion: input.serverConfigVersion,
@@ -315,7 +311,7 @@ export class MCPOAuthClientRegistrationAuthority {
         if (!persisted) {
           throw new Error('MCP OAuth client registration completion fence was lost');
         }
-        return registered;
+        return { registration: registered, registrationId: owned.registrationId };
       } catch (error) {
         await runWithTenantDatabaseScope(this.db, input.tenantId, (scoped) =>
           new MCPOAuthClientRegistrationRepository(scoped).finishFailure(
@@ -336,6 +332,20 @@ export class MCPOAuthClientRegistrationAuthority {
   async invalidateForServer(tenantId: string, serverId: MCPServerID): Promise<number> {
     return runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
       new MCPOAuthClientRegistrationRepository(scoped).invalidateForServer(tenantId, serverId)
+    );
+  }
+
+  async invalidateRegistration(
+    tenantId: string,
+    serverId: MCPServerID,
+    registrationId: MCPOAuthClientRegistrationID
+  ): Promise<boolean> {
+    return runWithTenantDatabaseScope(this.db, tenantId, (scoped) =>
+      new MCPOAuthClientRegistrationRepository(scoped).invalidateRegisteredById({
+        tenantId,
+        serverId,
+        registrationId,
+      })
     );
   }
 

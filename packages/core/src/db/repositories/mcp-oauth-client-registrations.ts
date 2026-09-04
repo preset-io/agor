@@ -27,7 +27,6 @@ export interface MCPOAuthClientRegistrationRecord {
   tenantId: string;
   registrationId: MCPOAuthClientRegistrationID;
   mcpServerId: MCPServerID;
-  registrationGeneration: number;
   bindingVersion: number;
   bindingFingerprint: string;
   serverConfigVersion: number;
@@ -69,8 +68,6 @@ function mapRow(row: Record<string, unknown>): MCPOAuthClientRegistrationRecord 
     typeof row.tenant_id !== 'string' ||
     typeof row.registration_id !== 'string' ||
     typeof row.mcp_server_id !== 'string' ||
-    !Number.isSafeInteger(Number(row.registration_generation)) ||
-    Number(row.registration_generation) <= 0 ||
     Number(row.binding_version) !== 1 ||
     typeof row.binding_fingerprint !== 'string' ||
     !SHA256_HEX.test(row.binding_fingerprint) ||
@@ -91,7 +88,6 @@ function mapRow(row: Record<string, unknown>): MCPOAuthClientRegistrationRecord 
     tenantId: row.tenant_id,
     registrationId: row.registration_id as MCPOAuthClientRegistrationID,
     mcpServerId: row.mcp_server_id as MCPServerID,
-    registrationGeneration: Number(row.registration_generation),
     bindingVersion: Number(row.binding_version),
     bindingFingerprint: row.binding_fingerprint,
     serverConfigVersion: Number(row.server_config_version),
@@ -167,7 +163,6 @@ export class MCPOAuthClientRegistrationRepository {
             WHERE tenant_id = ${input.tenantId}
               AND mcp_server_id = ${input.mcpServerId}
               AND is_current = true
-            ORDER BY registration_generation DESC
             LIMIT 1`
       );
       const currentRow = rawRows(currentResult)[0];
@@ -242,23 +237,15 @@ export class MCPOAuthClientRegistrationRepository {
         );
       }
 
-      const generationResult = await executeRaw(
-        this.db,
-        sql`SELECT nextval('mcp_oauth_client_registration_generation_seq') AS generation`
-      );
-      const generation = Number(rawRows(generationResult)[0]?.generation);
-      if (!Number.isSafeInteger(generation) || generation <= 0) {
-        throw new RepositoryError('MCP OAuth client registration generation is invalid');
-      }
       const inserted = await executeRaw(
         this.db,
         sql`INSERT INTO mcp_oauth_client_registrations
-              (tenant_id, registration_id, mcp_server_id, registration_generation,
-               binding_version, binding_fingerprint, server_config_version,
+              (tenant_id, registration_id, mcp_server_id, binding_version,
+               binding_fingerprint, server_config_version,
                envelope_version, is_current, status, claim_id, claim_generation,
                lease_expires_at, created_at, updated_at)
             VALUES (${input.tenantId}, ${input.registrationId}, ${input.mcpServerId},
-                    ${generation}, 1, ${input.bindingFingerprint}, ${input.serverConfigVersion},
+                    1, ${input.bindingFingerprint}, ${input.serverConfigVersion},
                     ${input.envelopeVersion}, true, 'registering', ${input.claimId}, 1,
                     clock_timestamp() + (${input.leaseMs} * INTERVAL '1 millisecond'),
                     clock_timestamp(), clock_timestamp())
@@ -281,7 +268,7 @@ export class MCPOAuthClientRegistrationRepository {
         sql`SELECT * FROM mcp_oauth_client_registrations
             WHERE tenant_id = ${tenantId} AND mcp_server_id = ${mcpServerId}
               AND is_current = true
-            ORDER BY registration_generation DESC LIMIT 1`
+            LIMIT 1`
       );
       const row = rawRows(result)[0];
       return row ? mapRow(row) : null;
@@ -299,7 +286,6 @@ export class MCPOAuthClientRegistrationRepository {
             SET dispatched_at = clock_timestamp(), updated_at = clock_timestamp()
             WHERE tenant_id = ${record.tenantId}
               AND registration_id = ${record.registrationId}
-              AND registration_generation = ${record.registrationGeneration}
               AND status = 'registering' AND is_current = true
               AND claim_id = ${record.claimId}
               AND claim_generation = ${record.claimGeneration}
@@ -334,7 +320,6 @@ export class MCPOAuthClientRegistrationRepository {
                 updated_at = clock_timestamp()
             WHERE tenant_id = ${record.tenantId}
               AND registration_id = ${record.registrationId}
-              AND registration_generation = ${record.registrationGeneration}
               AND status = 'registering' AND is_current = true
               AND claim_id = ${record.claimId}
               AND claim_generation = ${record.claimGeneration}
@@ -370,7 +355,6 @@ export class MCPOAuthClientRegistrationRepository {
                 updated_at = clock_timestamp(), finished_at = clock_timestamp()
             WHERE tenant_id = ${record.tenantId}
               AND registration_id = ${record.registrationId}
-              AND registration_generation = ${record.registrationGeneration}
               AND status = 'registering' AND is_current = true
               AND claim_id = ${record.claimId}
               AND claim_generation = ${record.claimGeneration}
@@ -414,7 +398,6 @@ export class MCPOAuthClientRegistrationRepository {
                 updated_at = clock_timestamp(), finished_at = clock_timestamp()
             WHERE tenant_id = ${record.tenantId}
               AND registration_id = ${record.registrationId}
-              AND registration_generation = ${record.registrationGeneration}
               AND binding_fingerprint = ${record.bindingFingerprint}
               AND status = 'registered' AND is_current = true
             RETURNING registration_id`
@@ -425,8 +408,49 @@ export class MCPOAuthClientRegistrationRepository {
     }
   }
 
+  /**
+   * Fence one provider-invalidated client registration by its UUID epoch.
+   * A callback bound to an older attempt must never invalidate a replacement
+   * registration that another replica has already published.
+   */
+  async invalidateRegisteredById(input: {
+    tenantId: string;
+    serverId: MCPServerID;
+    registrationId: MCPOAuthClientRegistrationID;
+  }): Promise<boolean> {
+    try {
+      const result = await executeRaw(
+        this.db,
+        sql`UPDATE mcp_oauth_client_registrations
+            SET status = 'superseded', is_current = false, sealed_material = NULL,
+                claim_id = NULL, lease_expires_at = NULL,
+                failure_code = 'provider_invalidated_client',
+                updated_at = clock_timestamp(), finished_at = clock_timestamp()
+            WHERE tenant_id = ${input.tenantId}
+              AND mcp_server_id = ${input.serverId}
+              AND registration_id = ${input.registrationId}
+              AND status = 'registered' AND is_current = true
+            RETURNING registration_id`
+      );
+      return rawRows(result).length === 1;
+    } catch (error) {
+      throw failure('provider invalidation', error);
+    }
+  }
+
   async maintain(): Promise<{ abandoned: number; expired: number; purged: number }> {
     try {
+      // Every HA replica runs this periodic worker. Elect one cleanup pass for
+      // this transaction instead of multiplying the same fleet-wide scans.
+      const election = await executeRaw(
+        this.db,
+        sql`SELECT pg_catalog.pg_try_advisory_xact_lock(
+              pg_catalog.hashtextextended('mcp-oauth-client-registration-maintenance', 0)
+            ) AS elected`
+      );
+      if (rawRows(election)[0]?.elected !== true) {
+        return { abandoned: 0, expired: 0, purged: 0 };
+      }
       const abandoned = await executeRaw(
         this.db,
         sql`UPDATE mcp_oauth_client_registrations

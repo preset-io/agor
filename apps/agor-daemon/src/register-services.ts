@@ -81,7 +81,10 @@ import type {
   OAuthFlowContext,
   OAuthTokenResponse,
 } from '@agor/core/tools/mcp/oauth-mcp-transport';
-import { OAuthConfigurationError } from '@agor/core/tools/mcp/oauth-mcp-transport';
+import {
+  OAuthCodeExchangeError,
+  OAuthConfigurationError,
+} from '@agor/core/tools/mcp/oauth-mcp-transport';
 import type { RefreshAndPersistDeps } from '@agor/core/tools/mcp/oauth-refresh';
 import type {
   AgenticToolName,
@@ -96,6 +99,8 @@ import type {
   MCPOAuthBrowserOperation,
   MCPOAuthBrowserReservation,
   MCPOAuthBrowserReservationRequest,
+  MCPOAuthClientRegistrationResetRequest,
+  MCPOAuthClientRegistrationResetResult,
   MCPOAuthDCRMode,
   MCPOAuthPendingFlowStatus,
   MCPOAuthRuntimeCompatibilityMode,
@@ -2226,10 +2231,19 @@ export async function registerMCPServices(
     )) as StartTwoPhaseOAuthAndAwaitResult;
   }
 
+  const assertMcpOAuthCapability = (): void => {
+    if (isConstrainedHa(ctx.deployment) && !ctx.deployment.capabilities.mcpOAuth) {
+      throw new PublicBaseUrlNotConfiguredError(
+        'HA MCP OAuth requires an explicitly configured public HTTPS base URL.'
+      );
+    }
+  };
+
   async function startTwoPhaseMCPOAuthFlowInternal(
     opts: StartTwoPhaseOAuthOptions,
     awaitToken: boolean
   ): Promise<StartTwoPhaseOAuthResult | StartTwoPhaseOAuthAndAwaitResult> {
+    assertMcpOAuthCapability();
     const assertFlowAuthority =
       opts.requestAuthority || opts.browserReservation
         ? () => {
@@ -3299,6 +3313,27 @@ export async function registerMCPServices(
     return 'OAuth flow did not complete. Please start a new flow.';
   };
 
+  const invalidateProviderRejectedClient = async (
+    pendingFlow: PendingOAuthFlow,
+    error: unknown
+  ): Promise<void> => {
+    if (
+      !(error instanceof OAuthCodeExchangeError) ||
+      !error.invalidClientRegistration ||
+      !durableOAuthClientRegistrations ||
+      !pendingFlow.tenantId ||
+      !pendingFlow.mcpServerId ||
+      !pendingFlow.context.clientRegistrationId
+    ) {
+      return;
+    }
+    await durableOAuthClientRegistrations.invalidateRegistration(
+      pendingFlow.tenantId,
+      pendingFlow.mcpServerId as MCPServerID,
+      pendingFlow.context.clientRegistrationId
+    );
+  };
+
   const sendOAuthResultPage = (
     res: express.Response,
     success: boolean,
@@ -3327,7 +3362,35 @@ export async function registerMCPServices(
         // Reject any awaitToken() promise from the originating flow so the
         // caller (discover / test-oauth) can surface the failure.
         if (state) {
-          if (durableOAuthFlows) {
+          if (
+            durableOAuthFlows &&
+            durableOAuthClientRegistrations &&
+            (error === 'invalid_client' || error === 'unauthorized_client')
+          ) {
+            const claimed = await durableOAuthFlows.claimForCallback(state);
+            if (claimed.outcome === 'claimed') {
+              const rejected = pendingFromDurableClaim(
+                durableOAuthFlows.openClaim(claimed.flow, state)
+              );
+              const invalidatedRegistration = Boolean(rejected.context.clientRegistrationId);
+              if (invalidatedRegistration) {
+                await invalidateProviderRejectedClient(
+                  rejected,
+                  new OAuthCodeExchangeError(
+                    'The provider rejected the OAuth client registration.',
+                    false,
+                    'client_registration_invalidated',
+                    true
+                  )
+                );
+              }
+              await durableOAuthFlows.finish(
+                claimed.flow,
+                'failed',
+                invalidatedRegistration ? 'client_registration_invalidated' : 'provider_rejected'
+              );
+            }
+          } else if (durableOAuthFlows) {
             await durableOAuthFlows.failPendingCallback(state, 'authorization_denied');
           } else {
             const pending = pendingOAuthFlows.get(state);
@@ -3424,6 +3487,11 @@ export async function registerMCPServices(
         console.log('[OAuth Callback] Flow completed successfully');
         sendOAuthResultPage(res, true, 'OAuth authentication was successful.');
       } catch (innerErr) {
+        try {
+          await invalidateProviderRejectedClient(pendingFlow, innerErr);
+        } catch {
+          console.warn('[OAuth Callback] Client-registration invalidation could not be persisted');
+        }
         const classification = classifyMCPOAuthCompletionFailure(innerErr);
         const { ambiguous } = classification;
         if (pendingFlow.durableRecord) {
@@ -4323,6 +4391,7 @@ export async function registerMCPServices(
       const assertRequestAuthority = requestAuthorityAssertion(params);
       try {
         assertRequestAuthority?.();
+        assertMcpOAuthCapability();
         console.log('[OAuth Start] Starting two-phase OAuth flow');
         const userId = params?.user?.user_id;
         const tenantId = tenantIdFromParams(params);
@@ -4705,6 +4774,13 @@ export async function registerMCPServices(
         return { success: true, message: 'OAuth authentication successful!', tokenObtained: true };
       } catch (error) {
         if (pendingFlow) {
+          try {
+            await invalidateProviderRejectedClient(pendingFlow, error);
+          } catch {
+            console.warn(
+              '[OAuth Complete] Client-registration invalidation could not be persisted'
+            );
+          }
           const classification = classifyMCPOAuthCompletionFailure(error);
           const { ambiguous, failureCode } = classification;
           completionFailureCode = failureCode;
@@ -4747,6 +4823,48 @@ export async function registerMCPServices(
     },
   });
   app.service('mcp-servers/oauth-complete').hooks({ before: { create: [ctx.requireAuth] } });
+
+  // Admin recovery for providers that invalidate a DCR client before a usable
+  // callback can report the closed invalid_client/unauthorized_client error.
+  // Resetting also retires pending attempts and grants so the next reconnect
+  // must resolve a fresh client instead of continuing under stale material.
+  app.use('/mcp-servers/oauth-client-registration-reset', {
+    async create(
+      data: MCPOAuthClientRegistrationResetRequest,
+      params?: AuthenticatedParams
+    ): Promise<MCPOAuthClientRegistrationResetResult> {
+      const tenantId = tenantIdFromParams(params);
+      const userId = params?.user?.user_id as UserID | undefined;
+      if (!tenantId || !userId) throw new NotAuthenticated('OAuth reset requires authentication');
+      if (!durableOAuthClientRegistrations || !durableOAuthFlows) {
+        throw new BadRequest(
+          'Durable OAuth client-registration reset is available only on PostgreSQL deployments'
+        );
+      }
+      await runInOAuthTenantWriteScope(db, tenantId, async () => {
+        const currentUser = await new UsersRepository(db).findById(userId);
+        if (!hasMinimumRole(currentUser?.role, ROLES.ADMIN)) {
+          throw new Forbidden('OAuth client-registration reset requires an administrator');
+        }
+        const authorized = await loadMcpServerForCaller(db, data.mcp_server_id, params);
+        await lockOAuthGrantConfiguration(db, tenantId, authorized.mcp_server_id);
+        const currentServer = await new MCPServerRepository(db).findById(authorized.mcp_server_id);
+        if (!currentServer || !isMCPServerUsableBy(currentServer, userId)) {
+          throw new Forbidden('MCP server authority changed before OAuth reset');
+        }
+        await new UserMCPOAuthTokenRepository(db).deleteAllForServer(authorized.mcp_server_id);
+        await durableOAuthFlows.invalidateForServer(tenantId, authorized.mcp_server_id);
+        await durableOAuthClientRegistrations.invalidateForServer(
+          tenantId,
+          authorized.mcp_server_id
+        );
+      });
+      return { success: true };
+    },
+  });
+  app.service('mcp-servers/oauth-client-registration-reset').hooks({
+    before: { create: [ctx.requireAuth] },
+  });
 
   // OAuth disconnect
   app.use('/mcp-servers/oauth-disconnect', {

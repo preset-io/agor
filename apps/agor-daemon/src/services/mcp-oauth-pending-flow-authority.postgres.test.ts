@@ -28,7 +28,7 @@ import {
   UserMCPOAuthTokenRepository,
   UsersRepository,
 } from '@agor/core/db';
-import type { MCPServerID, UserID } from '@agor/core/types';
+import type { MCPOAuthClientRegistrationID, MCPServerID, UserID } from '@agor/core/types';
 import { isMCPOAuthGrantBindingVersion } from '@agor/core/types';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { lockMCPOAuthGrantConfiguration } from './mcp-oauth-grant-binding.js';
@@ -66,6 +66,7 @@ function flowContext(label: string): DurableMCPOAuthFlowContext {
     pkceVerifier: `pkce-verifier-${label}`,
     clientId: `client-id-${label}`,
     clientSecret: `client-secret-${label}`,
+    clientRegistrationId: '01991ea2-58f0-7000-8000-000000000001' as MCPOAuthClientRegistrationID,
     state: `state-capability-${label}`,
     authorizationUrl: `https://provider.example.test/${label}/authorize?state=state-capability-${label}`,
     compatibilityMode: 'strict',
@@ -200,12 +201,14 @@ describe.skipIf(!postgresUrl || !usesPostgresSchema)(
         outcome: 'claimed' as const,
         pkceVerifier: opened.context.pkceVerifier,
         clientId: opened.context.clientId,
+        clientRegistrationId: opened.context.clientRegistrationId,
         clientSecret: opened.context.clientSecret,
       };
       expect(completed).toMatchObject({
         outcome: 'claimed',
         pkceVerifier: context.pkceVerifier,
         clientId: context.clientId,
+        clientRegistrationId: context.clientRegistrationId,
         clientSecret: context.clientSecret,
       });
       await expect(

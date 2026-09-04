@@ -217,6 +217,8 @@ export interface MCPOAuthPendingFlowSealedMaterial {
   pkceVerifier: string;
   clientId: string;
   clientSecret?: string;
+  /** Exact durable DCR UUID epoch used by this attempt. */
+  clientRegistrationId?: MCPOAuthClientRegistrationID;
   compatibilityMode: MCPOAuthRuntimeCompatibilityMode;
   /** Whether RFC 9207 says this AS will return `iss` on the callback. */
   authorizationResponseIssuerParameterSupported?: boolean;
@@ -236,7 +238,6 @@ export interface MCPOAuthClientRegistrationSealedMaterial {
   tenantId: string;
   registrationId: MCPOAuthClientRegistrationID;
   mcpServerId: MCPServerID;
-  registrationGeneration: number;
   bindingVersion: 1;
   bindingFingerprint: string;
   serverConfigVersion: number;
@@ -255,6 +256,15 @@ export interface MCPOAuthClientRegistrationSealedMaterial {
   clientSecret?: string;
   /** Provider epoch seconds. Zero/absent means no advertised expiry. */
   clientSecretExpiresAt?: number;
+}
+
+/** Admin-only reset of the current durable DCR authority for one saved server. */
+export interface MCPOAuthClientRegistrationResetRequest {
+  mcp_server_id: MCPServerID;
+}
+
+export interface MCPOAuthClientRegistrationResetResult {
+  success: true;
 }
 
 /**

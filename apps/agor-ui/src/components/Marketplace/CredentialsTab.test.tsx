@@ -73,11 +73,17 @@ describe('Marketplace credential metadata', () => {
     render(
       <CredentialsTab
         overview={overview(
-          statuses.map(([status], index) => ({
-            mcp_server_id: `server-${status}`,
+          statuses.map(([detailStatus], index) => ({
+            mcp_server_id: `server-${detailStatus}`,
             server_name: `Server ${index + 1}`,
-            method: status === 'configured' ? 'bearer' : 'oauth',
-            status,
+            method: detailStatus === 'configured' ? 'bearer' : 'oauth',
+            status:
+              detailStatus === 'refreshing' || detailStatus === 'reauthentication_required'
+                ? 'attention'
+                : detailStatus === 'refreshable'
+                  ? 'expired'
+                  : detailStatus,
+            detail_status: detailStatus,
           }))
         )}
         loading={false}
