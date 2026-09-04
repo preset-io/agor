@@ -93,4 +93,26 @@ describe('OpenCode known model catalog', () => {
       ]),
     });
   });
+
+  it('offers curated OrcaRouter models only with saved credential evidence', () => {
+    const disconnected = createOpenCodeKnownModelCatalog(new Set());
+    const configured = createOpenCodeKnownModelCatalog(new Set(['orcarouter']));
+
+    expect(disconnected.providers.find(({ id }) => id === 'orcarouter')).toMatchObject({
+      availableForSelection: false,
+    });
+    expect(configured.suggestedSelection).toEqual({
+      providerId: 'orcarouter',
+      modelId: 'orcarouter/auto',
+    });
+    expect(configured.providers.find(({ id }) => id === 'orcarouter')).toMatchObject({
+      name: 'OrcaRouter',
+      availableForSelection: true,
+      suggestedModel: 'orcarouter/auto',
+      models: expect.arrayContaining([
+        expect.objectContaining({ id: 'orcarouter/auto' }),
+        expect.objectContaining({ id: 'orcarouter/fusion' }),
+      ]),
+    });
+  });
 });

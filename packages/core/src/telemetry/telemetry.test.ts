@@ -64,7 +64,9 @@ describe('open-source telemetry payload hygiene', () => {
   it('normalizes providers and model families without preserving custom names', () => {
     expect(normalizeTelemetryProvider('Gemini')).toBe('google');
     expect(normalizeTelemetryProvider('AcmeInternal')).toBe('other');
+    expect(normalizeTelemetryProvider('OrcaRouter')).toBe('orcarouter');
     expect(normalizeTelemetryModelFamily('claude-sonnet-4-5')).toBe('claude-sonnet');
+    expect(normalizeTelemetryModelFamily('orcarouter/auto')).toBe('custom');
     expect(normalizeTelemetryModelFamily('acme-prod-secure-westus')).toBe('custom');
   });
 

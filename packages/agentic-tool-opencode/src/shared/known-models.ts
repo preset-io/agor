@@ -81,6 +81,17 @@ const KNOWN_PROVIDERS = [
     ]),
   },
   {
+    id: 'orcarouter',
+    name: 'OrcaRouter',
+    availableWithoutCredentials: false,
+    suggestedModel: 'orcarouter/auto',
+    models: activeModels([
+      ['orcarouter/auto', 'OrcaRouter Auto'],
+      ['orcarouter/fusion', 'OrcaRouter Fusion'],
+      ['orcarouter/fusion-flash', 'OrcaRouter Fusion Flash'],
+    ]),
+  },
+  {
     id: 'opencode',
     name: 'OpenCode Zen',
     availableWithoutCredentials: true,
